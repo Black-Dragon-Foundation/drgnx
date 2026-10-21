@@ -4,15 +4,19 @@
 //! 2. the socket's directory made private (`private_dir`), and `<state>/hub` and its `log/`, then logging;
 //! 3. the lock ([`crate::lock`]); signals are caught from here on;
 //! 4. only while holding it: a stale socket removed, the cap written (0600, temp + rename), the socket bound and made
-//!    0600;
-//! 5. `runtime.db`.
+//!    0600, and the agent sockets (test-hooks) bound in `hub-HASH.d/` beside it;
+//! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick.
 //!
-//! It serves until SIGTERM, SIGINT or the `--parent-pid` process is gone (checked each second), then stops accepting
-//! and removes the socket and the cap while the lock is still held.
+//! It serves until SIGTERM, SIGINT, `shutdown` or the `--parent-pid` process is gone (checked each second), then
+//! stops accepting and removes the sockets and the cap while the lock is still held.
 
-use crate::cli::ServeArgs;
-use crate::conn::{self, Shared};
+use crate::cli::{AgentSocket, ServeArgs};
+use crate::conn;
+use crate::dispatch::NoBackend;
+use crate::front::Front;
+use crate::hello::Socket;
 use crate::lock::{self, LockError};
+use crate::store::WorkDb;
 use crate::{Exit, log, runtime_db};
 use drgnx_proto::paths::{self, Env};
 use drgnx_proto::proof::Cap;
@@ -26,6 +30,9 @@ use tokio::signal::unix::{SignalKind, signal};
 
 /// `sqlite3_libversion_number()` Ratatoskr needs: 3.51.3.
 pub const SQLITE_FLOOR: i32 = 3_051_003;
+
+/// How often work.db's schema is read (read-only while it is newer).
+pub const SCHEMA_TICK: Duration = Duration::from_secs(2);
 
 pub async fn run(args: ServeArgs) -> Exit {
     if let Err(e) = urdr::check_floor(SQLITE_FLOOR) {
@@ -97,18 +104,55 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    // the agent sockets (test-hooks: `--agent-socket SID[:JOB]`), bound under the lock too
+    let (mut agents, mut agent_paths) = (Vec::new(), Vec::new());
+    for a in &args.agent_sockets {
+        match bind_agent(&socket, a) {
+            Ok((path, l, s)) => {
+                agent_paths.push(path);
+                agents.push((l, s));
+            }
+            Err(e) => {
+                tracing::error!("cannot start: {e}");
+                remove_all(&agent_paths);
+                remove(&socket, &cap_path);
+                return Exit::CannotStart;
+            }
+        }
+    }
     let store = match runtime_db::open(&hub_dir) {
         Ok((store, _handle)) => store,
         Err(e) => {
             tracing::error!("cannot start: {e}");
             drop(listener);
+            remove_all(&agent_paths);
             remove(&socket, &cap_path);
             return Exit::CannotStart;
         }
     };
-    let shared = Arc::new(Shared::new(cap));
+    let work_db = match WorkDb::spawn(paths::data_dir(&env).join("work.db")) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::error!("cannot start: no work.db reader: {e}");
+            remove_all(&agent_paths);
+            remove(&socket, &cap_path);
+            return Exit::CannotStart;
+        }
+    };
+    let front = Arc::new(Front::new(
+        cap,
+        socket.clone(),
+        work_db,
+        Arc::new(NoBackend),
+    ));
+    // read-only at start and at each tick while work.db is newer than this hub
+    front.set_schema(front.work_db.schema().await.unwrap_or(0));
+    tokio::spawn(watch_schema(front.clone()));
+    for (l, s) in agents {
+        tokio::spawn(accept(l, front.clone(), s));
+    }
     tracing::info!(
-        pid = shared.pid,
+        pid = front.pid,
         commit = crate::version::COMMIT,
         "serving on {}",
         socket.display()
@@ -134,7 +178,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         tokio::select! {
             a = listener.accept() => match a {
                 Ok((stream, _)) => {
-                    tokio::spawn(conn::serve(stream, shared.clone()));
+                    tokio::spawn(conn::serve(stream, front.clone(), Socket::Main));
                 }
                 Err(e) => {
                     // out of descriptors, for example: never a hot loop
@@ -142,6 +186,10 @@ pub async fn run(args: ServeArgs) -> Exit {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             },
+            () = front.stopped() => {
+                tracing::info!("shutdown: stopping");
+                break Exit::Stopped;
+            }
             _ = term.recv() => {
                 tracing::info!("SIGTERM: stopping");
                 break Exit::Stopped;
@@ -158,10 +206,82 @@ pub async fn run(args: ServeArgs) -> Exit {
     };
     drop(listener);
     // the lock is still held: these are ours
+    remove_all(&agent_paths);
     remove(&socket, &cap_path);
     let _ = tokio::task::spawn_blocking(move || store.shutdown()).await;
     drop(lock);
     exit
+}
+
+/// Accept on an agent socket for as long as the hub serves.
+async fn accept(listener: UnixListener, front: Arc<Front>, socket: Socket) {
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                tokio::spawn(conn::serve(stream, front.clone(), socket.clone()));
+            }
+            Err(e) => {
+                tracing::warn!("accept failed: {e}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
+/// work.db's schema every 2 s: read-only while it is newer than this hub's.  A read that fails keeps the last state.
+async fn watch_schema(front: Arc<Front>) {
+    let mut every = tokio::time::interval(SCHEMA_TICK);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    every.tick().await;
+    loop {
+        every.tick().await;
+        match front.work_db.schema().await {
+            Ok(n) => front.set_schema(n),
+            Err(e) => tracing::warn!("cannot read work.db's schema: {e}"),
+        }
+    }
+}
+
+/// Under the lock: agent socket A at `<socket dir>/hub-HASH.d/agent-SID.sock` (the directory private, a stale
+/// socket removed, the socket 0600).
+fn bind_agent(socket: &Path, a: &AgentSocket) -> Result<(PathBuf, UnixListener, Socket), String> {
+    let stem = socket.file_stem().unwrap_or_default().to_string_lossy();
+    let dir = socket
+        .parent()
+        .unwrap_or(Path::new("/"))
+        .join(format!("{stem}.d"));
+    paths::private_dir(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("agent-{}.sock", a.sid));
+    match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "cannot remove the stale socket {}: {e}",
+                path.display()
+            ));
+        }
+        _ => {}
+    }
+    let listener =
+        UnixListener::bind(&path).map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("cannot chmod {}: {e}", path.display()))?;
+    tracing::info!(sid = a.sid, "agent socket {}", path.display());
+    let s = Socket::Agent {
+        sid: a.sid.clone(),
+        job: a.job.clone(),
+    };
+    Ok((path, listener, s))
+}
+
+fn remove_all(files: &[PathBuf]) {
+    for f in files {
+        match std::fs::remove_file(f) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                tracing::warn!("cannot remove {}: {e}", f.display());
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Under the lock: the stale socket removed, the cap written, the socket bound and made 0600.

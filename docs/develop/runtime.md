@@ -144,7 +144,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `run` | `capture`, `bin`, `args`, `env`, `hub`, `expect_code`, `expect_stdout` | run `BIN ARGS` to completion (30 s) in the hub's root: `ensure`, `stop`, `status`. The capture is `{stdout, code, json}`; `expect_stdout` is a string the output contains or a pattern for its JSON |
 | `spawn` | `capture`, `argv` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends |
 | `connect` | `conn` (default `c`), `hub`, `socket` (`"main"` or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
-| `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code |
+| `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `expect_result`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code; `expect_result` is a pattern for the reply. A connection is challenged once: a second `hello` on it uses the nonce the first one read |
 | `chmod` | `path`, `mode` | change a mode (octal string) |
 | `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. `"eof": true` then closes the sending side (a client that vanished mid-line). A write the hub closed meanwhile is no error: the next `expect_closed` says so |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
@@ -158,7 +158,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `sqlite` | `path`, `sql: [...]` | set up a database (bundled SQLite) |
 | `backend_log` | `hub`, `expect_line`, `expect_no_line`, `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON |
 | `pid` | `capture`, `alive` (true), `within_ms` (5000) | a captured pid is (or is no longer) running; a reused pid does not count |
-| `class_matrix` | `table` | generated checks over the class table: the reader arrives with the hello task |
+| `class_matrix` | `table`, `args`, `env`, `agent`, `last`, `within_ms` | every method of `table` (`{method: [classes]}`, `class-matrix.json`) gets `{}` from `user` (a valid hello), `service` (no hello) and, with `agent: SID`, `agent` (that session's socket, which `args` such as `["--agent-socket", "s1:j1"]` makes the hub serve). A listed class must not get `not-allowed`; any other must. The step starts its own hubs with `args` and `env`: one for the table, and for each method of `last` (default `restart`, `shutdown`, which a user call runs) one per class |
 | `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello` goes on a fresh connection each time |
 | `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` |
 
@@ -247,7 +247,15 @@ Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`)
 
 | Group | Rows |
 |---|---|
-| `params/` | `bad-params-are-refused-with-a-path` (`bad_params` over `runtime/protocol/methods.json`), `named-types-refuse` (ids, absolute local paths, a 17-item `env/set`, an uppercase nonce: each `invalid-params` with its path) |
+| `params/` | `bad-params-are-refused-with-a-path` (`bad_params` over `runtime/protocol/methods.json`), `named-types-refuse` (ids, absolute local paths, a 17-item `env/set`, an uppercase nonce: each `invalid-params` with its path), `duplicate-key-refused`, `unknown-keys-dropped-and-listed` |
+| `hello/` | `challenge-on-accept`, `valid-proof-makes-user-and-hub-proves`, `wrong-proof-refused-and-logged`, `replayed-hello-is-refused` (SB-T12-6), `no-hello-is-service`, `newer-proto-refused`, `a-second-hello-is-refused`; with `test-hooks`: `an-agent-socket-is-agent-class` |
+| `class/` | `matrix` (`test-hooks`: `class_matrix` over `class-matrix.json`, the agent class through `--agent-socket s1:j1`) |
+| `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer) |
+| `readonly/` | `a-newer-work-db-refuses-writes` (work.db at schema 9: `schema` for a writing method within the 2 s tick) |
+| `basics/` | `status-shape-v1`, `events-since-without-a-work-db`; with `fake-backend`: `events-since-from-the-store` (rows written into work.db with `sqlite`) |
+
+Paths: the agent sockets are `<root>/run/drgnx/hub-HASH.d/agent-SID.sock`, so with `DRGNX_CONFORMANCE_ROOTS` the
+root's own path must leave room for them within 103 bytes (a short link to a deeper directory works).
 
 `test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
 registry's test and the `class_matrix` step read.

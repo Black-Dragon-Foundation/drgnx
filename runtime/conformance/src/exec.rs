@@ -399,9 +399,7 @@ impl Runner<'_> {
             "sqlite" => self.sqlite(step),
             "backend_log" => self.backend_log(step),
             "pid" => self.pid(step),
-            "class_matrix" => {
-                Err("class_matrix is filled by the hello task (14): no table reader yet".into())
-            }
+            "class_matrix" => self.class_matrix(step),
             "bad_params" => self.bad_params(step),
             "measure" => self.measure(step),
             v => Err(format!("verb {v} has no executor")),
@@ -596,16 +594,7 @@ impl Runner<'_> {
         let hub = &self.hubs[idx];
         let path = match str_of(&step.obj, "socket").unwrap_or("main") {
             "main" => hub.socket.clone(),
-            s if s.starts_with("agent:") => {
-                let hash = hub
-                    .socket
-                    .file_stem()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                hub.socket_dir()
-                    .join(format!("{hash}.d"))
-                    .join(format!("agent-{}.sock", &s[6..]))
-            }
+            s if s.starts_with("agent:") => agent_socket(hub, &s[6..]),
             other => {
                 return Err(format!(
                     "\"socket\" is \"main\" or \"agent:SID\", not {other:?}"
@@ -631,18 +620,7 @@ impl Runner<'_> {
         if who == "user" && !self.cfg.lisp_target {
             let cap = self.hubs[idx].cap();
             let conn = self.conns.get_mut(&name).expect("just inserted");
-            Self::do_hello(
-                conn,
-                &cap,
-                &HelloSpec {
-                    proof: Proof::Valid,
-                    proto: 1,
-                    class: Some("user".into()),
-                    error: None,
-                },
-                &mut self.caps,
-                None,
-            )?;
+            Self::do_hello(conn, &cap, &HelloSpec::user(), &mut self.caps, None)?;
         }
         Ok(())
     }
@@ -668,6 +646,10 @@ impl Runner<'_> {
             proto: step.obj.get("proto").and_then(Value::as_u64).unwrap_or(1),
             class: str_of(&step.obj, "expect_class").map(str::to_string),
             error: str_of(&step.obj, "expect_error").map(str::to_string),
+            result: step
+                .obj
+                .get("expect_result")
+                .map(|p| self.subst(idx, p, false)),
         };
         let cap = idx.map(|i| self.hubs[i].cap()).unwrap_or_default();
         let capture = str_of(&step.obj, "capture").map(str::to_string);
@@ -753,6 +735,9 @@ impl Runner<'_> {
                     result["proof"]
                 ));
             }
+        }
+        if let Some(pattern) = &spec.result {
+            matcher::matches(pattern, result, caps).map_err(|e| format!("hello's result: {e}"))?;
         }
         Ok(())
     }
@@ -907,6 +892,123 @@ impl Runner<'_> {
         } else {
             Err(failed.join("; "))
         }
+    }
+
+    /// Every method of `table` (`{method: [classes]}`; a relative path is from the current directory) called with
+    /// `{}` from each class: `user` (a valid hello on the main socket), `service` (no hello) and, with `agent` (a SID
+    /// the hub serves through `args`, e.g. `--agent-socket SID:JOB`), `agent` (that session's socket).  A class the
+    /// table lists must not get `not-allowed`; any other must.  The hubs are the step's own (started with `args` and
+    /// `env`): one for the table, and for each method of `last` (default `restart`, `shutdown`: a user call runs them)
+    /// a fresh one per class, so the matrix never ends a hub it still tests.
+    fn class_matrix(&mut self, step: &Step) -> R {
+        let file = self.text(None, step, "table")?;
+        let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
+        let table: BTreeMap<String, Vec<String>> =
+            serde_json::from_str(&text).map_err(|e| format!("{file}: {e}"))?;
+        let agent = str_of(&step.obj, "agent").map(str::to_string);
+        let last: Vec<String> = match step.obj.get("last") {
+            Some(_) => self.strings(None, step, "last")?,
+            None => vec!["restart".into(), "shutdown".into()],
+        };
+        let within = ms(&step.obj, "within_ms", 5000);
+        let mut classes = vec!["user", "service"];
+        if agent.is_some() {
+            classes.push("agent");
+        }
+        let mut hub_step = Map::new();
+        for k in ["args", "env"] {
+            if let Some(v) = step.obj.get(k) {
+                hub_step.insert(k.into(), v.clone());
+            }
+        }
+        let (mut id, mut calls, mut failed) = (2_000_000u64, 0, Vec::new());
+        let mut call =
+            |r: &mut Self, conns: &mut BTreeMap<&str, Conn>, method: &str, class: &str| {
+                id += 1;
+                calls += 1;
+                let allowed = table[method].iter().any(|c| c == class);
+                let conn = conns.get_mut(class).expect("a connection per class");
+                let line = json!({"id": id, "method": method, "params": {}}).to_string();
+                let answer = conn
+                    .send_line(&line, true)
+                    .and_then(|()| conn.expect(&json!({ "id": id }), within, &mut r.caps));
+                let refused = |a: &Value| a["error"]["code"] == "not-allowed";
+                match answer {
+                    Err(e) => failed.push(format!("{method} as {class}: {e}")),
+                    Ok(a) if allowed && refused(&a) => {
+                        failed.push(format!("{method} as {class}: allowed, but refused: {a}"))
+                    }
+                    Ok(a) if !allowed && !refused(&a) => {
+                        failed.push(format!("{method} as {class}: not allowed, but got {a}"))
+                    }
+                    Ok(_) => {}
+                }
+            };
+        let main = self.matrix_hub(&hub_step)?;
+        let mut conns = self.matrix_conns(main, &classes, agent.as_deref())?;
+        for method in table.keys().filter(|m| !last.contains(m)) {
+            for &class in &classes {
+                call(self, &mut conns, method.as_str(), class);
+            }
+        }
+        drop(conns);
+        self.hubs[main].terminate();
+        for method in last.iter().filter(|m| table.contains_key(*m)) {
+            for &class in &classes {
+                let fresh = self.matrix_hub(&hub_step)?;
+                let mut conns = self.matrix_conns(fresh, &[class], agent.as_deref())?;
+                call(self, &mut conns, method.as_str(), class);
+                drop(conns);
+                self.hubs[fresh].terminate();
+            }
+        }
+        if calls == 0 {
+            return Err(format!("{file}: no method"));
+        }
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(failed.join("; "))
+        }
+    }
+
+    /// A hub of the class matrix's own (its step's `args` and `env`): its index.
+    fn matrix_hub(&mut self, obj: &Map<String, Value>) -> R<usize> {
+        let mut obj = obj.clone();
+        obj.insert("hub".into(), json!(format!("matrix-{}", self.started + 1)));
+        self.start(&Step {
+            line: 0,
+            verb: "start".into(),
+            obj,
+        })?;
+        self.hub_index(None)
+    }
+
+    /// One connection per class to hub HUB: `user` said a valid hello, `service` nothing, `agent` is AGENT's socket.
+    fn matrix_conns<'c>(
+        &mut self,
+        hub: usize,
+        classes: &[&'c str],
+        agent: Option<&str>,
+    ) -> R<BTreeMap<&'c str, Conn>> {
+        let mut conns = BTreeMap::new();
+        for &class in classes {
+            let h = &self.hubs[hub];
+            let conn = match class {
+                "user" => {
+                    let mut c = Conn::open(&h.socket, Duration::from_secs(2))?;
+                    Self::do_hello(&mut c, &h.cap(), &HelloSpec::user(), &mut self.caps, None)?;
+                    c
+                }
+                "agent" => Conn::open(
+                    &agent_socket(h, agent.unwrap_or_default()),
+                    Duration::from_secs(2),
+                )?,
+                _ => Conn::open(&h.socket, Duration::from_secs(2))?,
+            };
+            conns.insert(class, conn);
+        }
+        Ok(conns)
     }
 
     fn kill(&mut self, step: &Step) -> R {
@@ -1178,4 +1280,31 @@ struct HelloSpec {
     proto: u64,
     class: Option<String>,
     error: Option<String>,
+    /// A pattern the result must match.
+    result: Option<Value>,
+}
+
+impl HelloSpec {
+    /// The hello of a `"user"` connect: a valid proof, protocol 1, and the connection user class.
+    fn user() -> HelloSpec {
+        HelloSpec {
+            proof: Proof::Valid,
+            proto: 1,
+            class: Some("user".into()),
+            error: None,
+            result: None,
+        }
+    }
+}
+
+/// The agent socket of session SID: `<socket dir>/hub-HASH.d/agent-SID.sock`.
+fn agent_socket(hub: &Hub, sid: &str) -> PathBuf {
+    let stem = hub
+        .socket
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    hub.socket_dir()
+        .join(format!("{stem}.d"))
+        .join(format!("agent-{sid}.sock"))
 }

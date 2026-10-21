@@ -223,6 +223,27 @@ fn mode(p: &Path) -> u32 {
 }
 
 #[test]
+fn methods_prints_the_committed_registry() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let run = |flag: &str| {
+        let out = Command::new(BIN).args(["methods", flag]).output().unwrap();
+        assert!(out.status.success(), "methods {flag}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let committed = std::fs::read_to_string(repo.join("runtime/protocol/methods.json")).unwrap();
+    assert_eq!(run("--json"), committed);
+    let docs = std::fs::read_to_string(repo.join("docs/develop/hub.md")).unwrap();
+    let table = run("--markdown");
+    assert!(table.starts_with("| Method | Class |"), "{table}");
+    assert!(
+        docs.contains(&table),
+        "hub.md's table is not `methods --markdown`"
+    );
+    let out = Command::new(BIN).arg("methods").output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "neither flag is a usage error");
+}
+
+#[test]
 fn peer_uid_is_checked() {
     use drgnx_ratatoskr::conn::peer_allowed;
     assert!(peer_allowed(1000, 1000));

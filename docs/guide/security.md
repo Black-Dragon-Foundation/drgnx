@@ -72,7 +72,11 @@ shorthands come back, without reopening them.
 - **The hub's socket (Ratatoskr).** Its directory is yours and mode 0700, and the socket, the cap file
   (`hub-HASH.cap`) and the lock are 0600. Ratatoskr also asks the system who connected (the peer's uid) and closes a
   connection from any other user at once, root included, with the peer's pid in its log. That holds even when a socket
-  was opened up by mistake. The cap proves an editor or the CLI to the hub, and the hub to them. It keeps out
+  was opened up by mistake. The cap proves an editor or the CLI to the hub, and the hub to them. Each proof covers
+  that connection's own challenge, so a hello line someone captured does not work on another connection. Without a
+  proof a connection may only ping, read the hub's status, list the sessions (names and jobs), read spending and
+  send coordination notices; everything that starts, stops, answers, approves, configures or reads a transcript needs
+  it. The cap keeps out
   a connection that reaches a socket it should not have, such as one bound into a container. It is worth nothing
   against unsandboxed programs running as you: they can read the cap file. The agent sandbox is the boundary
   there, not the cap.

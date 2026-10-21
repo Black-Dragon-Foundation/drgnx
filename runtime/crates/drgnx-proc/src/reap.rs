@@ -138,6 +138,12 @@ fn refused(pgid: i32) -> bool {
     pgid <= 1 || pgid == unsafe { libc::getpgrp() } || pgid == unsafe { libc::getsid(0) }
 }
 
+/// Whether the process `pid` exists (a zombie counts): `kill(pid, 0)` succeeds or fails with EPERM.  A `pid` below
+/// 1 names a group or every process, never one process: false, nothing sent.
+pub fn alive(pid: i32) -> bool {
+    pid > 0 && probe(&RealSignaller, pid)
+}
+
 /// Whether `target` exists: `kill(target, 0)` succeeds or fails with EPERM (it exists, but is not ours to signal).
 fn probe(sig: &dyn Signaller, target: i32) -> bool {
     match sig.kill(target, 0) {

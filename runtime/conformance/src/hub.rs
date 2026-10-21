@@ -322,6 +322,8 @@ pub struct Conn {
     buf: VecDeque<String>,
     eof: bool,
     helper: Option<Child>,
+    /// The hub's challenge nonce, once read.
+    hub_nonce: Option<String>,
     pub next_id: u64,
 }
 
@@ -379,6 +381,7 @@ impl Conn {
             buf: VecDeque::new(),
             eof: false,
             helper: None,
+            hub_nonce: None,
             next_id: 1,
         })
     }
@@ -428,6 +431,7 @@ impl Conn {
             buf: VecDeque::new(),
             eof: false,
             helper: Some(child),
+            hub_nonce: None,
             next_id: 1,
         })
     }
@@ -615,15 +619,21 @@ impl Conn {
         }
     }
 
-    /// Wait for the `challenge` event and return the hub's nonce (earlier lines stay buffered).
+    /// Wait for the `challenge` event and return the hub's nonce (earlier lines stay buffered).  A connection is
+    /// challenged once: a second hello on it uses the nonce the first one read.
     pub fn challenge(&mut self, within: Duration) -> Result<String, String> {
+        if let Some(n) = &self.hub_nonce {
+            return Ok(n.clone());
+        }
         let mut caps = Captures::default();
         let v = self.expect(
             &serde_json::json!({"event": "challenge", "data": {"nonce": "$capture:n"}}),
             within,
             &mut caps,
         )?;
-        Ok(v["data"]["nonce"].as_str().unwrap_or_default().to_string())
+        let n = v["data"]["nonce"].as_str().unwrap_or_default().to_string();
+        self.hub_nonce = Some(n.clone());
+        Ok(n)
     }
 }
 

@@ -1,0 +1,2 @@
+{"scenario": "class/matrix", "requires": ["v1", "test-hooks"], "doc": "Every method of class-matrix.json, called with {} as user (valid hello), service (no hello) and agent (--agent-socket s1:j1): a class the table lists is never not-allowed, any other always is; restart and shutdown last, each in a hub of its own."}
+{"do": "class_matrix", "table": "test/conformance/class-matrix.json", "args": ["--agent-socket", "s1:j1"], "agent": "s1"}

@@ -1,0 +1,8 @@
+{"scenario": "hello/replayed-hello-is-refused", "requires": ["v1"], "doc": "SB-T12-6: connection 1's valid hello line, sent again on connection 2, is not-allowed (the proof covers connection 1's challenge), and connection 2 stays service."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "user", "capture": "line"}
+{"do": "connect", "conn": "b", "hub": "h", "as": "service"}
+{"do": "hello", "conn": "b", "proof": "replay:line", "expect_error": "not-allowed"}
+{"do": "send", "conn": "b", "json": {"id": 2, "method": "events/since"}}
+{"do": "expect", "conn": "b", "json": {"id": 2, "error": {"code": "not-allowed"}}}

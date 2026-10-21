@@ -122,7 +122,10 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
         Err(e) => return Err(LockError::Io(e.into())),
     }
     let me = std::process::id();
-    let started = start_time(me).unwrap_or(0);
+    let started = i32::try_from(me)
+        .ok()
+        .and_then(|p| drgnx_proc::start_time(p).ok())
+        .unwrap_or(0);
     file.set_len(0)
         .and_then(|()| file.write_all(format!("{me} {started}\n").as_bytes()))
         .map_err(LockError::Io)?;
@@ -143,18 +146,9 @@ fn read_pid(file: &Path) -> Option<u32> {
     text.trim().parse().ok().filter(|p| *p > 0)
 }
 
-/// Is PID a process (`kill(pid, 0)` succeeds, or fails with EPERM: it exists and is someone else's)?
+/// Is PID a process ([`drgnx_proc::alive`]; a number above `i32::MAX` is none)?
 pub fn alive(pid: u32) -> bool {
-    let Some(pid) = i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-    else {
-        return false;
-    };
-    match rustix::process::test_kill_process(pid) {
-        Ok(()) => true,
-        Err(e) => e == rustix::io::Errno::PERM,
-    }
+    i32::try_from(pid).is_ok_and(drgnx_proc::alive)
 }
 
 /// The arguments of PID (Linux `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`); none when they cannot be read.
@@ -225,38 +219,6 @@ pub fn command_line(pid: u32) -> Option<Vec<Vec<u8>>> {
     )
 }
 
-/// This process's start time as `drgnx-proc` records it: Linux `/proc/PID/stat` field 22 (clock ticks since boot),
-/// macOS `proc_pidinfo` (microseconds since the epoch).
-#[cfg(target_os = "linux")]
-pub fn start_time(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // after the last ")" (the command may hold one): field 3 is the first, so field 22 is the 20th
-    stat.rsplit_once(')')?
-        .1
-        .split_whitespace()
-        .nth(19)?
-        .parse()
-        .ok()
-}
-
-/// This process's start time as `drgnx-proc` records it: Linux `/proc/PID/stat` field 22 (clock ticks since boot),
-/// macOS `proc_pidinfo` (microseconds since the epoch).
-#[cfg(target_os = "macos")]
-pub fn start_time(pid: u32) -> Option<u64> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
-    let n = unsafe {
-        libc::proc_pidinfo(
-            i32::try_from(pid).ok()?,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            (&mut info as *mut libc::proc_bsdinfo).cast(),
-            size,
-        )
-    };
-    (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,7 +266,6 @@ mod tests {
         assert!(alive(me));
         assert!(!System.is_lisp_hub(me), "this test is no Lisp hub");
         assert!(command_line(me).is_some_and(|a| !a.is_empty()));
-        assert!(start_time(me).is_some_and(|t| t > 0));
         // pid 1 exists and is not ours: EPERM counts as alive
         assert!(alive(1));
         // no child is spawned here: a fork in this process would hold the other test's lock until its exec

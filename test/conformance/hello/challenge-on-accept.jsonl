@@ -1,0 +1,9 @@
+{"scenario": "hello/challenge-on-accept", "requires": ["v1"], "doc": "The first line on every connection is the hub's challenge, a fresh 32-hex nonce, before the client sends anything."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "as": "service"}
+{"do": "expect_next", "conn": "a", "json": {"event": "challenge", "data": {"nonce": "$capture:first"}}, "within_ms": 2000}
+{"do": "connect", "conn": "b", "hub": "h", "as": "service"}
+{"do": "expect_next", "conn": "b", "json": {"event": "challenge", "data": {"nonce": "$string"}}, "within_ms": 2000}
+{"do": "expect_silent", "conn": "b", "for_ms": 200}
+{"do": "send", "conn": "b", "json": {"id": 1, "method": "hello", "params": {"proto": 1, "nonce": "$first"}}}
+{"do": "expect", "conn": "b", "json": {"id": 1, "result": {"class": "service", "proof": "$absent"}}}

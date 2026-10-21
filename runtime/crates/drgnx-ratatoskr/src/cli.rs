@@ -1,15 +1,23 @@
-//! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--agent-socket SID[:JOB]]…` and
-//! `ratatoskr version [--json]`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
+//! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--agent-socket SID[:JOB]]…`,
+//! `ratatoskr version [--json]` and `ratatoskr methods --json|--markdown`.  A line that does not parse exits 2
+//! ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
 
 pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID]\n\
-    \x20      ratatoskr version [--json]";
+    \x20      ratatoskr version [--json]\n\
+    \x20      ratatoskr methods --json|--markdown";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Serve(ServeArgs),
-    Version { json: bool },
+    Version {
+        json: bool,
+    },
+    /// The registry: `runtime/protocol/methods.json`'s content, or the docs' Markdown table.
+    Methods {
+        markdown: bool,
+    },
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -73,6 +81,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             }
             Ok(Command::Version { json })
         }
+        "methods" => {
+            let mut markdown = None;
+            while let Some(arg) = p.next().map_err(e)? {
+                match arg {
+                    Long("json") if markdown.is_none() => markdown = Some(false),
+                    Long("markdown") if markdown.is_none() => markdown = Some(true),
+                    other => return Err(other.unexpected().to_string()),
+                }
+            }
+            let markdown = markdown.ok_or("methods takes --json or --markdown")?;
+            Ok(Command::Methods { markdown })
+        }
         other => Err(format!("unknown command {other:?}")),
     }
 }
@@ -133,6 +153,14 @@ mod tests {
             p(&["version", "--json"]),
             Ok(Command::Version { json: true })
         );
+        assert_eq!(
+            p(&["methods", "--json"]),
+            Ok(Command::Methods { markdown: false })
+        );
+        assert_eq!(
+            p(&["methods", "--markdown"]),
+            Ok(Command::Methods { markdown: true })
+        );
     }
 
     #[test]
@@ -146,6 +174,9 @@ mod tests {
             &["serve", "--parent-pid", "0"],
             &["serve", "extra"],
             &["version", "--yaml"],
+            &["methods"],
+            &["methods", "--json", "--markdown"],
+            &["methods", "--yaml"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} parsed");
         }
