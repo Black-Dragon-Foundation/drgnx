@@ -55,6 +55,19 @@ cargo deny  --manifest-path runtime/Cargo.toml check
 
 Only `Cargo.lock` regeneration (`cargo generate-lockfile`, `cargo update -w`) runs without `--locked`.
 
+### Platforms
+
+Linux and macOS are supported; Android is not a target, but the door stays open. Every `cfg(target_os)` gate names its
+Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`, so a Linux-kernel fact (`/proc`,
+`SO_PEERCRED`, inotify) is gated `any(target_os = "linux", target_os = "android")`, and a desktop-distro fact (systemd,
+bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
+ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
+function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p drgnx-proto -p drgnx-proc -p drgnx-ratatoskr`.
+`drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
+does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
+AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
+
 ## drgnx-proto: the contract
 
 `crates/drgnx-proto` holds what the hub protocol is on the Rust side; the server, the client half and the tests share it.

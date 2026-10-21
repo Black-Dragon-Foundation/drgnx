@@ -283,6 +283,10 @@ pub fn choose(env: &Env) -> Mode {
             None => Mode::SelfDetach(Some("no /bin/launchctl".into())),
         };
     }
+    // Android stance: systemd and launchd are desktop facts, so the hub detaches itself there (a service is later work).
+    if cfg!(target_os = "android") {
+        return Mode::SelfDetach(Some("no supervisor on Android".into()));
+    }
     let manager = env
         .vars
         .get("XDG_RUNTIME_DIR")
