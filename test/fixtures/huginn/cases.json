@@ -1,0 +1,6 @@
+[
+  {"id": "int-plain", "text": "42", "expect": "accept", "dump": [["int", "42"]]},
+  {"id": "quoted-list", "text": "'(a \"b\" 1.5)", "expect": "accept",
+   "dump": [["list", [["sym", "quote"], ["list", [["sym", "a"], ["str", "b"], ["float", "1.5"]]]]]]},
+  {"id": "backquote-refused", "text": "`(a ,b)", "expect": "refuse", "kind": "ReaderMacro", "at": 0}
+]

@@ -1,0 +1,22 @@
+[package]
+name = "huginn"
+description = "A reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated; every reader macro refused"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+tempfile.workspace = true

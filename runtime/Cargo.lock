@@ -401,6 +401,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "huginn"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "proptest",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "tempfile",
+]
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
