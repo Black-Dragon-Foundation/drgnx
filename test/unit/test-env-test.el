@@ -85,6 +85,21 @@ variable holding a path under the real HOME — are unset or point into the run,
             (should-not (funcall seen "DRGNX_USER_ELPA"))))
       (delete-directory run t))))
 
+(ert-deftest drgnx-test-env/drgnx-emacs-is-the-runs-own ()
+  "A test's bin/drgnx runs the Emacs the run is on: no nidhogg on PATH, and the caller's DRGNX_EMACS under the
+real HOME (macOS CI's Nidhogg.app, a local build in ~/.local/opt) — never unset, never PATH's."
+  (let ((run (make-temp-file "drgnx-test-env" t))
+        (self (expand-file-name invocation-name invocation-directory)))
+    (unwind-protect
+        (dolist (tier drgnx-test-env-tiers)
+          (dolist (caller '("DRGNX_EMACS=/real-home/work/_temp/nidhogg/Nidhogg.app/Contents/MacOS/Emacs" "DRGNX_EMACS"))
+            (let* ((process-environment (append (list "HOME=/real-home" "PATH=/usr/bin" caller) process-environment))
+                   (env (drgnx-test-env tier run)))
+              (should (equal self (drgnx-test-env-test--lookup env "DRGNX_EMACS")))
+              (let ((process-environment (append env process-environment)))
+                (should (equal self (getenv "DRGNX_EMACS")))))))
+      (delete-directory run t))))
+
 (ert-deftest drgnx-test-env/gui-tiers-get-only-the-harness-display ()
   (let ((run (make-temp-file "drgnx-test-env" t))
         (display '("DISPLAY=:77" "XAUTHORITY=/x/y")))

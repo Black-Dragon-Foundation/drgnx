@@ -197,6 +197,30 @@ Fails the test unless every child exits 0."
       (should (= (hash-table-count (drgnx-projects--imported)) 2))
       (should (eq (plist-get (drgnx-config-read 'projects) :status) 'ok)))))
 
+(ert-deftest drgnx-projects-eld/project-el-list-is-changed-under-its-lock-and-replaced-whole ()
+  ;; project.el writes its list in place (truncate, then write) with no lock: a second import reading it meanwhile
+  ;; read a cut-off file and failed (CI, Nidhogg 31.1).  drgnx changes it the way it changes its own files.
+  (drgnx-projects-eld-test--with
+    (let* ((alpha (drgnx-projects-eld-test--repo "alpha"))
+           (beta (drgnx-projects-eld-test--repo "beta"))
+           (gamma (drgnx-projects-eld-test--repo "gamma"))
+           (list-file (expand-file-name "projects" (drgnx-state-dir)))
+           (entry (lambda (dir) (list (list :name "x" :root (directory-file-name dir) :url nil))))
+           (dirs (lambda () (mapcar #'car (plist-get (drgnx-file-read list-file) :data))))
+           (inode (lambda () (file-attribute-inode-number (file-attributes list-file)))))
+      (drgnx-projects--remember (funcall entry alpha))
+      (should (equal (funcall dirs) (list alpha)))
+      (let ((before (funcall inode)))
+        (drgnx-projects--remember (funcall entry beta))
+        (should (equal (funcall dirs) (list beta alpha)))
+        (should-not (equal (funcall inode) before)))                         ; a new file renamed over the old one
+      (let ((bytes (drgnx-projects-eld-test--bytes list-file))
+            (held (drgnx-file--lock (file-truename list-file) 0)))
+        (unwind-protect
+            (should-error (drgnx-projects--remember (funcall entry gamma)) :type 'drgnx-file-busy)
+          (drgnx-file--unlock held))
+        (should (equal (drgnx-projects-eld-test--bytes list-file) bytes))))))
+
 (ert-deftest drgnx-projects-eld/imported-keys-merge-across-processes ()
   (drgnx-projects-eld-test--with
     (let ((form (lambda (tag)

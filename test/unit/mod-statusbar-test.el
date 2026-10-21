@@ -15,8 +15,6 @@
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)  ; C8's one count of what needs you
 (load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)
 (require 'drgnx-file)
-(defvar drgnx-job-ui--badge)
-(defvar drgnx-job-ui--needs-you)
 (defvar compilation-arguments)
 (defvar flymake-mode)
 (defvar eglot--cached-server)
@@ -965,9 +963,9 @@ active (`drgnx-statusbar-test--epochs')."
           (should (equal (substring-no-properties (drgnx-statusbar--seg-misc)) "● Rec")))
         (let ((default-directory "/ssh:me@box.example:/srv/work/"))
           (should (equal (drgnx-statusbar--seg-misc) "Remote: box.example")))
-        ;; other entries of global-mode-string; the job badge is left out (the jobs segment shows it).  Set, not
-        ;; let-bound: the bar reads the entries when they are set
-        (setq global-mode-string (list "" "12:30" '(:eval (drgnx-job-ui--badge-segment))))
+        ;; other entries of global-mode-string, but the ones the bar already shows.  Set, not let-bound: the bar reads
+        ;; the entries when they are set
+        (setq global-mode-string (list "" "12:30" '(:eval (drgnx-trust--mark))))
         (should (equal (drgnx-statusbar--seg-misc) "12:30"))
         ;; a construct that is not plain strings is formatted by Emacs, entry by entry
         (cl-letf (((symbol-function 'format-mode-line) (lambda (c &rest _) (format "<%S>" c))))
@@ -1131,9 +1129,10 @@ active (`drgnx-statusbar-test--epochs')."
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
-      (let ((drgnx-job-ui--badge "") (drgnx-job-ui--needs-you nil) (asked 0)
+      (let ((needs 0) (asked 0)
             (answer '(:jobs [(:id "a" :status "running") (:id "b" :status "running") (:id "c" :status "done")])))
         (cl-letf (((symbol-function 'force-mode-line-update) #'ignore)
+                  ((symbol-function 'drgnx-job-ui-needs-you) (lambda () needs))
                   ((symbol-function 'drgnx-hub-call)
                    (lambda (method params cb) (should (equal method "job/status")) (should-not params)
                      (cl-incf asked) (funcall cb answer nil))))
@@ -1147,8 +1146,8 @@ active (`drgnx-statusbar-test--epochs')."
           (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 2 jobs"))
           (dotimes (_ 10) (drgnx-statusbar-test--seg 'jobs))
           (should (= asked 1))                            ; redisplay never asks
-          ;; cards waiting (C8's count, set with the badge) come after
-          (setq drgnx-job-ui--badge " ⚑3" drgnx-job-ui--needs-you 3)
+          ;; cards waiting (the notice model's count) come after
+          (setq needs 3)
           (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 2 jobs ⚑3"))
           (setq answer '(:jobs [(:id "a" :status "running") (:id "c" :status "done")]))
           (drgnx-statusbar--hub-event "card" '(:id 1 :job "a"))
@@ -1163,20 +1162,20 @@ active (`drgnx-statusbar-test--epochs')."
           (drgnx-statusbar--hub-event "job" '(:id "a"))
           (drgnx-statusbar--refresh-now)
           (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job ⚑3"))
-          (setq drgnx-job-ui--badge "" drgnx-job-ui--needs-you nil)
+          (setq needs 0)
           (drgnx-statusbar--hub-gone)
           (should-not (drgnx-statusbar-test--seg 'jobs)))))))
 
-(ert-deftest drgnx-statusbar/cards-waiting-reads-the-job-count-not-the-badge ()
-  ;; the jobs segment shows C8's one count (`drgnx-job-ui-needs-you'), never a number read back from the badge's text;
+(ert-deftest drgnx-statusbar/cards-waiting-reads-the-job-count ()
+  ;; the jobs segment shows the one count (`drgnx-job-ui-needs-you'), and a change of it makes the text again;
   ;; a click on it opens What Needs You of every job
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
-      (let ((drgnx-job-ui--badge " ⚑99") (needs 3))
+      (let ((needs 3))
         (cl-letf (((symbol-function 'drgnx-job-ui-needs-you) (lambda () needs)))
           (should (equal (drgnx-statusbar-test--seg 'jobs) "⚑3"))
-          (setq needs nil drgnx-job-ui--badge " ⚑98")      ; the badge's text moves the memo, the count is not known
+          (setq needs nil)                                 ; the count is not known
           (should-not (drgnx-statusbar-test--seg 'jobs))))
       (should (eq (plist-get (gethash 'jobs drgnx-statusbar--segments) :click) 'drgnx-cockpit-show-jobs)))))
 
@@ -1300,13 +1299,11 @@ active (`drgnx-statusbar-test--epochs')."
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
       (let ((drgnx-statusbar-left '(misc)) (drgnx-statusbar-right nil)
-            (drgnx-job-ui--badge " ⚑2") (drgnx-job-ui--needs-you 2) (mode-line-process nil) (defining-kbd-macro nil)
-            (global-mode-string (list "" '(:eval (drgnx-job-ui--badge-segment)))))
-        (cl-letf (((symbol-function 'drgnx-job-ui--badge-segment) (lambda () drgnx-job-ui--badge))
-                  ;; a batch Emacs formats every mode-line construct as "": strings and :eval forms, as a frame would
-                  ((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line))
+            (mode-line-process nil) (defining-kbd-macro nil)
+            (global-mode-string (list "")))
+        ;; a batch Emacs formats every mode-line construct as "": strings and :eval forms, as a frame would
+        (cl-letf (((symbol-function 'format-mode-line) #'drgnx-statusbar-test--format-mode-line))
           (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
-            (should-not (string-match-p "⚑" (drgnx-statusbar-mode-line)))   ; the jobs segment shows the badge
             ;; another module (the remote mark, the trust mark) pushes an entry: it appears, no coupling
             (push '(:eval (propertize "TRUST" 'face 'warning)) global-mode-string)
             (should (string-match-p "TRUST" (drgnx-statusbar-mode-line)))
@@ -1604,7 +1601,7 @@ was built once; no other package's entry yet."
        (let ((drgnx-statusbar-test--builds 0) (global-mode-string nil) (drgnx-statusbar-left '(a misc))
              ;; what the tests set (a set is seen, a `let' is not): theirs only
              (mode-line-misc-info mode-line-misc-info) (drgnx-statusbar-misc-exclude drgnx-statusbar-misc-exclude)
-             (drgnx-statusbar-quiet drgnx-statusbar-quiet) (drgnx-job-ui--badge drgnx-job-ui--badge)
+             (drgnx-statusbar-quiet drgnx-statusbar-quiet)
              (drgnx-explorer--roots nil) (drgnx-face-glyphs drgnx-face-glyphs))
          (drgnx-statusbar-define-segment 'a :fn #'drgnx-statusbar-test--count-a)
          (drgnx-statusbar-define-segment 'misc :fn #'drgnx-statusbar--seg-misc)
@@ -1699,7 +1696,6 @@ makes the next redisplay build the bar again."
   (drgnx-statusbar--bump)
   (setq drgnx-statusbar-left '(misc a))
   (setq drgnx-statusbar-quiet '(a))
-  (setq drgnx-job-ui--badge " ⚑3")
   (setq drgnx-explorer--roots '("/elsewhere/"))
   (setq drgnx-face-glyphs (copy-sequence drgnx-face-glyphs)))
 

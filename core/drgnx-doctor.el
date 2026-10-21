@@ -433,13 +433,13 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 
 (defun drgnx-doctor--version< (a b) (version< a b))
 
-(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "Nidhogg, drgnx's own Emacs build (stock GNU Emacs 31.1 warns)"
+(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "Nidhogg, drgnx's own Emacs build (stock GNU Emacs fails)"
                      :check (lambda (f)
                               (let ((v (plist-get f :version)) (n (plist-get f :nidhogg)))
                                 (cond ((drgnx-doctor--version< v "31.1")
                                        (list 'fail (format "Emacs %s is too old (31.1 or newer needed)" v) drgnx-doctor-install-hint))
                                       (n (list 'ok (format "Nidhogg %s (GNU Emacs %s)" n v) nil))
-                                      (t (list 'warn (format "GNU Emacs %s is not Nidhogg, drgnx's own Emacs build: drgnx still runs on it for now" v)
+                                      (t (list 'fail (format "GNU Emacs %s is not Nidhogg, drgnx's own Emacs build" v)
                                                drgnx-doctor-nidhogg-hint))))))
 
 (drgnx-doctor-define 'native-compilation :group "Emacs" :doc "Native compilation works (drgnx's speed depends on it)"

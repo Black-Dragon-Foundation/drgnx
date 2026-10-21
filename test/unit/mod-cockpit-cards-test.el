@@ -10,6 +10,7 @@
 (require 'drgnx-coord)
 (require 'drgnx-job)                                   ; job/reply, as the hub runs it
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; panes the state store sees; a project
 (defvar drgnx-statusbar-waiting-functions)             ; the setup adds the cockpit's count to it
 
@@ -383,24 +384,25 @@ their hooks and timers."
         (should (equal (plist-get drgnx-cockpit-graph-current-filter :job) "j2"))
         (should (string-search "job j2" (drgnx-cockpit--filter-line)))))))
 
-(ert-deftest drgnx-cockpit-cards/the-pane-and-the-badge-count-alike ()
-  ;; every job's pane counts with the badge's function and tells it: no second count, no second question
+(ert-deftest drgnx-cockpit-cards/the-pane-and-the-notice-model-count-alike ()
+  ;; every job's pane counts with the model's function and tells it: no second count, no second question
   (drgnx-cockpit-cards-test--with
-    (let* ((drgnx-job-ui--badge "") (drgnx-job-ui--badge-job nil) (drgnx-job-ui--needs-you nil)
-           (j2 (list :id "j2" :title "Other" :status "paused" :repo "/q/"
-                     :cards '((:id 9 :kind "budget" :task :null :title "paused" :actions (("stop" "Stop")) :data :null))
-                     :messages :null))
-           (drgnx-cockpit-cards-test--answer (lambda (_m _p) (list (list :jobs (list drgnx-cockpit-cards-test--summary j2)) nil))))
-      (drgnx-cockpit-cards-test--show)
-      (drgnx-cockpit-cards-refresh)
-      (should (= 4 (drgnx-job-ui-needs-you)))              ; j1: two cards and a message; j2: a card
-      (should (equal (substring-no-properties drgnx-job-ui--badge) " ⚑4"))
-      (should (string-search "What needs you — every job: 4" (drgnx-cockpit-cards-test--text 'cards)))
-      ;; one job: its own count in the head line
-      (setq drgnx-cockpit-graph-current-filter '(:job "j1")
-            drgnx-cockpit-cards-test--answer (lambda (_m _p) (list drgnx-cockpit-cards-test--summary nil)))
-      (drgnx-cockpit-cards-refresh)
-      (should (string-search "What needs you: 3" (drgnx-cockpit-cards-test--text 'cards))))))
+    (drgnx-notice-test-with-model
+      (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)
+      (let* ((j2(list :id "j2" :title "Other" :status "paused" :repo "/q/"
+                      :cards '((:id 9 :kind "budget" :task :null :title "paused" :actions (("stop" "Stop")) :data :null))
+                      :messages :null))
+             (drgnx-cockpit-cards-test--answer (lambda (_m _p) (list (list :jobs (list drgnx-cockpit-cards-test--summary j2)) nil))))
+        (drgnx-cockpit-cards-test--show)
+        (drgnx-cockpit-cards-refresh)
+        (should (= 4 (drgnx-needs-you-count)))               ; j1: two cards and a message; j2: a card
+        (should (= 3 (drgnx-needs-you-count "j1")))
+        (should (string-search "What needs you — every job: 4" (drgnx-cockpit-cards-test--text 'cards)))
+        ;; one job: its own count in the head line
+        (setq drgnx-cockpit-graph-current-filter '(:job "j1")
+              drgnx-cockpit-cards-test--answer (lambda (_m _p) (list drgnx-cockpit-cards-test--summary nil)))
+        (drgnx-cockpit-cards-refresh)
+        (should (string-search "What needs you: 3" (drgnx-cockpit-cards-test--text 'cards)))))))
 
 ;;;; A workbench saved before M12f
 
@@ -464,23 +466,6 @@ their hooks and timers."
             (drgnx-cockpit-cards--adopt (selected-frame))
             (should-not drgnx-cockpit-graph-current-filter))
         (set-frame-parameter nil 'drgnx-persist-extra extra)))))
-
-;;;; The badge
-
-(ert-deftest drgnx-cockpit-cards/the-badge-opens-the-cockpit ()
-  (drgnx-cockpit-cards-test--with
-    (cl-letf (((symbol-function 'drgnx-cockpit-schedule) #'ignore))
-      (let ((click (lookup-key drgnx-job-ui-badge-map [mode-line mouse-1])))
-        ;; the job with the newest card
-        (let ((drgnx-job-ui--badge-job "j1"))
-          (should (null (funcall click))))
-        (should (equal drgnx-cockpit-graph-current-filter '(:job "j1")))
-        (should (eq (window-buffer (selected-window)) (drgnx-cockpit-cards-buffer)))
-        ;; only messages wait (no card names a job): every job
-        (let ((drgnx-job-ui--badge-job nil))
-          (funcall click))
-        (should-not (plist-get drgnx-cockpit-graph-current-filter :job))
-        (should (eq (window-buffer (selected-window)) (drgnx-cockpit-cards-buffer)))))))
 
 (ert-deftest drgnx-cockpit-cards/the-commands-are-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)

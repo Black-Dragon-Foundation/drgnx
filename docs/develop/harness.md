@@ -685,7 +685,7 @@ cloned `--bare` beside the snapshot. Two containers follow, each with a memory c
    `openrouter` key (built at run time) encrypted to it as `secrets.age` and committed into the bare repository, and a
    second repository whose `secrets.age` is locked with a passphrase (typed on a terminal made by `script`).
 2. **The second machine** (a fresh `fedora:N`, 6 GB, `test/bootstrap/in-container.sh`): as root it adds only what a
-   desktop has (`sudo`, a user `tester` with NOPASSWD, `dbus-daemon`, `gnome-keyring`, `libsecret`, `script`) and
+   desktop has, plus Nidhogg's release (`sudo`, a user `tester` with NOPASSWD, `dbus-daemon`, `gnome-keyring`, `libsecret`, `script`) and
    checks that `tester`'s sudo works (if it does not, the container runtime is at fault: the run stops there and
    prints the evidence: the error, `/etc/shadow`, the capabilities and SELinux state); as
    `tester`, in a D-Bus session whose login keyring is unlocked with a password on stdin
@@ -709,7 +709,9 @@ cloned `--bare` beside the snapshot. Two containers follow, each with a memory c
      come within `PTY_STEP_TIMEOUT` seconds (300) stops the command, and the test fails naming what it waited for,
      with the screen printed above.
 
-Fedora 44 builds Emacs from source and takes much longer. A test never touches your home: the snapshot, the fixture
+Nidhogg is not built here: container 2 unpacks the pinned release for its Fedora (`test/container/nidhogg.sh`, the CI
+images' script, sha256-checked) as root before `tester` runs `install.sh`, which finds it and keeps it. Building Nidhogg
+from source in a container (30-60 minutes) is what `--install` tests. A test never touches your home: the snapshot, the fixture
 repositories and the log live in a fresh `mktemp -d` directory under `$TMPDIR` (`/tmp`), and the run refuses to start
 if that is under `$HOME`. Each container is named (`drgnx-bootstrap-PID-keys`, `-machine`) and runs within an hour
 (`timeout -k 30`); it is removed by name after its run and on any exit of the test, Ctrl-C or a time-out included
@@ -914,6 +916,8 @@ Every tier gets:
 - `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `DRGNX_CONFIG_DIR`, `DRGNX_DATA_DIR`
   and `TMPDIR` under RUN, and a private `XDG_RUNTIME_DIR` (RUN/run, mode 700);
 - `DRGNX_TEST_ISOLATED=1`, `DRGNX_NO_HUB_START=1`, `DRGNX_HUB_PARENT_PID` (the hub ends with this Emacs);
+- `DRGNX_EMACS`: the Emacs the run is on, so a test's `bin/drgnx` or child Emacs runs that one, whatever PATH holds
+  and wherever it lives (macOS CI's `Nidhogg.app` is under HOME, where the scan below would drop a caller's value);
 - a dead session bus (`drgnx-test-env-dead-bus`), and no provider key or agent home
   (`drgnx-test-env-provider-variables`).
 

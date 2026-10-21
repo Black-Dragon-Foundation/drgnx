@@ -27,7 +27,7 @@ What happens:
 
 - **drgnx is not running:** it starts in the background (an Emacs daemon named `drgnx`, with the Emacs drgnx was
   installed with — see [install.md](install.md)), and the paths open as soon as it answers (it is given 30 s, or
-  `DRGNX_OPEN_WAIT` seconds, a whole number above 0 counted on the clock; anything else is refused with a note and 30
+  `DRGNX_OPEN_WAIT` seconds, a whole number above 0 counted on the clock, at least that long and under a second more; anything else is refused with a note and 30
   is used; it says "still starting" after a third of that; its startup messages are added to
   `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
   Two `drgnx` commands started at once make one daemon and one window: the second waits for the first (a lock,

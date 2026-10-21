@@ -7,9 +7,7 @@
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)   ; what needs you, counted once in the bar
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
-(defvar drgnx-job-ui--badge)
-(defvar drgnx-job-ui--badge-job)
-(defvar drgnx-job-ui--needs-you)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-cockpit-feed-test--hub nil "The hub calls a test saw, newest first: ((METHOD PARAMS)…).")
 
@@ -527,23 +525,25 @@ buffers are killed after: they owned their hooks and their timers."
 (ert-deftest drgnx-cockpit-feed/an-ask-card-shows-once-in-the-status-bar ()
   ;; the jobs segment's ⚑ and the agents segment's "waiting on you" never both count one ask card
   (drgnx-cockpit-feed-test--with
-    (let ((drgnx-statusbar--tick 0) (drgnx-statusbar--agents-state nil) (drgnx-statusbar--jobs-state nil)
-          (drgnx-statusbar--redraw-wanted nil)
-          (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil) (drgnx-statusbar--errors nil)
-          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
-          (drgnx-statusbar--segments (make-hash-table :test #'eq))
-          (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting))
-          (drgnx-job-ui--badge "") (drgnx-job-ui--badge-job nil) (drgnx-job-ui--needs-you nil))
-      (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-cockpit-waiting-count)   ; as tools/cockpit's setup does
-      (drgnx-statusbar--define-defaults)
-      (let ((cid (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?"))
-            (seg (lambda (id) (when-let* ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn))))
-                                (substring-no-properties s)))))
-        (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :messages nil
-                                            :cards (list (list :id cid :kind "ask" :title "go?")))))
-        (drgnx-statusbar--refresh-now)
-        (should (equal (funcall seg 'jobs) (concat (drgnx-statusbar--glyph 'flag "#") "1")))   ; ⚑1
-        (should-not (string-search "waiting on you" (or (funcall seg 'agents) "")))))))
+    (drgnx-notice-test-with-model
+      (let ((drgnx-statusbar--tick 0) (drgnx-statusbar--agents-state nil) (drgnx-statusbar--jobs-state nil)
+            (drgnx-statusbar--redraw-wanted nil)
+            (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil) (drgnx-statusbar--errors nil)
+            (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
+            (drgnx-statusbar--segments (make-hash-table :test #'eq))
+            (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting))
+            (drgnx-notice-functions nil))
+        (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-cockpit-waiting-count)   ; as tools/cockpit's setup does
+        (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)   ; as tools/jobs' setup does
+        (drgnx-statusbar--define-defaults)
+        (let ((cid (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?"))
+              (seg (lambda (id) (when-let* ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn))))
+                                  (substring-no-properties s)))))
+          (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :messages nil
+                                              :cards (list (list :id cid :kind "ask" :title "go?")))))
+          (drgnx-statusbar--refresh-now)
+          (should (equal (funcall seg 'jobs) (concat (drgnx-statusbar--glyph 'flag "#") "1")))   ; ⚑1
+          (should-not (string-search "waiting on you" (or (funcall seg 'agents) ""))))))))
 
 (ert-deftest drgnx-cockpit-feed/terminals-get-the-same-text-in-ascii ()
   (drgnx-cockpit-feed-test--with

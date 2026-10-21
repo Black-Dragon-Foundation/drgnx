@@ -992,6 +992,35 @@ macOS (no /proc there)."
             (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/a-container-run-from-a-worktree-mounts-the-git-dir ()
+  ;; In a git worktree `.git' is a file naming an absolute host path; the container mounts only the checkout, so git
+  ;; there exited 128.  The common git dir goes in read-only at the same absolute path; a plain checkout gets no extra mount.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (main (expand-file-name "main" dir))
+         (wt (expand-file-name "wt" dir)))
+    (unwind-protect
+        (progn
+          (dolist (cmd `(("git" "init" "-q" ,main)
+                         ("git" "-C" ,main "-c" "user.name=t" "-c" "user.email=t@t" "commit" "-q" "--allow-empty" "-m" "x")
+                         ("git" "-C" ,main "worktree" "add" "-q" ,wt)))
+            (should (eql 0 (apply #'call-process (car cmd) nil nil nil (cdr cmd)))))
+          (make-directory (expand-file-name "bin" wt) t)
+          (dolist (f '("drgnx" "drgnx-paths.sh"))
+            (copy-file (expand-file-name (concat "bin/" f) drgnx-bin-test--root) (expand-file-name (concat "bin/" f) wt))
+            (set-file-modes (expand-file-name (concat "bin/" f) wt) #o755))
+          (let* ((common (concat (file-truename main) "/.git"))
+                 (drgnx-bin-test--bin (expand-file-name "bin/drgnx" wt))
+                 (args (drgnx-bin-test--container-argv dir nil)))
+            (should (member (format "%s:%s:ro" common common) args)))
+          ;; the main checkout, where `.git' is a directory: no extra mount
+          (let* ((drgnx-bin-test--bin (expand-file-name "bin/drgnx" main))
+                 (args (progn (make-directory (expand-file-name "bin" main) t)
+                              (dolist (f '("drgnx" "drgnx-paths.sh"))
+                                (copy-file (expand-file-name (concat "bin/" f) wt) (expand-file-name (concat "bin/" f) main) t))
+                              (drgnx-bin-test--container-argv dir nil))))
+            (should-not (seq-find (lambda (a) (string-suffix-p "/.git:ro" a)) args))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()
   ;; DRGNX_MODAL_ELPA (evil for the modal tests) is mounted read-only into the container and named there, so the
   ;; 31.1 container runs the evil tests instead of skipping them.
@@ -1293,6 +1322,16 @@ echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset
     (with-temp-buffer
       (should (= 2 (apply #'call-process drgnx-bin-test--bin nil t nil "test" "--bootstrap" args)))
       (should (string-match-p "usage: drgnx test --bootstrap\\|--fedora is 44 or 45" (buffer-string))))))
+
+(ert-deftest drgnx-bin/test-bootstrap-installs-the-way-a-user-does-now ()
+  ;; NH-BOOTSTRAP-1: install.sh dropped --method source|package (exit 2) when drgnx required Nidhogg; the second machine
+  ;; gets the pinned Nidhogg release (test/container/nidhogg.sh) and install.sh keeps it, and no step runs a bare emacs
+  (let ((text (with-temp-buffer
+                (insert-file-contents (expand-file-name "test/bootstrap/in-container.sh" drgnx-bin-test--root))
+                (buffer-string))))
+    (should-not (string-match-p "install\\.sh[^\n]*--method" text))
+    (should-not (string-match-p "stock=" text))
+    (should (string-search "test/container/nidhogg.sh" text))))
 
 ;; the fake runtime copies what each container would mount (the run removes its temporary directory when it succeeds);
 ;; $((…)) because macOS's wc pads the count with blanks

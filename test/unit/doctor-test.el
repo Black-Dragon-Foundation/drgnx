@@ -20,10 +20,10 @@
     (should (eq (drgnx-doctor-test--status 'emacs-version nid) 'ok))
     (should (string-search "Nidhogg 31.1-nidhogg.1 (GNU Emacs 31.1)" (nth 1 (drgnx-doctor-check 'emacs-version nid)))))
   (let ((stock (drgnx-doctor-test--facts :nidhogg nil)))
-    (should (eq (drgnx-doctor-test--status 'emacs-version stock) 'warn))
-    (should (string-search "not Nidhogg" (nth 1 (drgnx-doctor-check 'emacs-version stock))))
+    (should (eq (drgnx-doctor-test--status 'emacs-version stock) 'fail))
+    (should (string-search "GNU Emacs 31.1 is not Nidhogg, drgnx's own Emacs build" (nth 1 (drgnx-doctor-check 'emacs-version stock))))
     (should (string-search "installer" (nth 2 (drgnx-doctor-check 'emacs-version stock)))))
-  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :nidhogg nil :version "31.2")) 'warn))
+  (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :nidhogg nil :version "31.2")) 'fail))
   (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :nidhogg nil :version "30.2")) 'fail))
   (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :version "29.4")) 'fail))
   (should (string-search "31.1 or newer needed"

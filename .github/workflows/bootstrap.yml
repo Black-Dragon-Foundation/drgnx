@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       fedora:
-        description: "Fedora release (44 builds Emacs from source: slow)"
+        description: "Fedora release (Nidhogg's release tarball exists for both)"
         type: choice
         options: ["45", "44"]
         default: "45"

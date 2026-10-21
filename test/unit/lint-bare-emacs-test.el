@@ -10,8 +10,7 @@
 (require 'drgnx-paths)
 
 (defconst drgnx-lint-bare-emacs--allowed
-  '(("test/bootstrap/in-container.sh" . "the container tier installs Fedora's stock emacs and runs no Nidhogg")
-    ("test/unit/lint-bare-emacs-test.el" . "this lint's own patterns and fixtures"))
+  '(("test/unit/lint-bare-emacs-test.el" . "this lint's own patterns and fixtures"))
   "File (relative to the checkout) -> why a bare `emacs' subprocess there is right.")
 
 (defconst drgnx-lint-bare-emacs--lisp-patterns

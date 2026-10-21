@@ -82,7 +82,9 @@ nil or the reason it failed) when it ends.")
 
 (defun drgnx-hub-socket ()
   "The hub's socket: $XDG_RUNTIME_DIR/drgnx/hub-HASH.sock (HASH of the data dir: one hub per data dir), else under
-the state dir."
+the state dir; past 103 bytes, drgnx-hub-UID/ in the first of $TMPDIR, $TMP, $TEMP, else /tmp.  A function of the
+environment alone, as the Rust side computes it (test/fixtures/hub-socket-cases.json): never `temporary-file-directory',
+which macOS's Emacs takes from `getconf DARWIN_USER_TEMP_DIR' when none of the three is set, and a user can change."
   (let* ((name (format "hub-%s.sock" (substring (secure-hash 'sha1 (drgnx-data-dir)) 0 8)))
          (run (getenv "XDG_RUNTIME_DIR"))
          (path (if (and run (file-directory-p run))
@@ -91,7 +93,8 @@ the state dir."
     ;; a Unix socket's path ends with a NUL inside 104 bytes on macOS (108 on Linux): at most 103; a deep state
     ;; dir gets a short private one instead.  Counted as the system sees it: encoded (macOS decomposes "é" to 3 bytes)
     (if (<= (length (encode-coding-string path (or file-name-coding-system default-file-name-coding-system))) 103) path
-      (expand-file-name name (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory)))))
+      (let ((tmp (file-name-as-directory (or (getenv "TMPDIR") (getenv "TMP") (getenv "TEMP") "/tmp"))))
+        (expand-file-name name (expand-file-name (format "drgnx-hub-%d" (user-uid)) tmp))))))
 
 (defun drgnx-hub--private-dir (dir)
   "Make DIR (mode 0700 from the start) and make sure it is this user's own directory (a shared /tmp: never another's,

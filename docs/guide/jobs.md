@@ -33,7 +33,7 @@ and no frame opens.
   actions as buttons (a clash shows both sides and the reviewer's recommendation; **Accept the reviewer** is there
   only when it recommended a side; a clash whose reviewer was lost twice says so), then the messages agents sent
   you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting
-  in the badge). Below them, the job's tasks (each one's status, profile and what it waits on), the budget, spent
+  in the "needs you" number). Below them, the job's tasks (each one's status, profile and what it waits on), the budget, spent
   against the limit, and the agents at work, each with **Transcript** and **Message…** (queued: the agent gets it,
 marked as yours, when its turn ends).
 - **Decisions** (pane `decisions`; **Show Decisions**, `cockpit-decisions`): the job's decision log, newest first:
@@ -48,14 +48,16 @@ The panes follow the hub's events and redraw only what changed, at most twice a 
 hidden one keeps no timer and catches up when it shows). Hiding them stops nothing of the job. Without a hub What needs you says so, and fills in
 when the hub runs again; if the hub does not know the job (it was deleted), the cockpit shows every job again.
 
-You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
-waiting; a click shows the job with the newest card in the Work cockpit, or every job when only messages wait; it
-disappears when the hub cannot be asked, rather than showing the last count). What needs you's first line shows
-the same number, counted the same way. With the status bar on, its jobs
-count does the same, and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
-in the echo area — `drgnx-job-ui-notify` nil turns them off; the backends are [Notices](notices.md#on-the-desktop)). Neither ever asks you anything. Turning `tools/jobs`
-off (Preferences: Modules) removes the badge; open job windows stay as they are but no longer follow the hub (the
-job goes on). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+You do not have to watch it: the open cards and the messages to you (not yet acted on) of the proposed, running and
+paused jobs are the **Jobs** source of [Notices](notices.md), so they count in the one "needs you" number (the status
+bar's, What needs you's first line, the Notices list) and each new card is a desktop notification (D-Bus on Linux;
+`osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the backends are
+[Notices](notices.md#on-the-desktop)). An `overlap` card is advice: it counts but never interrupts. When the hub cannot
+be asked or goes away the count is not shown as a number: Notices says "Jobs: not known" and why, rather than showing
+the last count. The mode-line badge of earlier releases is gone (`drgnx-job-ui-badge-mode` is now the obsolete name of
+`drgnx-job-ui-attention-mode`, and `drgnx-job-ui-notify` of `drgnx-notice-desktop`). Nothing here ever asks you
+anything. Turning `tools/jobs` off (Preferences: Modules) removes the source and its items; open job windows stay as
+they are but no longer follow the hub (the job goes on). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply and a Dismiss.
@@ -229,7 +231,7 @@ not start, a stalled turn, a reviewer's answered permission, a restart with a re
 against a hub in a child process), `job-cards-test.el` (cards and their actions), `job-clash-test.el` and
 `job-clash-review-test.el` (the rules, the reviewer, the user's choice), `job-gate-test.el` (the gate),
 `job-cockpit-test.el` (reassign, block, the run order and Start as Job from the Work graph; the merge gate),
-`job-ui-test.el` and `test/ui/job-window-test.el` (the window, the badge, notifications), `job-exit-test.el` (a
+`job-ui-test.el` and `test/ui/job-window-test.el` (the window; `job-ui-test.el`: the Jobs source, not known, notifications), `job-exit-test.el` (a
 four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
 the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).
 

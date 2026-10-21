@@ -43,7 +43,7 @@ package directory (`DRGNX_USER_ELPA', deliberate: tests that load packages read 
 
 (defconst drgnx-test-env-set-variables
   '("HOME" "XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_STATE_HOME" "XDG_CACHE_HOME" "XDG_RUNTIME_DIR" "DRGNX_CONFIG_DIR"
-    "DRGNX_DATA_DIR" "TMPDIR" "GNUPGHOME" "DBUS_SESSION_BUS_ADDRESS")
+    "DRGNX_DATA_DIR" "TMPDIR" "GNUPGHOME" "DBUS_SESSION_BUS_ADDRESS" "DRGNX_EMACS")
   "Variables `drgnx-test-env' sets to something in the run: the scan of the caller's environment leaves them alone.")
 
 (defun drgnx-test-env--under-home (env)
@@ -78,7 +78,7 @@ HOME, other than `drgnx-test-env-scan-exempt'."
   "The environment of a TIER test run whose private directory is RUN: a list for `process-environment'.
 Entries \"K=V\" set, a bare \"K\" unsets.  TIER is one of `drgnx-test-env-tiers'.  Every tier: HOME, the XDG
 directories, DRGNX_CONFIG_DIR, DRGNX_DATA_DIR and TMPDIR under RUN, a private XDG_RUNTIME_DIR (RUN/run), a dead
-session bus, no provider key, DRGNX_TEST_ISOLATED, no durable hub.  The desktop variables are unset, except in a GUI
+session bus, no provider key, DRGNX_TEST_ISOLATED, no durable hub, DRGNX_EMACS naming this Emacs.  The desktop variables are unset, except in a GUI
 tier, which gets DISPLAY, the \"K=V\" strings of the harness compositor's display.  CONFIG: an external configuration
 directory whose code directories (`drgnx-test-env-config-links') are linked into RUN/config.
 Also unset: `drgnx-test-env-ambient-variables' (SSH agent, X authority, git configuration, agent sockets …) and any
@@ -103,6 +103,9 @@ other variable of the caller holding a path under the real HOME (`drgnx-test-env
                       ("XDG_CONFIG_HOME" . "xdg-config") ("XDG_DATA_HOME" . "xdg-data")
                       ("TMPDIR" . ".")))
             (list "DRGNX_TEST_ISOLATED=1")
+            ;; the Emacs a test's bin/drgnx or child runs is this one: never PATH's, a record in the real HOME, or
+            ;; none (the scan below would drop a caller's DRGNX_EMACS under HOME: macOS CI's Nidhogg.app is there)
+            (list (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
             ;; no durable hub that would outlive the run (the hub's own tests unset this) …
             (list "DRGNX_NO_HUB_START=1")
             ;; … and a hub one starts anyway ends with this Emacs (an interrupted run leaves none)

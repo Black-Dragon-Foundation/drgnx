@@ -389,6 +389,17 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     [ "$rt" = podman ] && [ "${1:-}" != --ui ] && elpa="$elpa,z"
     args+=(-v "$elpa" -e DRGNX_MODAL_ELPA=/modal-elpa)
   fi
+  # a git worktree's `.git' is a file naming an absolute host path (the common git dir's worktrees/NAME): mount that
+  # dir read-only at the same path, or git in the container exits 128. Read-only is enough: the tests only read the
+  # repository (a test that commits does so in a repository of its own under a temporary directory)
+  if [ -f "$here/.git" ]; then
+    local gcommon; gcommon="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [ -d "$gcommon" ]; then
+      case "$gcommon" in *:*) echo "drgnx: the git dir must not contain ':' (it is mounted with -v): $gcommon" >&2; return 2 ;; esac
+      local gmount="$gcommon:$gcommon:ro"; [ "$rt" = podman ] && gmount="$gmount,z"
+      args+=(-v "$gmount")
+    fi
+  fi
   "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
@@ -486,7 +497,7 @@ ui_compositor_ok() { # C — is C a compositor a GUI session can run under (harn
 test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one command on a fresh Fedora reaches a green doctor
   # Container 1 makes the encrypted key bundle (age) and commits it into a bare copy of the fixture configuration;
   # container 2, a fresh Fedora with only what a desktop has, runs install.sh --yes --config … --identity … and checks
-  # the outcome (test/bootstrap/in-container.sh; docs/develop/harness.md).  Fedora 44 builds Emacs from source (slow).
+  # the outcome (test/bootstrap/in-container.sh; docs/develop/harness.md).  Nidhogg is the pinned release, put in before install.sh runs (which keeps it); building it is `--install`'s job.
   local rt fedora=45 logs snap fixture log image rcc=0 mount tmproot home
   while (($#)); do
     case "$1" in
@@ -911,7 +922,9 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
     fi
   fi
   deadline=$((SECONDS + OPEN_WAIT)) notice=$((SECONDS + OPEN_WAIT / 3))   # wall-clock seconds: a poll takes more than its sleep
-  while ((SECONDS < deadline)); do
+  # SECONDS counts whole seconds and its first one can be nearly over: `<' would give up as early as OPEN_WAIT - 1 s
+  # (macOS CI: 2.4 s of 3), `<=' waits at least OPEN_WAIT s and under one more
+  while ((SECONDS <= deadline)); do
     probe -e t >/dev/null 2>&1 && return 0
     if [[ -z "$noticed" ]] && ((SECONDS >= notice)); then
       echo "drgnx: drgnx is still starting (waiting up to $OPEN_WAIT s)…" >&2; noticed=1

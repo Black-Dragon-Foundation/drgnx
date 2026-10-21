@@ -37,6 +37,27 @@ as_tester() { sudo -u tester -H env PATH="$home/.local/bin:/usr/local/bin:/usr/b
 # the mounted Nidhogg repository is root's; written as a file, since git may not be installed yet (install.sh installs it)
 printf '[safe]\n\tdirectory = *\n' >"$home/.gitconfig" && chown tester "$home/.gitconfig"
 
+case "$ID:$VERSION_ID" in
+  fedora:44|fedora:45|ubuntu:26.04) ;;   # Nidhogg's recipes (nidhogg/deps): the rest of this script
+  *)   # no recipe yet (NIDHOGG-DISTROS-1): the installer stops and installs no stock Emacs; the doctor fails on one
+    step "install.sh --yes: no Nidhogg recipe, exit 1, nothing installed"
+    rc=0; out="$(as_tester bash /src/install.sh --yes 2>&1)" || rc=$?
+    printf '%s\n' "$out"
+    ((rc == 1)) || fail "install.sh exited $rc, not 1"
+    grep -q 'no Nidhogg recipe for .* yet (NIDHOGG-DISTROS-1)' <<<"$out" || fail "the message does not name the missing recipe"
+    [[ ! -e "$home/.local/share/drgnx" && ! -e "$home/.local/opt" ]] || fail "the refused run installed something"
+    if [[ "$ID" == arch ]]; then   # --method keep on the distribution's own Emacs: drgnx runs, and the doctor says FAIL
+      step "--method keep on Arch's own Emacs: emacs-version FAILs"
+      pacman -S --noconfirm --needed emacs-wayland >/dev/null
+      as_tester bash /src/install.sh --yes --method keep || fail "install.sh --method keep exited $?"
+      rc=0; out="$(as_tester drgnx doctor)" || rc=$?
+      printf '%s\n' "$out"
+      grep -q '^FAIL  emacs-version ' <<<"$out" || fail "emacs-version is not a failure for stock Emacs"
+    fi
+    step "E2E OK ($PRETTY_NAME)"
+    exit 0 ;;
+esac
+
 step "install.sh --yes"
 as_tester bash /src/install.sh --yes || fail "install.sh exited $?"
 [[ -d "$home/.local/share/drgnx/drgnx/.git" ]] || fail "drgnx was not cloned"
@@ -44,12 +65,7 @@ as_tester bash /src/install.sh --yes || fail "install.sh exited $?"
 step "drgnx doctor"
 out="$(as_tester drgnx doctor)" || { printf '%s\n' "$out"; fail "the doctor reports a failure"; }
 printf '%s\n' "$out"
-case "$ID:$VERSION_ID" in
-  fedora:44|fedora:45|ubuntu:26.04)   # Nidhogg's recipes (nidhogg/deps)
-    grep -q '^OK    emacs-version .*Nidhogg 31.1-nidhogg.1' <<<"$out" || fail "emacs-version is not Nidhogg 31.1-nidhogg.1" ;;
-  *)   # no recipe yet: stock GNU Emacs 31.1, which the doctor warns about
-    grep -q '^WARN  emacs-version ' <<<"$out" || fail "emacs-version is not a warning about stock Emacs" ;;
-esac
+grep -q '^OK    emacs-version .*Nidhogg 31.1-nidhogg.1' <<<"$out" || fail "emacs-version is not Nidhogg 31.1-nidhogg.1"
 grep -q '^OK    native-compilation ' <<<"$out" || fail "native compilation is not ok"
 grep -q '^OK    gui ' <<<"$out" || fail "not a graphical build"
 grep -q '^OK    tree-sitter ' <<<"$out" || fail "no tree-sitter"
@@ -69,25 +85,9 @@ step "second run is a no-op"
 rc=0; out="$(as_tester bash /src/install.sh --yes)" || rc=$?
 ((rc == 0)) || { printf '%s\n' "$out"; fail "second run exited $rc"; }
 printf '%s\n' "$out"
-case "$ID:$VERSION_ID" in
-  fedora:44|fedora:45|ubuntu:26.04) grep -q 'keep the installed Nidhogg' <<<"$out" || fail "second run did not keep the installed Nidhogg" ;;
-  *) grep -q 'keep the installed Emacs' <<<"$out" || fail "second run did not keep the installed Emacs" ;;
-esac
+grep -q 'keep the installed Nidhogg' <<<"$out" || fail "second run did not keep the installed Nidhogg"
 grep -q 'git pull --ff-only' <<<"$out" || fail "second run did not update the checkout"
 ! grep -q '^As root:' <<<"$out" || fail "second run ran a root step"
-
-if [[ "$ID" == fedora ]] && rpm -q emacs-pgtk >/dev/null 2>&1; then
-  # Fedora's `emacs` is an alternatives link to the emacs-desktop wrapper, which prefers a graphical build to
-  # emacs-nw (priorities 85 for the wrapper, 80 pgtk, 65 nw): a terminal-only Emacs beside ours must not take over.
-  step "emacs-nw beside emacs-pgtk: emacs stays graphical"
-  dnf -y -q install emacs-nw >/dev/null
-  rpm -q emacs-nw >/dev/null || fail "emacs-nw was not installed"
-  printf 'emacs -> %s\n' "$(readlink -f "$(command -v emacs)")"
-  gui="$(as_tester emacs --batch -Q --eval '(princ (cond ((featurep (quote pgtk)) "pgtk") ((featurep (quote x)) "x") (t "nil")))')"
-  [[ "$gui" == pgtk ]] || fail "with emacs-nw installed, emacs is not the pgtk build (it reports gui=$gui)"
-  out="$(as_tester bash /src/install.sh --yes)" || { printf '%s\n' "$out"; fail "run with emacs-nw present exited $?"; }
-  grep -q 'keep the installed \(Emacs\|Nidhogg\)' <<<"$out" || { printf '%s\n' "$out"; fail "emacs-nw beside emacs-pgtk made the installer replace Emacs"; }
-fi
 
 step "--dry-run changes nothing"
 touch /tmp/before-dry-run

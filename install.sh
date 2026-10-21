@@ -28,10 +28,6 @@ NIDHOGG_REPO="${DRGNX_INSTALL_NIDHOGG_REPO:-https://github.com/Black-Dragon-Foun
 NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-29f76866bd1d7a19307ffe2eb330556c5291e0cf}"
 DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drgnx.git}"
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/guide/install.md
-GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
-GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
-EMACS_SIGNER="${DRGNX_INSTALL_SIGNER:-8DC2487E51ABDD90B5C4753F0F56D0553B6D411B}"   # who signs $EMACS_VERSION (docs/guide/install.md)
-APT_DIR="${DRGNX_INSTALL_APT_DIR:-/etc/apt}"
 HOMEBREW_INSTALLER_URL=https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
 # Ratatoskr (the agent runtime, Rust) is built from source: the oldest Rust that builds it, the toolchain a private
 # rustup installs when the distro has none new enough, and the rustup release that installs it.  rustup-init comes from
@@ -83,12 +79,12 @@ usage() {
 usage: install.sh [options]
   --dry-run          print the plan and exit; change nothing
   --yes              do not ask (root steps may still ask for your password)
-  --prefix DIR       where a source-built Emacs and the drgnx command go (default ~/.local)
+  --prefix DIR       where Nidhogg's links and the drgnx command go (default ~/.local)
   --dir DIR          where drgnx is checked out (default ~/.local/share/drgnx/drgnx)
   --source-dir DIR   use this existing drgnx checkout instead of cloning
   --method M         auto (default) | nidhogg (drgnx's own Emacs, built from source: Fedora 44/45,
-                     Ubuntu 26.04, macOS) | keep (do not install Emacs) | package | source
-                     | cask | formula (macOS: Homebrew's emacs-plus; stock GNU Emacs, drgnx doctor warns)
+                     Ubuntu 26.04, macOS) | keep (do not install Emacs; drgnx doctor fails on
+                     anything but Nidhogg)
   --jobs N           parallel make jobs for the build (default: by CPUs and memory; or DRGNX_INSTALL_JOBS)
   --memory GIB       memory cap of the Nidhogg container build, whole GiB, at least 3 (default: by available
                      memory; or DRGNX_INSTALL_MEMORY)
@@ -126,7 +122,11 @@ parse_args() {
     esac
     shift
   done
-  case "$METHOD" in auto|nidhogg|package|source|keep|cask|formula) ;; *) die 2 "--method must be auto, nidhogg, keep, package, source, cask or formula" ;; esac
+  case "$METHOD" in
+    auto|nidhogg|keep) ;;
+    package|source|cask|formula) die 2 "method $METHOD was removed: drgnx runs on Nidhogg (see docs/guide/install.md, \"Nidhogg\")" ;;
+    *) die 2 "--method must be auto, nidhogg or keep" ;;
+  esac
   if [[ -n "$OPT_JOBS" && ! "$OPT_JOBS" =~ ^[1-9][0-9]*$ ]]; then die 2 "--jobs (DRGNX_INSTALL_JOBS) must be a whole number, 1 or more"; fi
   if [[ -n "$OPT_MEMORY" && ! "$OPT_MEMORY" =~ ^[1-9][0-9]*$ ]]; then die 2 "--memory (DRGNX_INSTALL_MEMORY) must be whole GiB, 3 or more"; fi
   if [[ -n "$CONFIG" && -n "$CHEZMOI" ]]; then die 2 "--config and --chezmoi cannot be used together"; fi
@@ -177,14 +177,8 @@ os_field() { # FILE KEY → value of KEY in an os-release file, unquoted
 detect() {
   UNAME="${DRGNX_INSTALL_UNAME:-$(uname -s)}"
   ARCH="${DRGNX_INSTALL_ARCH:-$(uname -m)}"
-  SESSION="${DRGNX_INSTALL_SESSION:-${XDG_SESSION_TYPE:-}}"
   OSTREE=0         # image-based (Silverblue, Kinoite, Bazzite, …): the system is read-only, dnf cannot install
   if [[ -e "${DRGNX_INSTALL_OSTREE_BOOTED:-/run/ostree-booted}" ]]; then OSTREE=1; fi
-  if [[ -z "$SESSION" || "$SESSION" == tty ]]; then
-    if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then SESSION=wayland
-    elif [[ -n "${DISPLAY:-}" ]]; then SESSION=x11
-    else SESSION=wayland; fi                  # no display (server, container): the pgtk build works on both
-  fi
   if [[ "$UNAME" == Darwin ]]; then
     OS=macos FAMILY=macos ID=macos VERSION_ID="${DRGNX_INSTALL_MACOS:-$(sw_vers -productVersion 2>/dev/null || echo 0)}"
     PRETTY="macOS $VERSION_ID ($ARCH)"
@@ -234,8 +228,8 @@ probe_emacs() {
   # Is there already an Emacs that is good for drgnx (>= 31.1, native compilation that compiles, graphical)?
   # EMACS_NIDHOGG: the one found is a Nidhogg of this version ("" for stock GNU Emacs).
   # On macOS also /Applications/Emacs.app, which is usually not on PATH (DRGNX_INSTALL_MACOS_APP=none|PATH overrides
-  # it: tests). APP_OLD: that app is there but not good enough — what it is ("Emacs 30.2", say, or "unknown"; anything below 31.1 is not good enough).
-  EMACS_FOUND="" EMACS_INFO="" APP_OLD="" EMACS_NIDHOGG=""
+  # it: tests).
+  EMACS_FOUND="" EMACS_INFO="" EMACS_NIDHOGG=""
   local candidates=() app=""
   if [[ -n "${DRGNX_INSTALL_EMACS:-}" ]]; then candidates=("$DRGNX_INSTALL_EMACS")
   else candidates=("$(nidhogg_bin)" "$PREFIX/bin/nidhogg" "$PREFIX/bin/emacs" emacs); fi
@@ -248,19 +242,15 @@ probe_emacs() {
     [[ "$e" == none ]] && continue
     command -v "$e" >/dev/null 2>&1 || continue
     info="$(emacs_info "$e")"
-    if [[ -z "$info" ]]; then
-      if [[ -n "$app" && "$e" == "$app" ]]; then APP_OLD=unknown; fi
-      continue
-    fi
+    [[ -n "$info" ]] || continue
     EMACS_INFO="$info"
     local v native gui nidhogg
     read -r v native gui nidhogg <<<"$info"
     if version_ge "$v" "$EMACS_VERSION" && [[ "$native" == t && "$gui" != nil ]]; then
-      EMACS_FOUND="$(command -v "$e")" APP_OLD=""
+      EMACS_FOUND="$(command -v "$e")"
       if [[ "${nidhogg:--}" != - ]]; then EMACS_NIDHOGG="$nidhogg"; fi
       return
     fi
-    if [[ -n "$app" && "$e" == "$app" ]]; then APP_OLD="Emacs $v"; fi
   done
 }
 
@@ -332,51 +322,17 @@ choose_nidhogg_mode() { # NIDHOGG_MODE container | host, NIDHOGG_WHY, NIDHOGG_ME
 
 choose_method() {
   nidhogg_distro
-  NO_NIDHOGG=0     # 1: auto found no Nidhogg recipe and goes on with a stock GNU Emacs (the plan says so)
   if [[ "$METHOD" != auto ]]; then CHOSEN="$METHOD"
   elif [[ -n "$EMACS_FOUND" && "$EMACS_NIDHOGG" == "$NIDHOGG_VERSION" ]]; then CHOSEN=keep
-  elif [[ -n "$NIDHOGG_DISTRO" ]]; then CHOSEN=nidhogg
-  elif [[ -n "$EMACS_FOUND" ]]; then CHOSEN=keep NO_NIDHOGG=1
-  else
-    NO_NIDHOGG=1
-    case "$FAMILY" in
-      macos) if [[ "$ARCH" == arm64 ]] && version_ge "$VERSION_ID" 15; then CHOSEN=cask; else CHOSEN=formula; fi ;;
-      fedora) if version_ge "${FEDORA_VERSION:-0}" 45; then CHOSEN=package; else CHOSEN=source; fi ;;
-      arch) CHOSEN=package ;;
-      debian) CHOSEN=source ;;
-      *) die 2 "no automatic install for ${PRETTY:-this system} yet. Install GNU Emacs $EMACS_VERSION with native compilation (see $DOCS_URL), then run: bash install.sh --method keep" ;;
-    esac
-  fi
-  if [[ "$CHOSEN" == formula && "$FAMILY" != macos ]]; then die 2 "--method formula is for macOS (Homebrew's emacs-plus@31)"; fi
-  if [[ "$CHOSEN" == cask && "$FAMILY" != macos ]]; then die 2 "--method cask is for macOS (Homebrew's emacs-plus-app)"; fi
-  if [[ "$CHOSEN" == cask && -n "$APP_OLD" ]]; then   # the cask installs /Applications/Emacs.app: never over yours
-    die 2 "an older Emacs.app is in /Applications ($APP_OLD): move it aside, or run with --method formula (emacs-plus@31, built from source beside it) — see $DOCS_URL"
-  fi
-  if [[ "$CHOSEN" == package && "$FAMILY" == debian ]]; then CHOSEN=source; fi   # no 31.1 packages there yet
-  if ((OSTREE)) && [[ "$FAMILY" == fedora && ( "$CHOSEN" == package || "$CHOSEN" == source || "$CHOSEN" == nidhogg ) ]]; then
-    die 2 "${PRETTY:-this system} is image-based (rpm-ostree): dnf cannot install here. Either run this installer inside a toolbox (toolbox create, toolbox enter, then bash install.sh), or layer Emacs: rpm-ostree install emacs-pgtk, reboot, then run: bash install.sh --method keep (see $DOCS_URL)"
-  fi
-  case "$FAMILY:$SESSION" in
-    fedora:x11) PKG=(dnf install -y emacs-gtk+x11) ;;
-    fedora:*)   PKG=(dnf install -y emacs-pgtk) ;;
-    arch:x11)   PKG=(pacman -Syu --needed --noconfirm emacs) ;;          # -yu: Arch supports no partial upgrades
-    arch:*)     PKG=(pacman -Syu --needed --noconfirm emacs-wayland) ;;
-    *)          PKG=() ;;
-  esac
-  if [[ "$SESSION" == x11 ]]; then GUI_FLAG=--with-x-toolkit=gtk3; else GUI_FLAG=--with-pgtk; fi
-  case "$FAMILY" in
-    fedora) DEPS=(dnf builddep -y emacs) ;;
-    debian) DEPS=(apt-get build-dep -y emacs) ;;
-    *)      DEPS=() ;;
-  esac
-  if [[ ( "$CHOSEN" == package && ${#PKG[@]} -eq 0 ) || ( "$CHOSEN" == source && ${#DEPS[@]} -eq 0 ) ]]; then
-    die 2 "no --method $CHOSEN recipe for ${PRETTY:-this system} — use --method auto, or install GNU Emacs $EMACS_VERSION yourself (see $DOCS_URL), then run: bash install.sh --method keep"
+  else CHOSEN=nidhogg
   fi
   if [[ "$CHOSEN" == nidhogg && -z "$NIDHOGG_DISTRO" ]]; then
-    die 2 "no Nidhogg build recipe for ${PRETTY:-this system} (Fedora 44/45, Ubuntu 26.04, macOS) — see $DOCS_URL"
+    if ((OSTREE)) && [[ "$FAMILY" == fedora ]]; then   # Fedora 44/45 have a recipe, but dnf cannot install on the image
+      die 2 "${PRETTY:-this system} is image-based (rpm-ostree): dnf cannot install here. Run this installer inside a toolbox (toolbox create, toolbox enter, then bash install.sh) — see $DOCS_URL"
+    fi
+    die 1 "no Nidhogg recipe for ${PRETTY:-this system} yet (NIDHOGG-DISTROS-1): Nidhogg builds on Fedora 44/45, Ubuntu 26.04 and macOS — see $DOCS_URL"
   fi
   BUILD_DIR="$(drgnx_dir cache)/build"
-  CONFIGURE=(./configure "--prefix=$PREFIX" --with-native-compilation=aot --with-tree-sitter "$GUI_FLAG")
   JOBS="$(build_jobs)"
   if [[ "$CHOSEN" == nidhogg ]]; then choose_nidhogg_mode; fi
   if [[ -n "$OPT_JOBS" ]]; then JOBS="$OPT_JOBS"; fi
@@ -424,15 +380,9 @@ plan_homebrew() { # the Homebrew lines of the plan (macOS)
   fi
 }
 
-planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tell (the formula's path is an estimate:
-                  # beside brew; the run records `brew --prefix emacs-plus@31` itself)
+planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tell
   case "$CHOSEN" in
     keep) echo "${EMACS_FOUND:-emacs}" ;;
-    nidhogg) nidhogg_bin ;;
-    cask) echo /Applications/Emacs.app/Contents/MacOS/Emacs ;;
-    formula) if [[ -n "$BREW" ]]; then echo "$(dirname "$(dirname "$BREW")")/opt/emacs-plus@31/bin/emacs"
-             else echo "emacs-plus@31's bin/emacs"; fi ;;
-    source) echo "$PREFIX/bin/emacs" ;;
     *) nidhogg_bin ;;
   esac
 }
@@ -441,10 +391,6 @@ print_plan() {
   say "drgnx install — ${PRETTY:-$OS}"
   say ""
   say "1. Emacs:"
-  if ((NO_NIDHOGG)); then
-    if [[ "$CHOSEN" == keep ]]; then note "Nidhogg has no build recipe for ${PRETTY:-this system} yet: the installed GNU Emacs is kept (drgnx doctor warns about it)"
-    else note "Nidhogg has no build recipe for ${PRETTY:-this system} yet: GNU Emacs $EMACS_VERSION is installed instead (drgnx doctor warns about it)"; fi
-  fi
   case "$CHOSEN" in
     keep) if [[ -n "$EMACS_NIDHOGG" ]]; then note "keep the installed Nidhogg $EMACS_NIDHOGG ($EMACS_FOUND)"
           elif [[ -n "$EMACS_FOUND" ]]; then note "keep the installed Emacs ${EMACS_INFO%% *} ($EMACS_FOUND): native compilation works"
@@ -465,20 +411,6 @@ print_plan() {
         note "build on this machine ($NIDHOGG_WHY): make -j$JOBS (logs: $BUILD_DIR/nidhogg-build)"
       fi
       note "link $PREFIX/bin/nidhogg and $PREFIX/bin/nidhoggclient to it" ;;
-    package) note "install with: sudo ${PKG[*]}" ;;
-    cask) plan_homebrew
-          note "${BREW:-brew} trust d12frosted/emacs-plus && ${BREW:-brew} tap d12frosted/emacs-plus"
-          note "${BREW:-brew} install --cask emacs-plus-app   (prebuilt, native compilation)" ;;
-    formula) plan_homebrew
-             note "${BREW:-brew} trust d12frosted/emacs-plus && ${BREW:-brew} tap d12frosted/emacs-plus"
-             note "${BREW:-brew} install emacs-plus@31   (built from source, ~30 minutes)" ;;
-    source)
-      note "build GNU Emacs $EMACS_VERSION from source into $PREFIX (about 20-40 minutes)"
-      note "download $GNU_MIRROR/emacs-$EMACS_VERSION.tar.xz and verify its signature (gnu-keyring.gpg) before installing anything"
-      [[ "$FAMILY" == debian ]] && note "enable Debian source packages for build dependencies (a drgnx-owned apt list, removed afterwards)"
-      note "build dependencies: sudo ${DEPS[*]}"
-      [[ "$FAMILY" == debian ]] && note "then libgccjit for the default gcc (libgccjit-N-dev, N = gcc's major version)"
-      note "${CONFIGURE[*]} && make -j$JOBS && make install   (in $BUILD_DIR, logs kept there; jobs limited by memory)" ;;
   esac
   say "2. drgnx:"
   if [[ -n "$SOURCE_DIR" ]]; then note "use the checkout in $DIR"
@@ -531,17 +463,10 @@ as_root() { # [--no-ask] CMD… — announced, confirmed (unless --no-ask: clean
   sudo "$@"
 }
 
-install_emacs_package() {
-  case "$FAMILY" in
-    fedora|arch) as_root "${PKG[@]}" ;;
-  esac
-  EMACS_BIN=emacs
-}
-
 install_homebrew() { # macOS without Homebrew: explained, asked, then Homebrew's own installer
   [[ -z "$BREW" ]] || return 0
   say ""
-  say "Emacs comes from Homebrew, which is not installed. Its installer asks for your password,"
+  say "Nidhogg's build dependencies come from Homebrew, which is not installed. Its installer asks for your password,"
   say "installs Apple's Command Line Tools if they are missing, and takes a few minutes."
   confirm "Install Homebrew?" || die 1 "Homebrew is needed on macOS: install it from https://brew.sh, then run this again"
   local script
@@ -579,127 +504,7 @@ brew_profile_hint() { # Homebrew's own installer asks you to put this in your pr
   offer_rc_line "$rc" "$line"
 }
 
-install_emacs_brew() {
-  [[ -n "$BREW" ]] || die 1 "Homebrew is needed on macOS: install it from https://brew.sh, then run this again"
-  "$BREW" trust d12frosted/emacs-plus 2>/dev/null || true
-  "$BREW" tap d12frosted/emacs-plus
-  if [[ "$CHOSEN" == cask ]]; then
-    "$BREW" install --cask emacs-plus-app
-    EMACS_BIN=/Applications/Emacs.app/Contents/MacOS/Emacs
-  else
-    "$BREW" install emacs-plus@31
-    EMACS_BIN="$("$BREW" --prefix emacs-plus@31)/bin/emacs"
-  fi
-}
-
-enable_deb_src() {
-  # drgnx-owned lists mirroring every system source as deb-src (deb822 .sources, one-line .list files and
-  # sources.list — Linux Mint uses the .list form), so `apt-get build-dep` works. Removed afterwards, also
-  # when a step fails or the run is interrupted.
-  local d="$APT_DIR/sources.list.d" f sources list
-  sources="$(mktemp)" list="$(mktemp)"
-  for f in "$d"/*.sources; do
-    [[ -e "$f" && "$f" != "$d"/drgnx-deb-src.* ]] || continue
-    sed 's/^Types:.*/Types: deb-src/' "$f" >>"$sources"; printf '\n' >>"$sources"
-  done
-  for f in "$APT_DIR/sources.list" "$d"/*.list; do
-    [[ -r "$f" && "$f" != "$d"/drgnx-deb-src.* ]] || continue
-    { grep -E '^deb ' "$f" || true; } | sed 's/^deb /deb-src /' >>"$list"
-  done
-  trap disable_deb_src EXIT
-  trap 'exit 130' INT TERM HUP     # so the EXIT trap runs on an interrupt too
-  if [[ -s "$sources" ]]; then as_root install -m 644 "$sources" "$d/drgnx-deb-src.sources"; fi
-  if [[ -s "$list" ]]; then as_root install -m 644 "$list" "$d/drgnx-deb-src.list"; fi
-  rm -f "$sources" "$list"
-  as_root apt-get update -qq
-}
-
-disable_deb_src() { # no question: the user already agreed to these files
-  trap - EXIT INT TERM HUP
-  as_root --no-ask rm -f "$APT_DIR/sources.list.d/drgnx-deb-src.sources" "$APT_DIR/sources.list.d/drgnx-deb-src.list"
-  as_root --no-ask apt-get update -qq || true
-}
-
-download_tools() { # curl, gpg and xz — installed as root only when one is missing
-  local t
-  for t in curl gpg xz; do
-    command -v "$t" >/dev/null 2>&1 && continue
-    case "$FAMILY" in
-      fedora) as_root dnf install -y curl gnupg2 xz ;;
-      debian)
-        as_root apt-get update -qq
-        as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates gnupg xz-utils ;;
-    esac
-    return
-  done
-}
-
-download() { # URL FILE — no half file is kept
-  curl -fsSL -o "$2" "$1" && return
-  rm -f "$2"
-  die 1 "could not download $1 — nothing was installed (no network, or the mirror has not synced the release yet: try again later)"
-}
-
-fetch_emacs_source() { # download, verify and unpack into $BUILD_DIR/emacs-VERSION (kept across runs)
-  local src="emacs-$EMACS_VERSION"
-  mkdir -p "$BUILD_DIR"
-  cd "$BUILD_DIR"
-  [[ -d "$src" ]] && return
-  say "Downloading $src and its signature…"
-  download "$GNU_MIRROR/$src.tar.xz" "$src.tar.xz"
-  download "$GNU_MIRROR/$src.tar.xz.sig" "$src.tar.xz.sig"
-  download "$GNU_KEYRING" gnu-keyring.gpg
-  rm -rf gnupg && mkdir -m 700 gnupg   # a private gpg home: the user's ~/.gnupg is neither needed nor touched
-  if ! gpg --homedir ./gnupg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" --status-fd 3 \
-       --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log" 3>"$BUILD_DIR/gpg.status"; then
-    rm -f "$src.tar.xz" "$src.tar.xz.sig"
-    die 1 "the signature of $src.tar.xz does not verify — nothing was installed (details: $BUILD_DIR/gpg.log)"
-  fi
-  # Any key of the GNU keyring signs validly; the release's signer is pinned (VALIDSIG: the signing key's
-  # fingerprint, and last the primary key's).
-  if ! awk -v fp="$EMACS_SIGNER" '$1 == "[GNUPG:]" && $2 == "VALIDSIG" && ($3 == fp || $NF == fp) { ok = 1 }
-                                  END { exit !ok }' "$BUILD_DIR/gpg.status"; then
-    rm -f "$src.tar.xz" "$src.tar.xz.sig"
-    die 1 "$src.tar.xz has a good signature, but not by the key that signs Emacs releases ($EMACS_SIGNER) — nothing was installed (details: $BUILD_DIR/gpg.log)"
-  fi
-  grep -E 'Good signature' "$BUILD_DIR/gpg.log" | sed 's/^/  /' || true
-  rm -rf "$src.partial"      # unpacked aside: an interrupted unpack is never taken for a verified tree
-  mkdir "$src.partial"
-  tar xf "$src.tar.xz" -C "$src.partial"
-  mv "$src.partial/$src" "$src"
-  rmdir "$src.partial"
-}
-
-install_emacs_source() {
-  download_tools
-  fetch_emacs_source         # verified before anything is installed
-  case "$FAMILY" in
-    fedora)
-      as_root dnf install -y dnf-plugins-core git make gcc
-      as_root "${DEPS[@]}" ;;
-    debian)
-      as_root apt-get update -qq
-      as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git build-essential
-      enable_deb_src
-      as_root env DEBIAN_FRONTEND=noninteractive "${DEPS[@]}" -qq
-      disable_deb_src
-      # The distro may build its emacs with an older gcc (Ubuntu 26.04: gcc-14, default 15).
-      as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "libgccjit-$(gcc -dumpversion | cut -d. -f1)-dev" ;;
-    *) die 2 "no source-build recipe for $PRETTY — see $DOCS_URL" ;;
-  esac
-  cd "$BUILD_DIR/emacs-$EMACS_VERSION"
-  say "Configuring (log: $BUILD_DIR/configure.log)…"
-  "${CONFIGURE[@]}" >"$BUILD_DIR/configure.log" 2>&1 || die 1 "configure failed — see $BUILD_DIR/configure.log"
-  grep -q 'Does Emacs have native lisp compiler? *yes' "$BUILD_DIR/configure.log" ||
-    die 1 "configure did not enable native compilation (libgccjit missing?) — see $BUILD_DIR/configure.log"
-  say "Building, this takes a while (log: $BUILD_DIR/make.log)…"
-  make -j"$JOBS" >"$BUILD_DIR/make.log" 2>&1 ||
-    die 1 "the build failed — see $BUILD_DIR/make.log (nothing was installed)"
-  make install >"$BUILD_DIR/install.log" 2>&1 || die 1 "make install failed — see $BUILD_DIR/install.log"
-  EMACS_BIN="$PREFIX/bin/emacs"
-}
-
-need_git() { # a package install (Arch, Fedora 45) does not bring git
+need_git() { # a fresh system may not have git
   command -v git >/dev/null 2>&1 && return
   case "$FAMILY" in
     fedora) as_root dnf install -y git ;;
@@ -1110,9 +915,6 @@ main() {
   EMACS_BIN="${EMACS_FOUND:-emacs}"
   case "$CHOSEN" in
     keep) if keeps_installed_nidhogg; then link_nidhogg; fi ;;   # bin/nidhogg and nidhoggclient must exist for drgnx to find it
-    package) install_emacs_package ;;
-    cask|formula) install_homebrew; install_emacs_brew ;;
-    source) install_emacs_source ;;
     nidhogg)
       fetch_nidhogg
       if [[ "$FAMILY" == macos ]]; then install_homebrew; fi

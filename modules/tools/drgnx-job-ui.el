@@ -1,10 +1,11 @@
-;;; drgnx-job-ui.el --- Jobs in the editor: the Plan Job commands, the badge and notifications -*- lexical-binding: t -*-
+;;; drgnx-job-ui.el --- Jobs in the editor: the Plan Job commands and jobs as a source of what needs you -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The Plan Job commands, and what tells you a job needs you when you are not looking: a badge in the mode line (for
-;; those without the status bar) and a notification per new card.  A job shows in the Work cockpit: Show Job in Work
+;; The Plan Job commands, and what tells you a job needs you when you are not looking: the open cards and the messages
+;; to you of the jobs are the `jobs' source of the notice model (`drgnx-notice-set'), so they count in the one "needs
+;; you" number and a new one reaches the desktop through the notice routes.  A job shows in the Work cockpit: Show Job in Work
 ;; filters it to the job — what needs you (cards with their actions, messages agents sent you, the job's tasks, agents
 ;; and spend) and the decision log are the cockpit's parts (drgnx-cockpit-cards.el; until M12f they were a frame of
 ;; their own, the job window).  See docs/guide/jobs.md.
@@ -17,7 +18,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-timer)
-(require 'drgnx-memo)
+(require 'drgnx-notice)
 (require 'drgnx-notice-desktop)
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -31,8 +32,9 @@
   "The hub's client, loaded when it is not yet."
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client)))
 
-(defvar drgnx-job-ui-badge-mode)
 (defvar drgnx-job-merge-gate)
+(defvar drgnx-notice--sources)
+(defvar drgnx-job-ui-attention-mode)
 
 (defun drgnx-job-ui--v (x) (unless (memq x '(:null :false)) x))
 
@@ -59,39 +61,9 @@ own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
   (unless (fboundp 'drgnx-cockpit-show-job) (user-error "The Work cockpit is off (module tools/cockpit)"))
   (drgnx-cockpit-show-job id))
 
-;;;; The badge and notifications: nobody has to watch the cockpit
+;;;; What needs you, counted once: the notice model's `jobs' source and the Work cockpit's What needs you
 
-(defvar drgnx-job-ui-notify t "Non-nil: a new card is a desktop notification (else a message in the echo area).")
-(defvar drgnx-job-ui--badge "" "The mode line's badge: \" ⚑N\" while N things of jobs need you, else empty.")
-(defvar drgnx-job-ui--badge-job nil "The job with the newest card: the one the badge opens.")
-(defvar drgnx-job-ui--notified (make-hash-table :test #'equal) "Card ids already notified.")
-
-(defvar drgnx-job-ui-badge-map
-  (let ((m (make-sparse-keymap)))
-    (define-key m [mode-line mouse-1] #'drgnx-job-ui--badge-click)
-    m)
-  "A click on the badge opens the Work cockpit at the job with the newest card.")
-
-(defun drgnx-job-ui--badge-click ()
-  "The Work cockpit at the job with the newest card; every job's when only messages wait."
-  (interactive)
-  (cond (drgnx-job-ui--badge-job (drgnx-job-ui-show drgnx-job-ui--badge-job))
-        ((fboundp 'drgnx-cockpit-show-jobs) (drgnx-cockpit-show-jobs))))
-
-(drgnx-memo-define job-badge :keys (drgnx-job-ui--badge)
-                   :doc "The mode line's badge string, built again only when the badge text is set to another string.")
-
-(defun drgnx-job-ui--badge-segment ()
-  "The badge for the mode line: the memo `job-badge' (a redisplay with the badge unchanged allocates nothing)."
-  (drgnx-memo job-badge nil
-              (if (string-empty-p drgnx-job-ui--badge) ""
-                (propertize drgnx-job-ui--badge 'face 'warning 'mouse-face 'mode-line-highlight 'local-map drgnx-job-ui-badge-map
-                            'help-echo "A job needs you: click to see it in the Work cockpit"))))
-
-;;;; What needs you, counted once: the badge, the Work cockpit's What needs you, the status bar
-
-(defvar drgnx-job-ui--needs-you nil
-  "How many things of jobs need the user, as last counted (`drgnx-job-ui-note-jobs'); nil when not known.")
+(define-obsolete-variable-alias 'drgnx-job-ui-notify 'drgnx-notice-desktop "drgnx M12f")
 
 (defun drgnx-job-ui--open-items (job)
   "JOB's (a `job/status' summary) open cards and messages to the user not acted on, when the job is proposed,
@@ -116,66 +88,88 @@ running and paused jobs — and the job with the newest card.  The one count: th
           (when (> (plist-get c :id) newest-id) (setq newest-id (plist-get c :id) newest (plist-get j :id))))))
     (cons n newest)))
 
+(define-obsolete-function-alias 'drgnx-job-ui-needs-you #'drgnx-needs-you-count "drgnx M12f")
+
+(defun drgnx-job-ui--source-p ()
+  "Non-nil while the `jobs' notice source is defined: the module `tools/jobs' is on."
+  (and (gethash 'jobs drgnx-notice--sources) t))
+
+(defun drgnx-job-ui--line (text)
+  "TEXT as one line of at most 100 characters."
+  (truncate-string-to-width (string-join (split-string (format "%s" text) "[\n\r]+" t) " ") 100 nil nil "…"))
+
+(defun drgnx-job-ui--items (jobs)
+  "The notice items for JOBS (`job/status' summaries): each open card, each message to the user not acted on."
+  (let ((items nil))
+    (dolist (j jobs)
+      (when (member (plist-get j :status) '("proposed" "running" "paused"))
+        (let ((job (plist-get j :id)))
+          (dolist (c (drgnx-job-ui--v (plist-get j :cards)))
+            (push (nconc (list :id (cons 'card (plist-get c :id)) :text (format "%s — %s" job (plist-get c :title))
+                               :command (list 'drgnx-job-ui-show job) :scope job)
+                         ;; an overlap card is advice: it counts, it never interrupts
+                         (when (equal (plist-get c :kind) "overlap") (list :echo nil)))
+                  items))
+          (dolist (m (drgnx-job-ui--v (plist-get j :messages)))
+            (unless (equal (plist-get m :state) "acted")
+              (push (list :id (cons 'message (plist-get m :id))
+                          :text (drgnx-job-ui--line (format "%s — %s: %s" job (plist-get m :sender) (plist-get m :text)))
+                          :command (list 'drgnx-job-ui-show job) :scope job)
+                    items))))))
+    (nreverse items)))
+
 (defun drgnx-job-ui-note-jobs (jobs)
-  "Every job's summary (JOBS, as `job/status' lists them) was read: count what needs the user once — the badge and
-`drgnx-job-ui-needs-you' follow.  The badge's own question and the cockpit's every-job pane call it."
-  (pcase-let ((`(,n . ,job) (drgnx-job-ui-needs-you-count jobs)))
-    (setq drgnx-job-ui--needs-you n drgnx-job-ui--badge (if (> n 0) (format " ⚑%d" n) "") drgnx-job-ui--badge-job job)
+  "Every job's summary (JOBS, as `job/status' lists them) was read: they are the `jobs' set of the notice model, the
+one \"needs you\" count's.  The recount and the cockpit's every-job pane call it; nothing happens while `tools/jobs'
+is off (no source)."
+  (when (drgnx-job-ui--source-p)
+    (drgnx-notice-set 'jobs (drgnx-job-ui--items jobs))
     (force-mode-line-update t)))
 
-(defun drgnx-job-ui-needs-you ()
-  "How many things of jobs need the user, as last counted; nil when not known (no hub, or it went away).  Cached:
-for redisplay code (the status bar's jobs segment)."
-  drgnx-job-ui--needs-you)
+(defun drgnx-job-ui--unknown (reason)
+  "The jobs' count is not known (REASON says why): a count that cannot be read again must not stay as if current."
+  (when (drgnx-job-ui--source-p)
+    (drgnx-notice-set 'jobs :unknown :reason reason)
+    (force-mode-line-update t)))
 
-(defun drgnx-job-ui--badge-clear ()
-  "Say nothing: a count that cannot be read again must not stay on screen as if it were current."
-  (setq drgnx-job-ui--badge "" drgnx-job-ui--badge-job nil drgnx-job-ui--needs-you nil)
-  (force-mode-line-update t))
+(defun drgnx-job-ui--unknown-gone ()
+  "`drgnx-hub-disconnect-functions': the hub went away."
+  (drgnx-job-ui--unknown "Jobs: not known — the hub went away"))
 
 (defun drgnx-job-ui--recount ()
-  "Count again what needs the user (asynchronously): the badge.  A hub that does not answer clears it."
+  "Count again what needs the user (asynchronously).  A hub that does not answer makes the count not known."
   (condition-case nil
       (progn (drgnx-job-ui--hub)
              (drgnx-hub-call "job/status" nil
                              (lambda (r e)
-                               (if e (drgnx-job-ui--badge-clear)
+                               (if e (drgnx-job-ui--unknown "Jobs: not known — the hub did not answer")
                                  (drgnx-job-ui-note-jobs (drgnx-job-ui--v (plist-get r :jobs)))))))
-    (error (drgnx-job-ui--badge-clear))))
+    (error (drgnx-job-ui--unknown "Jobs: not known — the hub did not answer"))))
 
 (defun drgnx-job-ui--schedule-recount ()
   "Count again within a second (once, however many events)."
   (drgnx-timer-soon 'job-ui-recount 1 #'drgnx-job-ui--recount :owner 'tools/jobs))
 
-(defun drgnx-job-ui--event (event data)
-  "`drgnx-hub-event-functions' (while the badge is on): a job or a card changed — count again; a new card notifies."
-  (when (member event '("job" "card"))
-    (when (equal event "card") (drgnx-job-ui--notify data))
-    (when drgnx-job-ui-badge-mode (drgnx-job-ui--schedule-recount))))
+(defun drgnx-job-ui--event (event _data)
+  "`drgnx-hub-event-functions' (while the attention mode is on): a job or a card changed — count again.  A new card
+reaches the desktop through the set's `:added' ids (the notice routes), not from here."
+  (when (and (member event '("job" "card")) drgnx-job-ui-attention-mode)
+    (drgnx-job-ui--schedule-recount)))
 
-(defun drgnx-job-ui--notify (data)
-  "A new card (DATA of its event): a desktop notification, once per card — or a message.  Never a prompt."
-  (let ((id (plist-get data :id)))
-    (when (and drgnx-job-ui-notify id (not (gethash id drgnx-job-ui--notified)) (not (equal (plist-get data :kind) "overlap")))
-      (puthash id t drgnx-job-ui--notified)
-      (let ((body (format "%s — %s" (plist-get data :job) (plist-get data :title))))
-        ;; later, not in the hub's event handler: a D-Bus call that hangs must not hold the filter
-        (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx: %S" (drgnx-job-ui--send "drgnx: a job needs you" body))))))))
-
-;; The backends moved to core (drgnx-notice-desktop.el); notices Task 14 makes cards an attention source.
-(defalias 'drgnx-job-ui--send #'drgnx-notice-desktop-send)
-
-(define-minor-mode drgnx-job-ui-badge-mode
-  "A badge in the mode line while something of a job needs you (and a notification when it starts to)."
+(define-minor-mode drgnx-job-ui-attention-mode
+  "Jobs as a source of what needs you: the hub's events recount their cards and messages; a lost hub makes
+the count not known."
   :global t :group 'drgnx
-  (if drgnx-job-ui-badge-mode
-      (progn (add-to-list 'global-mode-string '(:eval (drgnx-job-ui--badge-segment)) t)
-             (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
-             (add-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--badge-clear)
+  (if drgnx-job-ui-attention-mode
+      (progn (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
+             (add-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--unknown-gone)
              (when (featurep 'drgnx-hub-client) (drgnx-job-ui--schedule-recount)))   ; never loads the client by itself
-    (setq global-mode-string (delete '(:eval (drgnx-job-ui--badge-segment)) global-mode-string))
     (remove-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
-    (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--badge-clear)))
+    (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--unknown-gone)))
+
+(define-obsolete-function-alias 'drgnx-job-ui-badge-mode #'drgnx-job-ui-attention-mode "drgnx M12f")
+(with-no-warnings   ; the mode's variable is declared at the top (used above the mode): the alias comes after it
+  (define-obsolete-variable-alias 'drgnx-job-ui-badge-mode 'drgnx-job-ui-attention-mode "drgnx M12f"))
 
 ;;;; The Plan Job commands (they may wait for the hub: the user asked)
 
@@ -223,20 +217,14 @@ for redisplay code (the status bar's jobs segment)."
   "Count again, once the hub's client is loaded: the 60 s idle timer's function."
   (when (featurep 'drgnx-hub-client) (drgnx-job-ui--recount)))
 
-(defun drgnx-job-ui--teardown ()
-  "Turned off: the last count goes too, so neither the mode line nor the status bar's jobs segment shows it as if
-it were current.  The badge's mode (and with it the hub's hooks), the memo, the commands and the layer timers (the
-recounts on their way end with the module's run) go with the cleanup stack."
-  (drgnx-job-ui--badge-clear))
-
 (drgnx-module-define 'tools/jobs
-                     :doc "Jobs: agents through a plan you approve — cards, clashes, the badge; shown in the Work cockpit."
+                     :doc "Jobs: agents through a plan you approve — cards, clashes, what needs you; shown in the Work cockpit."
                      :stage 'startup :requires '(tools/agents)
-                     :teardown #'drgnx-job-ui--teardown
                      :setup
                      (lambda ()
-                       (drgnx-memo-activate 'job-badge)
-                       (drgnx-job-ui-badge-mode 1)
+                       ;; the source, its set and the mode's hub hooks go with the module's cleanup stack
+                       (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)
+                       (drgnx-job-ui-attention-mode 1)
                        ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
                        (drgnx-timer-start 'job-ui-recount-idle 60 #'drgnx-job-ui--idle-recount :repeat t :idle t)
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*plan jobs\\*\\'" 'editor))

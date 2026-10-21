@@ -195,8 +195,8 @@ linter) redraws the bars a moment later: flymake has no hook for it, so the bar 
 
 **Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when the mode starts or the first hub event
 arrives, then when a job or a card changes — one question at a time, never on redisplay; nothing while there is no
-hub). `⚑1` is the jobs' one count of cards and messages waiting on you (`drgnx-job-ui-needs-you`, the number the
-badge shows too). A click opens What Needs You for every job in the Work cockpit.
+hub). `⚑1` is the jobs' one count of cards and messages waiting on you (the notice model's `drgnx-needs-you-count`, which `drgnx-job-ui-needs-you` is the
+obsolete name of). A click opens What Needs You for every job in the Work cockpit.
 
 **Waiting on you.** The number in `◐ 1 waiting on you` is the sum of `drgnx-statusbar-waiting-functions`: each
 returns how many things wait for you. drgnx counts the agents' permission requests and edits to review, and the Work
@@ -245,7 +245,7 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 | `drgnx-statusbar-language-names` | names for the modes whose own name is not the language's | mode → the name the `language` segment shows; worked out once per mode |
 | `drgnx-statusbar-quiet-modes` | `(drgnx-start-mode)` | the modes that get the quiet bar |
 | `drgnx-statusbar-quiet` | `(folder branch agents jobs tests misc)` | the quiet bar's segments, on the left |
-| `drgnx-statusbar-misc-exclude` | the job badge and the Restricted Mode mark | entries of `global-mode-string` that `misc` leaves out |
+| `drgnx-statusbar-misc-exclude` | the Restricted Mode mark | entries of `global-mode-string` that `misc` leaves out |
 | `drgnx-statusbar-misc-info-skip` | `global-mode-string`, which-function's and eglot's entries | entries of `mode-line-misc-info` that `misc` does not format (shown another way) |
 | `drgnx-statusbar-misc-slow-ms` | `1.0` | milliseconds another package's entry may take, on average, per redisplay; a slower one is formatted once a second and named by `drgnx doctor` |
 | `drgnx-statusbar-test-command-regexp` | `\_<test\_>` | a compilation whose command matches is a test run |

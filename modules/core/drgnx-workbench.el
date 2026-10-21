@@ -60,6 +60,7 @@
 (declare-function drgnx-wb-focus-panel "drgnx-area")
 (declare-function drgnx-wb-toggle-right-dock "drgnx-area")
 (declare-function drgnx-wb-show-unrouted "drgnx-rules")
+(declare-function drgnx-wb-place "drgnx-rules")
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (declare-function drgnx-buffers-setup "drgnx-buffers")
 (declare-function drgnx-buffers-focus "drgnx-buffers")
@@ -96,6 +97,8 @@
                                              :command #'drgnx-wb-focus-panel :doc "Show the bottom panel and move focus to it")
                        (drgnx-command-define 'toggle-right-dock :category "View" :title "Toggle Right Dock" :scope 'window
                                              :command #'drgnx-wb-toggle-right-dock :menu '("View") :doc "Show or hide the right dock")
+                       ;; The Notices list (core) is a panel tab.
+                       (drgnx-wb-place "\\`\\*drgnx Notices\\*\\'" 'panel)
                        ;; Chrome by role: tab lines and breadcrumbs in editor windows.
                        (require 'drgnx-chrome)
                        (drgnx-chrome-mode 1)

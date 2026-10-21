@@ -10,8 +10,12 @@
 (defvar drgnx-coord-mcp-test--out nil)
 
 (defun drgnx-coord-mcp-test--start (env)
-  "The server with ENV (\"NAME=value\"…) added; its process."
-  (let ((process-environment (append env process-environment)))
+  "The server with ENV (\"NAME=value\" sets, bare \"NAME\" unsets) added; its process."
+  ;; ENV's sets before its unsets: Emacs's child environment (callproc.c, add_env) compares a bare NAME with a later
+  ;; entry past NAME's end, so "DRGNX_AGENT" before "DRGNX_AGENT_KIND=claude" drops the latter in some children
+  (let ((process-environment (append (seq-filter (lambda (e) (string-search "=" e)) env)
+                                     (seq-remove (lambda (e) (string-search "=" e)) env)
+                                     process-environment)))
     (setq drgnx-coord-mcp-test--out "")
     (make-process :name "coord-mcp" :noquery t :connection-type 'pipe :coding 'utf-8-unix
                   :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
