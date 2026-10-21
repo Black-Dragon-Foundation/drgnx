@@ -490,8 +490,14 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `line_codec` | arbitrary bytes, cut into chunks of a size the input picks, through the client line codec, then `parse_strict` on every line |
 | `request_prelude` | a line through `dispatch::prelude` (steps 1 to 5, no handler) for every class and several protocol states |
 | `hello` | hello params decoded from arbitrary JSON, then `hello()` against a fixed cap: as given, with the correct proof, on a main and on an agent socket, and a second hello |
+| `connect_head` | bytes as a proxy request head: the blank-line search, the exactly-`CONNECT target HTTP/1.x` line, then `parse_target` on the target (gleipnir's `fuzzing` feature exposes the entry point) |
+| `host_target` | text through `parse_target`; a success must `Display` back to a string that parses to the same target |
+| `sbpl_quote` | text through `sbpl::quote`; a success must read back through `sbpl::sexp` as one string equal to the input |
+| `bwrap_version` | text as `bwrap --version` output through `parse_version` and `version_at_floor` |
+| `inner_spec` | bytes decoded as the helper's `InnerSpec` (`deny_unknown_fields`); a success must re-encode and decode to the same value |
 
-The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows. A run adds files to the
+The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1) and the unit tables
+(gleipnir's targets). A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.
 
 Local run (keep the toolchain and the crate cache out of `~`: point `RUSTUP_HOME` and `CARGO_HOME` at a scratch

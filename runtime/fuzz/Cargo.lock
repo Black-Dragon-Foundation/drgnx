@@ -123,6 +123,7 @@ dependencies = [
 name = "draugr"
 version = "0.1.0"
 dependencies = [
+ "eitri",
  "libc",
  "tokio",
 ]
@@ -133,6 +134,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "drgnx-ratatoskr",
+ "gleipnir",
  "libfuzzer-sys",
  "runstav",
  "serde_json",
@@ -145,6 +147,8 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "draugr",
+ "eitri",
+ "gleipnir",
  "lexopt",
  "libc",
  "runstav",
@@ -165,6 +169,34 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "eitri"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustix",
+]
+
+[[package]]
+name = "enumflags2"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1027f7680c853e056ebcec683615fb6fbbc07dbaa13b4d5d9442b146ded4ecef"
+dependencies = [
+ "enumflags2_derive",
+]
+
+[[package]]
+name = "enumflags2_derive"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67c78a4d8fdf9953a5c9d458f9efe940fd97a0cab0941c075a813ac594733827"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "errno"
@@ -218,6 +250,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gleipnir"
+version = "0.1.0"
+dependencies = [
+ "eitri",
+ "landlock",
+ "libc",
+ "rustix",
+ "seccompiler",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hmac"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -249,6 +295,17 @@ checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
 dependencies = [
  "getrandom",
  "libc",
+]
+
+[[package]]
+name = "landlock"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cca98e95f35b29d469dade6724c6f96cec9236640f745a0e99b0334ec320ab1"
+dependencies = [
+ "enumflags2",
+ "libc",
+ "thiserror",
 ]
 
 [[package]]
@@ -456,6 +513,15 @@ dependencies = [
  "quote",
  "serde_derive_internals",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
