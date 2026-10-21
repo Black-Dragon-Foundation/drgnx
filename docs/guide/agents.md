@@ -184,8 +184,10 @@ OpenRouter agents ([AI](ai.md)); when the last one refuses, its own status, `Ret
 **Subscription CLIs never go through it**: the plain `claude` profile (and any profile without `:ai`) uses the CLI's
 own login, which drgnx only launches and never reads.
 
-The **hub** is a background process (a durable job: it outlives the Emacs that started it, and a later Emacs finds
-it again). The first agent that needs it starts it; `drgnx hub start|stop|status [--json]` manages it by hand. Keys
+The **hub** is Ratatoskr, a background process (kept by your system's service manager, or by itself where there is none:
+it outlives the Emacs that started it, and a later Emacs finds it again). The first agent that needs it starts it, with
+one `ratatoskr ensure`; `drgnx hub start|stop|status [--json]` are `ratatoskr ensure|stop|status` and manage it by hand.
+Where Ratatoskr is not built, drgnx says so: run `drgnx runtime build`. Keys
 reach it over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never through its
 environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
 then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
@@ -197,6 +199,18 @@ it went somewhere your shell's `PATH` does not reach (onboarding's Agents step a
 Emacs only), run `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
+
+### When drgnx was updated
+
+A running hub keeps the program it started from. After `drgnx update` it notices the new one and drgnx shows a warning:
+"drgnx was updated; the hub restarts when its N running turns finish". The hub restarts itself the first time nothing is
+busy, so nothing needs doing; **Hub: Restart Now** (the notice's action, or the palette) restarts it at once, and the
+agent sessions it runs end. It asks nothing and has no key by default. The warning goes away when the hub that comes
+back is the new one.
+
+A hub from before Ratatoskr (an install updated while that hub ran) is never restarted unasked: the warning says "a hub
+from before this drgnx update runs; restart it to use Ratatoskr (running agent sessions end)", and Hub: Restart Now
+shuts it down and starts Ratatoskr in its place.
 
 ## Kimi and DeepSeek
 

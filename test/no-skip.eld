@@ -30,6 +30,9 @@
   "drgnx-hub-client/outside-coord-server-still-works"
   "drgnx-hub-client/ping-probe-and-coord-mcp-skip-the-challenge"
   "drgnx-hub-client/proves-itself-and-is-user"
+  "drgnx-hub-client/restart-now-over-ratatoskr"
+  "drgnx-hub-client/the-update-notice-offers-restart-now"
+  "drgnx-job-cli/propose-then-approve-then-status"
   "drgnx-portable/the-pre-commit-hook-knows-the-new-formats"
   "drgnx-search-config/a-fifo-is-refused"
   "drgnx-search-files/a-submodule-is-not-listed-nor-its-files"
@@ -70,4 +73,7 @@
   "drgnx-hub-client/outside-coord-server-still-works"
   "drgnx-hub-client/ping-probe-and-coord-mcp-skip-the-challenge"
   "drgnx-hub-client/proves-itself-and-is-user"
+  "drgnx-hub-client/restart-now-over-ratatoskr"
+  "drgnx-hub-client/the-update-notice-offers-restart-now"
+  "drgnx-job-cli/propose-then-approve-then-status"
 ))

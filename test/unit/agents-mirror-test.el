@@ -6,6 +6,7 @@
 (require 'drgnx-records)
 (require 'drgnx-hub)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-agents-mirror-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT, a hub process serving them (profile \"mock\" in its agents.eld), no mirrors yet."
@@ -22,7 +23,7 @@
              (prin1 (list :profiles (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                                       "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
                     (current-buffer)))
-           (drgnx-hub-ensure)
+           (drgnx-test-lisp-hub-ensure)
            ,@body)
        (ignore-errors (drgnx-hub-call-sync "shutdown" nil 3))
        (ignore-errors (drgnx-test-wait (lambda () (not (drgnx-hub-running-p))) :what "the hub gone"))

@@ -4,7 +4,8 @@
 ;; - MODE `v1' (the default): a challenge on accept, the client's proof checked, the hub's proof right;
 ;; - `wrong-proof': the same, but the hub's proof is made with another cap;
 ;; - `no-proof': the same, but the reply carries no proof;
-;; - `legacy': no challenge, no `hello' ("no method hello", as the Lisp hub of before protocol 1 answers).
+;; - `legacy': no challenge, no `hello' ("no method hello", as the Lisp hub of before protocol 1 answers); it ends on
+;;   `shutdown'.
 ;; HOLD-HELLO: hello answers wait for `drgnx-fake-hub-release'.  SILENT: methods never answered.
 ;; `drgnx-fake-hub-lines' are the requests read, oldest first.  The cap file is written beside SOCKET.
 (require 'cl-lib)
@@ -40,6 +41,10 @@
                    (process-put server :held (cons (cons conn answer) (process-get server :held)))
                  (drgnx-fake-hub--send conn answer)))))
           ((equal method "ping") (drgnx-fake-hub--send conn (list :id id :result (list :pid (emacs-pid)))))
+          ;; a legacy hub ends on shutdown, as the Lisp hub does
+          ((and (equal method "shutdown") (eq (process-get server :mode) 'legacy))
+           (drgnx-fake-hub--send conn (list :id id :result t))
+           (drgnx-fake-hub-stop server))
           (t (drgnx-fake-hub--send conn (list :id id :result t))))))
 
 (defun drgnx-fake-hub--filter (conn chunk)

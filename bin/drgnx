@@ -1545,9 +1545,14 @@ case "${1:-help}" in
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;
   safe) shift; DRGNX_SAFE=1 exec "$(emacs_bin || echo false)" --init-directory="$here/init" "$@" ;;
-  hub) shift
-        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-              -l drgnx-hub-client -f drgnx-hub-cli -- "$@" ;;
+  hub) shift   # Ratatoskr's own CLI: start is ensure; no Emacs runs, but a hub it starts serves this Emacs and checkout
+        sub="${1:-}"; [ "$#" -gt 0 ] && shift
+        case "$sub" in start) sub=ensure ;; stop | status) ;; *) echo "usage: drgnx hub start|stop|status [--json]" >&2; exit 2 ;; esac
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
+        DRGNX_DIR="$here" exec "$rtsk" "$sub" "$@" ;;
   job) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-job-cli -- "$@" ;;
