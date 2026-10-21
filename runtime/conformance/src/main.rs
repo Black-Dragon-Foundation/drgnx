@@ -1,8 +1,8 @@
-//! drgnx-conformance: runs scenario files (docs/develop/runtime.md) against a hub binary, each in fresh temporary roots.
+//! domr: runs scenario files (docs/develop/runtime.md) against a hub binary, each in fresh temporary roots.
 //!
-//! `drgnx-conformance --target lisp|ratatoskr --hub-bin PATH --scenarios DIR [--lisp-hub PATH] [--fake-backend PATH]
+//! `domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR [--lisp-hub PATH] [--fake-backend PATH]
 //!  [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]`, and the helper
-//! `drgnx-conformance connect-as --socket PATH` (the connection of another uid, relayed over stdio).
+//! `domr connect-as --socket PATH` (the connection of another uid, relayed over stdio).
 
 mod exec;
 mod hub;
@@ -17,9 +17,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: drgnx-conformance --target lisp|ratatoskr --hub-bin PATH --scenarios DIR [--lisp-hub PATH]\n\
+const USAGE: &str = "usage: domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR [--lisp-hub PATH]\n\
     \x20      [--fake-backend PATH] [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]\n\
-    \x20      drgnx-conformance connect-as --socket PATH";
+    \x20      domr connect-as --socket PATH";
 
 struct Args {
     lisp_target: bool,
@@ -138,14 +138,14 @@ fn main() -> ExitCode {
     let args = match parse_args(&argv) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("drgnx-conformance: {e}\n{USAGE}");
+            eprintln!("domr: {e}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
     let scenarios = match scenario::load_dir(&args.scenarios) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("drgnx-conformance: {e}");
+            eprintln!("domr: {e}");
             return ExitCode::from(2);
         }
     };
@@ -202,7 +202,7 @@ fn main() -> ExitCode {
     if let Some(path) = &args.perf
         && let Err(e) = report.write_perf(path)
     {
-        eprintln!("drgnx-conformance: {e}");
+        eprintln!("domr: {e}");
         return ExitCode::from(2);
     }
     ExitCode::from(report.exit_code(args.require_all) as u8)

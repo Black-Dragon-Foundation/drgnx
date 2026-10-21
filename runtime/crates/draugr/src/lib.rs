@@ -1,4 +1,4 @@
-//! drgnx-proc: how Ratatoskr starts and ends processes (docs/develop/hub.md, "Processes").
+//! draugr: how Ratatoskr starts and ends processes (docs/develop/hub.md, "Processes").
 //!
 //! - [`env`]: a child's environment, built from an allowlist; nothing else of the hub's environment reaches it.
 //! - [`spawn`]: every child in its own process group, SIGPIPE ignored, stderr kept as a bounded tail, one exit.

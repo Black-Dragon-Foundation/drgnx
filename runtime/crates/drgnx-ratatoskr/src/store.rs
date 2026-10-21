@@ -2,7 +2,7 @@
 //! `urdr::open_readonly` on a thread of its own, so SQLite never runs on an async worker.  The file may not exist yet
 //! (a fresh install): it is opened the first time it is there, and until then every read says so.
 
-use drgnx_proto::methods::hub::{EventRow, EventsPage};
+use runstav::methods::hub::{EventRow, EventsPage};
 use serde_json::Value;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
@@ -194,7 +194,7 @@ mod tests {
             json!({"since": 2, "last": 3, "events": [{"id": 3, "at": 3.0, "agent": "7", "kind": "note"}]})
         );
         // the answer is what the registry says events/since returns
-        let m = drgnx_proto::registry::find("events/since").unwrap();
+        let m = runstav::registry::find("events/since").unwrap();
         assert_eq!((m.check_result)(&page).unwrap(), page);
         // a limit of 0 is the default, a huge one the maximum
         assert_eq!(w.events_since(None, Some(0)).await.unwrap().events.len(), 3);

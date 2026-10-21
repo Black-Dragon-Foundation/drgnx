@@ -49,8 +49,8 @@ jobs:
       - name: conformance-lisp (the v0 rows against the Lisp hub)
         working-directory: ${{ github.workspace }}
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
-          runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+          cargo build --locked --manifest-path runtime/Cargo.toml -p domr
+          runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
 
   msrv:
     name: MSRV 1.88 builds
@@ -97,5 +97,5 @@ jobs:
         run: /bin/bash test/container/nidhogg.sh macos
       - name: conformance-lisp (the v0 rows against the Lisp hub)
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
-          runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+          cargo build --locked --manifest-path runtime/Cargo.toml -p domr
+          runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance

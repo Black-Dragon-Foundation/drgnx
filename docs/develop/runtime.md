@@ -11,7 +11,7 @@ runtime/
   Cargo.toml        workspace: members = ["conformance", "crates/*"], exclude = ["fuzz"], resolver 3
   Cargo.lock        committed; every build is --locked
   deny.toml         the supply-chain policy (cargo deny check)
-  conformance/      drgnx-conformance, the harness below
+  conformance/      domr, the harness below
   crates/           the runtime's crates (one directory each)
   fuzz/             cargo-fuzz targets: its own workspace, nightly only
 ```
@@ -31,12 +31,12 @@ runtime/
 | Name | What it is |
 |---|---|
 | `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
-| `drgnx-proto` | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#drgnx-proto-the-contract)) |
+| `runstav` (formerly `drgnx-proto`) | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#runstav-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
-| `drgnx-proc` | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-drgnx-proc)) |
+| `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)) |
 | `gleipnir` | the sandbox; self-contained |
 | `hrafn` | search and the indexer |
-| `drgnx-conformance` | the conformance harness (this page) |
+| `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
 
@@ -63,14 +63,14 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p drgnx-proto -p drgnx-proc -p drgnx-ratatoskr`.
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p drgnx-ratatoskr`.
 `drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
 
-## drgnx-proto: the contract
+## runstav: the contract
 
-`crates/drgnx-proto` holds what the hub protocol is on the Rust side; the server, the client half and the tests share it.
+`crates/runstav` holds what the hub protocol is on the Rust side; the server, the client half and the tests share it.
 
 - **`wire`**: `Request {id?, method, params}` (`params` is `{}` when absent; no `id` makes a notification), `Answer {id,
   result, ignored?}` (`ignored` left out when empty), `ErrorAnswer {id, error}`, `Error {code, message, path?}` and
@@ -102,14 +102,14 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
   in `docs/develop/hub.md` are generated from them and checked by tests. See
   [hub.md, "The registry"](hub.md#the-registry-protocol-v1).
 
-`cargo test -p drgnx-proto` runs the unit tests (RFC 4231 case 2 for the HMAC, the socket fixture below), a
+`cargo test -p runstav` runs the unit tests (RFC 4231 case 2 for the HMAC, the socket fixture below), a
 compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptest_line.rs`: random byte streams, read in
 random pieces, through the codec and `parse_strict` never panic, and the codec never holds more than one line's limit
 plus the read that went past it.
 
 ## The conformance harness
 
-`drgnx-conformance` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
+`domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
 Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not `$TMPDIR`, so macOS socket paths stay
 short) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
@@ -118,10 +118,10 @@ test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` 
 must stay within 103 bytes.
 
 ```
-drgnx-conformance --target lisp|ratatoskr --hub-bin PATH --scenarios DIR
+domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR
                   [--lisp-hub PATH] [--fake-backend PATH]
                   [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
-drgnx-conformance connect-as --socket PATH
+domr connect-as --socket PATH
 ```
 
 - `--target lisp` runs only the `v0` rows, against the Lisp hub (through `test/conformance/lisp-hub.sh`, which maps
@@ -211,7 +211,7 @@ Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (th
 ### Where the socket is: one fixture for Lisp and Rust
 
 The data directory and the socket path follow Lisp's `drgnx-paths-dir 'data` and `drgnx-hub-socket` exactly
-(`crates/drgnx-proto/src/paths.rs` and, until it switches to that module, `conformance/src/paths.rs` are the Rust side): only an absolute environment value counts; names are normalised as Emacs's
+(`crates/runstav/src/paths.rs` and, until it switches to that module, `conformance/src/paths.rs` are the Rust side): only an absolute environment value counts; names are normalised as Emacs's
 `expand-file-name` does it, oddities kept (`/a/../../b` is `/../b`, `//a` stays `//a`); `sha1` of the data directory
 (with its trailing `/`), cut to 8 hex digits, names `hub-HASH.sock`; it is under `$XDG_RUNTIME_DIR/drgnx/` when that is a
 directory, else under `<state>/hub/`; a path over 103 bytes goes to `<tmp>/drgnx-hub-UID/`, where `<tmp>` is the first
@@ -220,11 +220,11 @@ scope.
 
 `test/fixtures/hub-socket-cases.json` holds cases `{env, data_dir, socket}` (`$UID` stands for the uid); the Lisp test
 `drgnx-hub-socket-cases/lisp-agrees-with-the-fixture` and the Rust tests `paths::tests::socket_cases_fixture` (in the
-harness and in `drgnx-proto`) all read it. To add a case, run the Lisp side to measure it and put the result in; never write an expected value by hand.
+harness and in `runstav`) all read it. To add a case, run the Lisp side to measure it and put the result in; never write an expected value by hand.
 
 ### Testing the harness
 
-`cargo test -p drgnx-conformance` covers the parser, the matcher, the paths, the proofs and, in `tests/harness.rs`, whole
+`cargo test -p domr` covers the parser, the matcher, the paths, the proofs and, in `tests/harness.rs`, whole
 runs against a scripted hub (a small hub inside the test binary). `test/conformance/self/*.jsonl` are the harness's own
 rows: they are valid against any hub, so they also run against the Lisp hub.
 
@@ -242,8 +242,8 @@ default `"as": "user"`, so the same rows run through Ratatoskr's front once it e
 Run them against the Lisp hub (Emacs from `$DRGNX_EMACS`, else `emacs` on `PATH`):
 
 ```
-cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-conformance
-runtime/target/debug/drgnx-conformance --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
+cargo build --locked --manifest-path runtime/Cargo.toml -p domr
+runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
 ```
 
 Green is 11 `PASS` for these rows (plus the 2 `self/` rows).
@@ -260,9 +260,9 @@ Green is 11 `PASS` for these rows (plus the 2 `self/` rows).
 | `security/` | `another-uid-is-refused` (`sudo`: as root in the Fedora 45 test image, or through passwordless sudo on macOS) |
 
 ```
-cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p drgnx-conformance --features drgnx-ratatoskr/test-hooks
+cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
 cargo test  --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
-runtime/target/debug/drgnx-conformance --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
     --lisp-hub test/conformance/lisp-hub.sh --scenarios test/conformance --only 'lifecycle/*'
 ```
 
@@ -294,8 +294,8 @@ Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`)
 The forwarding rows run with both helpers:
 
 ```
-cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p drgnx-conformance --features drgnx-ratatoskr/test-hooks
-runtime/target/debug/drgnx-conformance --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
     --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
     --scenarios test/conformance
 ```
@@ -357,4 +357,4 @@ cargo +nightly-2026-10-15 fuzz run line_codec --fuzz-dir runtime/fuzz /path/to/s
 ```
 
 A crash is written to `runtime/fuzz/artifacts/<target>/` (ignored by git). Commit the input as a regression test in
-`drgnx-proto` (or the crate that owns the parser) before fixing it.
+`runstav` (or the crate that owns the parser) before fixing it.

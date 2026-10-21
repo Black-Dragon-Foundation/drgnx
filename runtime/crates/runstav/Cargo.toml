@@ -1,5 +1,5 @@
 [package]
-name = "drgnx-proto"
+name = "runstav"
 description = "The hub protocol's contract: wire types, strict lines, typed decode, HMAC proofs, the socket paths"
 version.workspace = true
 edition.workspace = true

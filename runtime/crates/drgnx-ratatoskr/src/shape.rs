@@ -7,10 +7,10 @@
 //! The params are shaped before the line goes to the backend, the result after it passed `check_result`.
 
 use crate::dispatch::Caller;
-use drgnx_proto::methods::Params;
-use drgnx_proto::registry::Class;
-use drgnx_proto::types::Id;
-use drgnx_proto::wire::{Error, ErrorCode};
+use runstav::methods::Params;
+use runstav::registry::Class;
+use runstav::types::Id;
+use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value};
 
 /// The keys of a session a `service` or `agent` caller of `agents/list` gets.
@@ -72,7 +72,7 @@ pub fn result(caller: &Caller, method: &str, result: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use drgnx_proto::registry::find;
+    use runstav::registry::find;
     use serde_json::json;
 
     fn caller(class: Class, sid: Option<&str>, job: Option<&str>) -> Caller {

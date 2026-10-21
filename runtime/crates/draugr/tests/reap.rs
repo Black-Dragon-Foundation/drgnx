@@ -1,8 +1,8 @@
 //! The orphan reaper against real children of this test, each in its own process group. Only those groups are ever
 //! signalled for real; the guard tests use a spy that sends nothing but `0` probes.
 
-use drgnx_proc::reap::GRACE;
-use drgnx_proc::{
+use draugr::reap::GRACE;
+use draugr::{
     Child, RealSignaller, ReapOutcome, Record, Signaller, Skip, Spec, boot_id, env, kill_group,
     reap, spawn, start_time,
 };
@@ -310,12 +310,12 @@ async fn kill_group_refuses_like_reap_and_kills_our_group() {
 #[test]
 fn alive_says_whether_one_process_exists() {
     let me = std::process::id() as i32;
-    assert!(drgnx_proc::alive(me));
+    assert!(draugr::alive(me));
     // pid 1 exists; for a user it is someone else's (EPERM counts as alive)
-    assert!(drgnx_proc::alive(1));
+    assert!(draugr::alive(1));
     // a group (negative), every process (-1) or our own group (0) is never one process
     for not_a_pid in [0, -1, -me, i32::MIN] {
-        assert!(!drgnx_proc::alive(not_a_pid), "{not_a_pid}");
+        assert!(!draugr::alive(not_a_pid), "{not_a_pid}");
     }
-    assert!(!drgnx_proc::alive(i32::MAX), "above any pid_max");
+    assert!(!draugr::alive(i32::MAX), "above any pid_max");
 }

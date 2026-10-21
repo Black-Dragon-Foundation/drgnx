@@ -14,7 +14,7 @@ use std::process::Command;
 #[path = "../src/paths.rs"]
 mod paths;
 
-const CONFORMANCE: &str = env!("CARGO_BIN_EXE_drgnx-conformance");
+const CONFORMANCE: &str = env!("CARGO_BIN_EXE_domr");
 const HUB_NONCE: &str = "00112233445566778899aabbccddeeff";
 const CAP: &str = "abababababababababababababababababababababababababababababababab";
 

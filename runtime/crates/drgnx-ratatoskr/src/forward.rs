@@ -12,10 +12,10 @@
 use crate::backend::Backend;
 use crate::dispatch::{Answer, BackendInfo, Caller, Forward};
 use crate::shape;
-use drgnx_proto::line::MAX_CLIENT_LINE;
-use drgnx_proto::methods::Params;
-use drgnx_proto::registry::{Class, Method};
-use drgnx_proto::wire::{Error, ErrorCode};
+use runstav::line::MAX_CLIENT_LINE;
+use runstav::methods::Params;
+use runstav::registry::{Class, Method};
+use runstav::wire::{Error, ErrorCode};
 use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
@@ -114,7 +114,7 @@ impl Forward for ToBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use drgnx_proto::registry::find;
+    use runstav::registry::find;
     use serde_json::{Value, json};
 
     fn decoded(method: &str, params: Value) -> Params {

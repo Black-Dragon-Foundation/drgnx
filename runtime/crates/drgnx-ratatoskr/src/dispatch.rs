@@ -11,11 +11,11 @@
 //! logged and counted by [`Refusals::note`], with the method, the code, the class and the path, never the params or
 //! the message (a decode error's message can quote a value: a key, a prompt).
 
-use drgnx_proto::line;
-use drgnx_proto::methods::Params;
-use drgnx_proto::methods::hub::{Backend, Refusals as RefusalsResult};
-use drgnx_proto::registry::{self, Class, Method};
-use drgnx_proto::wire::{Error, ErrorCode, Id, Request};
+use runstav::line;
+use runstav::methods::Params;
+use runstav::methods::hub::{Backend, Refusals as RefusalsResult};
+use runstav::registry::{self, Class, Method};
+use runstav::wire::{Error, ErrorCode, Id, Request};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::future::Future;
@@ -287,7 +287,7 @@ mod tests {
     use crate::conn::Outbox;
     use crate::front::Front;
     use crate::hello::{Session, Socket};
-    use drgnx_proto::proof::Cap;
+    use runstav::proof::Cap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 

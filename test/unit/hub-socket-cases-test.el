@@ -1,5 +1,5 @@
 ;;; hub-socket-cases-test.el --- batch tests: Lisp's hub socket path agrees with the shared fixture -*- lexical-binding: t -*-
-;; test/fixtures/hub-socket-cases.json is also read by the Rust side (runtime/conformance, paths.rs; later drgnx-proto):
+;; test/fixtures/hub-socket-cases.json is also read by the Rust side (runtime/conformance, paths.rs; later runstav):
 ;; Lisp, bash and Rust must agree on the socket path.  Every case is the whole environment (nothing else is set).
 (require 'ert)
 (require 'json)

@@ -1,5 +1,5 @@
 [package]
-name = "drgnx-conformance"
+name = "domr"
 description = "The hub protocol's conformance harness: scenarios as data, run against a hub binary"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [[bin]]
-name = "drgnx-conformance"
+name = "domr"
 path = "src/main.rs"
 
 # std-only harness (threads, blocking UnixStreams): no async runtime here.

@@ -16,7 +16,7 @@ const MAX_CAP_FILE: u64 = 256;
 /// The cap: 32 random bytes as 64 lowercase hex, kept secret (no `Debug`, zeroed when dropped).
 ///
 /// ```compile_fail
-/// fn show(cap: &drgnx_proto::proof::Cap) -> String {
+/// fn show(cap: &runstav::proof::Cap) -> String {
 ///     format!("{cap:?}")
 /// }
 /// ```

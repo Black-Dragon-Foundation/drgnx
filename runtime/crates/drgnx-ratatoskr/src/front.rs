@@ -11,13 +11,13 @@ use crate::dispatch::{self, Call, Caller, ErrorAnswerOrDrop, Forward, Refusals};
 use crate::hello::{self, Session};
 use crate::store::WorkDb;
 use crate::version::COMMIT;
-use drgnx_proto::line::MAX_HUB_LINE;
-use drgnx_proto::methods::Params;
-use drgnx_proto::methods::hub::{HubStatus, Runtime};
-use drgnx_proto::proof::Cap;
-use drgnx_proto::registry;
-use drgnx_proto::registry::{Class, Method};
-use drgnx_proto::wire::{Answer, Error, ErrorAnswer, ErrorCode, Event, Id};
+use runstav::line::MAX_HUB_LINE;
+use runstav::methods::Params;
+use runstav::methods::hub::{HubStatus, Runtime};
+use runstav::proof::Cap;
+use runstav::registry;
+use runstav::registry::{Class, Method};
+use runstav::wire::{Answer, Error, ErrorAnswer, ErrorCode, Event, Id};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -397,7 +397,7 @@ mod tests {
     use super::*;
     use crate::dispatch::NoBackend;
     use crate::hello::Socket;
-    use drgnx_proto::registry::Class;
+    use runstav::registry::Class;
 
     fn front(dir: &std::path::Path) -> Front {
         Front::new(
@@ -569,8 +569,8 @@ mod tests {
         {
             Box::pin(async {
                 dispatch::BackendInfo {
-                    backend: Some(drgnx_proto::methods::hub::Backend {
-                        state: drgnx_proto::methods::hub::BackendState::Running,
+                    backend: Some(runstav::methods::hub::Backend {
+                        state: runstav::methods::hub::BackendState::Running,
                         pid: Some(42),
                     }),
                     gateway_port: Some(7),
@@ -663,9 +663,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.hub_nonce = drgnx_proto::proof::nonce().unwrap();
-        let nonce = drgnx_proto::proof::nonce().unwrap();
-        let p = drgnx_proto::proof::client_proof(&f.cap, &s.hub_nonce, &nonce);
+        s.hub_nonce = runstav::proof::nonce().unwrap();
+        let nonce = runstav::proof::nonce().unwrap();
+        let p = runstav::proof::client_proof(&f.cap, &s.hub_nonce, &nonce);
         let out = Arc::new(Outbox::new(s.conn));
         let line =
             json!({"id": 1, "method": "hello", "params": {"proto": 1, "nonce": nonce, "proof": p}});
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(s.class, Class::User);
         // a wrong proof is a refusal: counted
         let mut t = Session::new(f.next_conn(), Socket::Main);
-        t.hub_nonce = drgnx_proto::proof::nonce().unwrap();
+        t.hub_nonce = runstav::proof::nonce().unwrap();
         f.line(&mut t, &out, &line.to_string()).await;
         assert_eq!(answers(&out)[0]["error"]["code"], "not-allowed");
         assert_eq!(f.status().refusals.map(|r| r.count), Some(1));

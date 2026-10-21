@@ -1,5 +1,5 @@
 [package]
-name = "drgnx-proc"
+name = "draugr"
 description = "Ratatoskr's process control: explicit environments, own process groups, one exit, the orphan reaper"
 version.workspace = true
 edition.workspace = true

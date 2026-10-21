@@ -20,8 +20,8 @@ path = "src/main.rs"
 test-hooks = []
 
 [dependencies]
-drgnx-proto = { path = "../drgnx-proto", version = "0.1.0" }
-drgnx-proc = { path = "../drgnx-proc", version = "0.1.0" }
+runstav = { path = "../runstav", version = "0.1.0" }
+draugr = { path = "../draugr", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
 tokio.workspace = true
 tokio-util.workspace = true

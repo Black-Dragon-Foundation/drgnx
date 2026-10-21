@@ -133,9 +133,9 @@ status `busy` and `job/status` no job `running` (each asked through the private 
 not come or does not fit is not idle, so a busy hub is never restarted; a hub whose backend cannot exist (`missing`)
 has nothing running. Phase 5 replaces this with the hub's own turn state.
 
-### Ratatoskr's children (`drgnx-proc`)
+### Ratatoskr's children (`draugr`)
 
-`runtime/crates/drgnx-proc` is how the Rust runtime starts and ends processes.
+`runtime/crates/draugr` is how the Rust runtime starts and ends processes.
 
 - **Environment:** `env::build(allow, allow_prefixes, set)` copies only the allowed names (and names starting with
   an allowed prefix) from the runtime's environment, then applies `set`. The child starts from an empty environment
@@ -250,7 +250,7 @@ lines and limits, with these differences:
 - **The first line on a connection is the hub's challenge** `{"event":"challenge","data":{"nonce"}}`, on the main
   socket and on every agent socket ([hello and versions](#hello-and-versions)). Every line then goes through the
   dispatcher ([Errors](#errors)).
-- **Lines in:** the 1 MiB codec (`drgnx_proto::line::codec`). A codec error (a line too long, not UTF-8) closes the
+- **Lines in:** the 1 MiB codec (`runstav::line::codec`). A codec error (a line too long, not UTF-8) closes the
   connection. A line that fails `parse_strict` is answered `invalid-params` (with its `path`) when its id reads, and
   is otherwise dropped and logged. On EOF a partial line is dropped and what is queued is still written, then the
   connection closes. Other connections are not touched.
@@ -389,7 +389,7 @@ Ratatoskr stops, the backend's group gets SIGTERM, SIGKILL 2 s later.
 **Its record and the reaper.** Before the spawn a `proc` row (purpose `backend`, boot id) goes into `runtime.db`;
 right after it, the row gets the pid, start time and group (the pid: every child leads its own group), and it goes
 when the exit is seen. At start, before the backend is spawned, Ratatoskr reaps every recorded row with
-`drgnx-proc`'s rules (above: a row with a NULL pid, group, start time or boot id is skipped and never signalled) and
+`draugr`'s rules (above: a row with a NULL pid, group, start time or boot id is skipped and never signalled) and
 then deletes them all, so a backend a crashed (SIGKILLed) Ratatoskr left is killed with its group. Two windows stay
 open:
 - **the unrecorded spawn:** between the spawn and the row's update the child is not recorded (unavoidable without a
@@ -561,9 +561,9 @@ What crosses the socket is JSON shaped by the record schemas of `core/drgnx-reco
 
 ## The registry (protocol v1)
 
-Every method of the hub protocol is one Rust definition in `runtime/crates/drgnx-proto/src/methods/` (`hub.rs`,
+Every method of the hub protocol is one Rust definition in `runtime/crates/runstav/src/methods/` (`hub.rs`,
 `gateway.rs`, `agents.rs`, `jobs.rs`, `coord.rs`): its name, the classes that may call it, its params type, its result
-type, whether it writes work.db, and a line of doc. `drgnx_proto::registry::registry()` lists them sorted by name and
+type, whether it writes work.db, and a line of doc. `runstav::registry::registry()` lists them sorted by name and
 `find(NAME)` looks one up. Each method's `decode` is the typed decode the dispatcher runs: a value that does not fit
 is `invalid-params` with its `path` (a missing key is named too: `{}` for `job/stop` is refused at `id`), and unknown
 keys are dropped and listed in `ignored`. Its `check_result` decodes a result into the result type and encodes it
@@ -573,7 +573,7 @@ out `[]` (A-17). `PROTO` is 1, `PROTO_MIN` 1, `RECORDS` 2 and `SCHEMA` 6.
 From the registry come `runtime/protocol/methods.json` (`{proto, proto_min, records, schema, methods: [{name, classes,
 writes, doc, params, result}], events: [{name, doc, data}]}`, each schema JSON Schema 2020-12 with the named types
 under `$defs`, keys sorted) and the table below (`registry::markdown_table()`). Tests fail when either is out of date;
-`UPDATE_METHODS_JSON=1 cargo test -p drgnx-proto registry` (through the cargo wrapper) writes both again. In the table
+`UPDATE_METHODS_JSON=1 cargo test -p runstav registry` (through the cargo wrapper) writes both again. In the table
 `{a: T, b?: T}` is an object with `a` required and `b` optional (absent or `null`), `[T]` a list, `A | B` either, and
 a capitalised name a named type (below) or, in results, a record (`JobSummary`, `Snapshot`, `Entry`, `EventRow`,
 `HubStatus`, `HelloReply`: their fields are in `methods.json`). A params schema never holds an unconstrained value (`any`); a
@@ -643,7 +643,7 @@ refused with `schema` while the hub is read-only) are `gateway/register`, `gatew
 
 ### Types
 
-The named input types (`runtime/crates/drgnx-proto/src/types.rs`): each validates as it decodes, and a value that does
+The named input types (`runtime/crates/runstav/src/types.rs`): each validates as it decodes, and a value that does
 not fit is refused with its path, never rewritten. Lengths count characters, as JSON Schema's `maxLength` does; each
 type's schema carries the same `pattern` and `maxLength`.
 
@@ -672,7 +672,7 @@ is the backend's check.
 
 ### Event types
 
-`drgnx_proto::events::events()` (`src/events.rs`), each with the type of its `data`, decoded and encoded again as a
+`runstav::events::events()` (`src/events.rs`), each with the type of its `data`, decoded and encoded again as a
 result is (`event(NAME).check`):
 
 | Event | From | Data |

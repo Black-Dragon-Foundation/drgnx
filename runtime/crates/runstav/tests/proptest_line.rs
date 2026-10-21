@@ -1,8 +1,8 @@
 //! Random byte streams, in random reads, through the client codec and the strict parse: nothing panics, and the
 //! codec never holds more than one line's limit plus the read that went past it.
 
-use drgnx_proto::line::{MAX_CLIENT_LINE, codec, parse_strict};
 use proptest::prelude::*;
+use runstav::line::{MAX_CLIENT_LINE, codec, parse_strict};
 use tokio_util::codec::Decoder;
 
 /// A piece of a stream: bytes of any kind, a newline, JSON-ish text, or a run near the line limit.

@@ -7,9 +7,9 @@
 use crate::front::{Front, MAX_IN_FLIGHT};
 use crate::hello::{Session, Socket};
 use bytes::BytesMut;
-use drgnx_proto::line;
-use drgnx_proto::proof;
-use drgnx_proto::wire::Event;
+use runstav::line;
+use runstav::proof;
+use runstav::wire::Event;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -290,8 +290,8 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
 #[cfg(feature = "test-hooks")]
 mod flood {
     use super::Outbox;
-    use drgnx_proto::line::MAX_HUB_LINE;
-    use drgnx_proto::wire::{Answer, Event, Request};
+    use runstav::line::MAX_HUB_LINE;
+    use runstav::wire::{Answer, Event, Request};
     use serde_json::{Value, json};
     use std::sync::Arc;
     use std::time::Duration;

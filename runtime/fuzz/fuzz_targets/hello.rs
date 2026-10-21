@@ -2,11 +2,11 @@
 //! for the client's nonce, on a main socket and on an agent socket.
 #![no_main]
 
-use drgnx_proto::methods::hub::HelloParams;
-use drgnx_proto::proof::{self, Cap};
-use drgnx_proto::types::Hex64;
 use drgnx_ratatoskr::hello::{Session, Socket, hello};
 use libfuzzer_sys::fuzz_target;
+use runstav::methods::hub::HelloParams;
+use runstav::proof::{self, Cap};
+use runstav::types::Hex64;
 use std::sync::OnceLock;
 
 const HUB_NONCE: &str = "00112233445566778899aabbccddeeff";
@@ -34,7 +34,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(data) else {
         return;
     };
-    let Ok((mut p, _ignored)) = drgnx_proto::decode::typed::<HelloParams>(&v) else {
+    let Ok((mut p, _ignored)) = runstav::decode::typed::<HelloParams>(&v) else {
         return;
     };
     let agent = || Socket::Agent {

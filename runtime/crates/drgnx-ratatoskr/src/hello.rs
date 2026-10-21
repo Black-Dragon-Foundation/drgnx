@@ -9,10 +9,10 @@
 //! - At most one hello reaches this per connection: a second one is `proto`, whatever it holds.
 
 use crate::dispatch::Caller;
-use drgnx_proto::methods::hub::{HelloParams, HelloReply, Runtime};
-use drgnx_proto::proof::{self, Cap};
-use drgnx_proto::registry::{self, Class};
-use drgnx_proto::wire::{Error, ErrorCode};
+use runstav::methods::hub::{HelloParams, HelloReply, Runtime};
+use runstav::proof::{self, Cap};
+use runstav::registry::{self, Class};
+use runstav::wire::{Error, ErrorCode};
 
 /// Which socket a connection came in on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,7 +125,7 @@ pub fn hello(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use drgnx_proto::types::{Hex64, Nonce};
+    use runstav::types::{Hex64, Nonce};
 
     fn params(proof: Option<String>, proto: u64) -> (HelloParams, String) {
         let nonce = proof::nonce().unwrap();

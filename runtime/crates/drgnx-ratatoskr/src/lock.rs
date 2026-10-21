@@ -124,7 +124,7 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
     let me = std::process::id();
     let started = i32::try_from(me)
         .ok()
-        .and_then(|p| drgnx_proc::start_time(p).ok())
+        .and_then(|p| draugr::start_time(p).ok())
         .unwrap_or(0);
     file.set_len(0)
         .and_then(|()| file.write_all(format!("{me} {started}\n").as_bytes()))
@@ -228,9 +228,9 @@ fn read_pid(file: &Path) -> Option<u32> {
     text.trim().parse().ok().filter(|p| *p > 0)
 }
 
-/// Is PID a process ([`drgnx_proc::alive`]; a number above `i32::MAX` is none)?
+/// Is PID a process ([`draugr::alive`]; a number above `i32::MAX` is none)?
 pub fn alive(pid: u32) -> bool {
-    i32::try_from(pid).is_ok_and(drgnx_proc::alive)
+    i32::try_from(pid).is_ok_and(draugr::alive)
 }
 
 /// The arguments of PID (Linux and Android `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`; any other platform has

@@ -537,7 +537,7 @@ mod tests {
             "drgnx was updated; the hub restarts when its 3 running turns finish"
         );
         assert!(
-            drgnx_proto::events::event("notice").is_some_and(|e| (e.check)(&n).is_ok()),
+            runstav::events::event("notice").is_some_and(|e| (e.check)(&n).is_ok()),
             "it fits the registry's notice"
         );
     }

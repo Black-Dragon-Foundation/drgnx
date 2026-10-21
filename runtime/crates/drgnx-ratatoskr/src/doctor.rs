@@ -7,7 +7,7 @@
 
 use crate::client::{self, Client};
 use crate::front::JOB_AGENTS;
-use drgnx_proto::paths::{self, Env};
+use runstav::paths::{self, Env};
 use serde_json::{Value, json};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;

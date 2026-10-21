@@ -120,19 +120,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-fuzz"
-version = "0.0.0"
-dependencies = [
- "bytes",
- "drgnx-proto",
- "drgnx-ratatoskr",
- "libfuzzer-sys",
- "serde_json",
- "tokio-util",
-]
-
-[[package]]
-name = "drgnx-proc"
+name = "draugr"
 version = "0.1.0"
 dependencies = [
  "libc",
@@ -140,23 +128,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-proto"
-version = "0.1.0"
+name = "drgnx-fuzz"
+version = "0.0.0"
 dependencies = [
- "getrandom",
- "hmac",
- "rustix",
- "schemars",
- "secrecy",
- "serde",
- "serde_ignored",
+ "bytes",
+ "drgnx-ratatoskr",
+ "libfuzzer-sys",
+ "runstav",
  "serde_json",
- "serde_path_to_error",
- "sha1",
- "sha2",
- "subtle",
  "tokio-util",
- "zeroize",
 ]
 
 [[package]]
@@ -164,10 +144,10 @@ name = "drgnx-ratatoskr"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "drgnx-proc",
- "drgnx-proto",
+ "draugr",
  "lexopt",
  "libc",
+ "runstav",
  "rustix",
  "serde",
  "serde_json",
@@ -177,6 +157,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "urdr",
+ "zeroize",
 ]
 
 [[package]]
@@ -404,6 +385,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "runstav"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "hmac",
+ "rustix",
+ "schemars",
+ "secrecy",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "serde_path_to_error",
+ "sha1",
+ "sha2",
+ "subtle",
+ "tokio-util",
+ "zeroize",
 ]
 
 [[package]]

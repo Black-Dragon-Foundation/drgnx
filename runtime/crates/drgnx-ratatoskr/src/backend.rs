@@ -16,10 +16,10 @@
 
 use crate::dispatch::BackendInfo;
 use bytes::BytesMut;
-use drgnx_proc::{self as proc, RealSignaller, Record};
-use drgnx_proto::line::MAX_HUB_LINE;
-use drgnx_proto::methods::hub::{Backend as BackendStatus, BackendState};
-use drgnx_proto::wire::{Error, ErrorCode};
+use draugr::{self as proc, RealSignaller, Record};
+use runstav::line::MAX_HUB_LINE;
+use runstav::methods::hub::{Backend as BackendStatus, BackendState};
+use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -218,7 +218,7 @@ fn restarted() -> Error {
     internal("the Lisp backend restarted")
 }
 
-/// Reap every process the `proc` rows of `runtime.db` name (`drgnx_proc::reap`'s rules: a row without a pid is
+/// Reap every process the `proc` rows of `runtime.db` name (`draugr::reap`'s rules: a row without a pid is
 /// skipped, never signalled), then delete them all.  At start, before the backend is spawned.
 pub async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
     let rows: Vec<Record> = db

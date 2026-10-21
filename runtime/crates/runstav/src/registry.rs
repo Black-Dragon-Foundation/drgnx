@@ -1,7 +1,7 @@
 //! The registry: every method of the hub protocol with its classes, its params and result types (and so their JSON
 //! Schemas), whether it writes work.db, and a line of doc (design 4.3).  `runtime/protocol/methods.json` and the
 //! method table in `docs/develop/hub.md` are generated from it, and tests fail when either is out of date
-//! (`UPDATE_METHODS_JSON=1 cargo test -p drgnx-proto registry` rewrites both).
+//! (`UPDATE_METHODS_JSON=1 cargo test -p runstav registry` rewrites both).
 
 use crate::decode;
 use crate::events::events;
@@ -406,7 +406,7 @@ mod tests {
         let committed = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(
             committed == now,
-            "{} is out of date: UPDATE_METHODS_JSON=1 cargo test -p drgnx-proto registry",
+            "{} is out of date: UPDATE_METHODS_JSON=1 cargo test -p runstav registry",
             path.display()
         );
     }
@@ -429,7 +429,7 @@ mod tests {
         }
         assert!(
             text[b..e] == table,
-            "the table in {} is out of date: UPDATE_METHODS_JSON=1 cargo test -p drgnx-proto registry\n{table}",
+            "the table in {} is out of date: UPDATE_METHODS_JSON=1 cargo test -p runstav registry\n{table}",
             path.display()
         );
     }

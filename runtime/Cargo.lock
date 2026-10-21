@@ -184,7 +184,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-conformance"
+name = "domr"
 version = "0.1.0"
 dependencies = [
  "getrandom",
@@ -198,7 +198,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-proc"
+name = "draugr"
 version = "0.1.0"
 dependencies = [
  "libc",
@@ -206,36 +206,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-proto"
-version = "0.1.0"
-dependencies = [
- "getrandom",
- "hmac",
- "proptest",
- "rustix",
- "schemars",
- "secrecy",
- "serde",
- "serde_ignored",
- "serde_json",
- "serde_path_to_error",
- "sha1",
- "sha2",
- "subtle",
- "tempfile",
- "tokio-util",
- "zeroize",
-]
-
-[[package]]
 name = "drgnx-ratatoskr"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "drgnx-proc",
- "drgnx-proto",
+ "draugr",
  "lexopt",
  "libc",
+ "runstav",
  "rustix",
  "serde",
  "serde_json",
@@ -565,6 +543,28 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "runstav"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "hmac",
+ "proptest",
+ "rustix",
+ "schemars",
+ "secrecy",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "serde_path_to_error",
+ "sha1",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio-util",
+ "zeroize",
+]
 
 [[package]]
 name = "rusqlite"

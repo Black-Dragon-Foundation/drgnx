@@ -4,7 +4,7 @@
 //! does not decode, is dropped and logged (its name, cut, and the path where it failed; never its data).
 
 use crate::front::Front;
-use drgnx_proto::events;
+use runstav::events;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;

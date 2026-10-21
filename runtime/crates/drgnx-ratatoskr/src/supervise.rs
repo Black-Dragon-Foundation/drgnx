@@ -19,7 +19,7 @@
 
 use crate::client::{self, Client};
 use crate::lock::{self, Holder, Procs};
-use drgnx_proto::paths::{self, Env};
+use runstav::paths::{self, Env};
 use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -504,7 +504,7 @@ fn term(pid: u32) {
 fn start_time_of(pid: u32) -> Option<u64> {
     i32::try_from(pid)
         .ok()
-        .and_then(|p| drgnx_proc::start_time(p).ok())
+        .and_then(|p| draugr::start_time(p).ok())
 }
 
 /// `stop`: the exit code (0 stopped or not running, 1 it would not stop).

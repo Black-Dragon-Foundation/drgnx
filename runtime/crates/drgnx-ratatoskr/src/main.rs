@@ -2,9 +2,9 @@
 //! line is read (the commands that only talk to a hub never build one): multi-thread, two workers.  The same binary
 //! answers to any name (`rtsk`): argv[0] is never consulted.
 
-use drgnx_proto::paths::Env;
 use drgnx_ratatoskr::cli::{self, Command, Supervisor};
 use drgnx_ratatoskr::{Exit, doctor, idle, server, supervise, version};
+use runstav::paths::Env;
 use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -25,10 +25,10 @@ fn main() -> ExitCode {
         Command::Version { json: true } => println!("{}", version::json()),
         Command::Version { json: false } => println!("{}", version::text()),
         Command::Methods { markdown: false } => {
-            print!("{}", drgnx_proto::registry::methods_json_text())
+            print!("{}", runstav::registry::methods_json_text())
         }
         Command::Methods { markdown: true } => {
-            print!("{}", drgnx_proto::registry::markdown_table())
+            print!("{}", runstav::registry::markdown_table())
         }
         Command::Ensure { timeout } => return code(supervise::ensure(&Env::process(), timeout)),
         Command::Stop { timeout } => return code(supervise::stop(&Env::process(), timeout)),

@@ -1,4 +1,4 @@
-//! The hub protocol's contract on the Rust side (docs/develop/runtime.md, "drgnx-proto").
+//! The hub protocol's contract on the Rust side (docs/develop/runtime.md, "runstav").
 //!
 //! - [`wire`]: requests, answers, errors and events as they cross the socket (one JSON object per line).
 //! - [`line`]: the line limits and the strict parse of one line (duplicate keys and deep nesting refused).

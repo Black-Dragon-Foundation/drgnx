@@ -3,8 +3,8 @@
 //! hub's proof back before it sends anything (design 4.2).  Lines are read until the answer with the id asked for;
 //! events on the way are skipped.
 
-use drgnx_proto::paths::{self, Env};
-use drgnx_proto::proof::{self, Cap};
+use runstav::paths::{self, Env};
+use runstav::proof::{self, Cap};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

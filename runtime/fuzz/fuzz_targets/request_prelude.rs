@@ -1,9 +1,9 @@
 //! A line through the dispatcher's steps 1 to 5 (no handler), for every class and a few protocol states.
 #![no_main]
 
-use drgnx_proto::registry::Class;
 use drgnx_ratatoskr::dispatch::prelude;
 use libfuzzer_sys::fuzz_target;
+use runstav::registry::Class;
 
 fuzz_target!(|line: &str| {
     for class in [Class::User, Class::Agent, Class::Service] {
