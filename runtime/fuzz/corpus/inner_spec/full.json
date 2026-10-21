@@ -1,0 +1,1 @@
+{"version":1,"env":[["PATH","/usr/bin"]],"chdir":"/work","landlock":{"tier":"full","min_abi":1,"read_roots":["/usr"],"write_roots":["/work"],"dev_write_files":["/dev/null"],"unix_connect_roots":[],"tcp_connect_ports":null,"tcp_bind_ports":null},"new_session":false,"relay":null}

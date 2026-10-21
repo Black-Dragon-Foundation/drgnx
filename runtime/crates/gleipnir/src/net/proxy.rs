@@ -356,6 +356,26 @@ async fn read_head(client: &mut Box<dyn Client>, buf: &mut [u8]) -> (Head, usize
     }
 }
 
+/// The target of a head's request line, which must be exactly `CONNECT target HTTP/1.x`, one space each. `head` is the
+/// bytes before the blank line.
+pub(crate) fn connect_request(head: &[u8]) -> Option<&[u8]> {
+    let line = &head[..head
+        .windows(2)
+        .position(|w| w == b"\r\n")
+        .unwrap_or(head.len())];
+    line.strip_prefix(b"CONNECT ").and_then(|rest| {
+        let sp = rest.iter().position(|&c| c == b' ')?;
+        matches!(&rest[sp + 1..], b"HTTP/1.1" | b"HTTP/1.0").then_some(&rest[..sp])
+    })
+}
+
+/// For the `connect_head` fuzz target: the head's end as [`read_head`] finds it, then [`connect_request`].
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_connect_head(buf: &[u8]) -> Option<&[u8]> {
+    let end = buf.windows(4).position(|w| w == b"\r\n\r\n")?;
+    connect_request(&buf[..end])
+}
+
 /// One client: its head, the checks, the upstream, the splice.
 async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: Slot) {
     let mut buf = vec![0u8; sh.max_head];
@@ -381,17 +401,7 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
         }
     };
     let early = &buf[end + 4..len];
-    let line = &buf[..end];
-    let line = &line[..line
-        .windows(2)
-        .position(|w| w == b"\r\n")
-        .unwrap_or(line.len())];
-
-    // exactly `CONNECT target HTTP/1.x`, one space each
-    let request = line.strip_prefix(b"CONNECT ").and_then(|rest| {
-        let sp = rest.iter().position(|&c| c == b' ')?;
-        matches!(&rest[sp + 1..], b"HTTP/1.1" | b"HTTP/1.0").then_some(&rest[..sp])
-    });
+    let request = connect_request(&buf[..end]);
     let Some(raw) = request.filter(|r| !r.is_empty()) else {
         return refuse(
             &sh,
