@@ -92,8 +92,23 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   (push (* 1000 (- gc-elapsed drgnx-perf--gc-last)) drgnx-perf--gc-pauses)
   (setq drgnx-perf--gc-last gc-elapsed))
 
+(defvar glitnir-enable)
+(declare-function glitnir-stats "glitnir")
+
+(defun drgnx-perf--glitnir-env ()
+  "Apply $DRGNX_PERF_GLITNIR (on or off) to `glitnir-enable' in this session; anything else leaves it alone."
+  (when-let* ((v (getenv "DRGNX_PERF_GLITNIR")) ((member v '("on" "off"))) ((boundp 'glitnir-enable)))
+    (setq glitnir-enable (equal v "on"))))
+
+(defun drgnx-perf--compose-stats (&optional reset)
+  "Glitnir's frame-time record (`glitnir-stats'; RESET clears it), or nil on a build or a root without it."
+  (and (fboundp 'glitnir-stats) (glitnir-stats nil reset)))
+
 (defun drgnx-perf-begin ()
-  "Start recording: every command's latency, every GC pause, memory."
+  "Start recording: every command's latency, every GC pause, memory, and Glitnir's frame-time record (the
+compose probe: reset here, read by `drgnx-perf-end' under :compose)."
+  (drgnx-perf--glitnir-env)
+  (drgnx-perf--compose-stats t)
   (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil
         drgnx-perf--gc-pauses nil drgnx-perf--gc-last gc-elapsed
         drgnx-perf--start (list gcs-done gc-elapsed (drgnx-perf-rss-kb) (drgnx-perf--rows)))
@@ -105,18 +120,22 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   "Stop recording: (:input STATS :alloc STATS :cpu_ms STATS :rows N :gc_count N :gc_ms MS :gc_pause STATS
 :rss_kb KB :rss_start_kb KB).  :input is wall ms, :alloc objects, :cpu_ms CPU ms, per command (pre-command-hook
 to the redisplay after it); :rows the growth of `drgnx-perf-row-counters'.  Allocation, CPU and rows do not move
-with the load on the machine; wall clock does."
+with the load on the machine; wall clock does.  :compose is Glitnir's record since `drgnx-perf-begin' (absent
+without Glitnir)."
   (remove-hook 'pre-command-hook #'drgnx-perf--pre)
   (remove-hook 'post-command-hook #'drgnx-perf--post)
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
-  (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start))
-    (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
-          :alloc (drgnx-perf-stats drgnx-perf--allocs)
-          :cpu_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--cpus))
-          :rows (- (drgnx-perf--rows) rows)
-          :gc_count (- gcs-done gcs) :gc_ms (drgnx-perf--round (* 1000 (- gc-elapsed elapsed)))
-          :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--gc-pauses))
-          :rss_kb (drgnx-perf-rss-kb) :rss_start_kb rss)))
+  (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start)
+              (compose (drgnx-perf--compose-stats)))
+    (append
+     (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
+           :alloc (drgnx-perf-stats drgnx-perf--allocs)
+           :cpu_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--cpus))
+           :rows (- (drgnx-perf--rows) rows)
+           :gc_count (- gcs-done gcs) :gc_ms (drgnx-perf--round (* 1000 (- gc-elapsed elapsed)))
+           :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--gc-pauses))
+           :rss_kb (drgnx-perf-rss-kb) :rss_start_kb rss)
+     (and compose (list :compose compose)))))
 
 ;;;; Redisplay and frames
 

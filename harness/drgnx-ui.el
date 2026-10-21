@@ -38,7 +38,7 @@ this at an exported REF.")
   "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
   '("USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
-    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_LEASE_HELD")
+    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR")
   "The only variables a session inherits; everything else (keys, tokens) stays out.  Not HOME: a session's is
 RUN/home (`drgnx-ui-session-env').")
 (defvar drgnx-ui-session-tier 'ui
@@ -656,7 +656,7 @@ variables (a later entry wins): a test puts a package's directory on the daemon'
 \(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.  Only names in
 `drgnx-ui-session-extra-env-names' are taken; anything else signals.")
 
-(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH")
+(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH" "DRGNX_PERF_GLITNIR")
   "The variables `drgnx-ui-session-extra-env' may set.  Not HOME, DISPLAY, the bus, XDG_RUNTIME_DIR or TMPDIR:
 a later entry wins, so one of those would move a session out of its run directory or onto the user's desktop.")
 
@@ -1949,9 +1949,12 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("test-bench" (require 'drgnx-bench) (let ((drgnx-ui-session-tier 'bench)) (drgnx-bench-run)))
       ("test-perf" (require 'drgnx-perf-run)
        (let ((drgnx-ui-session-tier 'perf))
-         (if-let* ((ref (getenv "DRGNX_PERF_AB")))
-             (drgnx-perf-ab ref :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100")))
-           (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT")))))
+         (cond
+          ((getenv "DRGNX_PERF_AB")
+           (drgnx-perf-ab (getenv "DRGNX_PERF_AB") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))))
+          ((getenv "DRGNX_PERF_AB_ENV")
+           (drgnx-perf-ab-env (getenv "DRGNX_PERF_AB_ENV") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))))
+          (t (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT"))))))
       ("test-soak" (require 'drgnx-perf-run)
        (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-soak (and (car pos) (string-to-number (car pos))))))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))

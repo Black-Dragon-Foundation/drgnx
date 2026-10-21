@@ -504,12 +504,15 @@ cmd_test() {
               --ab) [ -n "${2:-}" ] || { echo "usage: drgnx test --perf --ab REF [--n N]" >&2; exit 2; }
                     export DRGNX_PERF_AB="$2"
                     if [ "${3:-}" = --n ]; then [[ "${4:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --perf --ab REF [--n N]" >&2; exit 2; }; export DRGNX_PERF_AB_N="$4"; fi ;;
+              --ab-env) [[ "${2:-}" =~ ^[A-Z_][A-Z0-9_]*=[^,=]+,[^,=]+$ ]] || { echo "usage: drgnx test --perf --ab-env VAR=JUDGED,REF [--n N]  (the first value is the judged side)" >&2; exit 2; }
+                    export DRGNX_PERF_AB_ENV="$2"
+                    if [ "${3:-}" = --n ]; then [[ "${4:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; exit 2; }; export DRGNX_PERF_AB_N="$4"; fi ;;
             esac
             run_in_tmp ui_exec test-perf ;;
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N]] | --soak [MIN] | --container [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --container [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -606,7 +609,7 @@ lease_self() { # CLASS ARGS… — take the lease for this command: re-exec as `
 lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (the GUI, tty and container tiers), exclusive (A/B perf)
   case "${1:-}" in
     --ui|--tty|--scenario|--bench|--soak|--container|--podman|--install|--bootstrap|--stress) echo heavy ;;
-    --perf) case " $* " in *" --ab "*) echo exclusive ;; *) echo heavy ;; esac ;;
+    --perf) case " $* " in *" --ab "*|*" --ab-env "*) echo exclusive ;; *) echo heavy ;; esac ;;
     *) echo light ;;
   esac
 }
@@ -1446,9 +1449,10 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                (sessions: DRGNX_UI_SIZE=WxH, DRGNX_UI_SCALE=S or DRGNX_UI_SCALES="S1 S2"; mutter/sway/kwin)
        drgnx test --tty        terminal tests: Emacs in private tmux servers (needs tmux; docs/develop/harness.md)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
-       drgnx test --perf [--audit | --ab REF [--n N]]
+       drgnx test --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]]
                                input latency, redisplay, frames, GC, startup, memory against budgets
-                               (--audit: what each hook function costs, not judged)
+                               (--audit: what each hook function costs, not judged; --ab-env: the paired A/B on
+                               one tree, the first value the judged side, e.g. DRGNX_PERF_GLITNIR=on,off)
        drgnx test --soak [MIN] the workloads in a loop for MIN minutes (30); memory must hold
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration

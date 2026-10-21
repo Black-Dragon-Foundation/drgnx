@@ -207,6 +207,35 @@ session compiles them in the background while it runs, and the first runs cost s
 therefore wait until their native compilation has drained, and both run a discarded warm-up before the samples; the
 report prints each side's warm-up p50 next to the measured one.
 
+## Glitnir (the compositor): popups, the `compose` probe, A/B by environment
+
+**The `compose` probe.** When `glitnir-stats` is bound, `drgnx-perf-begin` resets it and `drgnx-perf-end` stores its
+plist under `:compose` (`(:compose :compose-ms :p95)`, `(:compose :draw-ms :p95)`, `(:compose :painted-px)`,
+`(:compose :count)`, ...), median-reduced over the three runs like every other number. On a build without Glitnir, or
+when the stats are nil (an inactive root), there is no `:compose` row and nothing fails. `DRGNX_PERF_GLITNIR=on|off`
+sets `glitnir-enable` in the session when recording begins (any other value leaves it alone); `drgnx test --perf`
+passes it on to the session.
+
+**The P1 workloads.** `popup-typing` (corfu open, 200+ characters), `popup-churn` (a posframe shown, moved and
+hidden 200 times; the hides are measured), `scroll-under-popup` (an eldoc-box at point, 60 `<next>` then 60
+`<prior>`: 120 samples, above the 100 that make p95 non-null) and `scroll-full-window` (one window filling the frame,
+`C-n` 300 times). The first three need the pinned child-frame packages: set `DRGNX_CHILDFRAME_ELPA`
+([harness.md](harness.md), "Child-frame packages"); without it `--perf` prints `perf: popup workloads skipped` and
+runs the rest (`scroll-full-window` needs no package).
+
+**Glitnir A/B.**
+
+```sh
+DRGNX_PERF_WORKLOADS=popup-typing bin/drgnx test --perf --ab-env DRGNX_PERF_GLITNIR=on,off
+```
+
+`--ab-env VAR=JUDGED,REF` is the interleaved A/B of the section above on **one** tree: two sessions, no export and
+one build. The first value is the **judged** side (the tool's "work tree" role), the second the **reference**, so
+"regressed" means the judged value (Glitnir on) is slower. Without the comma it is a usage error (exit 2). Only
+`DRGNX_PERF_GLITNIR` can be set this way. **Do not pass `--n`** in a gate run: the default (at least 100 per-command
+samples a side) is what makes p95 non-null; `--n` only exists to shorten a trial run. Verdicts, exit codes and the
+lease are those of `--ab`.
+
 ## The audit's per-command hook time
 
 `--audit` times every function on the busy hooks (`drgnx-perf-busy-hooks`, `window-state-change-functions` among
