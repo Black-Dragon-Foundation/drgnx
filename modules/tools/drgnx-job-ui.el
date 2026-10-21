@@ -34,6 +34,7 @@
 
 (defvar drgnx-job-merge-gate)
 (defvar drgnx-notice--sources)
+(defvar drgnx-job-ui-attention-mode)
 
 (defun drgnx-job-ui--v (x) (unless (memq x '(:null :false)) x))
 
@@ -156,7 +157,8 @@ reaches the desktop through the set's `:added' ids (the notice routes), not from
     (drgnx-job-ui--schedule-recount)))
 
 (define-minor-mode drgnx-job-ui-attention-mode
-  "Jobs as a source of what needs you: the hub's events recount their cards and messages; a lost hub makes the count not known."
+  "Jobs as a source of what needs you: the hub's events recount their cards and messages; a lost hub makes
+the count not known."
   :global t :group 'drgnx
   (if drgnx-job-ui-attention-mode
       (progn (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
@@ -166,7 +168,8 @@ reaches the desktop through the set's `:added' ids (the notice routes), not from
     (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--unknown-gone)))
 
 (define-obsolete-function-alias 'drgnx-job-ui-badge-mode #'drgnx-job-ui-attention-mode "drgnx M12f")
-(define-obsolete-variable-alias 'drgnx-job-ui-badge-mode 'drgnx-job-ui-attention-mode "drgnx M12f")
+(with-no-warnings   ; the mode's variable is declared at the top (used above the mode): the alias comes after it
+  (define-obsolete-variable-alias 'drgnx-job-ui-badge-mode 'drgnx-job-ui-attention-mode "drgnx M12f"))
 
 ;;;; The Plan Job commands (they may wait for the hub: the user asked)
 
