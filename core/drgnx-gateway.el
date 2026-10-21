@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'url-parse)
+(require 'drgnx-guard)
 (require 'drgnx-http)
 (require 'drgnx-ai)
 (require 'drgnx-timer)
@@ -82,7 +83,8 @@ its token (shown once: only its hash is kept)."
   (setq drgnx-gateway--server
         (make-network-process :name "drgnx-gateway" :server t :host "127.0.0.1" :service (or port t)
                               :family 'ipv4 :coding 'binary :noquery t
-                              :filter #'drgnx-gateway--filter :sentinel #'drgnx-gateway--client-sentinel))
+                              :filter (drgnx-guard-wrap #'drgnx-gateway--filter "gateway client")
+                              :sentinel (drgnx-guard-wrap #'drgnx-gateway--client-sentinel "gateway client")))
   (drgnx-gateway-port))
 
 (defvar drgnx-gateway--sockets)         ; Per-session sockets, below
@@ -107,7 +109,8 @@ listener.  A stale file at PATH is replaced.  Return PATH."
   (let ((server (with-file-modes #o600
                   (make-network-process :name (concat "drgnx-gw-sock " path) :server t :family 'local :service path
                                         :coding 'binary :noquery t
-                                        :filter #'drgnx-gateway--filter :sentinel #'drgnx-gateway--client-sentinel))))
+                                        :filter (drgnx-guard-wrap #'drgnx-gateway--filter "gateway client")
+                                        :sentinel (drgnx-guard-wrap #'drgnx-gateway--client-sentinel "gateway client")))))
     (process-put server :gateway-socket path)
     (puthash path server drgnx-gateway--sockets)
     path))
@@ -420,13 +423,17 @@ route to no provider.")
                    (make-process
                     :name "drgnx-gw-curl" :command '("curl" "-K" "-") :connection-type 'pipe :coding 'binary :noquery t
                     :buffer nil :stderr err
-                    :filter (lambda (proc bytes) (drgnx-gateway--upstream-bytes proc conn bytes scan (null (cdr steps))))
-                    :sentinel (lambda (proc _e)
-                                (unless (process-live-p proc)
-                                  (when (buffer-live-p err) (kill-buffer err))
-                                  (when body-file (ignore-errors (delete-file body-file)))
-                                  (drgnx-gateway--guarded
-                                   conn (lambda () (drgnx-gateway--upstream-done proc conn req reg steps reasons id model p scan))))))
+                    :filter (drgnx-guard-wrap
+                             (lambda (proc bytes) (drgnx-gateway--upstream-bytes proc conn bytes scan (null (cdr steps))))
+                             "gateway upstream")
+                    :sentinel (drgnx-guard-wrap
+                               (lambda (proc _e)
+                                 (unless (process-live-p proc)
+                                   (when (buffer-live-p err) (kill-buffer err))
+                                   (when body-file (ignore-errors (delete-file body-file)))
+                                   (drgnx-gateway--guarded
+                                    conn (lambda () (drgnx-gateway--upstream-done proc conn req reg steps reasons id model p scan)))))
+                               "gateway upstream"))
                  (error (kill-buffer err) (when body-file (ignore-errors (delete-file body-file)))
                         (signal (car e) (cdr e))))))
     (process-put conn :curl curl)

@@ -257,9 +257,11 @@ never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the f
         (let* ((answer nil)
                (c (make-network-process :name "drgnx-hub-probe" :family 'local :service socket :noquery t
                                         :coding 'utf-8-unix
-                                        :filter (lambda (p s)
-                                                  (drgnx-hub--lines p s (lambda (j) (unless (or answer (plist-get j :event))
-                                                                                      (setq answer j))))))))
+                                        :filter (drgnx-guard-wrap
+                                                 (lambda (p s)
+                                                   (drgnx-hub--lines p s (lambda (j) (unless (or answer (plist-get j :event))
+                                                                                       (setq answer j)))))
+                                                 "hub probe"))))
           (unwind-protect
               (progn (process-send-string c "{\"id\":0,\"method\":\"ping\"}\n")
                      (let ((deadline (+ (float-time) 1)))
@@ -275,7 +277,7 @@ never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the f
     (when-let* ((why (drgnx-hub--untrusted socket)))
       (error "Not connecting to the drgnx hub: %s" why))
     (make-network-process :name "drgnx-hub-client" :family 'local :service socket :noquery t
-                          :coding 'utf-8-unix :filter filter)))
+                          :coding 'utf-8-unix :filter (drgnx-guard-wrap filter "hub connection"))))
 
 ;;;; Proofs and the binary on disk
 

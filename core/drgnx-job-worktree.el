@@ -17,6 +17,7 @@
 ;;; Code:
 (require 'subr-x)
 (require 'drgnx-timer)
+(require 'drgnx-guard)
 (require 'drgnx-job-snapshot)
 
 (defcustom drgnx-job-worktree-timeout 300
@@ -130,15 +131,17 @@ process).  Stopping JOB ends it, and DONE is not called."
          (p (condition-case e
                 (make-process
                  :name "drgnx-worktree" :buffer out :noquery t :connection-type 'pipe :command argv
-                 :sentinel (lambda (p _event)
-                             (unless (process-live-p p)
-                               (drgnx-timer-cancel (cons 'job-worktree-timeout p))
-                               (let ((text (string-trim (with-current-buffer out (buffer-string)))))
-                                 (kill-buffer out)
-                                 (unless (process-get p :stopped)
-                                   (with-demoted-errors "drgnx worktree: %S"
-                                     (funcall done (cons (if (process-get p :timed-out) :timeout (process-exit-status p))
-                                                         text))))))))
+                 :sentinel (drgnx-guard-wrap
+                            (lambda (p _event)
+                              (unless (process-live-p p)
+                                (drgnx-timer-cancel (cons 'job-worktree-timeout p))
+                                (let ((text (string-trim (with-current-buffer out (buffer-string)))))
+                                  (kill-buffer out)
+                                  (unless (process-get p :stopped)
+                                    (with-demoted-errors "drgnx worktree: %S"
+                                      (funcall done (cons (if (process-get p :timed-out) :timeout (process-exit-status p))
+                                                          text)))))))
+                            "job worktree"))
               (error (kill-buffer out) (signal (car e) (cdr e))))))
     (when job (process-put p :job job))
     (drgnx-timer-start (cons 'job-worktree-timeout p) drgnx-job-worktree-timeout #'drgnx-job-worktree--timed-out

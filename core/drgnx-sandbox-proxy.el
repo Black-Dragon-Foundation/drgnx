@@ -28,6 +28,7 @@
 ;;; Code:
 (require 'subr-x)
 (require 'drgnx-timer)
+(require 'drgnx-guard)
 
 (declare-function puny-encode-domain "puny" (domain))
 (defvar drgnx-dir)
@@ -225,8 +226,10 @@ documentation, benchmarking, multicast or reserved."
                ;; :remote is the address checked, so nothing resolves again; :service only for the signature
                (make-network-process :name "drgnx-sandbox-proxy-up" :remote addr :service (aref addr (1- (length addr)))
                                      :nowait t :noquery t
-                                     :coding 'binary :filter #'drgnx-sandbox-proxy--upstream-filter
-                                     :sentinel #'drgnx-sandbox-proxy--upstream-sentinel))))
+                                     :coding 'binary
+                                     :filter (drgnx-guard-wrap #'drgnx-sandbox-proxy--upstream-filter "sandbox proxy upstream")
+                                     :sentinel (drgnx-guard-wrap #'drgnx-sandbox-proxy--upstream-sentinel
+                                                                 "sandbox proxy upstream")))))
     (cond (up (process-put up :peer conn) (process-put up :next (cdr addrs)) (process-put conn :peer up))
           ((cdr addrs) (drgnx-sandbox-proxy--connect conn (cdr addrs)))
           (t (drgnx-sandbox-proxy--refuse conn "502 Bad Gateway")))))
@@ -353,22 +356,25 @@ line on stderr on a bad argument, 1 when it cannot listen."
             (unless key (drgnx-sandbox-proxy--die 2 (format "not an entry: %S" arg)))
             (puthash key t drgnx-sandbox-proxy--allowed)))))
     (make-process :name "drgnx-sandbox-proxy-control" :command '("/bin/sh" "-c" "exec cat <&3")
-                  :connection-type 'pipe :noquery t :coding 'binary :filter #'drgnx-sandbox-proxy--control-filter
-                  :sentinel #'drgnx-sandbox-proxy--control-sentinel)
+                  :connection-type 'pipe :noquery t :coding 'binary
+                  :filter (drgnx-guard-wrap #'drgnx-sandbox-proxy--control-filter "sandbox proxy control")
+                  :sentinel (drgnx-guard-wrap #'drgnx-sandbox-proxy--control-sentinel "sandbox proxy control"))
     (condition-case err
         (setq server
               (if (equal where "tcp")
                   (make-network-process :name "drgnx-sandbox-proxy" :server t :host "127.0.0.1" :service t
                                         :family 'ipv4 :noquery t :coding 'binary :log #'drgnx-sandbox-proxy--accept
-                                        :filter #'drgnx-sandbox-proxy--client-filter
-                                        :sentinel #'drgnx-sandbox-proxy--client-sentinel)
+                                        :filter (drgnx-guard-wrap #'drgnx-sandbox-proxy--client-filter "sandbox proxy client")
+                                        :sentinel (drgnx-guard-wrap #'drgnx-sandbox-proxy--client-sentinel
+                                                                    "sandbox proxy client"))
                 (let ((modes (file-attribute-modes (file-attributes where))))
                   (when (and modes (eq (aref modes 0) ?s)) (delete-file where)))
                 (with-file-modes #o700
                   (make-network-process :name "drgnx-sandbox-proxy" :server t :family 'local :service where
                                         :noquery t :coding 'binary :log #'drgnx-sandbox-proxy--accept
-                                        :filter #'drgnx-sandbox-proxy--client-filter
-                                        :sentinel #'drgnx-sandbox-proxy--client-sentinel))))
+                                        :filter (drgnx-guard-wrap #'drgnx-sandbox-proxy--client-filter "sandbox proxy client")
+                                        :sentinel (drgnx-guard-wrap #'drgnx-sandbox-proxy--client-sentinel
+                                                                    "sandbox proxy client")))))
       (error (drgnx-sandbox-proxy--die 1 (format "cannot listen: %s" (error-message-string err)))))
     (send-string-to-terminal (if (equal where "tcp") (format "ready %d\n" (process-contact server :service)) "ready\n"))
     (while t (accept-process-output nil 30))))
@@ -418,7 +424,8 @@ has `:ready' once it listens, and `:port' its port when it has no socket.  It en
 Signals an error when an entry of HOSTS is not one."
   (let ((proc (make-process :name (format "drgnx-sandbox-proxy-%s" job) :command (drgnx-sandbox-proxy-command hosts socket)
                             :connection-type 'pipe :noquery t :coding 'utf-8-unix
-                            :filter #'drgnx-sandbox-proxy--hub-filter :sentinel #'ignore)))
+                            :filter (drgnx-guard-wrap #'drgnx-sandbox-proxy--hub-filter "sandbox proxy")
+                            :sentinel #'ignore)))
     (process-put proc :job job)
     proc))
 
