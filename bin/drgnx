@@ -418,7 +418,9 @@ test_snapshot() { # DIR — a snapshot of the working tree (edits during a run c
   (cd "$here" && git ls-files -z -co --exclude-standard | tar --null -T - -cf -) | tar -C "$snap" -xf -
   git -C "$snap" init -q -b main
   git -C "$snap" add -A
-  git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid commit -q -m snapshot
+  # no auto maintenance: git ≥ 2.5x repacks in a detached process after the commit, still writing into the snapshot
+  # while the bundle is made and the run removes it (rm: "Directory not empty")
+  git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid -c maintenance.auto=false commit -q -m snapshot
   git -C "$snap" bundle create -q "$snap/drgnx.bundle" main
 }
 
@@ -528,7 +530,8 @@ test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one
   cp "$here/etc/drgnx.lock.eld" "$fixture/drgnx.lock.eld"
   git -C "$fixture" init -q -b main
   git -C "$fixture" add -A
-  git -C "$fixture" -c user.name=drgnx-test -c user.email=test@drgnx.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m config
+  git -C "$fixture" -c user.name=drgnx-test -c user.email=test@drgnx.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+    -c maintenance.auto=false commit -q -m config
   git clone -q --bare "$fixture" "$snap/config.git"
   local limit=()
   test_time_limit 3600
