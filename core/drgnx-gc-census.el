@@ -3,12 +3,12 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The first measure of the stall watchdog (docs/develop/perf.md, "GC census").  While `drgnx-gc-census-mode' is on, the GC
-;; owner's `post-gc-hook' function calls `drgnx-gc-census--note', which only records numbers into a fixed ring: the pause (the
-;; change in `gc-elapsed', which Emacs updates before it runs the hook), the origin (`nidhogg-watchdog-gc-origin',
-;; bound by drgnx's own collections), whether it ran inside a command or a timer rather than at idle, `gcs-done', the
-;; time, the live heap by type (`garbage-collect-heapsize') and the threshold.  It does no I/O, never asks whether input
-;; is pending and allocates only that heap list.  An idle timer writes the ring as collection lines (JSON Lines, the
+;; The first measure of the stall watchdog (docs/develop/perf.md, "GC census").  While `drgnx-gc-census-mode' is
+;; on, the GC owner's `post-gc-hook' function calls `drgnx-gc-census--note', which only records numbers into a fixed
+;; ring: the pause (the change in `gc-elapsed', which Emacs updates before it runs the hook), the origin
+;; (`nidhogg-watchdog-gc-origin', bound by drgnx's own collections), whether it ran inside a command or a timer
+;; rather than at idle, `gcs-done', the time, the live heap by type (`garbage-collect-heapsize') and the threshold.
+;; It does no I/O, never asks whether input is pending and allocates only that heap list.  An idle timer writes the ring as collection lines (JSON Lines, the
 ;; watchdog's format) into (drgnx-state-dir)/watchdog/YYYY-MM-DD.jsonl; day files older than 14 days are deleted when
 ;; the mode starts.  `drgnx-gc-census-report' reads the day files back; the command `gc-census' (Help) shows it.
 ;; Off by default: speed.eld's :gc-census turns it on at start, `drgnx-gc-census-mode' for this session.  While the
@@ -78,10 +78,11 @@ once by `drgnx-gc-census--reset' so that recording a collection fills a slot and
           drgnx-gc-census--last-elapsed gc-elapsed)))
 
 (defun drgnx-gc-census--note ()
-  "After each collection (the GC owner's `drgnx-gc--note' calls it): record this collection in the ring, or count it as dropped when the ring is full.
-Numbers only, for it runs inside every collection: no file I/O, no `process-attributes', no message, and no
-`input-pending-p' (on pgtk it can dispatch GLib events inside the collection's span); FELT is only whether it ran
-inside a command or a timer rather than at idle.  It allocates `garbage-collect-heapsize''s small list and two floats.
+  "Record this collection in the ring, or count it as dropped when the ring is full.
+The GC owner's `drgnx-gc--note' calls it after each collection.  Numbers only, for it runs inside every
+collection: no file I/O, no `process-attributes', no message, and no `input-pending-p' (on pgtk it can dispatch
+GLib events inside the collection's span); FELT is only whether it ran inside a command or a timer rather than at
+idle.  It allocates `garbage-collect-heapsize''s small list and two floats.
 Nothing while the watchdog's own mode is on."
   (unless (bound-and-true-p nidhogg-watchdog-mode)
     (let ((elapsed gc-elapsed))

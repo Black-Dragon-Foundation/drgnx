@@ -92,24 +92,26 @@ yet); SETTING is what enforces it; FIX is the doctor's fix line.  The values com
     (or (gethash file memo)
         (puthash file (or (drgnx-owner-of-file file) (list "unknown")) memo))))
 
+(defconst drgnx-heap--emacs "emacs" "The owner name of what Emacs's C core holds (an owner, never a program).")
+
 (defun drgnx-heap--var-owner (ctx symbol)
   "(OWNER . DETAIL) of the variable SYMBOL: its defining file's owner; with no file, \"emacs\" for a special variable
 \(the C core's), else \"unknown\"."
   (let ((file (gethash symbol (drgnx-heap--ctx-vars ctx))))
     (cond (file (drgnx-heap--file-owner ctx file))
-          ((special-variable-p symbol) (list "emacs"))
+          ((special-variable-p symbol) (list drgnx-heap--emacs))
           (t (list "unknown")))))
 
 (defun drgnx-heap--fun-owner (ctx function)
   "(OWNER . DETAIL) of the function symbol FUNCTION: its defining file's owner; \"emacs\" for a primitive."
   (let ((file (and (symbolp function) (gethash function (drgnx-heap--ctx-funs ctx)))))
     (cond (file (drgnx-heap--file-owner ctx file))
-          ((and (symbolp function) (fboundp function) (subr-primitive-p (symbol-function function))) (list "emacs"))
+          ((and (symbolp function) (fboundp function) (subr-primitive-p (symbol-function function))) (list drgnx-heap--emacs))
           (t (list "unknown")))))
 
 (defun drgnx-heap--generic-p (owner)
   "Whether OWNER (OWNER . DETAIL) says nothing about who made something: \"emacs\" or \"unknown\"."
-  (member (car owner) '("emacs" "unknown")))
+  (member (car owner) (list drgnx-heap--emacs "unknown")))
 
 (defun drgnx-heap--symbol-owner (ctx symbol)
   "The owner of SYMBOL's plist: its function's file, else its variable's."
@@ -125,7 +127,7 @@ yet); SETTING is what enforces it; FIX is the doctor's fix line.  The values com
         (and (buffer-live-p b)
              (let ((mo (drgnx-heap--fun-owner ctx (buffer-local-value 'major-mode b))))
                (and (not (drgnx-heap--generic-p mo)) mo))))
-      (list "emacs")))
+      (list drgnx-heap--emacs)))
 
 (defun drgnx-heap--buffer-owner (ctx buffer)
   "The owner of BUFFER: its major mode's package, else (for a mode of Emacs's) its process's."
