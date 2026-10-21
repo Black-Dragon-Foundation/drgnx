@@ -763,9 +763,12 @@ the agent's name as written would be followed again, with handlers on); a remote
 (defun drgnx-agents-ui--teardown ()
   "Turned off: the hub's sessions are mirrored no more and the hub's event connection closes.  The layer timers (the
 list's tick, the mirror's) end with the module's run; the hooks, the views, the tab, the rules and the commands go
-with the cleanup stack."
+with the cleanup stack.  `agents' is a core notice source, so its set is emptied here: what waits there cannot be
+answered once the commands are gone, and must not stay counted (the next change of a session builds it again)."
   (when (featurep 'drgnx-agents-mirror) (drgnx-agents-mirror-stop))
-  (when (featurep 'drgnx-hub-client) (drgnx-hub-disconnect)))
+  (when (featurep 'drgnx-hub-client) (drgnx-hub-disconnect))
+  (setq drgnx-agents--attention-seen nil)
+  (drgnx-notice-set 'agents nil))
 
 (drgnx-module-define 'tools/agents
                      :doc "Agents: sessions over ACP in the right dock's Agents tab, durable jobs, edit review."

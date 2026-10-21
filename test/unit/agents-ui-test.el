@@ -147,6 +147,7 @@
                                  (add-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)       ; as `drgnx-agents-mirror-sync'
                                  (add-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
                                  (drgnx-module-teardown 'tools/agents)
+                                 (drgnx-timer-cancel 'statusbar-refresh)   ; the agents set emptied: the bar redraws
                                  (should-not (memq #'drgnx-agents-mirror--event drgnx-hub-event-functions))
                                  (should-not (memq #'drgnx-agents-mirror--hub-gone drgnx-hub-disconnect-functions))
                                  (should-not (process-live-p p))
@@ -154,6 +155,25 @@
                                  (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p))))
       (when (process-live-p p) (delete-process p))
       (when (and p (buffer-live-p (process-buffer p))) (kill-buffer (process-buffer p))))))
+
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-agents-ui/turned-off-it-empties-the-agents-set-and-a-click-says-why ()
+  ;; `agents' is a core source: what waits when the module goes must not stay counted, and a click on an item whose
+  ;; command went with the module says so instead of signalling
+  (drgnx-notice-test-with-model
+    (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "m1" :status 'busy :remote "r1"
+                                                            :permissions (list '(:id 7 :title "Run make")))))
+          (drgnx-agents--attention-seen nil))
+      (drgnx-test-with-modules '(tools/agents) :strict t
+                               (drgnx-agents--note-attention)
+                               (should (= 1 (drgnx-needs-you-count)))
+                               (drgnx-module-teardown 'tools/agents)
+                               (should (= 0 (drgnx-needs-you-count)))
+                               (drgnx-timer-cancel 'statusbar-refresh))   ; the bar redraws on the count (as above)
+      ;; a command that went with its module, clicked: it says so
+      (should-error (drgnx-ui--run 'drgnx-agents-ui-test--gone) :type 'user-error)
+      (should-error (funcall (drgnx-notices--action '(drgnx-agents-ui-test--gone 1))) :type 'user-error))))
 
 (ert-deftest drgnx-agents-ui/hub-sessions-are-mirrored-only-when-a-hub-runs ()
   ;; at idle: never a wait (no ping), never a hub started — only a socket that is there is connected to
