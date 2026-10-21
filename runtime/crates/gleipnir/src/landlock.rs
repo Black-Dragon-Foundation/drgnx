@@ -11,7 +11,8 @@
 //! - [`restrict`] checks the floor, then applies the description for the effective ABI to the calling thread.
 
 use crate::spec::{
-    LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_FULL, LANDLOCK_FLOOR_REDUCED, Mode, Net, ValidSpec,
+    LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_FULL, LANDLOCK_FLOOR_REDUCED, LANDLOCK_FLOOR_SHARED_NET, Mode,
+    Net, ValidSpec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -242,10 +243,20 @@ fn path_list<'a>(it: impl IntoIterator<Item = &'a PathBuf>, more: &[&str]) -> Ve
     v
 }
 
-/// The plan for `spec` in `tier` (pure). `min_abi` is the spec's, raised to the tier's floor.
+/// The plan for `spec` in `tier` (pure). `min_abi` is the spec's, raised to the tier's floor, and in the full tier
+/// under `Net::Shared` to [`LANDLOCK_FLOOR_SHARED_NET`]: the host's abstract sockets are reachable there unless ABI 6
+/// scopes them, so a kernel below it refuses the run (review S3).
 pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
     let s = spec.spec();
-    let min_abi = s.layers.landlock_min_abi.max(tier.floor());
+    let shared_floor = match (tier, &s.net) {
+        (Tier::Full, Net::Shared) => LANDLOCK_FLOOR_SHARED_NET,
+        _ => 0,
+    };
+    let min_abi = s
+        .layers
+        .landlock_min_abi
+        .max(tier.floor())
+        .max(shared_floor);
     let rw_binds = s.binds.iter().filter(|b| b.mode == Mode::Rw);
     let rw_home = s.home.iter().filter(|b| b.mode == Mode::Rw);
     match tier {
@@ -634,11 +645,15 @@ mod linux {
         Ok(())
     }
 
-    /// A layer that handles `bind_tcp` and allows no port.
+    /// A layer that handles `bind_tcp` and allows no port, and scopes signals and abstract sockets to itself: the
+    /// relay, started under the first layer, is outside it, so the program can neither kill the relay (and free its
+    /// port for another user) nor reach its sockets (gate review M12).
     pub(super) fn forbid_tcp_bind() -> Result<(), LandlockError> {
         let created = Ruleset::default()
             .set_compatibility(CompatLevel::HardRequirement)
             .handle_access(AccessNet::BindTcp)
+            .map_err(ruleset_err)?
+            .scope(Scope::Signal | Scope::AbstractUnixSocket)
             .map_err(ruleset_err)?
             .create()
             .map_err(ruleset_err)?;
@@ -870,7 +885,7 @@ mod tests {
         s.binds.push(bind(Mode::Rw, "/work/out2", "/mnt/out2"));
         let p = plan(s, Target::LinuxBwrap, Tier::Full);
         assert_eq!(p.tier, Tier::Full);
-        assert_eq!(p.min_abi, 1);
+        assert_eq!(p.min_abi, 6, "a shared network needs ABI 6");
         assert_eq!(p.read_roots, paths(&["/"]));
         assert_eq!(
             p.write_roots,
@@ -892,6 +907,36 @@ mod tests {
         ro.home.as_mut().unwrap().mode = Mode::Ro;
         let p = plan(ro, Target::LinuxBwrap, Tier::Full);
         assert!(!p.write_roots.contains(&"/home/agent".into()));
+    }
+
+    /// Review S3: the full tier under a shared network shares the host's abstract sockets, which only ABI 6 scopes,
+    /// so its plan needs 6 whatever the spec says; isolated keeps the floor (1) and a higher spec minimum is kept.
+    #[test]
+    fn full_shared_net_needs_abi_6() {
+        assert_eq!(LANDLOCK_FLOOR_SHARED_NET, 6);
+        let shared = plan(fixture(Net::Shared), Target::LinuxBwrap, Tier::Full);
+        assert_eq!(shared.min_abi, 6);
+        assert_eq!(
+            gate(&shared, 9, Some(5)),
+            Err(LandlockError::BelowFloor {
+                need: 6,
+                effective: 5,
+                kernel: 9
+            })
+        );
+        assert_eq!(gate(&shared, 9, Some(6)), Ok(6));
+        assert_eq!(
+            plan(fixture(isolated()), Target::LinuxBwrap, Tier::Full).min_abi,
+            1
+        );
+        let mut high = fixture(Net::Shared);
+        high.layers.landlock_min_abi = 8;
+        assert_eq!(plan(high, Target::LinuxBwrap, Tier::Full).min_abi, 8);
+        // The reduced tier's own floor (9) is above it either way.
+        assert_eq!(
+            plan(reduced_spec(), Target::LinuxReduced, Tier::Reduced).min_abi,
+            9
+        );
     }
 
     fn reduced_spec() -> Spec {
@@ -1333,12 +1378,40 @@ mod tests {
                 TcpListener::bind(("127.0.0.1", relay_free)).expect("the relay may bind its port"),
             );
             assert_eq!(errno(TcpListener::bind("127.0.0.1:0")), Some(libc::EACCES));
+            // A relay stand-in, started under the first layer only, as the helper starts the relay. It holds none of
+            // the test's pipes and ends by itself (this test cannot signal it once the second layer is on).
+            // SAFETY: fork in a single-purpose test process; the child only calls open, dup2, prctl, sleep, _exit.
+            let relay_pid = unsafe { libc::fork() };
+            assert!(relay_pid >= 0);
+            if relay_pid == 0 {
+                // SAFETY: the forked child's own descriptors and state; it never returns into the test.
+                unsafe {
+                    let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+                    for fd in 0..3 {
+                        libc::dup2(null, fd);
+                    }
+                    // Linux only; elsewhere every real test skips anyway (kernel_abi() == 0).
+                    #[cfg(target_os = "linux")]
+                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                    libc::sleep(20);
+                    libc::_exit(0);
+                }
+            }
+            // SAFETY: kill(2) with signal 0 only asks.
+            let signal = || unsafe { libc::kill(relay_pid, 0) == 0 };
+            assert!(signal(), "control: the relay can be signalled before");
             forbid_tcp_bind().unwrap();
             assert_eq!(
                 errno(TcpListener::bind(("127.0.0.1", relay_free))),
                 Some(libc::EACCES)
             );
             TcpStream::connect(relay_up.local_addr().unwrap()).expect("connects are unchanged");
+            // Gate review M12: the second layer scopes signals, so the relay is out of reach.
+            assert!(!signal(), "the relay can still be signalled");
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPERM)
+            );
         });
     }
 

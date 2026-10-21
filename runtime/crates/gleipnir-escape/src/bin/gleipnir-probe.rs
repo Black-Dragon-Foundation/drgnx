@@ -136,6 +136,7 @@ fn probe(name: &str, a: &[String]) -> Full {
         "bind-tcp" => resolve(&need(name, a, 1)[0])
             .and_then(|addr| std::net::TcpListener::bind(addr).map_err(os))
             .map(|_| None),
+        "listen-tcp" => listen_tcp(),
         "socket" => socket(need(name, a, 2)),
         "env-has" => env_has(need(name, a, 1)),
         "syscall" => syscall(&need(name, a, 1)[0]),
@@ -144,7 +145,8 @@ fn probe(name: &str, a: &[String]) -> Full {
         "proc-read" => std::fs::read(format!("/proc/{}/{}", need(name, a, 2)[0], a[1]))
             .map(|b| Some(b.len().to_string()))
             .map_err(os),
-        "spawn-sleep" => spawn_sleep(&need(name, a, 1)[0]),
+        "spawn-sleep" => spawn_sleep(&need(name, a, 1)[0], false),
+        "spawn-sleep-setsid" => spawn_sleep(&need(name, a, 1)[0], true),
         "kill" => kill(&need(name, a, 2)[0], &a[1]),
         "http-connect" => http_connect(&need(name, a, 1)[0]),
         "landlock-abi" => landlock_abi(),
@@ -442,14 +444,35 @@ fn open_fds() -> String {
 
 /// A child that sleeps `n` seconds without exec (so its command line is the probe's own, which the harness looks
 /// for), with stdio on /dev/null so no pipe is held open. The probe does not wait for it.
-fn spawn_sleep(n: &str) -> Res {
+///
+/// `setsid`: the child first tries to leave the probe's process group and session (`setsid()`) and reports how that
+/// went through a pipe: reached (the pid) when it left, blocked with the errno when it could not. Either way it then
+/// sleeps, so a row can check that a kill of the sandbox's group still ends it (review S1).
+fn spawn_sleep(n: &str, setsid: bool) -> Res {
     let secs: u32 = n.parse().map_err(|_| (libc::EINVAL, None))?;
+    let mut fds = [-1i32; 2];
+    // SAFETY: pipe(2) into a valid array.
+    if setsid && unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(last_errno());
+    }
     // SAFETY: the probe is single-threaded; the child only calls async-signal-safe functions.
     match unsafe { libc::fork() } {
         -1 => Err(last_errno()),
         0 => {
             // SAFETY: as above.
             unsafe {
+                if setsid {
+                    libc::close(fds[0]);
+                    let e: i32 = if libc::setsid() < 0 {
+                        std::io::Error::last_os_error()
+                            .raw_os_error()
+                            .unwrap_or(libc::EIO)
+                    } else {
+                        0
+                    };
+                    libc::write(fds[1], (&raw const e).cast(), 4);
+                    libc::close(fds[1]);
+                }
                 let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
                 for fd in 0..3 {
                     libc::dup2(null, fd);
@@ -461,7 +484,41 @@ fn spawn_sleep(n: &str) -> Res {
                 libc::_exit(0);
             }
         }
+        pid if setsid => {
+            let mut e: i32 = -1;
+            // SAFETY: plain reads and closes on the pipe made above.
+            let n = unsafe {
+                libc::close(fds[1]);
+                let n = libc::read(fds[0], (&raw mut e).cast(), 4);
+                libc::close(fds[0]);
+                n
+            };
+            match (n, e) {
+                (4, 0) => Ok(Some(pid.to_string())),
+                (4, e) => Err((e, Some(pid.to_string()))),
+                _ => Err((0, Some("the child said nothing".into()))),
+            }
+        }
         pid => Ok(Some(pid.to_string())),
+    }
+}
+
+/// `listen(2)` on a TCP socket that was never bound: the kernel binds it to a free port on every address itself
+/// (review S5). Reached when it listens; the detail is nothing (the port is the kernel's choice).
+fn listen_tcp() -> Res {
+    // SAFETY: plain socket/listen/close calls; the fd is closed before returning.
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        if fd < 0 {
+            return Err(last_errno());
+        }
+        let r = if libc::listen(fd, 1) == 0 {
+            Ok(None)
+        } else {
+            Err(last_errno())
+        };
+        libc::close(fd);
+        r
     }
 }
 
@@ -587,8 +644,9 @@ fn syscall(name: &str) -> Res {
             };
             return Err((0, Some(format!("killed by {sig}"))));
         }
+        // No errno: EIO is what some rows' controls expect (TIOCSTI), so a silent child must not look like it.
         if n != 4 {
-            return Err((libc::EIO, Some("the child said nothing".into())));
+            return Err((0, Some("the child said nothing".into())));
         }
         if e == 0 { Ok(None) } else { Err((e, None)) }
     }
@@ -608,7 +666,29 @@ const SYSCALLS: &[&str] = &[
     "ptrace-own-child",
     "x32-getpid",
     "i386-int80",
+    "setsid",
+    "setpgid",
 ];
+
+/// `setsid()` or `setpgid(0, 0)` in the forked child (which leads no group, so both work unconfined): its errno, 0
+/// when it worked. Every Unix has them; the reduced tier refuses both (review S1).
+fn leave_group(name: &str) -> i32 {
+    // SAFETY: plain calls on the throwaway child's own process state.
+    let r = unsafe {
+        if name == "setsid" {
+            libc::setsid()
+        } else {
+            libc::setpgid(0, 0)
+        }
+    };
+    if r >= 0 {
+        0
+    } else {
+        std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or(libc::EIO)
+    }
+}
 
 /// The errno of the call (0: it worked). Runs in the forked child.
 #[cfg(target_os = "linux")]
@@ -617,6 +697,7 @@ fn attempt(name: &str) -> i32 {
     unsafe {
         let ret = |r: libc::c_long| if r >= 0 { 0 } else { *libc::__errno_location() };
         match name {
+            "setsid" | "setpgid" => leave_group(name),
             "unshare-user" => ret(libc::syscall(libc::SYS_unshare, libc::CLONE_NEWUSER)),
             "io-uring" => {
                 let params = [0u8; 128];
@@ -709,8 +790,11 @@ fn attempt(name: &str) -> i32 {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn attempt(_: &str) -> i32 {
-    libc::ENOSYS
+fn attempt(name: &str) -> i32 {
+    match name {
+        "setsid" | "setpgid" => leave_group(name),
+        _ => libc::ENOSYS,
+    }
 }
 
 /// TIOCSTI on a pty the probe opens itself (never anyone's terminal). `high` sets bit 32 of the request register,

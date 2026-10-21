@@ -7,7 +7,7 @@ expression: "&p[BASE.len()..]"
 (allow system-socket (socket-domain AF_UNIX))
 (deny file-read*
   (subpath "/Users")
-  (regex "^/[Uu][Ss][Ee][Rr][Ss](/.*)?$"))
+  (regex "^/[Uu](s|S|ſ)[Ee][Rr](s|S|ſ)(/.*)?$"))
 (allow file-read*
   (literal "/"))
 (allow file-read-metadata
@@ -63,7 +63,7 @@ expression: "&p[BASE.len()..]"
   (subpath "/opt/homebrew/var")
   (regex "^/[Oo][Pp][Tt]/[Hh][Oo][Mm][Ee][Bb][Rr][Ee][Ww]/[Vv][Aa][Rr](/.*)?$")
   (subpath "/usr/local/var")
-  (regex "^/[Uu][Ss][Rr]/[Ll][Oo][Cc][Aa][Ll]/[Vv][Aa][Rr](/.*)?$"))
+  (regex "^/[Uu](s|S|ſ)[Rr]/[Ll][Oo][Cc][Aa][Ll]/[Vv][Aa][Rr](/.*)?$"))
 (allow file-write*
   (subpath "/w/task")
   (subpath "/w/state/home-1")
@@ -72,25 +72,25 @@ expression: "&p[BASE.len()..]"
   (subpath "/w/task/.git"))
 (deny file-write*
   (subpath "/w/task/.git")
-  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]/\\.[Gg][Ii][Tt](/.*)?$"))
+  (regex "^/[Ww]/[Tt][Aa](s|S|ſ)(k|K|K)/\\.[Gg][Ii][Tt](/.*)?$"))
 (allow file-read*
   (subpath "/w/objects"))
 (allow file-write*
   (subpath "/w/objects"))
 (deny file-read* file-write*
   (subpath "/w/task/conf/.env")
-  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]/[Cc][Oo][Nn][Ff]/\\.[Ee][Nn][Vv](/.*)?$"))
+  (regex "^/[Ww]/[Tt][Aa](s|S|ſ)(k|K|K)/[Cc][Oo][Nn][Ff]/\\.[Ee][Nn][Vv](/.*)?$"))
 (deny file-write-unlink
   (literal "/w/task")
-  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]$")
+  (regex "^/[Ww]/[Tt][Aa](s|S|ſ)(k|K|K)$")
   (literal "/w/state/home-1")
-  (regex "^/[Ww]/[Ss][Tt][Aa][Tt][Ee]/[Hh][Oo][Mm][Ee]-1$")
+  (regex "^/[Ww]/(s|S|ſ)[Tt][Aa][Tt][Ee]/[Hh][Oo][Mm][Ee]-1$")
   (literal "/private/var/folders/zz/T/gleipnir-S1-0123")
-  (regex "^/[Pp][Rr][Ii][Vv][Aa][Tt][Ee]/[Vv][Aa][Rr]/[Ff][Oo][Ll][Dd][Ee][Rr][Ss]/[Zz][Zz]/[Tt]/[Gg][Ll][Ee][Ii][Pp][Nn][Ii][Rr]-[Ss]1-0123$")
+  (regex "^/[Pp][Rr][Ii][Vv][Aa][Tt][Ee]/[Vv][Aa][Rr]/[Ff][Oo][Ll][Dd][Ee][Rr](s|S|ſ)/[Zz][Zz]/[Tt]/[Gg][Ll][Ee][Ii][Pp][Nn][Ii][Rr]-(S|s|ſ)1-0123$")
   (literal "/w/objects")
-  (regex "^/[Ww]/[Oo][Bb][Jj][Ee][Cc][Tt][Ss]$")
+  (regex "^/[Ww]/[Oo][Bb][Jj][Ee][Cc][Tt](s|S|ſ)$")
   (literal "/w/task/conf")
-  (regex "^/[Ww]/[Tt][Aa][Ss][Kk]/[Cc][Oo][Nn][Ff]$"))
+  (regex "^/[Ww]/[Tt][Aa](s|S|ſ)(k|K|K)/[Cc][Oo][Nn][Ff]$"))
 (allow network-outbound (remote ip "*:*"))
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
 (allow mach-lookup

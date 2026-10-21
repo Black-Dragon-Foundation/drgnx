@@ -38,7 +38,8 @@ impl Arch {
 
 /// `(name, x86_64, aarch64)`. Checked against seccompiler 0.5.0's generated tables (kernel 6.12), and the native
 /// column against `libc::SYS_*` by a test. The table is per architecture, not taken from the host's libc, so both
-/// filters compile (and their goldens run) on any Linux host.
+/// filters compile (and their goldens run) on any Linux host. `open_tree_attr` (Linux 6.15) is newer than both
+/// tables: 467 in the kernel's common table (`syscall_64.tbl`) and in `asm-generic/unistd.h`.
 const SYSCALLS: &[(&str, u32, u32)] = &[
     ("add_key", 248, 217),
     ("bpf", 321, 280),
@@ -58,11 +59,17 @@ const SYSCALLS: &[(&str, u32, u32)] = &[
     ("mount_setattr", 442, 442),
     ("move_mount", 429, 429),
     ("open_tree", 428, 428),
+    ("open_tree_attr", 467, 467),
     ("perf_event_open", 298, 241),
     ("pivot_root", 155, 41),
     ("ptrace", 101, 117),
     ("request_key", 249, 218),
+    ("sendmmsg", 307, 269),
+    ("sendmsg", 46, 211),
+    ("sendto", 44, 206),
     ("setns", 308, 268),
+    ("setpgid", 109, 154),
+    ("setsid", 112, 157),
     ("socket", 41, 198),
     ("umount2", 166, 39),
     ("unshare", 272, 97),
@@ -184,6 +191,7 @@ const DENIED_ALWAYS: &[&str] = &[
     "umount2",
     "pivot_root",
     "open_tree",
+    "open_tree_attr",
     "move_mount",
     "fsopen",
     "fsconfig",
@@ -217,6 +225,10 @@ const SOCK_STREAM: u32 = 1;
 /// `SOCK_TYPE_MASK`: the type's own bits, below `SOCK_NONBLOCK` and `SOCK_CLOEXEC`.
 const SOCK_TYPE_MASK: u32 = 0xf;
 const IPPROTO_TCP: u32 = 6;
+/// `MSG_FASTOPEN`: the send carries the SYN, so the connect happens without `connect(2)`.
+const MSG_FASTOPEN: u32 = 0x2000_0000;
+/// The calls that take `MSG_FASTOPEN`, and the index of their flags argument.
+const FASTOPEN_SENDS: [(&str, u8); 3] = [("sendto", 3), ("sendmsg", 2), ("sendmmsg", 3)];
 
 fn deny(syscall: &'static str, errno: i32, args: Vec<ArgMatch>) -> DenyRule {
     DenyRule {
@@ -264,7 +276,15 @@ pub fn rules() -> Vec<DenyRule> {
 /// - `socket(AF_INET | AF_INET6, type)` unless `type & SOCK_TYPE_MASK == SOCK_STREAM` (no UDP, so no DNS around the
 ///   proxy, and no raw sockets); seccompiler has no masked not-equal, so one rule per other type value;
 /// - `socket(AF_INET | AF_INET6, SOCK_STREAM, protocol)` unless the protocol is 0 or `IPPROTO_TCP` (SCTP and
-///   MPTCP stream sockets are not TCP to Landlock, which then leaves their connects alone).
+///   MPTCP stream sockets are not TCP to Landlock, which then leaves their connects alone);
+/// - `sendto`, `sendmsg` and `sendmmsg` with `MSG_FASTOPEN` in their flags (review S2): a TCP Fast Open send connects
+///   without `connect(2)`, and a kernel without the fix "landlock: fix TCP Fast Open connection bypass" (7.2-rc4,
+///   with no ABI bump, so ABI 9 does not tell) never asks Landlock about it. `TCP_FASTOPEN_CONNECT` goes through
+///   `connect(2)`, which Landlock sees;
+///
+/// and, with no pid namespace or cgroup to end them, the program may not leave the process group the helper leads
+/// (review S1): `setsid` and `setpgid` are refused, so every process it starts stays in the group that is killed
+/// when the run ends. The helper's own `setsid` runs before the filter is installed.
 pub fn reduced_rules() -> Vec<DenyRule> {
     let mut rules = vec![deny(
         "socket",
@@ -288,6 +308,16 @@ pub fn reduced_rules() -> Vec<DenyRule> {
         }
         let not_tcp = [0, IPPROTO_TCP].map(|value| ArgMatch::Ne { index: 2, value });
         rules.push(deny("socket", EPERM, [&[family][..], &not_tcp].concat()));
+    }
+    for (call, index) in FASTOPEN_SENDS {
+        let fastopen = ArgMatch::MaskedEq {
+            index,
+            mask: MSG_FASTOPEN,
+        };
+        rules.push(deny(call, EPERM, vec![fastopen]));
+    }
+    for call in ["setsid", "setpgid"] {
+        rules.push(deny(call, EPERM, vec![]));
     }
     rules
 }
@@ -501,6 +531,7 @@ mod tests {
         "umount2",
         "pivot_root",
         "open_tree",
+        "open_tree_attr",
         "move_mount",
         "fsopen",
         "fsconfig",
@@ -581,10 +612,11 @@ mod tests {
         assert_eq!(rules_for(Tier::Full), rules(), "the full tier adds nothing");
     }
 
-    /// The reduced tier's socket rules, written out (AF_UNIX 1, AF_INET 2, AF_INET6 10, AF_NETLINK 16; the type's
-    /// own bits are `& 0xf`, SOCK_STREAM 1; IPPROTO_TCP 6).
+    /// The reduced tier's rules, written out: the socket set (AF_UNIX 1, AF_INET 2, AF_INET6 10, AF_NETLINK 16; the
+    /// type's own bits are `& 0xf`, SOCK_STREAM 1; IPPROTO_TCP 6), MSG_FASTOPEN (0x20000000) in the flags of sendto
+    /// (arg 3), sendmsg (arg 2) and sendmmsg (arg 3), and setsid and setpgid always.
     #[test]
-    fn reduced_rules_are_the_socket_set() {
+    fn reduced_rules_are_the_socket_fastopen_and_group_set() {
         let socket = |args: Vec<ArgMatch>| DenyRule {
             syscall: "socket",
             errno: EPERM_,
@@ -607,6 +639,24 @@ mod tests {
             }
             want.push(socket(vec![family, ne(2, 0), ne(2, 6)]));
         }
+        for (syscall, index) in [("sendto", 3), ("sendmsg", 2), ("sendmmsg", 3)] {
+            let args = vec![ArgMatch::MaskedEq {
+                index,
+                mask: 0x2000_0000,
+            }];
+            want.push(DenyRule {
+                syscall,
+                errno: EPERM_,
+                args,
+            });
+        }
+        for syscall in ["setsid", "setpgid"] {
+            want.push(DenyRule {
+                syscall,
+                errno: EPERM_,
+                args: vec![],
+            });
+        }
         let mut got = reduced_rules();
         want.sort();
         got.sort();
@@ -627,6 +677,7 @@ mod tests {
             [1, 2, 10, 16]
         );
         assert_eq!((libc::SOCK_STREAM, libc::IPPROTO_TCP), (1, 6));
+        assert_eq!(libc::MSG_FASTOPEN, 0x2000_0000);
     }
 
     #[test]
@@ -681,7 +732,12 @@ mod tests {
             ("pivot_root", libc::SYS_pivot_root),
             ("ptrace", libc::SYS_ptrace),
             ("request_key", libc::SYS_request_key),
+            ("sendmmsg", libc::SYS_sendmmsg),
+            ("sendmsg", libc::SYS_sendmsg),
+            ("sendto", libc::SYS_sendto),
             ("setns", libc::SYS_setns),
+            ("setpgid", libc::SYS_setpgid),
+            ("setsid", libc::SYS_setsid),
             ("socket", libc::SYS_socket),
             ("umount2", libc::SYS_umount2),
             ("unshare", libc::SYS_unshare),
@@ -691,7 +747,14 @@ mod tests {
         for (name, want) in libc_nrs {
             assert_eq!(native.syscall_nr(name).map(i64::from), Some(want), "{name}");
         }
-        for rule in rules() {
+        // libc 0.2.191 has no SYS_open_tree_attr for x86_64 or aarch64: the kernel's own tables say 467 for both.
+        assert_eq!(native.syscall_nr("open_tree_attr"), Some(467));
+        assert_eq!(
+            SYSCALLS.len(),
+            libc_nrs.len() + 1,
+            "every row is checked against libc or above"
+        );
+        for rule in rules_for(Tier::Reduced) {
             assert!(
                 Arch::Aarch64.syscall_nr(rule.syscall).is_some(),
                 "{}",
@@ -1082,15 +1145,94 @@ mod tests {
         );
     }
 
-    /// Apart from `socket`, the reduced program answers every call exactly as the full one does (every number, with
-    /// zero and all-ones arguments, and the x32 and foreign-arch kills).
+    /// The reduced tier's process-group and Fast Open rules: `setsid` and `setpgid` refused whatever their arguments;
+    /// `sendto`/`sendmmsg` (flags at arg 3) and `sendmsg` (arg 2) refused exactly when the flags' low 32 bits hold
+    /// MSG_FASTOPEN (0x20000000; the kernel reads the flags as an int), whatever the other flags and the other
+    /// arguments. The full tier allows all of them (its pid namespace ends every process, and its network namespace
+    /// holds TCP to the relay).
     #[test]
-    fn reduced_differs_from_full_only_on_socket() {
+    fn reduced_group_and_fastopen_table() {
+        const TFO: u64 = 0x2000_0000;
+        let flag_cases: [(u64, bool); 9] = [
+            (0, false),
+            (TFO, true),
+            (TFO | 0x4000, true),        // MSG_NOSIGNAL too
+            (TFO | 0x40, true),          // MSG_DONTWAIT too
+            (TFO | 1 << 32, true),       // high half ignored
+            (0xFFFF_FFFF, true),         // every flag
+            (0xDFFF_FFFF, false),        // every flag but Fast Open
+            (TFO << 32 | 0x4000, false), // Fast Open only in the high half
+            (!TFO, false),               // everything else
+        ];
+        let mut wrong = Vec::new();
+        let mut cases = 0;
         for arch in ARCHES {
             let full = compile(arch).unwrap();
             let reduced = compile_for(arch, Tier::Reduced).unwrap();
-            let socket = nr(arch, "socket");
-            for n in (0..1024).filter(|&n| n != socket) {
+            let mut check = |label: String, d: Data, want_reduced: Act| {
+                for (tier, prog, want) in [
+                    ("reduced", &reduced, want_reduced),
+                    ("full", &full, Act::Allow),
+                ] {
+                    cases += 1;
+                    let got = run(prog, &d);
+                    if got != want {
+                        wrong.push(format!(
+                            "{arch:?} {tier} {label}: got {got:?}, want {want:?}"
+                        ));
+                    }
+                }
+            };
+            for name in ["setsid", "setpgid"] {
+                for args in [&[][..], &[0, 0], &[u64::MAX; 6]] {
+                    let d = Data::call(arch, nr(arch, name), args);
+                    check(format!("{name} {args:?}"), d, Act::Errno(EPERM_));
+                }
+            }
+            for (name, index) in [("sendto", 3), ("sendmsg", 2), ("sendmmsg", 3)] {
+                for (flags, refused) in flag_cases {
+                    let mut args = [3, 0x1000, 3, 0, 0x2000, 16];
+                    args[index] = flags;
+                    let want = if refused {
+                        Act::Errno(EPERM_)
+                    } else {
+                        Act::Allow
+                    };
+                    let d = Data::call(arch, nr(arch, name), &args);
+                    check(format!("{name} flags {flags:#x}"), d, want);
+                }
+                // MSG_FASTOPEN in any other argument (a length, an address) is not a flag.
+                for other in (0..6).filter(|&i| i != index) {
+                    let mut args = [0; 6];
+                    args[other] = TFO;
+                    let d = Data::call(arch, nr(arch, name), &args);
+                    check(format!("{name} arg {other} = TFO"), d, Act::Allow);
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} of {cases} cases wrong:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    /// Apart from its own rules (`socket`, `setsid`, `setpgid` and the Fast Open sends), the reduced program answers
+    /// every call exactly as the full one does (every number, with zero and all-ones arguments, and the x32 and
+    /// foreign-arch kills).
+    #[test]
+    fn reduced_differs_from_full_only_on_its_rules() {
+        for arch in ARCHES {
+            let full = compile(arch).unwrap();
+            let reduced = compile_for(arch, Tier::Reduced).unwrap();
+            let own: Vec<u32> = [
+                "socket", "setsid", "setpgid", "sendto", "sendmsg", "sendmmsg",
+            ]
+            .iter()
+            .map(|s| nr(arch, s))
+            .collect();
+            for n in (0..1024).filter(|n| !own.contains(n)) {
                 for args in [[0; 6], [u64::MAX; 6]] {
                     let d = Data::call(arch, n, &args);
                     assert_eq!(run(&full, &d), run(&reduced, &d), "{arch:?} nr {n}");
@@ -1219,6 +1361,35 @@ mod tests {
             name: "reduced-socket-mptcp",
             unfiltered: &[Outcome::Ok, Outcome::Errno(libc::EPROTONOSUPPORT)],
             filtered: Outcome::Errno(EPERM_),
+        },
+        // A process that leads no group may start a session or a group; the full tier lets it (its pid namespace
+        // ends every process), the reduced tier does not (review S1).
+        Case {
+            name: "setsid",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Ok,
+        },
+        Case {
+            name: "reduced-setsid",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Errno(EPERM_),
+        },
+        Case {
+            name: "reduced-setpgid",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Errno(EPERM_),
+        },
+        // A Fast Open send to a listener of its own: sent (client Fast Open on, the default), or EOPNOTSUPP (off);
+        // the reduced filter refuses it (review S2). A plain send on a socket pair still works.
+        Case {
+            name: "reduced-sendto-fastopen",
+            unfiltered: &[Outcome::Ok, Outcome::Errno(libc::EOPNOTSUPP)],
+            filtered: Outcome::Errno(EPERM_),
+        },
+        Case {
+            name: "reduced-send-plain",
+            unfiltered: &[Outcome::Ok],
+            filtered: Outcome::Ok,
         },
     ];
 
@@ -1418,6 +1589,60 @@ mod tests {
                         libc::SOCK_STREAM,
                         IPPROTO_MPTCP,
                     )))
+                }
+                "setsid" | "reduced-setsid" => {
+                    if !install_now() {
+                        return 254;
+                    }
+                    result(i64::from(libc::setsid()))
+                }
+                "reduced-setpgid" => {
+                    if !install_now() {
+                        return 254;
+                    }
+                    result(i64::from(libc::setpgid(0, 0)))
+                }
+                "reduced-sendto-fastopen" => {
+                    let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else {
+                        return 201;
+                    };
+                    let Ok(std::net::SocketAddr::V4(at)) = listener.local_addr() else {
+                        return 202;
+                    };
+                    let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+                    if fd < 0 {
+                        return 203;
+                    }
+                    let mut sin: libc::sockaddr_in = std::mem::zeroed();
+                    sin.sin_family = libc::AF_INET as libc::sa_family_t;
+                    sin.sin_port = at.port().to_be();
+                    sin.sin_addr.s_addr = u32::from_ne_bytes(at.ip().octets());
+                    if !install_now() {
+                        return 254;
+                    }
+                    let r = libc::sendto(
+                        fd,
+                        b"x".as_ptr().cast(),
+                        1,
+                        libc::MSG_FASTOPEN,
+                        (&raw const sin).cast(),
+                        size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                    );
+                    let code = result(r as i64);
+                    drop(listener);
+                    code
+                }
+                "reduced-send-plain" => {
+                    let mut pair = [0; 2];
+                    if libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, pair.as_mut_ptr()) != 0
+                    {
+                        return 201;
+                    }
+                    if !install_now() {
+                        return 254;
+                    }
+                    let flags = libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL;
+                    result(libc::send(pair[0], b"x".as_ptr().cast(), 1, flags) as i64)
                 }
                 _ => 200,
             }

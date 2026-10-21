@@ -35,6 +35,6 @@ pub use validate::{Context, Refusal, Rule, validate};
 
 pub use spec::{
     BASE_ENV_DENY, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_FULL,
-    LANDLOCK_FLOOR_REDUCED, Layers, Mode, Net, RESERVED_DESTS, RelayPort, SECRET_DIRS,
-    SECRET_DIRS_MACOS, SYSTEM_CLOSED, Spec, Target, ValidSpec,
+    LANDLOCK_FLOOR_REDUCED, LANDLOCK_FLOOR_SHARED_NET, Layers, Mode, Net, RESERVED_DESTS,
+    RelayPort, SECRET_DIRS, SECRET_DIRS_MACOS, SYSTEM_CLOSED, Spec, Target, ValidSpec,
 };

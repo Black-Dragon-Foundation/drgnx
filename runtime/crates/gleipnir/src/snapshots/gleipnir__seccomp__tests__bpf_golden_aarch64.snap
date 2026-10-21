@@ -186,5 +186,10 @@ expression: "listing(&compile(Arch::Aarch64).unwrap())"
   "0x0005   0   0 0x00000002  ja +k",
   "0x0006   0   0 0x00050001  ret #k",
   "0x0006   0   0 0x7fff0000  ret #k",
+  "0x0015   0   1 0x000001d3  jeq #k",
+  "0x0005   0   0 0x00000001  ja +k",
+  "0x0005   0   0 0x00000002  ja +k",
+  "0x0006   0   0 0x00050001  ret #k",
+  "0x0006   0   0 0x7fff0000  ret #k",
   "0x0006   0   0 0x7fff0000  ret #k"
 ]

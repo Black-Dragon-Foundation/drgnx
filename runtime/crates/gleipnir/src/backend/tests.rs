@@ -1,5 +1,5 @@
 //! `Sandbox` over its backends (Task 13). Fixtures live under /tmp/glp-XXXXXX. No real bwrap runs here (review S15:
-//! the container has none that works); the rows `any/works` and `reduced-*` (Tasks 14, 15) run the invocations.
+//! the container has none that works); the rows `linux/works` and `reduced-*` (Tasks 14, 15) run the invocations.
 
 use super::*;
 use crate::bwrap::{SPEC_FD, STATUS_FD};
@@ -363,7 +363,8 @@ fn reduced_cannot_hide_inside_a_granted_root() {
 }
 
 /// Task 9's hand-off: Seatbelt's run maps to an invocation with no fds and no status line, and its layers are known
-/// at once.
+/// at once. It starts a session of its own (review S6): `sandbox-exec` and the program never keep Ratatoskr's
+/// controlling terminal, whose `/dev/tty` they could read and whose input they could inject (TIOCSTI).
 #[test]
 fn seatbelt_run_maps_to_an_invocation() {
     let run = macos::Run {
@@ -380,7 +381,11 @@ fn seatbelt_run_maps_to_an_invocation() {
     assert_eq!(p.invocation.args, run.args);
     assert_eq!(p.invocation.env, run.env);
     assert_eq!(p.invocation.cwd, Some(run.cwd));
-    assert!(p.invocation.fds.is_empty() && !p.invocation.new_session);
+    assert!(p.invocation.fds.is_empty());
+    assert!(
+        p.invocation.new_session,
+        "no controlling terminal (review S6)"
+    );
     assert!(p.status.is_none());
     let l = p.layers.unwrap();
     assert!(l.seatbelt && !l.seccomp && l.landlock_abi == 0);

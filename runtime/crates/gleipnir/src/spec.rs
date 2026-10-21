@@ -83,6 +83,11 @@ pub const LANDLOCK_FLOOR_FULL: u8 = 1;
 /// namespace, ABI 6–8 would leave the user's sockets reachable (the user's ruling on review B1, 2026-10-21).
 pub const LANDLOCK_FLOOR_REDUCED: u8 = 9;
 
+/// The full tier's Landlock floor under `Net::Shared` (review S3). The sandbox then shares the host's network
+/// namespace, where abstract Unix sockets live (X11's `@/tmp/.X11-unix/X0`, a `unix:abstract=` D-Bus bus): only ABI 6
+/// scopes them. `Net::Isolated` has a namespace of its own and keeps [`LANDLOCK_FLOOR_FULL`].
+pub const LANDLOCK_FLOOR_SHARED_NET: u8 = 6;
+
 /// The highest Landlock ABI a spec may require: the last one the `landlock` crate knows. A newer kernel runs the
 /// ABI-9 rule set.
 pub const LANDLOCK_ABI_MAX: u8 = 9;

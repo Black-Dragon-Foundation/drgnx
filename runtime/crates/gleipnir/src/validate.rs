@@ -202,6 +202,12 @@ fn prepare(ctx: &Context, cmp: Cmp, target: Target) -> Result<Ctx<'_>, Refusal> 
             });
         }
     }
+    // A home of `/` is no home: its secret dirs would be `/.ssh` and so on, never the user's (gate review M16).
+    if ctx.home == Path::new("/") {
+        let msg =
+            "the context's home is /: no home is known, so its secret dirs cannot be named".into();
+        return Err(refusal(Rule::Malformed, Some(&ctx.home), msg));
+    }
     // True names on disk too (GL-T2-2): a home or closed dir given through a link would weaken every prefix rule.
     // One that does not exist needs a true-named deepest existing ancestor, as a spec's paths do.
     true_names(&named).map_err(|r| Refusal {
@@ -1630,6 +1636,14 @@ mod tests {
                 "user socket with a newline",
                 Context {
                     user_sockets: vec!["/a\nb".into()],
+                    ..fx.ctx()
+                },
+            ),
+            // Gate review M16: no home known. Its secret dirs would be `/.ssh` and so on, not the user's.
+            (
+                "home is /",
+                Context {
+                    home: "/".into(),
                     ..fx.ctx()
                 },
             ),

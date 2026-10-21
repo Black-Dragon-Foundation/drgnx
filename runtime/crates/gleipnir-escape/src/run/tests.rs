@@ -173,6 +173,34 @@ fn a_row_with_result_compares_a_subset() {
     assert!(judge_run(&r, &d, &canaries()).is_err());
 }
 
+/// Gate review S12: a refused row passes only when nothing ran. The program printing a line (it ran after all) fails
+/// the row even when the result file says refused, and `{"refused": {}}` needs a refusal, not `null`.
+#[test]
+fn a_refused_row_needs_silence_and_a_refusal() {
+    let r = row(json!({
+        "row": "r", "probes": [["status-field", "Seccomp"]],
+        "result": {"refused": {}},
+    }));
+    let refused = json!({"refused": {"rule": "Setup", "message": "no"}, "exit": null});
+    let mut d = ok_data(vec![]);
+    d.result_file = Some(refused.clone());
+    judge_run(&r, &d, &canaries()).unwrap();
+    // It ran: a probe line on stdout.
+    let ran = r#"{"probe":"status-field","arg":"Seccomp","result":"reached","detail":"0"}"#;
+    d.stdout = ran.into();
+    d.lines = vec![line("status-field", "reached", None, Some("0"))];
+    let e = judge_run(&r, &d, &canaries()).unwrap_err();
+    assert!(e.contains("to print nothing"), "{e}");
+    // Not refused at all: `{}` does not match `null`.
+    let mut d = ok_data(vec![]);
+    d.result_file = Some(json!({"refused": null, "exit": 0}));
+    let e = judge_run(&r, &d, &canaries()).unwrap_err();
+    assert!(e.contains("wanted an object"), "{e}");
+    assert!(subset(&json!({"refused": null}), &json!({"refused": {}})).is_err());
+    assert!(subset(&json!({"refused": "x"}), &json!({"refused": {}})).is_err());
+    subset(&refused, &json!({"refused": {}})).unwrap();
+}
+
 #[test]
 fn canary_in_output_fails_the_row() {
     let r = row(json!({"row": "r", "probes": [["fds"]], "expect": [{"result": "reached"}]}));
@@ -228,6 +256,41 @@ fn expectations_check_errno_and_detail() {
         )
         .is_err()
     );
+}
+
+/// The judge's line count and listener checks bite where the gate's mutants found no test (gate review fix round):
+/// a listener that saw nothing passes, a control run with a line missing fails, and a row that kills its run is
+/// judged without the exit or the line count a plain run needs.
+#[test]
+fn quiet_listeners_missing_control_lines_and_killed_runs() {
+    let r = row(json!({
+        "row": "r", "probes": [["fds"], ["fds"]],
+        "expect": [{"result": "reached"}, {"result": "reached"}],
+        "listeners_silent": ["hub"],
+    }));
+    let two = vec![
+        line("fds", "reached", None, None),
+        line("fds", "reached", None, None),
+    ];
+    let mut d = ok_data(two.clone());
+    d.silent = vec![("hub".into(), 0)];
+    judge_run(&r, &d, &canaries()).unwrap();
+    let direct = RunData {
+        direct: true,
+        result_file: None,
+        lines: two[..1].to_vec(),
+        ..RunData::default()
+    };
+    let e = judge_run(&r, &direct, &canaries()).unwrap_err();
+    assert!(e.contains("1 lines for 2 probes"), "{e}");
+    let killed = row(json!({
+        "row": "k", "probes": [["spawn-sleep", "9"], ["run", "sleep", "3"]],
+        "expect": [{"result": "reached"}],
+        "after": {"after_lines": 1, "kill": "group", "gone": {"match": "spawn-sleep 9", "within_ms": 1500}},
+    }));
+    let mut d = ok_data(vec![line("spawn-sleep", "reached", None, Some("7"))]);
+    d.result_file = Some(json!({"refused": null, "exit": 137}));
+    judge_run(&killed, &d, &canaries()).unwrap();
 }
 
 #[test]
@@ -433,6 +496,8 @@ fn macos_rows_cover_mac_sb_10_and_skip_elsewhere() {
         "mac-k1",
         "mac-k2",
         "mac-k8",
+        "mac-no-controlling-tty",
+        "mac-leaves-group-the-gap",
     ] {
         assert!(names.contains(&want), "no row {want}");
     }
@@ -448,13 +513,42 @@ fn macos_rows_cover_mac_sb_10_and_skip_elsewhere() {
             assert_eq!(skip_reason(r, &host), Some(Skip::NeedsMacos), "{}", r.row);
         }
         // Every refusing expectation names Seatbelt's errnos or none; a Linux-only errno would never match there.
+        // The one exception is the kernel's own answer for a process without a controlling terminal.
         for e in &r.expect {
             assert!(
-                e.errno.iter().all(|n| n == "EPERM" || n == "EACCES"),
+                e.errno.iter().all(|n| n == "EPERM"
+                    || n == "EACCES"
+                    || (n == "ENXIO" && r.row == "mac-no-controlling-tty")),
                 "{}",
                 r.row
             );
         }
+    }
+}
+
+/// `rows/any` runs on macOS with `--require-all` (gate review B1): none of its rows may need Linux, or the macOS job
+/// fails on a skip.
+#[test]
+fn any_rows_run_on_macos() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rows/any");
+    let rows = crate::row::load_dir(&dir).unwrap();
+    assert!(!rows.is_empty());
+    let linux_only = [
+        Need::Linux,
+        Need::Bwrap,
+        Need::Reduced,
+        Need::Landlock,
+        Need::Seccomp,
+        Need::Netns,
+        Need::X32,
+    ];
+    for r in &rows {
+        assert_eq!(r.platform(), Platform::Any, "{}", r.row);
+        assert!(
+            !r.needs.iter().any(|n| linux_only.contains(n)),
+            "{} needs Linux but sits in rows/any",
+            r.row
+        );
     }
 }
 

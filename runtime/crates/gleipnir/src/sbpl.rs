@@ -423,24 +423,37 @@ fn deny_any_case(ops: &str, filter: &str, paths: &[&str]) -> Result<Option<Strin
     Ok(Some(r))
 }
 
-/// `path` as a regex that matches it in any case: an ASCII letter as a class of both cases (`[Gg]`), another letter
-/// with case variants as a group of them (`(é|É)`), a regex metacharacter escaped. No `(?i)`, which SBPL is not known
-/// to support. `whole`: the path and everything under it (as `subpath`); else the path alone (as `literal`).
+/// Letters case-insensitive APFS also takes for a lowercase letter, beyond its own two cases: Unicode case folding
+/// (CaseFolding.txt) maps U+212A KELVIN SIGN to `k`, U+017F LONG S to `s` and U+212B ANGSTROM SIGN to `å`. A deny of
+/// `.secrets` must also hold for `.ſecrets` (gate review S8), whichever spelling Seatbelt compares.
+const FOLDS_TO: &[(char, char)] = &[('k', '\u{212A}'), ('s', '\u{17F}'), ('å', '\u{212B}')];
+
+/// `path` as a regex that matches it in any case: an ASCII letter as a class of both cases (`[Gg]`), a letter with
+/// more spellings ([`FOLDS_TO`]: `(k|K|K)`) or a non-ASCII letter with case variants as a group of them (`(é|É)`), a
+/// regex metacharacter escaped. No `(?i)`, which SBPL is not known to support. `whole`: the path and everything under
+/// it (as `subpath`); else the path alone (as `literal`).
 fn case_regex(path: &str, whole: bool) -> String {
     let mut re = String::from("^");
     for c in path.chars() {
+        let lower = single(c.to_lowercase());
+        // c, its lowercase and uppercase, the uppercase of its lowercase (a Kelvin sign's lowercase is `k`, whose
+        // uppercase is `K`), and the other spellings of that lowercase.
         let mut vars: Vec<char> = vec![c];
-        for mapped in [
-            c.to_lowercase().collect::<Vec<_>>(),
-            c.to_uppercase().collect(),
-        ] {
-            if let [one] = mapped[..]
-                && !vars.contains(&one)
-            {
-                vars.push(one);
+        let more = [
+            lower,
+            single(c.to_uppercase()),
+            lower.and_then(|l| single(l.to_uppercase())),
+        ];
+        let folds = FOLDS_TO
+            .iter()
+            .filter(|(base, _)| Some(*base) == lower)
+            .map(|&(_, extra)| extra);
+        for v in more.into_iter().flatten().chain(folds) {
+            if !vars.contains(&v) {
+                vars.push(v);
             }
         }
-        if c.is_ascii_alphabetic() {
+        if c.is_ascii_alphabetic() && vars.len() == 2 {
             re.push_str(&format!(
                 "[{}{}]",
                 c.to_ascii_uppercase(),
@@ -458,6 +471,12 @@ fn case_regex(path: &str, whole: bool) -> String {
     }
     re.push_str(if whole { "(/.*)?$" } else { "$" });
     re
+}
+
+/// The one character `it` yields, or `None` when it yields none or several (`ß` uppercases to `SS`).
+fn single(mut it: impl Iterator<Item = char>) -> Option<char> {
+    let one = it.next()?;
+    it.next().is_none().then_some(one)
 }
 
 /// A small S-expression reader for the order checks and the `sbpl_quote` fuzz target (review M4): lists, `;`
@@ -1019,6 +1038,25 @@ mod tests {
             assert!(re_match(&re, hit), "{hit}");
         }
         assert!(!re_match(&re, "/w/cafe/ß+x"));
+        // Gate review S8: the letters APFS's case folding gives more spellings: k (Kelvin sign), s (long s), å
+        // (Angstrom sign), from either case and from the odd spelling itself.
+        let re = case_regex("/w/.kubes/å", false);
+        assert!(
+            re.contains("(k|K|\u{212A})") && re.contains("(s|S|\u{17F})"),
+            "{re}"
+        );
+        assert!(re.contains("(å|Å|\u{212B})"), "{re}");
+        for hit in [
+            "/w/.kubes/å",
+            "/w/.KUBES/Å",
+            "/w/.\u{212A}ube\u{17F}/\u{212B}",
+            "/W/.kUbEs/å",
+        ] {
+            assert!(re_match(&re, hit), "{hit}");
+        }
+        assert!(!re_match(&re, "/w/.cubes/å"));
+        assert_eq!(case_regex("/\u{212A}", false), "^/(\u{212A}|k|K)$");
+        assert_eq!(case_regex("/g", false), "^/[Gg]$");
         // Homebrew's data, in every case too.
         let brew = one(&rs, "homebrew", |r| {
             is(r, "deny", &["file-read*"]) && args(r, "subpath") == SYSTEM_HIDDEN

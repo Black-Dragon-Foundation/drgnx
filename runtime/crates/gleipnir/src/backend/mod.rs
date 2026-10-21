@@ -268,8 +268,10 @@ impl Sandbox {
     }
 }
 
-/// Seatbelt's run as an invocation: no fds, no status line, the layers known now (Task 9's hand-off). Built on Linux
-/// in tests too, where the mapping is tested.
+/// Seatbelt's run as an invocation: no fds, no status line, the layers known now (Task 9's hand-off). A session of
+/// its own (review S6): Seatbelt lets the program read `/dev/tty` and ioctl its tty, so it must have no controlling
+/// terminal to reach (Linux: bwrap's `--new-session`, the reduced helper's `setsid`). Built on Linux in tests too,
+/// where the mapping is tested.
 #[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
 fn seatbelt_prepared(run: macos::Run) -> Prepared {
     Prepared {
@@ -279,7 +281,7 @@ fn seatbelt_prepared(run: macos::Run) -> Prepared {
             env: run.env,
             cwd: Some(run.cwd),
             fds: vec![],
-            new_session: false,
+            new_session: true,
         },
         status: None,
         layers: Some(LayersReport::seatbelt()),
