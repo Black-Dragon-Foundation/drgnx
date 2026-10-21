@@ -296,8 +296,14 @@ not name.  ST: `drgnx-file-stamp'."
       (let ((good (drgnx-config--good-file def)))
         (unless (equal (drgnx-file-read-bounded good :max-bytes (plist-get def :max-bytes)) text)
           (drgnx-file-write-text good text)))
-    (error (message "drgnx: the last good copy of %s was not kept: %s" (plist-get def :file)
-                    (error-message-string err)))))
+    (error (drgnx-config--warn (format "the last good copy of %s was not kept: %s" (plist-get def :file)
+                                       (error-message-string err))))))
+
+(defun drgnx-config--warn (text)
+  "A `warn' event of source `config' (the model loads at the first one).  Never signals."
+  (condition-case failed
+      (progn (require 'drgnx-notice) (drgnx-notify 'config 'warn text))
+    (error (message "drgnx: %s (not recorded: %s)" text (error-message-string failed)))))
 
 (defun drgnx-config--notify (key file problem fallback def)
   "Say PROBLEM of FILE (state KEY) once per text: a `drgnx-notify' condition, else one message.
@@ -327,8 +333,8 @@ is refused) says what happens when it is not the last good copy."
       (run-hook-wrapped 'drgnx-config-changed-functions
                         (lambda (fn)
                           (condition-case err (funcall fn name)
-                            (error (message "drgnx: %s, run because %s changed, failed: %s"
-                                            fn name (error-message-string err))))
+                            (error (drgnx-config--warn (format "%s, run because %s changed, failed: %s"
+                                                               fn name (error-message-string err)))))
                           nil)))))
 
 (defun drgnx-config--refresh (def key file &optional wrote)
@@ -762,8 +768,8 @@ file is read-only.  TIMEOUT is the lock's, as in `drgnx-config-update'.  Then th
   (when (and drgnx-config--visiting (drgnx-config-defined-p drgnx-config--visiting))
     (condition-case err
         (let ((drgnx-config-user-save t)) (drgnx-config-reread drgnx-config--visiting))
-      (error (message "drgnx: %s was saved, but reading it again failed: %s" drgnx-config--visiting
-                      (error-message-string err))))))
+      (error (drgnx-config--warn (format "%s was saved, but reading it again failed: %s" drgnx-config--visiting
+                                         (error-message-string err)))))))
 
 (defun drgnx-config-open (name)
   "Visit config file NAME, at its mistake when it has one."

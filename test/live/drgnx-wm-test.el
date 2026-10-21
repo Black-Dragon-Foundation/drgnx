@@ -261,7 +261,8 @@ Under X the window manager (or the pointer) gives Emacs the real event."
     (let ((saved (expand-file-name "saved/workbench.eld" root)))
       (drgnx-wm-move--save-aux-on-2 root saved)
       (let ((sess (drgnx-wm-move--start 1 saved))
-            (messages "(with-current-buffer \"*Messages*\" (buffer-string))"))
+            ;; *Messages* plus the texts of the `wb' notices (the monitor lines are notices since Task 20)
+            (messages "(concat (with-current-buffer \"*Messages*\" (buffer-string)) \"\\n\" (mapconcat (lambda (n) (plist-get n :text)) (drgnx-notices :source 'wb) \"\\n\"))"))
         (unwind-protect
             (progn
               (drgnx-wm-move--open-main sess)

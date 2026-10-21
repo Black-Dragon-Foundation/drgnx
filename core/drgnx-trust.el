@@ -28,6 +28,7 @@
 (defvar warning-minimum-log-level)
 (declare-function flymake--disable-backend "flymake")
 (declare-function flymake--run-backend "flymake")
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function flymake-start "flymake")
 (declare-function project-root "project")
 (declare-function project-current "project")
@@ -83,7 +84,8 @@ message says WHY once per change of the file.  Only entries `drgnx-trust--read-e
       (setq why (format "%s %s" (abbreviate-file-name file) why))
       (unless (equal drgnx-trust--told (list (plist-get r :stamp) why))
         (setq drgnx-trust--told (list (plist-get r :stamp) why))
-        (message "drgnx: no folder you trusted is trusted: %s" why))
+        (require 'drgnx-notice)
+        (drgnx-notify 'config 'warn (format "no folder you trusted is trusted: %s" why) :id 'trust-folders))
       (cons nil why))))
 
 (defun drgnx-trust-folders ()
@@ -389,7 +391,10 @@ is untrusted for this session only, and why."
       (progn
         ;; a state file never stops the guards: whatever its read signals, the user's folders are none
         (let ((user (condition-case err (drgnx-trust-folders)
-                      (error (message "drgnx: no folder you trusted is trusted: %s" (error-message-string err))
+                      (error (require 'drgnx-notice)
+                             (drgnx-notify 'config 'warn
+                                           (format "no folder you trusted is trusted: %s" (error-message-string err))
+                                           :id 'trust-folders)
                              nil))))
           (drgnx-trust--add (append (drgnx-trust--builtin) user))
           (setq drgnx-trust--added (seq-union drgnx-trust--added user)))

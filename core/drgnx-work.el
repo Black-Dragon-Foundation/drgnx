@@ -85,11 +85,16 @@ checkout meanwhile — whose commits they are is unknown, so none is recorded (`
          (new (drgnx-work--new-commits dir (plist-get state :head) head (or since (plist-get state :since)))))
     (plist-put state :head head)
     (cond ((null new) nil)
-          (overlap (message "drgnx work: %d commit(s) not recorded for %s: another task session worked in %s too (drgnx work record)"
-                            (length new) task (plist-get state :tree))
+          (overlap (require 'drgnx-notice)
+                   (drgnx-notify 'agents 'info
+                                 (format "work: %d commit(s) not recorded for %s: another task session worked in %s too (drgnx work record)"
+                                         (length new) task (plist-get state :tree)))
                    nil)
           ((> (length new) drgnx-work-collect-max)
-           (message "drgnx work: %d new commits after one turn of %s: not recorded (drgnx work record)" (length new) task)
+           (require 'drgnx-notice)
+           (drgnx-notify 'agents 'info
+                         (format "work: %d new commits after one turn of %s: not recorded (drgnx work record)"
+                                 (length new) task))
            nil)
           (t (drgnx-work-record-commits task dir new)
              (when (drgnx-work--notes-p) (dolist (c new) (drgnx-work--note dir (car c) task)))
@@ -157,6 +162,7 @@ on a timer, never inside the process filter that saw the turn end."
 
 (declare-function drgnx-jobs-list "drgnx-jobs")
 (declare-function drgnx-jobs--dir "drgnx-jobs")
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-jobs--text "drgnx-jobs")
 
 (defun drgnx-work-collect-jobs ()

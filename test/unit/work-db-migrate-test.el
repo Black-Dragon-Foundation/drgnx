@@ -1,6 +1,7 @@
 ;;; work-db-migrate-test.el --- batch tests: work.db migrations step by step; spend -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-work-db)
+(require 'drgnx-notice)
 
 (defmacro drgnx-work-db-migrate-test--with (&rest body)
   "BODY with drgnx's data dir a fresh temp dir (`dir'), no database open."
@@ -157,7 +158,8 @@ drgnx leaves it."
   ;; Review Focus 2: an unreadable object, text cut short, a symbol no schema covers
   (drgnx-work-db-migrate-test--with-5
     (let ((said nil))
-      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+                ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text said) nil)))   ; a notice, Task 20
         (should (= (drgnx-work-db-version) 6)))
       (should (= (length said) 1))
       (should (string-match-p "\\<3\\>" (car said))))

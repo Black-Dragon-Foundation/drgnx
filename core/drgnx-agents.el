@@ -698,10 +698,12 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
                                (lambda (f)
                                  (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
                                    (if (not (proper-list-p r))
-                                       (message "drgnx agents: an environment function returned %S, not a list of NAME=value strings; ignored" r)
+                                       (drgnx-notify 'agents 'warn
+                                                     (format "an environment function returned %S, not a list of NAME=value strings; ignored" r))
                                      (dolist (e r)
                                        (if (stringp e) (setq extra (append extra (list e)))
-                                         (message "drgnx agents: an environment function returned %S, not a NAME=value string; ignored" e)))))
+                                         (drgnx-notify 'agents 'warn
+                                                       (format "an environment function returned %S, not a NAME=value string; ignored" e))))))
                                  nil))
              extra))
    (cdr (drgnx-agents-profile (drgnx-agent-session-profile s)))))
@@ -840,8 +842,9 @@ none."
     (seq-filter (lambda (e)
                   (and (plistp e) (stringp (plist-get e :name))
                        (or (not (member (plist-get e :name) drgnx-agents-own-mcp-servers))
-                           (progn (message "drgnx agents: profile %s: MCP server %s left out (the name is drgnx's own)"
-                                           (drgnx-agent-session-profile s) (plist-get e :name))
+                           (progn (drgnx-notify 'agents 'warn
+                                                (format "profile %s: MCP server %s left out (the name is drgnx's own)"
+                                                        (drgnx-agent-session-profile s) (plist-get e :name)))
                                   nil))))
                 (plist-get (cdr profile) :mcp-servers))))
 
@@ -883,7 +886,9 @@ outside, as S."
   "Ask the hub to do METHOD (with PARAMS) on mirror S's session; asynchronous, never waits."
   (require 'drgnx-hub-client)
   (drgnx-hub-call method (append (list :id (drgnx-agent-session-remote s)) params)
-                  (lambda (_r err) (when err (message "drgnx agent %s: %s" (drgnx-agent-session-name s) err)))))
+                  (lambda (_r err)
+                    (when err
+                      (drgnx-notify 'agents 'warn (format "agent %s: %s" (drgnx-agent-session-name s) err))))))
 
 (defun drgnx-agents--new (profile cwd &optional task job)
   (let* ((base (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd)))))

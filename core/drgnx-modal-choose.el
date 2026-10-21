@@ -24,6 +24,7 @@
 (require 'drgnx-modal)
 (require 'drgnx-onboard)
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-pkg--module-packages "drgnx-pkg")
 
 (defvar drgnx-modal-engine-modules '((evil . editor/evil))
@@ -86,7 +87,9 @@ directory (what drgnx sync installed, loadable after `drgnx-pkg-activate')."
          (spec (alist-get module drgnx-modules--table)))
     (when (and spec (not (assq engine drgnx-modal-engines)))
       (condition-case err (drgnx-pkg-activate)
-        (error (message "drgnx: packages not activated: %s" (error-message-string err))))
+        (error (require 'drgnx-notice)
+               (drgnx-notify 'config 'warn (format "packages not activated: %s" (error-message-string err))
+                             :id 'pkg-activate)))
       (drgnx-modules--run-one module spec 'startup))
     (and (assq engine drgnx-modal-engines) t)))
 
@@ -211,7 +214,10 @@ stays; the doctor says what waits).  Never asks; an error is said in *Messages*.
         (drgnx-keys-use layers t)
         (drgnx-modal--forget-pending)
         layers)
-    (error (message "drgnx: the key stack waiting in keys.eld was not applied: %s" (error-message-string err))
+    (error (require 'drgnx-notice)
+           (drgnx-notify 'keys 'warn (format "the key stack waiting in keys.eld was not applied: %s"
+                                             (error-message-string err))
+                         :id 'pending-layers)
            nil)))
 
 (provide 'drgnx-modal-choose)

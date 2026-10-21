@@ -24,6 +24,7 @@
 (defvar package-quickstart-file)
 (defvar native-comp-eln-load-path)
 (defvar use-package-ensure-function)
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function package-installed-p "package")
 
 (defun drgnx-pkg-activate ()
@@ -56,9 +57,15 @@ message, never raised.  A wanted file that does not read is copied aside first."
                                (lambda (old) (if (memq name old) old (setq added t) (append old (list name))))
                                :on-unreadable 'backup :timeout 0)
             (when added
-              (message "drgnx: %s is not installed — drgnx sync installs it (until then its configuration waits)" name)))
+              (require 'drgnx-notice)
+              (drgnx-notify 'config 'info
+                            (format "%s is not installed — drgnx sync installs it (until then its configuration waits)" name)
+                            :id (cons 'wanted name) :fix "run drgnx sync")))
         (drgnx-file-busy nil)
-        (error (message "drgnx: %s could not be recorded as wanted: %s" name (error-message-string err)))))))
+        (error (require 'drgnx-notice)
+               (drgnx-notify 'config 'warn
+                             (format "%s could not be recorded as wanted: %s" name (error-message-string err))
+                             :id (cons 'wanted name)))))))
 
 (defun drgnx-pkg-ensure (name &optional args &rest _)
   "`use-package-ensure-function': record what use-package would install for the next `drgnx sync'; nil.

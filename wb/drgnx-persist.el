@@ -19,6 +19,7 @@
 (require 'drgnx-state-intent)           ; the store: which frames, and the sizes you chose
 (require 'drgnx-groups)
 (require 'drgnx-timer)
+(require 'drgnx-notice)
 (defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the visits, read by editor/large-files
 
 (defcustom drgnx-persist-restore-on-start t
@@ -179,8 +180,10 @@ other object); otherwise that function is skipped and said once, and the others'
                 (setq extra (append extra (drgnx-persist--no-props r))))
                ((memq fn drgnx-persist--extra-reported))
                (t (push fn drgnx-persist--extra-reported)
-                  (message "drgnx: state function %S left out of the saved workbench: %s" fn
-                           (if (eq (car-safe r) 'drgnx-persist-error) (cdr r) "not a plist that can be read back")))))
+                  (drgnx-notify 'wb 'warn
+                                (format "state function %S left out of the saved workbench: %s" fn
+                                        (if (eq (car-safe r) 'drgnx-persist-error) (cdr r) "not a plist that can be read back"))
+                                :id (cons 'state-function fn)))))
        nil))
     extra))
 
@@ -209,7 +212,9 @@ session never overwrites the desktop layout."
                                            state)
                                     :on-unreadable 'backup :max-bytes drgnx-persist--max-bytes)
                  file)
-        (drgnx-persist-newer (message "workbench.eld was written by a newer drgnx: not saved") nil)))))
+        (drgnx-persist-newer (drgnx-notify 'wb 'warn "workbench.eld was written by a newer drgnx: not saved"
+                                           :id 'workbench-newer)
+                             nil)))))
 
 (defun drgnx-persist--newer-p (data)
   "Non-nil if DATA, the state file as read, has a `:version' above `drgnx-persist-version'."
@@ -221,15 +226,19 @@ session never overwrites the desktop layout."
 written) is one message, never raised.  FRAMES-FUNCTION, when given, returns the frames to save."
   (let ((inhibit-interaction t))
     (condition-case err (drgnx-persist-save nil (and frames-function (funcall frames-function)))
-      (error (message "drgnx: workbench.eld not saved: %s" (error-message-string err)) nil))))
+      (error (drgnx-notify 'wb 'warn (format "workbench.eld not saved: %s" (error-message-string err))
+                           :id 'workbench-save)
+             nil))))
 
 (defun drgnx-persist--read (file)
   "FILE's state, or nil when it is absent or empty.  An unreadable file (not plain data, too deep or too big) is
 not restored: one message, and the next save keeps a backup of it."
   (let ((r (drgnx-file-read file :max-bytes drgnx-persist--max-bytes)))
     (if (eq (plist-get r :status) 'unreadable)
-        (progn (message "drgnx: %s cannot be read (%s): the workbench is not restored; the next save keeps a backup of it"
-                        file (plist-get (plist-get r :problem) :text))
+        (progn (drgnx-notify 'wb 'fail
+                             (format "%s cannot be read (%s): the workbench is not restored; the next save keeps a backup of it"
+                                     file (plist-get (plist-get r :problem) :text))
+                             :id (cons 'workbench-read file))
                nil)
       (plist-get r :data))))
 
@@ -315,7 +324,9 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
     (cond
      ((null state) nil)
      ((null frames)
-      (message "drgnx: %s has format %S, not %d; not restored" file (plist-get state :version) drgnx-persist-version)
+      (drgnx-notify 'wb 'fail
+                    (format "%s has format %S, not %d; not restored" file (plist-get state :version) drgnx-persist-version)
+                    :id (cons 'workbench-format file))
       nil)
      (t
       (setq drgnx-persist--pending nil)
@@ -343,12 +354,15 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
                                     (g (drgnx-persist--geometry st)))
                                 (when (and g (frame-live-p frame) (display-graphic-p frame))
                                   (drgnx-persist--place-frame frame g)))
-                            (error (message "drgnx: a window was not restored: %s" (error-message-string err))))
-                        (message "drgnx: a window was not restored: no graphical display")))
-                     (t (message "drgnx: a window was not restored: %S is not loaded" (car-safe restore)))))
+                            (error (drgnx-notify 'wb 'warn (format "a window was not restored: %s" (error-message-string err))
+                                                 :id 'window-restore)))
+                        (drgnx-notify 'wb 'warn "a window was not restored: no graphical display" :id 'window-restore)))
+                     (t (drgnx-notify 'wb 'warn (format "a window was not restored: %S is not loaded" (car-safe restore))
+                                      :id 'window-restore))))
                 (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
                   (condition-case err (with-selected-frame f (drgnx-persist--restore-frame st))
-                    (error (message "drgnx: a window's layout was not restored: %s" (error-message-string err)))))))
+                    (error (drgnx-notify 'wb 'warn (format "a window's layout was not restored: %s" (error-message-string err))
+                                         :id 'window-layout-restore))))))
           (when (and (not keep-focus) (frame-live-p home)) (select-frame-set-input-focus home))))
       t))))
 
@@ -459,7 +473,8 @@ Nothing here asks anything or signals: it runs from hooks."
       (run-hook-wrapped 'drgnx-persist-after-restore-functions
                         (lambda (fn frame)
                           (condition-case err (funcall fn frame)
-                            (error (message "drgnx: after-restore function %S failed: %s" fn (error-message-string err))))
+                            (error (drgnx-notify 'wb 'warn (format "after-restore function %S failed: %s" fn (error-message-string err))
+                                                 :id (cons 'after-restore fn))))
                           nil)                          ; nil: go on with the next function
                         frame))))
 

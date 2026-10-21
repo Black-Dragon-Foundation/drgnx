@@ -24,6 +24,10 @@
 (require 'drgnx-timer)
 (require 'drgnx-state)
 
+(defun drgnx-monitors--warn (text)
+  "TEXT, something the monitor code could not do, as a `warn' event of source `wb' (never a prompt, never raised)."
+  (drgnx-notify 'wb 'warn (concat "monitors: " text)))
+
 (defvar drgnx-monitors--count nil
   "How many monitors the window manager lists, as of the last refresh (nil: not known yet).")
 
@@ -119,7 +123,7 @@ not joined: the new one is refused.  Never signals."
     (let ((cb (lambda (r)
                 (remhash frame drgnx-monitors--moving)
                 (condition-case err (funcall callback r)
-                  (error (message "drgnx: monitors: %s" (error-message-string err)))))))
+                  (error (drgnx-monitors--warn (error-message-string err)))))))
       (condition-case err
           (let ((can (or can (drgnx-platform-can-move frame))))
             (cond ((not (eq can t))
@@ -274,7 +278,7 @@ Emacs' own.  A terminal or child frame is left alone."
     (condition-case err
         (progn (drgnx-monitors--fetch-monitor frame)
                (drgnx-monitors--fetch-count frame))
-      (error (message "drgnx: monitors: %s" (error-message-string err))))))
+      (error (drgnx-monitors--warn (error-message-string err))))))
 
 (defun drgnx-monitors--arm (delay)
   "Have `drgnx-monitors--run-pending' run after DELAY seconds of idleness: one idle debounce for all frames."
@@ -298,7 +302,7 @@ and the timer is armed again for the time they have left."
         (when due
           (dolist (f due) (drgnx-monitors--fetch-monitor f))
           (drgnx-monitors--fetch-count (car due)))
-      (error (message "drgnx: monitors: %s" (error-message-string err))))
+      (error (drgnx-monitors--warn (error-message-string err))))
     (when deferred
       (setq drgnx-monitors--pending deferred)
       (drgnx-monitors--arm (max drgnx-monitors--idle-delay soonest)))))
@@ -316,7 +320,7 @@ and the timer is armed again for the time they have left."
       (drgnx-monitors--schedule-frames
        (or (seq-filter (lambda (f) (and (drgnx-monitors--eligible-p f) (eq (frame-focus-state f) t))) (frame-list))
            (list (selected-frame))))
-    (error (message "drgnx: monitors: %s" (error-message-string err)))))
+    (error (drgnx-monitors--warn (error-message-string err)))))
 
 (defun drgnx-monitors--frame-moved (frame)
   "`move-frame-functions': FRAME was moved, maybe to another monitor."
@@ -327,7 +331,7 @@ and the timer is armed again for the time they have left."
 burst of calls; moves nothing."
   (condition-case err
       (drgnx-monitors--schedule-frames (frame-list) t)
-    (error (message "drgnx: monitors: %s" (error-message-string err)))))
+    (error (drgnx-monitors--warn (error-message-string err)))))
 ;;;; Right-click menu
 
 (defun drgnx-monitors--click-frame (click)
@@ -413,13 +417,13 @@ focus for a moment.  The first failure ends it, said once."
                frame monitor
                (lambda (r)
                  (if (drgnx-monitors--error-p r)
-                     (message "drgnx: could not put %s back on their monitors (%s); the window manager placed them"
-                              (drgnx-monitors--windows (length jobs)) (cadr r))
+                     (drgnx-monitors--warn (format "could not put %s back on their monitors (%s); the window manager placed them"
+                                                   (drgnx-monitors--windows (length jobs)) (cadr r)))
                    (when (and fullscreen (frame-live-p frame))
                      (set-frame-parameter frame 'fullscreen fullscreen))
                    (drgnx-monitors--schedule-frames (list frame))
                    (drgnx-monitors--place-next (cdr jobs)))))
-            (error (message "drgnx: monitors: %s" (error-message-string err)))))))))
+            (error (drgnx-monitors--warn (error-message-string err)))))))))
 
 (defun drgnx-monitors--placing (frames monitors)
   "FRAMES, restored windows, are matched to MONITORS (the listing, or (:error MESSAGE)) and placed.
@@ -427,21 +431,22 @@ A window closed while the listing was awaited is not counted."
   (setq frames (seq-filter #'frame-live-p frames))
   (when frames
     (if (drgnx-monitors--error-p monitors)
-        (message "drgnx: could not put %s back on their monitors (%s); the window manager placed them"
-                 (drgnx-monitors--windows (length frames)) (cadr monitors))
+        (drgnx-monitors--warn (format "could not put %s back on their monitors (%s); the window manager placed them"
+                                      (drgnx-monitors--windows (length frames)) (cadr monitors)))
       (let (jobs gone)
         (dolist (f frames)
           (let ((hit (drgnx-platform-match-monitor (drgnx-monitors--saved f) monitors)))
             (if hit (push (list f hit) jobs) (push f gone))))
         (when gone
-          (message (if (cdr gone)
-                       "drgnx: %d windows' monitors are not connected (%s); the window manager placed them"
-                     "drgnx: %d window's monitor is not connected (%s); the window manager placed it")
+          (drgnx-monitors--warn
+           (format (if (cdr gone)
+                       "%d windows' monitors are not connected (%s); the window manager placed them"
+                     "%d window's monitor is not connected (%s); the window manager placed it")
                    (length gone)
                    (mapconcat #'identity
                               (delete-dups (mapcar (lambda (f) (drgnx-monitors--saved-name (drgnx-monitors--saved f)))
                                                    (nreverse gone)))
-                              ", ")))
+                              ", "))))
         (drgnx-monitors--place-next (nreverse jobs))))))
 
 (defun drgnx-monitors--place-restored (_frame)
@@ -453,7 +458,7 @@ the window manager opened them.  Returns at once; never prompts or signals."
         (dolist (f frames) (puthash f t drgnx-monitors--placed))
         (let ((drgnx-platform-command-timeout drgnx-platform-restore-timeout))
           (drgnx-platform-monitors (car frames) (lambda (monitors) (drgnx-monitors--placing frames monitors)))))
-    (error (message "drgnx: monitors: %s" (error-message-string err)))))
+    (error (drgnx-monitors--warn (error-message-string err)))))
 
 ;;;; The mode
 

@@ -39,7 +39,8 @@ unreadable file is copied aside, and an error is one message."
                                alist))
                            :on-unreadable 'backup :timeout 0))
     (drgnx-file-busy nil)
-    (error (message "drgnx: the AI probe's results were not saved: %s" (error-message-string err)))))
+    (error (require 'drgnx-notice)
+           (drgnx-notify 'agents 'warn (format "the AI probe's results were not saved: %s" (error-message-string err))))))
 
 (defun drgnx-ai--local-p (p)
   (member (url-host (url-generic-parse-url (plist-get p :url))) '("localhost" "127.0.0.1" "::1")))
@@ -144,6 +145,7 @@ not GPU memory); else the first GPU's when nvidia-smi is there; else nil."
 
 ;;;; The local runner onboarding set up: started again when it is down (after a restart, a crash)
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-jobs-start "drgnx-jobs")
 (declare-function drgnx-jobs-list "drgnx-jobs")
 
@@ -199,9 +201,12 @@ timer: never waits for the job (`:no-wait'), never asks."
   (cond ((seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command)))
                    (drgnx-jobs-list)))
         ((not (and (stringp (car command)) (file-executable-p (car command))))
-         (message "drgnx: %s is not running — %s" name
-                  (if (eq id 'lmstudio) "open LM Studio (its server starts with it)"
-                    (format "start it: %s" (string-join command " ")))))
+         (require 'drgnx-notice)
+         (drgnx-notify 'agents 'warn
+                       (format "%s is not running — %s" name
+                               (if (eq id 'lmstudio) "open LM Studio (its server starts with it)"
+                                 (format "start it: %s" (string-join command " "))))
+                       :id (cons 'ai-local id) :echo t))
         (t (message "Starting %s…" name)
            (with-demoted-errors "drgnx: the local AI server did not start: %S"
              (make-directory (drgnx-state-dir) t)

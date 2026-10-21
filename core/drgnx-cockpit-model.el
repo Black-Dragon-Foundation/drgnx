@@ -93,6 +93,7 @@ the files past it show no count."
 
 ;;;; For the panes (drgnx-cockpit.el and its parts; the model itself never calls these)
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-state-frames "drgnx-state")
 (declare-function drgnx-state-windows "drgnx-state")
 
@@ -367,7 +368,9 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
                 (let ((more (funcall fn model)))
                   (setq model (plist-put model :nodes (append (plist-get model :nodes) (plist-get more :nodes))))
                   (setq model (plist-put model :edges (append (plist-get model :edges) (plist-get more :edges)))))
-              (error (message "drgnx cockpit: %S: %s" fn (error-message-string err))))))
+              (error (require 'drgnx-notice)
+                     (drgnx-notify 'render 'warn (format "cockpit: %S: %s" fn (error-message-string err))
+                                   :id (cons 'cockpit fn))))))
         ;; only edges between nodes of the model
         (let ((ids (make-hash-table :test #'equal)))
           (dolist (n (plist-get model :nodes)) (puthash (plist-get n :id) t ids))
@@ -617,7 +620,9 @@ from its jtask row)."
 (defun drgnx-cockpit--call (fn &rest args)
   "FN with ARGS; an error is a message, never a prompt or a signal out of a sentinel or timer."
   (condition-case err (apply fn args)
-    (error (message "drgnx cockpit: %s" (error-message-string err)) nil)))
+    (error (require 'drgnx-notice)
+           (drgnx-notify 'render 'warn (format "cockpit: %s" (error-message-string err)))
+           nil)))
 
 (defun drgnx-cockpit--later (fn &rest args)
   (run-at-time 0 nil (lambda () (apply #'drgnx-cockpit--call fn args))))

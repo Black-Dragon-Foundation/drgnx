@@ -17,7 +17,9 @@ into `msgs' (a list, newest first)."
          (cl-letf (((symbol-function 'drgnx-persist-state) (lambda (&optional _f) (list :role 'main :main '(leaf))))
                    ((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (framep f) 'gui))))   ; batch's frame, as a window
            (cl-letf (((symbol-function 'message)
-                      (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) msgs)) nil)))
+                      (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) msgs)) nil))
+                     ;; what persist says is a notice (Task 20): its text is collected like a message
+                     ((symbol-function 'drgnx-notify) (lambda (_source _severity text &rest _) (push text msgs) nil)))
              ,@body))
        (delete-directory ,var t))))
 

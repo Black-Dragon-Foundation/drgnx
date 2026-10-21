@@ -17,6 +17,8 @@
 (require 'drgnx-file)
 (require 'drgnx-timer)
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+
 (defun drgnx-jobs-dir () (file-name-as-directory (expand-file-name "jobs" (drgnx-state-dir))))
 (defun drgnx-jobs--dir (id) (file-name-as-directory (expand-file-name id (drgnx-jobs-dir))))
 
@@ -200,7 +202,8 @@ not made, and one that cannot be read is left alone; the error is a `message', n
                job))
            :timeout (or timeout 0))
         (drgnx-file-busy nil)
-        (error (message "drgnx: job.eld not stamped: %s" (error-message-string err))
+        (error (require 'drgnx-notice)
+               (drgnx-notify 'agents 'warn (format "job.eld not stamped: %s" (error-message-string err)))
                nil)))))
 
 (defun drgnx-jobs-get (id)
