@@ -12,7 +12,7 @@
           (should (eq (plist-get (plist-get s :ready) :init_error) :false))
           (let ((info (drgnx-ui-call sess "(drgnx-uitest--json
                      (list :commands (length (drgnx-commands-all))
-                           :problems (length drgnx-commands-problems)
+                           :problems (length (drgnx-notices :source 'commands))
                            :guard (if drgnx-guard-mode t :false)
                            :basics (format \"%S\" (alist-get 'core/basics (drgnx-modules-report)))))")))
             (should (> (plist-get info :commands) 2))

@@ -12,7 +12,6 @@
   `(let* ((dir (make-temp-file "drgnx-usage" t))
           (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-          (drgnx-commands-problems nil)
           (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
           (drgnx-surfaces--usage-saved nil) (drgnx-surfaces--usage-last-error nil))
      (unwind-protect

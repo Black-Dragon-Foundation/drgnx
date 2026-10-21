@@ -637,6 +637,21 @@ after `drgnx-keys--restore', so drgnx's own bindings are gone."
       (let ((now (drgnx-keys--lookup (symbol-value sym) key)))
         (and now (not (equal now (drgnx-keys--lookup snap key))) now)))))
 
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+
+(defun drgnx-keys--notify-problems (problems)
+  "Make PROBLEMS (strings) the `warn' conditions of source `keys', each its own id; the last apply's go.
+Keys problems are `warn', so they never echo.  Never signals."
+  (condition-case err
+      (progn
+        (require 'drgnx-notice)
+        (drgnx-notice-clear 'keys)
+        (dolist (p problems)
+          (let ((text (format "%s" p)))
+            (drgnx-notify 'keys 'warn text :id text :life 'condition))))
+    (error (message "drgnx: key problems not recorded as notices: %s" (error-message-string err)))))
+
 (defun drgnx-keys-apply ()
   "Bind the keys of the active stack and keys.eld, replacing what drgnx bound before.
 Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolution."
@@ -680,6 +695,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                                        :problems (append (reverse drgnx-keys-problems)
                                                          (list (format "keys could not be applied: %s"
                                                                        (error-message-string err))))))))
+  (drgnx-keys--notify-problems (plist-get drgnx-keys-last :problems))
   (drgnx-keys--write-report)
   (let ((layers (plist-get drgnx-keys-last :layers)))
     (dolist (fn (default-value 'drgnx-keys-after-apply-functions))

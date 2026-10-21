@@ -11,7 +11,7 @@
 
 (defmacro drgnx-test--with-commands (&rest body)
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil) (drgnx-surfaces-contexts nil))
+         (drgnx-surfaces-contexts nil))
      (drgnx-command-define 'b-cmd :title "Beta" :category "Zed" :command #'drgnx-test--surf-cmd
                            :map 'drgnx-test-surf-map :menu '("Tools" "Test") :doc "Beta does b")
      (drgnx-command-define 'a-cmd :title "Alpha" :category "Able" :command #'drgnx-test--surf-cmd
@@ -106,7 +106,7 @@
   `(let* ((cfg (make-temp-file "drgnx-cfg" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-          (drgnx-commands-problems nil) (drgnx-surfaces-contexts nil) (drgnx-surfaces--menu-items (make-hash-table :test #'eq))
+          (drgnx-surfaces-contexts nil) (drgnx-surfaces--menu-items (make-hash-table :test #'eq))
           (drgnx-surfaces--menu-created nil) (drgnx-module--claims (make-hash-table :test 'equal))
           (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
           (drgnx-modules--stacks nil))

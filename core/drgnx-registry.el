@@ -22,7 +22,6 @@
 
 (defvar drgnx-commands--table (make-hash-table :test #'eq) "ID → `drgnx-cmd'.")
 (defvar drgnx-commands--order nil "IDs in first-definition order.")
-(defvar drgnx-commands-problems nil "Messages about entries that could not be applied.")
 (defvar drgnx-commands--previous (make-hash-table :test #'eq :weakness 'key)
   "Definition → the definition it replaced (a chain, newest first); see `drgnx-commands--retire'.")
 

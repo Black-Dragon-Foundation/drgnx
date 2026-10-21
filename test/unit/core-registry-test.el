@@ -4,8 +4,7 @@
 
 (defmacro drgnx-test--fresh-registry (&rest body)
   `(let ((drgnx-commands--table (make-hash-table :test #'eq))
-         (drgnx-commands--order nil)
-         (drgnx-commands-problems nil))
+         (drgnx-commands--order nil))
      ,@body))
 
 (defun drgnx-test--cmd () (interactive))
