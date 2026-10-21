@@ -115,9 +115,20 @@ fn context_closes_data_state_config_and_sockets() {
     ];
     dirs.sort();
     assert_eq!(ctx.program_dirs, dirs);
-    for name in ENV_DENY {
-        assert!(ctx.env_deny.contains(&name.to_string()));
-    }
+    // Written out, not taken from the constant, so a dropped entry is caught (gate review M3); the secret's name too.
+    let mut deny = ctx.env_deny.clone();
+    deny.sort();
+    assert_eq!(
+        deny,
+        [
+            "DRGNX_AGENT",
+            "DRGNX_CONFIG_DIR",
+            "DRGNX_DATA_DIR",
+            "DRGNX_HUB_PARENT_PID",
+            "DRGNX_HUB_SERVE_SECRET",
+            "DRGNX_HUB_SERVE_SOCKET",
+        ]
+    );
     // Gleipnir accepts the context, and it refuses what it closes.
     let spec = |write: PathBuf| Spec {
         read: vec![],
