@@ -6,34 +6,37 @@
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-ghost-test--with (spec &rest body)
   "BODY in an Emacs Lisp buffer with ghost text on, its `complete' role on provider `o' (Ollama) served by a mock
 LLM answering SPEC; `o' found running."
   (declare (indent 1))
-  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-ghost" t)))
-          (port nil) (script (concat root "llm.eld"))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
-          (drgnx-ai-detected '((o :up t))) (drgnx-ai-ghost--said-unavailable nil)
-          (mock nil))
-     (unwind-protect
-         (progn
-           (make-directory (concat root "config") t)
-           (with-temp-file script (prin1 ,spec (current-buffer)))
-           (setq mock (drgnx-ai-test-mock-llm nil script)
-                 port (process-get mock :port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                               :roles ((complete (o . "coder"))))
-                    (current-buffer)))
-           (with-temp-buffer
-             (emacs-lisp-mode)
-             (drgnx-ai-ghost-mode 1)
-             (insert "(defun greet (name)\n  ")
-             (save-excursion (insert "\n  name)\n"))
-             ,@body))
-       (when mock (delete-process mock))
-       (delete-directory root t))))
+  `(drgnx-notice-test-with-model
+     (drgnx-notice-define-source 'ai :title "AI" :command 'ai-choose)
+     (let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-ghost" t)))
+            (port nil) (script (concat root "llm.eld"))
+            (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
+            (drgnx-ai-detected '((o :up t))) (drgnx-ai-ghost--said-unavailable nil)
+            (mock nil))
+       (unwind-protect
+           (progn
+             (make-directory (concat root "config") t)
+             (with-temp-file script (prin1 ,spec (current-buffer)))
+             (setq mock (drgnx-ai-test-mock-llm nil script)
+                   port (process-get mock :port))
+             (with-temp-file (concat root "config/ai.eld")
+               (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
+                                 :roles ((complete (o . "coder"))))
+                      (current-buffer)))
+             (with-temp-buffer
+               (emacs-lisp-mode)
+               (drgnx-ai-ghost-mode 1)
+               (insert "(defun greet (name)\n  ")
+               (save-excursion (insert "\n  name)\n"))
+               ,@body))
+         (when mock (delete-process mock))
+         (delete-directory root t)))))
 
 (defun drgnx-ai-ghost-test--wait (pred &optional secs)
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the ghost text's condition"))
@@ -225,7 +228,25 @@ LLM answering SPEC; `o' found running."
         (drgnx-ai-ghost--trigger))
       (drgnx-test-pause 0.3)
       (should-not (drgnx-ai-ghost-text))
-      (should (= 1 (seq-count (lambda (m) (string-match-p "no provider" m)) said))))))
+      (should-not said)
+      (should (= 1 (length (drgnx-notices :source 'ai)))))))
+
+(ert-deftest drgnx-ai-ui/no-provider-is-a-condition ()
+  (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"never\"}"))
+    (let ((drgnx-ai-detected nil))
+      (cl-letf (((symbol-function 'drgnx-ai-probe) #'ignore))
+        (drgnx-ai-ghost--trigger))
+      (let ((n (car (drgnx-notices :source 'ai))))
+        (should (eq (plist-get n :severity) 'warn))
+        (should (eq (plist-get n :life) 'condition))
+        (should (equal (plist-get n :id) 'no-provider))
+        (should (equal (plist-get n :text) "No AI provider for completion"))
+        (should (eq (plist-get n :command) 'ai-choose)))
+      ;; a provider answers: it clears
+      (let ((drgnx-ai-detected '((o :up t))))
+        (cl-letf (((symbol-function 'drgnx-ai-request) #'ignore))
+          (drgnx-ai-ghost--trigger)))
+      (should-not (drgnx-notices :source 'ai)))))
 
 (ert-deftest drgnx-ai-ghost/a-provider-without-its-key-loaded-says-load-keys-once ()
   ;; OpenRouter after a restart: its key is in the Keychain, which the background never reads.
@@ -239,7 +260,11 @@ LLM answering SPEC; `o' found running."
                 ((symbol-function 'drgnx-platform) (lambda () 'macos)))
         (drgnx-ai-ghost--trigger)
         (drgnx-ai-ghost--trigger))
-      (should (equal said '("AI completion: no key for openrouter loaded — AI: Load Keys reads your key from the Keychain"))))))
+      (should-not said)
+      (let ((ns (drgnx-notices :source 'ai)))
+        (should (= 1 (length ns)))
+        (should (equal (plist-get (car ns) :text) "No key for openrouter loaded: AI: Load Keys reads it from the Keychain"))
+        (should (eq (plist-get (car ns) :command) 'ai-load-keys))))))
 
 (ert-deftest drgnx-ai-tab/one-tab-in-five-states ()
   ;; 1: a suggestion shows → accept it

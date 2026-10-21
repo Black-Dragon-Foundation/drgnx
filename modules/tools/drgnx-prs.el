@@ -16,6 +16,7 @@
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'drgnx-modules)
+(require 'drgnx-notice)
 (require 'drgnx-registry)
 
 (declare-function eieio-oref "eieio-core")
@@ -34,6 +35,7 @@
 
 (defvar-local drgnx-prs--root nil "The repository this list is of.")
 (defvar-local drgnx-prs--all nil "Every PR read (plists), or :untracked.")
+(defvar-local drgnx-prs--why nil "Why the last read of forge failed (a string), or nil: the placeholder says it.")
 (defvar-local drgnx-prs-show-closed nil "Are merged and closed PRs listed too?")
 
 ;;;; Reading forge (the only code that touches its API)
@@ -66,9 +68,15 @@
                 (drgnx-prs--slot repo 'pullreqs))))))
 
 (defun drgnx-prs--read (root)
-  "`drgnx-prs--pullreqs' for ROOT; a forge whose classes are not what we read is a message and :untracked."
-  (condition-case err (drgnx-prs--pullreqs root)
-    (error (message "drgnx: could not read forge's pull requests: %s" (error-message-string err)) :untracked)))
+  "`drgnx-prs--pullreqs' for ROOT; a forge whose classes are not what we read is the warn condition `(prs . fetch)'
+\(the tab says why, `drgnx-prs--why') and :untracked; a good read clears it."
+  (condition-case err (prog1 (drgnx-prs--pullreqs root)
+                        (setq drgnx-prs--why nil)
+                        (drgnx-notice-clear 'prs 'fetch))
+    (error (setq drgnx-prs--why (error-message-string err))
+           (drgnx-notify 'prs 'warn (format "Pull requests: the forge did not answer: %s" drgnx-prs--why)
+                         :id 'fetch :life 'condition :command 'prs-fetch)
+           :untracked)))
 
 (defun drgnx-prs--remote (root)
   "The remote forge uses for ROOT, else origin."
@@ -130,7 +138,9 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
       (insert "\n "
               (if (and hidden (> hidden 0))                 ; they are all merged or closed, and hidden
                   (format "No open pull requests — %d merged or closed (Pull Requests: Show Closed lists them)." hidden)
-                drgnx-prs--placeholder)
+                (if drgnx-prs--why
+                    (format "Pull requests: the forge did not answer: %s" drgnx-prs--why)
+                  drgnx-prs--placeholder))
               "\n"))))
 
 (defun drgnx-prs--toplevel (dir)
@@ -194,7 +204,9 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
                                        (drgnx-diff-show (list 'range (format "%s/%s" remote (plist-get p :base)) ref) root))
                                       ((string-match-p "exited\\|failed\\|signal" event)
                                        (when (buffer-live-p err) (when-let* ((ep (get-buffer-process err))) (delete-process ep)) (kill-buffer err))
-                                       (message "drgnx: fetching pull request #%d failed: %s" n (or why (string-trim event))))))))))
+                                       (drgnx-notify 'prs 'warn
+                                                     (format "Fetching pull request #%d failed: %s" n (or why (string-trim event)))
+                                                     :command 'prs-fetch))))))))
 
 (defun drgnx-prs--commit-setup ()
   "`git-commit-setup-hook': # completes PR and issue numbers (forge)."
@@ -213,6 +225,7 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
                      :setup
                      (lambda ()
                        (add-hook 'git-commit-setup-hook #'drgnx-prs--commit-setup)
+                       (drgnx-notice-define-source 'prs :title "Pull requests" :command 'prs-fetch)
                        (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'prs :title "Pull Requests"))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((prs-view "Pull Requests" drgnx-prs-view "This repository's pull requests (forge)")
