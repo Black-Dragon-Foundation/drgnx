@@ -289,6 +289,15 @@ mod tests {
                 },
                 "[::ffff:127.0.0.1]:80",
             ),
+            // the longest IPv6 text (45 characters) is still an address
+            (
+                "[0000:0000:0000:0000:0000:ffff:255.255.255.255]:80".into(),
+                Target {
+                    host: Host::V6("::ffff:255.255.255.255".parse().unwrap()),
+                    port: 80,
+                },
+                "[::ffff:255.255.255.255]:80",
+            ),
         ];
         for (input, want, shown) in ok {
             let got = parse_target(&input).unwrap_or_else(|e| panic!("{input:?}: {e}"));
@@ -506,6 +515,19 @@ mod tests {
         for a in public6 {
             assert!(is_public(v6(a)), "{a} counted as not public");
         }
+    }
+
+    #[test]
+    fn errors_say_what_is_wrong() {
+        use TargetError::*;
+        let all = [NotAscii, Wildcard, BadPort, BadName, BadAddress];
+        let said: std::collections::HashSet<String> = all.iter().map(|e| e.to_string()).collect();
+        assert_eq!(
+            said.len(),
+            all.len(),
+            "each error has its own text: {said:?}"
+        );
+        assert!(said.iter().all(|s| !s.is_empty()));
     }
 
     #[test]
