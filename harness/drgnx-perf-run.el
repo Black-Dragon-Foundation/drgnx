@@ -27,6 +27,10 @@
           (insert-file-contents x) (goto-char (point-max)))))
     f))
 
+(defun drgnx-perf-run--session-size ()
+  "The perf sessions' monitor size: $DRGNX_UI_SIZE (WxH) when set, else 1400x800."
+  (let ((e (getenv "DRGNX_UI_SIZE"))) (if (member e '(nil "")) "1400x800" e)))
+
 (defun drgnx-perf-run--visit-fixture-form ()
   (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
                          (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0) t)"
@@ -1069,7 +1073,7 @@ its own cost to the other numbers)."
   (let* ((loads (list (drgnx-perf-load)))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (all (drgnx-perf-run--workloads)) (selected (drgnx-perf-run--select all))
-         (s (drgnx-ui-start "drgnx" "1400x800" 60)) (sess (drgnx-ui-own-session (plist-get s :name))) results)
+         (s (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)) (sess (drgnx-ui-own-session (plist-get s :name))) results)
     (unwind-protect
         (progn
           (drgnx-perf-run--check-gc sess)
@@ -1146,7 +1150,7 @@ each round; fails when RSS grows by more than 20% from the first round or passes
   (let* ((minutes (max 1 (or minutes 30))) (deadline (+ (float-time) (* 60 minutes)))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (process-environment (cons (format "DRGNX_UI_MAX_RUNTIME=%d" (+ (* 60 minutes) 900)) process-environment))
-         (s (drgnx-ui-start "drgnx" "1400x800" 60)) (sess (drgnx-ui-own-session (plist-get s :name)))
+         (s (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)) (sess (drgnx-ui-own-session (plist-get s :name)))
          (loads (seq-filter (lambda (w) (plist-get (cdr w) :actions)) (drgnx-perf-run--workloads)))
          samples over)
     (unwind-protect
@@ -1193,7 +1197,7 @@ each round; fails when RSS grows by more than 20% from the first round or passes
   "A session whose init, core, wb and modules come from TREE (nil: the controller's own); the harness is ours.
 ENV (\"K=V\" strings, `drgnx-ui-session-extra-env-names' only) is added to its environment."
   (let ((drgnx-ui-session-repo tree) (drgnx-ui-session-extra-env env))
-    (drgnx-ui-start "drgnx" "1400x800" 60)))
+    (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)))
 
 (defun drgnx-perf-ab-env-parse (spec)
   "SPEC, \"VAR=JUDGED,REF\", as (VAR JUDGED REF); an error unless it has a name and exactly two non-empty values."
