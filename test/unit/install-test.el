@@ -59,6 +59,27 @@ machine has."
 (ert-deftest drgnx-install/syntax ()
   (should (= 0 (call-process "bash" nil nil nil "-n" (expand-file-name "install.sh" drgnx-install-test--root)))))
 
+(ert-deftest drgnx-install/stock-methods-are-gone ()
+  ;; drgnx runs on Nidhogg: the methods that installed a stock GNU Emacs were removed, whatever the system.
+  (dolist (m '("package" "source" "cask" "formula"))
+    (dolist (r (list (drgnx-install-test--plan "fedora-45" "--method" m)
+                     (drgnx-install-test--run drgnx-install-test--macos "--dry-run" "--method" m)))
+      (should (= (car r) 2))
+      (should (string-search (format "method %s was removed: drgnx runs on Nidhogg (see docs/guide/install.md, \"Nidhogg\")" m)
+                             (cdr r)))
+      (should-not (string-search "1. Emacs" (cdr r)))))
+  (should (= 2 (car (drgnx-install-test--plan "fedora-45" "--method" "nonsense")))))
+
+(ert-deftest drgnx-install/no-recipe-says-so ()
+  ;; A system without a Nidhogg recipe: exit 1 and the reason, never a stock Emacs; --method nidhogg says the same.
+  (dolist (args '(("debian-13") ("arch") ("linuxmint") ("unknown") ("rocky-9") ("nobara-42") ("debian-13" "--method" "nidhogg")))
+    (let ((r (apply #'drgnx-install-test--plan args)))
+      (should (= (car r) 1))
+      (should (string-search "no Nidhogg recipe for " (cdr r)))
+      (should (string-search "yet (NIDHOGG-DISTROS-1)" (cdr r)))
+      (should (string-search "docs/guide/install.md" (cdr r)))
+      (should-not (string-search "1. Emacs" (cdr r))))))
+
 (ert-deftest drgnx-install/script-runs-only-from-main ()
   ;; A truncated download must run nothing: everything is a function, `main' is called on the last line.
   (with-temp-buffer
@@ -66,40 +87,6 @@ machine has."
     (goto-char (point-max))
     (skip-chars-backward " \n")
     (should (string= (buffer-substring (line-beginning-position) (point)) "main \"$@\""))))
-
-(ert-deftest drgnx-install/fedora-44-builds-from-source ()
-  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" "DRGNX_INSTALL_SESSION=wayland" "--method" "source")
-                              "Fedora Linux 44" "build GNU Emacs 31.1 from source" "dnf builddep -y emacs"
-                              "--with-native-compilation=aot" "--with-pgtk" "gnu-keyring.gpg"))
-
-(ert-deftest drgnx-install/fedora-45-uses-the-package ()
-  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" "DRGNX_INSTALL_SESSION=wayland" "--method" "package")
-                              "dnf install -y emacs-pgtk")
-  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" "DRGNX_INSTALL_SESSION=x11" "--method" "package")
-                              "dnf install -y emacs-gtk+x11"))
-
-(ert-deftest drgnx-install/arch-family-uses-the-package ()
-  (drgnx-install-test--expect (drgnx-install-test--plan "arch" "DRGNX_INSTALL_SESSION=wayland")
-                              "pacman -Syu --needed --noconfirm emacs-wayland")
-  (drgnx-install-test--expect (drgnx-install-test--plan "endeavouros" "DRGNX_INSTALL_SESSION=x11")
-                              "pacman -Syu --needed --noconfirm emacs"))
-
-(ert-deftest drgnx-install/debian-family-builds-from-source ()
-  (dolist (os '("debian-13" "ubuntu-26.04" "linuxmint"))
-    (drgnx-install-test--expect (drgnx-install-test--plan os "DRGNX_INSTALL_SESSION=x11" "--method" "source")
-                                "build GNU Emacs 31.1 from source" "apt-get build-dep -y emacs"
-                                ;; Ubuntu 26.04 builds its emacs with gcc-14 but defaults to gcc 15:
-                                ;; build-dep alone leaves the default gcc without libgccjit.
-                                "libgccjit for the default gcc"
-                                "--with-x-toolkit=gtk3")))
-
-(ert-deftest drgnx-install/macos ()
-  (drgnx-install-test--expect
-   (drgnx-install-test--run '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=arm64" "DRGNX_INSTALL_MACOS=15.4") "--dry-run" "--method" "cask")
-   "brew install --cask emacs-plus-app" "brew trust d12frosted/emacs-plus")
-  (drgnx-install-test--expect
-   (drgnx-install-test--run '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=x86_64" "DRGNX_INSTALL_MACOS=14.6") "--dry-run" "--method" "formula")
-   "brew install emacs-plus@31"))
 
 (defconst drgnx-install-test--macos
   '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=arm64" "DRGNX_INSTALL_MACOS=15.4")
@@ -114,13 +101,13 @@ machine has."
 
 (ert-deftest drgnx-install/macos-without-homebrew-offers-it ()
   ;; Homebrew is installed (asked) before the brew commands; without a terminal and without --yes: exit 3.
-  (let* ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos) "--dry-run" "--method" "cask"))
+  (let* ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos) "--dry-run"))
          (out (cdr r)))
     (should (= (car r) 0))
     (should (string-search "Install Homebrew" out))
     (should (string-search "Homebrew/install/HEAD/install.sh" out))
-    (should (< (string-search "Install Homebrew" out) (string-search "brew install --cask emacs-plus-app" out))))
-  (let ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos) "--method" "cask")))
+    (should (< (string-search "Install Homebrew" out) (string-search "Homebrew formulae from nidhogg/deps/macos.build" out))))
+  (let ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos))))
     (should (= (car r) 3))
     (should (string-search "--yes" (cdr r)))))
 
@@ -133,17 +120,17 @@ machine has."
 
 (ert-deftest drgnx-install/macos-with-homebrew-does-not-offer-it ()
   (let ((out (cdr (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=/opt/homebrew/bin/brew" drgnx-install-test--macos)
-                                           "--dry-run" "--method" "cask"))))
-    (should (string-search "/opt/homebrew/bin/brew install --cask emacs-plus-app" out))
+                                           "--dry-run"))))
+    (should (string-search "Homebrew formulae from nidhogg/deps/macos.build" out))
     (should-not (string-search "Install Homebrew" out))
     (should-not (string-search "Rosetta" out))))
 
 (ert-deftest drgnx-install/macos-with-intel-homebrew-on-apple-silicon ()
   ;; Homebrew for Intel in /usr/local on an arm64 Mac runs under Rosetta: used, but the plan says so.
   (let ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=/usr/local/bin/brew" drgnx-install-test--macos)
-                                    "--dry-run" "--method" "cask")))
+                                    "--dry-run")))
     (should (= (car r) 0))
-    (should (string-search "/usr/local/bin/brew install --cask emacs-plus-app" (cdr r)))
+    (should (string-search "Homebrew formulae from nidhogg/deps/macos.build" (cdr r)))
     (should (string-search "Rosetta" (cdr r)))
     (should-not (string-search "Install Homebrew" (cdr r)))))
 
@@ -163,8 +150,7 @@ machine has."
 
 (ert-deftest drgnx-install/macos-probes-emacs-app-in-applications ()
   ;; Emacs.app is not on PATH: /Applications/Emacs.app/Contents/MacOS/Emacs is probed too (DRGNX_INSTALL_MACOS_APP
-  ;; stands for it). Good enough: kept and remembered. Older: the cask would install over it — stopped before
-  ;; Homebrew, with the two ways on; --method formula (emacs-plus@31, beside it) goes on.
+  ;; stands for it). Good enough: kept and remembered. An older one is not kept: Nidhogg is built beside it.
   (let ((tmp (make-temp-file "drgnx-install" t)))
     (unwind-protect
         (let* ((good (let ((d (expand-file-name "good" tmp))) (make-directory d) (drgnx-install-test--fake-emacs d "31.1 t ns")))
@@ -177,34 +163,18 @@ machine has."
             (should (= (car r) 0))
             (should (string-search (concat "keep the installed Emacs 31.1 (" good ")") (cdr r)))
             (should (string-search (concat "Remember Emacs: " good) (cdr r)))
-            (should-not (string-search "brew install" (cdr r)))
             (should-not (string-search "Install Homebrew" (cdr r))))
-          (let ((r (funcall run old "--method" "cask")))
-            (should (= (car r) 2))
-            (should (string-search "an older Emacs.app is in /Applications (Emacs 30.2): move it aside, or run with --method formula" (cdr r)))
-            (should-not (string-search "1. Emacs" (cdr r)))
-            (should-not (string-search "Homebrew" (cdr r))))
-          (let ((r (funcall run old "--method" "formula")))
+          (let ((r (funcall run old)))
             (should (= (car r) 0))
-            (should (string-search "install emacs-plus@31" (cdr r)))
-            (should-not (string-search "--cask emacs-plus-app" (cdr r))))
-          ;; none there: as before
-          (let ((r (funcall run (expand-file-name "missing/Emacs" tmp) "--method" "cask")))
-            (should (= (car r) 0))
-            (should (string-search "install --cask emacs-plus-app" (cdr r))))
+            (should (string-search "build Nidhogg 31.1-nidhogg.1" (cdr r)))
+            (should-not (string-search "keep the installed" (cdr r))))
           ;; DRGNX_INSTALL_EMACS still comes first
           (let ((r (drgnx-install-test--run (append (list (concat "DRGNX_INSTALL_EMACS=" good) (concat "DRGNX_INSTALL_MACOS_APP=" old)
                                                           "DRGNX_INSTALL_BREW=none")
                                                     drgnx-install-test--macos)
                                             "--dry-run" "--method" "keep")))
             (should (= (car r) 0))
-            (should (string-search (concat "keep the installed Emacs 31.1 (" good ")") (cdr r))))
-          ;; formula is a macOS method
-          (let ((r (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
-                                                  "DRGNX_INSTALL_UNAME=Linux")
-                                            "--dry-run" "--method" "formula")))
-            (should (= (car r) 2))
-            (should (string-search "--method formula is for macOS" (cdr r)))))
+            (should (string-search (concat "keep the installed Emacs 31.1 (" good ")") (cdr r)))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/homebrew-installer-runs-noninteractive-and-its-failure-stops-the-run ()
@@ -215,8 +185,7 @@ machine has."
   (let* ((tmp (make-temp-file "drgnx-install" t)) (bin (expand-file-name "bin" tmp))
          (drgnx-install-test--stdin (expand-file-name "stdin" tmp)))
     (unwind-protect
-        (progn
-          (make-directory bin)
+        (let ((fx (drgnx-install-test--nidhogg-fixture tmp)))
           (write-region "PIPED-SCRIPT-TEXT\n" nil drgnx-install-test--stdin)
           (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; read x && echo GOT || echo STDIN-EOF; exit 1'"
                           "exit 22"))
@@ -224,12 +193,12 @@ machine has."
             (set-file-modes (expand-file-name "curl" bin) #o755)
             (let ((r (drgnx-install-test--run
                       (append (list "DRGNX_INSTALL_BREW=none" (concat "PATH=" bin ":" (getenv "PATH")))
-                              drgnx-install-test--macos)
-                      "--yes" "--method" "cask" "--source-dir" drgnx-install-test--root "--prefix" (expand-file-name "prefix" tmp))))
+                              (drgnx-install-test--macos-env fx))
+                      "--yes" "--source-dir" (expand-file-name "drgnx" tmp))))
               (should (= (car r) 1))
-              ;; the plan names brew; once Homebrew's installer failed, no brew command ran
-              (should-not (string-search "Tapped" (cdr r)))
-              (should-not (string-search "emacs-plus" (substring (cdr r) (string-search "Emacs comes from Homebrew" (cdr r)))))
+              ;; once Homebrew's installer failed, nothing was built
+              (should-not (drgnx-install-test--file (expand-file-name "log" tmp)))
+              (should (string-search "come from Homebrew, which is not installed" (cdr r)))
               (if (string-search "exit 1" curl)
                   (progn (should (string-search "HB-INSTALLER NONINTERACTIVE=1" (cdr r)))
                          (should (string-search "STDIN-EOF" (cdr r)))
@@ -266,19 +235,19 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
 
 (ert-deftest drgnx-install/homebrew-installer-success-path ()
   ;; The installer succeeds (a fake one that makes a fake brew): the brew it made is found, its shellenv
-  ;; is evaluated, the profile line is offered (--yes only prints it) and tap and install run through it.
+  ;; is evaluated, the profile line is offered (--yes only prints it) and Nidhogg is built after it.
   (let ((tmp (make-temp-file "drgnx-install" t)))
     (unwind-protect
-        (let ((r (drgnx-install-test--run
-                  (append (drgnx-install-test--fake-homebrew tmp) (list "SHELL=/bin/zsh") drgnx-install-test--macos)
-                  "--yes" "--method" "cask" "--source-dir" drgnx-install-test--root "--prefix" (expand-file-name "prefix" tmp))))
+        (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+               (r (drgnx-install-test--run
+                   (append (drgnx-install-test--fake-homebrew tmp) (list "SHELL=/bin/zsh") (drgnx-install-test--macos-env fx))
+                   "--yes" "--source-dir" (expand-file-name "drgnx" tmp))))
           (should (= (car r) 0))
           (should (string-search "FAKE-HB-INSTALLED" (cdr r)))
           (should (string-search "Homebrew must be on your PATH in new terminals." (cdr r)))
           (should (string-match-p (concat "add this to [^ ]*/\\.zprofile: eval \"\\$(" (regexp-quote tmp) "/hb/brew shellenv)\"")
                                   (cdr r)))
-          (should (string-search "FAKE-BREW tap d12frosted/emacs-plus" (cdr r)))
-          (should (string-search "FAKE-BREW install --cask emacs-plus-app" (cdr r)))
+          (should (string-search "build.sh --host " (drgnx-install-test--file (expand-file-name "log" tmp))))
           (should-not (string-search "Homebrew was installed but brew was not found" (cdr r))))
       (delete-directory tmp t))))
 
@@ -287,21 +256,21 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   ;; ~/.zprofile; with SHELL unset ~/.zprofile if it exists, else ~/.profile; any other shell ~/.profile.
   (let ((tmp (make-temp-file "drgnx-install" t)))
     (unwind-protect
-        (let ((hint (lambda (shell &optional zprofile)
-                      (let* ((home (make-temp-file "drgnx-install-home" t))
-                             (r (unwind-protect
-                                    (progn
-                                      (when zprofile (write-region "" nil (expand-file-name ".zprofile" home)))
-                                      (drgnx-install-test--run
-                                       (append (drgnx-install-test--fake-homebrew tmp) (list (concat "HOME=" home))
-                                               (if shell (list (concat "SHELL=" shell)) (list "SHELL="))
-                                               drgnx-install-test--macos)
-                                       "--yes" "--method" "cask" "--source-dir" drgnx-install-test--root
-                                       "--prefix" (expand-file-name "prefix" tmp)))
-                                  (delete-directory home t))))
-                        (should (= (car r) 0))
-                        (and (string-match "add this to [^ ]*/\\(\\.z?profile\\): eval " (cdr r))
-                             (match-string 1 (cdr r)))))))
+        (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+               (hint (lambda (shell &optional zprofile)
+                       (let* ((home (make-temp-file "drgnx-install-home" t))
+                              (r (unwind-protect
+                                     (progn
+                                       (when zprofile (write-region "" nil (expand-file-name ".zprofile" home)))
+                                       (drgnx-install-test--run
+                                        (append (drgnx-install-test--fake-homebrew tmp) (list (concat "HOME=" home))
+                                                (if shell (list (concat "SHELL=" shell)) (list "SHELL="))
+                                                (drgnx-install-test--macos-env fx))
+                                        "--yes" "--source-dir" (expand-file-name "drgnx" tmp)))
+                                   (delete-directory home t))))
+                         (should (= (car r) 0))
+                         (and (string-match "add this to [^ ]*/\\(\\.z?profile\\): eval " (cdr r))
+                              (match-string 1 (cdr r)))))))
           (should (equal (funcall hint "/bin/zsh") ".zprofile"))
           (should (equal (funcall hint "/bin/bash") ".profile"))
           (should (equal (funcall hint "/usr/bin/fish") ".profile"))
@@ -450,12 +419,6 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
             (should-not (funcall opened))))
       (delete-directory tmp t))))
 
-(ert-deftest drgnx-install/unknown-distribution-gets-the-guide ()
-  (let ((r (drgnx-install-test--plan "unknown")))
-    (should (= (car r) 2))
-    (should (string-search "Plan 9 from Bell Labs" (cdr r)))
-    (should (string-search "docs/guide/install.md" (cdr r)))))
-
 (ert-deftest drgnx-install/a-good-emacs-is-kept ()
   (let ((fake (make-temp-file "fake-emacs")))
     (unwind-protect
@@ -472,8 +435,8 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
    (drgnx-install-test--run (append '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=arm64" "DRGNX_INSTALL_MACOS=15.4"
                                       "DRGNX_INSTALL_BREW=none")
                                     nil)
-                            "--dry-run" "--method" "cask")
-   "Remember Emacs: /Applications/Emacs.app/Contents/MacOS/Emacs")
+                            "--dry-run")
+   "Remember Emacs: " "/.local/opt/nidhogg/31.1-nidhogg.1/Nidhogg.app/Contents/MacOS/Emacs")
   (let ((tmp (make-temp-file "drgnx-install" t)))
     (unwind-protect
         (let ((fake (drgnx-install-test--fake-emacs tmp "31.1 t ns")))
@@ -513,25 +476,9 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
       (should (= (car r) 2))
       (should (string-search (concat opt " needs") (cdr r))))))
 
-(ert-deftest drgnx-install/a-method-without-a-recipe-is-refused ()
-  ;; M2.5-2: --method package/source where there is no such recipe — refused before the plan (exit 2),
-  ;; never an empty "sudo" line (bash 5) or "unbound variable" (bash 3.2).
-  (let ((macos '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=arm64" "DRGNX_INSTALL_MACOS=15.4")))
-    (dolist (r (list (apply #'drgnx-install-test--run macos '("--dry-run" "--method" "package"))
-                     (apply #'drgnx-install-test--run macos '("--dry-run" "--method" "source"))
-                     (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "arch"))
-                                                    "DRGNX_INSTALL_UNAME=Linux")
-                                              "--dry-run" "--method" "source")
-                     (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "unknown"))
-                                                    "DRGNX_INSTALL_UNAME=Linux")
-                                              "--dry-run" "--method" "package")))
-      (should (= (car r) 2))
-      (should (string-match-p "no --method \\(package\\|source\\) recipe for" (cdr r)))
-      (should-not (string-search "1. Emacs" (cdr r))))))
-
-(ert-deftest drgnx-install/image-based-fedora-gets-toolbox-or-layering ()
+(ert-deftest drgnx-install/image-based-fedora-gets-toolbox ()
   ;; M2.5-11: Silverblue, Kinoite, Bazzite (/run/ostree-booted): dnf cannot install there — refused before
-  ;; the plan with the two ways that work; an Emacs that is already good is kept.
+  ;; the plan with the way that works; an Emacs asked to be kept is kept.
   (let ((booted (make-temp-file "ostree-booted")) (fake (make-temp-file "fake-emacs")))
     (unwind-protect
         (progn
@@ -539,13 +486,11 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
             (let ((r (drgnx-install-test--plan os (concat "DRGNX_INSTALL_OSTREE_BOOTED=" booted))))
               (should (= (car r) 2))
               (should (string-search "toolbox" (cdr r)))
-              (should (string-search "rpm-ostree install emacs-pgtk" (cdr r)))
-              (should (string-search "--method keep" (cdr r)))
               (should-not (string-search "dnf install" (cdr r)))))
           (write-region "#!/bin/sh\necho '31.1 t pgtk'\n" nil fake)
           (set-file-modes fake #o755)
           (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" (concat "DRGNX_INSTALL_OSTREE_BOOTED=" booted)
-                                                                (concat "DRGNX_INSTALL_EMACS=" fake))
+                                                                (concat "DRGNX_INSTALL_EMACS=" fake) "--method" "keep")
                                       "keep the installed Emacs 31.1"))
       (delete-file booted)
       (delete-file fake))))
@@ -565,68 +510,6 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
                                     "--dry-run" "--dir" dir)
            (format "update %s (git pull --ff-only)" dir)))
       (delete-directory dir t))))
-
-(ert-deftest drgnx-install/bad-signature-installs-nothing ()
-  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
-  ;; The tarball is verified before anything is installed (build dependencies included).  A fake
-  ;; sudo on PATH: a regression must fail here, never escalate on the developer's machine.
-  (let* ((tmp (make-temp-file "drgnx-install" t))
-         (mirror (expand-file-name "mirror" tmp))
-         (bin (expand-file-name "bin" tmp))
-         (prefix (expand-file-name "prefix" tmp)))
-    (unwind-protect
-        (progn
-          (make-directory mirror)
-          (make-directory bin)
-          (dolist (f '("emacs-31.1.tar.xz" "emacs-31.1.tar.xz.sig" "keyring")) ; not *.gpg: EasyPG would encrypt it
-            (write-region "not what it claims to be\n" nil (expand-file-name f mirror)))
-          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
-          (set-file-modes (expand-file-name "sudo" bin) #o755)
-          (let ((r (drgnx-install-test--run
-                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44"))
-                          "DRGNX_INSTALL_UNAME=Linux"
-                          (concat "DRGNX_INSTALL_MIRROR=file://" mirror)
-                          (concat "DRGNX_INSTALL_KEYRING=file://" mirror "/keyring")
-                          (concat "XDG_CACHE_HOME=" tmp "/cache")
-                          (concat "PATH=" bin ":" (getenv "PATH")))
-                    "--yes" "--method" "source" "--prefix" prefix "--source-dir" drgnx-install-test--root)))
-            (should (= (car r) 1))
-            (should (string-search "does not verify" (cdr r)))
-            (should-not (string-search "As root:" (cdr r)))     ; no dependency step ran
-            (should-not (string-search "FAKE-SUDO" (cdr r)))
-            (should-not (file-exists-p (expand-file-name "bin/emacs" prefix)))))
-      (delete-directory tmp t))))
-
-(ert-deftest drgnx-install/a-failed-download-installs-nothing ()
-  ;; M2.5-4: a mirror without the tarball (not synced yet, no network) — a clear message, exit 1, nothing
-  ;; installed, no half file kept.
-  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
-  (let* ((tmp (make-temp-file "drgnx-install" t))
-         (mirror (expand-file-name "mirror" tmp))
-         (bin (expand-file-name "bin" tmp))
-         (prefix (expand-file-name "prefix" tmp)))
-    (unwind-protect
-        (progn
-          (make-directory mirror)
-          (make-directory bin)
-          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
-          (set-file-modes (expand-file-name "sudo" bin) #o755)
-          (let ((r (drgnx-install-test--run
-                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44"))
-                          "DRGNX_INSTALL_UNAME=Linux"
-                          (concat "DRGNX_INSTALL_MIRROR=file://" mirror)
-                          (concat "DRGNX_INSTALL_KEYRING=file://" mirror "/keyring")
-                          (concat "XDG_CACHE_HOME=" tmp "/cache")
-                          (concat "PATH=" bin ":" (getenv "PATH")))
-                    "--yes" "--method" "source" "--prefix" prefix "--source-dir" drgnx-install-test--root)))
-            (should (= (car r) 1))
-            (should (string-search (concat "could not download file://" mirror "/emacs-31.1.tar.xz") (cdr r)))
-            (should (string-search "nothing was installed" (cdr r)))
-            (should-not (string-search "As root:" (cdr r)))
-            (should-not (string-search "FAKE-SUDO" (cdr r)))
-            (should-not (directory-files (expand-file-name "cache/drgnx/build" tmp) nil "\\.tar\\.xz"))
-            (should-not (file-exists-p (expand-file-name "bin/emacs" prefix)))))
-      (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/the-path-hint-names-the-shell-startup-file ()
   ;; M2.5-3: zsh (macOS's default) never reads ~/.profile.  A run with --yes keeps a good (fake) Emacs,
@@ -648,21 +531,15 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
 
 (ert-deftest drgnx-install/root-steps-are-announced-even-with-yes ()
   (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
-  (let* ((tmp (make-temp-file "drgnx-install" t))
-         (bin (expand-file-name "bin" tmp)))
+  ;; The fixture's sudo only logs: nothing escalates on the developer's machine.
+  (let ((tmp (make-temp-file "drgnx-install" t)))
     (unwind-protect
-        (progn
-          (make-directory bin)
-          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
-          (set-file-modes (expand-file-name "sudo" bin) #o755)
-          (let ((r (drgnx-install-test--run
-                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
-                          "DRGNX_INSTALL_UNAME=Linux" "DRGNX_INSTALL_SESSION=wayland"
-                          (concat "PATH=" bin ":" (getenv "PATH")))
-                    "--yes" "--method" "package" "--source-dir" drgnx-install-test--root)))
-            (should (= (car r) 1))
-            (should (string-search "As root: dnf install -y emacs-pgtk" (cdr r)))
-            (should (string-search "FAKE-SUDO dnf install -y emacs-pgtk" (cdr r)))))
+        (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
+               (r (drgnx-install-test--nidhogg-run tmp fx))
+               (log (drgnx-install-test--file (expand-file-name "log" tmp))))
+          (should (= (car r) 0))
+          (should (string-search "As root: dnf install -y libbuildfoo libbuildbar" (cdr r)))
+          (should (string-search "sudo dnf install -y libbuildfoo libbuildbar" log)))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/e2e-tier-names-its-images ()
@@ -703,13 +580,12 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/fedora-family-is-fedora-itself ()
-  ;; RHEL clones and Amazon Linux carry `fedora' in ID_LIKE but have no Fedora packages: the guide.
-  ;; Fedora remixes (Nobara) have a Fedora PLATFORM_ID.
-  (dolist (os '("rocky-9" "amazon-2023"))
+  ;; RHEL clones and Amazon Linux carry `fedora' in ID_LIKE but have no Fedora packages: no recipe.
+  ;; Fedora remixes (Nobara) have a Fedora PLATFORM_ID (42 here, which has no recipe either; 44 and 45 do).
+  (dolist (os '("rocky-9" "amazon-2023" "nobara-42"))
     (let ((r (drgnx-install-test--plan os)))
-      (should (= (car r) 2))
-      (should (string-search "docs/guide/install.md" (cdr r)))))
-  (drgnx-install-test--expect (drgnx-install-test--plan "nobara-42") "build GNU Emacs 31.1 from source" "dnf builddep -y emacs"))
+      (should (= (car r) 1))
+      (should (string-search "no Nidhogg recipe for" (cdr r))))))
 
 (ert-deftest drgnx-install/relative-paths-become-absolute ()
   ;; `--source-dir .' from a clone: the drgnx link must not dangle.
@@ -720,100 +596,11 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
     (should (string-search (concat "→ " (directory-file-name drgnx-install-test--root)) (cdr r)))
     (should (string-search (concat "Link " (directory-file-name drgnx-install-test--root)) (cdr r)))))
 
-(defun drgnx-install-test--signed-mirror (tmp)
-  "TMP/mirror: an emacs-31.1.tar.xz signed by a throwaway key, its .sig and the key as keyring.  Returns
-the key's fingerprint."
-  (let ((gnupg (expand-file-name "g" tmp)) (mirror (expand-file-name "mirror" tmp))
-        (sh (lambda (&rest args) (should (= 0 (apply #'call-process "sh" nil nil nil "-c" args))))))
-    (dolist (d (list gnupg mirror (expand-file-name "src/emacs-31.1" tmp))) (make-directory d t))
-    (set-file-modes gnupg #o700)
-    (funcall sh (format "tar -C %s/src -cJf %s/emacs-31.1.tar.xz emacs-31.1" tmp mirror))
-    (funcall sh (format "gpg --homedir %s --batch --passphrase '' --quick-gen-key 'drgnx test <test@drgnx.invalid>' default default never 2>/dev/null" gnupg))
-    (funcall sh (format "gpg --homedir %s --batch --pinentry-mode loopback --passphrase '' --detach-sign -o %s/emacs-31.1.tar.xz.sig %s/emacs-31.1.tar.xz 2>/dev/null" gnupg mirror mirror))
-    (funcall sh (format "gpg --homedir %s --export >%s/keyring 2>/dev/null" gnupg mirror))
-    (prog1 (with-temp-buffer
-             (call-process "gpg" nil t nil "--homedir" gnupg "--batch" "--with-colons" "--list-keys")
-             (goto-char (point-min))
-             (re-search-forward "^fpr:+\\([0-9A-F]+\\):")
-             (match-string 1))
-      (call-process "gpgconf" nil nil nil "--homedir" gnupg "--kill" "all"))))
-
-(ert-deftest drgnx-install/only-the-release-key-is-trusted ()
-  ;; M2.5-5: a good signature by any key of the keyring is not enough — it must be the key that signs the
-  ;; release (DRGNX_INSTALL_SIGNER overrides the published one here).
-  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
-  (skip-unless (executable-find "gpg"))
-  (let* ((tmp (make-temp-file "drgnx-install" t))
-         (bin (expand-file-name "bin" tmp)) (prefix (expand-file-name "prefix" tmp)))
-    (unwind-protect
-        (let ((signer (drgnx-install-test--signed-mirror tmp)))
-          (make-directory bin)
-          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
-          (set-file-modes (expand-file-name "sudo" bin) #o755)
-          (dolist (want (list "0123456789ABCDEF0123456789ABCDEF01234567" signer))
-            (let ((r (drgnx-install-test--run
-                      (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44"))
-                            "DRGNX_INSTALL_UNAME=Linux" (concat "DRGNX_INSTALL_SIGNER=" want)
-                            (concat "DRGNX_INSTALL_MIRROR=file://" tmp "/mirror")
-                            (concat "DRGNX_INSTALL_KEYRING=file://" tmp "/mirror/keyring")
-                            (concat "XDG_CACHE_HOME=" tmp "/cache")
-                            (concat "PATH=" bin ":" (getenv "PATH")))
-                      "--yes" "--method" "source" "--prefix" prefix "--source-dir" drgnx-install-test--root)))
-              (should (= (car r) 1))
-              (if (equal want signer)          ; past the check: the first root step (fake sudo refuses it)
-                  (should (string-search "FAKE-SUDO dnf install" (cdr r)))
-                (should (string-search "not by the key that signs Emacs releases" (cdr r)))
-                (should (string-search "nothing was installed" (cdr r)))
-                (should-not (string-search "As root:" (cdr r)))
-                (should-not (directory-files (expand-file-name "cache/drgnx/build" tmp) nil "\\.tar\\.xz"))))))
-      (delete-directory tmp t))))
-
-(ert-deftest drgnx-install/debian-source-lists-are-mirrored-and-always-removed ()
-  ;; Linux Mint keeps its archives in a one-line .list; build-dep needs deb-src for them.  When a step
-  ;; fails, drgnx's deb-src list is removed anyway.  A tarball signed by a throwaway key gets past the
-  ;; signature check; fake sudo runs the command, fake apt-get records what build-dep would see, then fails.
-  (skip-unless (/= 0 (user-uid)))
-  (skip-unless (executable-find "gpg"))
-  (let* ((tmp (make-temp-file "drgnx-install" t))
-         (mirror (expand-file-name "mirror" tmp))
-         (apt (expand-file-name "apt" tmp)) (bin (expand-file-name "bin" tmp))
-         (log (expand-file-name "apt-get.log" tmp)))
-    (unwind-protect
-        (let ((signer (drgnx-install-test--signed-mirror tmp)))
-          (dolist (d (list bin (expand-file-name "sources.list.d" apt)))
-            (make-directory d t))
-          (write-region "" nil (expand-file-name "sources.list" apt))
-          (write-region "deb http://packages.linuxmint.com zena main upstream\ndeb http://archive.ubuntu.com/ubuntu noble main\n"
-                        nil (expand-file-name "sources.list.d/official-package-repositories.list" apt))
-          (write-region "#!/bin/sh\nexec \"$@\"\n" nil (expand-file-name "sudo" bin))
-          (write-region (format "#!/bin/sh\necho \"apt-get $*\" >>%s\ncase \"$*\" in *build-dep*) cat %s/sources.list.d/drgnx-deb-src.* >>%s; exit 100 ;; esac\nexit 0\n"
-                                log apt log)
-                        nil (expand-file-name "apt-get" bin))
-          (dolist (f '("sudo" "apt-get")) (set-file-modes (expand-file-name f bin) #o755))
-          (let ((r (drgnx-install-test--run
-                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "linuxmint"))
-                          "DRGNX_INSTALL_UNAME=Linux" (concat "DRGNX_INSTALL_SIGNER=" signer)
-                          (concat "DRGNX_INSTALL_MIRROR=file://" mirror)
-                          (concat "DRGNX_INSTALL_KEYRING=file://" mirror "/keyring")
-                          (concat "DRGNX_INSTALL_APT_DIR=" apt)
-                          (concat "XDG_CACHE_HOME=" tmp "/cache")
-                          (concat "PATH=" bin ":" (getenv "PATH")))
-                    "--yes" "--method" "source" "--prefix" (expand-file-name "prefix" tmp)
-                    "--source-dir" drgnx-install-test--root)))
-            (should (/= (car r) 0))
-            (should (string-search "Good signature" (cdr r)))
-            (let ((seen (with-temp-buffer (insert-file-contents log) (buffer-string))))
-              (should (string-search "deb-src http://packages.linuxmint.com zena main upstream" seen))
-              (should (string-search "deb-src http://archive.ubuntu.com/ubuntu noble main" seen)))
-            (should-not (directory-files (expand-file-name "sources.list.d" apt) nil "\\`drgnx-deb-src"))
-            (should-not (file-exists-p (expand-file-name "prefix/bin/emacs" tmp)))))
-      (delete-directory tmp t))))
-
 (ert-deftest drgnx-install/build-jobs-fit-in-memory ()
   ;; Native compilation runs one Emacs per make job: one job per CPU on a big machine starved the host of
   ;; memory (systemd-oomd killed the desktop session).  At most one job per 1.5 GiB of available memory.
   (cl-flet ((plan (cpus mem-kb)
-              (drgnx-install-test--plan "fedora-44" "--method" "source" (format "DRGNX_INSTALL_NPROC=%d" cpus)
+              (drgnx-install-test--plan "fedora-44" (format "DRGNX_INSTALL_NPROC=%d" cpus)
                                         (format "DRGNX_INSTALL_MEMORY_KB=%d" mem-kb))))
     (drgnx-install-test--expect (plan 16 (* 6 1024 1024)) "make -j4 ")
     (drgnx-install-test--expect (plan 16 (* 64 1024 1024)) "make -j16 ")
@@ -888,21 +675,6 @@ the key's fingerprint."
     (should-not (string-search "emacs-plus" out))
     (should-not (string-search "refresh drgnx.service" out))))
 
-(ert-deftest drgnx-install/no-nidhogg-recipe-installs-stock-and-says-so ()
-  (drgnx-install-test--expect (drgnx-install-test--plan "debian-13")
-                              "Nidhogg has no build recipe for" "GNU Emacs 31.1 is installed instead (drgnx doctor warns about it)"
-                              "build GNU Emacs 31.1 from source")
-  (drgnx-install-test--expect (drgnx-install-test--plan "arch") "Nidhogg has no build recipe" "pacman -Syu")
-  ;; ID=ubuntu exactly: a derivative has no recipe
-  (drgnx-install-test--expect (drgnx-install-test--plan "linuxmint") "Nidhogg has no build recipe"))
-
-(ert-deftest drgnx-install/method-nidhogg-without-a-recipe-is-refused ()
-  (let ((r (drgnx-install-test--plan "debian-13" "--method" "nidhogg")))
-    (should (= (car r) 2))
-    (should (string-search "no Nidhogg build recipe for" (cdr r)))
-    (should (string-search "docs/guide/install.md" (cdr r)))
-    (should-not (string-search "1. Emacs" (cdr r)))))
-
 (ert-deftest drgnx-install/a-current-nidhogg-is-kept ()
   (drgnx-install-test--with-tmp tmp
     (let ((r (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.1")))))
@@ -924,8 +696,9 @@ the key's fingerprint."
       (let ((out (cdr (drgnx-install-test--plan "fedora-44" emacs "--method" "keep"))))
         (should (string-search "keep the installed Emacs 31.1" out))
         (should-not (string-search "build Nidhogg" out)))
-      ;; no recipe: the stock Emacs is kept, as before
-      (drgnx-install-test--expect (drgnx-install-test--plan "debian-13" emacs) "keep the installed Emacs 31.1"))))
+      ;; no recipe: a stock Emacs is not a reason to go on, only --method keep does
+      (should (= 1 (car (drgnx-install-test--plan "debian-13" emacs))))
+      (drgnx-install-test--expect (drgnx-install-test--plan "debian-13" emacs "--method" "keep") "keep the installed Emacs 31.1"))))
 
 (ert-deftest drgnx-install/low-memory-shrinks-or-refuses ()
   (drgnx-install-test--with-tmp tmp
@@ -963,8 +736,13 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
              "for n in nidhogg emacs nidhoggclient; do\n"
              "  if [ -n \"$NH_BROKEN\" ]; then printf '#!/bin/sh\\nexit 127\\n' > \"$P/bin/$n\"\n"
              "  else printf '#!/bin/sh\\necho \"31.1 t pgtk 31.1-nidhogg.1\"\\n' > \"$P/bin/$n\"; fi\n"
-             "  chmod +x \"$P/bin/$n\"\ndone\n"))
-    (dolist (f '(("fedora-44.runtime" . "# runtime\nlibfoo\nlibbar\n") ("fedora-44.build" . "# build\n\nlibbuildfoo\nlibbuildbar\n")))
+             "  chmod +x \"$P/bin/$n\"\ndone\n"
+             ;; and the macOS layout (Nidhogg.app)
+             "A=\"$P/Nidhogg.app/Contents/MacOS\"; mkdir -p \"$A/bin\"\n"
+             "printf '#!/bin/sh\\necho \"31.1 t ns 31.1-nidhogg.1\"\\n' > \"$A/Emacs\"; chmod +x \"$A/Emacs\"\n"
+             "cp \"$A/Emacs\" \"$A/bin/emacsclient\"\n"))
+    (dolist (f '(("fedora-44.runtime" . "# runtime\nlibfoo\nlibbar\n") ("fedora-44.build" . "# build\n\nlibbuildfoo\nlibbuildbar\n")
+                 ("macos.build" . "# build\nlibmacfoo\n")))
       (write-region (cdr f) nil (expand-file-name (concat "nidhogg/deps/" (car f)) repo)))
     (funcall git "init" "-q")
     (funcall git "add" "-A")
@@ -980,6 +758,10 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
                 (concat "DRGNX_DATA_DIR=" home "/.local/share/drgnx") (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
                 (concat "XDG_CACHE_HOME=" tmp "/cache") (concat "PATH=" bin ":" (getenv "PATH")))
           (with-temp-buffer (call-process "git" nil t nil "-C" repo "rev-parse" "HEAD") (string-trim (buffer-string))))))
+
+(defun drgnx-install-test--macos-env (fixture)
+  "The environment of FIXTURE for a run on macOS 15.4 instead of Fedora 44 (the first entry of a name wins)."
+  (append drgnx-install-test--macos (list (concat "DRGNX_INSTALL_NIDHOGG_COMMIT=" (cdr fixture))) (car fixture)))
 
 (defun drgnx-install-test--nidhogg-run (tmp fixture &optional env commit)
   "Run install.sh --yes in the fixture of TMP with ENV added; COMMIT overrides the pinned one."
