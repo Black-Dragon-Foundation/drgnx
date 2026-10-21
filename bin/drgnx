@@ -251,6 +251,15 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     case "$resdir" in *:*) echo "drgnx: DRGNX_PERF_RESULTS must not be under a directory with ':' (it is mounted with -v): $resdir" >&2; return 2 ;; esac
     args+=(-v "$resdir:/out" -e "DRGNX_PERF_RESULTS=/out/$(basename "$res")")
   fi
+  # Ratatoskr for the client's binary tests: one in this checkout is seen at /src, any other is mounted read-only
+  if [ -n "${DRGNX_RATATOSKR_BIN:-}" ] && [ -x "$DRGNX_RATATOSKR_BIN" ]; then
+    local rbin; rbin="$(cd "$(dirname "$DRGNX_RATATOSKR_BIN")" && pwd -P)/$(basename "$DRGNX_RATATOSKR_BIN")"
+    case "$rbin" in
+      "$(cd "$here" && pwd -P)"/*) args+=(-e "DRGNX_RATATOSKR_BIN=/src/${rbin#"$(cd "$here" && pwd -P)"/}") ;;
+      *:*) echo "drgnx: DRGNX_RATATOSKR_BIN must not contain ':' (it is mounted with -v): $rbin" >&2; return 2 ;;
+      *) args+=(-v "$rbin:/opt/ratatoskr/ratatoskr:ro" -e DRGNX_RATATOSKR_BIN=/opt/ratatoskr/ratatoskr) ;;
+    esac
+  fi
   args+=(-e DRGNX_LEASE=off)   # the host's lease is not the container's: one run owns it
   # the image's own Emacs, named: drgnx never falls back to a bare `emacs' (Nidhogg, which test/container/nidhogg.sh links
   # into /usr/local/bin; the Containerfiles' ENV names the same build)

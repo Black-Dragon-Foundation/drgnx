@@ -590,10 +590,10 @@ about) and keeps the tests within their time limits."
                         (shell-command-to-string (format "ps -ww -o command= -p %d" pid)))))
       (should (/= pid (emacs-pid)))
       (should (string-search "drgnx-hub-main" cmdline))
-      ;; keys sent over the socket: in the hub's memory only
+      ;; a Lisp hub of protocol 0 (no proof): the register goes, its keys stay here
       (let ((r (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :keys '(:openrouter "sk-sock-only")))))
-        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
-        (should (string-search "Bearer sk-sock-only" (with-temp-buffer (insert-file-contents or-log) (buffer-string)))))
+        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
+        (should-not (file-exists-p or-log)))                ; nothing reached the provider
       (should-not (string-search "sk-sock" cmdline))
       (dolist (f (directory-files-recursively root "" nil))
         (unless (or (equal (file-name-nondirectory f) "or.log") (not (file-regular-p f)))   ; the socket, without XDG_RUNTIME_DIR
@@ -626,37 +626,39 @@ about) and keeps the tests within their time limits."
     (drgnx-hub-disconnect)
     (drgnx-hub-stop)
     (clrhash drgnx-gateway--keys)
-    ;; a real hub, started by an Emacs that has the key: not in its environment, yet its agents' requests carry it
+    ;; a real hub, started by an Emacs that has the key: not in its environment.  It is a Lisp hub of protocol 0 (no
+    ;; challenge, no proof): the client never hands it the key over the socket either (keys go only to a hub that
+    ;; proved itself), so its agents' requests carry none
     (should (= (drgnx-hub-test--start-elsewhere "OPENROUTER_API_KEY=sk-fake-env") 0))
     (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
            (environ (with-temp-buffer (set-buffer-multibyte nil)
                                       (insert-file-contents-literally (format "/proc/%d/environ" pid)) (buffer-string))))
       (let ((leaked (and (string-search "sk-fake-env" environ) t))) (should-not leaked))   ; (never the environment printed)
       (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
-        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
-        (should (string-search "Bearer sk-fake-env" (with-temp-buffer (insert-file-contents or-log) (buffer-string))))))))
+        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
+        (should-not (file-exists-p or-log))))))             ; nothing reached the provider
 
 (ert-deftest drgnx-hub/an-editor-gives-its-keys-again-to-a-restarted-hub ()
-  ;; a key this Emacs loaded (a .gpg file: in no environment) lives in the hub's memory only: a restarted hub has
-  ;; none until the editor connects again, which hands it over again
+  ;; a key this Emacs loaded (a .gpg file: in no environment) goes over the socket only to a hub that proved itself.
+  ;; The hub started elsewhere is a Lisp hub of protocol 0 (no challenge): it gets the editor's calls, but neither
+  ;; on the first connection nor after a restart a key (keys again after a restart, over Ratatoskr: Task 18)
   (drgnx-hub-test--with
     (puthash 'openrouter "sk-fake-loaded" drgnx-ai--keys)
     (should (= (drgnx-hub-test--start-elsewhere) 0))
     (drgnx-hub-connect)
     (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
     (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
-      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+      (should (eq drgnx-hub--last-hello :legacy))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
       (drgnx-hub-call-sync "shutdown" nil)
       (should (drgnx-hub-test--wait (lambda () (not (process-live-p drgnx-hub--events))) 5))
       (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5))
       (should (= (drgnx-hub-test--start-elsewhere) 0))
-      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))   ; the same token: no key yet
       (drgnx-hub-connect)                                                               ; (the editor's idle timer)
       (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
       (drgnx-hub-call-sync "ping" nil)
-      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
-      (should (= (with-temp-buffer (insert-file-contents or-log) (how-many "Bearer sk-fake-loaded" (point-min) (point-max)))
-                 2)))))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))
+      (should-not (file-exists-p or-log)))))                ; nothing reached the provider
 
 (defun drgnx-hub-test--sigpipe-ignored-p ()
   "Does this Emacs ignore SIGPIPE, as every hub does (Linux: SigIgn in /proc/self/status)?"
@@ -710,6 +712,11 @@ about) and keeps the tests within their time limits."
                                                   (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n"))))
              (current-buffer)))
     (delete-process mock) (setq mock (drgnx-ai-test-mock-llm or-port (concat root "or.eld") or-log))
+    ;; a provider that needs no key: the hub started here is of protocol 0, which never gets this Emacs's keys
+    (with-temp-file (concat root "config/ai.eld")
+      (prin1 `(:version 1 :providers ((openrouter :name "OR" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
+                                                  :caps (chat) :messages t)))
+             (current-buffer)))
     (should (= 0 (call-process "sh" nil nil nil "-c" "trap - PIPE; exec \"$0\" \"$@\""
                                (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub"

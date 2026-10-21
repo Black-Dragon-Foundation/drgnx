@@ -29,6 +29,18 @@
 
 (defun drgnx-agents-mirror--fetching-p (id) (not (eq (gethash id drgnx-agents-mirror--fetching :none) :none)))
 
+(defvar drgnx-agents-mirror--paused nil
+  "Non-nil while the hub sends its sessions in another record layout (`drgnx-hub-records'): nothing is mirrored then,
+so a mirror never reads a record it would misread.  A hub of this drgnx's layout (after a restart) is mirrored again.")
+
+(defun drgnx-agents-mirror--skew (_skew reply)
+  "The hub said hello with REPLY (`drgnx-hub-skew-functions'): mirroring pauses while its `records' differ."
+  (let ((paused (and (consp reply) (not (eql (plist-get reply :records) drgnx-hub-records)))))
+    (when (and paused (not drgnx-agents-mirror--paused))
+      (message "drgnx: the agent hub is another drgnx (records %s, not %d): its sessions are not mirrored until it restarts"
+               (plist-get reply :records) drgnx-hub-records))
+    (setq drgnx-agents-mirror--paused paused)))
+
 (defun drgnx-agents-mirror--decode (schema json)
   "The record SCHEMA describes, from JSON the hub sent (parsed), as a one-element list; nil if it does not decode.
 One damaged record from the hub is skipped (and said so), never allowed to stop the records after it."
@@ -76,7 +88,7 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
 
 (defun drgnx-agents-mirror--event (event data)
   "An event from the hub (`drgnx-hub-event-functions')."
-  (when (member event '("agent" "agent-entries"))
+  (when (and (member event '("agent" "agent-entries")) (not drgnx-agents-mirror--paused))
     (let ((id (plist-get data :id)) (seq (or (plist-get data :seq) 0)))
       (cond
        ;; a transcript on its way: the event waits for it
@@ -107,6 +119,7 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
   "Mirror the hub's agent sessions here, and keep them current.  Asynchronous; never starts a hub."
   (add-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)
   (add-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
+  (add-hook 'drgnx-hub-skew-functions #'drgnx-agents-mirror--skew)
   (drgnx-hub-connect)
   (drgnx-hub-call "agents/list" nil
                   (lambda (r _err)
@@ -114,12 +127,14 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
                             (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session json)))
                               (pcase-let ((`(,m . ,_) (drgnx-agents-mirror--apply-snapshot (car snap))))
                                 (drgnx-agents-mirror--fetch m))))
-                          (plist-get r :sessions)))))
+                          (and (not drgnx-agents-mirror--paused) (consp r) (plist-get r :sessions))))))
 
 (defun drgnx-agents-mirror-stop ()
   "Stop mirroring (the mirrors stay as they are)."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)
   (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
+  (remove-hook 'drgnx-hub-skew-functions #'drgnx-agents-mirror--skew)
+  (setq drgnx-agents-mirror--paused nil)
   (clrhash drgnx-agents-mirror--fetching)
   (clrhash drgnx-agents-mirror--seq))
 

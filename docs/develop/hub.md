@@ -221,8 +221,8 @@ One hub per socket: a second finds the first answering `ping`, or holding the lo
 made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket); a hub that cannot start for any other
 reason exits with status 1. A
 lock whose process is gone (or a zombie) is taken over. A hub removes its socket and lock when it stops, and only if
-the lock is still its own. Client side: `drgnx-hub-ensure` (start if needed; commands and the CLI only — it waits),
-`drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` (one subscription, even when called
+the lock is still its own. Client side ([The client](#the-client)): `drgnx-hub-ensure` (start if needed; commands and
+the CLI only — it waits), `drgnx-hub-call` (asynchronous, with a deadline), `drgnx-hub-call-sync`, `drgnx-hub-connect` (one subscription, even when called
 again before the hub answers — up to `drgnx-hub-subscribe-deadline`, 5 s, after which an unanswered one is given up
 and the next call subscribes again; each new one hands over the keys this Emacs holds) + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
@@ -400,6 +400,77 @@ open:
 
 Phase 1 reaps only the backend's group. An agent of a SIGKILLed backend that is not in that group survives outside
 systemd until phases 5 and 6 move agents into Ratatoskr (review I15).
+
+## The client
+
+`core/drgnx-hub-client.el` is what editors, the CLI and the coordination servers load to talk to the hub; it speaks
+protocol v1 to Ratatoskr ([hello and versions](#hello-and-versions)) and protocol 0 to a Lisp hub of before it.
+
+**`(drgnx-hub-call METHOD PARAMS CALLBACK &key DEADLINE FULL)`** returns the call's id. CALLBACK gets `(RESULT
+ERROR)` **exactly once**: the answer, or `(nil "…")` when DEADLINE passes (`drgnx-hub-call-deadline`, 30 s; a layer
+timer `(hub-call . ID)`) or the connection goes first. ERROR is the hub's message; with FULL it is the error object
+`(:code :message :path)`. A call answered after its deadline, or one failed by a closed connection, is never called
+back again. `drgnx-hub-call-sync` (commands and the CLI only) waits for the same callback, its TIMEOUT the deadline.
+
+**A new connection** proves itself before any call goes:
+1. **This Emacs serves the socket** (`drgnx-hub--server` is live on the same path: the Lisp hub's own tests, where
+   keys never leave the process): the connection is proven at once. Nothing is sent first and nothing is waited for.
+2. Otherwise it **waits for the hub's challenge**, at most 2 s (a layer timer `(hub-challenge . CONNECTION)`), and
+   sends a `ping` at once. Ratatoskr's challenge is always its first line, so a ping answered first means a hub of
+   before protocol 1: that one is `legacy` at once, without the 2 s wait. No line at all within 2 s is `legacy` too.
+3. On the challenge it sends **`hello`**: `proto` 1, a fresh `nonce`, `drgnx_version` (the commit of the binary on
+   disk, `drgnx-hub-client-binary-version`, when it is known), `schema` (`drgnx-work-db-schema-version`), `records` 2,
+   `client` (`"cli"` in a batch Emacs, else `"editor"`) and `proof`: `HMAC-SHA256(cap, "drgnx-hub client " +
+   HUB_NONCE + " " + nonce)`, the cap read from `hub-HASH.cap` beside the socket with `drgnx-file-read-bounded` (256
+   bytes). Calls made meanwhile wait in the connection's queue, in order.
+4. **The answer:** the hub's `proof` must be `HMAC-SHA256(cap, "drgnx-hub hub " + nonce + " " + HUB_NONCE)`
+   (compared as SHA-256 digests). Then the connection is **proven** and the queued calls go out. A missing or wrong
+   proof closes the connection, fails the queued calls once with "the hub at SOCKET did not prove it read CAP-FILE",
+   and tells the user (a `fail` notice of source `hub`, id `unproven`). A refused hello, or a cap this Emacs cannot
+   read, closes it the same way (without the notice). A hello answered `no method hello` is `legacy`.
+
+**Keys go only to a hub that proved itself** (or this Emacs's own): on any other connection, a `legacy` one or a
+service one, `gateway/keys` is never written (its callback gets "keys go only to a hub that proved itself") and
+`gateway/register` goes without its `keys`. A legacy hub otherwise gets every call as before.
+
+**`drgnx-hub-client-proves`** (default t): nil sends the hello without a proof and never reads the cap, so the
+connection stays `service`. `drgnx-coord-mcp-main` binds it to nil: a coordination server an agent started must never
+become `user` class by reading the cap file. Its other hub client, `drgnx-coord-mcp--notify-hub`, writes a raw
+`coord/notify` notification and reads nothing; a service connection may send it.
+
+**Skew.** `drgnx-hub--last-hello` keeps the last answer (a plist, or `:legacy`); `(drgnx-hub-has-method-p NAME)`
+reads its `methods`. `(drgnx-hub-skew REPLY)` is:
+
+| Reply | Skew |
+|---|---|
+| `:legacy` (no challenge, or `no method hello`) | `restart-when-idle` |
+| `proto` missing or below `drgnx-hub-proto-min`, or `proto_min` above `drgnx-hub-proto` | `incompatible`: the connection is closed, its calls fail, an editor tells the user |
+| `records` other than 2; `drgnx_version` other than the binary on disk's commit (when that is known); `schema` other than `drgnx-work-db-schema-version` (0, no work.db yet, counts as the same) | `restart-when-idle` |
+| anything else | `ok` |
+
+`drgnx-hub-skew-functions` gets `(SKEW REPLY)` after each hello, inside the guard. The agents mirror pauses while
+`records` differs (`drgnx-agents-mirror--paused`): it reads no session or entry it could misread. What an editor does
+about `restart-when-idle` (the notice, **Hub: Restart Now**) is the next task's; the client restarts nothing.
+
+**`(drgnx-hub-client-binary)`**: `DRGNX_RATATOSKR_BIN` when it is an absolute name of an executable file, else
+`<data>/bin/ratatoskr` when it is one, else nil. **`(drgnx-hub-client-binary-version &optional CACHED-ONLY)`**: its
+`version --json` `commit`, read by an asynchronous process bounded at 2 s and cached by the file's name and
+modification time. CACHED-ONLY (the hello and the skew run in a filter: a daemon path) never waits: the cached value,
+or nil while a read started then runs.
+
+**Probes.** `drgnx-hub--ping-socket` (`drgnx-hub-running-p`) sends a raw `ping` and reads lines until one is not an
+event, so Ratatoskr's challenge is skipped. It sends no hello: a probe is `service` class, which `ping` allows.
+
+**The line reader** (`drgnx-hub--lines`, client and Lisp hub alike) searches only the chunk that came for a newline.
+The start of a line still open waits in a list of pieces, joined once its newline comes, so a 16 MiB snapshot in 8 KB
+chunks costs its length, not its length times its chunks (HUB-LINES-1, PERF-M3).
+
+**Tests:** `test/unit/hub-client-test.el` (prefix `drgnx-hub-client/`). Fake hubs that lie (a wrong proof, no proof,
+protocol 0, a held hello) are in `test/fixtures/fake-hub.el`. The tests marked "binary" run against Ratatoskr:
+`DRGNX_RATATOSKR_BIN` names it (`bin/drgnx test --container` passes it into the container), they skip without it,
+and `test/no-skip.eld` makes CI fail when they skip. Among them, `editor-traffic-over-ratatoskr` replays what the
+cockpit, the job UI, the agents mirror and `drgnx job` send, with the params their own code builds, over a populated
+store, and fails on any `invalid-params` or `internal`.
 
 ## Events
 

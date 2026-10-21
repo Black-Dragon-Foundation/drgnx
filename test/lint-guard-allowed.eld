@@ -20,7 +20,6 @@
  (:file "core/drgnx-hub-client.el" :form make-network-process :near "drgnx-hub--ping-socket" :why "the probe of a running hub" :until 18)
  (:file "core/drgnx-hub.el" :form make-network-process :near "drgnx-hub-serve" :why "the hub's clients' requests" :until 18)
  (:file "core/drgnx-hub-client.el" :form make-network-process :near "drgnx-hub--connect-socket" :why "a client connection's filter, handed in by the caller" :until 18)
- (:file "core/drgnx-hub-client.el" :form set-process-sentinel :near "drgnx-hub-connect" :why "the event subscription's end (its hook runs through drgnx-guard-run-hook)" :until 18)
  (:file "core/drgnx-job-snapshot.el" :form make-process :near "drgnx-job-snapshot--run" :why "a job snapshot's commands" :until 18)
  (:file "core/drgnx-job-worktree.el" :form make-process :near "drgnx-job-worktree--run" :why "a job worktree's commands" :until 18)
  (:file "core/drgnx-mcp-bridge.el" :form make-network-process :near "drgnx-mcp-bridge-main" :why "the MCP bridge's hub socket (a batch Emacs)" :until 18)
