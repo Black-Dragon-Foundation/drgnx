@@ -30,6 +30,27 @@ The echo is polite:
 
 Every line also lands in `*Messages*`. Turn the echo off with `drgnx-notice-echo-mode`.
 
+## The two counts
+
+The mode line shows up to two counts. `◐ N waiting on you` is the number of different things that wait for you (an
+agent's question, an edit to review, a job's card); a thing two places hold counts once. `✕ F ⚠ W` is the number of
+problems now: `✕` for what does not work, `⚠` for what drgnx works around (information is not counted). Click the
+first to act on the newest thing when everything waiting comes from one place, or to open the list; click the
+second to open the list.
+
+## The Notices list
+
+**View → Show Notices** (or the palette) opens `*drgnx Notices*` in the bottom panel, in three sections:
+
+- **Needs you (N):** what waits on you. Each row has the button that takes you there. It goes when its source stops
+  holding it, so it has no Dismiss.
+- **Problems (✕ F ⚠ W):** what is wrong now, newest first, with what to do about it. **Dismiss** hides a problem
+  until it comes back with other text.
+- **Recent:** what happened lately, newest first (a repeat shows as `×N`). **Dismiss** hides an event.
+
+An empty section says "Nothing here." The list follows changes by itself; `g` draws it again. The command
+`notices` has no key: it is in the palette and behind the counts.
+
 ## On the desktop
 
 Everything that waits on you — an agent asking for permission, an edit to review, a question, a job's card — is

@@ -21,6 +21,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-modules-record)
+(require 'drgnx-notice)
 (require 'drgnx-timer)
 (require 'drgnx-state)                 ; also `drgnx-signal-delay' and `drgnx-signal-errors'
 
@@ -121,6 +122,10 @@ Set by the raw-hook functions below; a flush with the mode off rebuilds both.")
   (drgnx-signal--schedule))
 
 (defvar drgnx-signal-mode)
+
+(defun drgnx-signal--notices-changed (_change)
+  "On the notice model's `now' lane: post `notices-changed' for the bus's followers (the idle lane)."
+  (drgnx-signal-post 'notices-changed))
 
 (defun drgnx-signal--flush ()
   "The idle flush: observe the selected frame (`drgnx-state-sync') and make the store's waiting idle calls,
@@ -287,6 +292,9 @@ lane shares the flush."
   :global t :group 'drgnx
   (pcase-dolist (`(,hook . ,fn) drgnx-signal--hooks)
     (if drgnx-signal-mode (add-hook hook fn) (remove-hook hook fn)))
+  (if drgnx-signal-mode
+      (add-hook 'drgnx-notice-functions #'drgnx-signal--notices-changed)
+    (remove-hook 'drgnx-notice-functions #'drgnx-signal--notices-changed))
   (pcase-dolist (`(,event . ,fn) drgnx-signal--store-events)
     (if drgnx-signal-mode (drgnx-state-subscribe event fn :lane 'now) (drgnx-state-unsubscribe event fn)))
   (setq drgnx-signal--seen-buffer nil drgnx-signal--switched nil)

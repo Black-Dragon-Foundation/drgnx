@@ -624,6 +624,29 @@ line over the `fail` conditions present. A single line names the item's `:comman
 command's key; a merged line and the startup line name the Notices list and its key. Lines go out as
 `(let ((message-truncate-lines t)) (message "%s" LINE))`.
 
+**The list and the mode-line pair** (`core/drgnx-notices.el`). `(drgnx-notices-show)` (command `notices`) pops to
+`*drgnx Notices*`, in `drgnx-notices-mode` (a `special-mode`; `g` redraws). It is drawn through the render
+pipeline's views (`wb/drgnx-view.el`, required when the list is first shown, so the rest of the file needs nothing
+in `wb/`): the view type `notices-list` has a row per key (a heading, a "Nothing here." line or a notice), its SYNC
+rebuilds the three sections (Needs you, Problems = conditions, Recent = events, newest first) and
+`drgnx-view-sync-rows` patches only the rows whose notice (or repeat count) changed. A row is the status glyph, the
+source title (`shadow`), the text and `×N`; then the `:fix` (`drgnx-status-info`); then a button for `:command` (the
+registry title, else the command's name; `(FN . ARGS)` runs as `(apply FN ARGS)`) and, for events and conditions, a
+Dismiss button. The list follows the model on the `now` lane with `drgnx-notices--changed`, which only starts the
+idle timer `notices-list` (0.1 s, `:core`); the timer marks the view. Showing the list adds the function to
+`drgnx-notice-functions`; killing the buffer removes it and cancels the timer. `notices-dismiss` (map
+`drgnx-notices-mode-map`) dismisses the row at point; an attention row is refused. `core/workbench` places the
+buffer in the panel; `drgnx-signal-mode` posts the bus event `notices-changed` (idle lane) from the same hook, for
+followers in `wb/` and modules.
+
+`drgnx-notice-mode-line-mode` (on in `drgnx-init`) puts `(:eval (drgnx-notice-mode-line))` in
+`global-mode-string` and calls `force-mode-line-update` on each change. `drgnx-notice-needs-you-text` (`◐ N waiting
+on you`), `drgnx-notice-problems-text` (`✕ F`, `⚠ W` or both) and `drgnx-notice-mode-line` (the two joined) are
+memoised on the model's tick, the glyph table and the model's table (`eq`), so a read allocates nothing; each is a
+`mode-line` button (`drgnx-ui-button`). A click on the needs-you count runs `drgnx-notice-needs-you-click`: with
+every item from one source it does what the newest item's `:command` says, else it opens the list; the problems
+count opens the list.
+
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
 which three items change and three ids come and go, then reading the count, 250 conses (gated at 275; the wall
