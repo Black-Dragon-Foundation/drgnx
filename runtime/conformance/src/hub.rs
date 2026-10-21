@@ -261,13 +261,6 @@ impl Hub {
         })
     }
 
-    pub fn socket_dir(&self) -> PathBuf {
-        self.socket
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default()
-    }
-
     pub fn cap(&self) -> PathBuf {
         self.socket.with_extension("cap")
     }
@@ -688,11 +681,15 @@ impl Conn {
         }
     }
 
-    pub fn expect_closed(&mut self, within: Duration) -> Result<(), String> {
+    /// The connection is closed within WITHIN; SILENT: with no line before (a refusal answers nothing).
+    pub fn expect_closed(&mut self, within: Duration, silent: bool) -> Result<(), String> {
         let deadline = Instant::now() + within;
         loop {
             match self.fetch(deadline.saturating_duration_since(Instant::now())) {
                 Ok(None) => return Ok(()),
+                Ok(Some(line)) if silent => {
+                    return Err(format!("a line arrived before the close: {line}"));
+                }
                 Ok(Some(line)) => self.buf.push_back(line),
                 Err(_) => {
                     return Err(format!(

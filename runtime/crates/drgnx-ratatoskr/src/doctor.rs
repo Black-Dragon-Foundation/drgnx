@@ -1,12 +1,17 @@
 //! The commands that ask a running hub (or the machine) something: `status`, `doctor --json` and `restart`.
 //!
 //! `doctor --json` is
-//! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, socket_dir: {path, mode, ok}, sqlite, job_agents}`.
+//! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, socket_dir: {path, mode, ok}, sqlite, job_agents,
+//! sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use}}`. `sandbox` is the job sandbox's check
+//! (`gleipnir::check`), `in_use` false until phase 6.
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet
 //! (the hub makes it private at its first start); `mode` is then null.
 
 use crate::client::{self, Client};
 use crate::front::JOB_AGENTS;
+use crate::sandbox;
+use gleipnir::Tier;
+use gleipnir::check::Check;
 use runstav::paths::{self, Env};
 use serde_json::{Value, json};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -20,6 +25,8 @@ const ASK: Duration = Duration::from_secs(5);
 /// so a slow hub is reported as running, not as a binary that gave no answer.
 const DOCTOR_ASK: Duration = Duration::from_millis(1500);
 const DOCTOR_PING: Duration = Duration::from_millis(300);
+/// The sandbox check inside `doctor`, run beside the hub ask: a slow probe is reported as one that did not finish.
+const DOCTOR_CHECK: Duration = Duration::from_millis(1400);
 // core/drgnx-doctor.el waits 2 s for `doctor --json`; the ask leaves room for the backend's 1 s status
 const _: () = assert!(DOCTOR_ASK.as_millis() + DOCTOR_PING.as_millis() < 2000);
 const _: () = assert!(DOCTOR_ASK.as_millis() > crate::backend::STATUS_DEADLINE.as_millis());
@@ -46,8 +53,45 @@ fn socket_dir(socket: &Path, uid: u32) -> Value {
     }
 }
 
+/// The job sandbox section: what the check found. `in_use` is false until jobs run in it (phase 6).
+fn sandbox_section(c: &Check) -> Value {
+    json!({
+        "backend": c.backend.name(),
+        "version": c.version,
+        "ok": c.ok,
+        "reason": c.reason,
+        "fix": c.fix,
+        "landlock_abi": c.landlock_abi,
+        "in_use": false,
+    })
+}
+
+/// The doctor's text line about the sandbox. It says what works here and that jobs do not use it yet; it never says a
+/// job is "sandboxed".
+pub fn sandbox_line(c: &Check) -> String {
+    if c.ok {
+        let name = match &c.version {
+            Some(v) => format!("{} {v}", c.backend.name()),
+            None => c.backend.name().to_string(),
+        };
+        format!(
+            "job sandbox backend: {name} works here ({}); job agents do not use it yet (phase 6)",
+            c.layers_text()
+        )
+    } else {
+        let mut out = format!(
+            "job sandbox backend: not available here: {}",
+            c.reason.as_deref().unwrap_or("unknown")
+        );
+        if let Some(fix) = &c.fix {
+            out.push_str(&format!(" \u{2014} {fix}"));
+        }
+        out
+    }
+}
+
 /// The doctor's report for ENV, with RUNNING when a hub answered.
-pub fn report(env: &Env, binary: &Path, running: Option<Running>) -> Value {
+pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Check) -> Value {
     let socket = paths::socket_path(env);
     let mut v = json!({
         "binary": {
@@ -58,6 +102,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>) -> Value {
         "socket_dir": socket_dir(&socket, env.uid),
         "sqlite": crate::version::sqlite(),
         "job_agents": JOB_AGENTS,
+        "sandbox": sandbox_section(sandbox),
     });
     if let Some(r) = running {
         v["running"] = json!({"pid": r.pid, "commit": r.commit});
@@ -132,29 +177,66 @@ fn summary(v: &Value) -> String {
     out
 }
 
-/// `doctor --json`.
-pub fn doctor(env: &Env) -> i32 {
+/// `doctor`: `--json` is the report; without it, a few lines of text. The sandbox check runs beside the hub ask, so
+/// the two together stay under the editor's 2 s.
+pub fn doctor(env: &Env, json_out: bool) -> i32 {
     let socket = paths::socket_path(env);
     let binary = crate::idle::resolve_exe()
         .map(Path::to_path_buf)
         .unwrap_or_default();
     let deadline = std::time::Instant::now() + DOCTOR_ASK;
     let left = || deadline.saturating_duration_since(std::time::Instant::now());
-    let running = Client::user(env, left())
-        .and_then(|mut c| c.call("status", json!({}), left()))
-        .ok()
-        .map(|s| Running {
-            pid: s["pid"]
-                .as_u64()
-                .and_then(|p| u32::try_from(p).ok())
-                .unwrap_or(0),
-            commit: s["runtime"]["commit"].as_str().map(str::to_string),
-        })
-        .or_else(|| {
-            client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running { pid, commit: None })
-        });
-    println!("{}", report(env, &binary, running));
+    let (running, sandbox) = std::thread::scope(|s| {
+        let check = s.spawn(|| sandbox::check_blocking(Tier::Full, None, DOCTOR_CHECK));
+        let running = Client::user(env, left())
+            .and_then(|mut c| c.call("status", json!({}), left()))
+            .ok()
+            .map(|s| Running {
+                pid: s["pid"]
+                    .as_u64()
+                    .and_then(|p| u32::try_from(p).ok())
+                    .unwrap_or(0),
+                commit: s["runtime"]["commit"].as_str().map(str::to_string),
+            })
+            .or_else(|| {
+                client::ping(&socket, left().max(DOCTOR_PING))
+                    .map(|pid| Running { pid, commit: None })
+            });
+        let check = check
+            .join()
+            .unwrap_or_else(|_| Check::failed("the check panicked".into(), None));
+        (running, check)
+    });
+    let v = report(env, &binary, running, &sandbox);
+    if json_out {
+        println!("{v}");
+    } else {
+        println!("{}", text(&v, &sandbox));
+    }
     0
+}
+
+/// The lines `doctor` prints without `--json`.
+fn text(v: &Value, sandbox: &Check) -> String {
+    let t = |p: &Value| p.as_str().unwrap_or("?").to_string();
+    let mut out = format!(
+        "binary: {} (commit {})\nsocket dir: {} (mode {}, {})",
+        t(&v["binary"]["path"]),
+        t(&v["binary"]["commit"]),
+        t(&v["socket_dir"]["path"]),
+        t(&v["socket_dir"]["mode"]),
+        if v["socket_dir"]["ok"] == true {
+            "ok"
+        } else {
+            "not private"
+        },
+    );
+    if let Some(r) = v.get("running") {
+        out.push_str(&format!("\nrunning: pid {}", r["pid"]));
+    }
+    out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
+    out.push_str(&format!("\n{}", sandbox_line(sandbox)));
+    out
 }
 
 /// `restart`: ask the running hub to restart (it answers, then exits 75 or re-executes itself).
@@ -195,7 +277,7 @@ mod tests {
         let sock_dir = paths::socket_path(&env).parent().unwrap().to_path_buf();
         std::fs::create_dir_all(&sock_dir).unwrap();
         std::fs::set_permissions(&sock_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let v = report(&env, Path::new("/opt/ratatoskr"), None);
+        let v = report(&env, Path::new("/opt/ratatoskr"), None, &working());
         assert_eq!(v["binary"]["path"], "/opt/ratatoskr");
         assert_eq!(v["binary"]["commit"], crate::version::COMMIT);
         assert_eq!(v["binary"]["test_hooks"], cfg!(feature = "test-hooks"));
@@ -206,7 +288,7 @@ mod tests {
         assert!(v.get("running").is_none());
         // too open: not ok
         std::fs::set_permissions(&sock_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let open = report(&env, Path::new("/b"), None);
+        let open = report(&env, Path::new("/b"), None, &working());
         assert_eq!(open["socket_dir"]["ok"], false);
         assert_eq!(open["socket_dir"]["mode"], "0755");
         let up = report(
@@ -216,6 +298,7 @@ mod tests {
                 pid: 7,
                 commit: Some("abc".into()),
             }),
+            &working(),
         );
         assert_eq!(up["running"], json!({"pid": 7, "commit": "abc"}));
     }
@@ -229,9 +312,112 @@ mod tests {
             ],
             1000,
         );
-        let v = report(&env, Path::new("/b"), None);
+        let v = report(&env, Path::new("/b"), None, &working());
         assert_eq!(v["socket_dir"]["ok"], true);
         assert!(v["socket_dir"]["mode"].is_null());
+    }
+
+    fn working() -> Check {
+        Check {
+            backend: gleipnir::BackendKind::Bwrap,
+            program: Some("/usr/bin/bwrap".into()),
+            version: Some("0.12.0".into()),
+            ok: true,
+            reason: None,
+            fix: None,
+            layers: Some(gleipnir::LayersReport {
+                landlock_abi: 10,
+                landlock: "enforced".into(),
+                seccomp: true,
+                no_new_privs: true,
+                new_session: true,
+                relay: true,
+                seatbelt: false,
+            }),
+            landlock_abi: 10,
+            container: false,
+            stderr: None,
+        }
+    }
+
+    fn broken() -> Check {
+        Check {
+            ok: false,
+            backend: gleipnir::BackendKind::None,
+            reason: Some(
+                "AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and later)".into(),
+            ),
+            fix: Some("load the profile".into()),
+            layers: None,
+            ..working()
+        }
+    }
+
+    fn report_of(c: &Check) -> Value {
+        let env = Env::new(&[("HOME", "/nonexistent/h")], 1000);
+        report(&env, Path::new("/b"), None, c)
+    }
+
+    #[test]
+    fn sandbox_section_shape() {
+        let v = report_of(&working());
+        assert_eq!(
+            v["sandbox"],
+            json!({
+                "backend": "bwrap", "version": "0.12.0", "ok": true, "reason": null, "fix": null,
+                "landlock_abi": 10, "in_use": false,
+            })
+        );
+        let v = report_of(&broken());
+        assert_eq!(v["sandbox"]["backend"], "none");
+        assert_eq!(v["sandbox"]["ok"], false);
+        assert!(
+            v["sandbox"]["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("AppArmor")
+        );
+        assert_eq!(v["sandbox"]["fix"], "load the profile");
+        assert_eq!(v["sandbox"]["in_use"], false);
+        assert_eq!(
+            sandbox_line(&working()),
+            "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp); job agents do not use it yet (phase 6)"
+        );
+        assert_eq!(
+            sandbox_line(&broken()),
+            "job sandbox backend: not available here: AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and later) \u{2014} load the profile"
+        );
+    }
+
+    /// Nothing runs in the sandbox yet, so no state of the check says a job is sandboxed: not the line, not the section.
+    #[test]
+    fn sandbox_line_never_says_sandboxed() {
+        let seatbelt = Check {
+            backend: gleipnir::BackendKind::Seatbelt,
+            version: None,
+            layers: Some(gleipnir::LayersReport::seatbelt()),
+            ..working()
+        };
+        for c in [
+            working(),
+            broken(),
+            seatbelt,
+            Check::failed("x".into(), None),
+        ] {
+            let line = sandbox_line(&c);
+            let section = report_of(&c)["sandbox"].to_string();
+            let text = text(&report_of(&c), &c);
+            for s in [&line, &section] {
+                assert!(!s.to_lowercase().contains("sandboxed"), "{s}");
+            }
+            // the text as a whole may say what job agents do today ("unsandboxed"), but never claims otherwise
+            assert!(
+                text.lines()
+                    .all(|l| !l.contains("sandboxed") || l.starts_with("job agents: unsandboxed")),
+                "{text}"
+            );
+        }
+        assert!(sandbox_line(&working()).contains("job agents do not use it yet"));
     }
 
     #[test]

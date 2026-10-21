@@ -33,8 +33,10 @@ runtime/
 | `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
 | `runstav` (formerly `drgnx-proto`) | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#runstav-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type |
-| `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)) |
-| `gleipnir` | the sandbox; self-contained |
+| `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)); passed fds, the pinned spawner and the git runner ([below](#draugr-passed-fds-and-git)) |
+| `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
+| `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` ([below](#eitri-no-link-file-access)) |
+| `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
 | `hrafn` | search and the indexer |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
@@ -63,7 +65,7 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p drgnx-ratatoskr`.
+`cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr`.
 `drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
@@ -94,7 +96,13 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
 - **`paths`**: `data_dir`, `socket_path`, `cap_path` (`hub-HASH.cap`), `lock_path` (`hub-HASH.sock.lock`) and
   `backend_socket_path`, the Lisp backend's private socket `<socket dir>/hub-HASH.d/backend.sock` (one per data dir, so
   two data dirs sharing a runtime dir never collide). Over 103 bytes it goes to `<tmp>/drgnx-hub-UID/hub-HASH.d/`, and
-  past 103 bytes there too it is `PathError::TooLong`. `private_dir` makes a directory 0700 (parents too) when it is not
+  past 103 bytes there too it is `PathError::TooLong`. `session_dir(env, socket, SID)` is one agent session's
+  directory, `<socket dir>/s/SID/` (design §4.2): it holds that session's sockets, `hub.sock` (agent class) today and
+  `mcp.sock`, `search.sock` and `gateway.sock` later, and never the backend's (review M10): a sandbox is given `s/SID`
+  alone (Gleipnir's run parent is `s/`), so nothing bound into it reaches `backend.sock`. Over 103 bytes for its longest
+  socket (`gateway.sock`) it is `<tmp>/drgnx-hub-UID/s/SID/`; a SID that is not letters, digits, `-` and `_` is
+  `PathError::BadName`. `make_session_dir` makes the socket dir (or that `<tmp>` one), `s/` and `s/SID/` with
+  `private_dir` and checks each with `trusted_dir`. `private_dir` makes a directory 0700 (parents too) when it is not
   there, refuses one that is a link, not a directory or another user's, and chmods it 0700 through the descriptor it
   checked (opened with `O_NOFOLLOW`), as the Lisp `drgnx-hub--private-dir` does.
 - **`registry`**, **`methods`**, **`types`**, **`events`**: every method with its classes, typed params and result,
@@ -106,6 +114,139 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
 compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptest_line.rs`: random byte streams, read in
 random pieces, through the codec and `parse_strict` never panic, and the codec never holds more than one line's limit
 plus the read that went past it.
+
+## eitri: no-link file access
+
+`crates/eitri` is how the runtime touches a path someone else can change (an agent's tree, a candidate program):
+every open refuses a link in any component and hands back the fd it checked, so what was checked is what is used.
+It names no drgnx type or path. Every error is an `FsError`: `Link { path }`, `NotRegular`, `NotDir`, `TooLarge {
+cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
+
+- **`open_path(abs, kind)`** and **`open_beneath(dir, rel, kind)`** return a `Pinned { fd, dev, ino, is_dir }`.
+  `kind` is `Dir`, `File` (a regular file) or `Any`, checked with `fstat` on the fd. Linux and Android use
+  `openat2(O_PATH | O_CLOEXEC, RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`, plus `RESOLVE_BENEATH` for
+  `open_beneath`; macOS uses `open`/`openat` with `O_NOFOLLOW_ANY | O_NONBLOCK | O_NOCTTY`. A `rel` that is absolute
+  or has a `..` component is `Escapes` before any syscall. A kernel without `openat2` (before 5.6, or one that
+  refuses its flags) gives `Unsupported`: there is no fallback that resolves by path. Any other OS is `Unsupported`.
+- **`read_regular(dir, rel, cap)`** opens `O_RDONLY | O_NONBLOCK | O_NOCTTY` with the same resolution, refuses
+  anything but a regular file (a FIFO opens at once and is never read) and reads at most `cap + 1` bytes; one more
+  than `cap` is `TooLarge`.
+- **`write_regular(dir, rel, bytes, mode)`** opens the parent with `open_beneath`, creates `.eitri-<16 hex>` in it
+  with `O_CREAT | O_EXCL | O_NOFOLLOW` and `mode` (at most 0o777, less the umask), writes, `fsync`s and `renameat`s
+  it over `rel`. A link at `rel` is replaced, never followed; anything else that is not a regular file is
+  `NotRegular`. The temporary file is removed on every error.
+- **`trusted_program(candidates)`** returns the first candidate that only root can change, as a `TrustedProgram {
+  path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
+  bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not
+  group- or world-writable (so never under `/tmp`). Otherwise the last candidate's `Untrusted { path, why }`.
+  Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched.
+
+`cargo test -p eitri` runs the unit tests (links in every component, `..` refused with no syscall made, a FIFO
+refused within 100 ms, the cap, a write over a link, no temporary file left, `ENOSYS`/`EINVAL` from `openat2`
+injected through a test seam, each `Untrusted.why`) and the proptest `tests/tree.rs`: random trees with links to
+inside, outside and `/`, where every `Ok` is the `(dev, ino)` an `lstat` walk finds and every path through a link is
+`Link`. The fixtures that need root-owned ancestors (`/var/lib/glp-…`) run as uid 0, as in the build container, and
+are skipped otherwise.
+
+## draugr: passed fds and git
+
+`crates/draugr` starts and ends Ratatoskr's processes ([hub.md](hub.md#ratatoskrs-children-draugr)). For the sandbox it also
+passes descriptors at fixed numbers, forks sandboxes from one pinned thread, and runs git.
+
+**Passed descriptors.** `spawn::Spec` has `pass_fds: Vec<PassFd>`, each `PassFd { fd: Arc<OwnedFd>, target }`. The
+child gets exactly 0–2 and the targets, in this order:
+
+1. The targets are checked: each 3 or more, each once (else `InvalidInput`). In the parent, every source is copied
+   with `fcntl(F_DUPFD_CLOEXEC, highest target + 1)`, so no `dup2` in the child overwrites a source it still needs.
+2. Every free number from 3 to the highest target is held with a close-on-exec copy until the child is started.
+   std reports a failed exec over a socket it opens just before the fork, at the lowest free number; on a target
+   the child's `dup2` would close it, and a failed exec would look like a start. Another thread that closes a low
+   descriptor during the spawn can still free a number for it. A failed exec then shows as a child that exits 1 at
+   once, and std's 8 bytes go to the passed descriptor at that number. The callers fail closed on both (no status
+   line from the helper).
+3. In the child (`pre_exec`, no allocation): every descriptor from 3 up is marked close-on-exec, with
+   `close_range(3, ~0, CLOSE_RANGE_CLOEXEC)` on Linux and Android. Before Linux 5.11, and on macOS, an
+   `fcntl(F_SETFD, FD_CLOEXEC)` loop up to `RLIMIT_NOFILE` (at most 2^20) does it. Then each source is `dup2`'d to
+   its target, and `dup2` clears close-on-exec on the copy. So a descriptor the hub inherited without close-on-exec
+   (from systemd, launchd or Emacs) reaches no child. This holds for every spawn, not only those with `pass_fds`.
+
+`spawn` consumes its `Spec` and drops the `PassFd`s once the child is started, so the parent keeps no copy of a pipe
+end it waits on for EOF. Never keep a clone of a `Spec` that has `pass_fds`.
+
+**`spawn_pinned`.** bwrap's `--die-with-parent` and the reduced helper's `PR_SET_PDEATHSIG` fire when the *thread*
+that forked them exits. A spawn from a tokio blocking-pool thread would kill the sandbox when that thread retires.
+`spawn_pinned` hands the spec to one thread, `draugr-spawner`, which is started on first use and lives as long as
+the process. That thread enters the caller's runtime and spawns. If the caller stopped waiting, the thread kills the
+child's group. Every sandboxed spawn goes through it; other spawns keep `spawn`.
+
+**`new_session`.** A `Spec` with `new_session` starts its child with `setsid()` before exec instead of a process
+group of its own (std's `setpgid` runs before `pre_exec`, and a group leader cannot `setsid`). Gleipnir's reduced
+tier needs it: its helper starts a session itself (GL-T8-1). Either way the child's pid is its group's, so
+`kill_group` ends it.
+
+**git.**
+- `git::git_program()` gives git from a root-owned path (`eitri::trusted_program`), never through `PATH`.
+  - Linux: `/usr/bin/git`.
+  - macOS: never the `/usr/bin/git` shim, which runs whatever developer dir is selected. It reads the link
+    `/private/var/db/xcode_select_link`. That link and every directory up to `/` must be root's and not group- or
+    world-writable. The program is then `<developer dir>/usr/bin/git`, which must pass `trusted_program`. The
+    Command Line Tools pass; Xcode under the admin-writable `/Applications` is refused.
+  - Any other OS (Android included): `Unsupported`.
+- `git::command(&GitCall { place, allow_protocols, args })` returns the argv after the program, and the environment
+  to add.
+  - **The argv.** Every call starts with `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c
+    core.editor=false -c protocol.ext.allow=never`. `Place::Trusted { read_only: true }` adds
+    `--no-optional-locks`. Then come `args`.
+  - **The environment.** Every call gets `GIT_TERMINAL_PROMPT=0` and `GIT_ALLOW_PROTOCOL` (the protocols joined by
+    `:`; `ext` is refused, since that variable overrides `protocol.ext.allow`). `Place::InSandbox` adds
+    `GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 HOME=/nonexistent
+    GIT_LFS_SKIP_SMUDGE=1`. It never sets `DEVELOPER_DIR`, `TOOLCHAINS` or `SDKROOT`, and the caller's part of the
+    environment must not either.
+  - **Refused anywhere in `args`**, also as `--NAME=VALUE` and as any abbreviation git accepts (a prefix of the name,
+    so `--text` too: use `-a`):
+    - config: `-c`, `--config`, `--config-env`;
+    - programs: `--textconv`, `--ext-diff`, `--extcmd`, `--upload-pack`, `--receive-pack`, `--exec`, `--exec-path`,
+      `-O`, `--open-files-in-pager`;
+    - files: `--output`, `--template`;
+    - repository location: `--git-dir`, `--work-tree`, `-C` (they would bypass `check_trusted_repo`).
+    A short letter is refused alone, with a value attached (`-Ovim`) or in a cluster (`-iO`).
+  - **Refused after a subcommand:** `-u` after `clone`, `fetch`, `pull`, `ls-remote` or `archive`; `-x` after
+    `rebase` or `difftool`.
+  - **The rule for callers:** values that came from an agent go after `--`, or are checked as hex object ids. Phase 6
+    may narrow this to an allowlist of the subcommands it uses.
+- `git::check_trusted_repo(repo, in_ledger)` refuses `InLedger { path }` when any of these lies in a folder for which
+  `in_ledger` is true (it is asked about the path and every folder above it):
+  - the git dir: `repo/.git` as a directory, or what a `.git` file's `gitdir:` line names (read with `read_regular`,
+    at most 4 KiB, relative to `repo`);
+  - the common dir: what `<git dir>/commondir` names, or the git dir;
+  - `config` and `config.worktree` in both, and every `<common dir>/worktrees/*/config.worktree`.
+  Every path is opened without links, and a link anywhere is refused, since git would follow it. `..` is resolved by
+  components, which is safe because no link was followed. A `gitdir:` line that looks like a remote
+  (`/ssh:host:/x`) is just a missing path. Phase 6 passes the ledger.
+  **What it does not hold (gate review S9, DEFERRED):** the check reads paths once, and git later opens them by path
+  again, so an agent that can write the worktree could swap `.git` (a directory or a `gitdir:` file) in between. The
+  repository's own config can still name programs the overrides above do not cover (`filter.*.clean`/`smudge`/
+  `process`, `diff.*.command` and `textconv`, `diff.external`, `core.sshCommand`, `credential.helper`,
+  `core.askPass`), and `status` and `diff` read each populated submodule's own config. So phase 6 must keep `.git`
+  pinned (not writable by any agent) while agents run, and pick its trusted subcommands with this in mind; blanking
+  those keys here would also drop the user's own global helpers for a trusted fetch.
+
+`cargo test -p draugr` covers this:
+- `spawn::tests`: three pipes at 3, 4 and 5, and at the sources' own numbers rotated; a parent fd without
+  close-on-exec that the child never sees (the child lists its descriptors through `/dev/fd`); the passed fds
+  dropped after the spawn; bad targets; a `setpriv --pdeathsig KILL` child that `spawn_pinned` started from a
+  blocking-pool thread, alive 1.2 s after that thread retired.
+- `tests/fds.rs`: a failed exec with targets 3–63 is still an error. It is its own test binary, so no other test
+  frees a number during the spawn.
+- `git::tests`: the argv, the environment, and a table of every refused form with controls. The macOS resolver also
+  runs against a fixture under `/var/lib/glp-…`, as uid 0.
+- `tests/git.rs`:
+  - a planted `core.fsmonitor` and `post-checkout` hook run under plain git, the control, and never through
+    `command`;
+  - a `.git` file, a `.git` directory and a `commondir` into a ledger folder are refused;
+  - a real `git worktree` passes, and is refused when its main repository is in the ledger;
+  - links in the metadata are refused;
+  - a remote-looking `gitdir:` is not found.
 
 ## The conformance harness
 
@@ -132,7 +273,8 @@ domr connect-as --socket PATH
   run through the front (`--target ratatoskr --lisp-hub test/conformance/lisp-hub.sh --only-tag v0`). A row with
   neither runs with the backend `missing` (the harness sets no `DRGNX_DIR`).
 - **The fake backend** (`runtime/target/debug/ratatoskr-fake-backend`, `conformance/src/bin/`) stands in for the
-  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, appends every line it gets to
+  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, closes a connection whose first line is not `{"auth":
+  DRGNX_HUB_SERVE_SECRET}` (as the Lisp backend does; that line is not logged), appends every other line it gets to
   `$STATE/fake-backend.log` and writes its environment as a JSON object to `$STATE/fake-backend.env`. It answers from
   the JSON script in `DRGNX_FAKE_BACKEND_SCRIPT` (a row's `start` `env`): `{METHOD: ANSWER}`, ANSWER an object with
   `result` or `error` (sent with the request's id), a string (the whole line, `$ID` the id), `null` (never
@@ -173,14 +315,14 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `rename`, `remove` | `from`, `to` / `path` | rename-replace a file, remove one (an update of a binary on disk) |
 | `install_bin` | `to` | copy the hub under test to `to` (0755), a binary a scenario can replace |
 | `spawn` | `capture`, `argv` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends |
-| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"` or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
+| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"`, `"backend"`, the Lisp backend's own socket, or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
 | `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `expect_result`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code; `expect_result` is a pattern for the reply. A connection is challenged once: a second `hello` on it uses the nonce the first one read |
 | `chmod` | `path`, `mode`, `owner` | change a mode (octal string) and/or the owner: `"other"` gives the path to uid and gid 65534, `"self"` back to the harness's (root does it itself; anyone else through passwordless `sudo -n chown`, so such a row needs `sudo`) |
 | `send` | `conn`, one of `json`, `raw`, `bytes` | write one line. `raw` is the text as is, plus `\n` unless `"no_newline": true`; `bytes` is `{fill, n, newline}`. In `json`, `{"$repeat": TEXT, "times": N}` is TEXT N times (a long string without a long row). `"eof": true` then closes the sending side (a client that vanished mid-line). A write the hub closed meanwhile is no error: the next `expect_closed` says so |
 | `pause` | `conn` | stop reading the connection (what arrives stays in the socket): a client that stopped reading. The next step that reads it reads again |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
 | `expect_next` | as `expect` | the very next line must match |
-| `expect_closed` | `conn`, `within_ms` | the hub closed the connection |
+| `expect_closed` | `conn`, `within_ms`, `silent` | the hub closed the connection; with `"silent": true`, without sending a line first (a refusal answers nothing) |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
 | `expect_exit` | `hub` or `pid`, `code`, `signal`, `within_ms` (10000) | the process ended with this status (a `pid` must be one the scenario spawned) |
@@ -197,7 +339,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 $HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the scenarios' directory, absolute: its
 `fixtures/`), `$EMACS` (`$DRGNX_EMACS`, else `emacs`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are
-`$SOCKET_DIR/hub-HASH.d/agent-SID.sock`.
+`$SOCKET_DIR/s/SID/hub.sock` (`paths::session_dir`).
 
 **Patterns** are JSON. An object matches when it has every key of the pattern (extra keys are fine). Arrays match element
 by element and in length, unless the pattern is `{"$contains": [...]}` (every listed pattern matches some element).
@@ -302,8 +444,8 @@ runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/rata
     --scenarios test/conformance
 ```
 
-Paths: the agent sockets are `<root>/run/drgnx/hub-HASH.d/agent-SID.sock`, so with `DRGNX_CONFORMANCE_ROOTS` the
-root's own path must leave room for them within 103 bytes (a short link to a deeper directory works).
+Paths: the agent sockets are `<root>/run/drgnx/s/SID/hub.sock`; past 103 bytes (sized for the longest session socket,
+`gateway.sock`) a session dir goes to `<tmp>/drgnx-hub-UID/s/SID/`.
 
 `test/conformance/class-matrix.json` is not a row: it is the hand-written class table (`{method: [classes]}`) that the
 registry's test and the `class_matrix` step read.
@@ -367,8 +509,14 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `line_codec` | arbitrary bytes, cut into chunks of a size the input picks, through the client line codec, then `parse_strict` on every line |
 | `request_prelude` | a line through `dispatch::prelude` (steps 1 to 5, no handler) for every class and several protocol states |
 | `hello` | hello params decoded from arbitrary JSON, then `hello()` against a fixed cap: as given, with the correct proof, on a main and on an agent socket, and a second hello |
+| `connect_head` | bytes as a proxy request head: the blank-line search, the exactly-`CONNECT target HTTP/1.x` line, then `parse_target` on the target (gleipnir's `fuzzing` feature exposes the entry point) |
+| `host_target` | text through `parse_target`; a success must `Display` back to a string that parses to the same target |
+| `sbpl_quote` | text through `sbpl::quote`; a success must read back through `sbpl::sexp` as one string equal to the input |
+| `bwrap_version` | text as `bwrap --version` output through `parse_version` and `version_at_floor` |
+| `inner_spec` | bytes decoded as the helper's `InnerSpec` (`deny_unknown_fields`); a success must re-encode and decode to the same value |
 
-The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows. A run adds files to the
+The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1) and the unit tables
+(gleipnir's targets). A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.
 
 Local run (keep the toolchain and the crate cache out of `~`: point `RUSTUP_HOME` and `CARGO_HOME` at a scratch

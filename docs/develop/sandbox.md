@@ -1,5 +1,8 @@
 # The job sandbox
 
+The Rust sandbox is Gleipnir ([gleipnir.md](gleipnir.md)); this page describes the Lisp libraries on main, which
+nothing calls.
+
 A job agent runs shell commands, hooks and MCP servers as the user's uid. No token or command check can stop such a
 process from reaching what the user can reach: the hub's socket (and with it the cards), the user's home, other
 repositories, the Emacs server, D-Bus. So each job agent's **whole process tree** runs inside a boundary the kernel

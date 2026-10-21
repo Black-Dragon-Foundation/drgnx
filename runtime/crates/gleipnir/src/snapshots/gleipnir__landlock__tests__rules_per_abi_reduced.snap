@@ -1,0 +1,281 @@
+---
+source: crates/gleipnir/src/landlock.rs
+expression: render(&reduced)
+---
+tier Reduced, min_abi 9
+read_roots: /bin /dev/full /dev/null /dev/random /dev/tty /dev/urandom /dev/zero /etc /gnu /lib /lib64 /nix /opt /proc /rt/s/S1 /sbin /srv/docs /state/home-1 /state/tmp-1 /usr /work/lib /work/out /work/task
+write_roots: /state/home-1 /state/tmp-1 /work/out /work/task
+dev_write_files: /dev/full /dev/null /dev/zero
+unix_connect_roots: /rt/s/S1
+tcp_connect_ports: Some([])
+tcp_bind_ports: Some([])
+
+== ABI 1
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym
+handled net: -
+scoped: -
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym
+
+== ABI 2
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer
+handled net: -
+scoped: -
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer
+
+== ABI 3
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: -
+scoped: -
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 4
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: bind_tcp connect_tcp
+scoped: -
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 5
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: bind_tcp connect_tcp
+scoped: -
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 6
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: bind_tcp connect_tcp
+scoped: abstract_unix_socket signal
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 7
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: bind_tcp connect_tcp
+scoped: abstract_unix_socket signal
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 8
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate
+handled net: bind_tcp connect_tcp
+scoped: abstract_unix_socket signal
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+
+== ABI 9
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate resolve_unix
+handled net: bind_tcp connect_tcp
+scoped: abstract_unix_socket signal
+tcp ports: []
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/full: execute write_file read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/tty: execute read_file read_dir
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute write_file read_file read_dir
+/etc: execute read_file read_dir
+/gnu: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/nix: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/rt/s/S1: execute read_file read_dir resolve_unix
+/sbin: execute read_file read_dir
+/srv/docs: execute read_file read_dir
+/state/home-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/state/tmp-1: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/work/lib: execute read_file read_dir
+/work/out: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/work/task: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate

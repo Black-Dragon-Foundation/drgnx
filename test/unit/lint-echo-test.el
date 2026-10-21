@@ -31,7 +31,7 @@
     ;; points (their lines are their log; Rust-bound)
     ("core/drgnx-coord.el" . 1)
     ("core/drgnx-hub-client.el" . 2)
-    ("core/drgnx-hub.el" . 6)
+    ("core/drgnx-hub.el" . 8)          ; + Gleipnir 13b: the backend's refused connection, two serve-env errors
     ("core/drgnx-mcp-bridge.el" . 1)
     ("core/drgnx-sandbox-mcp.el" . 3)
     ("core/drgnx-sandbox-proxy.el" . 2)

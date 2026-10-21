@@ -52,7 +52,7 @@ jobs:
       # root in this container: the `sudo` rows (another uid on the socket) run, through setpriv
       - name: Tools
         working-directory: /
-        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng
+        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng bubblewrap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -66,13 +66,43 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
       - run: cargo test --locked --workspace --features drgnx-ratatoskr/test-hooks
       # the test-hooks binary and the harness: ci.yml's emacs-31 job runs the editor's tests against this ratatoskr
-      - run: cargo build --locked -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+      # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
+      - run: cargo build --locked -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ratatoskr
           path: runtime/target/debug/ratatoskr
           if-no-files-found: error
           retention-days: 7
+      # gleipnir's test hooks (landlock_omit, abi_cap) must never be on in a build without --features (review M5).
+      # The inverted form: the forward `cargo tree` does not show gleipnir's feature even when it is on (Task 0).
+      # `shell: bash` adds pipefail (a failed `cargo tree` fails the step), and the tree must name gleipnir at all, so
+      # an empty file never passes (gate review S14).
+      - name: gleipnir has no test-hooks in a default ratatoskr build
+        shell: bash
+        run: |
+          cargo tree --locked -e features -i gleipnir -p drgnx-ratatoskr | tee "$RUNNER_TEMP/gleipnir-features.txt"
+          grep -q '^gleipnir v' "$RUNNER_TEMP/gleipnir-features.txt"
+          if grep -q 'gleipnir feature "test-hooks"' "$RUNNER_TEMP/gleipnir-features.txt"; then
+            echo "gleipnir's test-hooks are on in a default build" >&2; exit 1
+          fi
+      # The escape suite, container tier (docs/develop/gleipnir.md, "Proving it"). As root in this container there are
+      # no user namespaces to nest, so the full and reduced rows skip with a listed reason ("inside a container",
+      # "Landlock ABI N below 9"); what runs is that the rows parse, the probes reach without a sandbox,
+      # check-in-a-container, the floor row, path-bwrap-never-run and fail-closed-no-bwrap. Only listed reasons may skip.
+      # No --require-all (a skip here is expected); the VM/host jobs below hold the rest.
+      - name: escape suite (container tier)
+        run: |
+          mkdir -p "$RUNNER_TEMP/escape"
+          target/debug/gleipnir-escape --ratatoskr target/debug/ratatoskr --probe target/debug/gleipnir-probe \
+            --rows crates/gleipnir-escape/rows --rows crates/gleipnir-escape/rows/container \
+            --report "$RUNNER_TEMP/escape/escape-container.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: escape-report-container
+          path: ${{ runner.temp }}/escape/escape-container.json
+          if-no-files-found: warn
       - name: Nidhogg 31.1 (the Emacs drgnx ships on)
         working-directory: ${{ github.workspace }}
         run: |
@@ -126,6 +156,89 @@ jobs:
       - run: rustup toolchain install 1.88.0 --profile minimal
       - run: cargo +1.88.0 build --locked --manifest-path runtime/Cargo.toml
 
+  # The escape suite on the runner itself, no container: the full tier (bubblewrap with user namespaces) and, on the arm64
+  # runner (free for public repositories), a real arm64 Linux run of the seccomp tests (GL-T4-2: the aarch64 syscall
+  # numbers). Ubuntu 24.04 turns unprivileged user namespaces off through AppArmor, so the job lifts the restriction
+  # with sudo (the runner user has passwordless sudo) and builds bubblewrap 0.12.0 (gleipnir's floor; apt has 0.9.0).
+  # continue-on-error until a first real run shows which rows this kernel can hold (docs/develop/ci.md).
+  escape-host:
+    name: escape suite on the runner (${{ matrix.os }})
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ hashFiles('runtime/Cargo.lock') }}
+      - name: bubblewrap 0.12.0 (checksum verified, built from source)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build pkg-config libcap-dev
+          curl -fsSL -o "$RUNNER_TEMP/bwrap.tar.xz" https://github.com/containers/bubblewrap/releases/download/v0.12.0/bubblewrap-0.12.0.tar.xz
+          echo "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314  $RUNNER_TEMP/bwrap.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/bwrap.tar.xz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/bubblewrap-0.12.0"
+          meson setup _build -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled -Dselinux=disabled -Dtests=false
+          ninja -C _build
+          sudo ninja -C _build install
+          bwrap --version
+      - name: user namespaces for unprivileged processes (AppArmor's restriction lifted)
+        run: |
+          uname -r
+          cat /sys/kernel/security/lsm; echo
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user true
+          bwrap --unshare-all --ro-bind / / true
+      - run: rustup toolchain install stable --profile minimal
+      # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
+      - run: cargo test --locked --manifest-path runtime/Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
+      - run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      # No --require-all: a Landlock ABI below 9 skips the reduced rows ("Landlock ABI N below 9"), as the harness lists.
+      - name: escape suite (full tier on the runner)
+        run: |
+          mkdir -p "$RUNNER_TEMP/escape"
+          runtime/target/debug/gleipnir-escape --ratatoskr runtime/target/debug/ratatoskr \
+            --probe runtime/target/debug/gleipnir-probe \
+            --rows runtime/crates/gleipnir-escape/rows/linux --rows runtime/crates/gleipnir-escape/rows/any \
+            --report "$RUNNER_TEMP/escape/escape-${{ runner.arch }}.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: escape-report-host-${{ runner.arch }}
+          path: ${{ runner.temp }}/escape/escape-${{ runner.arch }}.json
+          if-no-files-found: warn
+
+  # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
+  # is for urdr's bundled SQLite: a type-check does not link.
+  android:
+    name: Android type-check
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC_aarch64_linux_android: /usr/bin/true
+      AR_aarch64_linux_android: /usr/bin/true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup target add aarch64-linux-android
+      - run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr
+      # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
+      - run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -- -D warnings
+
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
     runs-on: ubuntu-24.04
@@ -148,7 +261,7 @@ jobs:
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
   # a pull request runs none. A crash uploads its input.
   fuzz:
-    name: fuzz (line_codec, request_prelude, hello)
+    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -181,7 +294,7 @@ jobs:
         run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
       - name: Run each target
         run: |
-          for target in line_codec request_prelude hello; do
+          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec; do
             echo "::group::$target ($FUZZ_SECONDS s)"
             cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS"
             echo "::endgroup::"
@@ -210,7 +323,9 @@ jobs:
             runtime/target
           key: cargo-${{ runner.os }}-brew-${{ hashFiles('runtime/Cargo.lock') }}
       - run: cargo test --locked --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
-      - run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+      # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
+      # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
+      - run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
         run: /bin/bash test/container/nidhogg.sh macos
       - name: conformance-lisp (the v0 rows against the Lisp hub)
@@ -234,3 +349,32 @@ jobs:
           name: ratatoskr-perf-macos
           path: perf-macos.json
           if-no-files-found: error
+      # The Seatbelt rows run for real, with the real /usr/bin/sandbox-exec. --require-all: a skip fails the job. Last
+      # in the job, so a failing row never skips the conformance and perf steps above (gate review B1); ci.yml's
+      # emacs-31 job runs whatever this job's result. mac-works-git needs the git draugr trusts: the Command Line Tools
+      # pass, Xcode under /Applications is refused, so point xcode-select at the CLT when the runner has them.
+      # mac-net-* need a non-loopback address (the fixture takes the one the default route uses); the step prints
+      # what the runner has.
+      - name: escape suite (Seatbelt, required)
+        run: |
+          xcode-select -p
+          if [ -d /Library/Developer/CommandLineTools ]; then sudo xcode-select -s /Library/Developer/CommandLineTools; fi
+          xcode-select -p
+          route -n get default | grep -E 'interface|gateway' || true
+          ifconfig | grep 'inet ' || true
+          mkdir -p "$RUNNER_TEMP/escape"
+          runtime/target/debug/gleipnir-escape --ratatoskr runtime/target/debug/ratatoskr \
+            --probe runtime/target/debug/gleipnir-probe \
+            --rows runtime/crates/gleipnir-escape/rows/macos --rows runtime/crates/gleipnir-escape/rows/any \
+            --require-all --report "$RUNNER_TEMP/escape/escape-macos.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: escape-report-macos
+          path: ${{ runner.temp }}/escape/escape-macos.json
+          if-no-files-found: warn
+      # The pure-Rust crates' tests through clippy on darwin: only clippy's test build shows code that is dead on macOS
+      # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
+      - name: clippy on darwin (the pure-Rust crates)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -- -D warnings

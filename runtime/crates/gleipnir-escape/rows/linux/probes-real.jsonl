@@ -1,0 +1,1 @@
+{"row":"probes-reach-without-sandbox-linux","needs":["linux"],"unsandboxed":true,"probes":[["connect-abstract","${ABSTRACT}"],["tfo","${TCP_LO}"],["status-field","NoNewPrivs"],["proc-read","${HARNESS_PID}","environ"],["landlock-abi"]],"expect":[{"result":"reached"},{"result":"reached"},{"result":"reached"},{"result":"reached"},{"result":"reached"}]}

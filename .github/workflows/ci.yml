@@ -32,9 +32,13 @@ jobs:
     with:
       fuzz_minutes: ${{ inputs.fuzz_minutes }}
 
+  # It needs only the `ratatoskr` artifact of runtime.yml's Linux job, so it runs whatever runtime's other jobs say
+  # (a red macOS escape row must not skip the editor's tests: gate review B1). If the Linux job never uploaded the
+  # artifact, the download below fails this job, so it never runs against a missing binary.
   emacs-31:
     name: Nidhogg 31.1 (Fedora 45)
     needs: runtime
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

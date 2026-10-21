@@ -1,0 +1,20 @@
+[package]
+name = "gleipnir-escape"
+description = "Test tooling, never shipped: the probe binary and the escape harness that runs rows against ratatoskr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Normal dependencies, not dev ones: the whole crate is test tooling. It never turns on gleipnir's `test-hooks`
+# (docs/develop/gleipnir.md, "Proving it").
+[dependencies]
+gleipnir = { path = "../gleipnir", version = "0.1.0" }
+draugr = { path = "../draugr", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+rustix.workspace = true
+libc.workspace = true
+tempfile.workspace = true

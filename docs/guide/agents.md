@@ -160,6 +160,9 @@ default; the doctor of the Welcome's Finish step shows yours.) Without a working
 - **Ubuntu 23.10 and later** restrict unprivileged user namespaces with AppArmor ("AppArmor restricts unprivileged
   user namespaces"). The doctor gives the command that loads Ubuntu's `bwrap-userns-restrict` profile, which lets
   bwrap make them.
+- The Agents group's `ratatoskr` line also says whether the job sandbox of the new runtime could start here ("job
+  sandbox backend: bwrap 0.12.0 works here …", or why not and the fix). Job agents do not use it yet, so it never
+  changes the line's status. `ratatoskr sandbox check` shows the same with more detail.
 - **macOS** ships `sandbox-exec`.
 - **Inside a container** there is no sandbox for jobs: run drgnx on the host.
 

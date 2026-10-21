@@ -68,6 +68,8 @@ impl Group {
             env: env::build(&["PATH"], &[], &[]),
             cwd: None,
             stdin_null: false,
+            pass_fds: vec![],
+            new_session: false,
         })
         .await
         .unwrap();

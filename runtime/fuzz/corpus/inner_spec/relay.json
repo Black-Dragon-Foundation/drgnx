@@ -1,0 +1,1 @@
+{"version":1,"env":[],"chdir":null,"landlock":{"tier":"reduced","min_abi":1,"read_roots":["/usr"],"write_roots":["/work"],"dev_write_files":["/dev/null"],"unix_connect_roots":[],"tcp_connect_ports":null,"tcp_bind_ports":null},"new_session":true,"relay":{"argv":["/r"],"ready_timeout_ms":1000}}

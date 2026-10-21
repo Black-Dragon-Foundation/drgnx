@@ -1,0 +1,13 @@
+{"scenario": "security/agent-sockets-are-apart-from-the-backend", "requires": ["v1", "test-hooks", "fake-backend"], "doc": "Review M10: an agent socket is s/SID/hub.sock in the socket dir, a directory of its own per session (0700, the user's, as is s/), never in the backend's hub-HASH.d/: what a sandbox is given (s/SID) holds no backend.sock. The session dir goes at the stop."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "backend_log", "hub": "h", "expect_line": {"method": "subscribe"}}
+{"do": "file", "path": "$SOCKET_DIR/s", "mode": "0700", "owner": "user"}
+{"do": "file", "path": "$SOCKET_DIR/s/s1", "mode": "0700", "owner": "user"}
+{"do": "file", "path": "$SOCKET_DIR/s/s1/hub.sock", "mode": "0600", "owner": "user"}
+{"do": "file", "path": "$BACKEND_SOCKET", "owner": "user"}
+{"do": "file", "path": "$SOCKET_DIR/s/s1/backend.sock", "exists": false}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "agent"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "file", "path": "$SOCKET_DIR/s/s1", "exists": false}

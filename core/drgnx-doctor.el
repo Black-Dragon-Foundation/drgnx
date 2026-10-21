@@ -695,6 +695,21 @@ severity, the fix the first `:fix'."
   "Whether the SQLite version string V is in 3.7.0 to 3.51.2, which has the WAL-reset bug (storage design, section 2)."
   (and (stringp v) (version<= "3.7.0" v) (version<= v "3.51.2")))
 
+(defun drgnx-doctor--ratatoskr-sandbox-line (s)
+  "The detail line for the job sandbox section S of `ratatoskr doctor --json' (nil without one).
+It only informs: nothing runs in the sandbox yet (phase 6), so the check's status never depends on it."
+  (when s
+    (if (plist-get s :ok)
+        (format "job sandbox backend: %s%s works here (%s); job agents do not use it yet (phase 6)"
+                (plist-get s :backend)
+                (if-let* ((v (plist-get s :version))) (concat " " v) "")
+                (if (equal (plist-get s :backend) "seatbelt")
+                    "Seatbelt"
+                  (format "Landlock ABI %s, seccomp" (plist-get s :landlock_abi))))
+      (format "job sandbox backend: not available here: %s%s"
+              (or (plist-get s :reason) "unknown")
+              (if-let* ((fix (plist-get s :fix))) (concat " — " fix) "")))))
+
 (defun drgnx-doctor--ratatoskr-check (f)
   "The `ratatoskr' check of the fact F (`drgnx-doctor--ratatoskr'): failures first, then warnings."
   (let* ((report (plist-get f :report))
@@ -728,7 +743,11 @@ severity, the fix the first `:fix'."
      ((drgnx-doctor--sqlite-wal-bug-p esql)
       (list 'warn (format "this Emacs's SQLite %s has a bug in its write-ahead log (3.7.0 to 3.51.2)" esql)
             "use an Emacs built with SQLite 3.51.3 or newer (Nidhogg); Ratatoskr's own SQLite is not affected"))
-     (t (list 'ok (format "Ratatoskr %s; job agents: %s" (or commit "?") (or (plist-get report :job_agents) "unknown")) nil)))))
+     (t (list 'ok (format "Ratatoskr %s; job agents: %s%s" (or commit "?") (or (plist-get report :job_agents) "unknown")
+                          (if-let* ((line (drgnx-doctor--ratatoskr-sandbox-line (plist-get report :sandbox))))
+                              (concat "; " line)
+                            ""))
+              nil)))))
 
 (drgnx-doctor-define 'ratatoskr :group "Agents"
                      :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory"

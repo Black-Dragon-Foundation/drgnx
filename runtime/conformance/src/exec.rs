@@ -533,9 +533,15 @@ impl Runner<'_> {
                 Ok(())
             }
             "expect" | "expect_next" => self.expect(step),
-            "expect_closed" => self
-                .conn(step)?
-                .expect_closed(ms(&step.obj, "within_ms", 5000)),
+            "expect_closed" => {
+                let silent = step
+                    .obj
+                    .get("silent")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.conn(step)?
+                    .expect_closed(ms(&step.obj, "within_ms", 5000), silent)
+            }
             "expect_silent" => self.conn(step)?.expect_silent(ms(&step.obj, "for_ms", 300)),
             "kill" => self.kill(step),
             "expect_exit" => self.expect_exit(step),
@@ -816,10 +822,12 @@ impl Runner<'_> {
         let hub = &self.hubs[idx];
         let path = match str_of(&step.obj, "socket").unwrap_or("main") {
             "main" => hub.socket.clone(),
-            s if s.starts_with("agent:") => agent_socket(hub, &s[6..]),
+            "backend" => runstav::paths::backend_socket_path(&hub.env, &hub.socket)
+                .map_err(|e| e.to_string())?,
+            s if s.starts_with("agent:") => agent_socket(hub, &s[6..])?,
             other => {
                 return Err(format!(
-                    "\"socket\" is \"main\" or \"agent:SID\", not {other:?}"
+                    "\"socket\" is \"main\", \"backend\" or \"agent:SID\", not {other:?}"
                 ));
             }
         };
@@ -1250,7 +1258,7 @@ impl Runner<'_> {
                     c
                 }
                 "agent" => Conn::open(
-                    &agent_socket(h, agent.unwrap_or_default()),
+                    &agent_socket(h, agent.unwrap_or_default())?,
                     Duration::from_secs(2),
                 )?,
                 _ => Conn::open(&h.socket, Duration::from_secs(2))?,
@@ -1588,14 +1596,9 @@ impl HelloSpec {
     }
 }
 
-/// The agent socket of session SID: `<socket dir>/hub-HASH.d/agent-SID.sock`.
-fn agent_socket(hub: &Hub, sid: &str) -> PathBuf {
-    let stem = hub
-        .socket
-        .file_stem()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    hub.socket_dir()
-        .join(format!("{stem}.d"))
-        .join(format!("agent-{sid}.sock"))
+/// The agent socket of session SID: `hub.sock` in its session dir (`<socket dir>/s/SID/`).
+fn agent_socket(hub: &Hub, sid: &str) -> R<PathBuf> {
+    runstav::paths::session_dir(&hub.env, &hub.socket, sid)
+        .map(|d| d.join(runstav::paths::SESSION_HUB_SOCKET))
+        .map_err(|e| e.to_string())
 }

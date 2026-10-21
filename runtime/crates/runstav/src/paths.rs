@@ -64,6 +64,8 @@ impl Env {
 pub enum PathError {
     /// Over [`MAX_SOCKET_PATH`] bytes even under `<tmp>`.
     TooLong(PathBuf),
+    /// A session id that is not a file name of letters, digits, `-` and `_`.
+    BadName(String),
 }
 
 impl fmt::Display for PathError {
@@ -73,6 +75,10 @@ impl fmt::Display for PathError {
                 f,
                 "the socket path {} is over {MAX_SOCKET_PATH} bytes (set TMPDIR to a shorter directory)",
                 p.display()
+            ),
+            PathError::BadName(n) => write!(
+                f,
+                "the session id {n:?} is not a name of letters, digits, - and _"
             ),
         }
     }
@@ -262,6 +268,60 @@ pub fn backend_socket_path(env: &Env, socket: &Path) -> Result<PathBuf, PathErro
         return Ok(under_tmp);
     }
     Err(PathError::TooLong(under_tmp))
+}
+
+/// The agent-class hub socket in a session dir ([`session_dir`]), design §4.2.
+pub const SESSION_HUB_SOCKET: &str = "hub.sock";
+
+/// The longest socket name a session dir holds (`hub.sock`, `mcp.sock`, `search.sock`, `gateway.sock`): it sizes the
+/// fallback.
+const SESSION_LONGEST_SOCKET: &str = "gateway.sock";
+
+/// Where session dirs are made, for the hub SOCKET names: `<socket dir>/s` and `<tmp>/drgnx-hub-UID/s` (the
+/// fallback).  Gleipnir's run parents: a sandbox is given one direct child of these.
+pub fn session_parents(env: &Env, socket: &Path) -> [PathBuf; 2] {
+    [
+        socket.parent().unwrap_or(Path::new("/")).join("s"),
+        PathBuf::from(expand_in("s", &private_tmp(env))),
+    ]
+}
+
+/// One agent session's private directory (design §4.2): `<socket dir>/s/SID/`, holding that session's sockets
+/// (`hub.sock`, agent class; later `mcp.sock`, `search.sock`, `gateway.sock`).  Never `hub-HASH.d/`, the backend's
+/// (review M10): a sandbox is given `s/SID` alone, so nothing bound into it reaches `backend.sock`.  When its longest
+/// socket would be over 103 bytes, `<tmp>/drgnx-hub-UID/s/SID/`; over there too, [`PathError::TooLong`].  SID is a
+/// name of letters, digits, `-` and `_` ([`PathError::BadName`] otherwise).
+pub fn session_dir(env: &Env, socket: &Path, sid: &str) -> Result<PathBuf, PathError> {
+    let name_ok = !sid.is_empty()
+        && sid
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !name_ok {
+        return Err(PathError::BadName(sid.to_string()));
+    }
+    let fits = |dir: &Path| dir.join(SESSION_LONGEST_SOCKET).as_os_str().len() <= MAX_SOCKET_PATH;
+    let [beside, under_tmp] = session_parents(env, socket).map(|p| p.join(sid));
+    if fits(&beside) {
+        return Ok(beside);
+    }
+    if fits(&under_tmp) {
+        return Ok(under_tmp);
+    }
+    Err(PathError::TooLong(under_tmp.join(SESSION_LONGEST_SOCKET)))
+}
+
+/// [`session_dir`], made: its root (the socket dir, or `<tmp>/drgnx-hub-UID`), `s/` and `s/SID/` each made private
+/// ([`private_dir`]: 0700, ours, not a link) and then checked with [`trusted_dir`].  An unusable path is
+/// `InvalidInput`.
+pub fn make_session_dir(env: &Env, socket: &Path, sid: &str) -> io::Result<PathBuf> {
+    let dir = session_dir(env, socket, sid)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+    let parent = dir.parent().unwrap_or(Path::new("/"));
+    for d in [parent.parent().unwrap_or(Path::new("/")), parent, &dir] {
+        private_dir(d)?;
+        trusted_dir(d)?;
+    }
+    Ok(dir)
 }
 
 /// Make DIR a private directory of this user's: made (with its missing parents) mode 0700 from the start when it is
@@ -513,6 +573,111 @@ mod tests {
             let p = backend_socket_path(env, &socket_path(env)).unwrap();
             assert!(p.as_os_str().len() <= 103, "{p:?}");
         }
+    }
+
+    /// Review M10: an agent session's sockets are in `s/SID/`, never in or around the backend's `hub-HASH.d/`.
+    #[test]
+    fn session_dirs_are_apart_from_the_backend_and_within_103_bytes() {
+        let env = Env::new(
+            &[
+                ("HOME", "/hm/u"),
+                ("XDG_RUNTIME_DIR", "/tmp"),
+                ("DRGNX_DATA_DIR", "/srv/a"),
+            ],
+            4242,
+        );
+        let socket = socket_path(&env);
+        let stem = socket.file_stem().unwrap().to_str().unwrap();
+        let s1 = session_dir(&env, &socket, "s1").unwrap();
+        assert_eq!(s1, Path::new("/tmp/drgnx/s/s1"));
+        let backend_dir = backend_socket_path(&env, &socket).unwrap();
+        let backend_dir = backend_dir.parent().unwrap();
+        assert_eq!(
+            backend_dir,
+            Path::new("/tmp/drgnx").join(format!("{stem}.d"))
+        );
+        // neither holds the other: a sandbox given s/SID never reaches backend.sock, nor the reverse
+        assert!(!s1.starts_with(backend_dir) && !backend_dir.starts_with(&s1));
+        assert!(!backend_dir.starts_with(s1.parent().unwrap()));
+        assert_eq!(
+            session_parents(&env, &socket),
+            [
+                PathBuf::from("/tmp/drgnx/s"),
+                PathBuf::from("/tmp/drgnx-hub-4242/s")
+            ]
+        );
+        // a name only: never a path, a dot name or empty
+        for bad in ["", ".", "..", "a/b", "../d", "a b", "a\0b", "é"] {
+            assert_eq!(
+                session_dir(&env, &socket, bad),
+                Err(PathError::BadName(bad.into())),
+                "{bad:?}"
+            );
+        }
+        for good in ["s1", "0123456789ab", "a-b_C"] {
+            assert!(session_dir(&env, &socket, good).is_ok(), "{good:?}");
+        }
+        // sized for gateway.sock: 103 bytes fit beside the socket, 104 go under <tmp>
+        let t = Env::new(&[("HOME", "/hm/u"), ("TMPDIR", "/var/tmp")], 4242);
+        let sid = "0123456789ab";
+        let room = |n: usize| {
+            // "<dir>/hub-546b5fa5.sock" whose "<dir>/s/SID/gateway.sock" is n bytes
+            let dir = format!(
+                "/{}",
+                "d".repeat(n - "/s/0123456789ab/gateway.sock".len() - 1)
+            );
+            PathBuf::from(format!("{dir}/hub-546b5fa5.sock"))
+        };
+        let fits = session_dir(&t, &room(103), sid).unwrap();
+        assert_eq!(fits.join("gateway.sock").as_os_str().len(), 103);
+        assert!(fits.starts_with(room(103).parent().unwrap()));
+        assert_eq!(
+            session_dir(&t, &room(104), sid).unwrap(),
+            Path::new("/var/tmp/drgnx-hub-4242/s/0123456789ab")
+        );
+        let long_tmp = format!("/{}", "t".repeat(80));
+        let t = Env::new(&[("HOME", "/hm/u"), ("TMPDIR", &long_tmp)], 4242);
+        assert!(matches!(
+            session_dir(&t, &room(104), sid),
+            Err(PathError::TooLong(_))
+        ));
+    }
+
+    #[test]
+    fn make_session_dir_makes_each_level_private_and_refuses_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+        let run = root.path().join("run");
+        let env = Env::new(
+            &[
+                ("HOME", "/hm/u"),
+                ("XDG_RUNTIME_DIR", run.to_str().unwrap()),
+                ("DRGNX_DATA_DIR", "/srv/a"),
+            ],
+            4242,
+        );
+        std::fs::create_dir(&run).unwrap();
+        let socket = socket_path(&env);
+        let made = make_session_dir(&env, &socket, "s1").unwrap();
+        assert_eq!(made, run.join("drgnx/s/s1"));
+        for d in [run.join("drgnx"), run.join("drgnx/s"), made.clone()] {
+            assert_eq!(mode(&d), 0o700, "{d:?}");
+        }
+        // again: the same, fine
+        assert_eq!(make_session_dir(&env, &socket, "s1").unwrap(), made);
+        // a session dir that is a link (to the backend's dir, say) is refused and not followed
+        let backend = run.join("drgnx/hub-x.d");
+        std::fs::create_dir(&backend).unwrap();
+        std::os::unix::fs::symlink(&backend, run.join("drgnx/s/s2")).unwrap();
+        assert!(make_session_dir(&env, &socket, "s2").is_err());
+        // and so is s/ itself as a link
+        std::fs::remove_dir_all(run.join("drgnx/s")).unwrap();
+        std::os::unix::fs::symlink(&backend, run.join("drgnx/s")).unwrap();
+        assert!(make_session_dir(&env, &socket, "s3").is_err());
+        assert!(!backend.join("s3").exists());
+        // a bad name is refused before anything is made
+        let e = make_session_dir(&env, &socket, "../x").unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
