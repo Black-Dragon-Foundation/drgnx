@@ -6,8 +6,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 
 - **The client** (`core/drgnx-hub-client.el`, feature `drgnx-hub-client`): everything an editor, the CLI or the
   sandbox needs to talk to a hub, and nothing of the hub's runtime — the socket path and its trust check, the line
-  protocol, `drgnx-hub-call` / `-call-sync`, the event subscription, `drgnx-hub-ensure` (which starts the hub),
-  the write queue and `drgnx hub start|stop|status`. It requires only `cl-lib`, `subr-x`, `drgnx-paths`, `drgnx-jobs`
+  protocol, `drgnx-hub-call` / `-call-sync`, the event subscription, `drgnx-hub-ensure` (which starts Ratatoskr),
+  `drgnx-hub-restart-now` and the write queue (`drgnx hub start|stop|status` is `bin/drgnx` calling the binary: no Emacs). It requires only `cl-lib`, `subr-x`, `drgnx-paths`, `drgnx-jobs`
   and `drgnx-guard` (the AI provider list comes from `drgnx-ai`, which the caller has loaded). Editor files require
   this and never `drgnx-hub`; `drgnx-agents.el` calls the server's `drgnx-hub-serving-p` and `drgnx-hub-register` only
   when `(featurep 'drgnx-hub)`. The message prompt both the cockpit preview and the hub's delivery use is
@@ -450,13 +450,34 @@ reads its `methods`. `(drgnx-hub-skew REPLY)` is:
 
 `drgnx-hub-skew-functions` gets `(SKEW REPLY)` after each hello, inside the guard. The agents mirror pauses while
 `records` differs (`drgnx-agents-mirror--paused`): it reads no session or entry it could misread. What an editor does
-about `restart-when-idle` (the notice, **Hub: Restart Now**) is the next task's; the client restarts nothing.
+about `restart-when-idle` is in "Starting the hub, and Hub: Restart Now" below; the client restarts nothing by itself.
 
 **`(drgnx-hub-client-binary)`**: `DRGNX_RATATOSKR_BIN` when it is an absolute name of an executable file, else
 `<data>/bin/ratatoskr` when it is one, else nil. **`(drgnx-hub-client-binary-version &optional CACHED-ONLY)`**: its
 `version --json` `commit`, read by an asynchronous process bounded at 2 s and cached by the file's name and
-modification time. CACHED-ONLY (the hello and the skew run in a filter: a daemon path) never waits: the cached value,
-or nil while a read started then runs.
+modification time. CACHED-ONLY (the skew runs in a filter: a daemon path) never waits: the cached value,
+or nil while a read started then runs. The hello does not send without it: on the challenge the connection is in
+state `version` (queueing calls) until the read ends (`drgnx-hub--with-binary-version`; a timer ends a read at 2 s and
+the hello goes without a version), so the first hello of an Emacs carries `drgnx_version` too.
+
+### Starting the hub, and Hub: Restart Now
+
+`drgnx-hub--ensure-running CALLBACK` starts **one asynchronous `ratatoskr ensure --timeout 5`** (no batch Emacs;
+`DRGNX_EMACS` and `DRGNX_DIR` from `(drgnx-emacs-program)` and `drgnx-dir`; provider-key variable names unset). It
+never waits: CALLBACK gets nil when a hub answers, or the reason (the process's output) when `ensure` fails or passes
+`drgnx-hub-ensure-deadline` (10 s, a layer timer `hub-ensure`). A second call while it runs joins it. `drgnx-hub-ensure`
+(commands, the CLI) waits for that and then hands over the keys; in a daemon path (`inhibit-interaction`) it returns at
+once and the keys go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
+no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
+
+The hub's `notice` event (sent when the binary on disk changed) is posted by `drgnx-hub--note-notice` (an editor's
+subscription) as a notice of source `hub`, a condition with command `hub-restart-now`. A hello that finds the hub
+current (`ok`) clears it. A `legacy` hub (the Lisp hub of an install updated while it ran) gets the same notice with
+its own text, from the hello, in an editor only. **`hub-restart-now`** ("Hub: Restart Now", category Agents, no key in
+any profile; `drgnx-hub-restart-now`) asks no one: on Ratatoskr it calls `restart` (its supervisor, or its own
+re-execution, brings it back); on a legacy hub it calls `shutdown` (protocol 0 has no `restart`), waits up to 5 s for
+`<socket>.lock` to go, and runs `ratatoskr ensure`; with no hub it just starts one. Agent sessions end. The Lisp hub's
+own tests start a Lisp hub with `test/fixtures/lisp-hub-fixture.el`, since `drgnx-hub-ensure` no longer does.
 
 **Probes.** `drgnx-hub--ping-socket` (`drgnx-hub-running-p`) sends a raw `ping` and reads lines until one is not an
 event, so Ratatoskr's challenge is skipped. It sends no hello: a probe is `service` class, which `ping` allows.

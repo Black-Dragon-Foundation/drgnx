@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-hub-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT (so the hub's socket is this test's own), a mock OpenRouter on OR-PORT logging
@@ -582,7 +583,8 @@ about) and keeps the tests within their time limits."
   (drgnx-hub-test--with
     (let ((rc (call-process (expand-file-name invocation-name invocation-directory) nil nil nil "--batch" "-Q"
                             "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub"
-                            "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+                            "-l" (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir)
+                            "--eval" "(kill-emacs (if (drgnx-test-lisp-hub-ensure) 0 1))")))
       (should (= rc 0)))
     (should (drgnx-hub-running-p))                    ; the starter is gone; the hub serves
     (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
@@ -608,7 +610,8 @@ about) and keeps the tests within their time limits."
   "Start the hub from another Emacs with ENV (\"NAME=value\"…) added, as an editor or the CLI does; its exit status."
   (let ((process-environment (append env process-environment)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil "--batch" "-Q"
-                  "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+                  "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-l" (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir)
+                  "--eval" "(kill-emacs (if (drgnx-test-lisp-hub-ensure) 0 1))")))
 
 (ert-deftest drgnx-hub/no-key-in-unit-environment ()
   ;; a key in the starting Emacs's environment never becomes the hub's (a systemd unit's --setenv is kept in the
@@ -619,7 +622,7 @@ about) and keeps the tests within their time limits."
       (cl-letf (((symbol-function 'drgnx-jobs-start)
                  (lambda (&rest args) (setq started args) (drgnx-hub-serve (drgnx-hub-socket)))))
         (let ((process-environment (cons "OPENROUTER_API_KEY=sk-fake-env" process-environment)))
-          (drgnx-hub-ensure)))
+          (drgnx-test-lisp-hub-ensure)))
       (should started)
       (should-not (string-search "sk-fake-env" (prin1-to-string started)))
       (should-not (string-search "API_KEY" (prin1-to-string started))))
@@ -720,7 +723,8 @@ about) and keeps the tests within their time limits."
     (should (= 0 (call-process "sh" nil nil nil "-c" "trap - PIPE; exec \"$0\" \"$@\""
                                (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub"
-                               "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+                               "-l" (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir)
+                               "--eval" "(kill-emacs (if (drgnx-test-lisp-hub-ensure) 0 1))")))
     (let* ((r (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :keys '(:openrouter "sk-k"))))
            (port (string-to-number (car (last (split-string (plist-get r :url) ":"))))))
       (dotimes (_ 3)                                                   ; three agents hang up mid-answer
@@ -907,19 +911,6 @@ about) and keeps the tests within their time limits."
         (should-not started))
       (drgnx-hub-serve (drgnx-hub-socket))            ; one that runs is used
       (should (drgnx-hub-ensure)))))
-
-(ert-deftest drgnx-hub/the-cli ()
-  (drgnx-hub-test--with
-    (let ((cli (lambda (&rest args)
-                 (with-temp-buffer
-                   (cons (apply #'call-process (expand-file-name "bin/drgnx" drgnx-dir) nil t nil "hub" args) (buffer-string))))))
-      (should (= (car (funcall cli "status" "--json")) 1))
-      (should (= (car (funcall cli "start")) 0))
-      (let ((s (funcall cli "status" "--json")))
-        (should (= (car s) 0))
-        (should (integerp (plist-get (json-parse-string (cdr s) :object-type 'plist) :gateway_port))))
-      (should (= (car (funcall cli "stop")) 0))
-      (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
 
 ;;;; The hub's timers, on the timer layer (virtual time; no socket, no gateway)
 

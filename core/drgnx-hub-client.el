@@ -72,12 +72,11 @@ record layout differs.")
   "(FILE MTIME COMMIT) of Ratatoskr's binary as `drgnx-hub-client-binary-version' last read it.")
 (defvar drgnx-hub--binary-reading nil "The `ratatoskr version --json' process reading now, or nil.")
 
-(defconst drgnx-hub--env-names
-  '("DRGNX_DATA_DIR" "DRGNX_CONFIG_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_CONFIG_HOME" "XDG_RUNTIME_DIR"
-    "DRGNX_HUB_PARENT_PID")
-  "Variables the hub gets from the Emacs that starts it (when set): the same dirs and (tests only) the pid it ends
-with.  Never a key: a systemd unit keeps its environment where `systemctl --user show' prints it; keys come over the
-socket (`drgnx-hub--send-keys').")
+(defvar drgnx-hub--ensuring nil
+  "The `ratatoskr ensure' process running now, or nil.  Its property `:callbacks' holds the functions to call (with
+nil or the reason it failed) when it ends.")
+
+(defconst drgnx-hub-ensure-deadline 10 "Seconds `ratatoskr ensure' may run before it is ended and counted as failed.")
 
 ;;;; Where
 
@@ -325,7 +324,31 @@ the CLI proves it read in its hello."
       (when (stringp commit) (setq drgnx-hub--binary-version (append (process-get p :stamp) (list commit))))
       (process-put p :done t)
       (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p)))
-      (when (eq drgnx-hub--binary-reading p) (setq drgnx-hub--binary-reading nil)))))
+      (when (eq drgnx-hub--binary-reading p) (setq drgnx-hub--binary-reading nil))
+      (drgnx-hub--version-read-ended p))))
+
+(defun drgnx-hub--version-read-ended (p)
+  "The read P ended (or ran too long): the functions waiting for its answer (`drgnx-hub--with-binary-version') run once."
+  (drgnx-timer-cancel (cons 'hub-binary-version p))
+  (let ((fns (nreverse (process-get p :then))))
+    (process-put p :then nil)
+    (dolist (f fns) (funcall f))))
+
+(defun drgnx-hub--version-read-expired (p)
+  "The read P ran past its deadline: it is ended, and what waits for it goes on without a version."
+  (when (process-live-p p) (delete-process p))
+  (when (eq drgnx-hub--binary-reading p) (setq drgnx-hub--binary-reading nil))
+  (drgnx-hub--version-read-ended p))
+
+(defun drgnx-hub--with-binary-version (fn)
+  "Call FN once Ratatoskr's binary version is known or cannot be: at once when it is cached or there is no binary, else
+when the read that runs ends (at most 2 s).  Never waits."
+  (if (drgnx-hub-client-binary-version t)
+      (funcall fn)
+    (let ((p drgnx-hub--binary-reading))
+      (if (process-live-p p)
+          (process-put p :then (cons fn (process-get p :then)))
+        (funcall fn)))))
 
 (defun drgnx-hub--read-binary-version (stamp)
   "Start reading the version of the binary STAMP names ((FILE MTIME)), unless that read runs already: the process,
@@ -342,6 +365,7 @@ or nil when it cannot start.  One left running past 2 s is ended by the next rea
                                    :sentinel (drgnx-guard-wrap #'drgnx-hub--binary-version-read "ratatoskr version"))))
               (process-put p :stamp stamp)
               (process-put p :started (float-time))
+              (drgnx-timer-start (cons 'hub-binary-version p) 2 #'drgnx-hub--version-read-expired :args (list p) :owner :core)
               (setq drgnx-hub--binary-reading p))
           (error nil)))))
 
@@ -379,7 +403,11 @@ subscribed connection) goes to `drgnx-hub-event-functions'."
            (when (eq (process-get conn :drgnx-state) 'wait)
              (drgnx-timer-cancel (cons 'hub-challenge conn))
              (let ((nonce (plist-get (plist-get json :data) :nonce)))
-               (if (stringp nonce) (drgnx-hub--hello conn nonce)
+               (if (stringp nonce)
+                   ;; the binary's version goes in the first hello too: it waits for the read that runs (R-T17-2); the
+                   ;; connection is no longer `wait'ing for a challenge (the probe's answer must not make it `legacy')
+                   (progn (process-put conn :drgnx-state 'version)
+                          (drgnx-hub--with-binary-version (lambda () (when (process-live-p conn) (drgnx-hub--hello conn nonce)))))
                  (drgnx-hub--reject-hub conn (format "the hub at %s sent a challenge without a nonce" (drgnx-hub-socket)))))))
           (event (when (process-get conn :drgnx-events)
                    (drgnx-guard-run-hook 'drgnx-hub-event-functions event (plist-get json :data))))
@@ -497,9 +525,21 @@ when they fail."
   (setq drgnx-hub--last-hello reply)
   (let ((skew (drgnx-hub-skew reply)))
     (drgnx-guard-run-hook 'drgnx-hub-skew-functions skew reply)
+    (drgnx-hub--skew-notice skew reply)
     (if (eq skew 'incompatible)
         (drgnx-hub--reject-hub conn (drgnx-hub--incompatible-text reply) (and (not noninteractive) 'incompatible))
       (drgnx-hub--send-queued conn))))
+
+(defun drgnx-hub--skew-notice (skew reply)
+  "The notice for a hub of SKEW (`drgnx-hub-skew') that answered with REPLY.  A legacy hub (the Lisp hub of an install
+updated while it ran) is offered Hub: Restart Now, in an editor; nothing restarts it unasked.  A hub that is current
+takes away the notice that offered a restart (the Ratatoskr one is the hub's own `notice' event,
+`drgnx-hub--note-notice')."
+  (cond ((and (eq skew 'restart-when-idle) (eq reply :legacy))
+         (unless noninteractive
+           (drgnx-notify 'hub 'warn "a hub from before this drgnx update runs; restart it to use Ratatoskr (running agent sessions end)"
+                         :id 'restart-when-idle :life 'condition :command 'hub-restart-now)))
+        ((eq skew 'ok) (drgnx-notice-clear 'hub 'restart-when-idle))))
 
 (defun drgnx-hub--send-queued (conn)
   "Send the calls waiting in CONN's queue, in order — only those still waiting: one whose deadline passed was told it
@@ -529,7 +569,7 @@ proven or `legacy'."
                        :args (list id) :owner :core)
     (let ((msg (list :id id :method method :params (or params (make-hash-table)))))
       (cond (first (drgnx-hub--send conn msg))
-            ((memq (process-get conn :drgnx-state) '(wait hello))
+            ((memq (process-get conn :drgnx-state) '(wait version hello))
              (process-put conn :drgnx-queue (nconc (process-get conn :drgnx-queue) (list msg))))
             (t (drgnx-hub--transmit conn msg))))
     id))
@@ -565,6 +605,7 @@ error, or when it does not answer."
     (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (let (ids)
     (maphash (lambda (id _) (push id ids)) drgnx-hub--pending)
     (dolist (id ids) (drgnx-hub--settle id nil "disconnected from the drgnx hub"))))
@@ -617,35 +658,105 @@ argument or a file.  The hub keeps them in memory only, so they go again on each
   (when-let* ((keys (drgnx-hub--held-keys)))
     (drgnx-hub-call "gateway/keys" (list :keys keys) #'ignore)))
 
-(defun drgnx-hub-ensure ()
-  "Make sure the hub runs, starting it as a durable job if not (waits up to 5 s: commands and the CLI only), and
-hand it the keys this Emacs holds.  t, or an error saying why not."
-  (prog1 (drgnx-hub--ensure-running)
-    ;; it waits (commands and the CLI): the keys go once the connection is proven, and a CLI that exits at once
-    ;; would take them with it
-    (when-let* ((id (drgnx-hub--send-keys)))
-      (let ((limit (+ (float-time (time-convert nil t)) 5)))
-        (while (and (gethash id drgnx-hub--pending) (< (float-time (time-convert nil t)) limit))
-          (accept-process-output nil 0.02))))))
+(defun drgnx-hub--wait-for-keys ()
+  "Hand the hub the keys this Emacs holds and wait (up to 5 s) for it to take them: a CLI that exits at once would take
+them with it."
+  (when-let* ((id (drgnx-hub--send-keys)))
+    (let ((limit (+ (float-time (time-convert nil t)) 5)))
+      (while (and (gethash id drgnx-hub--pending) (< (float-time (time-convert nil t)) limit))
+        (accept-process-output nil 0.02)))))
 
-(defun drgnx-hub--ensure-running ()
+(defun drgnx-hub--ensured (err)
+  "A hub started in a daemon path is up (ERR nil): it gets the keys this Emacs holds.  Otherwise (ERR the reason) the user
+is told."
+  (if err
+      (drgnx-notify 'hub 'fail err :id 'start)
+    (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys))))
+
+(defun drgnx-hub-ensure ()
+  "Make sure the hub runs, starting Ratatoskr (one `ratatoskr ensure') if not, and hand it the keys this Emacs holds.
+t, or an error saying why not.  For commands and the CLI, which wait for it (`drgnx-hub-ensure-deadline' at most).  In a
+daemon path (`inhibit-interaction') it never waits: it returns t only when a hub answered already, and the keys go,
+or the user is told, when the start ends."
+  (if inhibit-interaction
+      (null (drgnx-hub--ensure-running #'drgnx-hub--ensured))
+    (let ((state 'waiting) (limit (+ (float-time) drgnx-hub-ensure-deadline 2)))
+      (drgnx-hub--ensure-running (lambda (err) (setq state (or err t))))
+      (while (and (eq state 'waiting) (< (float-time) limit)) (accept-process-output nil 0.05))
+      (unless (eq state t) (error "%s" (if (stringp state) state "ratatoskr ensure did not finish")))
+      (drgnx-hub--wait-for-keys)
+      t)))
+
+(defun drgnx-hub--ensure-done (p)
+  "The `ratatoskr ensure' process P ended, or ran past its deadline: whoever waits for it hears how it went."
+  (when (eq drgnx-hub--ensuring p)
+    (setq drgnx-hub--ensuring nil)
+    (drgnx-timer-cancel 'hub-ensure)
+    (let* ((out (if (buffer-live-p (process-buffer p)) (with-current-buffer (process-buffer p) (string-trim (buffer-string))) ""))
+           (err (cond ((process-get p :expired)
+                       (format "ratatoskr ensure did not finish in %d s (see `drgnx hub status')" drgnx-hub-ensure-deadline))
+                      ((and (eq (process-status p) 'exit) (eql (process-exit-status p) 0)) nil)
+                      (t (format "Ratatoskr did not start: %s" (if (string-empty-p out) "ratatoskr ensure failed" out)))))
+           (callbacks (reverse (process-get p :callbacks))))
+      (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p)))
+      (dolist (f callbacks) (funcall f err)))))
+
+(defun drgnx-hub--ensure-sentinel (p _event)
+  (unless (process-live-p p) (drgnx-hub--ensure-done p)))
+
+(defun drgnx-hub--ensure-expired ()
+  "`ratatoskr ensure' ran past `drgnx-hub-ensure-deadline': it is ended and counted as failed."
+  (when-let* ((p drgnx-hub--ensuring))
+    (process-put p :expired t)
+    (when (process-live-p p) (delete-process p))
+    (drgnx-hub--ensure-done p)))
+
+(defun drgnx-hub--ensure-running (callback)
+  "Make sure a hub runs, without waiting: CALLBACK is called with nil once one answers (at once when one does already)
+or with the reason it does not, when the one asynchronous `ratatoskr ensure --timeout 5' ends or passes
+`drgnx-hub-ensure-deadline'.  Returns that process (nil when a hub ran already).  Signals when it cannot start one:
+Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
   (require 'drgnx-ai)
-  (or (drgnx-hub-running-p)
-      (and (getenv "DRGNX_NO_HUB_START")
-           (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
-      (let ((env (delq nil (mapcar (lambda (n) (let ((v (getenv n))) (and v (not (string-empty-p v)) (concat n "=" v))))
-                                   drgnx-hub--env-names)))
-            ;; nor through inheritance (a launcher without systemd passes this Emacs's environment on): keys unset
-            (process-environment (append (delq nil (mapcar (lambda (p) (plist-get (cdr p) :key-env)) (drgnx-ai-providers)))
-                                         process-environment)))
-        ;; SIGPIPE ignored (the editing Emacs does not): an agent that hangs up must never end the hub
-        (drgnx-jobs-start "drgnx-hub" (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""
-                                            (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                            "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main")
-                          :cwd (expand-file-name "~") :env env)
-        (let ((deadline (+ (float-time) 5)))
-          (while (and (not (drgnx-hub-running-p)) (< (float-time) deadline)) (sleep-for 0.1)))
-        (or (drgnx-hub-running-p) (error "The drgnx hub did not start (see `drgnx hub status' and its job log)")))))
+  (cond ((drgnx-hub-running-p) (funcall callback nil) nil)
+        ((getenv "DRGNX_NO_HUB_START")
+         (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
+        ((process-live-p drgnx-hub--ensuring)
+         (process-put drgnx-hub--ensuring :callbacks (cons callback (process-get drgnx-hub--ensuring :callbacks)))
+         drgnx-hub--ensuring)
+        (t
+         (let* ((bin (or (drgnx-hub-client-binary) (error "Ratatoskr is not built: run `drgnx runtime build'")))
+                ;; its Emacs and checkout are this one's; no key through inheritance either (names without a value unset)
+                (process-environment (append (list (concat "DRGNX_EMACS=" (drgnx-emacs-program))
+                                                   (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)))
+                                             (delq nil (mapcar (lambda (p) (plist-get (cdr p) :key-env)) (drgnx-ai-providers)))
+                                             process-environment))
+                (p (make-process :name "ratatoskr-ensure" :buffer (generate-new-buffer " *ratatoskr ensure*" t) :noquery t
+                                 :connection-type 'pipe :command (list bin "ensure" "--timeout" "5")
+                                 :sentinel (drgnx-guard-wrap #'drgnx-hub--ensure-sentinel "ratatoskr ensure"))))
+           (process-put p :callbacks (list callback))
+           (setq drgnx-hub--ensuring p)
+           (drgnx-timer-start 'hub-ensure drgnx-hub-ensure-deadline #'drgnx-hub--ensure-expired :owner :core)
+           p))))
+
+(defun drgnx-hub--restart-legacy ()
+  "End the Lisp hub of before this update (protocol 0 has `shutdown', not `restart'), wait up to 5 s for its lock directory
+to go, then start Ratatoskr."
+  (let ((lock (concat (drgnx-hub-socket) ".lock")) (limit (+ (float-time) 5)))
+    (ignore-errors (drgnx-hub-call-sync "shutdown" nil 5))
+    (while (and (file-exists-p lock) (< (float-time) limit)) (accept-process-output nil 0.05))
+    (drgnx-hub--ensure-running #'drgnx-hub--ensured)))
+
+(defun drgnx-hub-restart-now ()
+  "Restart the hub now (Hub: Restart Now): the agent sessions it runs end.  Asks no one: the user chose it, from the
+update notice or the palette.  Ratatoskr is asked to `restart' (its supervisor starts it again); a hub from before
+Ratatoskr is shut down and Ratatoskr started in its place; no hub at all is started."
+  (interactive)
+  (if (not (drgnx-hub-running-p))
+      (drgnx-hub--ensure-running #'drgnx-hub--ensured)
+    (drgnx-hub-call-sync "ping" nil 5)            ; the connection's hello says which hub it is
+    (if (eq (process-get drgnx-hub--client :drgnx-state) 'legacy)
+        (drgnx-hub--restart-legacy)
+      (drgnx-hub-call-sync "restart" nil 5))))
 
 (defun drgnx-hub-connect ()
   "Subscribe to the hub's events (`drgnx-hub-event-functions') and hand it the keys this Emacs holds
@@ -666,6 +777,7 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
       (process-put c :since (float-time))
       (drgnx-hub--call-on c "subscribe" nil (lambda (r _err) (drgnx-hub--subscribed c r)))
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)   ; removed by `drgnx-hub-disconnect'
+      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)  ; also
       ;; a hub keeps keys in memory only: one that restarted has none, so each new subscription gives them again
       (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys)))))
 
@@ -674,6 +786,17 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
   (when (and result (process-live-p conn))
     (setq drgnx-hub--events conn)
     (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))))
+
+(defun drgnx-hub--note-notice (event data)
+  "In an editor: a `notice' the hub sent (it is not the version on disk any more) becomes a notice of source `hub', with
+the command it names (Hub: Restart Now).  A condition: the hub, or the next hello from a current one, takes it away."
+  (when (equal event "notice")
+    (let ((id (plist-get data :id)) (text (plist-get data :text)) (severity (plist-get data :severity))
+          (command (plist-get data :command)))
+      (when (and (stringp id) (stringp text) (member severity '("info" "warn" "fail")))
+        (drgnx-notify 'hub (intern severity) text :id (intern id)
+                      :life (if (equal (plist-get data :life) "condition") 'condition 'event)
+                      :command (and (stringp command) (intern command)))))))
 
 (declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
 
@@ -686,28 +809,6 @@ when it is loaded)."
         (let ((d (plist-get e :data)))
           (when (and (proper-list-p d) (or (natnump (plist-get d :passed)) (natnump (plist-get d :failed))))
             (drgnx-statusbar-note-tests (or (plist-get d :passed) 0) (or (plist-get d :failed) 0) (plist-get e :agent))))))))
-
-;;;; CLI
-
-(defun drgnx-hub-cli ()
-  "`drgnx hub start|stop|status [--json]'."
-  (let* ((args (prog1 (cdr (member "--" command-line-args-left)) (setq command-line-args-left nil)))
-         (json (member "--json" args)))
-    (kill-emacs
-     (condition-case err
-         (pcase (car args)
-           ("start" (drgnx-hub-ensure) (princ (format "drgnx hub: running (%s)\n" (drgnx-hub-socket))) 0)
-           ("stop" (when (drgnx-hub-running-p) (drgnx-hub-call-sync "shutdown" nil)) 0)
-           ("status"
-            (if (not (drgnx-hub-running-p))
-                (progn (princ (if json "{\"running\":false}\n" "drgnx hub: not running\n")) 1)
-              (let ((s (drgnx-hub-call-sync "status" nil)))
-                (princ (if json (concat (json-serialize (drgnx-hub--jsonable (append (list :running t) s))) "\n")
-                         (format "drgnx hub: running, pid %s, gateway 127.0.0.1:%s, %s registrations, since %s\n"
-                                 (plist-get s :pid) (plist-get s :gateway_port) (plist-get s :registrations) (plist-get s :started))))
-                0)))
-           (_ (princ "usage: drgnx hub start|stop|status [--json]\n" #'external-debugging-output) 2))
-       (error (princ (format "drgnx hub: %s\n" (error-message-string err)) #'external-debugging-output) 1)))))
 
 (provide 'drgnx-hub-client)
 ;;; drgnx-hub-client.el ends here

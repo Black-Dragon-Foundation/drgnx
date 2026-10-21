@@ -27,6 +27,7 @@
                                        process-environment))
           (drgnx-hub--client nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil)
           (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
+          (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
           (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil) (drgnx-hub-skew-functions nil))
      (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
      (unwind-protect (progn ,@body)
@@ -48,6 +49,9 @@
   (let ((b (getenv "DRGNX_RATATOSKR_BIN")))
     (and b (file-name-absolute-p b) (file-executable-p b) (not (file-directory-p b)) b)))
 
+(defvar drgnx-hub-client-test--serve-fn nil
+  "A function (ROOT) → (BINARY ARG…) that replaces the binary `with-ratatoskr' serves with, and adds arguments.")
+
 (defmacro drgnx-hub-client-test--with-ratatoskr (&rest body)
   "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'), its Lisp backend this checkout's; skipped
 without the binary."
@@ -58,8 +62,12 @@ without the binary."
                                                (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
                                          process-environment))
             (hub (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
-                               :command (list (drgnx-hub-client-test--bin) "serve" "--foreground"
-                                              "--parent-pid" (number-to-string (emacs-pid))))))
+                               :command (let ((s (if drgnx-hub-client-test--serve-fn
+                                                     (funcall drgnx-hub-client-test--serve-fn root)
+                                                   (list (drgnx-hub-client-test--bin)))))
+                                          (append (list (car s) "serve" "--foreground"
+                                                        "--parent-pid" (number-to-string (emacs-pid)))
+                                                  (cdr s))))))
        (unwind-protect
            (progn (drgnx-hub-client-test--wait #'drgnx-hub-running-p "Ratatoskr answers a ping")
                   ,@body)
@@ -420,5 +428,170 @@ without the binary."
           (should (equal (nreverse got) '((:a 1) (:b 2))))
           (should (< drgnx-hub-client-test--searched (* 2 n (length chunk)))))
       (delete-process p))))
+
+;;;; Starting Ratatoskr, and Hub: Restart Now
+
+(defun drgnx-hub-client-test--stub (root body)
+  "A /bin/sh script in ROOT that runs BODY; its name."
+  (let ((f (concat root "stub-ratatoskr")))
+    (with-temp-file f (insert "#!/bin/sh\n" body "\n"))
+    (set-file-modes f #o755)
+    f))
+
+(defun drgnx-hub-client-test--lines (file)
+  (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (split-string (buffer-string) "\n" t))))
+
+(ert-deftest drgnx-hub-client/ensure-is-one-async-process ()
+  ;; the hub is started by one `ratatoskr ensure --timeout 5', which does not block the caller; no Emacs starts
+  (drgnx-hub-client-test--with
+    (let* ((log (concat root "stub.log")) (done 'waiting)
+           (process-environment
+            (cons (concat "DRGNX_RATATOSKR_BIN="
+                          (drgnx-hub-client-test--stub root (format "echo \"$* emacs=$DRGNX_EMACS dir=$DRGNX_DIR\" >> '%s'" log)))
+                  process-environment)))
+      (drgnx-hub--ensure-running (lambda (err) (setq done err)))
+      (should (eq done 'waiting))
+      (drgnx-hub-client-test--wait (lambda () (not (eq done 'waiting))) "ensure ends")
+      (should-not done)
+      (should (equal (drgnx-hub-client-test--lines log)
+                     (list (format "ensure --timeout 5 emacs=%s dir=%s" (expand-file-name invocation-name invocation-directory)
+                                   (directory-file-name drgnx-dir)))))
+      (should-not drgnx-hub--ensuring)
+      (should-not (string-search "--batch" (or (car (drgnx-hub-client-test--lines log)) ""))))))
+
+(ert-deftest drgnx-hub-client/ensure-says-why-it-failed ()
+  (drgnx-hub-client-test--with
+    (let* ((process-environment
+            (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "echo 'ratatoskr: no way' >&2; exit 1"))
+                  process-environment))
+           (err (should-error (drgnx-hub-ensure))))
+      (should (string-search "no way" (error-message-string err))))))
+
+(ert-deftest drgnx-hub-client/ensure-never-waits-in-a-daemon-path ()
+  (drgnx-hub-client-test--with
+    (let ((process-environment
+           (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "exec sleep 3")) process-environment))
+          (inhibit-interaction t) (t0 (float-time)))
+      (unwind-protect
+          (progn
+            (should-not (drgnx-hub-ensure))
+            (should (< (- (float-time) t0) 1.0))
+            (should (process-live-p drgnx-hub--ensuring)))
+        (when (process-live-p drgnx-hub--ensuring) (delete-process drgnx-hub--ensuring))
+        (drgnx-timer-cancel 'hub-ensure)))))
+
+(ert-deftest drgnx-hub-client/no-binary-says-how-to-build ()
+  (drgnx-hub-client-test--with
+    (let ((process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
+      (dolist (f '(drgnx-hub-ensure drgnx-hub-restart-now))
+        (should (string-search "Ratatoskr is not built: run `drgnx runtime build'"
+                               (error-message-string (should-error (funcall f)))))))))
+
+(ert-deftest drgnx-hub-client/the-first-hello-carries-the-binary-version ()
+  ;; R-T17-2: the hello waits for the binary's version read, which the first connection of an Emacs starts
+  (drgnx-hub-client-test--with-fake ()
+    (let ((process-environment
+           (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "echo '{\"commit\":\"abc123\"}'"))
+                 process-environment)))
+      (drgnx-hub-call "agents/list" nil #'ignore)
+      (drgnx-hub-client-test--wait (lambda () (member "agents/list" (drgnx-fake-hub-methods hub))) "the call goes")
+      (let ((hello (seq-find (lambda (l) (equal (plist-get l :method) "hello")) (drgnx-fake-hub-lines hub))))
+        (should (equal (plist-get (plist-get hello :params) :drgnx_version) "abc123"))))))
+
+(ert-deftest drgnx-hub-client/a-current-hello-clears-the-restart-notice ()
+  ;; the notice is a condition: a hub that comes back from the binary's own commit takes it away
+  (drgnx-hub-client-test--with-fake ()
+    (let ((process-environment
+           (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "echo '{\"commit\":\"fake\"}'"))
+                 process-environment)))
+      (unwind-protect
+          (progn
+            (drgnx-notify 'hub 'warn "drgnx was updated" :id 'restart-when-idle :life 'condition :command 'hub-restart-now)
+            (should (gethash '(hub . restart-when-idle) drgnx-notice--table))
+            (drgnx-hub-call-sync "agents/list" nil 10)
+            (should-not (gethash '(hub . restart-when-idle) drgnx-notice--table)))
+        (drgnx-notice-clear 'hub 'restart-when-idle)))))
+
+(ert-deftest drgnx-hub-client/a-legacy-hub-offers-restart-now ()
+  ;; a Lisp hub of before this update runs: the notice offers Hub: Restart Now, which shuts it down (v0 has no
+  ;; restart) and starts Ratatoskr with one `ensure'
+  (drgnx-hub-client-test--with-fake (:mode 'legacy)
+    (let* ((log (concat root "stub.log")) (noninteractive nil)
+           (process-environment
+            (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root (format "echo \"$*\" >> '%s'" log)))
+                  process-environment)))
+      (unwind-protect
+          (progn
+            (drgnx-hub-call-sync "ping" nil 10)
+            (let ((n (gethash '(hub . restart-when-idle) drgnx-notice--table)))
+              (should n)
+              (should (eq (plist-get n :command) 'hub-restart-now))
+              (should (string-search "restart it to use Ratatoskr (running agent sessions end)" (plist-get n :text))))
+            (drgnx-hub-restart-now)
+            ;; (the stub also answers the client's `version --json' read)
+            (let ((ensures (lambda () (seq-filter (lambda (l) (string-prefix-p "ensure" l)) (drgnx-hub-client-test--lines log)))))
+              (drgnx-hub-client-test--wait ensures "ratatoskr ensure runs")
+              (should (member "shutdown" (drgnx-fake-hub-methods hub)))
+              (should-not (member "restart" (drgnx-fake-hub-methods hub)))
+              (should (equal (funcall ensures) '("ensure --timeout 5")))))
+        (drgnx-notice-clear 'hub 'restart-when-idle)))))
+
+(ert-deftest drgnx-hub-client/the-update-notice-offers-restart-now ()
+  ;; binary: the file the hub runs from is replaced by another commit's (an update): the hub's `notice' event becomes
+  ;; a notice whose command is Hub: Restart Now (needs the binary's test hooks: the 200 ms tick)
+  (skip-unless (and (drgnx-hub-client-test--bin)
+                    (string-search "\"test_hooks\":true"
+                                   (shell-command-to-string (concat (shell-quote-argument (drgnx-hub-client-test--bin)) " version --json")))))
+  (let ((drgnx-hub-client-test--serve-fn
+         (lambda (root)
+           (let ((live (concat root "ratatoskr-live")))
+             (copy-file (drgnx-hub-client-test--bin) live)
+             (set-file-modes live #o755)
+             (list live "--idle-tick-ms" "200")))))
+    (drgnx-hub-client-test--with-ratatoskr
+      (unwind-protect
+          (progn
+            (drgnx-hub-client-test--backend-up)
+            (drgnx-hub-connect)
+            (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
+            (let ((other (drgnx-hub-client-test--stub root "echo '{\"commit\":\"another\"}'")))
+              (rename-file other (concat root "ratatoskr-live") t))
+            (let ((n (drgnx-hub-client-test--wait (lambda () (gethash '(hub . restart-when-idle) drgnx-notice--table))
+                                                  "the update notice")))
+              (should (eq (plist-get n :command) 'hub-restart-now))
+              (should (eq (plist-get n :life) 'condition))))
+        (drgnx-notice-clear 'hub 'restart-when-idle)))))
+
+(ert-deftest drgnx-hub-client/restart-now-over-ratatoskr ()
+  ;; binary + the Lisp backend (R-T17-3): ensure starts Ratatoskr, the editor's key reaches it, Hub: Restart Now
+  ;; restarts it (self-supervised: it executes itself again), and the editor's next subscription gives the key again
+  (skip-unless (drgnx-hub-client-test--bin))
+  (require 'drgnx-ai)
+  (drgnx-hub-client-test--with
+    (let* ((bin (drgnx-hub-client-test--bin))
+           (process-environment (append (list (concat "DRGNX_RATATOSKR_BIN=" bin) "RATATOSKR_SUPERVISOR=none"
+                                              "OPENROUTER_API_KEY=sk-test-restart")
+                                        process-environment))
+           (drgnx-hub-client-test--traffic nil))
+      (advice-add 'drgnx-hub-call :around #'drgnx-hub-client-test--record)
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-ensure))
+            (should (drgnx-hub-running-p))
+            (drgnx-hub-connect)
+            (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
+            (let ((first drgnx-hub--events)
+                  (given (lambda () (seq-count (lambda (c) (and (equal (car c) "gateway/keys") (null (nth 2 c))))
+                                               drgnx-hub-client-test--traffic))))
+              (drgnx-hub-client-test--wait (lambda () (>= (funcall given) 1)) "the key reaches the hub")
+              (drgnx-hub-restart-now)
+              (drgnx-hub-client-test--wait (lambda () (not (process-live-p first))) "the hub restarts")
+              (let ((before (funcall given)))
+                (drgnx-hub-client-test--wait (lambda () (ignore-errors (drgnx-hub-connect) (process-live-p drgnx-hub--events)))
+                                             "the editor subscribes again")
+                (drgnx-hub-client-test--wait (lambda () (> (funcall given) before)) "the key goes again"))))
+        (advice-remove 'drgnx-hub-call #'drgnx-hub-client-test--record)
+        (drgnx-hub-disconnect)
+        (call-process bin nil nil nil "stop" "--timeout" "10")))))
 
 ;;; hub-client-test.el ends here
