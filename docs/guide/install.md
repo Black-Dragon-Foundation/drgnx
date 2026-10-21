@@ -45,6 +45,9 @@ machine at any time.
 6. **Compiles drgnx** (`drgnx build`), then on Linux **refreshes `drgnx.service`'s Emacs** if the unit is installed
    (`drgnx service-unit --refresh`: only its `ExecStart=` line changes; you restart drgnx yourself, see
    [Staying up to date](#staying-up-to-date)).
+   **Ratatoskr** (the agent runtime, written in Rust) is built from source next ([Ratatoskr's Rust toolchain](#ratatoskrs-rust-toolchain)).
+   A failed build warns with the log path and the fix (`drgnx runtime build --install`); drgnx still runs, and
+   agents say "Ratatoskr is not built".
 7. **macOS: the drgnx app.** Installs `~/Applications/drgnx.app` (`drgnx macos-app`: Finder, Spotlight, the Dock,
    Open With — [opening.md](opening.md#on-macos-the-drgnx-app)); if that fails it warns and goes on.
 8. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
@@ -183,7 +186,8 @@ The details:
   background when you close its last window.
 
 For tests, `DRGNX_INSTALL_BREW=none|PATH` overrides the Homebrew detection and `DRGNX_INSTALL_TTY=none|yes` overrides
-the check for a terminal (so the tests need no `setsid`).
+the check for a terminal (so the tests need no `setsid`). `DRGNX_INSTALL_RUNTIME=none` skips the Ratatoskr step
+(toolchain probe and build) altogether.
 
 ### The source build
 
@@ -331,6 +335,39 @@ installs anything and never asks.
 | another Wayland compositor | `info river (Wayland): no adapter; drgnx leaves window placement to it` |
 | over SSH, or no display | `info no graphical session here: run drgnx doctor in your desktop's terminal to check its window manager` |
 
+## Ratatoskr's Rust toolchain
+
+Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.88
+or newer and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
+parallel job. install.sh takes the first of these that applies (`--dry-run` says which):
+
+1. `cargo` and `rustc` 1.88 or newer already on `PATH`.
+2. The distro's default Rust package, only if its version is 1.88 or newer (asked first): Fedora `cargo rust gcc`,
+   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 44/45, Ubuntu 26.04 and
+   Homebrew qualify.
+3. A versioned Debian-family package when the default is too old (Ubuntu 24.04: `rustc-1.91 cargo-1.91`, binaries in
+   `/usr/lib/rust-1.91/bin`).
+4. Otherwise (Debian 13, other distros) a private rustup in `~/.local/share/drgnx/rustup` with Rust 1.93.1. rustup-init
+   is downloaded from the versioned archive on static.rust-lang.org and checked against a sha256 recorded in
+   install.sh before it runs; nothing touches `~/.rustup` or `~/.cargo`.
+
+A missing `cc` is named in the plan (`gcc`; on macOS `xcode-select --install`). The choice is recorded in
+`~/.local/share/drgnx/cargo` (the cargo's path, and `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup) because the
+update timer's `PATH` lacks `~/.cargo/bin` and `/usr/lib/rust-1.91/bin`; `drgnx runtime build` and `drgnx update` use it.
+
+The build uses `-j` by CPUs and memory (one job per 1.5 GiB available). On Linux with a user systemd it runs inside
+`systemd-run --user --scope` with `MemoryMax` of jobs x 1.5 GiB + 1 GiB (never more than available minus 1 GiB) and no
+swap; over SSH without a user manager it runs with `-j` alone and says so. **macOS has no memory cap**, only the job
+count.
+
+```sh
+drgnx runtime build [--install]      # cargo build of Ratatoskr; --install also installs it
+drgnx runtime install [--prefix DIR] # <data>/bin/ratatoskr (by rename), links DIR/bin/ratatoskr and rtsk
+```
+
+`runtime install` refuses a binary built with test hooks. The build's commit (`ratatoskr version --json`) is what the
+doctor compares with the checkout.
+
 ## Staying up to date
 
 One command brings the install to the newest `main` on GitHub:
@@ -347,9 +384,12 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
    If you are already at `main` it says so and stops.
 3. **Fast-forwards only.** If the checkout has local commits `main` does not have (it has *diverged*), it refuses and
    names the fix: `git rebase origin/main`, or `git reset --hard origin/main` to discard them.
-4. Runs **`drgnx sync`** (packages, from the lock the new version ships) and **`drgnx build`**. If either fails, the
+4. Runs **`drgnx sync`** (packages, from the lock the new version ships), **`drgnx build`**, and then **`drgnx runtime
+   build --install`** (Ratatoskr; the new binary replaces the old one only after a good build). If any fails, the
    checkout goes back to the commit it was on, that commit's packages are synced again (from the cache first) and it is
-   rebuilt, and the message says how far that got. The same happens if the update is interrupted (Ctrl-C, a timeout,
+   rebuilt (and Ratatoskr too, when the installed binary is from another commit), and the message says how far that
+   got. A failed Rust build rolls the whole update back, so the Lisp and the binary never differ: the last run reads
+   "failed: runtime build failed (…)", and the doctor says to fix the toolchain, then `drgnx update`. The same happens if the update is interrupted (Ctrl-C, a timeout,
    logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
 5. Points an installed `drgnx.service` at the Emacs drgnx uses now (`drgnx service-unit --refresh`; only the
    `ExecStart=` line changes; see [packages.md](packages.md#running-drgnx-as-a-daemon)). It never restarts the service.
