@@ -114,15 +114,17 @@
       (setq drgnx-agents--sessions (delq s drgnx-agents--sessions)))))
 
 (ert-deftest drgnx-job-clash/overlapping-tasks-are-advisory ()
-  ;; both tasks append to task.txt: when the first is in review, the other open task changed the same file
+  ;; both tasks append to task.txt: when the first is in review, the other open task changed the same file.  The two
+  ;; run at once, so either can be first: the card is on the task that reached review (macOS CI 39605706447 read
+  ;; task 1, still running, after task 2's card), and advisory means that task stays in review
   (drgnx-job-run-test--with drgnx-job-clash-test--two
     (let* ((drgnx-job-review nil) (id (drgnx-job-propose plan)))
       (drgnx-job-approve id)
       (should (drgnx-job-run-test--wait (lambda () (drgnx-job-clash-test--cards id "overlap")) 30))
       (let ((card (car (drgnx-job-clash-test--cards id "overlap"))))
-        (should (member "task.txt" (plist-get (plist-get card :data) :files))))
-      (should (= 1 (length (drgnx-job-clash-test--cards id "overlap"))))   ; one per pair
-      (should (member (drgnx-job-run-test--status id 1) '("in-review" "done"))))))
+        (should (member "task.txt" (plist-get (plist-get card :data) :files)))
+        (should (member (plist-get (drgnx-coord-task (plist-get card :task)) :status) '("in-review" "done"))))
+      (should (= 1 (length (drgnx-job-clash-test--cards id "overlap")))))))   ; one per pair
 
 (ert-deftest drgnx-job-clash/covers ()
   (should (drgnx-job-clash--covers-p "legacy/a.txt" "legacy/"))
