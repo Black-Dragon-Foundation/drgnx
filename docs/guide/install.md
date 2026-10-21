@@ -259,7 +259,9 @@ drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also lo
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
 your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. `portable-config` warns when the config dir holds a key in plain text (it names the file,
 never the key) or a machine-local file such as the old `emacs` record, and says which `projects.eld` roots are not
-cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). With Vim keys the `modal` check warns when the stack needs evil and it is not
+cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). The `modules`, `display-rules` and `key-problems` checks (and the problems under the Terminal group's keys row) are
+what the running drgnx says as notices (see below); `modules-report.eld` and `wb-report.eld` are no longer written, and
+`key-conflicts` still reads the conflict table of `keys-report.eld`. With Vim keys the `modal` check warns when the stack needs evil and it is not
 installed or not running (fix: `drgnx sync`, then restart, or choose another Keyboard Profile…), says when Vim waits for `drgnx sync`, and on
 GNOME notes that Alt+Space opens the window menu before drgnx sees it (Settings → Keyboard → Keyboard Shortcuts → Windows; the Leader
 Menu is on `M-SPC`, which replaces Emacs' `cycle-spacing`).
@@ -267,6 +269,14 @@ The `claude-adapter` check reads the `package.json` of the Claude Code adapter t
 run, without running it. It wants `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. The deprecated
 `@zed-industries/claude-agent-acp`, an older version, or a program of no package drgnx knows is a warning, with the
 one-line command that fixes it, or advice when the adapter is not in a global npm prefix ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+
+**What drgnx has told you.** Each running drgnx writes the problems it knows (the notices that are still true, and
+the last 50 warnings and failures) to its own file in `~/.local/state/drgnx/notices/`, two seconds after a change; at
+exit the file becomes `last.eld`. The doctor only reads them. A check of this kind prints what the running drgnx says
+and ends with `(this session)`, or `(this session, pid 1234, 5678)` when more than one drgnx is running; with none
+running, it prints the last session's, `(from the last session, 3 h ago)`, and those of a drgnx that died without
+exiting. Before the first start it says `no session recorded yet — start drgnx once`. The file of a dead drgnx is
+deleted after 7 days.
 
 A terminal-only Emacs (no graphical build) passes the `gui` check: drgnx runs in terminals, with no images and one font
 size.

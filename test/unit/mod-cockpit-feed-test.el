@@ -5,7 +5,6 @@
 (require 'drgnx-agents)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
-(load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)   ; what needs you, counted once in the bar
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
@@ -22,8 +21,8 @@ buffers are killed after: they owned their hooks and their timers."
      (drgnx-test-with-state
        (drgnx-cockpit-feed--subscribe)
        (let* ((drgnx-cockpit-feed--buffers nil)
-              (drgnx-cockpit-feed--waiting nil) (drgnx-cockpit-feed-test--hub nil)
-              (drgnx-cockpit-feed--told nil) (drgnx-cockpit-feed--in-flight nil)
+              (drgnx-cockpit-feed--noted nil) (drgnx-cockpit-feed-test--hub nil)
+              (drgnx-cockpit-feed--in-flight nil)
               (drgnx-cockpit-graph-current-filter nil)
               (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-at (float-time))
               (m1 (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'idle :job "jx" :task "jx#2"))
@@ -296,34 +295,108 @@ buffers are killed after: they owned their hooks and their timers."
             (should (> (cdar drgnx-cockpit-feed--in-flight) (- (float-time) 5)))
             (should-error (drgnx-cockpit-answer q2 "tabs") :type 'user-error)))))))
 
-(ert-deftest drgnx-cockpit-feed/the-status-bar-hears-of-a-new-count ()
-  (drgnx-cockpit-feed-test--with
-    (let ((refreshes 0))
-      (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (cl-incf refreshes))))
-        (drgnx-cockpit-feed-tell-statusbar)
-        (should (= refreshes 1))                    ; first told
-        (drgnx-cockpit-feed-tell-statusbar)
-        (should (= refreshes 1))                    ; the same count: nothing
-        ;; another process asks (no hub event): the module's look (`cockpit-waiting') tells the bar, whatever shows
-        (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] ok?" :question t)
-        (drgnx-cockpit--waiting)
-        (should (= refreshes 2))
-        (drgnx-cockpit--waiting)
-        (should (= refreshes 2))
-        (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
-        (drgnx-cockpit--waiting)
-        (should (= refreshes 3))
-        ;; a store write that changes no count tells nothing
-        (drgnx-coord-event-add :agent "s-1" :kind "edit" :data '(:paths ("x.el")))
-        (drgnx-cockpit--waiting)
-        (should (= refreshes 3))
-        ;; a refresh that fails leaves the count untold: the next look tries again
-        (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and then?" :question t)
-        (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (error "bar broken"))))
-          (drgnx-cockpit--waiting))
-        (should (= refreshes 3))
-        (drgnx-cockpit--waiting)
-        (should (= refreshes 4))))))
+(defmacro drgnx-cockpit-feed-test--with-notices (&rest body)
+  "BODY in the feed fixture with a fresh notice model that has the `questions' and `jobs' sources, as the modules'
+setups define them."
+  (declare (indent 0))
+  `(drgnx-cockpit-feed-test--with
+     (drgnx-notice-test-with-model
+       (drgnx-notice-define-source 'questions :title "Questions" :command 'cockpit-answer)
+       (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)
+       ,@body)))
+
+(defun drgnx-cockpit-feed-test--item (id)
+  "The notice item with ID in the model, or nil."
+  (seq-find (lambda (i) (equal (plist-get i :id) id)) (drgnx-needs-you-items)))
+
+(ert-deftest drgnx-cockpit-feed/the-count-moves-when-another-process-asks ()
+  (drgnx-cockpit-feed-test--with-notices
+    (drgnx-cockpit-feed-note-questions)
+    (let ((n0 (drgnx-needs-you-count)))
+      ;; another process asks (no hub event): the module's look (`cockpit-waiting') moves the count, whatever shows
+      (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] ok?" :question t)
+      (drgnx-cockpit--waiting)
+      (should (= (drgnx-needs-you-count) (1+ n0)))
+      (drgnx-cockpit--waiting)
+      (should (= (drgnx-needs-you-count) (1+ n0)))
+      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+      (drgnx-cockpit--waiting)
+      (should (= (drgnx-needs-you-count) (+ n0 2)))
+      ;; a store write that asks nothing leaves it
+      (drgnx-coord-event-add :agent "s-1" :kind "edit" :data '(:paths ("x.el")))
+      (drgnx-cockpit--waiting)
+      (should (= (drgnx-needs-you-count) (+ n0 2))))))
+
+(ert-deftest drgnx-cockpit-feed/questions-are-the-questions-set ()
+  (drgnx-cockpit-feed-test--with-notices
+    (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
+    (drgnx-cockpit-feed-note-questions)
+    (let* ((q (seq-find (lambda (q) (equal (plist-get q :agent) "s-2")) (drgnx-cockpit-feed--open-questions)))
+           (item (drgnx-cockpit-feed-test--item (cons 'question (plist-get q :id)))))
+      (should q)
+      (should item)
+      (should (equal (plist-get item :text) (drgnx-cockpit-feed--describe q)))
+      (should (eq (plist-get item :command) 'cockpit-answer))
+      (should (equal (plist-get item :scope) (plist-get q :job))))
+    ;; the next set replaces the whole set: an answered question is gone
+    (let ((n (drgnx-needs-you-count)))
+      (drgnx-cockpit-answer (seq-find (lambda (q) (equal (plist-get q :agent) "s-2")) (drgnx-cockpit-feed--open-questions))
+                            "spaces")
+      (should (< (drgnx-needs-you-count) n)))))
+
+(ert-deftest drgnx-cockpit-feed/an-ask-card-counts-once ()
+  ;; the jobs set and the questions set both hold it: `drgnx-needs-you-count' counts it once
+  (drgnx-cockpit-feed-test--with-notices
+    (drgnx-cockpit-feed-note-questions)
+    (let* ((n0 (drgnx-needs-you-count))
+           (cid (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?")))
+      (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :messages nil
+                                          :cards (list (list :id cid :kind "ask" :title "go?")))))
+      (should (= (drgnx-needs-you-count) (1+ n0)))      ; the jobs set alone holds it
+      (drgnx-cockpit-feed-note-questions)
+      (should (= (drgnx-needs-you-count) (1+ n0)))      ; both hold it
+      (should (drgnx-cockpit-feed-test--item (cons 'card cid)))
+      (should (= 1 (seq-count (lambda (i) (equal (plist-get i :id) (cons 'card cid))) (drgnx-needs-you-items)))))))
+
+(ert-deftest drgnx-cockpit-feed/a-job-message-question-counts-once ()
+  (drgnx-cockpit-feed-test--with-notices
+    (drgnx-cockpit-feed-note-questions)
+    (let* ((n0 (drgnx-needs-you-count))
+           (mid (plist-get (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] ok?" :job "jx") :id)))
+      (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :cards nil
+                                          :messages (list (list :id mid :sender "s-1" :text "[escalation] ok?" :state "queued")))))
+      (drgnx-cockpit-feed-note-questions)
+      (should (= (drgnx-needs-you-count) (1+ n0)))
+      (should (drgnx-cockpit-feed-test--item (cons 'message mid))))))
+
+(ert-deftest drgnx-cockpit-feed/heads-show-the-one-count ()
+  ;; the timeline's head reads the model's count, which holds more than the store's questions
+  (drgnx-cockpit-feed-test--with-notices
+    (drgnx-notice-define-source 'extra :title "Extra" :command 'cockpit-answer)
+    (let ((b (drgnx-cockpit-timeline-buffer)))
+      (set-window-buffer (selected-window) b)
+      (drgnx-notice-set 'extra (list (list :id '(extra . 1) :text "one") (list :id '(extra . 2) :text "two")))
+      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+      (drgnx-cockpit-feed--changed)
+      (drgnx-cockpit-feed-test--tick)
+      (should (> (drgnx-needs-you-count) 3))
+      (with-current-buffer b
+        (should (string-match-p (format "%s %d waiting on you" (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))
+                                        (drgnx-needs-you-count))
+                                (drgnx-cockpit-feed-test--line "waiting on you")))))))
+
+(ert-deftest drgnx-cockpit-feed/the-status-bar-is-not-called ()
+  (drgnx-cockpit-feed-test--with-notices
+    (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (ert-fail "the cockpit called the status bar"))))
+      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+      (drgnx-cockpit-feed-note-questions)
+      (drgnx-cockpit--waiting)
+      (drgnx-cockpit-feed--changed)
+      (drgnx-cockpit-feed--hub-event "events" nil))
+    (dolist (f '("modules/tools/drgnx-cockpit-feed.el" "modules/tools/drgnx-cockpit.el"))
+      (with-temp-buffer
+        (insert-file-contents (expand-file-name f drgnx-dir))
+        (should-not (search-forward "drgnx-statusbar" nil t))))))
 
 (ert-deftest drgnx-cockpit-feed/timeline-chips-in-time-order ()
   (drgnx-cockpit-feed-test--with
@@ -446,24 +519,23 @@ buffers are killed after: they owned their hooks and their timers."
           (should-not (string-search "s-1 asks you" (drgnx-cockpit-feed-test--line "claude · jx#2"))))))))
 
 (ert-deftest drgnx-cockpit-feed/a-question-shows-in-all-three-places ()
-  (drgnx-cockpit-feed-test--with
+  (drgnx-cockpit-feed-test--with-notices
     (let* ((b (drgnx-cockpit-timeline-buffer))
            (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table)))
            (task5 "agent:s-2")
            (waiting-p (lambda (id) (plist-get (seq-find (lambda (n) (equal (plist-get n :id) id))
                                                         (plist-get (drgnx-cockpit-model :sessions sessions) :nodes))
                                               :waiting)))
-           (n0 (drgnx-cockpit-waiting-count)))
+           (n0 (progn (drgnx-cockpit-feed-note-questions) (drgnx-needs-you-count))))
       (set-window-buffer (selected-window) b)
-      ;; the count the status bar shows leaves to the jobs count what it holds: the escalation of job jx (a message
-      ;; of the job) and the reopened card; the timeline's head still counts the model's open questions
-      (should (= n0 0))
-      (should (= (drgnx-cockpit-feed--head-count) (length (plist-get (drgnx-cockpit-model :sessions sessions) :questions))))
+      ;; the one count holds the model's open questions: the escalation of job jx and the reopened card
+      (should (= n0 (length (plist-get (drgnx-cockpit-model :sessions sessions) :questions))))
       (should-not (funcall waiting-p task5))
-      ;; s-2 asks: the graph marks its task, the status bar's count goes up, the timeline gets a waiting chip
+      ;; s-2 asks: the graph marks its task, the one count goes up, the timeline gets a waiting chip
       (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
+      (drgnx-cockpit-feed-note-questions)
       (should (funcall waiting-p task5))
-      (should (= (drgnx-cockpit-waiting-count) (1+ n0)))
+      (should (= (drgnx-needs-you-count) (1+ n0)))
       (drgnx-cockpit-feed-schedule)
       (drgnx-cockpit-feed-test--tick)
       (with-current-buffer b
@@ -478,7 +550,7 @@ buffers are killed after: they owned their hooks and their timers."
           (call-interactively #'drgnx-cockpit-answer)))
       (should (equal (assoc "agents/send" drgnx-cockpit-feed-test--hub) (list "agents/send" (list :id "s-2" :text "spaces"))))
       (should-not (funcall waiting-p task5))
-      (should (= (drgnx-cockpit-waiting-count) n0))
+      (should (= (drgnx-needs-you-count) n0))
       ;; the chip is calm again (its row drawn again, though the answer is another row's); the window's point, on the
       ;; chip, stays on its row, at the same column, and its start where it was (the view puts its own window back)
       (let* ((w (get-buffer-window b)) (start (window-start w))
@@ -503,47 +575,8 @@ buffers are killed after: they owned their hooks and their timers."
           (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "this way")))
             (call-interactively #'drgnx-cockpit-answer))))
       (should (assoc "job/reply" drgnx-cockpit-feed-test--hub))
-      (should (= (drgnx-cockpit-waiting-count) n0)))))           ; that one was the jobs count's
-
-(ert-deftest drgnx-cockpit-feed/an-ask-card-is-left-to-the-jobs-count ()
-  ;; notices Phase 0: an ask card is a question event naming the card, and the jobs count (C8) holds it already
-  (drgnx-cockpit-feed-test--with
-    (let ((n0 (drgnx-cockpit-waiting-count)) (h0 (drgnx-cockpit-feed--head-count)))
-      (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?")
-      (should (= (drgnx-cockpit-waiting-count) n0))
-      (should (= (drgnx-cockpit-feed--head-count) (1+ h0))))))
-
-(ert-deftest drgnx-cockpit-feed/a-job-message-question-is-left-to-the-jobs-count ()
-  ;; an escalation sent with a job is also a message of the job to you, which the jobs count holds
-  (drgnx-cockpit-feed-test--with
-    (let ((n0 (drgnx-cockpit-waiting-count)))
-      (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] ok?" :job "jx")
-      (should (= (drgnx-cockpit-waiting-count) n0))
-      (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] ok?")
-      (should (= (drgnx-cockpit-waiting-count) (1+ n0))))))
-
-(ert-deftest drgnx-cockpit-feed/an-ask-card-shows-once-in-the-status-bar ()
-  ;; the jobs segment's ⚑ and the agents segment's "waiting on you" never both count one ask card
-  (drgnx-cockpit-feed-test--with
-    (drgnx-notice-test-with-model
-      (let ((drgnx-statusbar--tick 0) (drgnx-statusbar--agents-state nil) (drgnx-statusbar--jobs-state nil)
-            (drgnx-statusbar--redraw-wanted nil)
-            (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil) (drgnx-statusbar--errors nil)
-            (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
-            (drgnx-statusbar--segments (make-hash-table :test #'eq))
-            (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting))
-            (drgnx-notice-functions nil))
-        (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-cockpit-waiting-count)   ; as tools/cockpit's setup does
-        (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)   ; as tools/jobs' setup does
-        (drgnx-statusbar--define-defaults)
-        (let ((cid (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?"))
-              (seg (lambda (id) (when-let* ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn))))
-                                  (substring-no-properties s)))))
-          (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :messages nil
-                                              :cards (list (list :id cid :kind "ask" :title "go?")))))
-          (drgnx-statusbar--refresh-now)
-          (should (equal (funcall seg 'jobs) (concat (drgnx-statusbar--glyph 'flag "#") "1")))   ; ⚑1
-          (should-not (string-search "waiting on you" (or (funcall seg 'agents) ""))))))))
+      (drgnx-cockpit-feed-note-questions)
+      (should (= (drgnx-needs-you-count) (1- n0))))))            ; s-1's escalation is answered
 
 (ert-deftest drgnx-cockpit-feed/terminals-get-the-same-text-in-ascii ()
   (drgnx-cockpit-feed-test--with
@@ -646,17 +679,16 @@ buffers are killed after: they owned their hooks and their timers."
         (with-current-buffer tl (should (string-search "1 file" (drgnx-cockpit-feed-test--line "claude · jx#2"))))))))
 
 (ert-deftest drgnx-cockpit-feed/commands-and-keys-in-every-profile ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil)
-        (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
       (drgnx-cockpit-fixture-after-setup
+        ;; the setup defines the `questions' attention source
+        (should (gethash 'questions drgnx-notice--sources))
         ;; the feed hears from the workbench state store when its panes show, are hidden, swap buffers or resize
         (should (memq #'drgnx-cockpit-feed--pane-shown (alist-get 'pane-shown drgnx-state--now)))
         (should (memq #'drgnx-cockpit-feed--pane-hidden (alist-get 'pane-hidden drgnx-state--now)))
         (should (memq #'drgnx-cockpit-feed--windows-changed (alist-get 'windows-changed drgnx-state--now)))
         (should (memq #'drgnx-cockpit-feed--pane-resized (alist-get 'pane-resized drgnx-state--idle)))))
-    ;; the questions only the cockpit counts reach the status bar's "waiting on you"
-    (should (memq #'drgnx-cockpit-waiting-count drgnx-statusbar-waiting-functions))
     (should (eq (plist-get (alist-get 'happened kinds) :home) 'right))
     (should (eq (plist-get (alist-get 'timeline kinds) :home) 'bottom))
     (pcase-dolist (`(,id ,fn ,map) '((cockpit-answer drgnx-cockpit-answer drgnx-cockpit-map)

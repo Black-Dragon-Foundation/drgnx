@@ -27,6 +27,7 @@
 (require 'cl-lib)
 (require 'drgnx-frame-kind)
 (require 'drgnx-modules-helpers)
+(require 'drgnx-notice)
 (require 'drgnx-timer)                  ; the off path cancels the shared flush, `signal-flush'
 
 (defvar drgnx-wb--areas)                ; drgnx-area.el: the areas' tabs (read, when loaded)
@@ -276,11 +277,14 @@ Those two only on request: `frame-parameter' copies all of a frame's parameters 
 
 ;;;; The observer
 
-(defun drgnx-state--error (what fn err)
-  "Record ERR, raised by FN during WHAT, in `drgnx-signal-errors' (the bus's format, at most 20)."
-  (push (format "%s %s: %s" what fn (error-message-string err)) drgnx-signal-errors)
-  (when (nthcdr 20 drgnx-signal-errors)
-    (setq drgnx-signal-errors (take 20 drgnx-signal-errors))))
+(defun drgnx-state--error (what fn err &optional source)
+  "Say ERR, raised by FN during WHAT: a `warn' event of SOURCE (`store', or `bus' for the bus) keyed by
+\(WHAT . FN), and the line in `drgnx-signal-errors' (a mirror of the bus's format, at most 20)."
+  (let ((line (format "%s %s: %s" what fn (error-message-string err))))
+    (push line drgnx-signal-errors)
+    (when (nthcdr 20 drgnx-signal-errors)
+      (setq drgnx-signal-errors (take 20 drgnx-signal-errors)))
+    (drgnx-notify (or source 'store) 'warn line :id (cons what fn))))
 
 (defun drgnx-state--observe (frame &optional parameters)
   "Bring FRAME's record up to date; non-nil (the new record) when it was taken anew.

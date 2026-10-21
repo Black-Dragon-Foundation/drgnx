@@ -70,8 +70,12 @@ handlers, so a read at startup or from the palette never connects; an entry that
 once per change of an unusable file. The mode body reads under `condition-case`, so a bad file never keeps a guard
 off. Untrust This Folder takes effect in the session (`drgnx-trust--added`) even when the file cannot be changed.
 
-The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook: an
-error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
+The display-buffer entry is checked by `drgnx-rules--sync-entry-notice` (a startup hook), which posts the
+`(wb . display-buffer-entry)` warn condition, cleared when the entry is back; there is no `wb-report.eld`, no
+`modules-report.eld` (`drgnx-modules-report` stays in memory) and no `:problems` in `keys-report.eld` or
+`:fallback-problems` in `terminal-report.eld`: the doctor's `modules`, `display-rules` and `key-problems` checks are
+`drgnx-doctor-define-notices` declarations, and the Terminal keys row appends the `terminal` notices. The report files
+in the state folder go this way: `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
 (`drgnx-check--save-durations`) and `terminal-report.eld` (`drgnx-tty-frames--save-report`, from a terminal frame's
 hooks: an error goes to `drgnx-hooks-problems`) are written with `drgnx-file-write ... :fsync nil`, so a failed write
 keeps the old report. They are read with `drgnx-file-read`: `drgnx-tty--read-report` (which ui/terminal's
@@ -477,7 +481,8 @@ that mean it. The theme hook passes TIMEOUT 0 and skips when `drgnx-file-busy`; 
 Work that need not happen at startup hangs on a stage and runs once, when the stage is first reached:
 `drgnx-first-input-hook` (before the first command), `drgnx-first-file-hook` (first visited file),
 `drgnx-first-gui-frame-hook` (first graphical frame — for a daemon, the first `emacsclient -c`). Each function
-runs under its own error guard; errors are collected in `drgnx-hooks-problems`, never shown as prompts.
+runs under its own error guard; an error is a `warn` event of notice source `hooks` (id `(HOOK . FN)`), never shown
+as a prompt.
 
 ## No prompts in automatic paths (`drgnx-guard.el`)
 
@@ -624,6 +629,20 @@ line over the `fail` conditions present. A single line names the item's `:comman
 command's key; a merged line and the startup line name the Notices list and its key. Lines go out as
 `(let ((message-truncate-lines t)) (message "%s" LINE))`.
 
+**The session file** (`core/drgnx-notice-save.el`, `drgnx-notice-save-mode`, on in `drgnx-init`).
+`drgnx-notice--save-soon` is on `drgnx-notice-functions`: unless it is already pending, it starts the idle timer
+`notices-save` (2 s, `:core`), whose write sees every change made meanwhile. `(drgnx-notice--save)` writes
+`<state>/notices/<PID>.eld` (`drgnx-notice-save-file`) through `drgnx-file-write` (`:fsync nil`): `(:version 1 :pid P
+:emacs V :daemon D :started S :written W :notices …)`, the conditions (oldest first) then the newest 50 `warn`/`fail`
+events. A notice is written without text properties and without any property that does not read back (a `:command`
+that does not goes; an unreadable `:id` becomes its printed form). The first write of a session deletes
+`notices/<PID>.eld` files of dead processes older than 7 days. `drgnx-notice--save-at-exit` (`kill-emacs-hook`) writes
+`last.eld` the same way and deletes the process's own file; a failure there is a message. The files are written
+owner-only (`:private t`, 0600): notice texts can carry paths. One file per process, so two
+running Emacsen never overwrite each other. `drgnx-notice-save-pid-live-p` is the liveness test (the pid's process
+name starts with `emacs` or `nidhogg`). The doctor reads the files; see "Doctor" (`drgnx-doctor-define-notices`).
+Tests: `test/unit/core-notice-save-test.el`.
+
 **The list and the mode-line pair** (`core/drgnx-notices.el`). `(drgnx-notices-show)` (command `notices`) pops to
 `*drgnx Notices*`, in `drgnx-notices-mode` (a `special-mode`; `g` redraws). It is drawn through the render
 pipeline's views (`wb/drgnx-view.el`, required when the list is first shown, so the rest of the file needs nothing
@@ -646,6 +665,19 @@ memoised on the model's tick, the glyph table and the model's table (`eq`), so a
 `mode-line` button (`drgnx-ui-button`). A click on the needs-you count runs `drgnx-notice-needs-you-click`: with
 every item from one source it does what the newest item's `:command` says, else it opens the list; the problems
 count opens the list.
+
+**Core producers** (they load the model on their first post, so none needs it at startup; none ever signals):
+
+| Source | Posts | Id |
+|---|---|---|
+| `keys` | After each `drgnx-keys-apply`, `drgnx-notice-clear` of the source, then one `warn` condition per entry of `drgnx-keys-last`' `:problems` (a keys.eld mistake, an unknown profile, a binding that could not be made). `warn`, so never echoed. `drgnx-keys-problems` stays the input list. | the problem text |
+| `hooks` | A `warn` event for an error in a staged-hook function (`drgnx-hooks-run-once`): `HOOK: FN: MESSAGE`. | `(HOOK . FN)` |
+| `commands` | Nothing yet. `drgnx-commands-problems`, which nothing wrote, is gone; a registry problem is a `commands` notice. | |
+| `timers` | A `warn` condition when the layer stops a timer at its `drgnx-timer-failure-limit`-th failure in a row: `timer KEY (FN) stopped after N failures: ERROR`, with a fix line. Cleared when KEY starts again. `timers-report.eld` and the doctor's `timers` check are unchanged. | the timer key |
+| `terminal` | `drgnx-tty-fallback-notify`: a `warn` condition per line of `drgnx-tty-fallback-problems` for a frame's terminal; lines that stopped being a problem go, other terminals' stay. | `(TERMINAL . LINE)` |
+
+The terminal modules still push their own caught errors to `drgnx-hooks-problems` (terminal mode is frozen); only
+staged-hook errors are notices.
 
 **Cost** (allocation is the gate; `test/unit/core-notice-test.el`, byte-compiled): a count read 0 conses; a new
 event 14 (22 with one hook function); a repeat 1 (its key). Replacing three sets of 40/40/20 items (80 ids) in
@@ -982,7 +1014,7 @@ What it does **not** record:
   jit-lock its context timer) and kept in a variable; cancelled, it would stay dead for the session (undo boundaries
   for process output would stop). Such a timer stays pending, and the module's report says so: `:left`, a list of
   `"timer FN (FILE)"` (FILE is where FN is defined, `no file` when it is not) or `"timer a lambda"`, newest first. It
-  is cleared when the module's run starts and is in `modules-report.eld`. Read it as "this module's setup started
+  is cleared when the module's run starts and is in `drgnx-modules-report`. Read it as "this module's setup started
   these, and turning it off did not stop them": a line for a function that is the module's own means the module should
   start it through `drgnx-timer-start`, which ends it with the run.
 - **Global modes are owned by the first module that turns them on.** "Newly on" is all the net sees: when module
@@ -2272,6 +2304,17 @@ after failing 3 times in a row ([Timers](#timers)). OK "no timer stopped"; else 
 report's age, fix "report the error; drgnx starts the timer again at the next start". A report stays until the next
 stop rewrites it, so an old one shows its age.
 
+**Notices in the doctor.** The fact `:notices`, `(drgnx-doctor--notices)`, reads the session files of
+`drgnx-notice-save` (never writes): `(:live (DATA…) :last DATA :crashed (DATA…))`. A file is *live* when its pid is a
+running Emacs (`drgnx-notice-save-pid-live-p`); `last.eld` is the last session; a dead pid's file is *crashed*, and
+ignored when its mtime is over 7 days old. `(drgnx-doctor-define-notices SOURCE &key group doc name)` defines the check
+NAME (default SOURCE) from them: SOURCE's notices from the live files merged by key (the later `:at` wins), else from
+`last.eld` and the crashed files; the status is the worst severity (else OK "no problems"); the detail is the texts
+joined by "; " (the first 5, then "and N more") and " (this session)", " (this session, pid P, Q)" when more than one
+is live, or " (from the last session, AGE)"; the fix is the first `:fix`; with no file at all, INFO "no session
+recorded yet — start drgnx once". Tests: `test/unit/doctor-test.el` (`drgnx-doctor/notices-*`,
+`define-notices-*`).
+
 ## Window managers (`drgnx-platform.el`)
 
 Emacs cannot move a frame to another monitor by itself under Wayland, and a tiling window manager ignores
@@ -2771,7 +2814,9 @@ counts a window it moves. `idle` (the default) queues the call: one per FN, even
 `:kind`), with the last data. The bus's idle flush (`drgnx-signal--flush`, `drgnx-signal-delay`, 0.05 s) makes
 them, oldest first, after observing the selected frame; the store has no timer of its own. The handler reads the
 records then. Every call binds `inhibit-interaction`, so a subscriber that prompts gets an error.
-An error is recorded in `drgnx-signal-errors` as `"EVENT FN: message"` (newest first, at most 20), never raised.
+An error is a `warn` event (`drgnx-state--error`: source `store` here, `bus` for `drgnx-signal--call`, which runs FN
+inside `drgnx-automatic`) keyed `(EVENT . FN)`, text `"EVENT FN: message"`, and is mirrored in `drgnx-signal-errors`
+(newest first, at most 20; kept one release for its tests), never raised.
 Subscribers of one event run in subscription order.
 
 The Work cockpit's panes are such consumers ([cockpit.md](cockpit.md)): `pane-shown` and `pane-hidden` on `now` start

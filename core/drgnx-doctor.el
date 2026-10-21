@@ -25,6 +25,9 @@
 
 (declare-function package-built-in-p "package")
 (declare-function drgnx-portable-config-problems "drgnx-portable")
+(declare-function drgnx-notice-save-dir "drgnx-notice-save")
+(declare-function drgnx-notice-save-last-file "drgnx-notice-save")
+(declare-function drgnx-notice-save-pid-live-p "drgnx-notice-save")
 
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
@@ -372,9 +375,6 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
            :keys-report (drgnx-doctor--keys-report)
            :desktop (getenv "XDG_CURRENT_DESKTOP")
-           :wb-report (drgnx-doctor--state-file "wb-report.eld")
-           :modules-report (drgnx-doctor--state-file "modules-report.eld")
-           :modules-report-time (drgnx-doctor--state-file-time "modules-report.eld")
            :onboarding (drgnx-doctor--state-file "onboarding.eld")
            :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
                        (error (list :error (error-message-string err))))
@@ -397,6 +397,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :config-files (drgnx-doctor--config-files)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
+           :notices (drgnx-doctor--notices)
            :statusbar-slow (drgnx-doctor--state-file "statusbar-slow.eld")   ; the status bar's slow entries
            :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")
            ;; file names only: a key found in the config dir is never part of the facts
@@ -424,6 +425,84 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
     (cond ((< s 3600) (format "%d min ago" (floor s 60)))
           ((< s 172800) (format "%d h ago" (floor s 3600)))
           (t (format "%d d ago" (floor s 86400))))))
+
+(defun drgnx-doctor--notices ()
+  "The notice session files (`drgnx-notice-save'), read, never written: (:live DATAS :last DATA :crashed DATAS).
+A file is live when its pid is a running Emacs; `last.eld' is the last session; the file of a dead pid is crashed,
+and ignored when older than 7 days."
+  (require 'drgnx-notice-save)
+  (let ((dir (drgnx-notice-save-dir)) (limit (- (float-time) (* 7 86400))) (live nil) (crashed nil))
+    (dolist (file (and (file-directory-p dir) (directory-files dir t "\\`[0-9]+\\.eld\\'")))
+      (let* ((alive (drgnx-notice-save-pid-live-p (string-to-number (file-name-base file))))
+             (mtime (float-time (file-attribute-modification-time (file-attributes file)))))
+        (when (or alive (>= mtime limit))
+          (let ((r (drgnx-file-read file)))
+            (when (eq (plist-get r :status) 'ok)
+              (if alive (push (plist-get r :data) live) (push (plist-get r :data) crashed)))))))
+    (let ((r (drgnx-file-read (drgnx-notice-save-last-file))))
+      (list :live (nreverse live) :crashed (nreverse crashed)
+            :last (and (eq (plist-get r :status) 'ok) (plist-get r :data))))))
+
+(defun drgnx-doctor--notices-found (source datas)
+  "SOURCE's notices in the session DATAS merged by key, the later :at winning: a list of (NOTICE . PID)."
+  (let ((found nil))
+    (dolist (data datas)
+      (dolist (n (plist-get data :notices))
+        (when (eq (plist-get n :source) source)
+          (let* ((key (plist-get n :id)) (old (assoc key found)))
+            (cond ((null old) (push (cons key (cons n (plist-get data :pid))) found))
+                  ((> (or (plist-get n :at) 0) (or (plist-get (cadr old) :at) 0))
+                   (setcdr old (cons n (plist-get data :pid)))))))))
+    (mapcar #'cdr (nreverse found))))
+
+(defun drgnx-doctor--notices-datas (notices)
+  "The session files of NOTICES (the `:notices' fact) that count: the live ones, else the crashed and the last."
+  (or (plist-get notices :live)
+      (append (plist-get notices :crashed) (and (plist-get notices :last) (list (plist-get notices :last))))))
+
+(defun drgnx-doctor--with-terminal-notices (result facts)
+  "RESULT, a check result (STATUS DETAIL FIX), with the `terminal' notices of FACTS' sessions after its detail
+\(the keys.eld :tty-fallback lines that could not apply); a clean RESULT becomes `warn'."
+  (let ((texts (mapcar (lambda (f) (plist-get (car f) :text))
+                       (drgnx-doctor--notices-found 'terminal (drgnx-doctor--notices-datas (plist-get facts :notices))))))
+    (if (or (null result) (null texts))
+        result
+      (list (if (memq (car result) '(ok info)) 'warn (car result))
+            (concat (nth 1 result) "\n" (string-join texts "\n"))
+            (nth 2 result)))))
+
+(defun drgnx-doctor--notices-check (source notices)
+  "The check result (STATUS DETAIL FIX) of SOURCE's notices in NOTICES, the `:notices' fact."
+  (let* ((live (plist-get notices :live))
+         (datas (drgnx-doctor--notices-datas notices)))
+    (if (null datas)
+        (list 'info "no session recorded yet — start drgnx once" nil)
+      (let ((found (drgnx-doctor--notices-found source datas)))
+        (if (null found)
+            (list 'ok "no problems" nil)
+          (let* ((texts (mapcar (lambda (f) (plist-get (car f) :text)) found))
+                 (shown (append (seq-take texts 5)
+                                (and (nthcdr 5 texts) (list (format "and %d more" (- (length texts) 5))))))
+                 (rank '((info . 0) (warn . 1) (fail . 2)))
+                 (worst (car (sort (mapcar (lambda (f) (plist-get (car f) :severity)) found)
+                                   (lambda (a b) (> (alist-get a rank 0) (alist-get b rank 0))))))
+                 (where (cond ((null live)
+                               (format " (from the last session, %s)"
+                                       (drgnx-doctor--age (apply #'max (mapcar (lambda (d) (or (plist-get d :written) 0))
+                                                                               datas)))))
+                              ((cdr live)
+                               (format " (this session, pid %s)"
+                                       (mapconcat #'number-to-string (seq-uniq (mapcar #'cdr found)) ", ")))
+                              (t " (this session)"))))
+            (list worst (concat (string-join shown "; ") where)
+                  (seq-some (lambda (f) (plist-get (car f) :fix)) found))))))))
+
+(cl-defun drgnx-doctor-define-notices (source &key group doc name)
+  "Define the check NAME (default SOURCE) in GROUP: what notice source SOURCE says in the session files.
+It reads the live sessions (merged by key), else the last session and the crashed ones; the status is the worst
+severity, the fix the first `:fix'."
+  (drgnx-doctor-define (or name source) :group group :doc doc
+                       :check (lambda (f) (drgnx-doctor--notices-check source (plist-get f :notices)))))
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
@@ -571,6 +650,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                      :doc "Jobs' agents run in a sandbox: bubblewrap (bwrap) on Linux, sandbox-exec on macOS"
                      :check (lambda (f) (drgnx-doctor--job-sandbox-check (plist-get f :sandbox))))
 
+(drgnx-doctor-define-notices 'modules :group "drgnx" :doc "Modules that failed, wait or are off (this session, or the last one)")
+
 ;; Ratatoskr, the agent runtime (runtime/): its binary's own report (`ratatoskr doctor --json', 2 s), the checkout's HEAD,
 ;; the last update's record and this Emacs's SQLite.  Nothing here starts a hub or prompts.
 (declare-function drgnx-hub-client-binary "drgnx-hub-client")
@@ -649,33 +730,6 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 (drgnx-doctor-define 'ratatoskr :group "Agents"
                      :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory"
                      :check (lambda (f) (drgnx-doctor--ratatoskr-check (plist-get f :ratatoskr))))
-
-(drgnx-doctor-define 'modules :group "drgnx" :doc "Modules that failed or wait for packages (from the last session)"
-                     :check (lambda (f)
-                              (let* ((r (plist-get f :modules-report))
-                                     (failed (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) r))
-                                     (waiting (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'missing-packages)) r))
-                                     (problems (seq-filter (lambda (m) (plist-get (cdr m) :problems)) r))
-                                     (off (seq-count (lambda (m) (eq (plist-get (cdr m) :status) 'disabled)) r))
-                                     (time (plist-get f :modules-report-time))
-                                     (res
-                                      (cond ((null r) (list 'info "no module report yet — start drgnx once" nil))
-                                            (failed (list 'fail (mapconcat (lambda (m) (format "%s: %s" (car m) (plist-get (cdr m) :error))) failed "; ")
-                                                          "see Preferences: Modules; turn the module off there or report the error"))
-                                            (waiting (list 'warn (format "waiting for packages: %s"
-                                                                         (mapconcat (lambda (m) (format "%s (%s)" (car m)
-                                                                                                        (mapconcat #'symbol-name (plist-get (cdr m) :missing) " ")))
-                                                                                    waiting ", "))
-                                                           "drgnx sync installs them (M5); until then these modules stay off"))
-                                            (problems (list 'warn (mapconcat (lambda (m) (format "%s: %s" (car m) (string-join (plist-get (cdr m) :problems) "; ")))
-                                                                             problems "; ")
-                                                            "see the module's documentation"))
-                                            (t (list 'ok (format "%d ok, %d off" (- (length r) off) off) nil)))))
-                                ;; the report is from the last session: say how old it is
-                                (if (and time (not (eq (car res) 'info)))
-                                    (list (car res) (format "%s (from the last session, %s)" (nth 1 res) (drgnx-doctor--age time))
-                                          (nth 2 res))
-                                  res))))
 
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
@@ -770,14 +824,12 @@ MODEL), as a sentence, or nil."
                                                                     drgnx-doctor-install-hint))
                                     (t (list 'ok (format "%d plans tracked" (plist-get f :work-plans)) nil)))))
 
-(drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"
+(drgnx-doctor-define-notices 'keys :name 'key-problems :group "drgnx" :doc "keys.eld and profile problems")
+
+(drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts (from the last session)"
                      :check (lambda (f)
-                              (let* ((r (plist-get f :keys-report)) (conflicts (plist-get r :conflicts)) (problems (plist-get r :problems)))
+                              (let* ((r (plist-get f :keys-report)) (conflicts (plist-get r :conflicts)))
                                 (cond ((null r) (list 'info "no key report yet — start drgnx once" nil))
-                                      (problems (list 'warn (format "%d key problem%s: %s" (length problems) (if (cdr problems) "s" "")
-                                                                    (string-join problems "; "))
-                                                      (format "fix %s (docs/guide/keys.md)"
-                                                              (abbreviate-file-name (expand-file-name "keys.eld" (drgnx-user-dir))))))
                                       (conflicts (list 'info (format "%d key conflicts, resolved by layer order (%s): %s" (length conflicts)
                                                                      (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < ")
                                                                      (string-join (seq-take conflicts 3) "; "))
@@ -786,13 +838,7 @@ MODEL), as a sentence, or nil."
                                                            (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < "))
                                                nil))))))
 
-(drgnx-doctor-define 'display-rules :group "drgnx" :doc "drgnx's entry in display-buffer-alist is still there (from the last session)"
-                     :check (lambda (f)
-                              (let ((r (plist-get f :wb-report)))
-                                (cond ((null r) (list 'info "no workbench report yet — start drgnx once" nil))
-                                      ((plist-get r :display-buffer-entry) (list 'ok "buffers are placed by drgnx's rules" nil))
-                                      (t (list 'warn "drgnx's entry in display-buffer-alist is gone: something set the variable after startup, so buffers are no longer placed by the rules"
-                                               "use (add-to-list 'display-buffer-alist …) instead of setq in your configuration, or restart drgnx"))))))
+(drgnx-doctor-define-notices 'wb :name 'display-rules :group "drgnx" :doc "Buffers are placed by drgnx's rules")
 
 (drgnx-doctor-define 'portable-config :group "drgnx"
                      :doc "The config dir travels as it is: no key in plain text, no machine-local file (docs/guide/second-machine.md)"
@@ -841,10 +887,7 @@ MODEL), as a sentence, or nil."
                      :check (lambda (f)
                               (let* ((r (plist-get f :keys-report)) (modal (plist-get r :modal))
                                      (engine (plist-get modal :engine))
-                                     (module-status (plist-get (alist-get (or (plist-get modal :module) ; a report before :module: evil's
-                                                                              (and engine (intern (format "editor/%s" engine))))
-                                                                          (plist-get f :modules-report))
-                                                               :status))
+                                     (module-status (plist-get modal :module-status))   ; the session's, in the key report
                                      (m-spc (and (equal (plist-get r :leader-menu-key) "M-SPC")
                                                  "M-SPC replaces Emacs' cycle-spacing"))
                                      (say (lambda (detail) (if m-spc (format "%s; %s" detail m-spc) detail))))
@@ -1001,36 +1044,38 @@ what its table row or tmux's extended-keys say), nil when that cannot be told."
 
 (drgnx-doctor--tty-define
  'terminal-keys "Keys: the kitty keyboard protocol or modifyOtherKeys, else the Alt+Shift and F6 fallbacks"
- (lambda (tf _f)
-   (let* ((mode (drgnx-doctor--tty-keys-mode tf)) (caps (plist-get tf :caps)) (row (drgnx-doctor--tty-row tf))
-          (id (plist-get (plist-get tf :identity) :id)))
-     (pcase mode
-       ('kkp (list 'ok (concat "the kitty keyboard protocol: every shortcut works"
-                               (when (eq (plist-get caps :c-g) 'waits) " (C-g stops only programs Emacs waits for)"))
-                   nil))
-       ('mok (if-let* ((folded (plist-get caps :folded)))
-                 (list 'info (format "modifyOtherKeys, but tmux sends %d chords as other keys (C-S-<letter> …): Alt+Shift or F6 then the key" (length folded))
-                       "type those chords as Alt+Shift or F6 then the key; or customize drgnx-tty-tmux-mok-level to 2 (then C-g cannot stop busy Lisp)")
-               (list 'ok "modifyOtherKeys: C-S- chords and the like work (Super keys need the kitty keyboard protocol)" nil)))
-       ('legacy
-        (let* ((rows (plist-get tf :fallbacks))
-               (own (when-let* ((x (drgnx-doctor--tty-fix row 'kkp))) (and (not (string-prefix-p "none" x)) x)))
-               (recommendation (plist-get (drgnx-tty-recommendation (list :keys 'legacy) (plist-get tf :os)) :text)))
-          (list 'warn
-                (concat "neither the kitty keyboard protocol nor modifyOtherKeys: this terminal cannot send C-S- chords and the like\n"
-                        (if rows (drgnx-doctor--key-table rows) "open drgnx in this terminal once to list them"))
-                ;; tmux with extended-keys already on: the terminal around it is what cannot send the keys
-                (if (and (eq id 'tmux) (not (member (plist-get (plist-get tf :tmux) :extended-keys) '("on" "always"))))
-                    (drgnx-doctor--tty-fix row 'mok)
-                  (concat recommendation (when own (format " In %s: %s." (plist-get row :name) own)))))))
-       (_ (list 'info (if row
-                          (format "not measured yet; %s %s (open drgnx in this terminal once to check)" (plist-get row :name)
-                                  (cond ((eq id 'tmux) "passes modifyOtherKeys only with extended-keys on")
-                                        ((plist-get row :kkp) "speaks the kitty keyboard protocol")
-                                        ((plist-get row :mok) "speaks modifyOtherKeys")
-                                        (t "sends only the basic keys")))
-                        "this terminal is not known to drgnx: open drgnx in it once to measure its keys")
-                nil))))))
+ (lambda (tf f)
+   (drgnx-doctor--with-terminal-notices   ; the fallback's problems are the session's `terminal' notices
+    (let* ((mode (drgnx-doctor--tty-keys-mode tf)) (caps (plist-get tf :caps)) (row (drgnx-doctor--tty-row tf))
+           (id (plist-get (plist-get tf :identity) :id)))
+      (pcase mode
+        ('kkp (list 'ok (concat "the kitty keyboard protocol: every shortcut works"
+                                (when (eq (plist-get caps :c-g) 'waits) " (C-g stops only programs Emacs waits for)"))
+                    nil))
+        ('mok (if-let* ((folded (plist-get caps :folded)))
+                  (list 'info (format "modifyOtherKeys, but tmux sends %d chords as other keys (C-S-<letter> …): Alt+Shift or F6 then the key" (length folded))
+                        "type those chords as Alt+Shift or F6 then the key; or customize drgnx-tty-tmux-mok-level to 2 (then C-g cannot stop busy Lisp)")
+                (list 'ok "modifyOtherKeys: C-S- chords and the like work (Super keys need the kitty keyboard protocol)" nil)))
+        ('legacy
+         (let* ((rows (plist-get tf :fallbacks))
+                (own (when-let* ((x (drgnx-doctor--tty-fix row 'kkp))) (and (not (string-prefix-p "none" x)) x)))
+                (recommendation (plist-get (drgnx-tty-recommendation (list :keys 'legacy) (plist-get tf :os)) :text)))
+           (list 'warn
+                 (concat "neither the kitty keyboard protocol nor modifyOtherKeys: this terminal cannot send C-S- chords and the like\n"
+                         (if rows (drgnx-doctor--key-table rows) "open drgnx in this terminal once to list them"))
+                 ;; tmux with extended-keys already on: the terminal around it is what cannot send the keys
+                 (if (and (eq id 'tmux) (not (member (plist-get (plist-get tf :tmux) :extended-keys) '("on" "always"))))
+                     (drgnx-doctor--tty-fix row 'mok)
+                   (concat recommendation (when own (format " In %s: %s." (plist-get row :name) own)))))))
+        (_ (list 'info (if row
+                           (format "not measured yet; %s %s (open drgnx in this terminal once to check)" (plist-get row :name)
+                                   (cond ((eq id 'tmux) "passes modifyOtherKeys only with extended-keys on")
+                                         ((plist-get row :kkp) "speaks the kitty keyboard protocol")
+                                         ((plist-get row :mok) "speaks modifyOtherKeys")
+                                         (t "sends only the basic keys")))
+                         "this terminal is not known to drgnx: open drgnx in it once to measure its keys")
+                 nil))))
+    f)))
 
 (drgnx-doctor--tty-define
  'terminal-clipboard "Copy reaches your clipboard (OSC 52)"

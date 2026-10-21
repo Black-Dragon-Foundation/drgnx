@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 ;; Work that need not happen at startup hangs on a stage and runs once, when that stage is
-;; first reached.  Each function runs under its own error guard; failures are collected in
-;; `drgnx-hooks-problems', never shown as prompts.
+;; first reached.  Each function runs under its own error guard; failures are notices of
+;; source `hooks' (`drgnx-notify'), never shown as prompts.
 
 ;;; Code:
 (require 'drgnx-frame-kind)
@@ -15,7 +15,20 @@
 (defvar drgnx-first-gui-frame-hook nil "Run once, when the first graphical frame exists.")
 
 (defvar drgnx-hooks--done nil "Staged hooks that have run.")
-(defvar drgnx-hooks-problems nil "Errors raised by staged-hook functions (newest first).")
+(defvar drgnx-hooks-problems nil
+  "Errors the terminal modules (`modules/ui/drgnx-tty-*') catch in their own hooks (newest first).
+Staged-hook errors are notices of source `hooks' instead.")
+
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+
+(defun drgnx-hooks--problem (hook fn err)
+  "Say that FN, on staged HOOK, signalled ERR: a `warn' event of source `hooks' (the model loads at the first error).
+Never signals."
+  (let ((text (format "%s: %s: %s" hook fn (error-message-string err))))
+    (condition-case failed
+        (progn (require 'drgnx-notice)
+               (drgnx-notify 'hooks 'warn text :id (cons hook fn)))
+      (error (message "drgnx: %s (not recorded: %s)" text (error-message-string failed))))))
 
 (defun drgnx-hooks-run-once (hook)
   "Run HOOK's functions once; isolate and record errors."
@@ -25,7 +38,7 @@
       (unless (eq fn t)
         (condition-case err
             (funcall fn)
-          (error (push (format "%s: %s: %s" hook fn (error-message-string err)) drgnx-hooks-problems)))))))
+          (error (drgnx-hooks--problem hook fn err)))))))
 
 (defun drgnx-hooks--first-input ()
   (remove-hook 'pre-command-hook #'drgnx-hooks--first-input)

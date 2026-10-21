@@ -65,8 +65,8 @@
 
 (defcustom drgnx-cockpit-check-interval 3
   "Seconds between two looks, while the Work graph or a feed pane shows, at whether another process wrote the store
-\(an outside agent's MCP server, another Emacs); also between two looks at the count of what waits on you, for the
-status bar.  One cheap query each; the graph redraws only when it changed."
+\(an outside agent's MCP server, another Emacs); also between two looks at the questions that wait on you (the
+`questions' notice source).  One cheap query each; the graph redraws only when it changed."
   :type 'number :group 'drgnx-cockpit)
 
 (defcustom drgnx-cockpit-silent-interval 45
@@ -310,9 +310,9 @@ started and cancelled by `drgnx-cockpit--follow'): ask for a redraw if the store
 
 (defun drgnx-cockpit--waiting ()
   "Every `drgnx-cockpit-check-interval' s while tools/cockpit runs (the timer `cockpit-waiting', its setup's): the
-status bar hears of a new waiting count (`drgnx-cockpit-feed-tell-statusbar'), whatever shows — another process may
-ask with no hub event.  One query when the store did not change."
-  (drgnx-cockpit--call #'drgnx-cockpit-feed-tell-statusbar))
+`questions' notice set is made again when the store changed (`drgnx-cockpit-feed-note-questions'), whatever shows —
+another process may ask with no hub event.  One query when the store did not change."
+  (drgnx-cockpit--call #'drgnx-cockpit-feed-note-questions))
 
 (defun drgnx-cockpit--roots ()
   "The folders the store knows in repositories — jobs' repos, the tracker's plans' repos, registered agents' working
@@ -795,7 +795,7 @@ or nil: any."
 (declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
 (declare-function drgnx-cockpit-feed--teardown "drgnx-cockpit-feed")
 (declare-function drgnx-cockpit-cards--schedule "drgnx-cockpit-cards")
-(declare-function drgnx-cockpit-feed-tell-statusbar "drgnx-cockpit-feed")
+(declare-function drgnx-cockpit-feed-note-questions "drgnx-cockpit-feed")
 ;; what needs you and the decision log, the job window's parts (drgnx-cockpit-cards.el, beside this file)
 (unless (featurep 'drgnx-cockpit-cards)
   (load (expand-file-name "drgnx-cockpit-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -806,7 +806,7 @@ or nil: any."
 
 (defun drgnx-cockpit--setup ()
   "tools/cockpit's setup: the Work graph's pane kind, its commands and its subscriptions to the workbench state
-store, the status bar's look at what waits on you, and its parts'."
+store, the `questions' notice source (via the feed's setup), and its parts'."
   (drgnx-pane-define-kind 'work-graph :title " WORK GRAPH" :home 'left :view 'work
                           :buffer #'drgnx-cockpit-graph-buffer)
   (drgnx-cockpit--subscribe)

@@ -306,3 +306,55 @@ and only when it differs from the last one it got."
     (drgnx-signal--flush)
     (should-not (plist-member drgnx-signal--state :editor))
     (should-not (plist-member drgnx-signal--state :frame))))
+
+;;;; Subscriber errors are notices (Notices Task 12)
+
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+(require 'drgnx-guard)
+
+(defun drgnx-notice-wb-test--boom (_data) (error "Boom"))
+(defun drgnx-notice-wb-test--ask (_data) (y-or-n-p "Really? "))
+
+(ert-deftest drgnx-notice-wb/a-bus-error-is-a-warn-event-keyed-by-event-and-fn ()
+  (drgnx-notice-test-with-model
+    (let ((drgnx-signal-errors nil))
+      (drgnx-signal--call 'buffer-set-changed #'drgnx-notice-wb-test--boom nil)
+      (drgnx-signal--call 'buffer-set-changed #'drgnx-notice-wb-test--boom nil)
+      (let ((n (car (drgnx-notices :source 'bus))))
+        (should (eq (plist-get n :severity) 'warn))
+        (should (eq (plist-get n :life) 'event))
+        (should (equal (plist-get n :id) '(buffer-set-changed . drgnx-notice-wb-test--boom)))
+        (should (equal (plist-get n :text) "buffer-set-changed drgnx-notice-wb-test--boom: Boom"))
+        (should (= 2 (plist-get n :count))))
+      (should (= 1 (length (drgnx-notices :source 'bus))))
+      (drgnx-signal--call 'modified-changed #'drgnx-notice-wb-test--boom nil)
+      (should (= 2 (length (drgnx-notices :source 'bus)))))))
+
+(ert-deftest drgnx-notice-wb/signal-errors-stays-a-20-entry-mirror ()
+  (drgnx-notice-test-with-model
+    (let ((drgnx-signal-errors nil))
+      (dotimes (_ 25) (drgnx-signal--call 'buffer-set-changed #'drgnx-notice-wb-test--boom nil))
+      (should (= 20 (length drgnx-signal-errors)))
+      (should (equal (car drgnx-signal-errors) "buffer-set-changed drgnx-notice-wb-test--boom: Boom")))))
+
+(ert-deftest drgnx-notice-wb/a-bus-subscriber-never-prompts ()
+  (drgnx-notice-test-with-model
+    (let ((drgnx-signal-errors nil) (asked nil))
+      (drgnx-guard-mode 1)
+      (unwind-protect
+          (cl-letf (((symbol-function 'read-from-minibuffer) (lambda (&rest _) (setq asked t) "y")))
+            (drgnx-signal--call 'buffer-set-changed #'drgnx-notice-wb-test--ask nil))
+        (drgnx-guard-mode -1))
+      (should-not asked)
+      (should (eq (plist-get (car (drgnx-notices :source 'bus)) :severity) 'warn)))))
+
+(ert-deftest drgnx-notice-wb/a-store-subscriber-error-is-a-warn-event ()
+  (drgnx-notice-test-with-model
+    (let ((drgnx-signal-errors nil))
+      (drgnx-state--call 'windows-changed #'drgnx-notice-wb-test--boom nil)
+      (let ((n (car (drgnx-notices :source 'store))))
+        (should (eq (plist-get n :severity) 'warn))
+        (should (equal (plist-get n :id) '(windows-changed . drgnx-notice-wb-test--boom)))
+        (should (equal (plist-get n :text) "windows-changed drgnx-notice-wb-test--boom: Boom")))
+      (should (equal drgnx-signal-errors '("windows-changed drgnx-notice-wb-test--boom: Boom")))
+      (should-not (drgnx-notices :source 'bus)))))

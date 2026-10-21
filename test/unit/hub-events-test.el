@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
+(load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)  ; the subscriber of the test events
 
 (defmacro drgnx-hub-events-test--with (plan-text &rest body)
   "BODY in the job fixture (PLAN-TEXT), subscribed to the hub: HEARD holds the events it sent, newest first."
@@ -179,14 +180,24 @@
           (should (equal (plist-get (car (last (plist-get d :events))) :data) '(:passed 49 :failed 0))))))))
 
 (ert-deftest drgnx-hub-events/test-events-reach-the-status-bar ()
+  ;; the status bar subscribes (`drgnx-statusbar-mode' adds this function); the hub client knows nothing of it
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let ((noted nil))
-      (cl-letf (((symbol-function 'drgnx-statusbar-note-tests) (lambda (&rest args) (push args noted))))
-        (drgnx-coord-event-add :agent "ext:t:1" :kind "test" :summary "12 passed" :data '(:passed 12 :failed 1))
-        (drgnx-coord-event-add :agent "ext:t:1" :kind "edit" :summary "1 file" :data '(:paths ("a")))
-        (drgnx-hub-call "coord/notify" nil #'ignore)
-        (should (drgnx-job-run-test--wait (lambda () noted) 3)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-statusbar-note-tests) (lambda (&rest args) (push args noted))))
+            (add-hook 'drgnx-hub-event-functions #'drgnx-statusbar--hub-tests)
+            (drgnx-coord-event-add :agent "ext:t:1" :kind "test" :summary "12 passed" :data '(:passed 12 :failed 1))
+            (drgnx-coord-event-add :agent "ext:t:1" :kind "edit" :summary "1 file" :data '(:paths ("a")))
+            (drgnx-hub-call "coord/notify" nil #'ignore)
+            (should (drgnx-job-run-test--wait (lambda () noted) 3)))
+        (remove-hook 'drgnx-hub-event-functions #'drgnx-statusbar--hub-tests))
       (should (equal noted '((12 1 "ext:t:1")))))))
+
+(ert-deftest drgnx-hub/no-status-bar-call ()
+  (dolist (f '("core/drgnx-hub.el" "core/drgnx-hub-client.el"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name f drgnx-dir))
+      (should-not (search-forward "drgnx-statusbar" nil t)))))
 
 (ert-deftest drgnx-hub-events/events-since-catches-up ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"

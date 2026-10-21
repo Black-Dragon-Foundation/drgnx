@@ -17,6 +17,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-paths)
 (require 'drgnx-file)
+(require 'drgnx-notice)
 (require 'drgnx-modules-helpers)
 
 (defvar drgnx-rules--table nil
@@ -117,7 +118,17 @@ the caller asked for a frame or for no window."
   (push (list :buffer (buffer-name buffer) :mode (buffer-local-value 'major-mode buffer) :time (float-time))
         drgnx-wb-unrouted)
   (when (> (length drgnx-wb-unrouted) drgnx-rules--unrouted-max)
-    (setq drgnx-wb-unrouted (seq-take drgnx-wb-unrouted drgnx-rules--unrouted-max))))
+    (setq drgnx-wb-unrouted (seq-take drgnx-wb-unrouted drgnx-rules--unrouted-max)))
+  (drgnx-rules--sync-unrouted))
+
+(defun drgnx-rules--sync-unrouted ()
+  "Say the unrouted list as one `info' condition of source `wb', `(wb . unrouted)'; clear it when the list is empty."
+  (let ((n (length drgnx-wb-unrouted)))
+    (if (zerop n)
+        (drgnx-notice-clear 'wb 'unrouted)
+      (drgnx-notify 'wb 'info (format "%d buffer%s matched no placement rule" n (if (= n 1) "" "s"))
+                    :id 'unrouted :life 'condition :command 'wb-unrouted
+                    :fix "Add a rule for them (docs/guide/workbench.md)"))))
 
 (defun drgnx-wb-run-body-function (window alist)
   "Run ALIST's `body-function' on WINDOW, as `window--display-buffer' does — a place that shows a
@@ -233,8 +244,9 @@ left and right docks run the frame's full height, the panel sits under the edito
         (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window)
         (advice-add 'balance-windows :around #'drgnx-rules--balance)
         (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
-        (add-hook 'emacs-startup-hook #'drgnx-rules--write-report))
-    (remove-hook 'emacs-startup-hook #'drgnx-rules--write-report)
+        (add-hook 'emacs-startup-hook #'drgnx-rules--sync-entry-notice))
+    (remove-hook 'emacs-startup-hook #'drgnx-rules--sync-entry-notice)
+    (drgnx-notice-clear 'wb 'display-buffer-entry)
     (advice-remove 'display-buffer-in-side-window #'drgnx-rules--side-window)
     (advice-remove 'balance-windows #'drgnx-rules--balance)
     (remove-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
@@ -244,23 +256,26 @@ left and right docks run the frame's full height, the panel sits under the edito
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))
 
-;;;; The report for `drgnx doctor'
+;;;; The display-buffer-alist entry, for `drgnx doctor' (a notice)
 
 (defun drgnx-rules-report ()
-  "What the doctor needs to know about the rules now: (:time … :display-buffer-entry t-or-nil)."
+  "What the rules look like now: (:time … :display-buffer-entry t-or-nil)."
   (list :time (format-time-string "%FT%T%z")
         :display-buffer-entry (and (member drgnx-rules--entry display-buffer-alist) t)))
 
-(defun drgnx-rules--write-report ()
-  "Write `drgnx-rules-report' to wb-report.eld in the state dir (after init, on `emacs-startup-hook': a user
-`setq' of `display-buffer-alist' in the configuration has run by then).  Never prompts; an error becomes one message."
-  (condition-case err
-      (let ((inhibit-interaction t))
-        (drgnx-file-write (expand-file-name "wb-report.eld" (drgnx-state-dir)) (drgnx-rules-report) :fsync nil))
-    (error (message "drgnx: cannot write the display-rules report: %s" (error-message-string err)))))
+(defun drgnx-rules--sync-entry-notice ()
+  "A missing entry in `display-buffer-alist' is the `warn' condition `(wb . display-buffer-entry)'; clear it when
+the entry is back (the doctor's text and fix).  Runs after init, on `emacs-startup-hook': a user `setq' of
+`display-buffer-alist' in the configuration has run by then.  Never prompts."
+  (if (plist-get (drgnx-rules-report) :display-buffer-entry)
+      (drgnx-notice-clear 'wb 'display-buffer-entry)
+    (drgnx-notify 'wb 'warn "drgnx's entry in display-buffer-alist is gone: something set the variable after startup, so buffers are no longer placed by the rules"
+                  :id 'display-buffer-entry :life 'condition
+                  :fix "use (add-to-list 'display-buffer-alist …) instead of setq in your configuration, or restart drgnx")))
 
 (defun drgnx-wb-show-unrouted ()
-  "List the buffers no rule matched (each one is a rule to add)."
+  "List the buffers no rule matched (each one is a rule to add).  Showing the list is reviewing it: the list
+is emptied and the `unrouted' notice goes; the buffers show up again if they are displayed again."
   (interactive)
   (with-current-buffer (get-buffer-create "*drgnx unrouted*")
     (let ((inhibit-read-only t))
@@ -270,7 +285,9 @@ left and right docks run the frame's full height, the panel sits under the edito
         (insert (format "%s  %-30s %s\n" (format-time-string "%T" (plist-get u :time))
                         (plist-get u :buffer) (plist-get u :mode)))))
     (special-mode)
-    (pop-to-buffer (current-buffer))))
+    (pop-to-buffer (current-buffer)))
+  (setq drgnx-wb-unrouted nil)
+  (drgnx-rules--sync-unrouted))
 
 (drgnx-wb-place "\\`\\*drgnx unrouted\\*\\'" 'editor)
 ;; Files, and buffers that are worked in like files (lists, settings, dired), go to the editor.

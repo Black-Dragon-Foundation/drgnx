@@ -17,9 +17,18 @@ file that does not load says `(in <library>)` when the error came from a library
 `needs <module>`, `disabled`, `off` (turned off in this session) — its stage, how long it took, and whether it runs at
 the next start (`on`, `off`, or `off at next start` for a module that is still running); `RET` turns the module on
 that row off or back on, now (below). A column header sorts by it (ms as a number, Stage
-in the order of the stages); an external module's row says its path and features. `drgnx doctor` reports failed modules and modules
-waiting for packages, from the last session; when all is well it counts the modules that run and those that are
-off ("12 ok, 3 off"), and every answer says how old the report is ("from the last session, 2 h ago").
+in the order of the stages); an external module's row says its path and features. `drgnx doctor` (the `modules` check) says what
+the running drgnx says about modules that failed, wait for packages or for a module, report a problem, or are off
+(`(this session)`); with none running it says what the last session said (`(from the last session, 2 h ago)`).
+There is no module report file any more: the doctor reads the same notices as the status bar.
+
+## When a module does not start
+
+A module that fails, waits for packages or for a module it needs, or reports a problem from its doctor check shows at
+once as a notice (source `modules`), not only in the report: after startup the status bar has the count, the echo area
+names the module once, and a click opens the Notices list. The notice stays until the module works or you turn it off
+(`ok` or `off` clears it). Modules that are off are one quiet line, "N modules are off: …", which opens Preferences:
+Modules. Packages that were not activated and modules that did not start at all are notices too.
 
 ## Turning a module off and on now
 
@@ -38,7 +47,7 @@ off ("12 ok, 3 off"), and every answer says how old the report is ("from the las
   (`needs …`); if its stage has not come yet (`idle`, `first-file`, …) it runs when it does. Its keys and menu
   entries come back with it, whatever its stage.
 - A problem while turning a module off (an undo that failed) is shown in the echo area, named by its label, and
-  kept for `drgnx doctor`.
+  kept in the module's notice, which `drgnx doctor` reads.
 - **`restart` modules.** A module defined with `:teardown 'restart` (and external modules) is not turned off while
   Emacs runs: the choice is only written, nothing is torn down and nothing is asked, the row says `off at next
   start`, and it stops then. The same holds for a module that a running `restart` module needs: it cannot stop
@@ -102,8 +111,8 @@ for any other change to the file, `(drgnx-modules-update-state FN)` (FN gets the
 `~/.config/drgnx/config.el` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)) is your own Emacs Lisp. It loads at the end of every start,
 after the `startup` modules, so what you set there wins; for a package that loads later, use
 `with-eval-after-load`. **Preferences: Open User Config** (palette, Options menu) opens it, made from a short
-template the first time. An error in it is said in `*Messages*` (what came before it ran, the rest did not) and
-drgnx starts anyway; `drgnx safe` skips it. Code you want reported as a module, with its own row in
+template the first time. An error in it is a notice (`✕` in the status bar, one line in the echo area at startup;
+what came before the error ran, the rest did not) and drgnx starts anyway; `drgnx safe` skips it. Code you want reported as a module, with its own row in
 Preferences: Modules, is an external module (below).
 
 What Customize saves (and `M-x package-install`'s list of packages) goes to `custom.el` beside it, which loads in every

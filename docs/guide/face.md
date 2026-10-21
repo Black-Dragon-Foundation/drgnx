@@ -148,8 +148,10 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `trust` | `Restricted Mode` while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **Trust This Folder** |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
-| `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | What Needs You, every job's |
-| `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
+| `jobs` | `◎ 2 jobs` while jobs run | What Needs You, every job's |
+| `agents` | `◎ 1 busy` | the Agents tab |
+| `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
+| `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
 | `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, when evil runs without drgnx's `editor/evil` module; with it, `modal` shows the state), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
 
@@ -166,7 +168,7 @@ The most recently used editor window shows the whole bar; the other editor group
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
 **New Untitled** (in whatever language you give it), or a buffer that is code, text or configuration
 (`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). The start page gets a
-quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, tests and `misc`), no line and column,
+quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, `needs-you`, `drgnx`, tests and `misc`), no line and column,
 for the modes in `drgnx-statusbar-quiet-modes`. Every other buffer (Magit, Dired, help, Info, a shell, compilation,
 drgnx's own panes) keeps its own mode line, and a buffer whose own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
 `drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped (in a column or
@@ -195,13 +197,14 @@ linter) redraws the bars a moment later: flymake has no hook for it, so the bar 
 
 **Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when the mode starts or the first hub event
 arrives, then when a job or a card changes — one question at a time, never on redisplay; nothing while there is no
-hub). `⚑1` is the jobs' one count of cards and messages waiting on you (the notice model's `drgnx-needs-you-count`, which `drgnx-job-ui-needs-you` is the
-obsolete name of). A click opens What Needs You for every job in the Work cockpit.
+hub). A click opens What Needs You for every job in the Work cockpit.
 
-**Waiting on you.** The number in `◐ 1 waiting on you` is the sum of `drgnx-statusbar-waiting-functions`: each
-returns how many things wait for you. drgnx counts the agents' permission requests and edits to review, and the Work
-cockpit adds the questions no job holds; an ask card or a job's message to you is the jobs segment's `⚑`, never both.
-A module of your own can add a function and call `drgnx-statusbar-refresh` when its count changes.
+**Waiting on you.** The number in `◐ 2 waiting on you` is the notice model's one count (`drgnx-needs-you-count`): the
+agents' permission requests and edits to review, the cards and messages of jobs, and the questions no job holds, each
+counted once however many places hold it. The segment reads that count and nothing else; `jobs` and `agents` no longer
+add their own. A producer of your own sets its items with `drgnx-notice-set` (see [Notices](notices.md)); there is no
+list of functions to add to. The same count, and the `drgnx` segment's problems, are what the bar redraws on when the
+notices change.
 
 **Other modules' marks.** Anything a package puts on `global-mode-string` or `mode-line-misc-info` shows in `misc`,
 with no change to the bar, and stays real time: a clock, a battery or a mark whose text changes with nothing to
@@ -235,22 +238,22 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents modal misc)` | segments on the left, in order |
+| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx modal misc)` | segments on the left, in order |
 | `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
-| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs trust)` | dropped first to last when the window is narrow |
+| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
 | `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers and Untitled editors) that get the bar |
 | `drgnx-statusbar-language-names` | names for the modes whose own name is not the language's | mode → the name the `language` segment shows; worked out once per mode |
 | `drgnx-statusbar-quiet-modes` | `(drgnx-start-mode)` | the modes that get the quiet bar |
-| `drgnx-statusbar-quiet` | `(folder branch agents jobs tests misc)` | the quiet bar's segments, on the left |
-| `drgnx-statusbar-misc-exclude` | the Restricted Mode mark | entries of `global-mode-string` that `misc` leaves out |
+| `drgnx-statusbar-quiet` | `(folder branch agents jobs needs-you drgnx tests misc)` | the quiet bar's segments, on the left |
+| `drgnx-statusbar-misc-exclude` | the Restricted Mode mark and the notice counts' entry | entries of `global-mode-string` that `misc` leaves out |
 | `drgnx-statusbar-misc-info-skip` | `global-mode-string`, which-function's and eglot's entries | entries of `mode-line-misc-info` that `misc` does not format (shown another way) |
 | `drgnx-statusbar-misc-slow-ms` | `1.0` | milliseconds another package's entry may take, on average, per redisplay; a slower one is formatted once a second and named by `drgnx doctor` |
 | `drgnx-statusbar-test-command-regexp` | `\_<test\_>` | a compilation whose command matches is a test run |
 | `drgnx-statusbar-test-count-regexps` | ERT's and `bin/drgnx test --ui`'s summary lines | where the counts come from |
-| `drgnx-statusbar-waiting` (face) | inherits `error` | the colour of the waiting count |
+| `drgnx-statusbar-waiting` (face) | inherits `drgnx-status-needs-you` | the colour of the waiting count |
 
 Reorder or drop with `setopt`, and add your own in `config.el`:
 

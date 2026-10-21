@@ -283,7 +283,8 @@ KEYS :seen TIME)) …)), newest first, one entry per terminal device (two client
 newest `drgnx-tty-frames-report-terminals' (16) only;
 :unsendable the active key profile's keys this terminal cannot send.  The fallback layer follows the caps first
 \(`drgnx-tty-fallback-install': on where they need it, off where not); the entry then has :fallback (on or not),
-:fallbacks (rows (CHORD NATIVE-P ALT PREFIX) for the doctor) and :fallback-problems.  The report's other keys
+:fallbacks (rows (CHORD NATIVE-P ALT PREFIX) for the doctor); the fallback's problems are `terminal' notices
+\(`drgnx-tty-fallback-notify'), not in the report.  The report's other keys
 \(:hinted) are kept.  Nothing when the terminal is gone."
   (when-let* ((caps (drgnx-tty-frame-caps frame)))
     (let* ((layer (and (fboundp 'drgnx-tty-fallback-install)
@@ -302,8 +303,8 @@ newest `drgnx-tty-frames-report-terminals' (16) only;
                             (list :tmux-conf lines))
                           (list :fallback (and layer t)
                                 :fallbacks (drgnx-tty-fallback-report-rows
-                                            table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))
-                                :fallback-problems (drgnx-tty-fallback-problems table (drgnx-tty-fallback--overrides))))))
+                                            table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))))))
+      (drgnx-tty-fallback-notify key table (drgnx-tty-fallback--overrides))
       (drgnx-tty-frames--save-report
        (append (list :terminals (seq-take (cons (cons key entry) (assoc-delete-all key (copy-sequence old)))
                                           drgnx-tty-frames-report-terminals))

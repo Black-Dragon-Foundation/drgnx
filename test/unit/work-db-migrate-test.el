@@ -176,12 +176,31 @@ drgnx leaves it."
       (should-not said))
     (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'migrate-6-dropped'")) "3"))))
 
-(ert-deftest drgnx-work-db/migration-6-is-all-or-nothing ()
+(ert-deftest drgnx-work-db/migration-6-drops-a-row-any-error-fails-on ()
+  ;; review S3: not only reader and schema errors: whatever fails on one row (here the schema check signalling
+  ;; wrong-type-argument on an odd value) drops that row alone, and the migration finishes
   (drgnx-work-db-migrate-test--with-5
-    (let ((file (concat dir "work.db")) (calls 0))
+    (let ((orig (symbol-function 'drgnx-records-encode)) (good 0))
+      (cl-letf (((symbol-function 'drgnx-records-encode)
+                 ;; the first row that would convert fails instead (a row the schema refuses still refuses)
+                 (lambda (&rest args)
+                   (let ((json (apply orig args)))
+                     (if (= (cl-incf good) 1) (signal 'wrong-type-argument '(listp 1)) json))))
+                ((symbol-function 'message) #'ignore))
+        (should (= (drgnx-work-db-version) 6))))
+    ;; the fixture's 3 unreadable rows and this one
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'migrate-6-dropped'")) "4"))))
+
+(ert-deftest drgnx-work-db/migration-6-is-all-or-nothing ()
+  ;; a failure outside a row's conversion (a write: a full disk, say) rolls the whole migration back
+  (drgnx-work-db-migrate-test--with-5
+    (let ((file (concat dir "work.db")) (calls 0) (orig (symbol-function 'sqlite-execute)))
       (let ((before (drgnx-work-db-migrate-test--bytes file)))
-        (cl-letf (((symbol-function 'drgnx-records-encode)
-                   (lambda (&rest _) (if (> (cl-incf calls) 5) (error "forced halfway") "{}"))))
+        (cl-letf (((symbol-function 'sqlite-execute)
+                   (lambda (db sql &rest args)
+                     (if (and (string-prefix-p "insert into " sql) (string-search "_new " sql) (> (cl-incf calls) 5))
+                         (error "forced halfway")
+                       (apply orig db sql args)))))
           (should-error (drgnx-work-db) :type 'error))
         (should (> calls 5))
         (drgnx-work-db-close-all)

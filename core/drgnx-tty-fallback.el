@@ -196,7 +196,7 @@ chords.  Empty when TABLE is clean."
     (nreverse out)))
 
 (defun drgnx-tty-fallback-problems (table &optional overrides)
-  "The keys.eld :tty-fallback entries TABLE could not apply, as lines (terminal-report.eld's :fallback-problems).
+  "The keys.eld :tty-fallback entries TABLE could not apply, as lines (`drgnx-tty-fallback-notify' makes them notices).
 With OVERRIDES (the :tty-fallback value TABLE was made with), also each entry that is not (CHORD . KEY) or names a
 chord the profile needs no fallback for (one a plain terminal sends, or no key of the profile)."
   (append
@@ -212,6 +212,25 @@ chord the profile needs no fallback for (one a plain terminal sends, or no key o
                                ((not (seq-find (lambda (r) (equal (key-parse (car r)) (key-parse (car o)))) table))
                                 (format "keys.eld :tty-fallback %s: the profile needs no fallback for it" (car o)))))
                        overrides)))))
+
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+(declare-function drgnx-notices "drgnx-notice" (&rest args))
+
+(defun drgnx-tty-fallback-notify (term table &optional overrides)
+  "Make `drgnx-tty-fallback-problems' of TABLE (and OVERRIDES) the `warn' conditions of TERM, a terminal's name.
+They are of source `terminal', id (TERM . LINE); those of TERM that are no longer a problem go, other
+terminals' stay.  Never signals."
+  (condition-case err
+      (let ((lines (drgnx-tty-fallback-problems table overrides)))
+        (require 'drgnx-notice)
+        (dolist (n (drgnx-notices :source 'terminal :life 'condition))
+          (let ((id (plist-get n :id)))
+            (when (and (consp id) (equal (car id) term) (not (member (cdr id) lines)))
+              (drgnx-notice-clear 'terminal id))))
+        (dolist (line lines)
+          (drgnx-notify 'terminal 'warn line :id (cons term line) :life 'condition)))
+    (error (message "drgnx: terminal fallback problems not recorded as notices: %s" (error-message-string err)))))
 
 ;;;; The active profile's table
 
@@ -348,7 +367,7 @@ LAYER, the rows installed on it (nil without the layer)."
 
 (defun drgnx-tty-fallback-facts (&optional report)
   "What the doctor shows for the fallback layer, from REPORT (default terminal-report.eld): one plist per terminal,
-\(:tty TTY :id ID :keys MODE :layer BOOL :rows ((CHORD NATIVE-P ALT PREFIX)…) :problems LINES), newest first.
+\(:tty TTY :id ID :keys MODE :layer BOOL :rows ((CHORD NATIVE-P ALT PREFIX)…)), newest first.
 The doctor prints :rows as three columns: native, fallback (ALT, \"Alt+Shift+F\"), prefix (\"F6 p\"); a row with
 none of them cannot be typed in that terminal."
   (let ((report (or report (drgnx-tty--read-report))))
@@ -356,8 +375,7 @@ none of them cannot be typed in that terminal."
               (let ((caps (plist-get entry :caps)))
                 (list :tty tty :id (plist-get caps :id) :keys (plist-get caps :keys)
                       :layer (and (plist-get entry :fallback) t)
-                      :rows (plist-get entry :fallbacks)
-                      :problems (plist-get entry :fallback-problems))))
+                      :rows (plist-get entry :fallbacks))))
             (seq-filter #'consp (plist-get report :terminals)))))
 
 (provide 'drgnx-tty-fallback)

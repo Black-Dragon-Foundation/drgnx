@@ -149,6 +149,7 @@ number (Emacs refuses it).  See docs/develop/core.md, \"Timers\"."
                   (run-with-idle-timer secs repeat #'drgnx-timer--fire entry)
                 (run-at-time secs repeat #'drgnx-timer--fire entry)))
         (puthash key entry drgnx-timer--table)
+        (drgnx-timer--restarted key)
         (when (bufferp (car cell)) (drgnx-timer--watch-buffer (car cell) key))
         key))))
 
@@ -267,7 +268,28 @@ At its `drgnx-timer-failure-limit'-th failure in a row an ENTRY that would run a
     (message "drgnx: timer %S failed: %s" key msg)
     (when stop
       (drgnx-timer--drop entry)
-      (drgnx-timer--write-report))))
+      (drgnx-timer--write-report)
+      (drgnx-timer--notify-stopped entry n msg))))
+
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+
+(defun drgnx-timer--notify-stopped (entry n msg)
+  "Post ENTRY, stopped after N failures (the last one MSG), as a `warn' condition of source `timers'.
+The model needs this layer, so it loads at the first stop.  Never signals."
+  (let ((key (drgnx-timer--entry-key entry)))
+    (condition-case failed
+        (progn
+          (require 'drgnx-notice)
+          (drgnx-notify 'timers 'warn
+                        (format "timer %S (%s) stopped after %d failures: %s" key (drgnx-timer--entry-fn entry) n msg)
+                        :id key :life 'condition
+                        :fix "report the error; drgnx starts the timer again at the next start"))
+      (error (message "drgnx: timer %S stopped (not recorded: %s)" key (error-message-string failed))))))
+
+(defun drgnx-timer--restarted (key)
+  "KEY starts again: its \"stopped\" notice, if any, goes (nothing when the model is not loaded)."
+  (when (featurep 'drgnx-notice) (drgnx-notice-clear 'timers key)))
 
 ;;;; The primitives: debounce, soon, poll, idle steps
 
@@ -285,6 +307,7 @@ At its `drgnx-timer-failure-limit'-th failure in a row an ENTRY that would run a
 (defun drgnx-timer--install (entry cell)
   "Put ENTRY, whose owner resolved to CELL, in the table under its key; a buffer owner notes the key."
   (puthash (drgnx-timer--entry-key entry) entry drgnx-timer--table)
+  (drgnx-timer--restarted (drgnx-timer--entry-key entry))
   (when (bufferp (car cell)) (drgnx-timer--watch-buffer (car cell) (drgnx-timer--entry-key entry))))
 
 (defun drgnx-timer--call-final (entry fn)

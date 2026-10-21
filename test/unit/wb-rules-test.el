@@ -190,43 +190,69 @@
    (should (plist-member (drgnx-rules-report) :display-buffer-entry))
    (should-not (plist-get (drgnx-rules-report) :display-buffer-entry))))
 
-(ert-deftest drgnx-rules/the-report-is-written-after-init-to-the-state-dir ()
+(ert-deftest drgnx-rules/no-report-file-is-written ()
+  ;; the doctor reads the notice (wb . display-buffer-entry) from the session file; wb-report.eld is gone
   (let* ((state (make-temp-file "drgnx-rules-state" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
     (unwind-protect
         (drgnx-rules-test--with
-         (should (memq #'drgnx-rules--write-report emacs-startup-hook))
-         (drgnx-rules--write-report)
-         (let ((file (expand-file-name "drgnx/wb-report.eld" state)))
-           (should (file-readable-p file))
-           (should (eq (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
-                                  :display-buffer-entry)
-                       t))
-           (setq display-buffer-alist nil)
-           (drgnx-rules--write-report)
-           (should-not (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
-                                  :display-buffer-entry))))
+         (should (memq #'drgnx-rules--sync-entry-notice emacs-startup-hook))
+         (should-not (fboundp 'drgnx-rules--write-report))
+         (setq display-buffer-alist nil)
+         (drgnx-rules--sync-entry-notice)
+         (should-not (directory-files-recursively state "wb-report")))
       (delete-directory state t))
-    (should-not (memq #'drgnx-rules--write-report emacs-startup-hook))))
+    (should-not (memq #'drgnx-rules--sync-entry-notice emacs-startup-hook))))
 
-(ert-deftest drgnx-rules/the-report-is-written-atomically ()
-  ;; a rename that fails keeps the old report as it was and leaves no temp file; the writer never raises (a hook)
-  (let* ((state (make-temp-file "drgnx-rules-state" t))
-         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
-         (file (expand-file-name "drgnx/wb-report.eld" state)))
-    (unwind-protect
-        (progn
-          (make-directory (file-name-directory file) t)
-          (with-temp-file file (insert "(:time \"old\" :display-buffer-entry t)\n"))
-          (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (signal 'file-error '("Renaming" "no")))))
-            (drgnx-rules--write-report))
-          (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string))
-                         "(:time \"old\" :display-buffer-entry t)\n"))
-          (should (equal (directory-files (file-name-directory file)) '("." ".." "wb-report.eld")))
-          (drgnx-rules--write-report)
-          (should (stringp (plist-get (car (read-from-string (with-temp-buffer (insert-file-contents file) (buffer-string))))
-                                      :time)))
-          (should-not (equal (plist-get (car (read-from-string (with-temp-buffer (insert-file-contents file) (buffer-string))))
-                                        :time)
-                             "old")))
-      (delete-directory state t))))
+
+;;;; Notices (Task 12)
+
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-notice-wb/unrouted-is-one-info-condition ()
+  (drgnx-notice-test-with-model
+    (drgnx-rules-test--with
+     (let ((editor (car (drgnx-rules-test--editors))))
+       (drgnx-test-use-editor editor)
+       (display-buffer (get-buffer-create "zz-unrouted"))
+       (let ((n (car (drgnx-notices :source 'wb))))
+         (should (equal (plist-get n :id) 'unrouted))
+         (should (eq (plist-get n :severity) 'info))
+         (should (eq (plist-get n :life) 'condition))
+         (should (equal (plist-get n :text) "1 buffer matched no placement rule"))
+         (should (eq (plist-get n :command) 'wb-unrouted))
+         (should (string-match-p "workbench.md" (plist-get n :fix))))
+       (display-buffer (get-buffer-create "*t1*"))
+       (should (= 1 (length (drgnx-notices :source 'wb))))
+       (should (equal (plist-get (car (drgnx-notices :source 'wb)) :text) "2 buffers matched no placement rule"))
+       (setq drgnx-wb-unrouted nil)
+       (drgnx-rules--sync-unrouted)
+       (should-not (drgnx-notices :source 'wb))))))
+
+(ert-deftest drgnx-rules/reviewing-the-unrouted-list-clears-it ()
+  ;; the Unrouted view shows the list once, then empties it and clears the (wb . unrouted) condition
+  (drgnx-notice-test-with-model
+    (drgnx-rules-test--with
+     (let ((drgnx-wb-unrouted nil))
+       (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
+         (drgnx-rules--log (get-buffer-create "zz-unrouted-a"))
+         (should (drgnx-notices :source 'wb))
+         (drgnx-wb-show-unrouted)
+         (with-current-buffer "*drgnx unrouted*" (should (string-search "zz-unrouted-a" (buffer-string))))
+         (should-not drgnx-wb-unrouted)
+         (should-not (drgnx-notices :source 'wb)))))))
+
+(ert-deftest drgnx-notice-wb/a-lost-display-buffer-entry-is-warn ()
+  (drgnx-notice-test-with-model
+    (drgnx-rules-test--with
+     (let ((inhibit-message t))
+       (setq display-buffer-alist nil)
+       (drgnx-rules--sync-entry-notice)
+       (let ((n (car (drgnx-notices :source 'wb))))
+         (should (equal (plist-get n :id) 'display-buffer-entry))
+         (should (eq (plist-get n :severity) 'warn))
+         (should (eq (plist-get n :life) 'condition))
+         (should (string-match-p "add-to-list" (plist-get n :fix))))
+       (push drgnx-rules--entry display-buffer-alist)
+       (drgnx-rules--sync-entry-notice)
+       (should-not (drgnx-notices :source 'wb))))))

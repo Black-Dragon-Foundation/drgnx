@@ -402,7 +402,10 @@ subscribed connection) goes to `drgnx-hub-event-functions'."
 
 (defun drgnx-hub--client-line (conn json)
   (let ((event (plist-get json :event)))
-    (cond ((equal event "challenge")
+    (cond ((and (equal event "challenge") (eq (process-get conn :drgnx-state) 'legacy))
+           ;; a v1 hub taken for `legacy': its calls would all be refused as service class; the next call connects again
+           (drgnx-hub--reject-hub conn (format "the hub at %s sent its challenge late: connecting again" (drgnx-hub-socket))))
+          ((equal event "challenge")
            (when (eq (process-get conn :drgnx-state) 'wait)
              (drgnx-timer-cancel (cons 'hub-challenge conn))
              (let ((nonce (plist-get (plist-get json :data) :nonce)))
@@ -455,7 +458,8 @@ call is forgotten first and its deadline cancelled."
   "A new connection to the hub (`drgnx-hub--connect-socket'); EVENTS non-nil: the subscribed connection.  Calls on it
 wait in its queue until it is proven or `legacy' (`drgnx-hub--hello'); on a socket this Emacs serves it is proven at
 once.  Otherwise a `ping' goes at once: a hub of before protocol 1 answers it, where Ratatoskr's challenge always
-comes first, so such a hub is not waited for; none of the two within `drgnx-hub--challenge-wait' is `legacy' too."
+comes first, so such a hub is not waited for.  None of the two within `drgnx-hub--challenge-wait' closes the
+connection (`drgnx-hub--challenge-late'): only the probe's answer makes a hub `legacy'."
   (let* ((socket (drgnx-hub-socket)) (c (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
     (process-put c :drgnx-events events)
     (set-process-sentinel c (drgnx-guard-wrap #'drgnx-hub--client-sentinel "hub connection"))
@@ -464,13 +468,24 @@ comes first, so such a hub is not waited for; none of the two within `drgnx-hub-
                (process-put c :drgnx-proven t))
       (process-put c :drgnx-state 'wait)
       (drgnx-hub-client-binary-version t)       ; read now, never waiting: for this hello and the skew
-      (drgnx-timer-start (cons 'hub-challenge c) drgnx-hub--challenge-wait #'drgnx-hub--legacy-now :args (list c) :owner :core)
+      (drgnx-timer-start (cons 'hub-challenge c) drgnx-hub--challenge-wait #'drgnx-hub--challenge-late :args (list c) :owner :core)
       (drgnx-hub--call-on c "ping" nil (lambda (_r err) (unless err (drgnx-hub--legacy-now c)))
                           :deadline drgnx-hub--challenge-wait :first t))
     c))
 
+(defun drgnx-hub--challenge-late (conn)
+  "`drgnx-hub--challenge-wait' passed with CONN still waiting for its hub's first line.  What already arrived is read
+first: an Emacs busy past the wait runs this timer before it reads the challenge waiting in the socket (review S2).
+Still nothing: CONN is closed and its calls fail — never taken for `legacy' (a v1 hub would then refuse every user
+call on it); the next call connects again."
+  (when (and (process-live-p conn) (eq (process-get conn :drgnx-state) 'wait))
+    (accept-process-output conn 0 nil t)
+    (when (and (process-live-p conn) (eq (process-get conn :drgnx-state) 'wait))
+      (drgnx-hub--reject-hub conn (format "the drgnx hub at %s sent nothing within %s s" (drgnx-hub-socket)
+                                          drgnx-hub--challenge-wait)))))
+
 (defun drgnx-hub--legacy-now (conn)
-  "CONN's hub sent no challenge before the probe's answer, or within `drgnx-hub--challenge-wait': it is `legacy'."
+  "CONN's hub answered the probe before it sent a challenge: it is `legacy'."
   (when (and (process-live-p conn) (eq (process-get conn :drgnx-state) 'wait))
     (drgnx-timer-cancel (cons 'hub-challenge conn))
     (process-put conn :drgnx-state 'legacy)
@@ -607,7 +622,6 @@ error, or when it does not answer."
       (drgnx-hub--fail-conn c "disconnected from the drgnx hub"))
     (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
-  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (let (ids)
     (maphash (lambda (id _) (push id ids)) drgnx-hub--pending)
@@ -779,8 +793,7 @@ Ratatoskr is shut down and Ratatoskr started in its place; no hub at all is star
       (setq drgnx-hub--subscribing c)
       (process-put c :since (float-time))
       (drgnx-hub--call-on c "subscribe" nil (lambda (r _err) (drgnx-hub--subscribed c r)))
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-tests)   ; removed by `drgnx-hub-disconnect'
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)  ; also
+      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)  ; removed by `drgnx-hub-disconnect'
       ;; a hub keeps keys in memory only: one that restarted has none, so each new subscription gives them again
       (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys)))))
 
@@ -800,18 +813,6 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
         (drgnx-notify 'hub (intern severity) text :id (intern id)
                       :life (if (equal (plist-get data :life) "condition") 'condition 'event)
                       :command (and (stringp command) (intern command)))))))
-
-(declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
-
-(defun drgnx-hub--note-tests (event data)
-  "In an editor: the test runs among the `events' the hub sent reach the status bar (`drgnx-statusbar-note-tests',
-when it is loaded)."
-  (when (and (equal event "events") (fboundp 'drgnx-statusbar-note-tests))
-    (dolist (e (append (plist-get data :events) nil))
-      (when (equal (plist-get e :kind) "test")
-        (let ((d (plist-get e :data)))
-          (when (and (proper-list-p d) (or (natnump (plist-get d :passed)) (natnump (plist-get d :failed))))
-            (drgnx-statusbar-note-tests (or (plist-get d :passed) 0) (or (plist-get d :failed) 0) (plist-get e :agent))))))))
 
 (provide 'drgnx-hub-client)
 ;;; drgnx-hub-client.el ends here

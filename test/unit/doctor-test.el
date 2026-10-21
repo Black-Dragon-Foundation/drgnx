@@ -297,57 +297,11 @@
   ;; The doctor reads the report the last drgnx session wrote (batch Emacs loads no modules).
   (let ((check (lambda (report) (drgnx-doctor-check 'key-conflicts (drgnx-doctor-test--facts :keys-report report)))))
     (should (eq (car (funcall check nil)) 'info))
-    (should (eq (car (funcall check '(:layers ((vscode app)) :conflicts nil :problems nil))) 'ok))
-    (let ((r (funcall check '(:layers ((emacs editing) (vscode app)) :conflicts ("C-o: a" "C-s: b") :problems nil))))
+    (should (eq (car (funcall check '(:layers ((vscode app)) :conflicts nil))) 'ok))
+    (let ((r (funcall check '(:layers ((emacs editing) (vscode app)) :conflicts ("C-o: a" "C-s: b")))))
       (should (eq (car r) 'info))
       (should (string-search "2 key conflicts" (nth 1 r)))
-      (should (string-search "Keyboard Shortcuts" (nth 2 r))))
-    (let ((r (funcall check '(:layers ((vscode app)) :conflicts nil :problems ("keys.eld: no command nope (in :bind)")))))
-      (should (eq (car r) 'warn))
-      (should (string-search "no command nope" (nth 1 r))))))
-
-(ert-deftest drgnx-doctor/modules-check-says-stale-and-disabled ()
-  (let* ((report '((a :status ok) (b :status disabled)))
-         (r (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report report
-                                                                   :modules-report-time (- (float-time) 3.5 3600 3600)))))
-    (should (eq (car r) 'ok))
-    (should (string-search "1 ok" (nth 1 r)))
-    (should (string-search "1 off" (nth 1 r)))
-    (should (string-search "from the last session, 2 h ago" (nth 1 r))))
-  (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report '((a :status disabled))
-                                                                  :modules-report-time (- (float-time) 90)))))
-    (should (string-search "0 ok, 1 off" (nth 1 r)))
-    (should (string-search "1 min ago" (nth 1 r))))
-  ;; a failure keeps its verdict and says how old the report is; without a time, no age
-  (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report '((a :status failed :error "boom"))
-                                                                  :modules-report-time (- (float-time) 3 (* 3 86400))))))
-    (should (eq (car r) 'fail))
-    (should (string-search "a: boom" (nth 1 r)))
-    (should (string-search "3 d ago" (nth 1 r))))
-  (should-not (string-search "ago" (nth 1 (drgnx-doctor-check 'modules (drgnx-doctor-test--facts :modules-report '((a :status ok))))))))
-
-(ert-deftest drgnx-doctor/modules-report-time-fact ()
-  (let* ((state (make-temp-file "drgnx-state" t))
-         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
-         (facts (lambda () (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)))))
-    (unwind-protect
-        (progn
-          (should-not (plist-get (funcall facts) :modules-report-time))
-          (make-directory (expand-file-name "drgnx" state))
-          (with-temp-file (expand-file-name "drgnx/modules-report.eld" state) (prin1 '((a :status ok)) (current-buffer)))
-          (set-file-times (expand-file-name "drgnx/modules-report.eld" state) (time-subtract nil 7200))
-          (let ((age (- (float-time) (plist-get (funcall facts) :modules-report-time))))
-            (should (< 7190 age 7300))))
-      (delete-directory state t))))
-
-(ert-deftest drgnx-doctor/display-buffer-alist-entry-missing-warns ()
-  (let ((check (lambda (report) (drgnx-doctor-check 'display-rules (drgnx-doctor-test--facts :wb-report report)))))
-    (should (eq (car (funcall check nil)) 'info))
-    (should (eq (car (funcall check '(:display-buffer-entry t))) 'ok))
-    (let ((r (funcall check '(:display-buffer-entry nil))))
-      (should (eq (car r) 'warn))
-      (should (string-search "display-buffer-alist" (nth 1 r)))
-      (should (string-search "display-buffer-alist" (nth 2 r))))))
+      (should (string-search "Keyboard Shortcuts" (nth 2 r))))))
 
 (ert-deftest drgnx-doctor/builtin-in-manifest-is-not-missing ()
   ;; eglot ships with Emacs: a manifest that names it needs no install.
@@ -381,19 +335,6 @@
         (drgnx-doctor--keys-report))
       (should (equal read '("/tmp/drgnx-home/.local/state/drgnx/keys-report.eld"))))))
 
-(ert-deftest drgnx-doctor/the-hint-names-the-real-config-dir ()
-  ;; M2.6-3: the hint names the config dir in use, never a literal ~/.config/drgnx
-  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-cfg" t)))
-         (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
-         (r (drgnx-doctor-check 'key-conflicts
-                                (drgnx-doctor-test--facts :keys-report '(:layers ((vscode app)) :conflicts nil
-                                                                                 :problems ("keys.eld: no command nope"))))))
-    (unwind-protect
-        (progn
-          (should (string-search (abbreviate-file-name (concat dir "keys.eld")) (nth 2 r)))
-          (should-not (string-search "~/.config/drgnx" (nth 2 r))))
-      (delete-directory dir t))))
-
 (ert-deftest drgnx-doctor/the-state-files-are-read-through-the-file-layer ()
   ;; data is data; a file with a mistake, a missing one and a huge one give nil, and no reader changes the bytes
   (let* ((state (make-temp-file "drgnx-state" t))
@@ -402,17 +343,17 @@
     (unwind-protect
         (progn
           (make-directory dir)
-          (should-not (drgnx-doctor--state-file "wb-report.eld"))
+          (should-not (drgnx-doctor--state-file "onboarding.eld"))
           (should-not (drgnx-doctor--keys-report))
           (dolist (text '("(:time \"x\"" "(:time \"x\") (:more)" "#1=(:a . #1#)"))
-            (dolist (name '("wb-report.eld" "keys-report.eld"))
+            (dolist (name '("onboarding.eld" "keys-report.eld"))
               (write-region text nil (expand-file-name name dir) nil 'silent))
-            (should-not (drgnx-doctor--state-file "wb-report.eld"))
+            (should-not (drgnx-doctor--state-file "onboarding.eld"))
             (should-not (drgnx-doctor--keys-report))
-            (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "wb-report.eld" dir)) (buffer-string))
+            (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "onboarding.eld" dir)) (buffer-string))
                            text)))
-          (write-region ";; note\n(:time \"x\" :display-buffer-entry t)\n" nil (expand-file-name "wb-report.eld" dir) nil 'silent)
-          (should (equal (drgnx-doctor--state-file "wb-report.eld") '(:time "x" :display-buffer-entry t)))
+          (write-region ";; note\n(:time \"x\" :done t)\n" nil (expand-file-name "onboarding.eld" dir) nil 'silent)
+          (should (equal (drgnx-doctor--state-file "onboarding.eld") '(:time "x" :done t)))
           (write-region (make-string (1+ drgnx-file-max-bytes) ?\s) nil (expand-file-name "keys-report.eld" dir) nil 'silent)
           (should-not (drgnx-doctor--keys-report)))
       (delete-directory state t))))
@@ -758,6 +699,175 @@
                                              " (reported 2 h ago)")))
             (should (equal (nth 2 r) "ask its package for a cheaper `:eval', or remove it from `mode-line-misc-info'"))))
       (delete-directory state t))))
+
+;;;; Notices: the doctor reads the session files and writes nothing
+
+(defmacro drgnx-doctor-test--with-notices (&rest body)
+  "BODY with an empty state dir (XDG_STATE_HOME) and `process-attributes' stubbed: only the pids in `live' are
+emacs processes, and `drgnx-doctor--checks' is restored afterwards."
+  (declare (indent 0) (debug t))
+  `(let* ((state (make-temp-file "drgnx-state" t))
+          (live nil)
+          (drgnx-doctor--checks (copy-tree drgnx-doctor--checks))   ; a redefinition changes the entry in place
+          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'process-attributes)
+                    (lambda (pid) (and (memq pid live) (list (cons 'comm (concat "ema" "cs")))))))   ; built, so the bare-emacs lint does not read it as a command
+           ,@body)
+       (delete-directory state t))))
+
+(defun drgnx-doctor-test--session (name written notices &optional age)
+  "Write the session file NAME (\"4242\" or \"last\") written WRITTEN seconds ago, holding NOTICES; its mtime is
+AGE seconds ago (default WRITTEN).  The pid in the data is NAME's number."
+  (let ((file (expand-file-name (concat "drgnx/notices/" name ".eld") (getenv "XDG_STATE_HOME"))))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (prin1 (list :version 1 :pid (string-to-number name) :emacs "31.1" :daemon nil :started 1.0
+                   :written (- (float-time) written) :notices notices)
+             (current-buffer)))
+    (set-file-times file (time-subtract nil (or age written)))
+    file))
+
+(defun drgnx-doctor-test--note (source severity text &optional fix)
+  (append (list :source source :id text :severity severity :life 'condition :text text :at 1.0)
+          (and fix (list :fix fix))))
+
+(ert-deftest drgnx-doctor/notices-live-session ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (let ((n (drgnx-doctor--notices)))
+      (should (= 1 (length (plist-get n :live))))
+      (should (= 4242 (plist-get (car (plist-get n :live)) :pid)))
+      (should-not (plist-get n :last))
+      (should-not (plist-get n :crashed)))))
+
+(ert-deftest drgnx-doctor/notices-last-session-with-its-age ()
+  (drgnx-doctor-test--with-notices
+    (drgnx-doctor-test--session "last" 10800 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+    (let ((n (drgnx-doctor--notices)))
+      (should (plist-get n :last))
+      (should-not (plist-get n :live)))
+    (should (equal (drgnx-doctor-check 'keys-notices (list :notices (drgnx-doctor--notices)))
+                   '(warn "clash (from the last session, 3 h ago)" nil)))))
+
+(ert-deftest drgnx-doctor/notices-a-crashed-session ()
+  (drgnx-doctor-test--with-notices
+    (drgnx-doctor-test--session "5151" 120 (list (drgnx-doctor-test--note 'keys 'fail "boom")))
+    (drgnx-doctor-test--session "5152" (* 8 86400) (list (drgnx-doctor-test--note 'keys 'fail "ancient")))
+    (let ((n (drgnx-doctor--notices)))
+      (should (equal '(5151) (mapcar (lambda (d) (plist-get d :pid)) (plist-get n :crashed))))   ; 7 days: ignored
+      (should-not (plist-get n :live))
+      (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+      (should (equal '(fail "boom (from the last session, 2 min ago)" nil)
+                     (drgnx-doctor-check 'keys-notices (list :notices n)))))))
+
+(ert-deftest drgnx-doctor/notices-two-live-sessions ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242 4343))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (drgnx-doctor-test--session "4343" 5 (list (drgnx-doctor-test--note 'keys 'warn "other")))
+    (drgnx-doctor-test--session "last" 50 (list (drgnx-doctor-test--note 'keys 'fail "old news")))
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+    (let* ((n (drgnx-doctor--notices))
+           (r (drgnx-doctor-check 'keys-notices (list :notices n))))
+      (should (= 2 (length (plist-get n :live))))
+      (should (eq 'warn (car r)))
+      (should (string-search "clash" (nth 1 r)))
+      (should (string-search "other" (nth 1 r)))
+      (should-not (string-search "old news" (nth 1 r)))
+      (should (string-match-p "(this session, pid 4242, 4343)\\'" (nth 1 r))))))
+
+(ert-deftest drgnx-doctor/notices-no-session-yet ()
+  (drgnx-doctor-test--with-notices
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d" :name 'keys-notices)
+    (should (equal (plist-get (drgnx-doctor--notices) :live) nil))
+    (should (equal '(info "no session recorded yet — start drgnx once" nil)
+                   (drgnx-doctor-check 'keys-notices (list :notices (drgnx-doctor--notices)))))))
+
+(ert-deftest drgnx-doctor/define-notices-worst-severity-texts-fix ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session
+     "4242" 5
+     (append (list (drgnx-doctor-test--note 'keys 'info "i1")
+                   (drgnx-doctor-test--note 'keys 'warn "w1" "fix w1")
+                   (drgnx-doctor-test--note 'keys 'fail "f1" "fix f1")
+                   (drgnx-doctor-test--note 'hooks 'fail "not mine"))
+             (cl-loop for i from 2 to 7 collect (drgnx-doctor-test--note 'keys 'info (format "i%d" i)))))
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d")
+    (drgnx-doctor-define-notices 'timers :group "drgnx" :doc "d")
+    (let ((r (drgnx-doctor-check 'keys (list :notices (drgnx-doctor--notices)))))
+      (should (eq 'fail (car r)))
+      (should (string-prefix-p "i1; w1; f1; i2; i3; and 4 more" (nth 1 r)))   ; the first 5, then "and N more"
+      (should (string-suffix-p "(this session)" (nth 1 r)))
+      (should (equal "fix w1" (nth 2 r))))
+    (should (equal '(ok "no problems" nil)
+                   (drgnx-doctor-check 'timers (list :notices (drgnx-doctor--notices)))))))
+
+(ert-deftest drgnx-doctor/the-doctor-writes-nothing ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'keys 'warn "clash")))
+    (drgnx-doctor-test--session "5151" 400 (list (drgnx-doctor-test--note 'keys 'warn "crash")))
+    (drgnx-doctor-test--session "last" 50 nil)
+    (drgnx-doctor-define-notices 'keys :group "drgnx" :doc "d")
+    (let ((listing (lambda ()
+                     (mapcar (lambda (f) (list f (file-attribute-size (file-attributes f))
+                                               (file-attribute-modification-time (file-attributes f))))
+                             (directory-files-recursively state "")))))
+      (let ((before (funcall listing)))
+        (drgnx-doctor-check 'keys (list :notices (drgnx-doctor--notices)))
+        (drgnx-doctor--notices)
+        (should (equal before (funcall listing)))
+        (should (= 3 (length before)))))))
+
+(ert-deftest drgnx-doctor/modules-is-a-notices-declaration ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'modules 'fail "ai/x did not start: boom" "turn it off")
+                                               (drgnx-doctor-test--note 'keys 'warn "not mine")))
+    (let ((r (drgnx-doctor-check 'modules (list :notices (drgnx-doctor--notices)))))
+      (should (eq (car r) 'fail))
+      (should (string-search "ai/x did not start: boom" (nth 1 r)))
+      (should-not (string-search "not mine" (nth 1 r)))
+      (should (equal (nth 2 r) "turn it off")))
+    (should (equal (plist-get (alist-get 'modules drgnx-doctor--checks) :doc)
+                   "Modules that failed, wait or are off (this session, or the last one)"))
+    ;; the two report files and their facts are gone
+    (let ((facts (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts))))
+      (dolist (k '(:modules-report :modules-report-time :wb-report))
+        (should-not (plist-member facts k))))))
+
+(ert-deftest drgnx-doctor/display-rules-is-a-notices-declaration ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'wb 'warn "drgnx's entry in display-buffer-alist is gone"
+                                                                        "use add-to-list")))
+    (let ((r (drgnx-doctor-check 'display-rules (list :notices (drgnx-doctor--notices)))))
+      (should (eq (car r) 'warn))
+      (should (string-search "display-buffer-alist" (nth 1 r)))
+      (should (equal (nth 2 r) "use add-to-list")))
+    (should (equal (plist-get (alist-get 'display-rules drgnx-doctor--checks) :doc)
+                   "Buffers are placed by drgnx's rules"))
+    (should-not (alist-get 'wb drgnx-doctor--checks))))
+
+(ert-deftest drgnx-doctor/key-problems-and-key-conflicts-are-separate ()
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'keys 'warn "keys.eld: no command nope" "fix keys.eld")))
+    (let ((facts (list :notices (drgnx-doctor--notices)
+                       :keys-report '(:layers ((emacs editing)) :conflicts ("C-o: a")))))
+      (let ((p (drgnx-doctor-check 'key-problems facts)))
+        (should (eq (car p) 'warn))
+        (should (string-search "no command nope" (nth 1 p)))
+        (should (equal (nth 2 p) "fix keys.eld")))
+      (let ((c (drgnx-doctor-check 'key-conflicts facts)))
+        (should (eq (car c) 'info))
+        (should (string-search "1 key conflicts" (nth 1 c)))
+        (should-not (string-search "nope" (nth 1 c)))))
+    (should (equal (plist-get (alist-get 'key-problems drgnx-doctor--checks) :doc) "keys.eld and profile problems"))))
 
 ;;; Ratatoskr (Task 19)
 

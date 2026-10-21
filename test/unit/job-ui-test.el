@@ -177,7 +177,6 @@
                                (should (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
                                (drgnx-job-ui-note-jobs (list drgnx-job-ui-test--summary))
                                (should (= 3 (drgnx-needs-you-count)))
-                               (should (eql (drgnx-job-ui-needs-you) 3))             ; the obsolete name, the same count
                                (drgnx-module-teardown 'tools/jobs)
                                (should-not (gethash 'jobs drgnx-notice--sources))
                                (should (= 0 (drgnx-needs-you-count)))
@@ -219,16 +218,11 @@
                              (should-not (drgnx-timer-active-p 'job-ui-recount))
                              (should-not (drgnx-timer-active-p 'job-ui-recount-idle)))))
 
-;; M9b4-1: once the hub has marked a dismissed message acted, the recount gives 0 (Dismiss itself:
-;; mod-cockpit-cards-test.el).
-(ert-deftest drgnx-job-ui/an-acted-message-is-not-counted ()
-  (should (= 0 (car (drgnx-job-ui-needs-you-count '((:id "j1" :status "running" :cards :null :messages ((:id 3 :state "acted")))))))))
-
-;; one count of what needs you: the notice model's, and the cockpit's What needs you
-(ert-deftest drgnx-job-ui/one-count-of-what-needs-you ()
+;; M9b4-1: once the hub has marked a dismissed message acted, the job does not wait on you (Dismiss itself:
+;; mod-cockpit-cards-test.el); the count is the notice model's (`drgnx-needs-you-count', tested above).
+(ert-deftest drgnx-job-ui/what-waits-on-you-is-open-cards-and-unacted-messages ()
   (let ((done (list :id "j2" :status "done" :cards '((:id 9 :kind "review")) :messages :null))
         (acted (list :id "j3" :status "running" :cards :null :messages '((:id 4 :state "acted")))))
-    (should (equal (drgnx-job-ui-needs-you-count (list drgnx-job-ui-test--summary done acted)) '(3 . "j1")))
     (should (drgnx-job-ui-waiting-p drgnx-job-ui-test--summary))
     (should-not (drgnx-job-ui-waiting-p done))
     (should-not (drgnx-job-ui-waiting-p acted))))

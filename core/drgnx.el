@@ -32,6 +32,7 @@
 (require 'drgnx-config)
 (require 'drgnx-shell-env)
 (require 'drgnx-notice-echo)
+(require 'drgnx-notice-save)
 (require 'drgnx-notices)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
@@ -41,12 +42,14 @@
   (expand-file-name "config.el" (drgnx-user-dir)))
 
 (defun drgnx--load-user-config (&optional file)
-  "Load FILE (default `drgnx-user-config-file') when it exists; an error in it is said in *Messages*, never stops
+  "Load FILE (default `drgnx-user-config-file') when it exists; an error in it is a notice, never stops
 the start."
   (let ((file (or file (drgnx-user-config-file))))
     (when (file-exists-p file)
       (condition-case err (load file nil 'nomessage 'nosuffix)
-        (error (message "drgnx: %s: %s (the rest of it did not run)" (abbreviate-file-name file) (error-message-string err)))))))
+        (error (drgnx-notify 'config 'fail (format "%s: %s (the rest of it did not run)" (abbreviate-file-name file)
+                                                   (error-message-string err))
+                             :id 'config-el :life 'condition :command 'preferences-user-config))))))
 
 (defun drgnx-open-user-config ()
   "Open your config.el — made from a short template the first time."
@@ -117,12 +120,14 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (drgnx-session-setup)                         ; keep running or quit; the close button
         (drgnx-shell-env-start)                        ; the login shell's PATH, asynchronously
         (drgnx-notice-mode-line-mode 1)                ; the needs-you and problems counts in the mode line
+        (drgnx-notice-save-mode 1)                     ; this Emacs's notices in its session file, for the doctor
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only
           (unless safe
             (condition-case err (drgnx-pkg-activate)
-              (error (message "drgnx: packages not activated: %s" (error-message-string err))))
+              (error (drgnx-notify 'modules 'fail (format "packages were not activated: %s" (error-message-string err))
+                                   :id 'packages :life 'condition)))
             (drgnx-pkg-guard-mode 1)
             (when custom-file (drgnx--load-user-config custom-file)))  ; what Customize saved: packages active, guarded
           (drgnx--core-commands)
@@ -132,7 +137,8 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
           (if safe
               (message "drgnx safe mode: the core only — no modules, no packages (drgnx bisect finds a module that breaks)")
             (condition-case err (drgnx-modules-start (expand-file-name "modules" drgnx-dir))   ; never stops the rest
-              (error (message "drgnx: modules did not start: %s" (error-message-string err))))
+              (error (drgnx-notify 'modules 'fail (format "modules did not start: %s" (error-message-string err))
+                                   :id 'start :life 'condition)))
             (drgnx--load-user-config)))
         (drgnx-keys-apply)
         (drgnx-modal-apply-pending)                    ; a Vim stack chosen before its engine was installed

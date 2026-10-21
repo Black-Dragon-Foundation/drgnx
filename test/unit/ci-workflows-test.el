@@ -58,7 +58,9 @@
                         "xcode-27" "nightly-2026-10-15" "cargo-fuzz --version 0.13.2" "--perf perf-")
     ;; its own triggers carry no push or pull_request: ci.yml's call is that run (a second one would build everything twice)
     (should-not (string-match-p "^  \\(push\\|pull_request\\):" rt))
-    (drgnx-ci-test--has macos "DRGNX_RATATOSKR_BIN=" "brew install ripgrep rust")))
+    (drgnx-ci-test--has macos "DRGNX_RATATOSKR_BIN=" "brew install ripgrep rust")
+    ;; the client's tests that need --idle-tick-ms are on darwin's no-skip list: the binary they use has the test hooks
+    (drgnx-ci-test--has macos "-p drgnx-ratatoskr --features test-hooks")))
 
 ;; Caches: a cached input is addressed by a hash of what it is built from, so a stale one cannot be restored.
 (defun drgnx-ci-test--matches (re text)

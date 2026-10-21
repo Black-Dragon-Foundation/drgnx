@@ -77,19 +77,6 @@ running or paused; else nil."
 message to the user not acted on."
   (and (drgnx-job-ui--open-items job) t))
 
-(defun drgnx-job-ui-needs-you-count (jobs)
-  "(N . JOB): what needs the user across JOBS (summaries): open cards and messages not acted on, of proposed,
-running and paused jobs — and the job with the newest card.  The one count: the badge and the cockpit use it."
-  (let ((n 0) (newest nil) (newest-id -1))
-    (dolist (j jobs)
-      (setq n (+ n (length (drgnx-job-ui--open-items j))))
-      (when (member (plist-get j :status) '("proposed" "running" "paused"))
-        (dolist (c (drgnx-job-ui--v (plist-get j :cards)))
-          (when (> (plist-get c :id) newest-id) (setq newest-id (plist-get c :id) newest (plist-get j :id))))))
-    (cons n newest)))
-
-(define-obsolete-function-alias 'drgnx-job-ui-needs-you #'drgnx-needs-you-count "drgnx M12f")
-
 (defun drgnx-job-ui--source-p ()
   "Non-nil while the `jobs' notice source is defined: the module `tools/jobs' is on."
   (and (gethash 'jobs drgnx-notice--sources) t))

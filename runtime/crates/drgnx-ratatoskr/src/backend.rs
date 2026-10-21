@@ -258,6 +258,8 @@ pub struct Link {
     pid: i32,
     writer: tokio::sync::Mutex<OwnedWriteHalf>,
     pending: Mutex<Pending>,
+    /// True once [`Link::close`] ran: the backend's life ends with it ([`Link::closed`]).
+    closed: watch::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -272,7 +274,14 @@ impl Link {
             pid,
             writer: tokio::sync::Mutex::new(writer),
             pending: Mutex::new(Pending::default()),
+            closed: watch::channel(false).0,
         }
+    }
+
+    /// Wait until the connection is given up.
+    async fn closed(&self) {
+        let mut rx = self.closed.subscribe();
+        let _ = rx.wait_for(|c| *c).await;
     }
 
     /// Send LINE (no newline), whose id is ID, within WITHIN: the receiver of its answer (the whole answer object).
@@ -299,16 +308,26 @@ impl Link {
         .await;
         match written {
             Ok(Ok(())) => Ok(rx),
-            // a line the backend never read whole is never served: the next backend gets it
+            // a line the backend never read whole is never served: the next backend gets it.  Part of it may be in
+            // the socket, and the next line would be appended to it (review M5): the connection is given up, its
+            // writer shut, so the backend sees its end and is started again.
             Ok(Err(_)) => {
                 self.forget(id);
+                self.give_up().await;
                 Err(None)
             }
             Err(_) => {
                 self.forget(id);
+                self.give_up().await;
                 Err(Some(internal("the Lisp backend does not read")))
             }
         }
+    }
+
+    /// The connection is unusable: every call in flight fails once ([`Link::close`]) and the writer is shut down.
+    async fn give_up(&self) {
+        self.close();
+        let _ = self.writer.lock().await.shutdown().await;
     }
 
     fn gone(&self) -> bool {
@@ -332,6 +351,7 @@ impl Link {
         for (_, tx) in p.waiting.drain() {
             let _ = tx.send(Err(restarted()));
         }
+        self.closed.send_replace(true);
     }
 }
 
@@ -595,6 +615,16 @@ impl Backend {
             }
             _ => {}
         }
+        // the lock directory a backend killed before it could remove it left (review S1): its pid may be another
+        // process's by now (a reboot), and the backend would then take it for a live hub and exit 3 at every start.
+        // Safe to remove: this runs under Ratatoskr's own lock in a private directory, and an orphan backend the
+        // reaper missed ends within a second through its parent-pid watch.
+        if let Err(e) = remove_stale_lock(&runstav::paths::lock_path(socket)) {
+            return End::Gone(format!(
+                "cannot start: the stale lock {}.lock: {e}",
+                socket.display()
+            ));
+        }
         let row = match self.record_insert().await {
             Ok(r) => r,
             Err(e) => return End::Gone(format!("cannot start: {e}")),
@@ -625,6 +655,7 @@ impl Backend {
             });
         }
         let mut exited = false;
+        let mut served = false;
         let end = 'life: {
             let ready = tokio::select! {
                 r = timeout(READY_WITHIN, connect_ready(socket, pid)) => match r {
@@ -673,6 +704,7 @@ impl Backend {
                 break 'life End::Gone("did not take the subscription".into());
             }
             self.phase.send_replace(Phase::Running(link.clone()));
+            served = true;
             tracing::info!(pid, "the Lisp backend serves on {}", socket.display());
             let end = tokio::select! {
                 s = child.wait() => {
@@ -680,6 +712,8 @@ impl Backend {
                     End::Gone(format!("ended ({})", describe(s)))
                 }
                 _ = reader => End::Gone("closed its connection".into()),
+                // a line it would not take whole (review M5): what follows would be appended to it
+                () = link.closed() => End::Gone("did not read a line sent to it".into()),
                 () = self.stopped() => End::Stopped,
             };
             link.close();
@@ -694,7 +728,13 @@ impl Backend {
                 child.wait()
             );
         }
-        tracing::debug!(pid, stderr = %child.stderr_tail(), "the Lisp backend's stderr");
+        // a backend that never served (a wrong Emacs, a load error): its stderr is the reason, so it is a warning
+        // (review M6); it is bounded
+        if !served && matches!(end, End::Gone(_)) {
+            tracing::warn!(pid, stderr = %child.stderr_tail(), "the Lisp backend ended before it served; its stderr");
+        } else {
+            tracing::debug!(pid, stderr = %child.stderr_tail(), "the Lisp backend's stderr");
+        }
         self.record_delete(row).await;
         end
     }
@@ -745,6 +785,20 @@ impl Backend {
         {
             tracing::warn!("cannot remove the Lisp backend's row from runtime.db: {e}");
         }
+    }
+}
+
+/// Remove the Lisp lock at LOCK (a directory with `pid`; anything else there goes too, never followed); none there is
+/// fine.
+fn remove_stale_lock(lock: &Path) -> std::io::Result<()> {
+    let gone = match std::fs::symlink_metadata(lock) {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(lock),
+        Ok(_) => std::fs::remove_file(lock),
+        Err(e) => Err(e),
+    };
+    match gone {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
     }
 }
 
@@ -952,6 +1006,75 @@ mod tests {
         );
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(p(&[("DRGNX_DIR", "/src/d")], "").is_err());
+    }
+
+    #[test]
+    fn a_stale_backend_lock_goes_whatever_it_is_and_nothing_is_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("backend.sock.lock");
+        // none there: fine
+        remove_stale_lock(&lock).unwrap();
+        // a Lisp lock directory naming a live pid (this test's): removed
+        std::fs::create_dir(&lock).unwrap();
+        std::fs::write(lock.join("pid"), std::process::id().to_string()).unwrap();
+        remove_stale_lock(&lock).unwrap();
+        assert!(std::fs::symlink_metadata(&lock).is_err());
+        // a file: removed
+        std::fs::write(&lock, "x").unwrap();
+        remove_stale_lock(&lock).unwrap();
+        assert!(std::fs::symlink_metadata(&lock).is_err());
+        // a link to a directory: the link goes, what it points at stays
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("pid"), "1").unwrap();
+        std::os::unix::fs::symlink(&target, &lock).unwrap();
+        remove_stale_lock(&lock).unwrap();
+        assert!(std::fs::symlink_metadata(&lock).is_err());
+        assert!(target.join("pid").exists());
+        // one that cannot be looked at (a file where its directory should be) is an error, not "none there"
+        let file = dir.path().join("a-file");
+        std::fs::write(&file, "").unwrap();
+        assert!(remove_stale_lock(&file.join("backend.sock.lock")).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_line_the_backend_does_not_take_whole_gives_the_connection_up() {
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        let (_r, w) = ours.into_split();
+        let link = Link::new(1, w);
+        // a connection in use is not closed
+        assert!(
+            timeout(Duration::from_millis(50), link.closed())
+                .await
+                .is_err()
+        );
+        // far more than a socket's buffer, and a backend that does not read
+        let big = "x".repeat(16 << 20);
+        let sent = link.send(1, &big, Duration::from_millis(200)).await;
+        assert!(
+            matches!(sent, Err(Some(_))),
+            "a write that timed out is an error"
+        );
+        assert!(link.gone(), "the connection is given up");
+        // the backend's life ends with it
+        timeout(Duration::from_secs(1), link.closed())
+            .await
+            .expect("closed");
+        // and the backend sees its end after the partial line: no later line is appended to it
+        let mut theirs = theirs;
+        let mut got = Vec::new();
+        timeout(Duration::from_secs(10), theirs.read_to_end(&mut got))
+            .await
+            .expect("an end")
+            .unwrap();
+        assert!(
+            got.len() < big.len() + 1,
+            "no whole line and nothing after it"
+        );
+        assert!(matches!(
+            link.send(2, "{}", Duration::from_millis(200)).await,
+            Err(None)
+        ));
     }
 
     #[test]

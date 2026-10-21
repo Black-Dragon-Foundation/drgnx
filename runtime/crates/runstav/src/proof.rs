@@ -31,10 +31,13 @@ impl Cap {
 
     /// The cap in FILE: refused when the file is over 256 bytes or is not exactly 64 lowercase hex.
     pub fn read(path: &Path) -> io::Result<Cap> {
+        Cap::read_from(std::fs::File::open(path)?, path)
+    }
+
+    /// The cap in FILE, already open (a client opens it through its checked directory), named PATH in errors.
+    pub fn read_from(file: std::fs::File, path: &Path) -> io::Result<Cap> {
         let mut text = Zeroizing::new(Vec::new());
-        std::fs::File::open(path)?
-            .take(MAX_CAP_FILE + 1)
-            .read_to_end(&mut text)?;
+        file.take(MAX_CAP_FILE + 1).read_to_end(&mut text)?;
         if text.len() as u64 > MAX_CAP_FILE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

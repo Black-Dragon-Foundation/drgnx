@@ -23,6 +23,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-ui-kit)
 (require 'drgnx-pkg-activate)
+(require 'drgnx-notice)
 (require 'drgnx-modules-record)
 (require 'drgnx-timer)
 (require 'drgnx-modules-helpers)
@@ -133,10 +134,38 @@ the new state; `drgnx-config-refused' for a file with a mistake or a newer one."
 
 ;;;; Running
 
+(defun drgnx-modules--notice (name status err missing problems)
+  "Say module NAME's STATUS as a notice: a condition that stays until it works or is turned off."
+  (pcase status
+    ('failed (drgnx-notify 'modules 'fail (format "%s did not start: %s" name err) :id name :life 'condition
+                           :fix "Turn it off in Preferences: Modules, or report the error"
+                           :command 'preferences-modules))
+    ('missing-packages (drgnx-notify 'modules 'warn (format "%s waits for packages: %s" name
+                                                            (mapconcat #'symbol-name missing " "))
+                                     :id name :life 'condition :fix "drgnx sync installs them"))
+    ('missing-requires (drgnx-notify 'modules 'warn (format "%s needs %s, which did not start" name
+                                                            (mapconcat #'symbol-name missing ", "))
+                                     :id name :life 'condition))
+    (_ (if (and (eq status 'ok) problems)
+           (drgnx-notify 'modules 'warn (format "%s: %s" name (string-join problems "; ")) :id name :life 'condition)
+         (drgnx-notice-clear 'modules name)))))
+
+(defun drgnx-modules--notice-off ()
+  "One info condition naming the modules that are off (`modules' . `off'); cleared when none is."
+  (let ((off (delq nil (mapcar (lambda (r) (and (eq (plist-get (cdr r) :status) 'off) (car r)))
+                               drgnx-modules--report))))
+    (if off
+        (drgnx-notify 'modules 'info (format (if (cdr off) "%d modules are off: %s" "%d module is off: %s")
+                                             (length off) (mapconcat #'symbol-name (reverse off) ", "))
+                      :id 'off :life 'condition :command 'preferences-modules)
+      (drgnx-notice-clear 'modules 'off))))
+
 (defun drgnx-modules--record (name stage ms status &optional err missing problems)
   (setf (alist-get name drgnx-modules--report)
         (list :stage stage :ms ms :status status :error err :missing missing :problems problems
-              :left (alist-get name drgnx-modules--left))))
+              :left (alist-get name drgnx-modules--left)))
+  (drgnx-modules--notice name status err missing problems)
+  (drgnx-modules--notice-off))
 
 (defun drgnx-modules--ok-p (name) (eq (plist-get (alist-get name drgnx-modules--report) :status) 'ok))
 
@@ -205,18 +234,6 @@ load is reported as module <category>/<file name>, naming the library it loaded 
 
 (defun drgnx-modules-report () drgnx-modules--report)
 
-(defun drgnx-modules-write-report ()
-  "Save the report for `drgnx doctor' (it runs in another process)."
-  (ignore-errors
-    (drgnx-file-write (expand-file-name "modules-report.eld" (drgnx-state-dir))
-                      (mapcar (lambda (m) (cons (car m) (list :status (plist-get (cdr m) :status)
-                                                              :error (plist-get (cdr m) :error)
-                                                              :missing (plist-get (cdr m) :missing)
-                                                              :problems (plist-get (cdr m) :problems)
-                                                              :left (plist-get (cdr m) :left))))
-                              drgnx-modules--report)
-                      :fsync nil)))
-
 (defvar use-package-ensure-function)
 (declare-function package-desc-name "package")
 
@@ -282,14 +299,13 @@ never stops Emacs — nothing is installed (the module waits for the package, as
   (drgnx-modules-load-directory dir)
   (drgnx-modules-run 'startup)
   ;; The idle stage: one idle timer per module, staggered, so input between them is handled first.  The
-  ;; external modules load before them (the end of the stage re-applies keys), the last writes the report.
+  ;; external modules load before them (the end of the stage re-applies keys), the last runs the stage hook.
   (let* ((ran nil)
          (steps (append (list #'drgnx-modules-load-external)
                         (mapcar (lambda (m) (lambda () (when (drgnx-modules--run-one (car m) (cdr m) 'idle) (setq ran t))))
                                 (drgnx-modules--in-order 'idle))
                         (list (lambda ()
-                                (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle))
-                                (drgnx-modules-write-report))))))
+                                (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle)))))))
     ;; Emacs-lifetime startup work with no module to own it: `:core'.
     (seq-do-indexed (lambda (step i)
                       (drgnx-timer-start (cons 'modules-idle-step i) (+ 1 (* 0.05 i)) #'drgnx-modules--idle-step
@@ -297,8 +313,7 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                     steps))
   (pcase-dolist (`(,hook . ,stage) '((drgnx-first-gui-frame-hook . first-frame) (drgnx-first-file-hook . first-file)
                                      (drgnx-first-input-hook . first-input)))
-    (add-hook hook (lambda () (drgnx-modules-run stage))))
-  (drgnx-modules-write-report))
+    (add-hook hook (lambda () (drgnx-modules-run stage)))))
 
 ;;;; Preferences: Modules
 
@@ -410,7 +425,6 @@ is torn down, nothing is asked, and it stops at the next start.  Returns nil, el
                 (now (drgnx-module-teardown m)))))
       (drgnx-modules-set-enabled module nil)
       (when now (run-hooks 'drgnx-modules-after-teardown-functions))
-      (drgnx-modules-write-report)
       (drgnx-modules--refresh-list)
       nil)))
 
@@ -424,12 +438,11 @@ Keys and menus follow the registry afterwards, whatever the stage (`drgnx-module
     (when (and spec r (not (drgnx-modules--ok-p module)))
       (when (drgnx-modules--run-one module (cdr spec) (plist-get (cdr spec) :stage))
         (run-hooks 'drgnx-modules-after-teardown-functions))))
-  (drgnx-modules-write-report)
   (drgnx-modules--refresh-list)
   nil)
 
 (defun drgnx-modules--say-problems (modules)
-  "Say what went wrong while MODULES were turned off or on (the doctor's report keeps it too)."
+  "Say what went wrong while MODULES were turned off or on (their notices keep it too)."
   (dolist (m modules)
     (when-let* ((p (plist-get (alist-get m drgnx-modules--report) :problems)))
       (message "drgnx: %s: %s" m (mapconcat #'identity p "; ")))))
