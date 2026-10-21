@@ -157,21 +157,23 @@ run's latest check (its :checking) sets :now: an older one's answer, come late, 
                      (make-process
                       :name "drgnx-review-head" :buffer out :noquery t :connection-type 'pipe
                       :command '("git" "rev-parse" "HEAD")
-                      :sentinel (lambda (proc _event)
-                                  (unless (process-live-p proc)
-                                    (let ((now (and (eql 0 (process-exit-status proc))
-                                                    (with-current-buffer out
-                                                      (let ((s (string-trim (buffer-string)))) ; a sha only: stderr shares the buffer
-                                                        (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" s) s))))))
-                                      (kill-buffer out)
-                                      (when (eq proc (plist-get run :checking))
-                                        (when (and now (not (equal now (plist-get run :now))))
-                                          (let ((was (drgnx-review--moved-p run)))
-                                            (plist-put run :now now)
-                                            (unless (eq was (drgnx-review--moved-p run))
-                                              (when (equal (gethash drgnx-review--current drgnx-review--runs) run) (drgnx-review--draw)))))
-                                        (when (and (plist-get run :recheck) (equal (gethash drgnx-review--current drgnx-review--runs) run))
-                                          (drgnx-review--check-head run)))))))
+                      :sentinel (drgnx-guard-wrap
+                                 (lambda (proc _event)
+                                   (unless (process-live-p proc)
+                                     (let ((now (and (eql 0 (process-exit-status proc))
+                                                     (with-current-buffer out
+                                                       (let ((s (string-trim (buffer-string)))) ; a sha only: stderr shares the buffer
+                                                         (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" s) s))))))
+                                       (kill-buffer out)
+                                       (when (eq proc (plist-get run :checking))
+                                         (when (and now (not (equal now (plist-get run :now))))
+                                           (let ((was (drgnx-review--moved-p run)))
+                                             (plist-put run :now now)
+                                             (unless (eq was (drgnx-review--moved-p run))
+                                               (when (equal (gethash drgnx-review--current drgnx-review--runs) run) (drgnx-review--draw)))))
+                                         (when (and (plist-get run :recheck) (equal (gethash drgnx-review--current drgnx-review--runs) run))
+                                           (drgnx-review--check-head run))))))
+                                 "the review's HEAD check"))
                    (error (kill-buffer out) nil))))))
 
 (defun drgnx-review--moved-p (run)

@@ -115,13 +115,15 @@ replaces one still running), never waiting for it."
                (err (generate-new-buffer " *markdown errors*" t))
                (p (make-process :name "markdown-preview" :buffer out :stderr err :command prog :noquery t
                                 :connection-type 'pipe :coding 'utf-8
-                                :sentinel (lambda (p _event)
-                                            (unless (process-live-p p)
-                                              (when (and (eql (process-exit-status p) 0) (buffer-live-p buf))
-                                                (drgnx-markdown--insert-html buf (with-current-buffer out (buffer-string)) dir))
-                                              (kill-buffer out)
-                                              (when-let* ((ep (get-buffer-process err))) (delete-process ep))
-                                              (kill-buffer err))))))
+                                :sentinel (drgnx-guard-wrap
+                                           (lambda (p _event)
+                                             (unless (process-live-p p)
+                                               (when (and (eql (process-exit-status p) 0) (buffer-live-p buf))
+                                                 (drgnx-markdown--insert-html buf (with-current-buffer out (buffer-string)) dir))
+                                               (kill-buffer out)
+                                               (when-let* ((ep (get-buffer-process err))) (delete-process ep))
+                                               (kill-buffer err)))
+                                           "markdown preview"))))
           (setq drgnx-markdown--proc p)
           (process-send-string p text)
           (process-send-eof p)))

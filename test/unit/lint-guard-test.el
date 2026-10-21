@@ -4,8 +4,8 @@
 ;; callback drgnx hands to a process is `(drgnx-guard-wrap FN LABEL)' (docs/develop/core.md "No prompts in
 ;; automatic paths").  The lint reads `core/', `wb/' and `modules/' with the Lisp reader (comments never count).
 ;; Today's sites are listed in test/lint-guard-allowed.eld, one row per site, so the list can only shrink: the task
-;; that wraps a site deletes its row (Task 18 for core and `wb', teardown's batches for modules, the hub-protocol
-;; runner for the sites it moves to `drgnx-proc-start', which wraps its own callbacks).
+;; that wraps a site deletes its row; what is left is the hub-protocol runner's (the sites it moves to
+;; `drgnx-proc-start', which wraps its own callbacks).
 (require 'ert)
 (require 'seq)
 (require 'subr-x)
@@ -123,15 +123,14 @@ order.  FILE is relative to ROOT, KIND the call's symbol, NEAR the name of the d
          (memq (plist-get row :form) (append drgnx-lint-guard--makers drgnx-lint-guard--setters))
          (stringp (plist-get row :near)) (not (string-empty-p (plist-get row :near)))
          (stringp (plist-get row :why)) (not (string-empty-p (plist-get row :why)))
-         (or (eql until 18) (equal until "runner")
-             (and (stringp until) (string-match-p "\\`td-t\\(1[5-9]\\|2[0-3]\\)\\'" until))))))
+         (equal until "runner"))))
 
 (defun drgnx-lint-guard--stale (sites rows)
   "Problems: a row that is not well formed, or a site listed more often than it is found."
   (let ((keys (mapcar #'drgnx-lint-guard--key rows)) bad)
     (dolist (row rows)
       (if (not (drgnx-lint-guard--well-formed-p row))
-          (push (format "%S: not a row (:file F :form KIND :near DEFUN :why WHY :until 18|td-t15…td-t23|runner)" row) bad)
+          (push (format "%S: not a row (:file F :form KIND :near DEFUN :why WHY :until \"runner\")" row) bad)
         (let* ((k (drgnx-lint-guard--key row))
                (found (drgnx-lint-guard--count k sites)) (listed (drgnx-lint-guard--count k keys)))
           (when (< found listed)
@@ -172,7 +171,7 @@ order.  FILE is relative to ROOT, KIND the call's symbol, NEAR the name of the d
           (with-temp-file (expand-file-name "harness/h.el" root) (insert "(set-process-filter p #'f)\n"))
           (let* ((f "modules/x/drgnx-scratch.el")
                  (sites (drgnx-lint-guard--sites root))
-                 (row (lambda (kind near) (list :file f :form kind :near near :why "x" :until 18)))
+                 (row (lambda (kind near) (list :file f :form kind :near near :why "x" :until "runner")))
                  (rows (list (funcall row 'make-process "scratch-a") (funcall row 'make-network-process "scratch-a")
                              (funcall row 'make-pipe-process "scratch-a") (funcall row 'make-serial-process "scratch-a")
                              (funcall row 'set-process-filter "scratch-a") (funcall row 'set-process-sentinel "scratch-a")

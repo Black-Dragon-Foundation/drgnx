@@ -311,14 +311,16 @@ Returns the process."
                           :command (append (list (expand-file-name "bin/drgnx" drgnx-dir) "work" "scan"
                                                  "--board" (drgnx-projects-board-file))
                                            (drgnx-work-default-roots))
-                          :sentinel (lambda (p _)
-                                      (unless (process-live-p p)
-                                        (if (eql 0 (process-exit-status p))
-                                            (progn (drgnx-work-ui--redraw) (run-hooks 'drgnx-work-ui-scanned-hook))
-                                          (message "Work: the scan failed: %s"
-                                                   (if (buffer-live-p (process-buffer p))
-                                                       (with-current-buffer (process-buffer p) (string-trim (buffer-string)))
-                                                     (format "exit %s" (process-exit-status p))))))))))))
+                          :sentinel (drgnx-guard-wrap
+                                     (lambda (p _)
+                                       (unless (process-live-p p)
+                                         (if (eql 0 (process-exit-status p))
+                                             (progn (drgnx-work-ui--redraw) (run-hooks 'drgnx-work-ui-scanned-hook))
+                                           (message "Work: the scan failed: %s"
+                                                    (if (buffer-live-p (process-buffer p))
+                                                        (with-current-buffer (process-buffer p) (string-trim (buffer-string)))
+                                                      (format "exit %s" (process-exit-status p)))))))
+                                     "the work scan"))))))
 
 (defun drgnx-work-ui--agent-turn (_s event)
   (when (eq event 'turn-end) (drgnx-work-ui--redraw)))

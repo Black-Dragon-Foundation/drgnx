@@ -107,9 +107,8 @@ with more than its count fails ("post a notice (`drgnx-notify`) instead"); a fil
 is lowered in the change that converts a site and can only fall. Notices: [core.md](core.md#notices-drgnx-noticeel).
 
 A row is `(:file F :form CALL :near DEFUN :why WHY :until TASK)`, one per site (two sites of one call in one
-definition are two equal rows). TASK is `"td-t15"` … `"td-t23"` (the
-teardown batch whose rider wraps the module) or `"runner"` (the hub-protocol sweep moves the site to
-`drgnx-proc-start`); core and `wb` have no rows left except the runner's. The list only shrinks: the change that wraps a site deletes its row in the same commit; a branch
+definition are two equal rows). TASK is `"runner"` (the hub-protocol sweep moves the site to
+`drgnx-proc-start`); the modules have no rows left, core and `wb` only the runner's. The list only shrinks: the change that wraps a site deletes its row in the same commit; a branch
 merged later that adds a site adds its row in its merge commit.
 
 ## Skips are listed, and some must not happen
