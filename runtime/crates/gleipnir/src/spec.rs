@@ -106,10 +106,11 @@ pub struct Spec {
     /// Binds whose inside path may differ from the source (only where there is a mount namespace).
     #[serde(default)]
     pub binds: Vec<Bind>,
-    /// The program's home. Always read-write (bwrap `--bind-fd`, a Landlock write root): its mode is `rw`.
+    /// The program's home, bound with its own mode: usually `rw`; a home asked `ro` is bound read-only, never widened.
     pub home: Option<Bind>,
     /// The session dir: a direct child of one of the caller's run parents, holding the session's sockets. Always
-    /// read-only (bwrap `--ro-bind-fd`): its mode is `ro`. Its dest is the caller's choice.
+    /// read-only (bwrap `--ro-bind-fd`): its mode must be `ro` (validation refuses `rw`). Its dest is the caller's
+    /// choice under bwrap, and its source elsewhere.
     pub run: Option<Bind>,
     /// The program's whole environment, in order. It travels in the inner spec over a sealed memfd, never in argv.
     #[serde(default)]
@@ -238,10 +239,6 @@ impl ValidSpec {
     }
 
     /// Only `validate` can call this: no other module can make a [`Checked`].
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "validate() (Task 2) calls it; remove this then")
-    )]
     pub(crate) fn new(spec: Spec, target: Target, _checked: Checked) -> ValidSpec {
         ValidSpec { spec, target }
     }
