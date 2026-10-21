@@ -1071,23 +1071,31 @@ mod tests {
 
     #[tokio::test]
     async fn listed_but_unreachable_is_502() {
-        // a listed public name whose addresses refuse, and one that does not resolve
+        // a listed public name whose addresses refuse, one that does not resolve, and one whose answer is empty
+        // (no address at all is unreachable, not private)
         let closed_port = {
             let l = std::net::TcpListener::bind((LOOP, 0)).unwrap();
             l.local_addr().unwrap()
         };
         let cfg = ProxyConfig {
-            allow: vec![t("gone.test:443"), t("nowhere.test:443")],
+            allow: vec![
+                t("gone.test:443"),
+                t("nowhere.test:443"),
+                t("empty.test:443"),
+            ],
             ..ProxyConfig::default()
         };
         let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
         let mut r = rig(
             cfg,
-            &[("gone.test", vec![vec![public]])],
+            &[
+                ("gone.test", vec![vec![public]]),
+                ("empty.test", vec![vec![]]),
+            ],
             &[(public, closed_port)],
         );
         let p = r.listen(1);
-        for target in ["gone.test:443", "nowhere.test:443"] {
+        for target in ["gone.test:443", "nowhere.test:443", "empty.test:443"] {
             let (mut s, code) = connect_to(&p, target).await;
             assert_eq!(code, 502, "{target}");
             assert!(closed(&mut s).await);
@@ -1292,8 +1300,13 @@ mod tests {
     async fn close_tag_ends_its_connections_only() {
         let up = echo().await;
         let target = format!("up.test:{}", up.port());
-        let r = rig(pinned_up(up.port()), &[], &[]);
+        let mut r = rig(pinned_up(up.port()), &[], &[]);
         let (p1, p2) = (r.listen(1), r.listen(2));
+        for p in [&p1, &p2] {
+            let (_s, code) = connect_to(p, "x.test:443").await;
+            assert_eq!(code, 403);
+        }
+        assert_eq!(r.said().len(), 2, "x.test denied once on each tag");
         let (mut a, code_a) = connect_to(&p1, &target).await;
         let (mut b, code_b) = connect_to(&p2, &target).await;
         // one still in its head, on tag 1
@@ -1315,6 +1328,37 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "tag 1 still accepts");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+
+        // close forgets what tag 1 was told, and only that: tag 2 stays quiet about x.test, a new tag 1 hears it again
+        let (_s, code) = connect_to(&p2, "x.test:443").await;
+        assert_eq!(code, 403);
+        assert!(r.said().is_empty(), "tag 2 was told about x.test already");
+        let again = r.dir.path().join("again.sock");
+        r.handle
+            .listen(Listener::Unix(UnixListener::bind(&again).unwrap()), 1);
+        let (_s, code) = connect_to(&again, "x.test:443").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![ProxyEvent::Denied {
+                tag: 1,
+                target: t("x.test:443")
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_the_handle_ends_everything() {
+        let up = echo().await;
+        let r = rig(pinned_up(up.port()), &[], &[]);
+        let p = r.listen(1);
+        let (mut a, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
+        assert_eq!(code, 200);
+        let Rig {
+            handle, dir: _dir, ..
+        } = r;
+        drop(handle);
+        assert!(closed(&mut a).await);
     }
 
     #[tokio::test]
