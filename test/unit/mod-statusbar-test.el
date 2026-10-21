@@ -1024,9 +1024,8 @@ active (`drgnx-statusbar-test--epochs')."
 (defmacro drgnx-statusbar-test--state (&rest body)
   "BODY with the drgnx side's state (tests, jobs, agents, their texts, the refresh timer) kept to this test."
   (declare (indent 0))
-  `(let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--jobs-state nil)
-         (drgnx-statusbar--agents-state nil)
-         (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil)
+  `(let ((drgnx-statusbar-tests-state nil)
+         (drgnx-statusbar--redraw-wanted nil)
          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
          (drgnx-statusbar--git-branches (make-hash-table :test #'equal)))
      (drgnx-cache--clear 'git-status)
@@ -1036,25 +1035,6 @@ active (`drgnx-statusbar-test--epochs')."
 (defun drgnx-statusbar-test--seg (id)
   "The plain text segment ID says now (nil when it says nothing)."
   (when-let* ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (substring-no-properties s)))
-
-(ert-deftest drgnx-statusbar/agent-changes-redraw-only-when-the-counts-change ()
-  (require 'drgnx-agents)
-  (drgnx-statusbar-test--with
-    (drgnx-statusbar-test--state
-      (drgnx-statusbar--define-defaults)
-      (let ((calls 0)
-            (drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
-                                          (drgnx-agents--make :name "b" :status 'idle))))
-        (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should all) (cl-incf calls))))
-          (drgnx-statusbar--refresh-now)
-          (should (= calls 1))
-          (drgnx-statusbar--refresh-now)                 ; the same counts: nothing to redraw
-          (should (= calls 1))
-          (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
-          (setf (drgnx-agent-session-status (cadr drgnx-agents--sessions)) 'busy)
-          (drgnx-statusbar--refresh-now)
-          (should (= calls 2))
-          (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 2 busy")))))))
 
 ;;;; The drgnx side (A5): tests, jobs, agents, other modules' marks
 
@@ -1125,56 +1105,22 @@ active (`drgnx-statusbar-test--epochs')."
         (should-not drgnx-statusbar-tests-state)
         (should-not (drgnx-statusbar-test--seg 'tests))))))
 
-(ert-deftest drgnx-statusbar/jobs-and-cards ()
+(ert-deftest drgnx-statusbar/a-module-off-takes-its-segment ()
+  ;; `jobs' and `agents' belong to their modules: the bar's own defaults do not define them, a module's setup does
+  ;; (recorded, so its teardown takes the segment back)
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
-      (let ((asked 0)
-            (answer '(:jobs [(:id "a" :status "running") (:id "b" :status "running") (:id "c" :status "done")])))
-        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore)
-                  ((symbol-function 'drgnx-hub-call)
-                   (lambda (method params cb) (should (equal method "job/status")) (should-not params)
-                     (cl-incf asked) (funcall cb answer nil))))
-          (should-not (drgnx-statusbar-test--seg 'jobs))
-          ;; a job event: the hub is asked once (on the refresh), and the count is cached
-          (drgnx-statusbar--hub-event "job" '(:id "a"))
-          (drgnx-statusbar--hub-event "agent-entries" '(:id "x"))
-          (should (= asked 0))
-          (drgnx-statusbar--refresh-now)
-          (should (= asked 1))
-          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 2 jobs"))
-          (dotimes (_ 10) (drgnx-statusbar-test--seg 'jobs))
-          (should (= asked 1))                            ; redisplay never asks
-          (setq answer '(:jobs [(:id "a" :status "running") (:id "c" :status "done")]))
-          (drgnx-statusbar--hub-event "card" '(:id 1 :job "a"))
-          (drgnx-statusbar--refresh-now)
-          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job"))
-          (setq answer '(:jobs []))
-          (drgnx-statusbar--hub-event "job" '(:id "a"))
-          (drgnx-statusbar--refresh-now)
-          (should-not (drgnx-statusbar-test--seg 'jobs))
-          ;; the hub went away: a count that cannot be read again is not shown
-          (setq answer '(:jobs [(:id "a" :status "running")]))
-          (drgnx-statusbar--hub-event "job" '(:id "a"))
-          (drgnx-statusbar--refresh-now)
-          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job"))
-          (drgnx-statusbar--hub-gone)
-          (should-not (drgnx-statusbar-test--seg 'jobs)))))))
-
-(ert-deftest drgnx-statusbar/jobs-and-agents-lose-their-counts ()
-  ;; what waits on you is the `needs-you' segment's, from the notice model: neither `jobs' nor `agents' says it
-  (require 'drgnx-agents)
-  (drgnx-statusbar-test--with
-    (drgnx-statusbar-test--state
-      (drgnx-statusbar--define-defaults)
-      (drgnx-notice-test-with-model
-        (drgnx-notice-set 'agents (list (list :id 'a :text "a?")))
-        (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "b" :status 'idle :permissions '((:id 1))))))
-          (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
-            (drgnx-statusbar--refresh-now)
-            (should-not (drgnx-statusbar-test--seg 'jobs))
-            (should-not (drgnx-statusbar-test--seg 'agents))
-            (should (eq (plist-get (gethash 'jobs drgnx-statusbar--segments) :click) 'drgnx-cockpit-show-jobs))))))))
+      (should-not (gethash 'jobs drgnx-statusbar--segments))
+      (should-not (gethash 'agents drgnx-statusbar--segments))
+      (drgnx-module-define 'test/segment-owner
+                           :doc "A module that shows something in the status bar."
+                           :stage 'startup
+                           :setup (lambda () (drgnx-statusbar-define-segment 'owned :fn (lambda () "OWNED"))))
+      (drgnx-modules--run-one 'test/segment-owner (alist-get 'test/segment-owner drgnx-modules--table) 'startup)
+      (should (equal (drgnx-statusbar-test--seg 'owned) "OWNED"))
+      (drgnx-module-teardown 'test/segment-owner)
+      (should-not (gethash 'owned drgnx-statusbar--segments)))))
 
 (ert-deftest drgnx-statusbar/a-test-summary-never-breaks-the-compilation ()
   (drgnx-statusbar-test--with
@@ -1193,69 +1139,6 @@ active (`drgnx-statusbar-test--epochs')."
           (unwind-protect (drgnx-statusbar--compilation-finished b "finished\n")
             (kill-buffer b))
           (should-not drgnx-statusbar-tests-state))))))
-
-(ert-deftest drgnx-statusbar/the-hub-is-asked-one-question-at-a-time ()
-  (drgnx-statusbar-test--with
-    (drgnx-statusbar-test--state
-      (drgnx-statusbar--define-defaults)
-      (let ((asked 0) (callback nil) (connected nil))
-        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore)
-                  ((symbol-function 'drgnx-statusbar--hub-connected-p) (lambda () connected))
-                  ((symbol-function 'drgnx-hub-call) (lambda (_m _p cb) (cl-incf asked) (setq callback cb))))
-          ;; an event that is not a job's (or not a string) does not ask while the count is known or the hub is away
-          (drgnx-statusbar--hub-event 'job nil)
-          (drgnx-statusbar--hub-event "agent" nil)
-          (drgnx-statusbar--refresh-now)
-          (should (= asked 0))
-          ;; the first event after the hub connects asks: the count is not known yet
-          (setq connected t)
-          (drgnx-statusbar--hub-event "agent" nil)
-          (drgnx-statusbar--refresh-now)
-          (should (= asked 1))
-          ;; while the answer is on its way, more job events ask nothing…
-          (drgnx-statusbar--hub-event "job" '(:id "a"))
-          (drgnx-statusbar--refresh-now)
-          (drgnx-statusbar--hub-event "card" '(:id 1))
-          (drgnx-statusbar--refresh-now)
-          (should (= asked 1))
-          ;; …the answer asks once more for them, on the next refresh
-          (funcall callback '(:jobs [(:status "running")]) nil)
-          (should-not drgnx-statusbar--jobs-pending)
-          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job"))
-          (should (drgnx-timer-active-p 'statusbar-refresh))
-          (drgnx-statusbar--refresh-now)
-          (should (= asked 2))
-          ;; an answer of the wrong shape (in the hub client's filter) signals nothing: the count is not known
-          (funcall callback '(:jobs 42) nil)
-          (should-not drgnx-statusbar--jobs-state)
-          (funcall callback "garbage" nil)
-          (should-not drgnx-statusbar--jobs-state)
-          ;; the hub went away with a question on its way: the next one is asked
-          (drgnx-statusbar--hub-event "job" nil)
-          (drgnx-statusbar--refresh-now)
-          (should (= asked 3))
-          (drgnx-statusbar--hub-gone)
-          (should-not drgnx-statusbar--jobs-pending)
-          (drgnx-statusbar--hub-event "job" nil)
-          (drgnx-statusbar--refresh-now)
-          (should (= asked 4)))))))
-
-(ert-deftest drgnx-statusbar/agents-busy ()
-  (require 'drgnx-agents)
-  (drgnx-statusbar-test--with
-    (drgnx-statusbar-test--state
-      (drgnx-statusbar--define-defaults)
-      (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
-                                          (drgnx-agents--make :name "b" :status 'idle))))
-        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
-          (drgnx-statusbar--refresh-now)
-          (let ((s (funcall (plist-get (gethash 'agents drgnx-statusbar--segments) :fn))))
-            (should (equal (substring-no-properties s) "◎ 1 busy"))
-            (should-not (get-text-property 0 'face s)))
-          ;; nobody busy: nothing to say
-          (setf (drgnx-agent-session-status (car drgnx-agents--sessions)) 'idle)
-          (drgnx-statusbar--refresh-now)
-          (should-not (drgnx-statusbar-test--seg 'agents)))))))
 
 (ert-deftest drgnx-statusbar/waiting-functions-are-gone ()
   (dolist (s '(drgnx-statusbar-waiting-functions drgnx-statusbar--cards-state))
@@ -1453,25 +1336,22 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
-      (let ((calls 0) (drgnx-statusbar-test--refreshes 0)
-            (drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy))))
+      (let ((calls 0) (drgnx-statusbar-test--refreshes 0))
         (advice-add 'drgnx-statusbar--refresh-now :around #'drgnx-statusbar-test--mark-refresh)
         (unwind-protect
             (drgnx-test-with-clock ()                         ; the debounce is a layer timer: virtual time
               (cl-letf (((symbol-function 'force-mode-line-update)
                          (lambda (&optional all) (when drgnx-statusbar-test--refreshing (should all) (cl-incf calls)))))
-                ;; 20 agent changes in 0.1 s: one refresh, one redraw of every bar
+                ;; 20 changes a module reports in 0.1 s: one refresh, one redraw of every bar
                 (dotimes (_ 20)
-                  (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))
+                  (drgnx-statusbar-refresh t)
                   (drgnx-test-advance 0.005))
                 (should (= calls 0))
                 (should (= drgnx-statusbar-test--refreshes 0))
                 (drgnx-test-advance 0.4)
                 (should (= drgnx-statusbar-test--refreshes 1))
                 (should (= calls 1))
-                (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
-                ;; the hub's and git's change hooks go through the same debounce
-                (drgnx-statusbar--hub-event "agent-entries" nil)
+                ;; git's change hook goes through the same debounce
                 (drgnx-cache-put 'git-status "/repo/" (list :branch '(:head "a" :ahead 1)))   ; a new branch state
                 (drgnx-statusbar--git-changed "/repo/")
                 (drgnx-statusbar--git-changed "/repo/")
@@ -1561,9 +1441,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
         (drgnx-signal--subscribers nil)
         (was drgnx-statusbar-mode)                       ; the process's other tests keep what they had
         (hooks '((post-command-hook . drgnx-statusbar--post-command)
-                 (drgnx-agents-changed-functions . drgnx-statusbar--agents-changed)
-                 (drgnx-hub-event-functions . drgnx-statusbar--hub-event)
-                 (drgnx-hub-disconnect-functions . drgnx-statusbar--hub-gone)
+                 (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
                  (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
                  (compilation-finish-functions . drgnx-statusbar--compilation-finished)
                  (after-change-major-mode-hook . drgnx-statusbar--mode-changed)

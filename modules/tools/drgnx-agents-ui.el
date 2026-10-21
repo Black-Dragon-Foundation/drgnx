@@ -24,6 +24,11 @@
 (require 'drgnx-agents)
 (require 'drgnx-jobs)
 
+;; `agents' is a segment of the status bar, defined by this module's setup (the bar's library comes with `ui/face')
+(declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
+(declare-function drgnx-statusbar-refresh "drgnx-statusbar")
+(declare-function drgnx-statusbar-source-window "drgnx-statusbar")
+(declare-function drgnx-face-glyph "drgnx-ui-kit")
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -513,10 +518,28 @@ at once (`drgnx-view-draw-now')."
     (pop-to-buffer b)
     b))
 
+(defvar drgnx-agents-ui--busy 0 "How many agent sessions are busy, as of the last change; the `agents' segment shows it.")
+
+(defun drgnx-agents-ui--count-busy ()
+  "Count the busy sessions; the status bar is drawn again only when the count changed."
+  (let ((n 0))
+    (dolist (s (drgnx-agents-sessions))
+      (when (eq (drgnx-agent-session-status s) 'busy) (setq n (1+ n))))
+    (unless (eql n drgnx-agents-ui--busy)
+      (setq drgnx-agents-ui--busy n)
+      (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))))
+
+(defun drgnx-agents-ui--segment ()
+  "The `agents' segment: `◎ 1 busy'.  Reads the cached count."
+  (when (> drgnx-agents-ui--busy 0)
+    (format "%s %d busy" (or (drgnx-face-glyph 'busy (window-frame (drgnx-statusbar-source-window))) "")
+            drgnx-agents-ui--busy)))
+
 (defun drgnx-agents-ui--changed (s)
   "A session changed: note when (the list's Last column) and mark its transcript's view and the list's (each draws
 from its own timer, at most every 0.1 s, only while shown).  Called from the agent's process filter: only marks."
   (puthash s (float-time) drgnx-agents-ui--last)
+  (drgnx-timer-soon 'agents-ui-busy 0.2 #'drgnx-agents-ui--count-busy :owner 'tools/agents)   ; once per burst
   (let* ((b (get-buffer (format "*agent: %s*" (drgnx-agent-session-name s))))
          (view (and b (buffer-local-value 'drgnx-view b))))
     (when (drgnx-view-p view) (drgnx-view-touch view)))
@@ -755,6 +778,10 @@ with the cleanup stack."
                                           :grow #'drgnx-agents-ui--grow-row :sync #'drgnx-agents-ui--sync
                                           :delay drgnx-view-delay :slice drgnx-view-slice :follow-tail t :key-test 'eq)
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
+                       (when (fboundp 'drgnx-statusbar-define-segment)
+                         (drgnx-statusbar-define-segment 'agents :fn #'drgnx-agents-ui--segment :click 'drgnx-agents-ui-view
+                                                         :help "Agents busy; click for the Agents tab"))
+                       (drgnx-agents-ui--count-busy)
                        ;; the list: no rows, its SYNC prints it in place; drawn only while shown
                        (drgnx-view-define 'agents-list :render #'ignore :sync #'drgnx-agents-ui--list-print
                                           :delay drgnx-view-delay)

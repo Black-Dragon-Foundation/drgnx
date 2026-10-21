@@ -16,8 +16,9 @@
 ;; and plain values (buffer, point, text, width…), so a redisplay that changes nothing costs a few comparisons and
 ;; allocates nothing.  Other packages' entries of the mode line stay real time: they are formatted once per buffer per
 ;; redisplay, in that buffer (`drgnx-statusbar--misc'), and one too slow for that once a second.  drgnx's own segments (tests,
-;; jobs, agents) are worked out when their hooks say something changed (`drgnx-statusbar-refresh', debounced), never on
-;; redisplay.  See docs/guide/face.md ("The status bar").
+;; the folder) are worked out when their hooks say something changed (`drgnx-statusbar-refresh', debounced), never on
+;; redisplay.  A module that has state of its own to show (jobs, agents) defines its segment in its setup and calls
+;; `(drgnx-statusbar-refresh t)' when that state changes: the bar reads no other module's internals.  See docs/guide/face.md ("The status bar").
 
 ;;; Code:
 (require 'cl-lib)
@@ -42,10 +43,6 @@
 (declare-function drgnx-modal-indicator-on "ext:drgnx-modal")
 (declare-function drgnx-modal-indicator-off "ext:drgnx-modal")
 (declare-function drgnx-modal-mode-line "ext:drgnx-modal")
-(declare-function drgnx-agent-session-status "drgnx-agents")
-(declare-function drgnx-agents-sessions "drgnx-agents")
-(declare-function drgnx-hub-call "drgnx-hub-client")
-(declare-function drgnx-agents-ui-view "drgnx-agents-ui")
 (declare-function flymake--mode-line-counter "flymake")
 (declare-function flymake-running-backends "flymake")
 (declare-function flymake-reporting-backends "flymake")
@@ -63,10 +60,7 @@
 (defvar drgnx-modal-state)
 (defvar flymake--mode-line-counter-cache)
 (defvar compilation-arguments)
-(defvar drgnx-hub--events)
-(defvar drgnx-agents-changed-functions)
 (defvar drgnx-hub-event-functions)
-(defvar drgnx-hub-disconnect-functions)
 (defvar drgnx-git-changed-functions)
 
 (defgroup drgnx-statusbar nil
@@ -108,7 +102,7 @@ out: the entries are read again (`drgnx-statusbar--misc-entries').")
                     :watch '(drgnx-face-glyphs drgnx-explorer--roots drgnx-statusbar-left
                                                drgnx-statusbar-right drgnx-statusbar-compact drgnx-statusbar-drop-order
                                                drgnx-statusbar-quiet drgnx-statusbar-misc-exclude)
-                    :doc "What drgnx's own segments show (tests, jobs, agents, the folder), a segment defined, a setting or
+                    :doc "What drgnx's own segments show (tests, the folder, and what modules tell it with `drgnx-statusbar-refresh'), a segment defined, a setting or
 the glyphs changed (`drgnx-statusbar--bump').")
 
 (drgnx-epoch-define 'redisplay
@@ -694,21 +688,15 @@ window is another one now, so the full bar and the compact one trade places in e
 (defvar drgnx-statusbar-tests-state nil
   "The last test run: (:passed N :failed N :at TIME :source SOURCE), or nil.  Set by `drgnx-statusbar-note-tests'.")
 
-(defvar drgnx-statusbar--jobs-state nil
-  "How many jobs run, as the hub last said; nil when it is not known (no hub, or it went away).")
-
-(defvar drgnx-statusbar--agents-state nil "How many agents are busy, as of the last refresh.")
-
 (defvar drgnx-statusbar-refresh-delay 0.2
   "Seconds `drgnx-statusbar-refresh' waits, so that a burst of changes is one refresh and one redraw.")
 
-(defvar drgnx-statusbar--redraw-wanted nil "Non-nil: the next refresh redraws the bars even when no count changed.")
-(defvar drgnx-statusbar--jobs-wanted nil "Non-nil: the next refresh asks the hub how many jobs run.")
-(defvar drgnx-statusbar--jobs-pending nil "Non-nil while a `job/status' question is on its way to the hub.")
+(defvar drgnx-statusbar--redraw-wanted nil "Non-nil: the next refresh redraws the bars.")
 
 (defun drgnx-statusbar-refresh (&optional changed)
-  "Bring drgnx's segments (agents, jobs) up to date and redraw the bars when they changed.
-CHANGED non-nil: something a segment shows changed (a segment of your own): every bar is drawn again.
+  "Redraw the bars once what a segment shows has changed.
+CHANGED non-nil: something a segment shows changed (a segment a module defines: jobs, agents, your own): every bar is
+drawn again.
 Debounced: the refresh runs once, `drgnx-statusbar-refresh-delay' seconds after the first call, however many calls
 came in between.  Never blocks; safe in a hook, a timer or a process filter."
   (when changed
@@ -717,18 +705,11 @@ came in between.  Never blocks; safe in a hook, a timer or a process filter."
   (drgnx-timer-soon 'statusbar-refresh drgnx-statusbar-refresh-delay #'drgnx-statusbar--refresh-now :owner :core))
 
 (defun drgnx-statusbar--refresh-now ()
-  "The refresh itself: count again, bump the tick and redraw every bar when a count changed (or a redraw was asked).
+  "The refresh itself: redraw every bar when a redraw was asked.
 Called directly, it takes the place of the pending one."
   (drgnx-timer-cancel 'statusbar-refresh)
-  (let ((redraw drgnx-statusbar--redraw-wanted)
-        (agents (drgnx-statusbar--agent-counts)))
+  (let ((redraw drgnx-statusbar--redraw-wanted))
     (setq drgnx-statusbar--redraw-wanted nil)
-    (when (and drgnx-statusbar--jobs-wanted (not drgnx-statusbar--jobs-pending))   ; else: asked when it answers
-      (setq drgnx-statusbar--jobs-wanted nil)
-      (drgnx-statusbar--ask-jobs))
-    (unless (equal agents drgnx-statusbar--agents-state)
-      (setq drgnx-statusbar--agents-state agents redraw t)
-      (drgnx-statusbar--bump))                           ; else every window would reuse its memoized bar
     ;; who asked for a redraw bumped its own epoch then: `statusbar' (`drgnx-statusbar-refresh' t), `git', `flymake'
     (when redraw (force-mode-line-update t))))
 
@@ -787,46 +768,6 @@ regexp of yours) is recorded as `tests' in `drgnx-statusbar--errors', never sign
     (error (setq drgnx-statusbar--errors (assq-delete-all 'tests drgnx-statusbar--errors))
            (drgnx-statusbar--note-error 'tests err))))
 
-(defun drgnx-statusbar--hub-connected-p ()
-  "Non-nil when this Emacs receives the hub's events."
-  (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
-
-(defun drgnx-statusbar--ask-jobs ()
-  "Ask the hub (asynchronously) how many jobs run, unless a question is already on its way; the answer redraws the
-bars when the count changed."
-  (when (and (fboundp 'drgnx-hub-call) (not drgnx-statusbar--jobs-pending))
-    (setq drgnx-statusbar--jobs-pending t)
-    (condition-case nil
-        (drgnx-hub-call "job/status" nil #'drgnx-statusbar--jobs-answer)
-      (error (setq drgnx-statusbar--jobs-pending nil)
-             (drgnx-statusbar--set-jobs nil)))))
-
-(defun drgnx-statusbar--jobs-answer (result err)
-  "The hub's answer to `job/status' (RESULT, or the error message ERR): the running jobs are counted.
-It runs in the hub client's process filter: nothing here signals.  A job event that came while the question was on
-its way asks again."
-  (setq drgnx-statusbar--jobs-pending nil)
-  (drgnx-statusbar--set-jobs
-   (condition-case nil
-       (unless (or err (not (listp result)))
-         (let ((n 0))
-           (dolist (j (append (plist-get result :jobs) nil))
-             (when (equal (plist-get j :status) "running") (setq n (1+ n))))
-           n))
-     (error nil)))
-  (when drgnx-statusbar--jobs-wanted (drgnx-statusbar-refresh)))
-
-(defun drgnx-statusbar--set-jobs (running)
-  "RUNNING jobs (nil: not known); the bars are redrawn when that changed."
-  (unless (eql running drgnx-statusbar--jobs-state)
-    (setq drgnx-statusbar--jobs-state running)
-    (drgnx-statusbar--bump)
-    (force-mode-line-update t)))
-
-(defun drgnx-statusbar--agents-changed (&rest _)
-  "On `drgnx-agents-changed-functions': refresh (debounced)."
-  (drgnx-statusbar-refresh))
-
 (defun drgnx-statusbar--hub-tests (event data)
   "On `drgnx-hub-event-functions': the test runs among the `events' the hub sent reach the `tests' segment
 \(`drgnx-statusbar-note-tests')."
@@ -836,19 +777,6 @@ its way asks again."
         (let ((d (plist-get e :data)))
           (when (and (proper-list-p d) (or (natnump (plist-get d :passed)) (natnump (plist-get d :failed))))
             (drgnx-statusbar-note-tests (or (plist-get d :passed) 0) (or (plist-get d :failed) 0) (plist-get e :agent))))))))
-
-(defun drgnx-statusbar--hub-event (event &rest _)
-  "On `drgnx-hub-event-functions': refresh (debounced).  A job or a card EVENT asks the hub for the running jobs; so
-does the first event after the hub connects (the count is not known yet: the hub has no connect hook)."
-  (when (or (and (stringp event) (member event '("job" "card")))
-            (and (null drgnx-statusbar--jobs-state) (drgnx-statusbar--hub-connected-p)))
-    (setq drgnx-statusbar--jobs-wanted t))
-  (drgnx-statusbar-refresh))
-
-(defun drgnx-statusbar--hub-gone ()
-  "On `drgnx-hub-disconnect-functions': the running jobs are not known any more (the question on its way is lost)."
-  (setq drgnx-statusbar--jobs-wanted nil drgnx-statusbar--jobs-pending nil)
-  (drgnx-statusbar--set-jobs nil))
 
 (defvar drgnx-statusbar--git-branches (make-hash-table :test #'equal)
   "Repository root → the branch plist the bars were last redrawn for (one entry per repository git has read).
@@ -925,10 +853,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
 
 (defconst drgnx-statusbar--hooks
   '((post-command-hook . drgnx-statusbar--post-command)
-    (drgnx-agents-changed-functions . drgnx-statusbar--agents-changed)
-    (drgnx-hub-event-functions . drgnx-statusbar--hub-event)
     (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
-    (drgnx-hub-disconnect-functions . drgnx-statusbar--hub-gone)
     (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
     (compilation-finish-functions . drgnx-statusbar--compilation-finished)
     (after-change-major-mode-hook . drgnx-statusbar--mode-changed)
@@ -950,11 +875,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
         (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)   ; flymake has no hook for this
         (advice-add 'flymake-start :after #'drgnx-statusbar--flymake-started)               ; nor for this
         (drgnx-statusbar--misc-report-soon)
-        (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off))   ; the bar shows the modal state
-        (setq drgnx-statusbar--agents-state (drgnx-statusbar--agent-counts))
-        (when (drgnx-statusbar--hub-connected-p)           ; connected: count the jobs
-          (setq drgnx-statusbar--jobs-wanted t)
-          (drgnx-statusbar-refresh)))
+        (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off)))   ; the bar shows the modal state
     (dolist (h drgnx-statusbar--hooks) (remove-hook (car h) (cdr h)))
     (drgnx-state-unsubscribe 'editor-changed #'drgnx-statusbar--editor-changed)
     (drgnx-signal-unsubscribe 'editor-changed #'drgnx-statusbar--ask-git)
@@ -1057,31 +978,6 @@ with `eq') changed: drgnx's own segments are worked out once per change of their
   "Show where the last test run came from (its compilation buffer)."
   (let ((source (plist-get drgnx-statusbar-tests-state :source)))
     (if (buffer-live-p source) (pop-to-buffer source) (message "drgnx: the last test run has no output to show"))))
-
-(defun drgnx-statusbar--seg-jobs ()
-  "`◎ 2 jobs' (running, as the hub last said).  What waits on you is the `needs-you' segment's."
-  (drgnx-statusbar--state-text
-   'jobs
-   (lambda ()
-     (let ((running drgnx-statusbar--jobs-state))
-       (and running (> running 0)
-            (format "%s %d job%s" (drgnx-statusbar--glyph 'busy) running (if (= running 1) "" "s")))))))
-
-(defun drgnx-statusbar--agent-counts ()
-  "How many agents work (from the sessions drgnx holds)."
-  (let ((busy 0))
-    (when (and (fboundp 'drgnx-agents-sessions) (fboundp 'drgnx-agent-session-status))
-      (dolist (s (drgnx-agents-sessions))
-        (when (eq (drgnx-agent-session-status s) 'busy) (setq busy (1+ busy)))))
-    busy))
-
-(defun drgnx-statusbar--seg-agents ()
-  "`◎ 1 busy', as of the last refresh."
-  (drgnx-statusbar--state-text
-   'agents
-   (lambda ()
-     (let ((busy drgnx-statusbar--agents-state))
-       (and busy (> busy 0) (format "%s %d busy" (drgnx-statusbar--glyph 'busy) busy))))))
 
 (defcustom drgnx-statusbar-misc-exclude '((:eval (drgnx-trust--mark)) (:eval (drgnx-notice-mode-line)))
   "Entries of `global-mode-string' the `misc' segment leaves out because the bar already shows them (the
@@ -1366,10 +1262,6 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
                                   :help "Problems in this file; click to list them")
   (drgnx-statusbar-define-segment 'tests :fn #'drgnx-statusbar--seg-tests :click #'drgnx-statusbar--click-tests
                                   :help "The last test run; click for its output")
-  (drgnx-statusbar-define-segment 'jobs :fn #'drgnx-statusbar--seg-jobs :click 'drgnx-cockpit-show-jobs
-                                  :help "Jobs; click for what they need of you")
-  (drgnx-statusbar-define-segment 'agents :fn #'drgnx-statusbar--seg-agents :click 'drgnx-agents-ui-view
-                                  :help "Agents busy; click for the Agents tab")
   (drgnx-statusbar-define-segment 'needs-you :fn #'drgnx-notice-needs-you-text :click #'drgnx-notice-needs-you-click
                                   :help "Waiting on you: click for the newest, or the Notices list")
   (drgnx-statusbar-define-segment 'drgnx :fn #'drgnx-notice-problems-text :click #'drgnx-notices-show

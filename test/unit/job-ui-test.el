@@ -7,6 +7,7 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)   ; the `jobs' segment is defined into its table
 (require 'drgnx-hub)                                   ; before any stub of its functions
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
@@ -185,6 +186,42 @@
                                (should-not (memq #'drgnx-job-ui--unknown-gone drgnx-hub-disconnect-functions))
                                (should-not (drgnx-timer-active-p 'job-ui-recount))
                                (should-not (drgnx-timer-active-p 'job-ui-recount-idle))))))
+
+(defun drgnx-job-ui-test--segment ()
+  "The plain text of the `jobs' status bar segment (nil when it says nothing)."
+  (when-let* ((spec (gethash 'jobs drgnx-statusbar--segments)) (s (funcall (plist-get spec :fn))))
+    (substring-no-properties s)))
+
+(ert-deftest drgnx-job-ui/defines-the-jobs-segment ()
+  (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore) (drgnx-job-ui--running nil))
+    (drgnx-notice-test-with-model
+      (drgnx-test-with-modules '(tools/jobs) :strict t
+                               (let ((spec (gethash 'jobs drgnx-statusbar--segments)))
+                                 (should spec)
+                                 (should (eq (plist-get spec :click) 'drgnx-cockpit-show-jobs)))
+                               (should-not (drgnx-job-ui-test--segment))
+                               ;; the running jobs are counted from the answer the notice model is fed with
+                               (drgnx-job-ui-note-jobs (list '(:id "a" :status "running") '(:id "b" :status "running")
+                                                             '(:id "c" :status "done")))
+                               (should (string-suffix-p "2 jobs" (drgnx-job-ui-test--segment)))
+                               (drgnx-job-ui-note-jobs (list '(:id "a" :status "running")))
+                               (should (string-suffix-p "1 job" (drgnx-job-ui-test--segment)))
+                               (drgnx-job-ui-note-jobs nil)
+                               (should-not (drgnx-job-ui-test--segment))
+                               ;; a count that cannot be read again is not shown
+                               (drgnx-job-ui-note-jobs (list '(:id "a" :status "running")))
+                               (drgnx-job-ui--unknown-gone)
+                               (should-not (drgnx-job-ui-test--segment))
+                               ;; a change redraws the bars (the epoch moves), the same count does not
+                               (drgnx-job-ui-note-jobs (list '(:id "a" :status "running")))
+                               (let ((before (drgnx-epoch 'statusbar)))
+                                 (drgnx-job-ui-note-jobs (list '(:id "a" :status "running") '(:id "c" :status "done")))
+                                 (should (eql before (drgnx-epoch 'statusbar)))
+                                 (drgnx-job-ui-note-jobs (list '(:id "a" :status "running") '(:id "b" :status "running")))
+                                 (should-not (eql before (drgnx-epoch 'statusbar))))
+                               (drgnx-timer-cancel 'statusbar-refresh)
+                               (drgnx-module-teardown 'tools/jobs)
+                               (should-not (gethash 'jobs drgnx-statusbar--segments))))))
 
 (ert-deftest drgnx-job-ui/note-jobs-is-quiet-while-the-module-is-off ()
   ;; the cockpit's every-job pane calls it whether or not tools/jobs is on

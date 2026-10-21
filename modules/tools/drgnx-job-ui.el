@@ -21,6 +21,11 @@
 (require 'drgnx-notice)
 (require 'drgnx-notice-desktop)
 
+;; `jobs' is a segment of the status bar, defined by this module's setup (the bar's library comes with `ui/face')
+(declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
+(declare-function drgnx-statusbar-refresh "drgnx-statusbar")
+(declare-function drgnx-statusbar-source-window "drgnx-statusbar")
+(declare-function drgnx-face-glyph "drgnx-ui-kit")
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
@@ -105,18 +110,37 @@ message to the user not acted on."
                     items))))))
     (nreverse items)))
 
+(defvar drgnx-job-ui--running nil
+  "How many jobs run, from the last `job/status' answer; nil when that is not known (no answer, or the hub went away).
+The `jobs' segment of the status bar shows it.")
+
+(defun drgnx-job-ui--set-running (n)
+  "N jobs run (nil: not known): the status bar is drawn again when that changed."
+  (unless (eql n drgnx-job-ui--running)
+    (setq drgnx-job-ui--running n)
+    (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t))))
+
+(defun drgnx-job-ui--segment ()
+  "The `jobs' segment: `◎ 2 jobs' while jobs run (what waits on you is the `needs-you' segment's).  Reads the cached count."
+  (when-let* (((drgnx-job-ui--source-p)) (n drgnx-job-ui--running) ((> n 0)))
+    (format "%s %d job%s" (or (drgnx-face-glyph 'busy (window-frame (drgnx-statusbar-source-window))) "")
+            n (if (= n 1) "" "s"))))
+
 (defun drgnx-job-ui-note-jobs (jobs)
   "Every job's summary (JOBS, as `job/status' lists them) was read: they are the `jobs' set of the notice model, the
-one \"needs you\" count's.  The recount and the cockpit's every-job pane call it; nothing happens while `tools/jobs'
-is off (no source)."
+one \"needs you\" count's, and the running ones the `jobs' segment's.  The recount and the cockpit's every-job pane
+call it; nothing happens while `tools/jobs' is off (no source)."
   (when (drgnx-job-ui--source-p)
     (drgnx-notice-set 'jobs (drgnx-job-ui--items jobs))
+    (drgnx-job-ui--set-running
+     (cl-count-if (lambda (j) (equal (plist-get j :status) "running")) (append jobs nil)))
     (force-mode-line-update t)))
 
 (defun drgnx-job-ui--unknown (reason)
   "The jobs' count is not known (REASON says why): a count that cannot be read again must not stay as if current."
   (when (drgnx-job-ui--source-p)
     (drgnx-notice-set 'jobs :unknown :reason reason)
+    (drgnx-job-ui--set-running nil)
     (force-mode-line-update t)))
 
 (defun drgnx-job-ui--unknown-gone ()
@@ -211,6 +235,9 @@ the count not known."
                      (lambda ()
                        ;; the source, its set and the mode's hub hooks go with the module's cleanup stack
                        (drgnx-notice-define-source 'jobs :title "Jobs" :command 'cockpit-needs-you)
+                       (when (fboundp 'drgnx-statusbar-define-segment)
+                         (drgnx-statusbar-define-segment 'jobs :fn #'drgnx-job-ui--segment :click 'drgnx-cockpit-show-jobs
+                                                         :help "Jobs; click for what they need of you"))
                        (drgnx-job-ui-attention-mode 1)
                        ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
                        (drgnx-timer-start 'job-ui-recount-idle 60 #'drgnx-job-ui--idle-recount :repeat t :idle t)
