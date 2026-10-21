@@ -435,6 +435,27 @@ ImageMagick (`magick root.png child.png -geometry +X+Y -composite out.png`), whi
 writes with `write-region … 'silent`, so it never puts a message into the screenshot's echo area. The PNG
 covers Emacs' drawing area only (no GTK menu or tool bar).
 
+When Glitnir (the compositor) draws the frames (`glitnir-active-p`), the child frames are already inside the root
+frame's picture, so capture writes Glitnir's snapshot as `root.png` (device pixels: at scale 2 twice `width` ×
+`height`) and reports no children; `ui shot` then has nothing to composite.
+
+### Snapshots and pixel probes
+
+For tests that compare pixels. A snapshot is `(W H BYTES)`: `BYTES` holds W×H ARGB32 pixels, rows tightly packed,
+each a 32-bit word in the machine's byte order (little-endian: B G R A). Rectangles are `(L T R B)` in device pixels
+(`frame-edges` × `frame-scale-factor`), right and bottom exclusive.
+
+| Function | Returns |
+|---|---|
+| `(drgnx-uitest-snapshot &optional FRAME)` | the device buffer: Glitnir's raw snapshot when `glitnir-snapshot` is bound (W H = frame pixel size × scale), else the export |
+| `(drgnx-uitest-export &optional FRAME)` | the `x-export-frames` composite decoded to the same layout; always logical pixels (1x), whatever the scale |
+| `(drgnx-uitest-pixel SNAP X Y)` | `(A R G B)` |
+| `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
+| `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
+| `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
+
+The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
+
 ## Emacs-side API
 
 Functions the CLI and MCP server call through `emacsclient -s <session socket> -e`; each returns JSON text. Each is sent

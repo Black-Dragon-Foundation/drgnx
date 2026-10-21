@@ -615,10 +615,126 @@ with redisplay between them, while the test waits.  The plist has :settled."
       (insert (x-export-frames frame 'png))
       (write-region nil nil file nil 'silent))))
 
+;;;; Snapshots and pixel probes
+;; A snapshot is (W H BYTES): BYTES holds W*H ARGB32 pixels, rows tightly packed, each pixel a 32-bit word in the
+;; machine's byte order (little-endian: B G R A), the layout of `glitnir-snapshot' with FORMAT `raw'.
+
+(defun drgnx-uitest-glitnir-p ()
+  "Non-nil when Glitnir (the compositor) draws this session's frames, so its snapshot is the whole picture."
+  (and (fboundp 'glitnir-active-p) (fboundp 'glitnir-snapshot) (glitnir-active-p)))
+
+(defun drgnx-uitest--png-raw (png)
+  "Decode PNG (a unibyte string: 8-bit RGB or RGBA, not interlaced, as cairo writes) into a snapshot."
+  (unless (and (> (length png) 8) (string-prefix-p "\x89PNG" png)) (error "drgnx-uitest: not a PNG"))
+  (unless (and (fboundp 'zlib-available-p) (zlib-available-p)) (error "drgnx-uitest: this Emacs has no zlib"))
+  (let ((pos 8) w h ctype (idat nil))
+    (while (< pos (length png))
+      (let* ((len (+ (ash (aref png pos) 24) (ash (aref png (+ pos 1)) 16) (ash (aref png (+ pos 2)) 8) (aref png (+ pos 3))))
+             (type (substring png (+ pos 4) (+ pos 8)))
+             (data (+ pos 8)))
+        (cond ((equal type "IHDR")
+               (setq w (+ (ash (aref png data) 24) (ash (aref png (+ data 1)) 16) (ash (aref png (+ data 2)) 8) (aref png (+ data 3)))
+                     h (+ (ash (aref png (+ data 4)) 24) (ash (aref png (+ data 5)) 16) (ash (aref png (+ data 6)) 8) (aref png (+ data 7)))
+                     ctype (aref png (+ data 9)))
+               (unless (and (= (aref png (+ data 8)) 8) (memq ctype '(2 6)) (= (aref png (+ data 12)) 0))
+                 (error "drgnx-uitest: unsupported PNG (need 8-bit RGB/RGBA, not interlaced)")))
+              ((equal type "IDAT") (push (substring png data (+ data len)) idat)))
+        (setq pos (+ data len 4))))
+    (let* ((bpp (if (= ctype 6) 4 3))
+           (stride (* w bpp))
+           (z (with-temp-buffer
+                (set-buffer-multibyte nil)
+                (apply #'insert (nreverse idat))
+                (unless (zlib-decompress-region (point-min) (point-max)) (error "drgnx-uitest: bad PNG data"))
+                (buffer-string)))
+           (out (make-string (* w h 4) 0))  ; an ASCII fill makes a unibyte string; every byte is set below
+           (le (eq (byteorder) ?l))
+           (prev (make-string stride 0))
+           (cur (make-string stride 0)))
+      (dotimes (y h)
+        (let ((base (* y (1+ stride))) (ft (aref z (* y (1+ stride)))))
+          (dotimes (i stride)
+            (let* ((x (aref z (+ base 1 i)))
+                   (a (if (>= i bpp) (aref cur (- i bpp)) 0))
+                   (b (aref prev i))
+                   (c (if (>= i bpp) (aref prev (- i bpp)) 0)))
+              (aset cur i
+                    (logand 255
+                            (+ x (pcase ft
+                                   (0 0) (1 a) (2 b) (3 (ash (+ a b) -1))
+                                   (4 (let* ((p (- (+ a b) c)) (pa (abs (- p a))) (pb (abs (- p b))) (pc (abs (- p c))))
+                                        (cond ((and (<= pa pb) (<= pa pc)) a) ((<= pb pc) b) (t c))))
+                                   (_ (error "drgnx-uitest: bad PNG filter"))))))))
+          (dotimes (px w)
+            (let ((s (* px bpp)) (d (* 4 (+ (* y w) px))))
+              (if le
+                  (progn (aset out d (aref cur (+ s 2))) (aset out (+ d 1) (aref cur (+ s 1)))
+                         (aset out (+ d 2) (aref cur s)) (aset out (+ d 3) (if (= bpp 4) (aref cur (+ s 3)) 255)))
+                (aset out d (if (= bpp 4) (aref cur (+ s 3)) 255)) (aset out (+ d 1) (aref cur s))
+                (aset out (+ d 2) (aref cur (+ s 1))) (aset out (+ d 3) (aref cur (+ s 2)))))))
+        (let ((tmp prev)) (setq prev cur cur tmp)))
+      (list w h out))))
+
+(defun drgnx-uitest-export (&optional frame)
+  "FRAME's (default: the root frame's) `x-export-frames' composite as a snapshot.
+It is the logical-pixel (1x) picture of FRAME and its child frames, whatever the display scale."
+  (let ((f (or frame (drgnx-uitest-root-frame))))
+    (redisplay t)
+    (drgnx-uitest--png-raw (x-export-frames f 'png))))
+
+(defun drgnx-uitest-snapshot (&optional frame)
+  "FRAME's (default: the root frame's) picture as a snapshot (W H BYTES), in device pixels.
+Glitnir's raw snapshot (the buffer GTK last committed) when `glitnir-snapshot' exists, else `drgnx-uitest-export'."
+  (let ((f (or frame (drgnx-uitest-root-frame))))
+    (if (fboundp 'glitnir-snapshot)
+        (progn (redisplay t) (glitnir-snapshot f 'raw))
+      (drgnx-uitest-export f))))
+
+(defun drgnx-uitest-pixel (snap x y)
+  "The pixel of SNAP at device pixel X, Y as (A R G B)."
+  (pcase-let* ((`(,w ,h ,bytes) snap))
+    (unless (and (<= 0 x) (< x w) (<= 0 y) (< y h)) (error "drgnx-uitest: pixel %d,%d outside %dx%d" x y w h))
+    (let ((o (* 4 (+ (* y w) x))))
+      (if (eq (byteorder) ?l)
+          (list (aref bytes (+ o 3)) (aref bytes (+ o 2)) (aref bytes (+ o 1)) (aref bytes o))
+        (list (aref bytes o) (aref bytes (+ o 1)) (aref bytes (+ o 2)) (aref bytes (+ o 3)))))))
+
+(cl-defun drgnx-uitest-region-equal-p (a b rect &key (tolerance 0) ignore-alpha)
+  "Non-nil when snapshots A and B agree on RECT (L T R B, device pixels, R and B exclusive).
+Every channel may differ by TOLERANCE; IGNORE-ALPHA leaves the alpha channel out.  Differing sizes: nil."
+  (pcase-let ((`(,l ,tp ,r ,bt) rect))
+    (when (and (equal (seq-take a 2) (seq-take b 2)))
+      (let ((w (nth 0 a)) (ba (nth 2 a)) (bb (nth 2 b)) (ok t)
+            (alpha (if (eq (byteorder) ?l) 3 0)) (y tp))
+        (while (and ok (< y bt))
+          (let ((s (* 4 (+ (* y w) l))) (e (* 4 (+ (* y w) r))))
+            (unless (and (= tolerance 0) (not ignore-alpha) (string= (substring ba s e) (substring bb s e)))
+              (let ((i s))
+                (while (and ok (< i e))
+                  (unless (and ignore-alpha (= (% (- i s) 4) alpha))
+                    (when (> (abs (- (aref ba i) (aref bb i))) tolerance) (setq ok nil)))
+                  (setq i (1+ i))))))
+          (setq y (1+ y)))
+        ok))))
+
+(defun drgnx-uitest-darker-p (a b x y)
+  "Non-nil when snapshot A's pixel at X, Y has a lower luma than B's."
+  (cl-flet ((luma (p) (+ (* 0.2126 (nth 1 p)) (* 0.7152 (nth 2 p)) (* 0.0722 (nth 3 p)))))
+    (< (luma (drgnx-uitest-pixel a x y)) (luma (drgnx-uitest-pixel b x y)))))
+
+(defun drgnx-uitest-bare-frame ()
+  "Scroll bars, tool bar, menu bar and the blinking cursor off for the selected frame."
+  (blink-cursor-mode -1)
+  (modify-frame-parameters nil '((vertical-scroll-bars) (horizontal-scroll-bars) (tool-bar-lines . 0) (menu-bar-lines . 0)))
+  (redisplay t)
+  nil)
+
 (defun drgnx-uitest-capture (dir)
   "Export the root frame and its visible child frames as PNGs into DIR.
 `x-export-frames' cannot put several frames in one PNG, so each child comes with its
-offset (parent-relative native edges) for compositing."
+offset (parent-relative native edges) for compositing.  When Glitnir draws the frames
+(`drgnx-uitest-glitnir-p') its snapshot already holds the children: root.png is that
+snapshot (device pixels) and there are no children."
   (unless (display-graphic-p (drgnx-uitest-root-frame))
     (error "drgnx-uitest: no graphical frame to capture (a daemon session without a client frame? open one with ui_frame)"))
   (redisplay t)
@@ -626,15 +742,21 @@ offset (parent-relative native edges) for compositing."
   (let* ((f (drgnx-uitest-root-frame))
          (root (expand-file-name "root.png" dir))
          (i -1))
-    (drgnx-uitest--export f root)
+    (if (drgnx-uitest-glitnir-p)
+        (let ((coding-system-for-write 'binary))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert (glitnir-snapshot f 'png))
+            (write-region nil nil root nil 'silent)))
+      (drgnx-uitest--export f root))
     (list :root root :width (frame-pixel-width f) :height (frame-pixel-height f)
-          :children (vconcat
-                     (mapcar (lambda (c)
-                               (let ((file (expand-file-name (format "child-%d.png" (cl-incf i)) dir))
-                                     (e (frame-edges c 'native-edges)))
-                                 (drgnx-uitest--export c file)
-                                 (list :path file :x (nth 0 e) :y (nth 1 e))))
-                             (drgnx-uitest-child-frames f))))))
+          :children (vconcat (and (not (drgnx-uitest-glitnir-p))
+                                  (mapcar (lambda (c)
+                                            (let ((file (expand-file-name (format "child-%d.png" (cl-incf i)) dir))
+                                                  (e (frame-edges c 'native-edges)))
+                                              (drgnx-uitest--export c file)
+                                              (list :path file :x (nth 0 e) :y (nth 1 e))))
+                                          (drgnx-uitest-child-frames f)))))))
 
 ;;;; JSON API (for emacsclient; see harness/drgnx-ui.el)
 
