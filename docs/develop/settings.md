@@ -9,4 +9,47 @@ Settings files are data, never code: drgnx never `load`s them. Two readers read 
 (Emacs's `read`, behind the config layer's checks in `core/drgnx-file.el`) and the runtime's (`runtime/crates/huginn`).
 Both read the cases in `test/fixtures/huginn/cases.json`.
 
-(The table of what the subset holds and what both refuse: Task 1.)
+What the subset holds, and what both readers refuse:
+
+| Syntax | Status |
+|---|---|
+| comments `;` | accepted (kept as gaps for spans) |
+| integers: decimal, trailing dot, `#x`, `#o`, `#b`, `#NrN` | accepted. Values beyond i64 are refused with a problem (no setting needs a bignum) |
+| floats, incl. `1.0e+INF`, `0.0e+NaN` | accepted |
+| strings: every escape incl. `\uNNNN`, `\U00NNNNNN`, `\N{U+X}`, `"\ "` (dropped), backslash-newline (dropped); `\xNN` and octal escapes below 0x80 | accepted |
+| strings Emacs reads as **unibyte** with a byte ≥ 0x80 (`"\xe9"`, `"\351"`, `"\M-a"`), and multibyte strings with a raw byte (`"é\xe9"`, which Emacs reads as the raw-byte character 4194281) | refused by both. The writer never emits them |
+| `\N{NAME}` | refused by Rust only: it would need the Unicode name table, and the writer never emits it. A listed divergence |
+| chars `?a`, `?\n`, `?\C-a`, `?\^a`, `?\M-x`, `?\s`, `?\^?`, and the modifiers `?\s-a`, `?\H-a`, `?\A-a`, `?\S-a` | accepted, as the integers Emacs gives (`?\C-a` → 1, `?\M-x` → 134217848, `?\s-a` → 8388705) |
+| symbols with escapes (`foo\ bar`, `\,x`, `1+`, `-`, `:kw`), `nil`, `t` | accepted |
+| lists, dotted pairs, vectors | accepted |
+| `'X` and `#'F` | accepted as `(quote X)` and `(function F)`; one top-level `quote` or `function` on a value is dropped (by the settings-file reader, not by `read`) |
+| `` ` ``, `,`, `,@`, `#s(`, `#(`, `#[`, `#&`, `#N=`, `#N#`, `#@`, `#$`, `#.`, `##`, `#_`, `#:` | refused with a span, by both (the Lisp side's token check). `#.` is invalid in Emacs anyway |
+| a file that is not valid UTF-8 | refused by both. Emacs would decode it to raw bytes; the Lisp side checks for `eight-bit` characters after decoding. A listed divergence from plain `read` |
+| depth > 64, file > 1 MiB | refused |
+
+How `huginn` reads it (`runtime/crates/huginn/src/read.rs`), where Emacs's `lread.c` has rules the table does not
+spell out. Each is pinned by a row in the shared table or a test in `read::tests`:
+
+- **Values are Emacs's.** Escapes, modifier chains (`?\M-\C-a`, `"\M-\M-a"`), `\x` with three or more digits (a
+  character, not a byte: `"\x080"` is U+0080), octal above `\177`, `?\C-%` (the control bit), `"\C- "` (NUL), and
+  `\N{U+41.}` (Emacs allows the trailing dot) all give what Emacs gives. Reading never recurses, so a long modifier
+  chain or a deep file cannot exhaust the stack.
+- **Tokens end where Emacs ends them.** Whitespace is every control character, space and no-break space. A symbol
+  ends at whitespace or `"';#()[]`,` (not at `?` or `.`: `a?b` is one symbol). A token is a number only when the
+  whole token has number syntax (`1+`, `1.5.`, `0x10`, `.e5` are symbols; `1.` is the integer 1). A radix integer
+  needs no delimiter after it (`#x10.5` is 16 then 0.5). A character literal must be followed by a delimiter (`?ab`
+  is refused), except `? ` and `?\t`.
+- **Dots.** A `.` is the dot of a dotted pair only when whitespace, `"';([#?`,` or the end follows; otherwise it
+  starts a symbol (`(a .)` is `(a \.)`). A dotted tail that is a list joins it: `(a . (b c))` is `(a b c)`,
+  `(a . nil)` is `(a)`, `(a . 'b)` is `(a quote b)`.
+- **`#` forms.** Only `#'`, `#x`, `#o`, `#b` and `#NrN` are data. `#!` skips the rest of its line, as Emacs does.
+  Every other `#` form is refused as a reader macro, including the char-table `#^[`, which the row above does not
+  name, and `#t`.
+- **Depth** counts lists, vectors and `'`/`#'` (each is a list in the datum): 64 levels read, 65 are refused.
+- **Spans** are byte offsets: a list's span runs from its `(` to its `)`, a string's includes its quotes, and every
+  span re-read alone gives the same datum. The `quote` or `function` that a `'` or `#'` stands for has that token
+  as its span.
+
+Found while building `huginn`, beyond the listed divergences: a string with a character that UTF-8 cannot hold, a
+surrogate or a code point beyond U+10FFFF (`"\uD800"`, `"\x110000"`), is read by Emacs and refused by `huginn`
+(`NotUtf8`). The writer never emits either.
