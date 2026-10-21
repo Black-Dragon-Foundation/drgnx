@@ -483,6 +483,15 @@ without the binary."
                            '("hub answer job/status: Bad data"))))
         (delete-process p)))))
 
+(ert-deftest drgnx-hub-client/a-failing-should-in-a-callback-fails-its-test ()
+  ;; the guard around each answer's callback lets ERT's failure through
+  (let* ((drgnx-hub--pending (make-hash-table))
+         (inner (make-ert-test :name 'drgnx-hub-client-test--inner
+                               :body (lambda ()
+                                       (puthash 1 (list :cb (lambda (_r _e) (should nil)) :method "ping") drgnx-hub--pending)
+                                       (drgnx-hub--settle 1 '(:ok t) nil)))))
+    (should (ert-test-failed-p (ert-run-test inner)))))
+
 ;;;; Starting Ratatoskr, and Hub: Restart Now
 
 (defun drgnx-hub-client-test--stub (root body)

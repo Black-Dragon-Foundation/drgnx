@@ -511,7 +511,8 @@ can tell it from a command; the guard is put on where the callback is handed ove
   notice of source `guard` with id LABEL ([Notices](#notices-drgnx-noticeel)): a refused prompt is a `fail` event
   ("LABEL asked a question from a process callback; drgnx refused (it would freeze Emacs)"), any other error a `warn`
   event ("LABEL: MESSAGE"), said in the echo area the first time LABEL fails (as Emacs said a failed filter); a
-  repeat only counts. LABEL names the process's purpose (`"hub events"`, `"ACP NAME"`);
+  repeat only counts. ERT's own signals (`ert-test-failed`, `ert-test-skipped`) pass through, so a `should` in a
+  guarded callback still fails its test. LABEL names the process's purpose (`"hub events"`, `"ACP NAME"`);
   default FN printed. The debugger opens only with `debug-on-error` and a frame to show it in, the timer layer's
   rule: never in batch or in a daemon with no client.
 - `(drgnx-guard-run-hook HOOK &rest ARGS)` calls each function of HOOK that way, with the label `"HOOK FN"`: one

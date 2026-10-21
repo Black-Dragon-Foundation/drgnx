@@ -103,10 +103,12 @@ when LABEL has none yet (the first catch; repeats only count), as Emacs said a f
 (defun drgnx-guard--call (fn label args)
   "Apply FN to ARGS as automatic code; an error is recorded under LABEL (`drgnx-guard--record') and the value is nil.
 The debugger opens only with `debug-on-error' and a frame to show it in (the timer layer's rule,
-`drgnx-timer--debugger-p'): never in batch or in a daemon with no client."
+`drgnx-timer--debugger-p'): never in batch or in a daemon with no client.  A test's own failure or skip (ERT's
+`ert-test-failed', `ert-test-skipped') is signalled again, never recorded: a `should' in a callback fails its test."
   (let ((debug-on-error (and debug-on-error (fboundp 'drgnx-timer--debugger-p) (drgnx-timer--debugger-p))))
     (condition-case-unless-debug err
         (drgnx-automatic (apply fn args))
+      ((ert-test-failed ert-test-skipped) (signal (car err) (cdr err)))
       (error (drgnx-guard--record label err) nil))))
 
 (defun drgnx-guard-wrap (fn &optional label)
