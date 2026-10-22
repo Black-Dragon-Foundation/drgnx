@@ -266,6 +266,19 @@ redisplay, is left out. Process filters are not timed yet.
 PERF-HOOKS-2: CI's perf job runs `--perf`, not `--audit`, so it does not enforce the `:hooks` budget; it is enforced
 only in a local audit, and stays gated off in CI until it is measured on every seeded workload.
 
+## A given Nidhogg, in a container
+
+```sh
+DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg DRGNX_PERF_WORKLOADS=popup-typing \
+  bin/drgnx test --container --perf --ab-env VAR=JUDGED,REF
+DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg bin/drgnx test --container --soak 30
+```
+
+The container runs the Nidhogg at `DRGNX_CONTAINER_NIDHOGG` (an unpacked build; see [harness.md](harness.md)) instead of
+the image's, so a build under test is measured without touching the host. `--soak [MIN]` is the soak of the section above in
+the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section. Name the workloads
+(`DRGNX_PERF_WORKLOADS`) for any A/B: the lab's other workloads need not suit the Nidhogg you mount.
+
 ## In CI
 
 The `perf` job of `gui.yml` runs `bin/drgnx test --container --perf` on every push to `main` or `ci/*` with
