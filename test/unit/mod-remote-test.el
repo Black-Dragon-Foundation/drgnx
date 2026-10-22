@@ -642,29 +642,94 @@ choice of two nobody has."
   (drgnx-test-wait (lambda () (with-current-buffer buffer (eglot-current-server))) :what "a server answering for the buffer's project")
   (accept-process-output nil 0.5))
 
+;; TEMPORARY (ci-gl-1): the macOS debug log
+(defun drgnx-gl1--remote-p () (and buffer-file-name (file-remote-p buffer-file-name)))
+(defun drgnx-gl1--stack ()
+  (let ((names nil))
+    (mapbacktrace (lambda (_evald fun _args _flags) (when (and (symbolp fun) (< (length names) 45)) (push fun names))))
+    (format "%S" (nreverse names))))
+(defun drgnx-gl1--mode () (when (drgnx-gl1--remote-p) (drgnx-lang--dbg "after-change-major-mode: %s" major-mode)))
+(defun drgnx-gl1--change () (when (drgnx-gl1--remote-p) (drgnx-lang--dbg "change-major-mode from %s managed=%s" major-mode (bound-and-true-p eglot--managed-mode))))
+(defun drgnx-gl1--managed () (when (drgnx-gl1--remote-p) (drgnx-lang--dbg "managed-mode now %s stack=%s" eglot--managed-mode (drgnx-gl1--stack))))
+(defun drgnx-gl1--kill () (when (drgnx-gl1--remote-p) (drgnx-lang--dbg "kill-buffer")))
+(defun drgnx-gl1--aff (&rest _) (drgnx-lang--dbg "after-find-file: %s mode=%s" buffer-file-name major-mode))
+(defun drgnx-gl1--ifc (&rest args) (drgnx-lang--dbg "insert-file-contents: %S" (car args)))
+(defun drgnx-gl1--connect (&rest _) (drgnx-lang--dbg "eglot--connect stack=%s" (drgnx-gl1--stack)))
+(defun drgnx-gl1--hook (server) (drgnx-lang--dbg "connect-hook: %s stack=%s" (ignore-errors (project-root (eglot--project server))) (drgnx-gl1--stack)))
+(defun drgnx-gl1--install ()
+  (add-hook 'after-change-major-mode-hook #'drgnx-gl1--mode)
+  (add-hook 'change-major-mode-hook #'drgnx-gl1--change)
+  (add-hook 'eglot--managed-mode-hook #'drgnx-gl1--managed)
+  (add-hook 'kill-buffer-hook #'drgnx-gl1--kill)
+  (add-hook 'eglot-connect-hook #'drgnx-gl1--hook -90)
+  (advice-add 'after-find-file :before #'drgnx-gl1--aff)
+  (advice-add 'insert-file-contents :before #'drgnx-gl1--ifc)
+  (advice-add 'eglot--connect :before #'drgnx-gl1--connect))
+(defun drgnx-gl1--uninstall ()
+  (remove-hook 'after-change-major-mode-hook #'drgnx-gl1--mode)
+  (remove-hook 'change-major-mode-hook #'drgnx-gl1--change)
+  (remove-hook 'eglot--managed-mode-hook #'drgnx-gl1--managed)
+  (remove-hook 'kill-buffer-hook #'drgnx-gl1--kill)
+  (remove-hook 'eglot-connect-hook #'drgnx-gl1--hook)
+  (advice-remove 'after-find-file #'drgnx-gl1--aff)
+  (advice-remove 'insert-file-contents #'drgnx-gl1--ifc)
+  (advice-remove 'eglot--connect #'drgnx-gl1--connect))
+(defun drgnx-gl1--dump (tag b)
+  (let ((drgnx-lang--dbg-on nil) (dir (expand-file-name "gl1-logs/" drgnx-dir)))
+    (make-directory dir t)
+    (with-temp-file (expand-file-name (format "%s-%d-%s.log" tag (emacs-pid) (format-time-string "%H%M%S%N")) dir)
+      (insert (format "=== %s pid %d\n" tag (emacs-pid)))
+      (when (buffer-live-p b)
+        (with-current-buffer b
+          (insert (format "b: file=%s mode=%s managed=%s cached=%s current=%s joins=%s\n" buffer-file-name major-mode
+                          (bound-and-true-p eglot--managed-mode) (and eglot--cached-server t)
+                          (and (ignore-errors (eglot-current-server)) t) (drgnx-lang--joins-a-start-p)))))
+      (insert (format "pending=%S\ntable=%S\n" drgnx-lang--remote-pending
+                      (let (l) (maphash (lambda (p s) (push (cons p (length s)) l)) eglot--servers-by-project) l)))
+      (dolist (x (buffer-list))
+        (with-current-buffer x
+          (when buffer-file-name
+            (insert (format "buffer %s file=%s mode=%s managed=%s\n" (buffer-name) buffer-file-name major-mode
+                            (bound-and-true-p eglot--managed-mode))))))
+      (dolist (l (reverse drgnx-lang--dbg-log)) (insert l "\n")))))
+(defun drgnx-gl1--check (b tag)
+  (drgnx-lang--dbg "check %s: managed=%s" tag (drgnx-remote-test--managed-p b))
+  (unless (drgnx-remote-test--managed-p b) (drgnx-gl1--dump (concat "FAIL-" tag) b))
+  (should (drgnx-remote-test--managed-p b)))
+
 (ert-deftest drgnx-remote/the-starting-buffer-and-the-project-are-managed ()
   "Eglot attaches buffers to a new server in a process filter; the guard skips remote buffers there, so the lang
 module attaches the project's buffers from `eglot-connect-hook'.  A buffer whose mode changed outside a command
 is attached by the next start (a Reconnect) and one of another host never is."
   (drgnx-remote-test--with
     (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook (list #'drgnx-lang--maybe-eglot))
-           (eglot-sync-connect nil) (python-mode-hook nil) a b other)
-      (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
-      (drgnx-lang-probe-remote root)
-      (let ((drgnx-lang--user-command t))                          ; the user's command visits the file
-        (setq a (find-file-noselect (concat root "a.py"))))
-      (setq b (find-file-noselect (concat root "b.py")))           ; opened by a timer: skipped, a server runs already
-      (setq other (generate-new-buffer " *drgnx-other-host*"))
-      (with-current-buffer other                                   ; looks like a file on another host; nothing is read
-        (setq buffer-file-name "/ssh:elsewhere:/srv/p/c.py" default-directory "/ssh:elsewhere:/srv/p/" major-mode 'python-mode))
-      (drgnx-remote-test--wait-for-server a)
-      (should (drgnx-remote-test--managed-p a))                    ; the buffer whose visit started the server
-      (should (drgnx-remote-test--managed-p b))                    ; the project's other buffer, from the connect hook
-      (should-not (drgnx-remote-test--managed-p other))
-      (with-current-buffer b (eglot--managed-mode -1))
-      (should-not (drgnx-remote-test--managed-p b))
-      (let ((drgnx-lang--user-command t)) (drgnx-lang-start-remote-server b))   ; Reconnect repairs it
-      (should (drgnx-remote-test--managed-p b)))))
+           (eglot-sync-connect nil) (python-mode-hook nil) a b other
+           (drgnx-lang--dbg-on t) (drgnx-lang--dbg-log nil))
+      (drgnx-gl1--install)
+      (unwind-protect
+          (progn
+            (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+            (drgnx-lang-probe-remote root)
+            (drgnx-lang--dbg "test: visit a")
+            (let ((drgnx-lang--user-command t))                          ; the user's command visits the file
+              (setq a (find-file-noselect (concat root "a.py"))))
+            (drgnx-lang--dbg "test: visit b")
+            (setq b (find-file-noselect (concat root "b.py")))           ; opened by a timer: skipped, a server runs already
+            (drgnx-lang--dbg "test: visited b")
+            (setq other (generate-new-buffer " *drgnx-other-host*"))
+            (with-current-buffer other                                   ; looks like a file on another host; nothing is read
+              (setq buffer-file-name "/ssh:elsewhere:/srv/p/c.py" default-directory "/ssh:elsewhere:/srv/p/" major-mode 'python-mode))
+            (drgnx-remote-test--wait-for-server a)
+            (drgnx-lang--dbg "test: waited")
+            (should (drgnx-remote-test--managed-p a))                    ; the buffer whose visit started the server
+            (drgnx-gl1--check b "662")                                   ; the project's other buffer, from the connect hook
+            (should-not (drgnx-remote-test--managed-p other))
+            (with-current-buffer b (eglot--managed-mode -1))
+            (should-not (drgnx-remote-test--managed-p b))
+            (let ((drgnx-lang--user-command t)) (drgnx-lang-start-remote-server b))   ; Reconnect repairs it
+            (drgnx-gl1--check b "667")
+            (drgnx-gl1--dump "pass" b))
+        (drgnx-gl1--uninstall)))))
 
 (ert-deftest drgnx-remote/a-file-opened-while-the-server-starts-joins-it ()
   "The server may answer while a file opened outside a command is still being read (its mode not set yet, so the

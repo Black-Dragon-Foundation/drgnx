@@ -89,6 +89,15 @@ second buffer of the same project must not start another meanwhile.")
 `post-command-hook'; nil in a hook that runs between commands.  A timer, a process filter or a sentinel that runs
 while the command waits sees it set, which is why `drgnx-lang--user-command-p' is what to ask.")
 
+(defvar drgnx-lang--dbg-on nil "TEMPORARY (ci-gl-1): log the remote guard's decisions.")
+(defvar drgnx-lang--dbg-log nil "TEMPORARY (ci-gl-1): the log, newest first.")
+(defun drgnx-lang--dbg (fmt &rest args)
+  "TEMPORARY (ci-gl-1)."
+  (when drgnx-lang--dbg-on
+    (push (format "%.4f [%s iq=%s cmd=%s] %s" (float-time) (buffer-name) inhibit-quit drgnx-lang--user-command
+                  (apply #'format fmt args))
+          drgnx-lang--dbg-log)))
+
 (defun drgnx-lang--user-command-p ()
   "Is the code running right now part of a command the user ran?  Not a timer, a process filter or a sentinel that
 fires while one waits: C binds `inhibit-quit' for filters and sentinels, and the timer machinery for timers."
@@ -178,6 +187,7 @@ commands only (Open Remote…, Reconnect, a command that visits the file): it us
               (progn (drgnx-lang--attach-buffers server) nil)  ; running already (a Reconnect, say): attach what is left
             (let* ((contact (eglot--guess-contact))
                    (key (cons (project-root (nth 1 contact)) (nth 3 contact))))
+              (drgnx-lang--dbg "start: key=%S pending=%S" key drgnx-lang--remote-pending)
               (unless (drgnx-lang--remote-pending-p key)
                 (push (cons key (float-time)) drgnx-lang--remote-pending)
                 (apply #'eglot contact)
@@ -218,11 +228,18 @@ that visits the file, eglot attaches the buffer to the running server as usual. 
 when a server has answered runs in a process filter, so it is skipped for remote buffers too; the buffers of a
 server's project are attached by `drgnx-lang--attach-buffers' (which binds `drgnx-lang--attaching'), and a buffer
 whose mode is set while its project's server starts joins it once it has answered (`drgnx-lang--joins-a-start-p')."
-  (when (or (and drgnx-lang--attaching buffer-file-name (string-prefix-p drgnx-lang--attaching buffer-file-name))
-            (drgnx-lang--user-command-p)
-            (not (file-remote-p default-directory))
-            (drgnx-lang--joins-a-start-p))
-    (apply activate args)))
+  (let ((attaching (and drgnx-lang--attaching buffer-file-name (string-prefix-p drgnx-lang--attaching buffer-file-name)))
+        (cmd (drgnx-lang--user-command-p))
+        (local (not (file-remote-p default-directory)))
+        (joins (and (file-remote-p default-directory) (drgnx-lang--joins-a-start-p))))
+    (when (and buffer-file-name (file-remote-p buffer-file-name))
+      (drgnx-lang--dbg "guard: mode=%s managed=%s attaching=%s cmd=%s local=%s joins=%s" major-mode
+                       (bound-and-true-p eglot--managed-mode) attaching cmd local joins))
+    (when (or attaching cmd local joins)
+      (prog1 (apply activate args)
+        (when (and buffer-file-name (file-remote-p buffer-file-name))
+          (drgnx-lang--dbg "guard: after activate managed=%s server=%s" (bound-and-true-p eglot--managed-mode)
+                           (and (fboundp 'eglot-current-server) (eglot-current-server) t)))))))
 
 (defun drgnx-lang--joins-a-start-p ()
   "Is the current remote buffer's file under the root of a server started in the last `eglot-connect-timeout' seconds
@@ -231,12 +248,15 @@ answers, but a file opened outside a command while the server starts may get its
 slow host the answer comes while the file is still being read (no mode yet), or before its buffer exists.  Prefix
 tests of names; nothing is asked of a host but the expansion of a `~' root started on this buffer's connection, as
 the attaching does (TRAMP keeps the home)."
+  (drgnx-lang--dbg "joins: pending=%S" drgnx-lang--remote-pending)
   (when-let* ((file buffer-file-name)
               (key (file-remote-p file))
               ((boundp 'eglot--servers-by-project))
               (started (seq-filter (lambda (root) (and (equal (file-remote-p root) key)
                                                        (string-prefix-p (file-name-as-directory (expand-file-name root)) file)))
                                    (mapcar #'caar (drgnx-lang--remote-pending-live)))))
+    (drgnx-lang--dbg "joins: started=%S table=%S" started
+                     (let (l) (maphash (lambda (p s) (push (cons (ignore-errors (project-root p)) (length s)) l)) eglot--servers-by-project) l))
     (catch 'answered                    ; a server registers in the table when it has answered
       (maphash (lambda (project servers)
                  (when (and servers (member (ignore-errors (project-root project)) started)) (throw 'answered t)))
@@ -253,8 +273,12 @@ server, with no I/O, so those of other hosts stay as they are.  One buffer that 
               ((file-remote-p root))
               (modes (condition-case nil (eglot--major-modes server) (error t)))) ; t: no accessor, no filter
     (let ((drgnx-lang--attaching (file-name-as-directory (expand-file-name root))))
+      (drgnx-lang--dbg "attach: root=%s attaching=%s modes=%S" root drgnx-lang--attaching modes)
       (dolist (buffer (buffer-list))
         (with-current-buffer buffer
+          (when buffer-file-name
+            (drgnx-lang--dbg "attach: file=%s mode=%s managed=%s prefix=%s" buffer-file-name major-mode
+                             (bound-and-true-p eglot--managed-mode) (string-prefix-p drgnx-lang--attaching buffer-file-name)))
           (when (and buffer-file-name (string-prefix-p drgnx-lang--attaching buffer-file-name)
                      (not (bound-and-true-p eglot--managed-mode))
                      (or (eq modes t) (apply #'derived-mode-p modes)))
