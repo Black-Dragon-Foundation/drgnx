@@ -290,21 +290,29 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
+test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 45 (the default): Fedora 44's Emacs is 30.2, which drgnx no longer supports
-  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor=""
+  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor="" abenv="" abn="" soakmin=""
   while (($#)); do
     case "$1" in
-      --ui|--tty|--scenario|--perf)
-        if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes one of --ui, --scenario, --perf, --tty" >&2; return 2; fi
-        tier="${1#--}" ;;
+      --ui|--tty|--scenario|--perf|--soak)
+        if [[ -n "$tier" && "$tier" != "${1#--}" ]]; then echo "drgnx: test --container takes one of --ui, --scenario, --perf, --soak, --tty" >&2; return 2; fi
+        tier="${1#--}"
+        if [ "$tier" = soak ] && [[ "${2:-}" =~ ^[0-9]+$ ]]; then soakmin="$2"; shift; fi ;;
+      --ab-env) [[ "${2:-}" =~ ^[A-Z_][A-Z0-9_]*=[^,=]+,[^,=]+$ ]] || { echo "usage: drgnx test --container --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; return 2; }
+                abenv="$2"; shift ;;
+      --n) [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --container --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; return 2; }
+           abn="$2"; shift ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
       --compositor) compositor="${2:-}"; ui_compositor_ok "$compositor" || return 2; shift ;;
-      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45])" >&2; return 2 ;;
+      *) echo "drgnx: unknown option for test --container: $1 (--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --tty [--fedora 45])" >&2; return 2 ;;
     esac
     shift
   done
+  if { [ -n "$abenv" ] || [ -n "$abn" ]; } && { [ "$tier" != perf ] || [ -z "$abenv" ]; }; then
+    echo "drgnx: --ab-env VAR=JUDGED,REF [--n N] goes with --perf" >&2; return 2
+  fi
   if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^45$ ]]; }; then
     echo "drgnx: --fedora 45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
   fi
@@ -315,10 +323,12 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
   image=drgnx-test:f45; file=Containerfile
-  if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = perf ]; then   # the GUI image: sessions under headless mutter
+  if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = perf ] || [ "$tier" = soak ]; then   # the GUI image: sessions under headless mutter
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     [ "$tier" = scenario ] && cmd=(bin/drgnx test --scenario --config drgnx)
     [ "$tier" = perf ] && cmd=(bin/drgnx test --perf)
+    if [ -n "$abenv" ]; then cmd+=(--ab-env "$abenv"); [ -z "$abn" ] || cmd+=(--n "$abn"); fi
+    if [ "$tier" = soak ]; then cmd=(bin/drgnx test --soak); [ -z "$soakmin" ] || cmd+=("$soakmin"); fi
     local comp="${DRGNX_UI_COMPOSITOR:-}"
     if [ -n "$compositor" ]; then cmd+=(--compositor "$compositor"); comp="$compositor"; fi
     # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
@@ -394,7 +404,24 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   args+=(-e DRGNX_LEASE=off)   # the host's lease is not the container's: one run owns it
   # the image's own Emacs, named: drgnx never falls back to a bare `emacs' (Nidhogg, which test/container/nidhogg.sh links
   # into /usr/local/bin; the Containerfiles' ENV names the same build)
-  args+=(-e DRGNX_EMACS=/usr/local/bin/emacs)
+  # DRGNX_CONTAINER_NIDHOGG=PREFIX: an unpacked Nidhogg instead, mounted read-only at the prefix its
+  # share/nidhogg/BUILDINFO names (it was built for that path), else at PREFIX itself as given (not with its
+  # symlinks resolved: a dev build bakes in the path it was built at)
+  if [ -n "${DRGNX_CONTAINER_NIDHOGG:-}" ]; then
+    local nsrc npfx nmount
+    [ -d "$DRGNX_CONTAINER_NIDHOGG" ] || { echo "drgnx: DRGNX_CONTAINER_NIDHOGG is not a directory: $DRGNX_CONTAINER_NIDHOGG" >&2; return 2; }
+    nsrc="$(cd "$DRGNX_CONTAINER_NIDHOGG" && pwd -P)"; npfx="$(cd "$DRGNX_CONTAINER_NIDHOGG" && pwd)"
+    if [ -f "$nsrc/share/nidhogg/BUILDINFO" ]; then
+      npfx="$(sed -n 's/^prefix=//p' "$nsrc/share/nidhogg/BUILDINFO" | head -n1)"
+      npfx="${npfx:-$nsrc}"
+    fi
+    case "$nsrc$npfx" in *:*) echo "drgnx: DRGNX_CONTAINER_NIDHOGG and its BUILDINFO prefix must not contain ':' (mounted with -v): $nsrc" >&2; return 2 ;; esac
+    case "$npfx" in /*) ;; *) echo "drgnx: the BUILDINFO prefix is not absolute: $npfx" >&2; return 2 ;; esac
+    nmount="$nsrc:$npfx:ro"; [ "$rt" = podman ] && nmount="$nmount,z"
+    args+=(-v "$nmount" -e "DRGNX_EMACS=$npfx/bin/nidhogg")
+  else
+    args+=(-e DRGNX_EMACS=/usr/local/bin/emacs)
+  fi
   # evil for the modal tests (DRGNX_MODAL_ELPA), read-only; ,z: a shared label, other containers may read it too
   if [ -n "${DRGNX_MODAL_ELPA:-}" ] && [ -d "$DRGNX_MODAL_ELPA" ]; then
     local elpa; elpa="$(cd "$DRGNX_MODAL_ELPA" && pwd -P):/modal-elpa:ro"
@@ -677,7 +704,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --container [--ui [--compositor C] | --scenario | --perf | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -1642,7 +1669,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --container [--ui [--compositor C]]
                                the same inside a fedora:45 / Nidhogg 31.1 container (GUI: capped at 3 GB, no swap;
                                DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
-                               (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
+                               (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides); also --perf [--ab-env VAR=JUDGED,REF [--n N]]
+                               and --soak [MIN]; DRGNX_CONTAINER_NIDHOGG=PREFIX runs an unpacked Nidhogg instead of the image's
        drgnx test --container --tty [--fedora 45]
                                the terminal tier in a container (45: Nidhogg 31.1, the default; 44's 30.2 is no longer supported)
        drgnx test --install [NAME…]

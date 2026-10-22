@@ -1013,6 +1013,86 @@ macOS (no /proc there)."
             (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
       (delete-directory dir t))))
 
+;; Whether `bin/drgnx test --container ARGS' is refused (non-zero) before any container runs.
+(defun drgnx-bin-test--container-refused-p (dir env &rest args)
+  (let ((drgnx-bin-test--cwd dir))
+    (not (eql 0 (car (apply #'drgnx-bin-test--call drgnx-bin-test--bin
+                            (append (list (concat "HOME=" dir) "DRGNX_CONTAINER=true" "DRGNX_TEST_IMAGE=i") env)
+                            "test" "--container" args))))))
+
+(ert-deftest drgnx-bin/container-nidhogg-prefix-mounted ()
+  ;; DRGNX_CONTAINER_NIDHOGG=PREFIX: the unpacked Nidhogg is mounted read-only (plus ,z on podman proper) at its path and is the run's Emacs;
+  ;; a path with `:' is refused before any container runs; unset: the image's own Emacs.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (pfx (file-truename (expand-file-name "nid" dir))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "bin" pfx) t)
+          (let ((args (drgnx-bin-test--container-argv dir (list (concat "DRGNX_CONTAINER_NIDHOGG=" pfx)))))
+            (should (member (concat pfx ":" pfx ":ro") args))
+            (should (member (concat "DRGNX_EMACS=" pfx "/bin/nidhogg") args))
+            (should-not (member "DRGNX_EMACS=/usr/local/bin/emacs" args)))
+          ;; Reached through a symlink, the tree is mounted at the path as given: the path it was built for.
+          (let* ((link (expand-file-name "link" dir))
+                 (args (progn (make-symbolic-link pfx link)
+                              (drgnx-bin-test--container-argv dir (list (concat "DRGNX_CONTAINER_NIDHOGG=" link))))))
+            (should (member (concat pfx ":" link ":ro") args))
+            (should (member (concat "DRGNX_EMACS=" link "/bin/nidhogg") args)))
+          (let ((args (drgnx-bin-test--container-argv dir nil)))
+            (should (member "DRGNX_EMACS=/usr/local/bin/emacs" args))
+            (should-not (seq-find (lambda (a) (string-suffix-p (concat ":" pfx ":ro") a)) args)))
+          (let ((bad (expand-file-name "a:b" dir)))
+            (make-directory bad t)
+            (should (drgnx-bin-test--container-refused-p dir (list (concat "DRGNX_CONTAINER_NIDHOGG=" bad))))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/container-nidhogg-buildinfo-prefix ()
+  ;; The tree is mounted at the prefix its share/nidhogg/BUILDINFO names (it was built for that path), and the
+  ;; run's Emacs is there.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (pfx (file-truename (expand-file-name "unpacked" dir))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "share/nidhogg" pfx) t)
+          (with-temp-file (expand-file-name "share/nidhogg/BUILDINFO" pfx)
+            (insert "version=31.1-nidhogg.2\ncommit=abc\nprefix=/opt/nidhogg-built\narch=x86_64\n"))
+          (let ((args (drgnx-bin-test--container-argv dir (list (concat "DRGNX_CONTAINER_NIDHOGG=" pfx)))))
+            (should (member (concat pfx ":/opt/nidhogg-built:ro") args))
+            (should (member "DRGNX_EMACS=/opt/nidhogg-built/bin/nidhogg" args))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/container-soak-accepted ()
+  ;; --soak [MIN] runs the soak in the GUI image, memory-capped like --ui; combined with another tier it is refused.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (progn
+          (let* ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--soak" "7"))
+                 (tail (member "gui-image" args)))
+            (should (equal (cdr tail) '("bin/drgnx" "test" "--soak" "7")))
+            (should (member "--memory" args))
+            (should-not (member "cpu-image" args)))
+          (let ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--soak")))
+            (should (equal (cdr (member "gui-image" args)) '("bin/drgnx" "test" "--soak"))))
+          (should (drgnx-bin-test--container-refused-p dir nil "--soak" "--perf")))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/container-perf-ab-env-passed ()
+  ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image; a malformed pair is a usage
+  ;; error; --ab-env without --perf is refused.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (progn
+          (let ((args (drgnx-bin-test--container-argv
+                       dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_PERF_WORKLOADS=popup-typing")
+                       "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
+            (should (equal (cdr (member "gui-image" args))
+                           '("bin/drgnx" "test" "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
+            (should (member "DRGNX_PERF_WORKLOADS=popup-typing" args)))
+          (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env" "X=on"))
+          (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env"))
+          (should (drgnx-bin-test--container-refused-p dir nil "--ab-env" "X=a,b")))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-from-a-worktree-mounts-the-git-dir ()
   ;; In a git worktree `.git' is a file naming an absolute host path; the container mounts only the checkout, so git
   ;; there exited 128.  The common git dir goes in read-only at the same absolute path; a plain checkout gets no extra mount.
