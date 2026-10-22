@@ -509,6 +509,19 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                                        "   (when-let* ((w (get-buffer-window b))) (ignore-errors (delete-window w)))"
                                        "   (kill-buffer b)) "
                                        kill-fixture ")"))
+      ;; the same shape as agent-stream with no agent: a transcript fed from a recording (test/fixtures/day/transcript.eld) by
+      ;; a timer, at the recorded pace, through `drgnx-agents--append-text' and `drgnx-agents--changed' (PD-14); it runs in
+      ;; the container, where a mock agent's turn ends before the typing does
+      (transcript-replay :setup ,(format "(progn (defvar drgnx-perf--replay-mark 0 \"Chunks fed when the keys began.\")
+                                                (drgnx-perf-replay-start \"replay\" '%S) t)" (drgnx-perf-day--read "transcript.eld"))
+                         :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                                        " (let ((editor (selected-window)) (b (drgnx-perf-replay-buffer \"replay\")))"
+                                        "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
+                                        "   (select-window editor))"
+                                        " (setq drgnx-perf--replay-mark (drgnx-perf-replay-count \"replay\")) t)")
+                         :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
+                         :check "(> (drgnx-perf-replay-count \"replay\") drgnx-perf--replay-mark)"   ; typed while it streamed
+                         :teardown ,(concat "(progn (drgnx-perf-replay-stop \"replay\") " kill-fixture ")"))
       ;; the Work cockpit filtered to a job (Show Job in Work: the graph, what needs you), following three agents that
       ;; stream (as it follows the hub's events)
       (cockpit-cards
@@ -1014,6 +1027,7 @@ version and the commit, as JSON in FILE."
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package")
+    (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream, PD-14)")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")
@@ -1174,6 +1188,231 @@ each round; fails when RSS grows by more than 20% from the first round or passes
              (princ "FAIL soak: memory grew more than 20% or passed 400 MB\n") 1)
             (over 1)
             (t (princ "soak: memory holds\n") 0)))))
+
+;;;; The synthetic day: `drgnx test --day [MIN]'
+
+(defconst drgnx-perf-day-seed "drgnx-day-1" "Seeds the order of the workloads in each steady round.")
+
+(defconst drgnx-perf-day-workloads
+  '(typing scrolling tabs explorer code-scrolling diff-scrolling replace-typing replace-retype window-switch transcript-replay)
+  "The workloads of a steady round: the container-runnable input workloads that need no package, process or git
+project the GUI image lacks (so not the mock-agent, Live, terminal, evil, popup, remote, ghost or index ones).")
+
+(defconst drgnx-perf-day-files
+  '("test/fixtures/day/project/main.el" "test/fixtures/day/project/util.el" "test/fixtures/day/project/README.md"
+    "test/fixtures/day/org/inbox.org" "test/fixtures/day/org/projects.org"
+    "test/fixtures/day/transcript.eld" "test/fixtures/day/lsp-exchange.eld" "test/fixtures/lsp-replay.el")
+  "Every input of the day, relative to the checkout.")
+
+(defun drgnx-perf-day--read (name)
+  "The Lisp data of test/fixtures/day/NAME."
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name (concat "test/fixtures/day/" name) drgnx-ui-repo-dir))
+    (read (current-buffer))))
+
+(defun drgnx-perf-day-composition ()
+  "(:seed S :workloads W :files F :sha SHA): what the day is made of; SHA (12 hex) is over the seed, the workload names
+and the files' contents, so two runs with the same SHA ran the same day."
+  (list :seed drgnx-perf-day-seed :workloads drgnx-perf-day-workloads :files drgnx-perf-day-files
+        :sha (substring
+              (secure-hash 'sha1
+                           (with-temp-buffer
+                             (set-buffer-multibyte nil)
+                             (insert drgnx-perf-day-seed (format "%S" drgnx-perf-day-workloads))
+                             (dolist (f drgnx-perf-day-files)
+                               (insert-file-contents-literally (expand-file-name f drgnx-ui-repo-dir))
+                               (goto-char (point-max)))
+                             (buffer-string)))
+              0 12)))
+
+(defconst drgnx-perf-day-rss-growth 20
+  "Percent: the most the steady phase's RSS may grow from its first round to its last (a leak check).")
+
+(defun drgnx-perf-day-verdict (rounds errors)
+  "Failure lines of a day: ROUNDS (plists with :rss_kb, the steady phase's, oldest first) whose RSS grew by more than
+`drgnx-perf-day-rss-growth' percent from the first to the last, and every one of ERRORS (strings: a workload that
+failed).  There is no absolute cap: the soak's 400 MB is the soak's (`drgnx-perf-soak'), not the day's."
+  (let* ((first (plist-get (car rounds) :rss_kb)) (last (plist-get (car (last rounds)) :rss_kb))
+         (growth (and (cdr rounds) (numberp first) (> first 0) (/ (* 100.0 (- last first)) first))))
+    (append (and growth (> growth drgnx-perf-day-rss-growth)
+                 (list (format "day: RSS grew %.1f%% across the steady rounds (%d → %d MB), over %d%%"
+                               growth (/ first 1024) (/ last 1024) drgnx-perf-day-rss-growth)))
+            (mapcar (lambda (e) (format "day: %s" e)) errors))))
+
+(defun drgnx-perf-day--fixture-repo (dir)
+  "Copy the day's project and Org trees into DIR and make the project a git repository: two commits at fixed dates and
+an uncommitted change, so `vc-git' has a status and a log to read."
+  (copy-directory (expand-file-name "test/fixtures/day/project" drgnx-ui-repo-dir) (expand-file-name "project" dir) nil t t)
+  (copy-directory (expand-file-name "test/fixtures/day/org" drgnx-ui-repo-dir) (expand-file-name "org" dir) nil t t)
+  (let ((default-directory (file-name-as-directory (expand-file-name "project" dir)))
+        (process-environment (append '("GIT_AUTHOR_NAME=Day" "GIT_AUTHOR_EMAIL=day@example.invalid"
+                                       "GIT_COMMITTER_NAME=Day" "GIT_COMMITTER_EMAIL=day@example.invalid"
+                                       "GIT_AUTHOR_DATE=2026-01-01T00:00:00Z" "GIT_COMMITTER_DATE=2026-01-01T00:00:00Z")
+                                     process-environment)))
+    (dolist (cmd '(("init" "-q") ("add" ".") ("commit" "-q" "-m" "The ledger")))
+      (unless (eql 0 (apply #'call-process "git" nil nil nil cmd)) (error "day: git %s failed" (car cmd))))
+    (write-region "\n;; a later change\n" nil "main.el" 'append 'silent)
+    (dolist (cmd '(("commit" "-q" "-a" "-m" "A later change")))
+      (unless (eql 0 (apply #'call-process "git" nil nil nil cmd)) (error "day: git %s failed" (car cmd))))
+    (write-region "\n;; not committed\n" nil "util.el" 'append 'silent)))
+
+(defun drgnx-perf-day--buildup-form (dir)
+  "The build-up phase as one form for the session: open the day's files and Org trees, start eglot on the project
+against the replay server, read the repository with `vc-git', start two transcript replays.  It returns a list of
+(:step NAME :ms MS :rss_kb KB :heap_mb MB) and signals at the first step that fails."
+  (prin1-to-string
+   `(let* ((dir ,dir) (project (expand-file-name "project/" dir)) (stub ,(expand-file-name "test/fixtures/lsp-replay.el" drgnx-ui-repo-dir))
+           (chunks ',(drgnx-perf-day--read "transcript.eld")) steps)
+      (cl-flet ((step (name fn)
+                  (let ((t0 (float-time)))
+                    (funcall fn)
+                    (push (list :step name :ms (round (* 1000 (- (float-time) t0))) :rss_kb (drgnx-perf-rss-kb)
+                                :heap_mb (drgnx-perf-heap-mb))
+                          steps))))
+        (step "baseline" #'ignore)
+        (step "files" (lambda ()
+                        (dolist (f '("main.el" "util.el" "README.md")) (find-file-noselect (expand-file-name f project)))))
+        (step "org" (lambda ()
+                      (dolist (f '("inbox.org" "projects.org"))
+                        (with-current-buffer (find-file-noselect (expand-file-name f (expand-file-name "org/" dir)))
+                          (org-element-parse-buffer)))))
+        (step "eglot" (lambda ()
+                        (require 'eglot)
+                        (with-current-buffer (find-file-noselect (expand-file-name "main.el" project))
+                          (let ((eglot-server-programs
+                                 (list (list 'emacs-lisp-mode (expand-file-name invocation-name invocation-directory)
+                                             "--batch" "-Q" "-l" stub))))
+                            (apply #'eglot (eglot--guess-contact))
+                            (let ((d (+ (float-time) 30)))
+                              (while (and (not (eglot-current-server)) (< (float-time) d)) (accept-process-output nil 0.1)))
+                            (unless (eglot-current-server) (error "eglot did not connect to the replay server"))))))
+        (step "vc-git" (lambda ()
+                         (require 'vc)
+                         (require 'vc-dir)
+                         (with-current-buffer (find-file-noselect (expand-file-name "main.el" project))
+                           (vc-git-state buffer-file-name)
+                           (vc-git-print-log (list project) (get-buffer-create "*day-vc-log*") t nil 20)
+                           (save-window-excursion (vc-dir project))
+                           ;; wait for the log process and the status refresh to finish, not for a fixed time
+                           (let* ((log (get-buffer "*day-vc-log*"))
+                                  (dir (seq-find (lambda (b) (with-current-buffer b (derived-mode-p 'vc-dir-mode))) (buffer-list)))
+                                  (d (+ (float-time) 30))
+                                  (busy (lambda () (or (process-live-p (get-buffer-process log))
+                                                       (with-current-buffer dir (vc-dir-busy))))))
+                             (unless dir (error "vc-git: no vc-dir buffer"))
+                             (while (and (< (float-time) d) (funcall busy)) (accept-process-output nil 0.1))
+                             (when (funcall busy) (error "vc-git did not finish"))
+                             (unless (> (buffer-size log) 0) (error "vc-git: the log is empty"))
+                             (unless (> (buffer-size dir) 0) (error "vc-git: the status is empty"))))))
+        (step "streams" (lambda ()
+                          (dolist (n '("day-1" "day-2"))
+                            (drgnx-perf-replay-start n chunks)
+                            (drgnx-perf-replay-buffer n)))))
+      (vconcat (nreverse steps)))))
+
+(defconst drgnx-perf-day-teardown-form
+  "(progn (dolist (n '(\"day-1\" \"day-2\")) (drgnx-perf-replay-stop n))
+         (when (fboundp 'eglot-shutdown-all) (ignore-errors (eglot-shutdown-all)))
+         t)"
+  "The day's end in the session: the replays and the language server stopped.")
+
+(defun drgnx-perf-day-liveness-fails (round before m)
+  "Failure lines for steady round ROUND: a background replay (day-1, day-2) whose chunk count in M (:replays) did not
+pass BEFORE (the counts a round earlier), or the project's language server gone (M's :eglot not t)."
+  (let (out)
+    (cl-mapc (lambda (n a b)
+               (unless (and (numberp b) (> b a))
+                 (push (format "round %d: replay %s stopped producing (%s chunks, %s a round before)" round n b a) out)))
+             '("day-1" "day-2") before (append (plist-get m :replays) nil))
+    (unless (eq (plist-get m :eglot) t) (push (format "round %d: the language server is gone" round) out))
+    (nreverse out)))
+
+(defun drgnx-perf-day--shuffle (list)
+  "LIST in a random order (the generator seeded by the caller)."
+  (let ((v (vconcat list)))
+    (cl-loop for i from (1- (length v)) downto 1
+             do (cl-rotatef (aref v i) (aref v (random (1+ i)))))
+    (append v nil)))
+
+(defun drgnx-perf-day (&optional minutes)
+  "`drgnx test --day [MINUTES]': a long, mixed, deterministic session (PD-14).  The build-up phase opens the day's
+files and Org trees, starts eglot on the project against `test/fixtures/lsp-replay.el', reads the repository with
+`vc-git' and starts two transcript replays; the steady phase then runs rounds of `drgnx-perf-day-workloads' (the order
+shuffled from `drgnx-perf-day-seed') until MINUTES (30) have passed, sampling RSS and the live Lisp heap after each.
+Fails when RSS grows more than `drgnx-perf-day-rss-growth' percent across the steady rounds or a workload errors
+(`drgnx-perf-day-verdict'); there is no 400 MB rule.  Every line carries (:synthetic t :composition SHA :machine HOST).
+Results go to $DRGNX_PERF_RESULTS."
+  (let* ((minutes (max 1 (or minutes 30))) (deadline (+ (float-time) (* 60 minutes)))
+         (comp (drgnx-perf-day-composition))
+         (label (format "(:synthetic t :composition %s :machine %s)" (plist-get comp :sha)
+                        (or (let ((m (getenv "DRGNX_PERF_MACHINE"))) (and m (not (string-empty-p m)) m)) (system-name))))
+         (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
+         (dir (make-temp-file "drgnx-day" t))
+         (process-environment (cons (format "DRGNX_UI_MAX_RUNTIME=%d" (+ (* 60 minutes) 1800)) process-environment))
+         (s (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)) (sess (drgnx-ui-own-session (plist-get s :name)))
+         (all (drgnx-perf-run--workloads))
+         (stamp (lambda () (format-time-string "%FT%T%z")))
+         rounds steps errors phases (before '(0 0)))
+    (random (plist-get comp :seed))
+    (unwind-protect
+        (progn
+          (drgnx-perf-run--check-gc sess)
+          (drgnx-perf-day--fixture-repo dir)
+          (push (list :phase "build-up" :start (funcall stamp)) phases)
+          (setq steps (append (drgnx-perf-run--call sess (drgnx-perf-day--buildup-form dir) 300) nil))
+          (setf (car phases) (plist-put (car phases) :end (funcall stamp)))
+          (dolist (st steps)
+            (send-string-to-terminal (format "day: build-up %-9s %6d ms, RSS %d MB, heap %.0f MB %s\n" (plist-get st :step) (plist-get st :ms)
+                                             (/ (plist-get st :rss_kb) 1024) (plist-get st :heap_mb) label)))
+          (push (list :phase "steady" :start (funcall stamp)) phases)
+          (while (< (float-time) deadline)
+            (let ((t0 (float-time)) (ran 0))
+              (dolist (name (drgnx-perf-day--shuffle drgnx-perf-day-workloads))
+                (message "day: %s…" name)
+                (let ((r (condition-case err (drgnx-perf-run-workload sess (cdr (assq name all)))
+                           (error (list :error (error-message-string err))))))
+                  (if (plist-get r :error)
+                      (progn (message "day: %s FAILED: %s" name (plist-get r :error))
+                             (push (format "%s: %s" name (plist-get r :error)) errors))
+                    (cl-incf ran))))
+              (let* ((m (drgnx-perf-run--call
+                         sess (format "(list :rss_kb (progn (garbage-collect) (drgnx-perf-rss-kb)) :heap_mb (drgnx-perf-heap-mb) :gcs gcs-done
+                                            :replays (vector (drgnx-perf-replay-count \"day-1\") (drgnx-perf-replay-count \"day-2\"))
+                                            :eglot (if (and (require 'eglot) (when-let* ((b (find-buffer-visiting %S))) (with-current-buffer b (eglot-current-server)))) t :false))"
+                                      (expand-file-name "project/main.el" dir))))
+                     (live (drgnx-perf-day-liveness-fails (1+ (length rounds)) before m)))
+                (dolist (f live) (message "day: FAILED: %s" f))
+                (setq errors (append (reverse live) errors) before (append (plist-get m :replays) nil))
+                (push (append m (list :workloads ran :seconds (round (- (float-time) t0)))) rounds)
+                (send-string-to-terminal (format "day: round %d: RSS %d MB, heap %.0f MB, %d collections, %d of %d workloads, replays %s chunks, language server %s, %d s %s\n"
+                                                 (length rounds) (/ (plist-get m :rss_kb) 1024) (plist-get m :heap_mb) (plist-get m :gcs) ran
+                                                 (length drgnx-perf-day-workloads) (append (plist-get m :replays) nil)
+                                                 (if (eq (plist-get m :eglot) t) "up" "GONE") (round (- (float-time) t0)) label)))))
+          (setf (car phases) (plist-put (car phases) :end (funcall stamp))))
+      (ignore-errors (drgnx-perf-run--call sess drgnx-perf-day-teardown-form))
+      (drgnx-ui-stop (plist-get s :name))
+      (delete-file drgnx-perf-run--fixture)
+      (ignore-errors (delete-directory dir t)))
+    (setq rounds (nreverse rounds) errors (delete-dups (nreverse errors)) phases (nreverse phases))
+    (when-let* ((file (getenv "DRGNX_PERF_RESULTS")))
+      (unless (string-empty-p file)
+        (make-directory (file-name-directory (expand-file-name file)) t)
+        (write-region (concat (json-serialize
+                               (list :synthetic t :composition (plist-get comp :sha) :label label :minutes minutes
+                                     :phases (vconcat (mapcar (lambda (p) (drgnx-perf-run--json-ready p)) phases))
+                                     :build_up (vconcat (mapcar #'drgnx-perf-run--json-ready steps))
+                                     :rounds (vconcat (mapcar #'drgnx-perf-run--json-ready rounds))
+                                     :errors (vconcat errors)))
+                              "\n")
+                      nil file nil 'silent)))
+    (unless rounds (error "The day finished no steady round"))
+    (let ((fails (drgnx-perf-day-verdict rounds errors)))
+      (princ (format "day: %d steady rounds in %d min; RSS %d → %d MB, heap %.0f → %.0f MB %s\n"
+                     (length rounds) minutes (/ (plist-get (car rounds) :rss_kb) 1024) (/ (plist-get (car (last rounds)) :rss_kb) 1024)
+                     (plist-get (car rounds) :heap_mb) (plist-get (car (last rounds)) :heap_mb) label))
+      (unless (cdr rounds) (princ "day: one steady round, RSS growth not judged\n"))
+      (dolist (f fails) (princ (format "FAIL %s\n" f)))
+      (if fails 1 (princ "day: the leak rule holds, no workload failed\n") 0))))
 
 ;;;; Paired A/B: `drgnx test --perf --ab REF'
 

@@ -8,6 +8,7 @@ drgnx test --perf           every workload; fails when a gated budget (allocatio
                             what got worse than the local history is printed
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
+drgnx test --day [MIN]      the synthetic day (below): a pinned session of files, Org, eglot, vc-git and transcript replays
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
 DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the table below; unset: all; a typo is an error).
                             A partial run is judged against its own budgets and writes no history line
@@ -29,6 +30,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
 | agent-typing | typing while an agent (the mock) streams a reply into the Agents tab (checked: still streaming at the end) | input latency |
+| transcript-replay | the typing workload's six strings while the editor's other window shows a transcript fed from a recording by a timer at the recorded pace (no agent; checked: chunks arrived while typing); runs in the container | input latency |
 | agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the mock streams 100-character chunks onto it, 50 a second (`stream 500`; checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
 | cockpit-cards | typing while the Work cockpit is filtered to a job (Show Job in Work: the graph, and What needs you with four cards, three tasks and their agents; twenty decisions) and three mock agents stream, the panes following their changes (checked: still streaming at the end); until M12f `job-window`, the job's own frame | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
@@ -133,7 +135,7 @@ seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out 
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
-In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the two mock-agent ones, the Live view and the terminal ones, the last three for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run.
+In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the two mock-agent ones, the Live view and the terminal ones, the last three for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. `transcript-replay` (the synthetic day's stream, below) replaces `agent-stream` there.
 
 **Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
 reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
@@ -278,6 +280,40 @@ The container runs the Nidhogg at `DRGNX_CONTAINER_NIDHOGG` (an unpacked build; 
 the image's, so a build under test is measured without touching the host. `--soak [MIN]` is the soak of the section above in
 the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section. Name the workloads
 (`DRGNX_PERF_WORKLOADS`) for any A/B: the lab's other workloads need not suit the Nidhogg you mount.
+
+## The synthetic day
+
+```sh
+DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg bin/drgnx test --container --day 30
+```
+
+A long, mixed, deterministic session the container can run: for soaks and cost checks of a build (the stall
+watchdog's gate) and for a rerun on a pinned release. Every input is pinned under `test/fixtures/day/`
+(`drgnx-perf-day-composition` hashes them with the seed and the workload list into the 12-hex `:composition` that labels
+every line, with the machine: `(:synthetic t :composition SHA :machine HOST)`).
+
+- **Build-up**, once: the project's files and two Org trees open; eglot starts on the project against
+  `test/fixtures/lsp-replay.el` (a batch Emacs on stdio that answers each request from the recorded exchange
+  `lsp-exchange.eld`: no network, no language server); `vc-git` reads the status and the log of the fixture repository
+  (made in a temporary directory, two commits at fixed dates and an uncommitted change); two `transcript-replay`
+  streams start. Each step prints its time, RSS and live Lisp heap.
+- **Steady**, until MIN minutes (default 30) have passed: rounds of `drgnx-perf-day-workloads` (`typing`, `scrolling`,
+  `tabs`, `explorer`, `code-scrolling`, `diff-scrolling`, `replace-typing`, `replace-retype`, `window-switch`,
+  `transcript-replay`), their order shuffled per round from the fixed seed. After each round: RSS and the live heap
+  (`drgnx-perf-heap-mb`, after a collection), and the number of collections.
+- **`transcript-replay`** is `agent-stream` with no agent: a session with no process whose transcript is fed from
+  `transcript.eld` by a timer, one `drgnx-agents--append-text` and `drgnx-agents--changed` per recorded chunk at the
+  recorded delay, while keys are typed in the editor window beside it. It runs in the container, which `agent-stream`
+  cannot. It has no budgets yet (`drgnx-perf-run-unseeded`).
+- **Rules** (`drgnx-perf-day-verdict`): RSS grows at most 20 % from the first steady round to the last, and no
+  workload fails. There is **no 400 MB rule** (that is the soak's); a day is not compared with a user's numbers (a user's
+  RSS is not the Lisp heap, the number of collections follows their consing, pauses differ by machine).
+- **Not in it:** the workloads that need eat, websocket, evil, popups, a mock agent or the repository's own index; real
+  language servers and agents; Magit (the built-in `vc-git` stands in).
+- **Container memory:** `DRGNX_TEST_DAY_MEMORY` (default 6g, a desktop size; set 4g or less on a laptop), swap equal. The
+  host name in the label is `DRGNX_PERF_MACHINE`, which `--container` sets to the host's.
+- **Results:** `DRGNX_PERF_RESULTS` gets the composition, the phases' start and end times (to slice another log by
+  phase), the build-up steps, the rounds and any errors as JSON.
 
 ## In CI
 

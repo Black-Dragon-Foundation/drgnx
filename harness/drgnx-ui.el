@@ -1972,6 +1972,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
           (t (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT"))))))
       ("test-soak" (require 'drgnx-perf-run)
        (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-soak (and (car pos) (string-to-number (car pos))))))
+      ("test-day" (require 'drgnx-perf-run)
+       (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-day (and (car pos) (string-to-number (car pos))))))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))
       (_ (drgnx-ui--fail "unknown command %S\n%s" cmd drgnx-ui-usage)))))
 
