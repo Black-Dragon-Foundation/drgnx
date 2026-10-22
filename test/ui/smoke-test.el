@@ -8,6 +8,17 @@
     (should (memq (window-system f) '(pgtk x)))
     (should (> (frame-pixel-width f) 640))))
 
+(ert-deftest drgnx-ui-smoke/root-has-the-scale ()
+  ;; DRGNX_UI_SESSION_SCALES is the session's scales (set by the harness; empty at scale 1).  GTK 3 reports the
+  ;; ceiling of a fractional scale and a monitor geometry of (WxH / S) * ceiling.
+  (let* ((s (string-to-number (or (car (split-string (or (getenv "DRGNX_UI_SESSION_SCALES") "") " " t)) "1")))
+         (f (drgnx-uitest-root-frame)))
+    (should (= (frame-scale-factor f) (ceiling s)))
+    (when (/= s (ceiling s))
+      (let ((geo (alist-get 'geometry (car (display-monitor-attributes-list f))))
+            (size (mapcar #'string-to-number (split-string (getenv "DRGNX_UI_SESSION_SIZE") "x"))))
+        (should (<= (abs (- (nth 2 geo) (* (ceiling s) (round (/ (nth 0 size) s))))) (ceiling s)))))))
+
 (ert-deftest drgnx-ui-smoke/session-is-isolated ()
   (should (string-prefix-p (getenv "DRGNX_UI_RUN") (expand-file-name user-emacs-directory)))
   (should (null auth-sources))

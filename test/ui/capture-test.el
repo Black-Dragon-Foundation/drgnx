@@ -31,3 +31,52 @@
     (drgnx-uitest-capture dir)
     (should (null (current-message)))
     (delete-directory dir t)))
+
+;;; Snapshots and pixel probes (device pixels)
+
+(defun drgnx-test--device-rect (frame)
+  "FRAME's whole drawing area as (L T R B) in logical pixels times its scale factor."
+  (let ((s (frame-scale-factor frame)))
+    (mapcar (lambda (v) (round (* v s))) (list 0 0 (frame-pixel-width frame) (frame-pixel-height frame)))))
+
+(ert-deftest drgnx-ui-capture/snapshot-equals-export-at-scale-1 ()
+  (let ((f (drgnx-uitest-root-frame)))
+    (skip-unless (= (frame-scale-factor f) 1))
+    (drgnx-uitest-bare-frame)
+    (redisplay t) (sit-for 0.3)
+    (let ((snap (drgnx-uitest-snapshot f)) (exp (drgnx-uitest-export f)))
+      (should (equal (seq-take snap 2) (seq-take exp 2)))
+      (should (drgnx-uitest-region-equal-p snap exp (drgnx-test--device-rect f)
+                                           :tolerance 0 :ignore-alpha t)))))
+
+(ert-deftest drgnx-ui-capture/snapshot-size-at-scale-2 ()
+  (let ((f (drgnx-uitest-root-frame)))
+    (skip-unless (and (= (frame-scale-factor f) 2) (fboundp 'glitnir-snapshot)))
+    (redisplay t) (sit-for 0.3)
+    (let ((snap (drgnx-uitest-snapshot f)))
+      (should (= (nth 0 snap) (* 2 (frame-pixel-width f))))
+      (should (= (nth 1 snap) (* 2 (frame-pixel-height f))))
+      (should (= (length (nth 2 snap)) (* 4 (nth 0 snap) (nth 1 snap)))))))
+
+(ert-deftest drgnx-ui-capture/pixel-at-a-known-face ()
+  (let* ((f (drgnx-uitest-root-frame))
+         (old (face-attribute 'default :background f)))
+    (drgnx-uitest-bare-frame)
+    (unwind-protect
+        (progn
+          (set-face-background 'default "#336699" f)
+          (with-temp-buffer
+            (switch-to-buffer (current-buffer))
+            (redisplay t) (sit-for 0.3)
+            (let* ((e (window-body-pixel-edges (selected-window)))
+                   (s (frame-scale-factor f))
+                   (x (round (* s (/ (+ (nth 0 e) (nth 2 e)) 2))))
+                   (y (round (* s (/ (+ (nth 1 e) (nth 3 e)) 2))))
+                   (snap (drgnx-uitest-snapshot f)))
+              (should (equal (drgnx-uitest-pixel snap x y) '(255 #x33 #x66 #x99)))
+              (set-face-background 'default "#ffffff" f)
+              (redisplay t) (sit-for 0.3)
+              (let ((white (drgnx-uitest-snapshot f)))
+                (should (drgnx-uitest-darker-p snap white x y))
+                (should-not (drgnx-uitest-darker-p white snap x y))))))
+      (set-face-background 'default old f))))

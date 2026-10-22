@@ -443,6 +443,27 @@ ImageMagick (`magick root.png child.png -geometry +X+Y -composite out.png`), whi
 writes with `write-region … 'silent`, so it never puts a message into the screenshot's echo area. The PNG
 covers Emacs' drawing area only (no GTK menu or tool bar).
 
+When Glitnir (the compositor) draws the frames (`glitnir-active-p`), the child frames are already inside the root
+frame's picture, so capture writes Glitnir's snapshot as `root.png` (device pixels: at scale 2 twice `width` ×
+`height`) and reports no children; `ui shot` then has nothing to composite.
+
+### Snapshots and pixel probes
+
+For tests that compare pixels. A snapshot is `(W H BYTES)`: `BYTES` holds W×H ARGB32 pixels, rows tightly packed,
+each a 32-bit word in the machine's byte order (little-endian: B G R A). Rectangles are `(L T R B)` in device pixels
+(`frame-edges` × `frame-scale-factor`), right and bottom exclusive.
+
+| Function | Returns |
+|---|---|
+| `(drgnx-uitest-snapshot &optional FRAME)` | the device buffer: Glitnir's raw snapshot when `glitnir-snapshot` is bound (W H = frame pixel size × scale), else the export |
+| `(drgnx-uitest-export &optional FRAME)` | the `x-export-frames` composite decoded to the same layout; always logical pixels (1x), whatever the scale |
+| `(drgnx-uitest-pixel SNAP X Y)` | `(A R G B)` |
+| `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
+| `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
+| `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
+
+The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
+
 ## Emacs-side API
 
 Functions the CLI and MCP server call through `emacsclient -s <session socket> -e`; each returns JSON text. Each is sent
@@ -601,6 +622,28 @@ process group) with the same caps (`MemoryMax=3G`, `RuntimeMaxSec`) and the same
 | `i3` | the same, then `i3 -c RUN/i3.conf` (no bar, no borders), focused on `XVFB-1` | the X11 build, with `I3SOCK` set as i3 sets it for its children | as x11, and i3's IPC socket in the session's socket directory (`ipc-socket` in the config) |
 | `kwin` | `dbus-run-session -- kwin_wayland --virtual --width W --height H --output-count N --socket wayland-1 --no-lockscreen --no-global-shortcuts --exit-with-session "EMACS ARGS"` (outputs `Virtual-0…`, side by side), with `XDG_CURRENT_DESKTOP=KDE`, `KDE_FULL_SESSION=true`, `XDG_SESSION_TYPE=wayland` | pgtk, placed by KWin; KWin exits when it does | its own bus (KWin's scripting API, which the adapter uses, is on it) and runtime directory (as sway); no XWayland; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` (and `MESA_SHADER_CACHE_DIR`) under `RUN/xdg/`, so KWin never reads or writes `~/.config/kwinrc` or `kwinoutputconfig.json` — the session's Emacs gets them too (fontconfig, GTK settings), so a kwin session reads less of `~` than the others |
 | `niri` | the sway session with one output, whose config runs `niri -c RUN/niri.kdl` instead of Emacs; niri (its winit backend, a window on sway: niri has no headless backend) spawns `sh RUN/niri-session.sh` | pgtk, without sway's `SWAYSOCK`/`I3SOCK` (Emacs must see niri); after it, `niri msg action quit` ends niri and sway | as sway; `xwayland-satellite { off; }`, so no X display in the shared `/tmp`; `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` under `RUN/xdg/cache`, so niri's GL writes no shader cache to `~/.cache`. **One output only** (`winit`): `--monitors 2` is refused |
+
+### Size and scale
+
+`DRGNX_UI_SIZE=3840x2160` sets the monitor size in device pixels (a size given to `ui start --size` or `ui_start`
+wins; default 1600x900). `DRGNX_UI_SCALE=2` puts every monitor at that scale, `DRGNX_UI_SCALES="1 2"` gives one scale
+per monitor (a count other than the monitors' fails with "scales need one per monitor"); in Lisp,
+`(drgnx-ui-start nil size nil nil monitors compositor SCALES)`. Scale 1 is the default and changes nothing. The
+scale is applied before Emacs starts, and `ui start` then waits up to 10 s for the root frame to show the first
+monitor's scale, else stops the session and fails with `scale S not applied`.
+
+| Compositor | How the scale is applied |
+|---|---|
+| `mutter` | `gdctl set --logical-monitor [--primary] --monitor Meta-k --scale S --x X --y 0` per monitor, run (retried) in front of Emacs; X is the sum of the monitors' logical widths (W / S). mutter 50 takes fractional scales on its headless virtual monitor. `gdctl` is a Python script that needs `python3-gobject-base` (in `Containerfile.gui`); when all 50 tries (10 s) fail, the session's log gets `scale not applied: gdctl set failed 50 times: ERROR` and Emacs never starts, so `ui start` fails with it |
+| `sway` | `output HEADLESS-k scale S` in `sway.conf`, positions in logical pixels |
+| `kwin` | `kwin_wayland --scale S` when every scale is the same and the binary has the flag, else `kscreen-doctor output.k.scale.S` per output, run by `RUN/kwin-session.sh` in front of Emacs (not exercised on the dev host: no KWin there) |
+| `x11`, `i3`, `niri` | refused: they have no monitor scale |
+
+The wait condition: GTK 3 knows only integer scales. At an integer S the root's `(frame-scale-factor)` is S; at a
+fractional S it is `(ceiling S)` and the monitor's `geometry` in `display-monitor-attributes-list` is (W / S) ·
+`(ceiling S)` (R12: 2880×1800 at 1.25 gives 4608×2880), within one logical pixel. The session's tests see
+`DRGNX_UI_SESSION_SIZE` and `DRGNX_UI_SESSION_SCALES` (the latter empty at scale 1). The 125 % matrix is 1920×1080,
+2560×1440, 2560×1600, 2880×1800 and 3840×2160 at `DRGNX_UI_SCALE=1.25`.
 
 The configs are generated per session: `sway.conf` (one `output HEADLESS-k resolution WxH position X 0` per monitor,
 `default_border none`, `exec` of the session's Emacs followed by `swaymsg exit` — sway lives as long as Emacs, as mutter
@@ -1004,6 +1047,35 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
 - **The contract with the timer layer** ([core.md](core.md), Timers): the layer's three seams follow the virtual
   clock; a delay counts from the virtual start; one `drgnx-test-idle` call is one pause; pending layer timers are named
   and cleared at the end.
+
+## Child-frame packages
+
+Tests of child frames against real packages (the compositor's popups, the popup perf workloads) use posframe, corfu,
+eldoc-box, company-box, which-key-posframe, transient-posframe, vertico-posframe and mini-frame, pinned in
+`test/fixtures/childframe-packages.eld`: `(NAME VERSION :archive ARCHIVE :sha256 HASH)`, the hash of the archive file.
+`bin/drgnx childframe-elpa DIR` installs exactly those versions into the new directory `DIR` the way `drgnx sync`
+does, in a private data directory (never your configuration or `elpa`): the hash is checked before the file enters
+the cache, the signature where the archive signs (GNU ELPA), and a hash that differs is refused and leaves `DIR`
+absent. What the packages need (compat, dash, company, vertico, …) comes along at the archives' newest, unpinned.
+MELPA serves only its newest build of a package, so when one is replaced the install fails until its pin is bumped.
+
+```sh
+bin/drgnx childframe-elpa .claude/tmp/childframe-elpa
+DRGNX_CHILDFRAME_ELPA="$PWD/.claude/tmp/childframe-elpa" bin/drgnx test ...
+```
+
+`(drgnx-uitest-childframe-packages)` puts the pinned packages from `DRGNX_CHILDFRAME_ELPA` on `load-path` and returns
+their names, or nil when the variable is unset or the directory lacks one, so tests `skip-unless` it, as the modal
+tests do with `DRGNX_MODAL_ELPA`. A session inherits the variable (`drgnx-ui-keep-env`). The tests of the command
+point `DRGNX_CHILDFRAME_PINS` and `DRGNX_CHILDFRAME_ARCHIVES` (`NAME=DIR,…`) at a local archive.
+
+`test/ui/childframe-chrome-test.el` holds the compositor's four popup scenarios (`drgnx-ui-chrome/…`: corfu with
+popupinfo, posframe shown and hidden 100 times, eldoc-box beside corfu, a popup at the right and bottom edge). Each
+skips unless Glitnir (the compositor) is active and the packages are present, so on a stock Nidhogg a run reports them
+as skipped. Active, they set `child-frame-chrome` to drgnx's defaults and `glitnir-debug` to `verify`, and compare
+snapshots in device pixels: inside a popup away from its corners equals the Glitnir-off picture, a corner pixel equals
+the no-popup picture, 4 px outside the right edge is darker than the no-popup picture, and after the hide the popup
+plus its shadow margin equals the no-popup picture; the verifier must report no violations.
 
 ## Modal tests
 
