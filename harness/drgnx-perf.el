@@ -544,5 +544,72 @@ the core for a share of the loop, so the wall-clock numbers taken now carry that
     (let ((w (* 1000 (- (float-time) w0))) (c (- (drgnx-perf--cpu-ms) c0)))
       (list :wall_ms (drgnx-perf--round w) :cpu_ms (drgnx-perf--round c) :loaded (and (> c 0) (> (/ w c) 1.3) t)))))
 
+;;;; Transcript replay (the synthetic day, `transcript-replay'): a streaming transcript with no agent behind it
+
+(cl-defstruct (drgnx-perf-replay (:constructor drgnx-perf-replay--make) (:copier nil))
+  name session chunks left (fed 0))
+
+(defvar drgnx-perf--replays nil "Live replays (`drgnx-perf-replay'), newest first.")
+
+(defun drgnx-perf-replay--get (name) (seq-find (lambda (r) (equal (drgnx-perf-replay-name r) name)) drgnx-perf--replays))
+
+(defun drgnx-perf-replay--arm (r)
+  "Set the timer of the next chunk of replay R, after the delay recorded for it."
+  (drgnx-timer-start (cons 'perf-replay (drgnx-perf-replay-name r))
+                     (/ (car (car (drgnx-perf-replay-left r))) 1000.0) #'drgnx-perf-replay-tick
+                     :args (list (drgnx-perf-replay-name r)) :owner :core))
+
+(defun drgnx-perf-replay-start (name chunks)
+  "Start a transcript session NAME fed from CHUNKS, ((DELAY-MS . TEXT)…), in a loop: no agent process.
+Each timer tick calls `drgnx-agents--append-text' and `drgnx-agents--changed' as a streaming agent's event does;
+the recording's end finishes the answer and starts it over.  Returns the session."
+  (require 'drgnx-agents)
+  (require 'drgnx-timer)
+  (drgnx-perf-replay-stop name)
+  (let* ((s (drgnx-agents--make :name name :profile "replay" :cwd temporary-file-directory :status 'busy :id name))
+         (r (drgnx-perf-replay--make :name name :session s :chunks chunks :left chunks)))
+    (push s drgnx-agents--sessions)
+    (push r drgnx-perf--replays)
+    (drgnx-perf-replay--arm r)
+    s))
+
+(defun drgnx-perf-replay-tick (name)
+  "Feed replay NAME its next chunk and set the timer of the one after."
+  (when-let* ((r (drgnx-perf-replay--get name)))
+    (let ((s (drgnx-perf-replay-session r)) (chunk (pop (drgnx-perf-replay-left r))))
+      (drgnx-agents--append-text s 'agent (cdr chunk))
+      (cl-incf (drgnx-perf-replay-fed r))
+      (unless (drgnx-perf-replay-left r)
+        (plist-put (car (last (drgnx-agent-session-entries s))) :done t)
+        (setf (drgnx-perf-replay-left r) (drgnx-perf-replay-chunks r)))
+      (drgnx-agents--changed s)
+      (drgnx-perf-replay--arm r))))
+
+(defun drgnx-perf-replay-count (name)
+  "How many chunks replay NAME has fed (0 for none)."
+  (if-let* ((r (drgnx-perf-replay--get name))) (drgnx-perf-replay-fed r) 0))
+
+(defun drgnx-perf-replay-stop (name)
+  "Stop replay NAME: its timer, its session and its transcript buffer."
+  (when-let* ((r (drgnx-perf-replay--get name)))
+    (drgnx-timer-cancel (cons 'perf-replay name))
+    (setq drgnx-perf--replays (delq r drgnx-perf--replays)
+          drgnx-agents--sessions (delq (drgnx-perf-replay-session r) drgnx-agents--sessions))
+    (when-let* ((b (get-buffer (format "*agent: %s*" name))))
+      (when-let* ((w (get-buffer-window b))) (ignore-errors (delete-window w)))
+      (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
+
+(defun drgnx-perf-replay-buffer (name)
+  "Replay NAME's transcript buffer, drawn (not shown)."
+  (require 'drgnx-agents-ui)
+  (drgnx-agents-ui-transcript-buffer (drgnx-perf-replay-session (drgnx-perf-replay--get name))))
+
+(defun drgnx-perf-heap-mb ()
+  "The live Lisp heap in MB after a collection: SIZE × USED over `garbage-collect''s entries."
+  (let ((bytes 0))
+    (dolist (e (garbage-collect))
+      (when (and (numberp (nth 1 e)) (numberp (nth 2 e))) (cl-incf bytes (* (nth 1 e) (nth 2 e)))))
+    (/ bytes 1048576.0)))
+
 (provide 'drgnx-perf)
 ;;; drgnx-perf.el ends here

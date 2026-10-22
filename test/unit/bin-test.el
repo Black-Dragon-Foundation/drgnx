@@ -1076,6 +1076,23 @@ macOS (no /proc there)."
           (should (drgnx-bin-test--container-refused-p dir nil "--soak" "--perf")))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/container-day-accepted ()
+  ;; --day [MIN] is the synthetic day in the GUI image, capped at DRGNX_TEST_DAY_MEMORY (6g, swap equal); with another
+  ;; tier it is refused.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (progn
+          (let* ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--day" "5"))
+                 (opts (butlast args (length (member "gui-image" args)))))
+            (should (equal (cdr (member "gui-image" args)) '("bin/drgnx" "test" "--day" "5")))
+            (should (equal (cadr (member "--memory" opts)) "6g"))
+            (should (equal (cadr (member "--memory-swap" opts)) "6g")))
+          (let ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_TEST_DAY_MEMORY=4g") "--day")))
+            (should (equal (cdr (member "gui-image" args)) '("bin/drgnx" "test" "--day")))
+            (should (equal (cadr (member "--memory" args)) "4g")))
+          (should (drgnx-bin-test--container-refused-p dir nil "--day" "--soak")))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/container-perf-ab-env-passed ()
   ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image; a malformed pair is a usage
   ;; error; --ab-env without --perf is refused.

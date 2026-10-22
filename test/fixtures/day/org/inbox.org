@@ -1,0 +1,27 @@
+#+title: Inbox
+#+todo: TODO NEXT WAITING | DONE
+
+* TODO Review the ledger report
+  The report prints one line per entry.
+** NEXT Check the rounding
+   =day-round= uses =fround=; compare with the bank's figures.
+** TODO Add a histogram to the summary
+* WAITING Answer from the accountant
+  Asked on Monday about the quarter's totals.
+** TODO Draft the follow-up
+* TODO Plan the week
+** TODO Monday
+   - [ ] Standup
+   - [ ] Ledger import
+** TODO Tuesday
+   - [ ] Review
+   - [X] Backups
+** TODO Wednesday
+** TODO Thursday
+* DONE Archive last month
+  CLOSED: [2026-09-30 Wed 17:00]
+* TODO Read about language servers
+  | Server  | Language | Notes         |
+  |---------+----------+---------------|
+  | elisp   | Lisp     | replayed here |
+  | rust    | Rust     | none          |

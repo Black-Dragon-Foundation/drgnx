@@ -273,7 +273,7 @@ the temp dir) and sleeps.  Return the process."
 
 (ert-deftest drgnx-lease/ui-takes-a-heavy-slot ()
   (drgnx-lease-test--with
-    (dolist (flag '("--ui" "--scenario" "--bench" "--perf" "--soak"))   ; the ones that run in the harness's Emacs
+    (dolist (flag '("--ui" "--scenario" "--bench" "--perf" "--soak" "--day"))   ; the ones that run in the harness's Emacs
       (should (equal "heavy:1" (drgnx-lease-test--held-by (drgnx-lease-test--env) "test" flag))))))
 
 (ert-deftest drgnx-lease/check-takes-the-host ()
