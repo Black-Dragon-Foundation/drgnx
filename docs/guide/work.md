@@ -186,7 +186,7 @@ a command line it does not understand.
 
 | Command | What it does |
 |---|---|
-| `drgnx graph export [--project P --out DIR] [--since TX] [--with activity] [--history]` | Writes the export folder (default `<data>/export/`). `--project` needs `--out` and never writes into a repository unless `--out` names it. |
+| `drgnx graph export [--project P --out DIR] [--since TX] [--with activity] [--history]` | Writes the export folder (default `<data>/export/`). `--project` needs `--out`. `DIR` must be new, empty or an earlier export: a folder holding anything else (a repository) is refused, never replaced. |
 | `drgnx graph import DIR` | Reads an export folder back (safe to repeat; never creates a grant). |
 | `drgnx graph backup [now]` | Makes and checks a dated copy now and rotates the old ones. |
 | `drgnx graph revert --tx N` or `--entity ID --to-ver V` `[--cascade]` | Puts a change back as a new version of yours. `--cascade` only lists what depends on it. |

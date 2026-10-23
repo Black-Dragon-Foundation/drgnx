@@ -289,7 +289,13 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
 - **`allow`** (door 5 for export, door 2 for import) is asked for every entity; a refused one leaves no line, no
   history, and no link to it.
 - **No half exports.** The files are written into `dir.tmp` and renamed; a failure or panic removes `dir.tmp`, and an
-  earlier export at `dir` stays until the new one replaces it. `<data>/export/` is made 0700.
+  earlier export at `dir` stays until the new one replaces it. The folders an export makes are 0700; an existing
+  parent keeps its mode.
+- **Only an export is replaced.** `dir`, `dir.tmp` and `dir.old` must each be missing or a folder holding only an
+  export's files (`entities.jsonl`, `links.jsonl`, `tx.jsonl`, `history.jsonl`, `link_stat.jsonl`); a file, a link
+  or a folder with anything else (`--out` naming a repository) is refused before a file is written. Backups write a
+  fixed file under `<data>/backup/`, and import and the 6 → 7 copy only read or add, so no other path replaces a
+  folder.
 - **Import** is idempotent by `id` and `ver`: a record present at that version or later is skipped; an older one is
   updated (the old row goes to `entity_hist`); an absent one is created at the record's `ver`. One tx per 500
   records (`actor` and `tool` `import`, class `system`, `imported = 0`: real versions). A different kind under an
