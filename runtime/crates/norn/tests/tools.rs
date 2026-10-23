@@ -804,7 +804,7 @@ async fn read_decisions_sets_seen_only_when_it_changed() {
     assert!(!error, "{text}");
     let rowid = |agent: &str| {
         w.text(&format!(
-            "select rowid from meta where key = 'seen:{agent}'"
+            "select cast(rowid as text) from meta where key = 'seen:{agent}'"
         ))
     };
     assert_eq!(rowid("s-2"), None);

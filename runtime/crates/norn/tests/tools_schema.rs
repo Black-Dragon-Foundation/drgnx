@@ -23,7 +23,9 @@ fn lisp_names() -> Vec<String> {
         };
         let (name, tail) = rest.split_once('"').unwrap();
         let tail = tail.trim();
-        if tail.is_empty() || tail.starts_with(":description") {
+        // a function's docstring opens a line too: a tool name is lower-case letters and underscores
+        let is_name = name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+        if is_name && (tail.is_empty() || tail.starts_with(":description")) {
             names.push(name.to_owned());
         }
     }
