@@ -136,7 +136,10 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
   runs, a key AI: Load Keys found waits in memory and goes when the editor connects. Checking whether a provider is
   usable (AI: Choose, onboarding's checks) reads its key only to see that there is one, and keeps nothing: neither the
-  key nor auth-source's copy of the file. A provider with a key is never asked directly,
+  key nor auth-source's copy of the file. When the hub restarts (an update, `drgnx hub restart`), the editor hands
+  over again the keys it can read without asking: your environment and a plain `~/.authinfo`. A key that lives only in
+  your Keychain, keyring or a `.gpg` file cannot be read without asking, so a notice says "the drgnx hub restarted
+  without your … key: run AI: Load Keys". A provider with a key is never asked directly,
   and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
   hub is not running; agents reach providers through it".
 - **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's

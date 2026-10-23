@@ -1057,11 +1057,23 @@ port file — and holds no key:
   editor subscribed to a proven hub). Each of the answer's `warnings` (a keyed provider at `http://` off this machine)
   becomes a `hub` notice once per provider per Emacs session (`drgnx-hub--clear-text-told`).
 - **`gateway/need-keys`** (`drgnx-hub--need-keys`, on the subscription) is answered only on a proven connection
-  (`drgnx-hub--event-conn`'s `:drgnx-proven`). For each provider the key is looked for again in its `:key-env`
-  variable (never `drgnx-ai--keys`); found keys go with `gateway/keys` and are kept nowhere. It runs in a process
-  filter, a daemon path, so auth-source is never read and nothing asks; a key not found is a `hub` notice
+  (`drgnx-hub--event-conn`'s `:drgnx-proven`). For each provider the key is looked for again as the hand-over does
+  (`drgnx-ai-key` without INTERACTIVE: its `:key-env` variable, else auth-source's sources that never ask, read
+  without keeping anything); found keys go with `gateway/keys` and are dropped once taken. It runs in a process
+  filter, a daemon path, so nothing asks (no `.gpg` file, Keychain or keyring); a key not found is a `hub` notice
   "agents need your P key in the drgnx hub: run AI: Load Keys". The keys and the table go after the subscription's
   answer, so the need-keys a hub sends a new subscriber is about the keys it held before them.
+- **The hand-over's keys** (`drgnx-hub--held-keys`, on every proven (re)connect) are, for each keyed provider of the
+  effective table, the same quiet read: the environment, a key AI: Load Keys found that no hub took yet, else a plain
+  `~/.authinfo`/`~/.netrc` entry. So a hub that restarted gets back the keys that live in a quiet file, and the editor
+  keeps none of them afterwards.
+- **A key the hub lost** (`drgnx-hub--keys-lost`). A hub's `need-keys` names only what agents need, never the
+  editor's own providers, so the editor checks itself: when `gateway/keys-held` answers, a keyed provider whose key a
+  hub held earlier in this Emacs session (`drgnx-hub--keys-had`, ids only), which this hub does not hold and which the
+  quiet read cannot find (it lived in a store that asks), is a `hub` condition "the drgnx hub restarted without your P
+  key: run AI: Load Keys". It goes when `keys-held` or `keys-changed` names the provider again. The editor decides
+  this rather than the hub because only the editor knows which providers it used: the hub's table holds every keyed
+  preset, and a hub-side list would warn about providers the user never set up.
 - **The drop** (design §5.6). When a `gateway/keys` the editor sent is answered without an error
   (`drgnx-hub--keys-taken`), and after `drgnx-hub-give-key` or an agent's `gateway/register` that carried keys, the
   editor forgets them: `drgnx-hub--drop-keys` → `drgnx-ai-forget-keys` removes each from `drgnx-ai--keys` (unless a

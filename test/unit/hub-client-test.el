@@ -11,6 +11,7 @@
 (require 'drgnx-agents-mirror)
 (require 'drgnx-coord-mcp)
 (require 'drgnx-ai)
+(require 'auth-source)                  ; its variables are let-bound below
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
@@ -31,7 +32,7 @@
           (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
           (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
           (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil) (drgnx-hub-skew-functions nil)
-          (drgnx-hub--clear-text-told nil))
+          (drgnx-hub--clear-text-told nil) (drgnx-hub--keys-had nil))
      (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
      (unwind-protect (progn ,@body)
        (drgnx-hub-disconnect)
@@ -820,12 +821,15 @@ without the binary."
       (should-not (gethash '(hub . need-key-openrouter) drgnx-notice--table)))))
 
 (ert-deftest drgnx-hub-client/need-keys-without-a-key-raises-a-notice-never-prompts ()
-  ;; a daemon path: nothing may ask; auth-source is never read; a key not found is a notice naming the provider
+  ;; a daemon path: nothing may ask; of auth-source only a file that never asks is read (never a .gpg file, the
+  ;; Keychain or the keyring); a key not found is a notice naming the provider
   (drgnx-notice-test-with-model
     (drgnx-hub-client-test--with-fake ()
       (let ((drgnx-ai--keys (make-hash-table :test #'eq)) (process-environment (drgnx-hub-client-test--no-keys-env))
-            (inhibit-interaction t))
-        (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (ert-fail "auth-source was read"))))
+            (inhibit-interaction t) (auth-sources (list (concat root "authinfo.gpg") 'macos-keychain-internet (concat root "authinfo"))))
+        (cl-letf (((symbol-function 'auth-source-search)
+                   (lambda (&rest _) (unless (equal auth-sources (list (concat root "authinfo")))
+                                       (ert-fail (format "a source that may ask was read: %S" auth-sources))))))
           (drgnx-hub-connect)
           (drgnx-hub-client-test--subscribed hub)
           (drgnx-fake-hub-event hub "gateway/need-keys" '(:providers ["openrouter"]))
@@ -888,6 +892,47 @@ without the binary."
         (drgnx-hub-disconnect)
         (call-process bin nil nil nil "stop" "--timeout" "10")))))
 
+(ert-deftest drgnx-hub-client/a-netrc-key-goes-again-after-a-restart ()
+  ;; binary (review M3): openrouter's key lives only in a plain netrc, not the environment; the hub restarts (keys live
+  ;; in its memory only); the reconnect's hand-over reads the file again, without asking, and the hub holds the key
+  ;; again — while this Emacs keeps neither the key nor auth-source's copy of the file
+  (skip-unless (drgnx-hub-client-test--bin))
+  (drgnx-hub-client-test--with
+    (let* ((bin (drgnx-hub-client-test--bin))
+           (process-environment (append (list (concat "DRGNX_RATATOSKR_BIN=" bin) "RATATOSKR_SUPERVISOR=none")
+                                        (drgnx-hub-client-test--no-keys-env)))
+           (netrc (concat root "netrc"))
+           (auth-sources (list netrc)) (auth-source-netrc-cache nil) (password-data (make-hash-table :test #'equal))
+           (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-hub--keys-held :unknown) (drgnx-hub--editor nil)
+           (cached (lambda () (or auth-source-netrc-cache
+                                  (let (found) (maphash (lambda (k _) (when (eq (car-safe k) 'auth-source) (setq found t)))
+                                                        password-data)
+                                       found)))))
+      (with-temp-file netrc (insert "machine openrouter.ai login drgnx password sk-or-netrc-m3\n"))
+      (set-file-modes netrc #o600)
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-ensure))
+            (drgnx-hub-connect)
+            (drgnx-hub-client-test--wait (lambda () (member "openrouter" (and (listp drgnx-hub--keys-held) drgnx-hub--keys-held)))
+                                         "the hub holds the key")
+            (let ((first drgnx-hub--events))
+              (drgnx-hub-restart-now)
+              (drgnx-hub-client-test--wait (lambda () (not (process-live-p first))) "the hub restarts"))
+            (drgnx-hub-client-test--wait (lambda () (ignore-errors (drgnx-hub-connect) (process-live-p drgnx-hub--events)))
+                                         "the editor subscribes again")
+            ;; the new hub's own answer, not the list this Emacs kept from before
+            (drgnx-hub-client-test--wait
+             (lambda () (member "openrouter" (append (plist-get (ignore-errors (drgnx-hub-call-sync "gateway/keys-held" nil 5))
+                                                                :providers)
+                                                     nil)))
+             "the hub holds the key again")
+            (should (zerop (hash-table-count drgnx-ai--keys)))
+            (should-not (funcall cached))
+            (should-not (gethash '(hub . key-lost-openrouter) drgnx-notice--table)))
+        (drgnx-hub-disconnect)
+        (call-process bin nil nil nil "stop" "--timeout" "10")))))
+
 (ert-deftest drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect ()
   ;; the hand-over also asks gateway/editor-token and gateway/keys-held; a proven reconnect asks again; keys-changed
   ;; keeps the list current; a disconnect forgets both
@@ -915,5 +960,43 @@ without the binary."
         (drgnx-hub-client-test--wait (lambda () (> (length (drgnx-hub-client-test--sent hub "gateway/editor-token")) asked))
                                      "the token asked again")
         (drgnx-hub-client-test--wait (lambda () drgnx-hub--editor) "the token again")))))
+
+(ert-deftest drgnx-hub-client/a-key-the-hub-lost-is-a-notice ()
+  ;; review M3: the hub held openrouter's key earlier this session and, after a restart, holds none; this Emacs cannot
+  ;; find it again without asking (it lived in a store that asks): a notice says to run AI: Load Keys, and goes once
+  ;; the hub holds the key again.  A provider the hub never held raises nothing
+  (drgnx-notice-test-with-model
+    (drgnx-hub-client-test--with-fake (:results (list (cons "gateway/keys-held" '(:providers []))))
+      (let ((drgnx-hub--keys-held :unknown) (drgnx-hub--keys-had '("openrouter")) (auth-sources nil)
+            (drgnx-ai--keys (make-hash-table :test #'eq)) (process-environment (drgnx-hub-client-test--no-keys-env)))
+        (drgnx-hub-connect)
+        (let ((n (drgnx-hub-client-test--wait (lambda () (gethash '(hub . key-lost-openrouter) drgnx-notice--table))
+                                              "the notice")))
+          (should (equal (plist-get n :text) "the drgnx hub restarted without your openrouter key: run AI: Load Keys"))
+          (should (eq (plist-get n :command) 'drgnx-ai-load-keys)))
+        (should-not (gethash '(hub . key-lost-anthropic) drgnx-notice--table))
+        (drgnx-fake-hub-event hub "gateway/keys-changed" '(:providers ["openrouter"]))
+        (drgnx-hub-client-test--wait (lambda () (not (gethash '(hub . key-lost-openrouter) drgnx-notice--table)))
+                                     "the notice goes")
+        (should (member "openrouter" drgnx-hub--keys-had))))))
+
+(ert-deftest drgnx-hub-client/a-key-found-again-quietly-raises-no-notice ()
+  ;; the same restart, but the key is in a plain authinfo (a store that never asks): the hand-over carries it again,
+  ;; and no notice is raised even when the hub's keys-held answer comes before it took the key
+  (drgnx-notice-test-with-model
+    (drgnx-hub-client-test--with-fake (:results (list (cons "gateway/keys-held" '(:providers []))))
+      (let* ((drgnx-hub--keys-held :unknown) (drgnx-hub--keys-had '("openrouter"))
+             (plain (concat root "authinfo"))
+             (auth-sources (list plain)) (auth-source-netrc-cache nil)
+             (drgnx-ai--keys (make-hash-table :test #'eq)) (process-environment (drgnx-hub-client-test--no-keys-env)))
+        (with-temp-file plain (insert "machine openrouter.ai login drgnx password sk-or-quiet-m3\n"))
+        (set-file-modes plain #o600)
+        (drgnx-hub-connect)
+        (drgnx-hub-client-test--wait (lambda () (listp drgnx-hub--keys-held)) "the held keys")
+        (should (equal (mapcar (lambda (l) (plist-get (plist-get l :params) :keys)) (drgnx-hub-client-test--sent hub "gateway/keys"))
+                       '((:openrouter "sk-or-quiet-m3"))))
+        (should-not (gethash '(hub . key-lost-openrouter) drgnx-notice--table))
+        (should (zerop (hash-table-count drgnx-ai--keys)))
+        (should-not auth-source-netrc-cache)))))
 
 ;;; hub-client-test.el ends here
