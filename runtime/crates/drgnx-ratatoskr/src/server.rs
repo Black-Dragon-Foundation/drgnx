@@ -541,7 +541,8 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
         let mut t = timer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let due = t.due(st.writes, now);
+        // only writes that put text: the Lisp backend's 60 s housekeeping (leases, events) never does
+        let due = t.due(st.texts, now);
         (due, t.probing())
     };
     if !due {

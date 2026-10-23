@@ -101,6 +101,8 @@ pub struct Tx<'a> {
     meta: TxMeta,
     guard: Arc<Guard>,
     sp: Savepoint<'a>,
+    /// An entity's text (its FTS row) was put: [`super::search::fts_put`] sets it.
+    text: bool,
 }
 
 impl<'a> Tx<'a> {
@@ -200,7 +202,18 @@ impl<'a> Tx<'a> {
             meta,
             guard,
             sp,
+            text: false,
         })
+    }
+
+    /// This write put an entity's text (what the entity embedder may have to send).
+    pub(super) fn put_text(&mut self) {
+        self.text = true;
+    }
+
+    /// Whether this write put an entity's text ([`super::writer::WriterStatus::texts`] counts those writes).
+    pub(super) fn wrote_text(&self) -> bool {
+        self.text
     }
 
     /// Release the savepoint: what the request wrote joins the batch's transaction. Dropping a `Tx` instead rolls

@@ -44,7 +44,8 @@ nothing else in the process writes it, and no request runs SQLite on its caller'
   - `ReadOnly` (a newer schema) refuses every write.
   - A tick also re-opens when the file at the path is another file (its `(dev, inode)` changed).
   - `status()` shows the rule's last answer (`last_open`), whether the store is open, its schema, and counts of
-    batches, writes and replays, with the last `COMMIT`'s time in milliseconds.
+    batches, writes and replays, with the last `COMMIT`'s time in milliseconds. `texts` counts the writes that put
+    an entity's text (`search::fts_put`: a new entity, a changed title or body, a restored version, an import).
 - **Group commit.** Requests arrive over a channel bounded at 256 (a write waits for room). The thread takes the
   first one and whatever arrives within `max_wait` (10 ms), up to `max_batch` (256), into one
   `BEGIN IMMEDIATE … COMMIT`, so `synchronous=FULL` costs one fsync per batch.
@@ -194,8 +195,9 @@ Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the
   `vec_put` in one `system` tx (tool `embedder`). A failed batch is tried once more; failing twice stops the round.
 - **Door 4.** An entity whose source, id or `data.path` the personal-notes deny-list denies (or whose source form is
   unknown) is never sent, whatever the scan's door let in. It stays stale and is looked at again each round.
-- **Schedule.** `embed::Timer`: a round starts when the graph writer has seen no write for a minute and none runs.
-  After a stop the next round begins by sending one text; it goes on only when the provider answers.
+- **Schedule.** `embed::Timer`: a round starts when the graph writer has seen no write that put text (its `texts`
+  count) for a minute and none runs. Lease, status, event and `kv` writes do not count: the Lisp backend's
+  housekeeping writes every 60 s and would otherwise keep every round away. After a stop the next round begins by sending one text; it goes on only when the provider answers.
 - **Spend.** `norn::write::spend::add_spend` takes the write's `Tx` and sets the row's `tx` (class `system`, tool
   `gateway`).
 

@@ -27,6 +27,7 @@ pub fn fts_put(
         "insert into entity_fts(rowid, title, body) values (?1, ?2, ?3)",
         params![n, title, body],
     )?;
+    tx.put_text();
     Ok(())
 }
 

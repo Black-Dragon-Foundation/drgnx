@@ -8,8 +8,10 @@
 //!   at a time.  An entity whose source, id or `data.path` the personal-notes deny-list denies (an unknown source form
 //!   too) is never sent, even when the scan's door let it in (door 4).  A batch that fails is tried once more; failing
 //!   twice stops the round.
-//! - **The schedule** ([`Timer`]): a round runs after the store has seen no write for [`IDLE`].  After a stop, one
-//!   text is sent each idle minute, and rounds resume when the provider answers it.
+//! - **The schedule** ([`Timer`]): a round runs after the store has seen no write that put an entity's text for
+//!   [`IDLE`] (the writer's `texts`, [`urdr::graph::writer::WriterStatus::texts`]).  Lease, status, event and `kv` writes do
+//!   not count: the Lisp backend's housekeeping writes every 60 s, and would keep every round away.  After a stop,
+//!   one text is sent each idle minute, and rounds resume when the provider answers it.
 
 use norn::deny::{DenyList, Source, Verdict};
 use norn::store::{CoordDb, CoordError};
@@ -24,7 +26,7 @@ use urdr::graph::{Class, TxMeta};
 /// Entities per request.
 pub const BATCH: usize = 64;
 
-/// How long the store must be quiet before a round.
+/// How long the store must be quiet (no text written) before a round.
 pub const IDLE: Duration = Duration::from_secs(60);
 
 /// How long one request to the provider may take.
@@ -340,11 +342,11 @@ pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
     }
 }
 
-/// When a round may start: the store was quiet for [`IDLE`], and no round runs.  Pure (the clock and the writer's
-/// write count are arguments).
+/// When a round may start: no text was written for [`IDLE`], and no round runs.  Pure (the clock and the writer's
+/// count of writes that put text, [`urdr::graph::writer::WriterStatus::texts`], are arguments).
 #[derive(Debug)]
 pub struct Timer {
-    writes: u64,
+    texts: u64,
     since: Instant,
     running: bool,
     /// A round stopped: the next one starts by sending one text.
@@ -354,17 +356,17 @@ pub struct Timer {
 impl Timer {
     pub fn new(now: Instant) -> Timer {
         Timer {
-            writes: 0,
+            texts: 0,
             since: now,
             running: false,
             stopped: false,
         }
     }
 
-    /// Whether a round starts now, given the writer's count of writes so far.
-    pub fn due(&mut self, writes: u64, now: Instant) -> bool {
-        if writes != self.writes {
-            self.writes = writes;
+    /// Whether a round starts now, given the writer's count of writes that put text so far.
+    pub fn due(&mut self, texts: u64, now: Instant) -> bool {
+        if texts != self.texts {
+            self.texts = texts;
             self.since = now;
             return false;
         }
@@ -683,5 +685,166 @@ mod tests {
         assert!(t.due(5, t0 + IDLE * 6 + IDLE));
         t.finish(false, t0 + IDLE * 7);
         assert!(!t.probing());
+    }
+
+    /// The writer's counts: (every write, the writes that put text).
+    fn counts(db: &CoordDb) -> (u64, u64) {
+        let st = db.graph_writer().unwrap().status();
+        (st.writes, st.texts)
+    }
+
+    /// The lease of `j#1`'s entity: (holder, until).
+    async fn lease_of(db: &CoordDb) -> (Option<String>, Option<f64>) {
+        db.read(|c| {
+            Ok(c.query_row(
+                "select lease_holder, lease_until from entity where id = ?1",
+                [norn::write::tasks::entity_id("j#1")],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// A job whose one task agent-a holds: the lease the housekeeping renews.
+    async fn claimed_job(db: &CoordDb) {
+        use norn::write::{jobs, tasks};
+        let claimed = db
+            .write(meta(), |tx| {
+                jobs::job_create(
+                    tx,
+                    jobs::NewJob {
+                        id: "j".into(),
+                        title: "the job".into(),
+                        plan: None,
+                        repo: None,
+                        tasks: vec![jobs::NewTask {
+                            n: 1,
+                            title: "the one task".into(),
+                            role: None,
+                            deps: vec![],
+                        }],
+                        data: None,
+                    },
+                    1.0,
+                )?;
+                tasks::claim(tx, "j#1", "agent-a", None, 1.0)
+            })
+            .await
+            .unwrap();
+        assert_eq!(claimed, tasks::ClaimResult::Ok);
+    }
+
+    /// One run of the Lisp backend's housekeeping (`drgnx-hub--housekeeping`, every 60 s) at unix time NOW, as the
+    /// front writes it: `coord/leases` (agent-a renewed, stale leases released), then `coord/prune`.
+    async fn housekeeping(db: &CoordDb, now: f64) {
+        use norn::write::{prune, tasks};
+        db.write(
+            TxMeta::new("hub", Class::System, "coord/leases"),
+            move |tx| {
+                tasks::renew(tx, "agent-a", now)?;
+                tasks::release_stale(tx, now)?;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        db.write(
+            TxMeta::new("hub", Class::System, "coord/prune"),
+            move |tx| {
+                prune::prune_daily_tx(tx, now)?;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// URDR-EMBED-NEVER-IDLE-1: the housekeeping writes every minute (a lease renewed, the event log pruned), yet puts
+    /// no text, so a round still starts after the quiet minute.  Counted by every write, it never would.
+    #[tokio::test]
+    async fn housekeeping_every_minute_still_lets_a_round_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        claimed_job(&db).await;
+        let t0 = Instant::now();
+        let mut t = Timer::new(t0);
+        let mut by_writes = Timer::new(t0);
+        let (w0, x0) = counts(&db);
+        assert!(x0 > 0, "the job's tasks put text");
+        assert!(!t.due(x0, t0));
+        assert!(!by_writes.due(w0, t0));
+        for minute in 1..=3u32 {
+            let unix = 1.0 + 60.0 * f64::from(minute);
+            housekeeping(&db, unix).await;
+            let (w, x) = counts(&db);
+            assert_eq!(
+                w,
+                w0 + 2 * u64::from(minute),
+                "both housekeeping writes committed"
+            );
+            assert_eq!(x, x0, "the housekeeping put no text");
+            assert_eq!(
+                lease_of(&db).await,
+                (
+                    Some("agent-a".into()),
+                    Some(unix + norn::write::tasks::LEASE_SECS)
+                ),
+                "the lease was renewed: an entity write"
+            );
+            let now = t0 + IDLE * minute;
+            assert!(!by_writes.due(w, now), "every write restarts its minute");
+            // each minute is quiet: its round starts (and ends, which starts the next minute)
+            assert!(t.due(x, now), "minute {minute}: no round");
+            t.finish(false, now);
+        }
+    }
+
+    /// A write that puts text (a new entity, a changed title) restarts the quiet minute; the housekeeping between them
+    /// does not.
+    #[tokio::test]
+    async fn a_content_write_restarts_the_quiet_minute() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        claimed_job(&db).await;
+        let t0 = Instant::now();
+        let mut t = Timer::new(t0);
+        let (_, x0) = counts(&db);
+        assert!(!t.due(x0, t0));
+        // half a minute in, an entity with text is stored
+        put(&db, "task:new", None, "new text", json!({})).await;
+        let (_, x1) = counts(&db);
+        assert_eq!(x1, x0 + 1);
+        assert!(!t.due(x1, t0 + IDLE / 2));
+        housekeeping(&db, 61.0).await;
+        assert_eq!(counts(&db).1, x1);
+        assert!(
+            !t.due(x1, t0 + IDLE),
+            "a minute after the start, half a minute after the text"
+        );
+        // its title changes: the minute starts over again
+        db.write(meta(), |tx| {
+            let n = urdr::graph::entity::by_id(tx.sql(), "task:new")?
+                .expect("stored")
+                .n;
+            urdr::graph::entity::update(
+                tx,
+                n,
+                None,
+                urdr::graph::entity::Changes {
+                    title: Some(Some("newer text".into())),
+                    ..Default::default()
+                },
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let (_, x2) = counts(&db);
+        assert_eq!(x2, x1 + 1);
+        let at = t0 + IDLE + IDLE / 4;
+        assert!(!t.due(x2, at));
+        assert!(!t.due(x2, at + IDLE / 2));
+        assert!(t.due(x2, at + IDLE), "a quiet minute after the last text");
     }
 }

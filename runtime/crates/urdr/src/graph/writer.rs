@@ -157,6 +157,9 @@ pub struct WriterStatus {
     pub schema: u32,
     pub batches: u64,
     pub writes: u64,
+    /// The committed writes that put an entity's text (its FTS row: a new entity, a changed title or body, a restored
+    /// version, an import): the only writes that can give the entity embedder work (Urdr Task 12b's quiet minute).
+    pub texts: u64,
     pub replays: u64,
     /// How long the last batch's `COMMIT` took, in milliseconds.
     pub last_commit_ms: Option<f64>,
@@ -252,6 +255,7 @@ fn spawn(
         schema: 0,
         batches: 0,
         writes: 0,
+        texts: 0,
         replays: 0,
         last_commit_ms: None,
         last_open: None,
@@ -462,6 +466,8 @@ struct Ran {
     out: Result<(i64, bool), WriteError>,
     /// Answered from a stored answer: if the batch fails, the answer may have been this batch's own.
     replay: bool,
+    /// It put an entity's text ([`WriterStatus::texts`]).
+    text: bool,
 }
 
 /// The writer thread's state; only the thread touches it.
@@ -545,6 +551,7 @@ fn one(
     clock: Option<&Clock>,
     meta: TxMeta,
     job: &mut dyn Job,
+    text: &mut bool,
 ) -> (Result<(i64, bool), WriteError>, bool) {
     if let Some(req) = &meta.req {
         let hit = conn
@@ -589,6 +596,7 @@ fn one(
     {
         return (Err(e.into()), false);
     }
+    *text = tx.wrote_text();
     match tx.release() {
         Ok(()) => (Ok((id, false)), false),
         Err(e) => (Err(e.into()), false),
@@ -770,6 +778,7 @@ impl State {
         let mut ran: Vec<Ran> = Vec::with_capacity(n);
         let mut items = items.into_iter();
         for Item { meta, mut job } in items.by_ref() {
+            let mut text = false;
             let (out, replay) = one(
                 conn,
                 &guard,
@@ -777,8 +786,14 @@ impl State {
                 clock.as_ref(),
                 meta,
                 &mut *job,
+                &mut text,
             );
-            ran.push(Ran { job, out, replay });
+            ran.push(Ran {
+                job,
+                out,
+                replay,
+                text,
+            });
             if conn.is_autocommit() {
                 // SQLite rolled the whole transaction back (a full disk, an I/O error): nothing of the batch stays.
                 for Item { job, .. } in items {
@@ -786,6 +801,7 @@ impl State {
                         job,
                         out: Err(WriteError::Retryable(String::new())),
                         replay: true,
+                        text: false,
                     });
                 }
                 fail(ran, "SQLite rolled the batch back");
@@ -810,6 +826,10 @@ impl State {
             .iter()
             .filter(|r| matches!(r.out, Ok((_, false))))
             .count() as u64;
+        let texts = ran
+            .iter()
+            .filter(|r| r.text && matches!(r.out, Ok((_, false))))
+            .count() as u64;
         let replays = ran
             .iter()
             .filter(|r| matches!(r.out, Ok((_, true))))
@@ -817,6 +837,7 @@ impl State {
         self.set_status(|s| {
             s.batches += 1;
             s.writes += writes;
+            s.texts += texts;
             s.replays += replays;
             s.last_commit_ms = Some(ms);
         });
