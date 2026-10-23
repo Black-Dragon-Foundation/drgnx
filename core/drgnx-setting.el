@@ -67,8 +67,8 @@ ARGS are `defcustom' keywords and drgnx's: `:scope', `:workspace', `:merge', `:o
        (drgnx-setting--declare ',name (list ,@own)))))
 
 (defun drgnx-setting-own-p (var)
-  "Non-nil when VAR was declared with `drgnx-defsetting'."
-  (and (get var 'drgnx-setting) t))
+  "Non-nil when VAR was declared with `drgnx-defsetting', with or without drgnx's keys."
+  (and (memq var drgnx-setting--names) t))
 
 (defun drgnx-setting-names ()
   "Every setting declared with `drgnx-defsetting', as a list of symbols."

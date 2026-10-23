@@ -14,10 +14,13 @@
        (remhash var drgnx-setting--cache))))
 
 (ert-deftest drgnx-setting/declares-a-defcustom-with-the-property ()
-  (drgnx-setting-test--with-fresh '(drgnx-setting-test-a)
+  (drgnx-setting-test--with-fresh '(drgnx-setting-test-a drgnx-setting-test-plain)
     (eval '(drgnx-defsetting drgnx-setting-test-a 3 "A test setting."
              :type 'integer :group 'drgnx :scope 'global :workspace 'safe :on-error 'strict)
           t)
+    ;; A declaration with no drgnx key is still drgnx's own.
+    (eval '(drgnx-defsetting drgnx-setting-test-plain 1 "A plain one." :type 'integer :group 'drgnx) t)
+    (should (drgnx-setting-own-p 'drgnx-setting-test-plain))
     (should (eql drgnx-setting-test-a 3))
     (should (eq (get 'drgnx-setting-test-a 'custom-type) 'integer))
     (should (equal (get 'drgnx-setting-test-a 'drgnx-setting) '(:scope global :workspace safe :on-error strict)))

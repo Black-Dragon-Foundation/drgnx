@@ -184,8 +184,7 @@ after custom.el CUSTOM, config.el CONFIG and FORMS."
                                                    :source "default (package sat-pkg)"))
                   :settings '("(sat-own 2)" "(sat-width 100)")
                   :start '((progn (add-to-list 'load-path (expand-file-name "~/sat")) (require 'sat-pkg) t)
-                           ;; :scope given: own-p needs a drgnx key (Task 7's, reported)
-                           (progn (drgnx-defsetting sat-own 1 "Ours." :type 'integer :group 'sat :scope 'global) t)
+                           (progn (drgnx-defsetting sat-own 1 "Ours." :type 'integer :group 'sat) t)
                            (drgnx-settings-apply-global :owned-only t)))
                  '((70 2) t)))
   (should (equal (drgnx-settings-compat--run

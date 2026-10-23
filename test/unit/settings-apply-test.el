@@ -279,10 +279,7 @@
 
 (ert-deftest drgnx-settings-apply/owned-only-skips-package-entries ()
   (drgnx-settings-apply-test--with (drgnx-sat--own drgnx-sat--a)
-    ;; :scope given: `drgnx-setting-own-p' is nil for a declaration with no drgnx key (Task 7's, reported)
-    (eval '(drgnx-defsetting drgnx-sat--own 1 "Ours." :type 'integer :group 'drgnx-settings-apply-test
-             :scope 'global)
-          t)
+    (eval '(drgnx-defsetting drgnx-sat--own 1 "Ours." :type 'integer :group 'drgnx-settings-apply-test) t)
     (drgnx-settings-apply-test--def 'drgnx-sat--a)
     (drgnx-settings-apply-test--settings "(drgnx-sat--a 100)" "(drgnx-sat--own 2)")
     (should (equal (drgnx-settings-apply-global :owned-only t) '((drgnx-sat--own . applied))))
@@ -297,10 +294,7 @@
   ;; V2 through the commands: an untouched variable goes back to its default, a later setq stays, drgnx's own stays;
   ;; turning on applies again where drgnx is the winner, and stores behind the setq.
   (drgnx-settings-apply-test--with (drgnx-sat--a drgnx-sat--b drgnx-sat--own)
-    ;; :scope given: `drgnx-setting-own-p' is nil for a declaration with no drgnx key (Task 7's, reported)
-    (eval '(drgnx-defsetting drgnx-sat--own 1 "Ours." :type 'integer :group 'drgnx-settings-apply-test
-             :scope 'global)
-          t)
+    (eval '(drgnx-defsetting drgnx-sat--own 1 "Ours." :type 'integer :group 'drgnx-settings-apply-test) t)
     (drgnx-settings-apply-test--def 'drgnx-sat--a)
     (drgnx-settings-apply-test--def 'drgnx-sat--b)
     (drgnx-settings-apply-test--settings "(drgnx-sat--a 100)" "(drgnx-sat--b 100)" "(drgnx-sat--own 2)")
