@@ -1,0 +1,10 @@
+{
+  "setup": [],
+  "clock": [100.0, 101.5, 102.0],
+  "calls": [
+    {"fn": "drgnx-coord-event-add", "args": {"agent": "a1", "job": "j1", "task": "j1#1", "kind": "claim", "summary": "claimed j1#1", "data": {"paths": ["x.el"]}}},
+    {"fn": "drgnx-coord-event-add", "args": {"agent": "a1", "kind": "start", "summary": "turn one\nsecond line", "data": {"turn": true}}},
+    {"fn": "drgnx-coord-event-add", "args": {"agent": "a1", "kind": "edit", "summary": "no data"}},
+    {"fn": "drgnx-coord-event-add", "args": {"agent": "a2", "kind": "stop", "summary": "stop without the turn flag", "data": {"command": "x"}, "at": 50.0}}
+  ]
+}

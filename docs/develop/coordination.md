@@ -122,6 +122,32 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
 - **Review marks:** `drgnx-coord-review-mark AGENT PATH STATE HASH` and `drgnx-coord-review-marks AGENT` (alist
   path → `(:state :hash :at)`). Accepting or reverting is a review layer only: nothing in the files changes.
 
+## The writer (`runtime/crates/norn`, `runtime/crates/urdr`)
+
+Ratatoskr writes the coordination tables through `norn`; the Lisp in `core/drgnx-coord.el` stays the oracle until it
+is deleted. Rules:
+
+- **Schema 6 only.** `urdr`'s `Mode::ReadWriteExisting { expect_schema, synchronous_full }` opens an existing file
+  read-write. It never creates a file, never migrates and leaves the journal mode alone; `busy_timeout` is 5 s. A
+  missing file is `Error::Missing`, a `meta.schema` other than the expected one is `Error::Schema { found }`, with
+  nothing written. The Lisp side makes and migrates `work.db`.
+- **One thread.** `norn::store::CoordDb` owns the connection on `urdr`'s store thread, so no statement runs on an async
+  worker. `write` runs its closure inside `BEGIN IMMEDIATE` (committed on `Ok`, rolled back on `Err`); `read` runs
+  outside a transaction. The closure gets `&Tx` (the connection, already in the transaction).
+- **Not ready.** Below schema 6 (or missing) a write is `NotReady { schema }`: "work.db is not ready (schema N); the
+  Lisp side makes it". A newer schema is opened read-only; a write is `ReadOnly { schema }`.
+- **Follows the file.** The hub's 2 s schema tick calls `CoordDb::tick`: it opens when not open, and opens again when
+  the file's `(dev, inode)` changed (a removed and re-made `work.db`, R-T14-2).
+- **Events and meta.** `write::event` is `drgnx-coord--event`: the summary is one line of at most 200 characters
+  (`runstav::text::one_line`), data over 4096 characters is stored as `{"truncated": true, "size": N}`, `turn` is 1
+  for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 17 of `drgnx-coord-event-kinds` (a test
+  reads the Lisp list). `write::meta` keeps `log-version`, `seen:AGENT` and `held:AGENT`.
+- **Parity.** `test/fixtures/coord-parity/CASE.input.json` (`setup`, `clock`, `calls`) is run by `gen.el` against the
+  real Lisp functions, which writes `CASE.expect.json` (results and tables); `norn/tests/parity.rs` replays each input
+  against the Rust writers with the same clock. `test/fixtures/work-db-6.sql` is the schema every Rust test starts
+  from. Run `gen.el` by hand in the build container (its header has the commands); the fixtures stay when the Lisp is
+  deleted.
+
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 
 `drgnx-mcp-serve NAME TOOLS` is a small MCP server (stdio, protocol 2025-06-18: initialize, ping, tools/list,

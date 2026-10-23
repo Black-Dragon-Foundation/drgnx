@@ -36,6 +36,12 @@ pub enum Error {
     Closed,
     /// The closure panicked on the store thread.
     Panicked,
+    /// `Mode::ReadWriteExisting`: the file does not exist.
+    Missing,
+    /// `Mode::ReadWriteExisting`: `meta.schema` is not the expected one; nothing was written.
+    Schema { found: u32 },
+    /// A write closure asked for a rollback with an error of its own, which the caller keeps.
+    Aborted,
 }
 
 impl fmt::Display for Error {
@@ -52,6 +58,9 @@ impl fmt::Display for Error {
             Error::ReadOnly => write!(f, "the store is read-only"),
             Error::Closed => write!(f, "the store is closed"),
             Error::Panicked => write!(f, "a store closure panicked"),
+            Error::Missing => write!(f, "the database file does not exist"),
+            Error::Schema { found } => write!(f, "the database is schema {found}, not the expected one"),
+            Error::Aborted => write!(f, "the write was rolled back"),
         }
     }
 }
@@ -76,6 +85,18 @@ impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
     }
+}
+
+/// SQLite's own error type, for callers that convert it (`From<SqliteError>`).
+pub use rusqlite::Error as SqliteError;
+
+/// Whether `e` is SQLite saying the database is busy or locked (another writer held it past the busy timeout).
+pub fn is_busy(e: &Error) -> bool {
+    matches!(
+        e,
+        Error::Sqlite(rusqlite::Error::SqliteFailure(f, _))
+            if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
 }
 
 /// `sqlite3_libversion_number()` of the linked (bundled) SQLite, e.g. 3051003.
