@@ -16,7 +16,9 @@ license = "GPL-3.0-or-later"
 tokio = { version = "1.54", features = ["rt-multi-thread", "net", "io-util", "process", "signal", "sync", "time", "macros", "fs"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: a stored f64 (a grant's expiry, any time in an entity's data) reads back exactly; the default parser
+# may land one ulp off (URDR-SCOPE-GRANT-FLAKE-1)
+serde_json = { version = "1", features = ["float_roundtrip"] }
 schemars = "1.2"
 serde_path_to_error = "0.1"
 serde_ignored = "0.1"
