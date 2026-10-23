@@ -1061,6 +1061,16 @@ port file — and holds no key:
   filter, a daemon path, so auth-source is never read and nothing asks; a key not found is a `hub` notice
   "agents need your P key in the drgnx hub: run AI: Load Keys". The keys and the table go after the subscription's
   answer, so the need-keys a hub sends a new subscriber is about the keys it held before them.
+- **The drop** (design §5.6). When a `gateway/keys` the editor sent is answered without an error
+  (`drgnx-hub--keys-taken`), and after `drgnx-hub-give-key` or an agent's `gateway/register` that carried keys, the
+  editor forgets them: `drgnx-hub--drop-keys` → `drgnx-ai-forget-keys` removes each from `drgnx-ai--keys` (unless a
+  newer key for the provider replaced it meanwhile) and calls `auth-source-forget-all-cached`. `drgnx-hub--transmit` sends
+  `gateway/keys` only on a proven connection, so a key goes only to a hub that proved itself. The environment is
+  left as it is (`drgnx doctor`'s `ai-env-keys` names the variables set). An Emacs that serves the standalone Lisp hub
+  skips the drop: there `drgnx-ai--keys` is the hub's own table. AI: Load Keys (`drgnx-ai-load-keys`) reads the keys
+  as a command and calls `drgnx-hub-hand-over-keys`: sent at once to a proven subscription, else the hub is started
+  and connected and the hand-over that follows takes them. Keyed providers and agent profiles have no direct route
+  (`drgnx-ai-route`, `drgnx-ai-agent-env`): without a hub a request skips the provider and an agent fails closed.
 
 ## The editor's token
 

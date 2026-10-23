@@ -130,10 +130,20 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   again on every reconnect and keeps it in memory only. The search indexer job asks for a token of its own, so it goes
   with the job. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
   waits.
+- **The editor keeps no key once the hub has one.** AI: Load Keys (and onboarding, the Store key button of Agent
+  Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
+  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, the
+  gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
+  runs, a key found waits in memory and goes when the editor connects. A provider with a key is never asked directly,
+  and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
+  hub is not running; agents reach providers through it".
 - **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
   `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
 - **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,
-  so the programs your Emacs starts (shells, `compile`, agents) still see them.
+  so the programs your Emacs starts (shells, `compile`) still see them; agents do not (their environment drops every
+  provider key) and use the copy the hub holds. `drgnx doctor` notes such a key ("OPENROUTER_API_KEY is set in this
+  Emacs's environment; children inherit it; agents use the copy the hub holds"). To keep a key out of shells too, keep
+  it in your Keychain or keyring instead and let AI: Load Keys hand it over.
 
 ## Who an agent is
 

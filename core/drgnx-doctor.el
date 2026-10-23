@@ -101,12 +101,23 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
 (declare-function drgnx-ai-model-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-role "drgnx-ai")
+(declare-function drgnx-ai-providers "drgnx-ai")
 
 (defun drgnx-doctor--ai-up ()
   "The providers the last probe found running."
   (ignore-errors
     (require 'drgnx-ai-probe)
     (mapcar #'car (seq-filter (lambda (e) (plist-get (cdr e) :up)) (drgnx-ai-detected-cached)))))
+
+(defun drgnx-doctor--ai-env-keys ()
+  "The names of the providers' key variables (`:key-env') set in this Emacs's environment, in provider order: names
+only, never a value."
+  (ignore-errors
+    (require 'drgnx-ai)
+    (delete-dups (cl-loop for (_ . p) in (drgnx-ai-providers)
+                          for env = (plist-get p :key-env)
+                          when (and (stringp env) (let ((v (getenv env))) (and v (not (string-empty-p v)))))
+                          collect env))))
 
 ;; Semantic search: SQLite with FTS5, the embedding provider the last probe found, the known projects' indexes.
 ;; A failure becomes a fact (:error), never a crash; nothing here prompts, and the network is asked at most once, for a second.
@@ -391,6 +402,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :window-manager (drgnx-platform-doctor-facts)
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
+           :ai-env-keys (drgnx-doctor--ai-env-keys)
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
            :sandbox (drgnx-doctor--sandbox)
@@ -797,6 +809,20 @@ It only informs: nothing runs in the sandbox yet (phase 6), so the check's statu
                                       (t (list 'ok (format "providers: %s%s" (mapconcat #'symbol-name (append (plist-get f :ai-up) (plist-get f :ai-keys)) ", ")
                                                            (if free (format "; %d MiB GPU free" free) ""))
                                                nil))))))
+
+(defun drgnx-doctor--ai-env-keys-check (names)
+  "The `ai-env-keys' check of NAMES (`drgnx-doctor--ai-env-keys'): an information line when some are set — the key
+stays in this Emacs's environment, its children inherit it, agents use the hub's copy — else ok."
+  (if (null names)
+      (list 'ok "no provider key in this Emacs's environment; the hub holds the keys AI: Load Keys gave it" nil)
+    (let ((one (null (cdr names))))
+      (list 'info
+            (format "%s %s set in this Emacs's environment; children inherit %s; agents use the %s the hub holds"
+                    (string-join names ", ") (if one "is" "are") (if one "it" "them") (if one "copy" "copies"))
+            "to keep a key out of shells and compile commands too, keep it in your Keychain or keyring instead (AI: Load Keys hands it to the hub; docs/guide/security.md)"))))
+
+(drgnx-doctor-define 'ai-env-keys :group "drgnx" :doc "Provider keys in this Emacs's environment (they stay there; the hub holds its own copy)"
+                     :check (lambda (f) (drgnx-doctor--ai-env-keys-check (plist-get f :ai-env-keys))))
 
 (declare-function drgnx-search-setup-mismatch "drgnx-search-setup")
 

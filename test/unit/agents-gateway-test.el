@@ -53,7 +53,7 @@
           (should (string-match-p "editor" (error-message-string err))))
         (should-not (seq-some (lambda (srcs) (seq-some (lambda (s) (and (stringp s) (string-suffix-p ".gpg" s))) srcs)) asked))
         (should (= (plist-get (drgnx-hub-call-sync "status" nil) :registrations) 0))
-        ;; an editor connects: its key is the agents' too (the gateway's, and a direct start's)
+        ;; an editor connects: its key is the agents' too (through the gateway)
         (drgnx-hub-call-sync "gateway/keys" '(:keys (:openrouter "sk-fake-sent")))
         (let ((env (drgnx-agents--env (drgnx-agents-gw-test--session "claude (OpenRouter)"))))
           (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_AUTH_TOKEN=" e)) env))
@@ -94,15 +94,27 @@
       (should-not (drgnx-agent-session-via s))
       (should (= (plist-get (drgnx-hub-call-sync "status" nil) :registrations) 0)))))
 
-(ert-deftest drgnx-agents/without-a-hub-it-goes-direct-and-says-so ()
+(ert-deftest drgnx-agents/a-keyed-profile-without-a-hub-fails-closed ()
+  ;; no hub can be had (starting one is off here): a keyed profile does not start — never directly with the key in this
+  ;; Emacs's environment — and says why, whatever `drgnx-agents-use-gateway' says; an Ollama profile (no key) still goes
+  ;; to Ollama directly and says so
   (drgnx-agents-gw-test--with
-    (let ((said nil))
-      (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () (error "no hub here")))
-                ((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
-        (let* ((s (drgnx-agents-gw-test--session "claude (OpenRouter)")) (env (drgnx-agents--env s)))
-          (should (member "ANTHROPIC_BASE_URL=https://openrouter.ai/api" env))
-          (should (eq (drgnx-agent-session-via s) 'direct))
-          (should (seq-find (lambda (m) (string-match-p "hub" m)) said)))))))
+    (let ((process-environment (append (list (concat "XDG_RUNTIME_DIR=" root "run") "DRGNX_NO_HUB_START=1") process-environment))
+          (said nil))
+      (dolist (use '(t nil))
+        (let ((drgnx-agents-use-gateway use))
+          (dolist (name '("claude (OpenRouter)" "claude (Kimi via OpenRouter)"))
+            (let* ((s (drgnx-agents-gw-test--session name))
+                   (err (should-error (drgnx-agents--env s) :type 'user-error)))
+              (should (string-search "the drgnx hub is not running; agents reach providers through it" (cadr err)))
+              (should-not (string-search "sk-or-x" (cadr err)))
+              (should-not (drgnx-agent-session-via s))))))
+      (let ((drgnx-agents-use-gateway t))
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
+          (let* ((s (drgnx-agents-gw-test--session "claude (Ollama)")) (env (drgnx-agents--env s)))
+            (should (member "ANTHROPIC_AUTH_TOKEN=ollama" env))
+            (should (eq (drgnx-agent-session-via s) 'direct))
+            (should (seq-find (lambda (m) (string-match-p "hub" m)) said))))))))
 
 (ert-deftest drgnx-agents/env-functions-add-strings-only ()
   ;; a function that fails, or returns anything but a list of strings, is reported; the agent still starts with the rest

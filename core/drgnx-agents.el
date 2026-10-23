@@ -550,23 +550,29 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
+(declare-function drgnx-ai-agent-keyed-p "drgnx-ai")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-hub--drop-keys "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-hub-serving-p "drgnx-hub")
 (declare-function drgnx-hub-register "drgnx-hub")
 (defvar drgnx-ai-gateway-kinds)
 
 (defvar drgnx-agents-use-gateway t
-  "Non-nil: agents on OpenRouter, Ollama or Anthropic profiles talk to the hub's gateway (a token, never a key);
-without a hub they go to the provider directly.")
+  "Non-nil: an Ollama agent (a keyless profile) talks to the hub's gateway too, and goes to Ollama directly only when
+no hub can be had; nil: it always goes directly.  For keyed profiles (OpenRouter, Anthropic, Kimi, DeepSeek:
+`drgnx-ai-agent-keyed-p') it means nothing any more: only the hub holds keys, so they always go through its gateway
+\(a token, never a key), and without a hub they do not start.")
 
 (defun drgnx-agents--in-hub-p ()
   "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
   (and (featurep 'drgnx-hub) (drgnx-hub-serving-p)))
 
 (defun drgnx-agents--gateway (s kind &optional model)
-  "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
-no hub can be had (S then goes direct, and says so).  In the standalone Lisp hub, keys are only those editors handed
+  "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token).  When no hub can
+be had a keyed KIND (`drgnx-ai-agent-keyed-p') fails closed with a `user-error' (only the hub holds keys); a keyless
+one (Ollama) gets nil, goes direct and says so.  Keys this command finds go with the registration, and once the hub
+took them this Emacs drops them (`drgnx-hub--drop-keys').  In the standalone Lisp hub, keys are only those editors handed
 over (and the environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says
 how one comes.  In the Lisp backend behind Ratatoskr (`drgnx-hub--behind-front') the front registers it and judges
 the chain and its keys itself; there is no direct route there (the backend holds no key): a refusal fails the start
@@ -603,6 +609,7 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                                (drgnx-hub-call-sync "gateway/register"
                                                     (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
                                                                :keys (or keys (make-hash-table)))))))
+                     (when keys (drgnx-hub--drop-keys keys))     ; the hub holds them now
                      (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
                      r))
                (error
@@ -611,8 +618,11 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                               (if (eq (car err) 'drgnx-hub-front-error) (plist-get (cdr err) :message)
                                 (error-message-string err))))
                 (when restrictions
-                  (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's hub only, which is not available (%s): %s is not started directly without them; start the hub, or remove :openrouter from agents.eld to go direct"
+                  (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's hub only, which is not available (%s): %s is not started without them; start the hub"
                               (error-message-string err) (drgnx-agent-session-name s)))
+                (when (drgnx-ai-agent-keyed-p kind)
+                  (user-error "%s is not started: the drgnx hub is not running; agents reach providers through it (%s)"
+                              (drgnx-agent-session-name s) (error-message-string err)))
                 (setf (drgnx-agent-session-via s) 'direct)
                 (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
                          (drgnx-agent-session-name s))
@@ -624,14 +634,6 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
         (user-error "The drgnx hub did not keep the OpenRouter restrictions (it predates them): %s is not started; restart the hub (`drgnx hub stop', then start an agent)"
                     (drgnx-agent-session-name s)))
       r)))
-
-(defun drgnx-agents--refuse-direct-restrictions (s kind &optional model)
-  "With the gateway turned off, S's agent (profile KIND, MODEL) would reach OpenRouter directly: a `user-error' when
-its chain has an OpenRouter step and restrictions are set (or do not read) — they are never dropped silently."
-  (when (and (memq kind drgnx-ai-gateway-kinds) (assq 'openrouter (drgnx-ai-agent-gateway-chain kind model))
-             (drgnx-agents-openrouter-restrictions))
-    (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's gateway only, which is turned off (drgnx-agents-use-gateway): %s is not started without them; turn the gateway on, or remove :openrouter from agents.eld"
-                (drgnx-agent-session-name s))))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
 
@@ -694,10 +696,10 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
                        (kind (plist-get profile :ai)))
              (require 'drgnx-ai)
              (drgnx-ai-check-agent-model kind (plist-get profile :model))   ; before a gateway token is made
-             (unless drgnx-agents-use-gateway (drgnx-agents--refuse-direct-restrictions s kind (plist-get profile :model)))
              (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model) :small-model (plist-get profile :small-model))
-                                 (not (drgnx-agents--in-hub-p))
-                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
+                                 ;; a keyed kind always: only the hub holds keys
+                                 (and (memq kind drgnx-ai-gateway-kinds)
+                                      (or drgnx-agents-use-gateway (drgnx-ai-agent-keyed-p kind))
                                       (drgnx-agents--gateway s kind (plist-get profile :model)))))
            (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
            (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))

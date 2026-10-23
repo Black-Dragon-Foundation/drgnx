@@ -269,9 +269,13 @@ Entries of `auth-sources` that are plists, such as `(:source (:secrets "Login"))
 `(:source (:macos-keychain-internet default))`, count as the stores they name. And
 even with `auth-sources` set to nil, those commands still read the system's own store (the Keychain on a Mac, the
 keyring on Linux), because that is where onboarding puts the key. Background features
-(ghost text, the hub, agents) never read them — they use the environment or a key this drgnx read earlier. So that
+(ghost text, the hub, agents) never read them — they use the environment or a key the hub was handed earlier. So that
 they have it after a restart, `drgnx open` (which the drgnx app runs) has drgnx read the keys of the providers your
-roles name once per start, a moment after its window shows (macOS may ask whether Emacs may use the Keychain).
+roles name once per start, a moment after its window shows (macOS may ask whether Emacs may use the Keychain), and
+hand them to the hub. Once the hub has taken a key your Emacs forgets it (its memory and auth-source's cache): only
+the hub holds it, and every feature reaches the provider through the hub's gateway. Until a hub runs, a key found
+waits in memory and goes when your Emacs connects. A key in your environment stays there
+([security.md](security.md#where-your-keys-live)).
 **AI: Load Keys** does the same at any time — needed when drgnx was started some other way; ghost text posts a notice
 ("No key for … loaded: AI: Load Keys reads it from the Keychain") when its provider's key is not loaded. The `drgnx` command-line
 tool, which runs in batch Emacs, never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it. In short: the
@@ -366,16 +370,13 @@ other keys (`order`, `sort`, `require_parameters`, `allow_fallbacks`, …) pass 
 body cannot be read as a JSON object (or its `provider` is not one), the gateway answers 400 `invalid_request_error`
 and sends nothing: a request that might not honour them never goes out. Without restrictions the body goes as it was.
 
-They reach only
-the agents that go through the gateway. When restrictions are set and the hub cannot be had (it does not start, its
-socket refuses), an agent with an OpenRouter route does not start: it would reach OpenRouter directly without them. Its
-session says why; start the hub, or remove `:openrouter` from `agents.eld` to go direct. The hub's answer to a
-registration lists the restrictions it kept. A hub started before drgnx had restrictions keeps none, so the agent does
-not start and the session says to restart the hub (`drgnx hub stop`, then start an agent). Without restrictions, an
-agent without a hub goes direct as before. With `drgnx-agents-use-gateway` off, an agent with an OpenRouter route and
-restrictions does not start either (restrictions are never dropped silently); its session says to turn the gateway on
-or remove `:openrouter` from `agents.eld`. Without restrictions, such a route is bound by your OpenRouter account
-settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
+An agent with an OpenRouter route always goes through the gateway, since only the hub holds the key
+([agents.md](agents.md#the-hub-and-the-gateway)); `drgnx-agents-use-gateway` changes nothing for it. When the hub cannot be had (it
+does not start, its socket refuses), the agent does not start, with restrictions or without; its session says why
+(with restrictions set: that they apply through the hub only; start the hub). The hub's answer to a registration
+lists the restrictions it kept. A hub started before drgnx had restrictions keeps none, so the agent does not start
+and the session says to restart the hub (`drgnx hub stop`, then start an agent). Without restrictions, the agents are
+bound by your OpenRouter account settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
 that no allowed provider serves fails with OpenRouter's own error, which the agent shows.
 Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
 and the other settings in `agents.eld` stay.
@@ -388,8 +389,11 @@ and the other settings in `agents.eld` stay.
   and Edit with AI's selection under Vim keys, with the real evil in its own Emacs, and unchanged without them), `test/unit/ai-ask-test.el` (Ask, Choose,
   gptel), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
   `brew`, `ollama`, `lms`, `sysctl` and `security`; the room on a Mac and the models for it).
-- `test/unit/agents-profiles-test.el` — Kimi and DeepSeek profiles: direct and gateway environments, the OpenRouter
-  model chain, the missing-key message, routes on the Claude page, the runner unsetting the keys.
+- `test/unit/ai-keys-test.el` (binary) — after AI: Load Keys hands a key to the hub the editor holds none (its key
+  table, auth-source's cache, gptel, what it sends), the environment is left as it was, and chat, completion,
+  embeddings and the commit message still work through the hub.
+- `test/unit/agents-profiles-test.el` — Kimi and DeepSeek profiles: gateway environments (a token, never a key), the
+  OpenRouter model chain, the missing-key message, routes on the Claude page, the runner unsetting the keys.
 - `test/unit/gateway-openrouter-test.el` -- the restrictions in the request body, other providers untouched, the setting
   in `agents.eld` with its comments, the Routes line and the Change command.
 - `test/live/drgnx-ai-test.el` — in a GUI session: typing, the suggestion as ghost text, Tab takes it; an inline

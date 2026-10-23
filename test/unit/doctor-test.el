@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-doctor)
 (require 'drgnx-macos)   ; so `drgnx-macos-app-dir' is special before a test let-binds it
+(require 'drgnx-ai)      ; its config file defined now, not inside a test's let-bound config table (ai-env-keys)
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
 (defun drgnx-doctor-test--facts (&rest kv)
@@ -987,3 +988,22 @@ what `ratatoskr doctor --json' said)."
         (should (string-search v (nth 1 r)))))
     (dolist (v '("3.6.23" "3.51.3" "3.53.0" nil))
       (should (eq (car (funcall check :emacs-sqlite v)) 'ok)))))
+
+(ert-deftest drgnx-doctor/the-environment-keys-are-noted ()
+  ;; a key the user put in this Emacs's environment stays there (Task 23c, the user's answer 1): the doctor says so in
+  ;; an information line naming the variable, never its value, and unsets nothing
+  (let ((process-environment (append '("OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY")
+                                     process-environment)))
+    (should (equal (plist-get (cdr (assq 'openrouter (drgnx-ai-providers))) :key-env) "OPENROUTER_API_KEY"))
+    (should-not (drgnx-doctor--ai-env-keys))
+    (should (eq (car (drgnx-doctor-check 'ai-env-keys (list :ai-env-keys nil))) 'ok))
+    (let ((process-environment (append '("OPENROUTER_API_KEY=sk-doctor-canary" "MOONSHOT_API_KEY=") process-environment)))
+      (let* ((names (drgnx-doctor--ai-env-keys)) (r (drgnx-doctor-check 'ai-env-keys (list :ai-env-keys names))))
+        (should (equal names '("OPENROUTER_API_KEY")))                  ; an empty value is no key
+        (should (eq (car r) 'info))
+        (should (equal (nth 1 r) "OPENROUTER_API_KEY is set in this Emacs's environment; children inherit it; agents use the copy the hub holds"))
+        (should-not (string-search "sk-doctor-canary" (prin1-to-string r))))
+      (should (equal (getenv "OPENROUTER_API_KEY") "sk-doctor-canary")))   ; left as it was
+    (let ((process-environment (append '("OPENROUTER_API_KEY=sk-a" "DEEPSEEK_API_KEY=sk-b") process-environment)))
+      (should (equal (nth 1 (drgnx-doctor-check 'ai-env-keys (list :ai-env-keys (drgnx-doctor--ai-env-keys))))
+                     "OPENROUTER_API_KEY, DEEPSEEK_API_KEY are set in this Emacs's environment; children inherit them; agents use the copies the hub holds")))))

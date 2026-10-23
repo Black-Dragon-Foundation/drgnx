@@ -489,12 +489,15 @@ LOG/security.calls."
 (ert-deftest drgnx-ai/agent-profiles-get-their-environment-when-they-start ()
   (drgnx-ai-test--with root
     (let ((process-environment (cons "OPENROUTER_API_KEY=sk-or-test" process-environment)))
-      (should (equal (drgnx-ai-agent-env '(:kind claude-openrouter))
-                     '("ANTHROPIC_BASE_URL=https://openrouter.ai/api" "ANTHROPIC_AUTH_TOKEN=sk-or-test" "ANTHROPIC_API_KEY=")))
-      (should (equal (drgnx-ai-agent-env '(:kind claude-ollama))
+      ;; a keyed kind goes through the hub's gateway with a token of its own, never with the key here
+      (should (equal (drgnx-ai-agent-env '(:kind claude-openrouter) '(:url "http://127.0.0.1:9/a/1" :token "agent-token"))
+                     '("ANTHROPIC_BASE_URL=http://127.0.0.1:9/a/1" "ANTHROPIC_AUTH_TOKEN=agent-token" "ANTHROPIC_API_KEY=")))
+      ;; without the hub it is not started: said, never sent direct with the key
+      (let ((err (should-error (drgnx-ai-agent-env '(:kind claude-openrouter)) :type 'user-error)))
+        (should (string-search "agents reach providers through it" (cadr err))))
+      (should (equal (drgnx-ai-agent-env '(:kind claude-ollama))                          ; a local runner: direct, keyless
                      '("ANTHROPIC_BASE_URL=http://127.0.0.1:11434" "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY=")))
-      (should-not (drgnx-ai-agent-env '(:kind subscription))))                             ; its own login, never read
-    (should-error (drgnx-ai-agent-env '(:kind claude-openrouter)) :type 'user-error)))     ; no key: said, not sent empty
+      (should-not (drgnx-ai-agent-env '(:kind subscription))))))                           ; its own login, never read
 
 (ert-deftest drgnx-ai/an-agent-profile-names-its-kind-and-gets-the-environment-at-start ()
   (require 'drgnx-agents)
@@ -534,7 +537,8 @@ LOG/security.calls."
 
 (ert-deftest drgnx-ai/load-keys-reads-the-roles-keys-as-a-command-and-keeps-them ()
   ;; The keys of the providers the roles name, through the sources a command may use (the Keychain); then the
-  ;; background (ghost text: not interactive) has them.  Local runners have no key: nothing is read for them.
+  ;; background (ghost text: not interactive) has them.  Local runners have no key: nothing is read for them.  No hub
+  ;; runs here, so they wait in memory for it; once it takes them they are dropped (ai-keys-test.el).
   (drgnx-ai-test--with root
     (drgnx-ai-test--write (concat root "config/ai.eld")
                           '(:version 1 :roles ((complete (openrouter . "m") (ollama . "c")) (chat (openrouter . "m")))))

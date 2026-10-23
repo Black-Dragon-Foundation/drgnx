@@ -8,7 +8,9 @@
 ;; (.drgnx/ai.eld); roles (complete, edit, chat, embed, agent) are fallback chains of (PROVIDER . MODEL).  Both files
 ;; are config files (`drgnx-config': a mistake keeps the last good providers; a project's file is read-only, 64 KiB).
 ;; Keys come from where the user keeps them — the environment, then auth-source (the macOS Keychain and the Linux
-;; keyring included, for commands the user ran) — when they are needed.  drgnx writes a key in one place only, that
+;; keyring included, for commands the user ran) — and go to the hub, which alone holds them: once the hub has taken
+;; a key this Emacs forgets it, and every request to a provider with a key goes through the hub's gateway with the
+;; editor token (design §5.6).  Keys in the environment stay there.  drgnx writes a key in one place only, that
 ;; Keychain or keyring, and only when the user asks (`drgnx-ai-store-key'); never in a command line, a log or a
 ;; file.  Subscription CLIs (Claude Code, Codex) are only launched: their logins are theirs.  See docs/guide/ai.md.
 
@@ -80,7 +82,9 @@ it when both fit, else the 3B, else the 1.5B too.  ROOM nil: as little as can be
          (name (lambda (m) (if (eq provider 'lmstudio) (nth 1 (assoc m drgnx-ai-lmstudio-models)) m))))
     (list (cons 'complete (funcall name small)) (cons 'edit (funcall name big)) (cons 'chat (funcall name big)))))
 
-(defvar drgnx-ai--keys (make-hash-table :test #'eq) "Keys found this session: provider → key (kept in memory only).")
+(defvar drgnx-ai--keys (make-hash-table :test #'eq)
+  "Keys found this session that the hub has not taken yet: provider → key, in memory only.  The hand-over sends them
+\(`drgnx-hub--held-keys'); once the hub took one it goes from here (`drgnx-ai-forget-keys').")
 
 ;;;; Configuration
 
@@ -277,7 +281,10 @@ and a Secret Service answers on it (`drgnx-ai--secret-service-p').  A batch Emac
 file it is asked to read may still ask for its passphrase on standard input.  With `auth-sources' nil an
 interactive command still gets the system's store (the Keychain, the keyring).
 auth-source's own cache is not used: it is keyed by the search alone, so a miss from a source that was left
-out would hide the key for hours."
+out would hide the key for hours.
+Only the hand-over uses the key itself (AI: Load Keys, a command that finds one, onboarding, an agent's registration):
+a key found in auth-source waits in `drgnx-ai--keys' until the hub takes it, and is forgotten then.  Every other
+caller only asks whether there is one."
   (let ((p (drgnx-ai-provider id)))
     (or (and (plist-get p :key-env) (let ((v (getenv (plist-get p :key-env)))) (and v (not (string-empty-p v)) v)))
         (gethash id drgnx-ai--keys)
@@ -297,12 +304,19 @@ out would hide the key for hours."
             (when key (puthash id key drgnx-ai--keys))
             key)))))
 
-;;;; The editor's requests go through the hub's gateway (design call 15)
+(declare-function auth-source-forget-all-cached "auth-source")
 
-(defvar drgnx-ai-via-gateway t
-  "Non-nil: a request to a provider with a `:key-env' goes to the hub's gateway (`/p/PROVIDER/…') with the editor
-token, and the hub adds the key.  Keyless providers (local runners) always go direct.  Tests that need no hub bind it
-nil.")
+(defun drgnx-ai-forget-keys (keys)
+  "The hub took KEYS (:PROVIDER KEY…) over a connection that proved itself: this Emacs keeps none of them.  Each one
+still waiting in `drgnx-ai--keys' goes (a key found since, for the same provider, stays until it goes too), and
+auth-source's cache is emptied.  The environment is left as it is: keys the user put there stay (docs/guide/security.md)."
+  (cl-loop for (k v) on keys by #'cddr
+           when (keywordp k)
+           do (let ((id (intern (substring (symbol-name k) 1))))
+                (when (equal (gethash id drgnx-ai--keys) v) (remhash id drgnx-ai--keys))))
+  (when (featurep 'auth-source) (auth-source-forget-all-cached)))
+
+;;;; The editor's requests go through the hub's gateway (design call 15)
 
 (define-error 'drgnx-ai-gateway-unavailable "drgnx hub is starting; try again")
 
@@ -316,8 +330,9 @@ the answer anyway), or a batch process, never a daemon path."
   (and (not inhibit-interaction) (or interactive waits noninteractive) t))
 
 (defun drgnx-ai-gateway-p (id)
-  "Whether requests to provider ID go through the gateway: it has a key and `drgnx-ai-via-gateway' is on."
-  (and drgnx-ai-via-gateway (plist-get (drgnx-ai-provider id) :key-env) t))
+  "Whether requests to provider ID go through the gateway: it has a key (only the hub holds keys; a keyless local
+runner is asked directly)."
+  (and (plist-get (drgnx-ai-provider id) :key-env) t))
 
 (defun drgnx-ai-gateway-credentials (&optional interactive waits)
   "(URL . TOKEN) for the gateway: the base address and the editor token.  INTERACTIVE as for `drgnx-ai-request'; a
@@ -350,8 +365,6 @@ or nil for a keyless provider) — or nil when the provider needs a key nobody h
 `drgnx-ai-gateway-unavailable' when the gateway has no token yet."
   (let ((p (drgnx-ai-provider id)))
     (cond ((not (plist-get p :key-env)) (list :url (plist-get p :url)))
-          ((not drgnx-ai-via-gateway)
-           (when-let* ((key (drgnx-ai-key id interactive))) (list :url (plist-get p :url) :key key)))
           (t
            ;; the token first: waiting for the hub also brings the list of the keys it holds
            (let* ((cred (drgnx-ai-gateway-credentials interactive waits))
@@ -364,18 +377,26 @@ or nil for a keyless provider) — or nil when the provider needs a key nobody h
                        (and (eq held :unknown) (drgnx-ai-key id nil)))
                (list :url (format "%s/p/%s" (string-remove-suffix "/" (car cred)) id) :key (cdr cred))))))))
 
+(declare-function drgnx-hub-hand-over-keys "drgnx-hub-client")
+
 (defun drgnx-ai-load-keys ()
   "Read the keys of the providers the roles name, as a command does — the Keychain or the keyring may be asked
-\(`drgnx-ai-key' with INTERACTIVE) — and keep them in memory, for the features that never ask: ghost text, the hub,
-agents.  Returns the ids that have a key."
+\(`drgnx-ai-key' with INTERACTIVE) — and hand them to the hub (`drgnx-hub-hand-over-keys'), which holds them for every
+feature that never asks: ghost text, chat, agents.  This Emacs forgets each key once the hub has taken it; until then
+\(no hub yet) they wait in memory and go when it connects.  Returns the ids that have a key."
   (interactive)
   (let* ((ids (delete-dups (mapcar #'car (apply #'append (mapcar (lambda (r) (drgnx-ai-role (car r))) drgnx-ai-default-roles)))))
          (keyed (seq-filter (lambda (id) (plist-get (drgnx-ai-provider id) :key-env)) ids))
          (found (seq-filter (lambda (id) (drgnx-ai-key id t)) keyed))
-         (missing (seq-difference keyed found)))
+         (missing (seq-difference keyed found))
+         (why (when found
+                (require 'drgnx-hub-client)
+                (condition-case err (progn (drgnx-hub-hand-over-keys) nil) (error (error-message-string err))))))
     (when (called-interactively-p 'interactive)
       (message "%s" (cond ((null keyed) "AI: no provider in your roles needs a key")
-                          (t (string-join (delq nil (list (and found (format "AI keys loaded: %s" (mapconcat #'symbol-name found ", ")))
+                          (t (string-join (delq nil (list (and found (format "AI keys loaded: %s, %s" (mapconcat #'symbol-name found ", ")
+                                                                             (if why (format "for the drgnx hub once it runs (%s)" why)
+                                                                               "handed to the drgnx hub")))
                                                           (and missing (format "no key found for %s (docs/guide/ai.md#keys)"
                                                                                (mapconcat #'symbol-name missing ", ")))))
                                           "; ")))))
@@ -553,14 +574,17 @@ profile's) names the model of the one provider of `claude-moonshot', `claude-dee
     ('claude-moonshot (list (cons 'moonshot model)))
     ('claude-deepseek (list (cons 'deepseek model)))))
 
-(defun drgnx-ai--agent-bearer-env (id name interactive)
-  "The environment of an agent on provider ID's own Anthropic-compatible API: its URL and its key as the bearer
-token (`ANTHROPIC_AUTH_TOKEN'), `ANTHROPIC_API_KEY' empty.  NAME is how the error calls the provider."
-  (let* ((p (drgnx-ai-provider id))
-         (key (or (drgnx-ai-key id interactive)
-                  (user-error "No %s key: set %s, or add one to auth-source for %s" name (plist-get p :key-env)
-                              (url-host (url-generic-parse-url (plist-get p :url)))))))
-    (list (concat "ANTHROPIC_BASE_URL=" (plist-get p :url)) (concat "ANTHROPIC_AUTH_TOKEN=" key) "ANTHROPIC_API_KEY=")))
+(defconst drgnx-ai--agent-providers
+  '((claude-openrouter . openrouter) (claude-ollama . ollama) (claude-anthropic . anthropic)
+    (claude-moonshot . moonshot) (claude-deepseek . deepseek))
+  "Each gateway kind's own provider: the one whose key decides whether the kind is keyed (`drgnx-ai-agent-keyed-p').")
+
+(defun drgnx-ai-agent-keyed-p (kind)
+  "Whether agents of profile KIND need a provider key: its provider has a `:key-env'.  Such an agent reaches its
+provider only through the hub's gateway, which holds the key (`drgnx-agents-use-gateway' does not change that); a
+keyless one (Ollama) may go direct."
+  (when-let* ((id (alist-get kind drgnx-ai--agent-providers)))
+    (and (plist-get (drgnx-ai-provider id) :key-env) t)))
 
 (defun drgnx-ai-check-agent-model (kind model)
   "Signal a `user-error' when an agent of KIND needs a MODEL and has none: the vendors' own APIs
@@ -568,16 +592,17 @@ token (`ANTHROPIC_AUTH_TOKEN'), `ANTHROPIC_API_KEY' empty.  NAME is how the erro
   (when (and (memq kind '(claude-moonshot claude-deepseek)) (not (and (stringp model) (not (string-empty-p model)))))
     (user-error "The %s agent profile needs a :model (the vendor's model name)" kind)))
 
-(defun drgnx-ai-agent-env (profile &optional interactive gateway)
+(defun drgnx-ai-agent-env (profile &optional gateway)
   "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …, :model …, :small-model …) starts with,
-resolved now.  GATEWAY (:url :token): the agent talks to the gateway with its token, and never sees a key.  With a
-:model every route also names it for Claude Code's main, Sonnet, Opus and subagent models, and :small-model (else the
-:model) for the small background one: `ANTHROPIC_MODEL', `ANTHROPIC_DEFAULT_SONNET_MODEL',
-`ANTHROPIC_DEFAULT_OPUS_MODEL', `CLAUDE_CODE_SUBAGENT_MODEL', `ANTHROPIC_DEFAULT_HAIKU_MODEL' (Claude Code's
-current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A subscription CLI gets nothing: it uses its own
-login, which drgnx never reads."
+resolved now.  GATEWAY (:url :token): the agent talks to the gateway with its token, and never sees a key.  A keyed
+kind (`drgnx-ai-agent-keyed-p') without GATEWAY is a `user-error': only the hub holds keys, so it fails closed; an
+Ollama agent without it goes to Ollama directly.  With a :model every route also names it for Claude Code's main,
+Sonnet, Opus and subagent models, and :small-model (else the :model) for the small background one:
+`ANTHROPIC_MODEL', `ANTHROPIC_DEFAULT_SONNET_MODEL', `ANTHROPIC_DEFAULT_OPUS_MODEL', `CLAUDE_CODE_SUBAGENT_MODEL',
+`ANTHROPIC_DEFAULT_HAIKU_MODEL' (Claude Code's current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A
+subscription CLI gets nothing: it uses its own login, which drgnx never reads."
   (drgnx-ai-check-agent-model (plist-get profile :kind) (plist-get profile :model))
-  (let ((env (drgnx-ai--agent-route-env profile interactive gateway))
+  (let ((env (drgnx-ai--agent-route-env profile gateway))
         (model (plist-get profile :model)))
     (if (and env (stringp model))
         (append env (mapcar (lambda (name) (concat name "=" model))
@@ -586,24 +611,16 @@ login, which drgnx never reads."
                 (list (concat "ANTHROPIC_DEFAULT_HAIKU_MODEL=" (or (plist-get profile :small-model) model))))
       env)))
 
-(defun drgnx-ai--agent-route-env (profile interactive gateway)
+(defun drgnx-ai--agent-route-env (profile gateway)
   "`drgnx-ai-agent-env' without the model variables."
   (pcase (plist-get profile :kind)
     ((and kind (guard gateway) (guard (memq kind drgnx-ai-gateway-kinds)))
      (list (concat "ANTHROPIC_BASE_URL=" (plist-get gateway :url)) (concat "ANTHROPIC_AUTH_TOKEN=" (plist-get gateway :token))
            "ANTHROPIC_API_KEY="))
-    ('claude-anthropic
-     (list (concat "ANTHROPIC_API_KEY="
-                   (or (drgnx-ai-key 'anthropic interactive)
-                       (user-error "No Anthropic API key: set ANTHROPIC_API_KEY, or add one to auth-source for api.anthropic.com")))))
-    ('claude-openrouter
-     (let ((key (or (drgnx-ai-key 'openrouter interactive)
-                    (user-error "No OpenRouter key: set OPENROUTER_API_KEY, or add one to auth-source for openrouter.ai"))))
-       (list "ANTHROPIC_BASE_URL=https://openrouter.ai/api" (concat "ANTHROPIC_AUTH_TOKEN=" key) "ANTHROPIC_API_KEY=")))
+    ((pred drgnx-ai-agent-keyed-p)
+     (user-error "The drgnx hub is not running; agents reach providers through it"))
     ('claude-ollama
      (list (concat "ANTHROPIC_BASE_URL=" (plist-get (drgnx-ai-provider 'ollama) :url)) "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY="))
-    ('claude-moonshot (drgnx-ai--agent-bearer-env 'moonshot "Moonshot" interactive))
-    ('claude-deepseek (drgnx-ai--agent-bearer-env 'deepseek "DeepSeek" interactive))
     (_ nil)))
 
 ;;;; Choosing (written to ai.eld: providers and models, never a key)
@@ -625,8 +642,9 @@ has a mistake, or was written by a newer drgnx, is never replaced: the error (`d
 (defvar gptel-model)
 
 (defun drgnx-ai-gptel-spec (id model)
-  "How to make provider ID's gptel backend for MODEL: (FUNCTION NAME . ARGS).  A key is a function asked
-when gptel sends, never a stored string."
+  "How to make provider ID's gptel backend for MODEL: (FUNCTION NAME . ARGS).  A provider with a key is the hub's
+gateway, and gptel's key is the editor token, a function asked when gptel sends, never a stored string; a keyless one
+is asked directly."
   (let* ((p (drgnx-ai-provider id))
          (gateway (and (drgnx-ai-gateway-p id) (drgnx-ai-gateway-credentials)))   ; signals when the hub has no token yet
          (u (url-generic-parse-url (if gateway (format "%s/p/%s" (string-remove-suffix "/" (car gateway)) id) (plist-get p :url))))
@@ -638,8 +656,7 @@ when gptel sends, never a stored string."
       (kind (append (list 'gptel-make-openai name :host host :protocol (url-type u)
                           :endpoint (concat (if (eq kind 'llamacpp) (concat path "/v1") path) "/chat/completions")
                           :models (list (intern model)) :stream t)
-                    (cond (gateway (list :key (lambda () (cdr (drgnx-ai-gateway-credentials t)))))
-                          ((plist-get p :key-env) (list :key (lambda () (drgnx-ai-key id t))))))))))
+                    (and gateway (list :key (lambda () (cdr (drgnx-ai-gateway-credentials t))))))))))
 
 (defvar drgnx-ai--gptel-ours nil "The gptel backend drgnx made last.")
 (defvar gptel--openai)
