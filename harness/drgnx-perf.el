@@ -116,20 +116,13 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
 (defvar drgnx-perf--watchdog-applied nil "Non-nil once $DRGNX_PERF_WATCHDOG has been applied in this session.")
 (defvar drgnx-perf--stalls nil "While recording: the stall records the watchdog resolved, newest first.")
 
-(defun drgnx-perf--watchdog-ms (v)
-  "The watchdog threshold in ms $DRGNX_PERF_WATCHDOG's value V asks for, or nil for `off'."
-  (cond ((equal v "off") nil)
-        ((equal v "on") 1)
-        ((and v (string-match-p "\\`[1-9][0-9]*\\'" v)) (string-to-number v))
-        (t 100)))
-
 (defun drgnx-perf--watchdog-env ()
   "Apply $DRGNX_PERF_WATCHDOG once per session: unset or `default' runs `nidhogg-watchdog-mode' at 100 ms (the shipped
-configuration), `on' at 1 ms (the stress case), a number of ms at that threshold (16: the gates' `stalls-ge16'
-rows), `off' leaves it off.  Without the feature, nothing."
+configuration), `on' at 1 ms (the stress case), `off' leaves it off.  Without the feature, nothing."
   (when (and (not drgnx-perf--watchdog-applied) (featurep 'nidhogg-watchdog))
     (setq drgnx-perf--watchdog-applied t)
-    (let ((ms (drgnx-perf--watchdog-ms (getenv "DRGNX_PERF_WATCHDOG"))))
+    (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
+           (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100))))
       (when (and (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode) (nidhogg-watchdog-mode -1))
       (when ms
         (setq nidhogg-watchdog-threshold ms)
