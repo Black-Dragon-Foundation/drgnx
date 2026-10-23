@@ -674,8 +674,9 @@ is `not-allowed` even though its class is `user`.
   op's `{conflict}`, `{lease_lost}` or `{proposed}`.
 
 **Cards the store settles** (`cards/settle`): an `access` card's choices are `session`, `project`, `profile` (a read
-grant of the target project for the requesting session, its project or its profile, made in the settle's tx) and
-`refuse`; `resolved` is `refuse`; the requester gets a message either way. A `close` card's are `accept` (the task
+grant of the target project for the requesting session, its project or its profile, made in the settle's tx; a
+`session` grant expires a day after the settle, since the session's end is not known then and a session id is never
+used again, while the other two last until revoked) and `refuse`; `resolved` is `refuse`; the requester gets a message either way. A `close` card's are `accept` (the task
 done as the user, its lease cleared, if it is still at the card's version: else the conflict, and the card stays
 open) and `reject` (`resolved` too: nothing changes, the proposing agent gets a notice). Any other choice is
 `invalid-params`. The backend's connection settles an access card only by refusing and a close card only by

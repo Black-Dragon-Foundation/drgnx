@@ -917,6 +917,11 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
 /// An access card's choices that make a grant.
 const GRANT_CHOICES: [&str; 3] = ["session", "project", "profile"];
 
+/// How long a `session` grant from an access card lasts at most (Task 15b: `expires` = the session's end). The end
+/// is not known when the card is settled; a session id is never used again, so the grant opens nothing once its
+/// session is gone, and the expiry bounds the row, which would otherwise stay active for good.
+const SESSION_GRANT_SECS: f64 = 86_400.0;
+
 fn check_access(choice: &str, backend: bool) -> Result<(), Error> {
     match choice {
         c if GRANT_CHOICES.contains(&c) && backend => Err(not_allowed(
@@ -1012,7 +1017,8 @@ pub(crate) fn settle_access(
             let what = project_n(tx.sql(), &target)?
                 .ok_or_else(|| refused(format!("no project {target} in the store: refuse it")))?;
             let shown = who.to_string();
-            let g = grants::create(tx, who, What::Project(what), Access::Read, None)?;
+            let expires = matches!(who, Who::Session(_)).then_some(now + SESSION_GRANT_SECS);
+            let g = grants::create(tx, who, What::Project(what), Access::Read, expires)?;
             format!("granted ({}): {shown} may read {target}", g.id)
         }
         None => format!("refused: no access to {target}"),
@@ -2153,6 +2159,36 @@ mod tests {
         assert!(r["reverted"].is_object(), "{r}");
         let title = text_of(&w, "select title from entity where kind = 'task'").await;
         assert_eq!(title, "first");
+    }
+
+    /// Review finding 10 (Task 15b: `expires` = the session's end for `session`): a session grant from an access card
+    /// expires; a project or profile grant lasts until it is revoked.
+    #[tokio::test]
+    async fn a_session_grant_from_an_access_card_expires() {
+        let (_dir, w, _, _) = fixture().await;
+        let at = now();
+        let card = access_card(&w, Some("p1")).await;
+        settle(&w, &user(false), card, "session".into(), at)
+            .await
+            .unwrap();
+        let card = access_card(&w, Some("p1")).await;
+        settle(&w, &user(false), card, "project".into(), at)
+            .await
+            .unwrap();
+        let gs = grants_now(&w).await;
+        let session = gs
+            .iter()
+            .find(|g| g.who == Who::Session("s1".into()))
+            .unwrap();
+        let ends = session.expires.expect("a session grant expires");
+        assert!(ends > at, "{ends} after {at}");
+        assert!(ends <= at + SESSION_GRANT_SECS, "a day at most: {ends}");
+        assert!(session.active(at) && !session.active(ends));
+        let project = gs
+            .iter()
+            .find(|g| matches!(g.who, Who::Project(_)))
+            .unwrap();
+        assert_eq!(project.expires, None);
     }
 
     #[test]
