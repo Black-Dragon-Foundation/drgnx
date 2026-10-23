@@ -330,6 +330,16 @@ overrides (no fsmonitor, no hook, no pager, no `ext::`, `--no-optional-locks`), 
 (`PATH`, `HOME`, the locale, `TMPDIR`), stdin closed, killed after 3 s (manager's call 10). The worktree is looked up
 on each call; the Lisp server found it once.
 
+**Writes by `job.rs`** (`send_message`, `record_decision`, `claim_task`, `update_task`, `complete_task`,
+`escalate`) are one transaction each: the writer, then the agent's `held:ID` count (a held write adds one, any other
+write clears it), then `coord/notify`. A write made from an old `seen_version` is held, nothing written, and the answer
+is `HELD: …` with the decisions since (`changes`, newest first). A recipient is `user`, an agent of the caller's job,
+or a hub session named by id or name (asked last); an outside agent's `send_message` counts as a report.
+`read.rs` has `read_inbox` (its rows are as they were read, then marked `read`), `ack`, `read_decisions` (the caller's
+`seen:ID` is written only when it changed), `task_status` and `work_status`: the work tracker's plans from the `node`
+and `edge` tables, read-only, sorted by path, with the counts of `drgnx-work-counts`. The size of `tools/list` is
+measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byte (about 6k-token) budget.
+
 **Where Rust and Lisp differ, on purpose:**
 - an identity's error texts name the agent's id instead of `DRGNX_AGENT`;
 - a missing or ill-typed argument is a tool error with its path (contract Task 10, amended), before the tool runs;

@@ -1,0 +1,18 @@
+{
+  "setup": [
+    "insert into job values ('j1', 'Escalate', null, null, 'running', 1.0, null)",
+    "insert into jtask (id, job, n, title, role, status, agent, lease_until) values ('j1#1', 'j1', 1, 'One', 'implement', 'running', 's-1', 9000.0)"
+  ],
+  "clock": [],
+  "tables": ["message"],
+  "calls": [
+    {"tool": "record_decision", "now": 400.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "wait", "subject": "A", "reason": "r", "seen_version": 0}},
+    {"tool": "escalate", "now": 401.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"subject": "Clash", "text": "two plans want a.rs", "seen_version": 0}},
+    {"tool": "escalate", "now": 402.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"subject": "Clash", "text": "two plans want a.rs", "seen_version": 1}},
+    {"tool": "escalate", "now": 403.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"subject": " ", "text": "x", "seen_version": 1}},
+    {"tool": "escalate", "now": 404.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"subject": "S", "text": "\n", "seen_version": 1}},
+    {"tool": "escalate", "now": 405.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"subject": "S", "text": "t", "seen_version": 1}},
+    {"tool": "escalate", "now": 406.5, "identity": null, "args": {"subject": "S", "text": "t", "seen_version": 1}},
+    {"tool": "escalate", "now": 407.5, "identity": {"agent": "s-3"}, "args": {"subject": "No job", "text": "t", "seen_version": 1}}
+  ]
+}
