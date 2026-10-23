@@ -139,11 +139,12 @@ chain without reading any socket, finished them while the harness's next call go
 
 (defun drgnx-perf-run--live-setup-form ()
   "The live-view workload's setup: websocket (from the user's packages if need be), the mock browser as the browser
-for agents, the Live view open, and the session functions it uses."
+for agents, the Live view open, the blank-frame count, and the session functions it uses."
   (prin1-to-string
    `(progn
       (unless (require 'websocket nil t)
-        (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+        ;; the lab's $DRGNX_USER_ELPA, put in here: the session does not inherit it
+        (let* ((elpa (expand-file-name (or ,(drgnx-perf-run--user-elpa) "~/.config/emacs/elpa")))
                (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`websocket-[0-9]"))))))
           (unless dir (error "The Live view needs the websocket package"))
           (add-to-list 'load-path dir)
@@ -211,11 +212,37 @@ for agents, the Live view open, and the session functions it uses."
             (set-window-buffer (split-window editor nil 'right) (drgnx-perf--live-view)))
           (select-window editor))
         (unless drgnx-perf--live-timer (setq drgnx-perf--live-timer (run-with-timer 0 (/ 1.0 30) #'drgnx-perf--live-frame)))
-        (setq drgnx-perf--live-drawn (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view))))
+        (setq drgnx-perf--live-drawn (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)))
+        (setq drgnx-perf--live-blank 0
+              drgnx-perf--live-seen (plist-get (drgnx-perf--live-images) :deferred))
+        (add-hook 'pre-redisplay-functions #'drgnx-perf--live-blank-sample)
+        (advice-add 'drgnx-live--draw-frame :before #'drgnx-perf--live-blank-sample))
+      ;; "No blank frame" (off-the-main-thread design §17.6): with Nidhogg's image worker a frame's decode may outlast
+      ;; the redisplay's wait budget; its entry is then pending and draws the last frame's picture (the stand-in) or
+      ;; nothing.  Pending entries are made only inside a redisplay, so before the next one (and before the next frame
+      ;; replaces the image) the image counters tell whether the last redisplay drew a pending entry without a
+      ;; stand-in; each newly deferred decode is judged once.  Without the worker nothing defers: 0.
+      (defvar drgnx-perf--live-blank 0 "Redisplays that drew a frame's space with no picture.")
+      (defvar drgnx-perf--live-seen 0 "The image worker's deferred count already judged.")
+      (defun drgnx-perf--live-images ()
+        (and (fboundp 'nidhogg-workers--test-image-info) (nidhogg-workers--test-image-info)))
+      (defun drgnx-perf--live-blank-sample (&rest _)
+        (when-let* ((i (drgnx-perf--live-images)))
+          (when (and (> (plist-get i :deferred) (or drgnx-perf--live-seen 0))
+                     (> (plist-get i :pending) (plist-get i :standing)))
+            (setq drgnx-perf--live-blank (1+ drgnx-perf--live-blank)))
+          (setq drgnx-perf--live-seen (plist-get i :deferred))))
+      (defun drgnx-perf--live-measure ()
+        (let ((i (drgnx-perf--live-images)))
+          (list :live (list :blank drgnx-perf--live-blank
+                            :frames (- (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)) drgnx-perf--live-drawn)
+                            :deferred (or (plist-get i :deferred) 0)))))
       (defun drgnx-perf--live-check ()
         "Frames were drawn while the keys were typed."
         (and (>= (- (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)) drgnx-perf--live-drawn) 5) t))
       (defun drgnx-perf--live-teardown ()
+        (remove-hook 'pre-redisplay-functions #'drgnx-perf--live-blank-sample)
+        (advice-remove 'drgnx-live--draw-frame #'drgnx-perf--live-blank-sample)
         (when (timerp drgnx-perf--live-timer) (cancel-timer drgnx-perf--live-timer))
         (setq drgnx-perf--live-timer nil)
         (when-let* ((v (drgnx-perf--live-view)))
@@ -421,6 +448,11 @@ order.  A name that is no workload is an error: a typo must not run nothing and 
   "Non-nil when $DRGNX_USER_ELPA holds an eat package (the terminal workloads can then run in the container)."
   (let ((elpa (drgnx-perf-run--user-elpa)))
     (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`eat-[0-9.]+\\'") t)))
+
+(defun drgnx-perf-run--websocket-elpa-p ()
+  "Non-nil when $DRGNX_USER_ELPA holds a websocket package (the Live view workload can then run in the container)."
+  (let ((elpa (drgnx-perf-run--user-elpa)))
+    (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`websocket-[0-9]") t)))
 
 (defun drgnx-perf-run--terminal-setup-form (command &rest switches)
   "The terminal workloads' setup: eat (from the user's packages if need be) and the session functions they use.
@@ -646,6 +678,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :setup ,(drgnx-perf-run--live-setup-form)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-perf--live-arm) t)")
        :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
+       :measure "(drgnx-perf--live-measure)"
        :check "(drgnx-perf--live-check)"
        :teardown ,(concat "(progn (drgnx-perf--live-teardown) " kill-fixture ")"))
       ;; opening the Claude Code settings page on a 5 MB .claude.json, 50 MCP servers and 200 skills: drawn, no process
@@ -1100,8 +1133,9 @@ fail the whole run; they still run on a host.  Each is also in `drgnx-perf-run-u
 
 (defun drgnx-perf-run--container-skip (workload)
   "Why WORKLOAD is left out in the container (`drgnx-perf-run-container-skipped'), or nil.  The terminal workloads
-run when $DRGNX_USER_ELPA holds eat (`bin/drgnx' mounts it in the perf tier)."
-  (unless (and (memq workload '(terminal-typing terminal-output)) (drgnx-perf-run--eat-elpa-p))
+run when $DRGNX_USER_ELPA holds eat (`bin/drgnx' mounts it in the perf tier), the Live view when it holds websocket."
+  (unless (or (and (memq workload '(terminal-typing terminal-output)) (drgnx-perf-run--eat-elpa-p))
+              (and (eq workload 'live-view) (drgnx-perf-run--websocket-elpa-p)))
     (cdr (assq workload drgnx-perf-run-container-skipped))))
 
 (defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
