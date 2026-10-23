@@ -199,6 +199,23 @@ them), `coord/decide` `{ok, n, status, version}`, `{held, version, changes}` or 
 `store.writes`, sends its new events to subscribers and, unless the backend made it, tells the backend
 (`coord/notify`, coalesced) so it delivers.
 
+### The editor writes through the hub
+
+The cockpit (`modules/tools/drgnx-cockpit*.el`) writes nothing to `work.db`; its five writes are hub calls
+(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits):
+
+| Where | Call |
+|---|---|
+| answering an ask card (`drgnx-cockpit-answer`) | `cards/settle`; `{settled: false}` says "That card was settled already" |
+| an answer to a message, a message to an agent (feed, cards, edits) | `messages/send`; a held one says why |
+| an answer closes its question | `events/add` (the `answer` event), then `messages/mark` `acted`, in that order |
+| a comment or a revert request in the edits pane | `messages/send`, then `events/add` once it was sent |
+| accepting a file | one `review/mark` with its `accept` event |
+
+An error is said once as "drgnx hub: TEXT". The editor sends no `coord/notify` after a send: the front notifies
+itself after a write. Reads stay on the read-only path. `drgnx-cockpit/no-writer-call-in-the-modules` walks the cockpit
+modules and `core/drgnx-cockpit-model.el` for a `drgnx-coord-` writer or a `sqlite-execute`.
+
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 
 `drgnx-mcp-serve NAME TOOLS` is a small MCP server (stdio, protocol 2025-06-18: initialize, ping, tools/list,

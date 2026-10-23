@@ -88,6 +88,28 @@ the state store sees it."
   "Wait (processes run) until PRED is non-nil: PRED's value (`drgnx-test-wait', at least 30 s or SECS)."
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the cockpit fixture's predicate"))
 
+(defun drgnx-cockpit-fixture-hub-write (method params)
+  "What the hub answers the editor's five writes (`cards/settle', `messages/send', `messages/mark', `events/add',
+`review/mark'), applied to the fixture's store with the Lisp writers (the hub's own writer is Rust: its rows live in
+the conformance suite): the result, or `:none' for any other METHOD."
+  (pcase method
+    ("cards/settle" (list :settled (and (drgnx-coord-card-settle (plist-get params :card) (plist-get params :choice)) t)))
+    ("messages/send" (drgnx-coord-send :job (plist-get params :job) :recipient (plist-get params :recipient)
+                                       :text (plist-get params :text) :seen (plist-get params :seen)
+                                       :answers (plist-get params :answers)))
+    ("messages/mark" (list :changed (and (drgnx-coord-mark (plist-get params :id) (plist-get params :state)) t)))
+    ("events/add" (list :id (drgnx-coord-event-add :agent (plist-get params :agent) :job (plist-get params :job)
+                                                   :task (plist-get params :task) :kind (plist-get params :kind)
+                                                   :summary (plist-get params :summary) :data (plist-get params :data))))
+    ("review/mark"
+     (drgnx-coord-review-mark (plist-get params :agent) (plist-get params :path) (plist-get params :state)
+                              (plist-get params :hash))
+     (when-let* ((e (plist-get params :event)))
+       (drgnx-coord-event-add :agent (plist-get params :agent) :job (plist-get e :job) :kind (plist-get e :kind)
+                              :summary (plist-get e :summary) :data (plist-get e :data)))
+     t)
+    (_ :none)))
+
 (defmacro drgnx-cockpit-fixture-with (&rest body)
   "BODY in the cockpit fixture (see the commentary): ROOT REPO SPEC PLAN BOARD WT-A WT-B TREE SHA SESSIONS are bound,
 and (PLAN-LINE N) is task N's heading line."

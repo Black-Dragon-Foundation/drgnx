@@ -39,7 +39,9 @@
 (declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
 (declare-function drgnx-cockpit-edits-show "drgnx-cockpit-edits")
 (declare-function drgnx-cockpit-edits--model-agent "drgnx-cockpit-edits")
-(declare-function drgnx-coord-send "drgnx-coord")
+(declare-function drgnx-cockpit-edits--write "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--args "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--sent-p "drgnx-cockpit-edits")
 (declare-function drgnx-coord-version "drgnx-coord")
 (declare-function drgnx-coord-message "drgnx-coord")
 (declare-function drgnx-job-ui--schedule-recount "drgnx-job-ui")
@@ -455,17 +457,18 @@ job's repository, for Open."
   (drgnx-agents-ui-transcript (drgnx-cockpit-cards--mirror id)))
 
 (defun drgnx-cockpit-cards--message (job id)
-  "Ask for a message to agent ID of JOB and leave it in the store as the user's (`drgnx-coord-send', no sender): the
+  "Ask for a message to agent ID of JOB and leave it in the store as the user's (the hub's `messages/send', no sender): the
 hub gives it to the agent when its turn ends, under the user's header (`drgnx-coord-message-prompt'), never
 interrupting it and never as a raw prompt."
   (let ((text (read-string (format "Message to %s (queues, never interrupts): " id))))
     (when (string-blank-p text) (user-error "An empty message: nothing sent"))
-    (let ((r (drgnx-coord-send :job job :recipient id :text text :seen (drgnx-coord-version))))
-      (if (equal (plist-get r :state) "held")
-          (message "drgnx: held, not sent — %s" (or (plist-get (drgnx-coord-message (plist-get r :id)) :reason) "too many messages"))
-        (drgnx-cockpit-cards--hub)
-        (ignore-errors (drgnx-hub-call "coord/notify" nil #'ignore))))   ; deliver now, when the agent is free
-    (drgnx-cockpit-cards--changed)))
+    ;; the hub's `messages/send' (it delivers when the agent is free, and notifies itself)
+    (drgnx-cockpit-cards--hub)
+    (drgnx-cockpit-edits--write
+     "messages/send"
+     (drgnx-cockpit-edits--args :job job :recipient id :text text :seen (drgnx-coord-version))
+     (lambda (_r) (drgnx-cockpit-cards--changed))
+     (lambda (r) (drgnx-cockpit-edits--sent-p r "drgnx:")))))
 
 ;;;; The filter and showing the parts
 

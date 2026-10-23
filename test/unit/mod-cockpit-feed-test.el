@@ -35,7 +35,10 @@ buffers are killed after: they owned their hooks and their timers."
                    ((symbol-function 'drgnx-ui-ascii-frame-p) #'ignore)
                    ((symbol-function 'drgnx-agents-sessions) (lambda () mirrors))
                    ((symbol-function 'drgnx-hub-call)
-                    (lambda (method params cb) (push (list method params) drgnx-cockpit-feed-test--hub) (funcall cb t nil) 1))
+                    (lambda (method params cb)
+                      (push (list method params) drgnx-cockpit-feed-test--hub)
+                      (let ((r (drgnx-cockpit-fixture-hub-write method params))) (funcall cb (if (eq r :none) t r) nil))
+                      1))
                    ((symbol-function 'drgnx-agents-stop) (lambda (&rest _) (ert-fail "an answer stopped an agent")))
                    ((symbol-function 'drgnx-agents-kill) (lambda (&rest _) (ert-fail "an answer killed an agent"))))
            (unwind-protect
@@ -453,7 +456,7 @@ setups define them."
     (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "ext:claude-code:42"))))
           (said nil) (drgnx-coord-queue-limit 0))   ; its queue is full: the store holds the message
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
-        (should-not (drgnx-cockpit-answer q "yes")))
+        (should (eq (drgnx-cockpit-answer q "yes") 'message)))   ; the hub's answer comes at once here
       (should (equal said '("Work cockpit: held, not sent — queue full")))
       (should (drgnx-cockpit-feed-test--open-p (plist-get q :id))))))
 

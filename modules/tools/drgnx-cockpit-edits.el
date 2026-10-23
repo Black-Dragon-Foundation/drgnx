@@ -883,9 +883,40 @@ another window).  A deleted file, or a remote folder, is said, never opened."
                (forward-line (1- line))
                b)))))
 
+(defun drgnx-cockpit-edits--args (&rest plist)
+  "PLIST without its nil values: a hub call's params never carry a nil (it would travel as null)."
+  (let (out)
+    (while plist
+      (when (cadr plist) (setq out (append out (list (car plist) (cadr plist)))))
+      (setq plist (cddr plist)))
+    out))
+
+(defun drgnx-cockpit-edits--write (method params &optional done accept)
+  "Ask the hub to write: METHOD with PARAMS, asynchronously (an editor path never waits).  DONE gets the result when the
+hub answered without an error and ACCEPT, when given, approved the result; an error is said once, as \"drgnx hub: TEXT\"
+\(also when no hub serves).  The hub notifies itself after a write: nothing else is sent."
+  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
+  (condition-case err
+      (drgnx-hub-call method params
+                      (lambda (r e)
+                        (cond (e (message "drgnx hub: %s" e))
+                              ((or (null accept) (funcall accept r)) (when done (funcall done r))))))
+    (error (message "drgnx hub: %s" (error-message-string err)))))
+
+(defun drgnx-cockpit-edits--sent-p (result prefix)
+  "Whether the hub's `messages/send' RESULT sent the message; a held one says why (after PREFIX) and is not."
+  (if (not (equal (plist-get result :state) "held")) t
+    (message "%s held, not sent — %s" prefix
+             (or (plist-get result :reason)
+                 (and (plist-get result :id) (plist-get (drgnx-coord-message (plist-get result :id)) :reason))
+                 "too many messages"))
+    nil))
+
 (defun drgnx-cockpit-edits--event (kind summary data)
-  (drgnx-coord-event-add :agent drgnx-cockpit-edits--id :job drgnx-cockpit-edits--job :kind kind :summary summary
-                         :data (append (list :by "user") data)))
+  "Add the user's event KIND about the pane's agent through the hub (`events/add')."
+  (drgnx-cockpit-edits--write
+   "events/add" (drgnx-cockpit-edits--args :kind kind :agent drgnx-cockpit-edits--id :job drgnx-cockpit-edits--job
+                                           :summary summary :data (append (list :by "user") data))))
 
 (defun drgnx-cockpit-edits-accept-file (file)
   "Accept FILE's change as it shows now: a review mark (with the diff's hash) for the merge gate.  It never merges or
@@ -897,24 +928,29 @@ matches the diff's, which is what the merge gate compares."
     (unless hash
       (user-error "%s: its diff does not show here (%s), so it cannot be accepted" (drgnx-wb-display-name file)
                   (string-trim (or (plist-get info :note) "on its way"))))
-    (drgnx-coord-review-mark drgnx-cockpit-edits--id file "accepted" hash)
-    (drgnx-cockpit-edits--event "accept" (format "you accepted %s" (drgnx-wb-display-name file)) (list :path file :hash hash))
-    (drgnx-cockpit-edits--read-marks)
-    (drgnx-cockpit-edits--patch-headers (list file))
-    (message "Accepted %s: a review mark for the merge gate — nothing is merged" (drgnx-wb-display-name file))))
+    ;; one call: the mark and its `accept' event commit together
+    (let ((buffer (current-buffer)) (shown (drgnx-wb-display-name file)))
+      (drgnx-cockpit-edits--write
+       "review/mark"
+       (list :agent drgnx-cockpit-edits--id :path file :state "accepted" :hash hash
+             :event (drgnx-cockpit-edits--args :kind "accept" :job drgnx-cockpit-edits--job
+                                               :summary (format "you accepted %s" shown)
+                                               :data (list :by "user" :path file :hash hash)))
+       (lambda (_r)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (drgnx-cockpit-edits--read-marks)
+             (drgnx-cockpit-edits--patch-headers (list file))))
+         (message "Accepted %s: a review mark for the merge gate — nothing is merged" shown))))))
 
 (defun drgnx-cockpit-edits--session (id)
   "Agent ID's session in this Emacs (its own or a mirror of the hub's), exited or not, or nil."
   (and (fboundp 'drgnx-agents-sessions)
        (seq-find (lambda (s) (equal (or (drgnx-agent-session-remote s) (drgnx-agent-session-id s)) id)) (drgnx-agents-sessions))))
 
-(defun drgnx-cockpit-edits--notify-hub ()
-  "Tell the hub a message waits in the store, so it delivers it now (never waits, never fails)."
-  (when (and (fboundp 'drgnx-hub-socket) (fboundp 'drgnx-hub-call) (file-exists-p (drgnx-hub-socket)))
-    (ignore-errors (drgnx-hub-call "coord/notify" nil #'ignore))))
-
-(defun drgnx-cockpit-edits--queue (src text)
-  "Queue TEXT for the pane's agent (SRC: its `drgnx-cockpit-edit-source'), never interrupting it.  The same routes as
+(defun drgnx-cockpit-edits--queue (src text &optional done)
+  "Queue TEXT for the pane's agent (SRC: its `drgnx-cockpit-edit-source'), never interrupting it, then DONE (no
+arguments).  The same routes as
 `drgnx-cockpit-feed--queue' (the Work cockpit's feed), to be one function when both are in:
 - a silent worktree: nobody reads messages there — a `user-error';
 - a live session of this Emacs: `drgnx-agents-send', its mode `queue' for the call (one set to interrupt waits all the
@@ -922,9 +958,10 @@ matches the diff's, which is what the merge gate compares."
 - a live hub session's mirror not set to interrupt: `drgnx-agents-send', the hub's `agents/send' (queued, or steered
   into its turn);
 - anything else (a mirror set to interrupt, an exited or failed session, a job's agent elsewhere, an outside agent): a
-  message in the store, which the hub gives the agent when it is free (an outside agent reads it with read_inbox); the
-  hub is told at once.
-`session', `message', or nil when the store held it back (said)."
+  message in the store (the hub's `messages/send'; it notifies itself), which the hub gives the agent when it is free
+  (an outside agent reads it with read_inbox).
+`session', or `message' for the hub's call, which is on its way: the hub's answer (an error, or a message it held
+back, said then) comes later, and DONE runs only when the message was sent."
   (when (eq (plist-get src :kind) 'silent) (user-error "Nobody reads messages in this worktree: no agent reports from it"))
   (let* ((s (drgnx-cockpit-edits--session drgnx-cockpit-edits--id))
          (live (and s (not (memq (drgnx-agent-session-status s) '(exited failed)))))
@@ -935,16 +972,17 @@ matches the diff's, which is what the merge gate compares."
         (setf (drgnx-agent-session-mode s) 'queue)
         (unwind-protect (drgnx-agents-send s text)
           (setf (drgnx-agent-session-mode s) mode)))
+      (when done (funcall done))
       'session)
-     ((and live (not (eq mode 'interrupt))) (drgnx-agents-send s text) 'session)
+     ((and live (not (eq mode 'interrupt))) (drgnx-agents-send s text) (when done (funcall done)) 'session)
      (t
-      (let ((r (drgnx-coord-send :job (or (plist-get src :job) drgnx-cockpit-edits--job) :recipient drgnx-cockpit-edits--id :text text)))
-        (if (equal (plist-get r :state) "held")
-            (progn (message "Work cockpit: held, not sent — %s"
-                            (or (plist-get (drgnx-coord-message (plist-get r :id)) :reason) "too many messages"))
-                   nil)
-          (drgnx-cockpit-edits--notify-hub)
-          'message))))))
+      (drgnx-cockpit-edits--write
+       "messages/send"
+       (drgnx-cockpit-edits--args :job (or (plist-get src :job) drgnx-cockpit-edits--job)
+                                  :recipient drgnx-cockpit-edits--id :text text)
+       (lambda (_r) (when done (funcall done)))
+       (lambda (r) (drgnx-cockpit-edits--sent-p r "Work cockpit:")))
+      'message))))
 
 (defun drgnx-cockpit-edits--stopped-p (src)
   "Whether SRC's agent is known to have stopped — positive evidence only; not being among the sessions never counts.
@@ -1063,10 +1101,13 @@ are never touched."
 
 (defun drgnx-cockpit-edits--request (src file shown why)
   "Queue a request to SRC's agent to undo its changes to FILE (SHOWN: its masked name), WHY said first in the echo."
-  (when (drgnx-cockpit-edits--queue src (format "[revert] please undo your changes to %s" shown))
-    (drgnx-cockpit-edits--event "revert" (format "you asked to undo %s" shown) (list :path file :requested t))
-    (message "%s %s to undo its changes to %s (queued: it never interrupts)"
-             (if (string-empty-p why) "Asked" (concat why "asked")) drgnx-cockpit-edits--name shown)))
+  (let ((name drgnx-cockpit-edits--name))
+    (drgnx-cockpit-edits--queue
+     src (format "[revert] please undo your changes to %s" shown)
+     (lambda ()
+       (drgnx-cockpit-edits--event "revert" (format "you asked to undo %s" shown) (list :path file :requested t))
+       (message "%s %s to undo its changes to %s (queued: it never interrupts)"
+                (if (string-empty-p why) "Asked" (concat why "asked")) name shown)))))
 
 (defun drgnx-cockpit-edits-comment (file line text)
   "Comment TEXT on LINE of FILE (the diff line at point): a queued message \"[comment] FILE:LINE: TEXT\" to the
@@ -1076,9 +1117,12 @@ agent, never an interruption."
   (drgnx-cockpit-edits--here)
   (let ((text (string-trim (or text ""))) (shown (drgnx-wb-display-name file)))
     (when (string-empty-p text) (user-error "No comment"))
-    (when (drgnx-cockpit-edits--queue (drgnx-cockpit-edits--read-source) (format "[comment] %s:%d: %s" shown line text))
-      (drgnx-cockpit-edits--event "comment" (format "you commented on %s:%d: %s" shown line text) (list :path file :line line))
-      (message "Comment queued for %s (it never interrupts)" drgnx-cockpit-edits--name))))
+    (let ((name drgnx-cockpit-edits--name))
+      (drgnx-cockpit-edits--queue
+       (drgnx-cockpit-edits--read-source) (format "[comment] %s:%d: %s" shown line text)
+       (lambda ()
+         (drgnx-cockpit-edits--event "comment" (format "you commented on %s:%d: %s" shown line text) (list :path file :line line))
+         (message "Comment queued for %s (it never interrupts)" name))))))
 
 ;;;; The module's part
 

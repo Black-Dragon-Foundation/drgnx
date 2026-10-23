@@ -7,6 +7,7 @@
   "drgnx-agents-adapter/a-package-json-that-is-a-fifo-is-never-read"
   "drgnx-agents/reads-refuse-fifos-devices-remote-paths-and-big-files"
   "drgnx-bootstrap/a-fifo-in-the-handback-is-refused-without-blocking"
+  "drgnx-cockpit-feed/an-answer-reaches-the-store-through-ratatoskr"
   "drgnx-explorer/find-with-a-root-inside-a-project-terminates"
   "drgnx-file/a-fifo-is-refused-without-blocking"
   "drgnx-git/a-folder-with-only-new-files-is-not-untracked"

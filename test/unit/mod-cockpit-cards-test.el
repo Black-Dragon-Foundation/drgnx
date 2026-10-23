@@ -46,8 +46,10 @@ their hooks and timers."
        (cl-letf (((symbol-function 'drgnx-hub-call)
                   (lambda (method params &optional cb)
                     (push (cons method params) drgnx-cockpit-cards-test--calls)
-                    (when (and cb (functionp drgnx-cockpit-cards-test--answer))
-                      (apply cb (funcall drgnx-cockpit-cards-test--answer method params)))))
+                    (let ((w (drgnx-cockpit-fixture-hub-write method params)))   ; the editor's five writes land in the store
+                      (cond ((and cb (not (eq w :none))) (funcall cb w nil))
+                            ((and cb (functionp drgnx-cockpit-cards-test--answer))
+                             (apply cb (funcall drgnx-cockpit-cards-test--answer method params)))))))
                  ((symbol-function 'drgnx-hub-connect) #'ignore)
                  ((symbol-function 'drgnx-job-ui--schedule-recount) #'ignore)   ; the badge's own count: job-ui-test.el
                  ((symbol-function 'make-frame) (lambda (&rest _) (ert-fail "a frame was made"))))
