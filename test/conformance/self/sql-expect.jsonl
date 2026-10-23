@@ -1,0 +1,5 @@
+{"scenario": "self/sql-expect", "requires": ["v0"], "doc": "The harness's own row: sql_expect matches the rows of a read-only query against a fixture database (the default path is $DATA/work.db)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["create table t (a integer, b text)", "insert into t values (1, 'x'), (2, 'y')"]}
+{"do": "sql_expect", "sql": "select a, b from t order by a", "rows": [[1, "x"], [2, "y"]]}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from t", "rows": [[2]]}

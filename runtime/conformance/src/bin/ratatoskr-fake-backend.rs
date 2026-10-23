@@ -11,6 +11,12 @@
 //!   id), `null` (never answered), `{"exit": CODE}` (it exits at once) or `{"from_file": PATH}` (the answer object
 //!   is read from PATH at each call, which a scenario rewrites meanwhile).  Without one: `ping` `{pid}`, `subscribe`
 //!   and `coord/notify` `true`, `status` `{pid, gateway_port: 0, registrations: 0}`, anything else an error;
+//! - a script entry `{METHOD: {"call_front": {"method": M, "params": P}, "then": ANSWER}}` makes it, on METHOD, call M
+//!   on the front's main socket as a proven user (the cap file's HMAC, one connection kept for later calls), wait up
+//!   to 10 s, log `front-answer {...}`, and answer METHOD with ANSWER, or with the front's answer when ANSWER is
+//!   `"$front"`;
+//! - logs `notification {"method", "params"}` for every `coord/notify` and `budget` it receives (its front
+//!   connection never subscribes);
 //! - when the script's `trigger` method (default `coord/notify`) is called, sends its subscribers the events of the
 //!   file `events` (a JSON array of `{event, data}`), then `flood` `card` events of `flood_size` bytes of title;
 //! - ends when `DRGNX_HUB_PARENT_PID` is gone (checked each second), unless the script says `ignore_parent: true`.
@@ -27,6 +33,114 @@ struct Shared {
     script: Map<String, Value>,
     log: Mutex<std::fs::File>,
     subscribers: Mutex<Vec<UnixStream>>,
+    /// The backend's one connection to the front, as a proven user (opened by the first `call_front`, then kept).
+    front: Mutex<Option<Front>>,
+}
+
+struct Front {
+    w: UnixStream,
+    r: BufReader<UnixStream>,
+    next_id: u64,
+}
+
+fn hmac_hex(key: &str, message: &str) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(key.as_bytes())
+        .expect("HMAC takes any key length");
+    mac.update(message.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+impl Front {
+    /// Connect to the main socket and prove the user's capability (`hub-HASH.cap` beside the socket).
+    fn open() -> Result<Front, String> {
+        let socket = runstav::paths::socket_path(&runstav::paths::Env::process());
+        let cap = std::fs::read_to_string(runstav::paths::cap_path(&socket))
+            .map_err(|e| format!("cannot read the cap: {e}"))?;
+        let cap = cap.trim();
+        let w = UnixStream::connect(&socket)
+            .map_err(|e| format!("cannot connect to {}: {e}", socket.display()))?;
+        let _ = w.set_read_timeout(Some(Duration::from_secs(10)));
+        let mut r = BufReader::new(w.try_clone().map_err(|e| e.to_string())?);
+        let mut line = String::new();
+        r.read_line(&mut line)
+            .map_err(|e| format!("no challenge: {e}"))?;
+        let challenge: Value = serde_json::from_str(line.trim_end())
+            .map_err(|e| format!("bad challenge {line:?}: {e}"))?;
+        let hub_nonce = challenge["data"]["nonce"]
+            .as_str()
+            .ok_or_else(|| format!("no nonce in {challenge}"))?
+            .to_string();
+        let mut raw = [0u8; 16];
+        getrandom::fill(&mut raw).map_err(|e| e.to_string())?;
+        let nonce: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let proof = hmac_hex(cap, &format!("drgnx-hub client {hub_nonce} {nonce}"));
+        let mut front = Front { w, r, next_id: 1 };
+        let hello = json!({"proto": 1, "nonce": nonce, "client": "fake-backend", "proof": proof});
+        let reply = front.call("hello", &hello)?;
+        if reply.get("error").is_some() {
+            return Err(format!("the front refused hello: {reply}"));
+        }
+        Ok(front)
+    }
+
+    /// Send one request and read lines until its answer (events and other answers are skipped).
+    fn call(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = json!({"id": id, "method": method, "params": params});
+        self.w
+            .write_all(format!("{req}\n").as_bytes())
+            .map_err(|e| format!("write failed: {e}"))?;
+        let _ = self.w.set_read_timeout(Some(Duration::from_secs(10)));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if std::time::Instant::now() > deadline {
+                return Err(format!("no answer to {method} within 10 s"));
+            }
+            let mut line = String::new();
+            match self.r.read_line(&mut line) {
+                Ok(0) => return Err("the front closed the connection".into()),
+                Err(e) => return Err(format!("no answer to {method}: {e}")),
+                Ok(_) => {}
+            }
+            if let Ok(v) = serde_json::from_str::<Value>(line.trim_end())
+                && v.get("id") == Some(&json!(id))
+            {
+                return Ok(v);
+            }
+        }
+    }
+}
+
+impl Shared {
+    fn log_line(&self, text: &str) {
+        let mut log = self.log.lock().unwrap();
+        let _ = writeln!(log, "{text}");
+        let _ = log.flush();
+    }
+
+    /// `{"method": M, "params": P}` called on the front; its answer object, or why there was none.  A broken
+    /// connection is dropped, and the next call opens a new one.
+    fn call_front(&self, call: &Value) -> Result<Value, String> {
+        let method = call["method"]
+            .as_str()
+            .ok_or("call_front needs a \"method\"")?;
+        let params = call.get("params").cloned().unwrap_or_else(|| json!({}));
+        let mut guard = self.front.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(Front::open()?);
+        }
+        let result = guard.as_mut().expect("just opened").call(method, &params);
+        if result.is_err() {
+            *guard = None;
+        }
+        result
+    }
 }
 
 fn die(why: &str) -> ! {
@@ -90,6 +204,7 @@ fn main() {
         script,
         log: Mutex::new(log),
         subscribers: Mutex::new(Vec::new()),
+        front: Mutex::new(None),
     });
     for stream in listener.incoming().flatten() {
         let shared = shared.clone();
@@ -139,7 +254,37 @@ fn serve(stream: UnixStream, shared: &Shared) {
         {
             shared.subscribers.lock().unwrap().push(c);
         }
-        match answer(&shared.script, &method) {
+        if matches!(method.as_str(), "coord/notify" | "budget") {
+            shared.log_line(&format!(
+                "notification {}",
+                json!({"method": method, "params": req.get("params").cloned().unwrap_or(Value::Null)})
+            ));
+        }
+        let entry = shared.script.get(&method);
+        let answer = match entry.and_then(|e| e.get("call_front")) {
+            Some(call) => {
+                let reply = shared.call_front(call);
+                shared.log_line(&format!(
+                    "front-answer {}",
+                    reply
+                        .clone()
+                        .unwrap_or_else(|e| json!({"error": {"message": e}}))
+                ));
+                let then = entry.and_then(|e| e.get("then"));
+                let resolved = match (then, reply) {
+                    (Some(Value::String(s)), Ok(front)) if s == "$front" => front,
+                    (Some(Value::String(s)), Err(e)) if s == "$front" => {
+                        json!({"error": {"message": e}})
+                    }
+                    (Some(t), _) => t.clone(),
+                    (None, _) => json!({"result": true}),
+                };
+                // a string ANSWER is the whole line (as in a plain script entry); `$front` was resolved above
+                answer_for(Some(&resolved), &method)
+            }
+            None => answer(&shared.script, &method),
+        };
+        match answer {
             Answer::Line(v) => {
                 let mut obj = match v {
                     Value::Object(o) => o,
@@ -171,7 +316,11 @@ enum Answer {
 }
 
 fn answer(script: &Map<String, Value>, method: &str) -> Answer {
-    match script.get(method) {
+    answer_for(script.get(method), method)
+}
+
+fn answer_for(entry: Option<&Value>, method: &str) -> Answer {
+    match entry {
         Some(Value::Null) => Answer::Never,
         Some(Value::String(s)) => Answer::Raw(s.clone()),
         Some(Value::Object(o)) if o.contains_key("exit") => {
