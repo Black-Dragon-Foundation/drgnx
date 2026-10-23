@@ -40,7 +40,11 @@ pub fn open_rule(opts: MigrateOpts) -> OpenRule {
 }
 
 /// Migrate the schema-6 file at PATH, open on CONN (the writer's connection).
-pub fn run(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> Result<MigrateReport, String> {
+pub fn run(
+    conn: &mut Connection,
+    path: &Path,
+    opts: &MigrateOpts,
+) -> Result<MigrateReport, String> {
     todo!("Task 11")
 }
 

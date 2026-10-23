@@ -33,7 +33,10 @@ pub enum Verdict {
     Board,
     /// A soft-tier file the user opted in.
     OptedIn,
-    Denied { why: String, tier: Tier },
+    Denied {
+        why: String,
+        tier: Tier,
+    },
 }
 
 /// A project root's verdict (door 3, the indexers).
@@ -41,9 +44,13 @@ pub enum Verdict {
 pub enum RootVerdict {
     Allowed,
     /// The root lies inside the denied root.
-    Denied { why: String },
+    Denied {
+        why: String,
+    },
     /// The root contains denied paths (e.g. `HOME` itself): the indexer skips them.
-    Contains { denied: Vec<PathBuf> },
+    Contains {
+        denied: Vec<PathBuf>,
+    },
 }
 
 /// Where a record came from: put-parsed's typed source, or schema 6's source strings (`"spec /path"`, a path,

@@ -127,9 +127,7 @@ pub enum TaskAnswer {
         next: String,
     },
     /// "Only I close my tasks": a close card instead of `done`.
-    Proposed {
-        card: i64,
-    },
+    Proposed { card: i64 },
 }
 
 /// Run OP for CALLER in TX: one tx and one `event`, plus the notices it raises.
