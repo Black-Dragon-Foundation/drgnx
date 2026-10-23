@@ -18,6 +18,8 @@ serde_path_to_error.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# the bridge's tests run on tokio's paused clock (`start_paused`): a feature of a crate already here, no new crate
+tokio = { workspace = true, features = ["test-util"] }
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }
 tempfile.workspace = true
 proptest.workspace = true

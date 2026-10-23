@@ -898,6 +898,40 @@ an identity from the agent: not from a tool's arguments, and never from `DRGNX_A
 
 Rows: `test/conformance/mcp/`.
 
+## The MCP bridge
+
+An agent speaks MCP over stdio; `ratatoskr mcp-bridge` is that stdio server, and it copies lines to the hub
+(`runtime/crates/drgnx-ratatoskr/src/bridge.rs`; the state machine is `mimir::bridge`). Claude Code never respawns a
+stdio server that died (anthropics/claude-code#82746), so the bridge outlives the hub instead (design §5.8).
+
+- **Inside: `mcp-bridge --socket PATH`.** PATH is a session's `mcp.sock` (`mcp/session`). It must be a socket when
+  the bridge starts (exit 1 otherwise); after that the bridge connects with no challenge and the first byte is MCP.
+  The socket is the identity: nothing in the bridge's environment (`DRGNX_AGENT` included) is read.
+- **Outside: `mcp-bridge --outside --kind KIND [--cwd DIR]`.** For an agent drgnx did not start. The bridge finds the
+  main socket as every client does (its environment's data dir), checks the socket's directory first (the Lisp
+  client's rule: the user's, 0700; otherwise it ends with exit 1 and the reason on stderr, never connecting), reads
+  the challenge, says `hello {proto: 1, nonce, client: "mcp-bridge", cwd}` with no proof (the connection stays
+  `service`) and `mcp/attach {kind}`; the next byte is MCP. `cwd` is `--cwd`, else the bridge's working directory.
+  A refused `hello` or `mcp/attach` ends the bridge with exit 1; a hub that is not there yet is dialled again.
+- **When the hub goes away.** The bridge dials again after 0.1 s, doubling to 5 s between dials, and gives up after
+  10 min without a connection (exit 1, "giving up" on stderr). On each reconnect it replays the agent's cached
+  `initialize` under an id of its own (the answer is dropped: the agent has one) and `notifications/initialized`,
+  fetches `tools/list` once, and sends the agent `notifications/tools/list_changed` when the list differs. The
+  stateless era (2026-07-28) has nothing to replay. An outside bridge says `hello` and `mcp/attach` again.
+- **While it is away.** `tools/list` and `server/discover` are answered from the cache, `ping` with `{}`. Any other
+  request waits up to 10 s for the socket (the bridge dials at once), then a `tools/call` gets the tool error
+  `drgnx hub restarting; retry` and anything else `-32603`.
+- **A call caught by the drop is never sent again.** A write has no request key before schema 7, so a resend could
+  write twice: a `tools/call` in flight when the socket dropped gets a tool error that says the hub went away and the
+  effect is unknown (check `read_inbox`, `task_status` or `read_decisions` before a retry); the agent decides. Any
+  other request in flight gets `-32603`.
+- **Lines.** An agent line over 1 MiB is answered `-32600` on its id (dropped without one) and the bridge goes on; a
+  hub line over 16 MiB drops the connection (and the bridge redials).
+- **The end.** The agent closing stdin ends the bridge at once with exit 0 (MCP stdio), as does a closed stdout.
+  Warnings (the hub went away, came back) go to stderr.
+
+Test hooks: `--bridge-backoff-ms N` and `--bridge-give-up-ms N` shorten the timings. Rows: `test/conformance/bridge/`.
+
 ## Registrations
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps

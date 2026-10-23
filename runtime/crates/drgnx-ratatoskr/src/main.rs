@@ -44,6 +44,8 @@ fn main() -> ExitCode {
         // The relay builds its own single-threaded runtime; it refuses to start under another parent than its
         // `--parent-pid`.
         Command::Relay { args } => return code(gleipnir::net::relay::main(args.into_iter())),
+        // Its own single-threaded runtime; it reads no environment variable but, outside, the data dir's.
+        Command::McpBridge(args) => return ExitCode::from(drgnx_ratatoskr::bridge::main(args)),
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),

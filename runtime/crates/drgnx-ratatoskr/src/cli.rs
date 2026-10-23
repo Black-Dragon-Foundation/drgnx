@@ -1,11 +1,10 @@
 //! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
 //! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown`,
 //! `sandbox check`, `sandbox-inner …` and `relay …` (the sandbox's inner helper and its relay, their arguments taken
-//! raw), and with
-//! the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
+//! raw), `mcp-bridge --socket PATH | --outside --kind KIND [--cwd DIR]` (an agent's coordination tools over stdio), and
+//! with the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
-#[cfg(feature = "test-hooks")]
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,6 +19,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)\n\
     \x20      ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET...   (the sandbox's relay; run by the sandbox only)\n\
     \x20      ratatoskr sandbox check [--json] [--tier full|reduced]   (does the job sandbox start here?)\n\
+    \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
+    \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
     \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] -- CMD...   (test builds only)";
 
@@ -70,6 +71,28 @@ pub enum Command {
     /// `sandbox run` (test-hooks only): one command under the sandbox, for the escape rows.
     #[cfg(feature = "test-hooks")]
     SandboxRun(SandboxRunArgs),
+    /// `mcp-bridge`: an agent's stdio MCP server, copied to the hub (`crate::bridge`).
+    McpBridge(BridgeArgs),
+}
+
+/// `mcp-bridge`'s arguments.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BridgeArgs {
+    pub target: BridgeTarget,
+    /// `--bridge-backoff-ms N` (test-hooks only): the wait before the first redial, 100 ms otherwise.
+    pub backoff_ms: Option<u64>,
+    /// `--bridge-give-up-ms N` (test-hooks only): how long without a hub before it exits 1, 10 min otherwise.
+    pub give_up_ms: Option<u64>,
+}
+
+/// Where `mcp-bridge` connects.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BridgeTarget {
+    /// `--socket PATH`: a session's `mcp.sock` (an absolute path); whoever connects is that session's agent.
+    Socket(PathBuf),
+    /// `--outside --kind KIND [--cwd DIR]`: the hub's main socket, as the bridge of an agent drgnx did not start.
+    /// KIND is an `AgentKind`; DIR an absolute local path.
+    Outside { kind: String, cwd: Option<PathBuf> },
 }
 
 /// `sandbox check`'s arguments.
@@ -275,6 +298,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 other => Err(format!("unknown sandbox subcommand {other:?}")),
             }
         }
+        "mcp-bridge" => mcp_bridge(&mut p).map(Command::McpBridge),
         other => Err(format!("unknown command {other:?}")),
     }
 }
@@ -357,6 +381,88 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
             .then_some(command)
             .ok_or("sandbox run needs a command after --")?,
     })
+}
+
+/// `mcp-bridge --socket PATH`, or `mcp-bridge --outside --kind KIND [--cwd DIR]`; with test-hooks also
+/// `[--bridge-backoff-ms N] [--bridge-give-up-ms N]`.
+fn mcp_bridge(p: &mut lexopt::Parser) -> Result<BridgeArgs, String> {
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut socket, mut outside, mut kind, mut cwd) = (None, false, None, None);
+    #[cfg_attr(not(feature = "test-hooks"), allow(unused_mut))]
+    let (mut backoff_ms, mut give_up_ms) = (None, None);
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("socket") => socket = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("outside") => outside = true,
+            Long("kind") => kind = Some(p.value().map_err(e)?.string().map_err(e)?),
+            Long("cwd") => cwd = Some(PathBuf::from(p.value().map_err(e)?)),
+            #[cfg(feature = "test-hooks")]
+            Long("bridge-backoff-ms") => backoff_ms = Some(millis_above_0(p, "bridge-backoff-ms")?),
+            #[cfg(feature = "test-hooks")]
+            Long("bridge-give-up-ms") => give_up_ms = Some(millis_above_0(p, "bridge-give-up-ms")?),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    let target = match (socket, outside) {
+        (Some(_), true) => {
+            return Err("mcp-bridge takes --socket PATH or --outside, not both".into());
+        }
+        (None, false) => {
+            return Err("mcp-bridge needs --socket PATH or --outside --kind KIND".into());
+        }
+        (Some(_), false) if kind.is_some() || cwd.is_some() => {
+            return Err("--kind and --cwd go with --outside".into());
+        }
+        (Some(s), false) if !s.is_absolute() => {
+            return Err(format!(
+                "--socket takes an absolute path, not {}",
+                s.display()
+            ));
+        }
+        (Some(s), false) => BridgeTarget::Socket(s),
+        (None, true) => {
+            let kind = kind.ok_or("mcp-bridge --outside needs --kind KIND")?;
+            if serde_json::from_value::<runstav::types::AgentKind>(serde_json::json!(kind)).is_err()
+            {
+                return Err(format!(
+                    "--kind takes lowercase letters, digits, _ and - (a letter or digit first, at most 32), not {kind:?}"
+                ));
+            }
+            if let Some(c) = &cwd
+                && !abs_path(c)
+            {
+                return Err(format!(
+                    "--cwd takes an absolute local path, not {}",
+                    c.display()
+                ));
+            }
+            BridgeTarget::Outside { kind, cwd }
+        }
+    };
+    Ok(BridgeArgs {
+        target,
+        backoff_ms,
+        give_up_ms,
+    })
+}
+
+/// Is P an absolute local path the hub takes (`runstav::types::AbsPath`)?
+pub fn abs_path(p: &std::path::Path) -> bool {
+    p.to_str().is_some_and(|s| {
+        serde_json::from_value::<runstav::types::AbsPath>(serde_json::json!(s)).is_ok()
+    })
+}
+
+#[cfg(feature = "test-hooks")]
+fn millis_above_0(p: &mut lexopt::Parser, name: &str) -> Result<u64, String> {
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let ms: u64 = p.value().map_err(e)?.parse().map_err(e)?;
+    if ms == 0 {
+        return Err(format!("--{name} takes a number above 0"));
+    }
+    Ok(ms)
 }
 
 /// `SID[:JOB]`, each a name of letters, digits, `-` and `_` (it becomes part of a socket's file name).
@@ -665,6 +771,100 @@ mod tests {
         ] {
             assert!(p(bad).is_err(), "{bad:?} parsed");
         }
+    }
+
+    #[test]
+    fn mcp_bridge_parses() {
+        let bridge = |target| {
+            Ok(Command::McpBridge(BridgeArgs {
+                target,
+                backoff_ms: None,
+                give_up_ms: None,
+            }))
+        };
+        assert_eq!(
+            p(&["mcp-bridge", "--socket", "/run/s/abc/mcp.sock"]),
+            bridge(BridgeTarget::Socket("/run/s/abc/mcp.sock".into()))
+        );
+        assert_eq!(
+            p(&["mcp-bridge", "--outside", "--kind", "codex"]),
+            bridge(BridgeTarget::Outside {
+                kind: "codex".into(),
+                cwd: None
+            })
+        );
+        assert_eq!(
+            p(&[
+                "mcp-bridge",
+                "--kind",
+                "gry-worker_2",
+                "--outside",
+                "--cwd",
+                "/w/x"
+            ]),
+            bridge(BridgeTarget::Outside {
+                kind: "gry-worker_2".into(),
+                cwd: Some("/w/x".into())
+            })
+        );
+        for bad in [
+            &["mcp-bridge"][..],
+            &["mcp-bridge", "--socket"],
+            &["mcp-bridge", "--socket", "rel/mcp.sock"],
+            &[
+                "mcp-bridge",
+                "--socket",
+                "/s",
+                "--outside",
+                "--kind",
+                "codex",
+            ],
+            &["mcp-bridge", "--socket", "/s", "--kind", "codex"],
+            &["mcp-bridge", "--socket", "/s", "--cwd", "/w"],
+            &["mcp-bridge", "--outside"],
+            &["mcp-bridge", "--outside", "--kind", "Claude"],
+            &["mcp-bridge", "--outside", "--kind", "-x"],
+            &["mcp-bridge", "--outside", "--kind", "codex", "--cwd", "rel"],
+            &[
+                "mcp-bridge",
+                "--outside",
+                "--kind",
+                "codex",
+                "--cwd",
+                "/ssh:h:/x",
+            ],
+            &["mcp-bridge", "--outside", "--kind", "codex", "extra"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} parsed");
+        }
+    }
+
+    /// The redial's timings are test hooks: a release build refuses them.
+    #[test]
+    fn bridge_timings_need_test_hooks() {
+        let r = p(&[
+            "mcp-bridge",
+            "--socket",
+            "/s",
+            "--bridge-backoff-ms",
+            "10",
+            "--bridge-give-up-ms",
+            "200",
+        ]);
+        #[cfg(feature = "test-hooks")]
+        {
+            assert_eq!(
+                r,
+                Ok(Command::McpBridge(BridgeArgs {
+                    target: BridgeTarget::Socket("/s".into()),
+                    backoff_ms: Some(10),
+                    give_up_ms: Some(200),
+                }))
+            );
+            assert!(p(&["mcp-bridge", "--socket", "/s", "--bridge-backoff-ms", "0"]).is_err());
+        }
+        #[cfg(not(feature = "test-hooks"))]
+        assert!(r.is_err());
     }
 
     #[cfg(not(feature = "test-hooks"))]

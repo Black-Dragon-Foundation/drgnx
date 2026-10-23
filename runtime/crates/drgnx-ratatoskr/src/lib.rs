@@ -1,6 +1,7 @@
 //! Ratatoskr, drgnx's agent runtime: the hub protocol's server (docs/develop/hub.md, docs/develop/runtime.md).
 //!
-//! - [`cli`]: the command line (`serve`, `ensure`, `stop`, `status`, `doctor`, `restart`, `version`, `methods`) and
+//! - [`cli`]: the command line (`serve`, `ensure`, `stop`, `status`, `doctor`, `restart`, `version`, `methods`,
+//!   `mcp-bridge`) and
 //!   the exit codes.
 //! - [`supervise`]: `ensure` (a transient systemd unit, launchd or a detached process) and `stop`.
 //! - [`client`]: the blocking client those commands use (a raw ping, a proven user connection).
@@ -19,6 +20,8 @@
 //! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
 //!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
 //! - [`peer`]: the process behind a connection: its parent and start time, for an outside agent's identity.
+//! - [`bridge`]: `mcp-bridge`, an agent's stdio MCP server copied to a session's socket or, for an outside agent, to
+//!   the main socket as `service`; it redials after a hub restart.
 //! - [`log`]: tracing to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` and warnings to stderr.
 //! - [`runtime_db`]: `<state>/hub/runtime.db`, the hub's own recovery state.
 //! - [`backend`]: the Lisp backend: its command, environment, record, connection and restarts.
@@ -29,6 +32,7 @@
 //! - [`version`]: what `version --json` says.
 
 pub mod backend;
+pub mod bridge;
 pub mod cli;
 pub mod client;
 pub mod conn;

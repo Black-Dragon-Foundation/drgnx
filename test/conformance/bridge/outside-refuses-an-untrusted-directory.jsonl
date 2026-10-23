@@ -1,0 +1,11 @@
+{"scenario": "bridge/outside-refuses-an-untrusted-directory", "requires": ["v1", "fake-backend"], "doc": "An outside bridge checks the socket's directory before it connects, as the Lisp client does: one open to other users ends the bridge with exit 1 and the reason on stderr, and no connection reaches the hub."}
+{"do": "start", "hub": "h"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "chmod", "path": "$SOCKET_DIR", "mode": "0755"}
+{"do": "spawn_conn", "conn": "b", "argv": ["$ROOT/bin/ratatoskr", "mcp-bridge", "--outside", "--kind", "codex", "--cwd", "$HOME"], "env": {"HOME": "$HOME", "XDG_RUNTIME_DIR": "$ROOT/run", "XDG_STATE_HOME": "$ROOT/state", "DRGNX_DATA_DIR": "$ROOT/data", "TMPDIR": "$ROOT/tmp"}}
+{"do": "expect_exit", "conn": "b", "code": 1, "within_ms": 5000}
+{"do": "file", "path": "$ROOT/spawn-conn-b.err", "contains": "is open to other users (mode 755; it must be 700)"}
+{"do": "chmod", "path": "$SOCKET_DIR", "mode": "0700"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"mcp": {"sessions": 0, "outside": 0}}}}

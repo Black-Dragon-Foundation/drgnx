@@ -356,6 +356,13 @@ The agent must start the server in its project folder. drgnx takes the folder th
 worktree) as the place the agent works. A server started in your home folder, or at `/`, can say hello, but its
 file reports are refused.
 
+With Ratatoskr, drgnx's runtime, the server is `ratatoskr mcp-bridge --outside --kind KIND` (`--cwd DIR` names the
+project folder when the agent cannot start it there). It survives a restart of the hub: while the hub is away the
+agent still sees its tools, a call waits up to 10 seconds and then reports "drgnx hub restarting; retry", and a call
+that was running when the hub went is reported as an error, never sent twice: the agent checks before it retries.
+After 10 minutes without a hub the server ends. It refuses to connect when the hub's socket folder is open to other
+users.
+
 The agent then gets four tools to report with:
 - **hello**: who it is and where it works;
 - **report_edit**: the files it changed (paths only);
