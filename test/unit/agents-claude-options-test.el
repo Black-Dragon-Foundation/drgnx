@@ -179,7 +179,7 @@ taken from the defconst."
 
 (ert-deftest drgnx-agents-claude-options/a-repos-settings-change-nothing-sent ()
   ;; A repository that pre-allows everything and brings its own MCP server: the options sent are the same as in a
-  ;; plain folder, and the mcpServers sent are drgnx's only.
+  ;; plain folder, and its mcpServers entry is never sent.
   (drgnx-agents-claude-options-test--with nil
     (let* ((plain (file-name-as-directory (expand-file-name "plain" root)))
            (repo (file-name-as-directory (expand-file-name "repo" root)))
@@ -204,11 +204,16 @@ taken from the defconst."
           (should (equal mb ma))
           (should (equal (drgnx-agents-claude-options-test--ask b "mode") "mode: default"))))
       (should (= (length sent) 2))
+      ;; The macro turns coordination off, so drgnx's own server is not among them: the repository's never is, and
+      ;; both folders send the same list.
+      (let ((names (mapcar (lambda (e)
+                             (mapcar (lambda (x) (plist-get x :name))
+                                     (append (plist-get (cdr e) :mcpServers) nil)))
+                           sent)))
+        (should (equal (car names) (cadr names)))
+        (should-not (member "repo-server" (apply #'append names))))
       (dolist (e sent)
-        (let ((servers (append (plist-get (cdr e) :mcpServers) nil)))
-          (should servers)
-          (should (equal (mapcar (lambda (x) (plist-get x :name)) servers) '("drgnx")))
-          (should (equal (plist-get (cdr e) :_meta) (plist-get (cdr (car sent)) :_meta)))))
+        (should (equal (plist-get (cdr e) :_meta) (plist-get (cdr (car sent)) :_meta))))
       (should-not (file-exists-p (expand-file-name "pwned" repo))))))
 
 (ert-deftest drgnx-agents-claude-options/deny-and-ask-rules-are-forwarded ()
