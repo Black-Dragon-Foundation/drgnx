@@ -95,6 +95,25 @@ shorthands come back, without reopening them.
   you are told; a hub of an older drgnx (before Ratatoskr) still gets your editor's calls but never a key. The
   coordination servers your agents run never read the cap: they stay at the level of a connection without a proof.
 
+## Who an agent is
+
+The coordination tools (hello, reports, messages, tasks, decisions) act as one agent, and the agent never says
+which: Ratatoskr knows it from how the connection reached it.
+
+- **An agent drgnx runs** gets a socket of its own (`mcp.sock`, in its session's private directory: mode 0700, the
+  socket 0600, both yours). Whoever connects to that socket is that agent, with its job and task. A name in a tool's
+  arguments, or `DRGNX_AGENT` in an environment, changes nothing. The socket closes when the program that opened the
+  session (your editor, or the hub's job) is gone, and comes back on the same path after a hub restart while that
+  program still runs.
+- **An agent drgnx did not start** (Claude Code in a terminal, for example) reaches the tools through a bridge on the
+  hub's main socket, without the cap. Ratatoskr names it after the process that started the bridge, from the system,
+  not from the bridge: `ext:KIND:PID-HASH` (the kind the bridge gives, that process's pid and a hash of its start
+  time, so a reused pid is a new name). Such an agent is unverified: it can say hello, report edits and tests and send
+  messages, but the tools of drgnx's jobs (claiming, updating or completing a job's task, recording a decision) refuse
+  it. A bridge whose parent is init (pid 1) is refused.
+- Any program running as you can still connect to these sockets: the agent sandbox, not the socket, is the boundary
+  between agents and your account.
+
 ## When something you trust is held back
 
 A checker that stays silent, or a shorthand that does not apply: look for **Restricted Mode** in the status bar, and trust

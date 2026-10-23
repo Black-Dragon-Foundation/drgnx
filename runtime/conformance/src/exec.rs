@@ -1236,7 +1236,8 @@ impl Runner<'_> {
     /// Every method of `registry` (`methods.json`; a relative path is from the current directory) with required
     /// params gets `{}` and a wrong type for its first required key, on `conn`.  Each must be refused
     /// `invalid-params` with a `path`: for `{}` one of the required keys, for the wrong type that key.  `hello`, which
-    /// a connection says once, goes on a fresh connection each time.
+    /// a connection says once, and a method whose classes leave out `user`, go on a fresh connection (no hello: the
+    /// service class) each time.
     fn bad_params(&mut self, step: &Step) -> R {
         let file = self.text(None, step, "registry")?;
         let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
@@ -1276,7 +1277,11 @@ impl Runner<'_> {
                 id += 1;
                 let line = json!({"id": id, "method": name, "params": p}).to_string();
                 let pattern = json!({ "id": id });
-                let answer = if name == "hello" {
+                // a method no user may call (`mcp/attach`: service only) is asked on a connection with no hello too
+                let user = m["classes"]
+                    .as_array()
+                    .is_none_or(|c| c.iter().any(|x| x == "user"));
+                let answer = if name == "hello" || !user {
                     let mut fresh = Conn::open(&socket, Duration::from_secs(2))?;
                     fresh.send_line(&line, true)?;
                     fresh.expect(&pattern, within, &mut self.caps)

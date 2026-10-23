@@ -16,6 +16,9 @@
 //! - [`store`]: `work.db`, read-only, on a thread of its own.
 //! - [`coord`]: the front's writes to `work.db` (the editor's methods, the seam's `coord/*`), the `events` broadcast,
 //!   the `coord/notify` coalescer and the coordination tools' hub.
+//! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
+//!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
+//! - [`peer`]: the process behind a connection: its parent and start time, for an outside agent's identity.
 //! - [`log`]: tracing to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` and warnings to stderr.
 //! - [`runtime_db`]: `<state>/hub/runtime.db`, the hub's own recovery state.
 //! - [`backend`]: the Lisp backend: its command, environment, record, connection and restarts.
@@ -38,10 +41,12 @@ pub mod hello;
 pub mod idle;
 pub mod lock;
 pub mod log;
+pub mod peer;
 pub mod relay;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod server;
+pub mod sessions;
 pub mod shape;
 pub mod store;
 pub mod supervise;

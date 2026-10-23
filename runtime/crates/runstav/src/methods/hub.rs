@@ -3,7 +3,7 @@
 
 use super::{Empty, method};
 use crate::registry::{Class, Method};
-use crate::types::{Bounded, EnvName, Hex64, Nonce, null_as_empty};
+use crate::types::{AbsPath, Bounded, EnvName, Hex64, Nonce, null_as_empty};
 use crate::wire::{Error, ErrorCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,10 @@ pub struct HelloParams {
     /// HMAC-SHA256 with the cap of `"drgnx-hub client " + hub nonce + " " + nonce`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proof: Option<Hex64>,
+    /// The folder the client started in: an outside agent's bridge sends it, and `mcp/attach` makes it the tools'
+    /// home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<AbsPath>,
 }
 
 /// The binary that serves: its version and build commit.
@@ -115,6 +119,14 @@ pub struct StoreStatus {
     pub writes: u64,
 }
 
+/// The coordination tools the front serves: the sessions' sockets, and the outside bridges connected now.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct McpStatus {
+    pub sessions: u64,
+    pub outside: u64,
+}
+
 /// The hub's status: the Lisp hub's keys and the front's.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -140,6 +152,9 @@ pub struct HubStatus {
     /// The front's writer (none from a Lisp hub).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store: Option<StoreStatus>,
+    /// The front's MCP hosting (none from a Lisp hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<Runtime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

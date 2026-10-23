@@ -190,6 +190,25 @@ named_string!(
     what: "a status: lowercase letters and -, a letter first, at most 32"
 );
 
+named_string!(
+    /// A session's id: the name of its directory beside the hub's socket (`s/SID`), never a path.
+    SessionId, max: 64, pattern: Some("^[A-Za-z0-9_-]+$"),
+    ok: |s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+    what: "a session's id: ASCII letters, digits, - and _, 1 to 64"
+);
+
+named_string!(
+    /// An outside agent's kind (`claude`, `codex`, …): the KIND of its identity `ext:KIND:PID-HASH` (`bin/drgnx`'s
+    /// rule).
+    AgentKind, max: 32, pattern: Some("^[a-z0-9][a-z0-9_-]*$"),
+    ok: |s| {
+        let mut cs = s.chars();
+        cs.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    },
+    what: "an agent kind: lowercase letters, digits, _ and - (a letter or digit first), at most 32"
+);
+
 /// A JSON object of at most 64 KiB as JSON text (an event's, a card's or a job's `data`).  The store keeps it as the
 /// JSON it is; what is inside is the writer's and its reader's business.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -553,6 +572,11 @@ mod tests {
         refuses::<AgentName>(json!("a\u{7f}"), json!("Agent 7"));
         refuses::<CardAction>(json!("Approve"), json!("approve-all"));
         refuses::<Status>(json!("In-review"), json!("needs-input"));
+        refuses::<SessionId>(json!("../x"), json!("0123456789ab"));
+        refuses::<SessionId>(json!("s".repeat(65)), json!("s_1-a"));
+        refuses::<AgentKind>(json!("Claude"), json!("claude"));
+        refuses::<AgentKind>(json!("-x"), json!("gry-worker_2"));
+        refuses::<AgentKind>(json!("a".repeat(33)), json!("a".repeat(32)));
         refuses::<JsonObject>(json!([1]), json!({"a": [1, {"b": null}]}));
         refuses::<JsonObject>(
             json!({"t": "x".repeat(65_536)}),

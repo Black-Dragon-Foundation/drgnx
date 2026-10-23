@@ -1,12 +1,13 @@
 //! Every method of the hub protocol, one definition each, grouped as the hub's parts are: the hub itself
-//! ([`hub`]), the gateway and spend ([`gateway`]), agent sessions ([`agents`]), jobs ([`jobs`]) and coordination
-//! ([`coord`]).  [`crate::registry`] puts them in one sorted table.
+//! ([`hub`]), the gateway and spend ([`gateway`]), agent sessions ([`agents`]), jobs ([`jobs`]), coordination
+//! ([`coord`]) and the coordination tools' sockets ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod coord;
 pub mod gateway;
 pub mod hub;
 pub mod jobs;
+pub mod mcp;
 
 use crate::registry::Method;
 use schemars::JsonSchema;
@@ -102,6 +103,9 @@ params! {
     CoordCardSet(coord::CardSetParams),
     CoordHeld(coord::HeldParams),
     CoordPrune(Empty),
+    McpSession(mcp::SessionParams),
+    McpSessionClose(mcp::SessionCloseParams),
+    McpAttach(mcp::AttachParams),
     Spend(gateway::SpendParams),
     GatewayRegister(gateway::RegisterParams),
     GatewayUnregister(gateway::UnregisterParams),
@@ -133,6 +137,7 @@ params! {
 pub(crate) fn all() -> Vec<Method> {
     let mut v = hub::methods();
     v.extend(coord::methods());
+    v.extend(mcp::methods());
     v.extend(gateway::methods());
     v.extend(agents::methods());
     v.extend(jobs::methods());

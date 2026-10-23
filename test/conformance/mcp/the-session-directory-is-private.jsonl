@@ -1,0 +1,9 @@
+{"scenario": "mcp/the-session-directory-is-private", "requires": ["v1"], "doc": "A minted session's socket is in a directory of its own (Gleipnir's session dir): s/ and s/SID/ 0700, mcp.sock 0600, all the user's."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "file", "path": "$SOCKET_DIR/s", "mode": "0700", "owner": "user"}
+{"do": "file", "path": "$SOCKET_DIR/s/$sid", "mode": "0700", "owner": "user"}
+{"do": "file", "path": "$SOCKET_DIR/s/$sid/mcp.sock", "mode": "0600", "owner": "user"}
+{"do": "file", "path": "$sock", "mode": "0600", "owner": "user"}

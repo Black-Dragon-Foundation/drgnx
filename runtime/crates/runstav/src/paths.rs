@@ -273,6 +273,9 @@ pub fn backend_socket_path(env: &Env, socket: &Path) -> Result<PathBuf, PathErro
 /// The agent-class hub socket in a session dir ([`session_dir`]), design §4.2.
 pub const SESSION_HUB_SOCKET: &str = "hub.sock";
 
+/// The coordination tools' socket in a session dir (`mcp/session`): whoever connects to it is that session's agent.
+pub const SESSION_MCP_SOCKET: &str = "mcp.sock";
+
 /// The longest socket name a session dir holds (`hub.sock`, `mcp.sock`, `search.sock`, `gateway.sock`): it sizes the
 /// fallback.
 const SESSION_LONGEST_SOCKET: &str = "gateway.sock";

@@ -1,0 +1,16 @@
+{"scenario": "mcp/modern-and-legacy-handshakes", "requires": ["v1", "fake-backend"], "doc": "A session socket speaks both eras: server/discover and a tools/call that carry 2026-07-28 in _meta (no initialize), and on a second connection the 2024-11-05 initialize handshake."}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"resultType": "complete", "supportedVersions": ["2026-07-28"]}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "hello", "arguments": {}, "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"resultType": "complete", "content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}}
+{"do": "connect", "conn": "l", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "l", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "l", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05"}}}
+{"do": "send", "conn": "l", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
+{"do": "expect", "conn": "l", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": "$any"}}}

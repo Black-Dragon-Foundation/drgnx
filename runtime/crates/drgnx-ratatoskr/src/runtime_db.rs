@@ -1,15 +1,28 @@
 //! `<state>/hub/runtime.db`: the hub's own recovery state (design 3.3), through urdr (0600, WAL, `synchronous=FULL`).
-//! Phase 1 keeps nothing in it that outlives a hub, so a file of a newer schema (left by a newer binary before an
-//! `update --back`) is moved aside, with its `-wal` and `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.
+//!
+//! - `proc` (1): the processes the hub started, reaped when a crashed hub left them.
+//! - `msession` (2): the sessions whose `mcp.sock` the hub minted ([`crate::sessions`]), bound again at the next start
+//!   while their owner lives.
+//!
+//! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
+//! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
+//! their sockets do not come back after the restart, which is accepted (installs are disposable).
 
 use std::path::Path;
 
 /// The schema, as data.
-pub const MIGRATIONS: &[(u32, &str)] = &[(
-    1,
-    "create table proc(id integer primary key, purpose text not null, pid integer, start_time integer, \
-     pgid integer, boot_id text, at real);",
-)];
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        1,
+        "create table proc(id integer primary key, purpose text not null, pid integer, start_time integer, \
+         pgid integer, boot_id text, at real);",
+    ),
+    (
+        2,
+        "create table msession(sid text primary key, agent text not null, job text, task text, cwd text, \
+         owner integer not null, owner_start integer not null, at real not null);",
+    ),
+];
 
 /// Open (or make) `runtime.db` in HUB_DIR on its own store thread.
 pub fn open(hub_dir: &Path) -> Result<(urdr::Store, urdr::Handle), String> {
@@ -81,15 +94,19 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("1"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("2"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        // the proc table is there
-        fresh
-            .query_row("select count(*) from proc", [], |r| r.get::<_, i64>(0))
-            .unwrap();
+        // the proc and msession tables are there
+        for table in ["proc", "msession"] {
+            fresh
+                .query_row(&format!("select count(*) from {table}"), [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap();
+        }
     }
 
     fn rusqlite_like(path: &Path) -> urdr::Connection {
