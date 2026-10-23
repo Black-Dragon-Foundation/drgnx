@@ -122,6 +122,118 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       (should (equal (get-text-property (1- (point-max)) 'wrap-prefix) drgnx-start--centre))
       (should (equal (car drgnx-start--centre) 'space)))))
 
+(defvar drgnx-start-test--width 1600 "The editor window's text width in pixels, as `drgnx-start-test--graphical' says.")
+
+(defmacro drgnx-start-test--graphical (&rest body)
+  "BODY as on a frame that shows JPEG images, its default font 20 pixels tall, the editor window
+`drgnx-start-test--width' pixels wide; the logo cache is empty before and after."
+  (declare (indent 0))
+  `(progn
+     (unless (memq 'jpeg image-types) (ert-skip "this Emacs has no JPEG support"))
+     (drgnx-cache--clear 'drgnx-start--logos)
+     (unwind-protect
+         (cl-letf (((symbol-function 'display-images-p) (lambda (&optional _) t))
+                   ((symbol-function 'image-type-available-p) (lambda (type) (eq type 'jpeg)))
+                   ((symbol-function 'frame-char-height) (lambda (&optional _) 20))
+                   ((symbol-function 'window-body-width)
+                    (lambda (&optional _w pixelwise) (if pixelwise drgnx-start-test--width 80))))
+           ,@body)
+       (drgnx-cache--clear 'drgnx-start--logos))))
+
+(defun drgnx-start-test--logo-at ()
+  "Where the logo is in the start page, or nil."
+  (with-current-buffer "*drgnx start*" (text-property-any (point-min) (point-max) 'drgnx-start-logo t)))
+
+(defun drgnx-start-test--logo ()
+  "The logo's image in the start page, or nil."
+  (when-let* ((at (drgnx-start-test--logo-at)))
+    (with-current-buffer "*drgnx start*" (get-text-property at 'display))))
+
+(defun drgnx-start-test--redraw ()
+  "Draw the start page again (as showing it again does)."
+  (with-current-buffer "*drgnx start*" (drgnx-start--render)))
+
+(ert-deftest drgnx-start/the-logo-heads-the-page-on-a-graphical-frame ()
+  (drgnx-start-test--with 'vscode
+    (drgnx-start-test--graphical
+      (drgnx-start-maybe-show)
+      (with-current-buffer "*drgnx start*"
+        (let* ((at (drgnx-start-test--logo-at)) (image (get-text-property at 'display))
+               (title (text-property-any (point-min) (point-max) 'face 'drgnx-start-title)))
+          (should (eq (car image) 'image))
+          (should (equal (image-property image :file) (expand-file-name "etc/images/drgnx-logo.jpg" drgnx-dir)))
+          (should (file-readable-p (image-property image :file)))   ; the asset ships with drgnx
+          (should (= (image-property image :height) (* 9 20)))       ; 9 lines of the default font
+          (should (< at title))                                      ; above the name, a blank line between
+          (should (equal (buffer-substring-no-properties (1+ at) title) "\n\n"))
+          ;; the left edge of the block: the logo, the name and the text line up
+          (should (equal (get-text-property at 'line-prefix) drgnx-start--centre))
+          (should (equal (get-text-property title 'line-prefix) drgnx-start--centre))))
+      ;; never wider than the window: lower instead
+      (let ((drgnx-start-test--width 120))
+        (drgnx-start-test--redraw)
+        (let ((height (image-property (drgnx-start-test--logo) :height)))
+          (should (= height (floor 120 drgnx-start--logo-ratio)))
+          (should (<= (* height drgnx-start--logo-ratio) 120)))))))
+
+(ert-deftest drgnx-start/a-text-frame-shows-the-page-as-before ()
+  (drgnx-start-test--with 'vscode
+    (let (tty no-jpeg)
+      (cl-letf (((symbol-function 'display-images-p) (lambda (&optional _) nil)))   ; a terminal
+        (drgnx-start-maybe-show)
+        (should-not (drgnx-start-test--logo-at))
+        (setq tty (with-current-buffer "*drgnx start*" (buffer-string))))
+      (drgnx-start-test--graphical                              ; a window system without JPEG
+        (cl-letf (((symbol-function 'image-type-available-p) #'ignore))
+          (drgnx-start-test--redraw)
+          (should-not (drgnx-start-test--logo-at))
+          (setq no-jpeg (with-current-buffer "*drgnx start*" (buffer-string)))))
+      (should (equal-including-properties tty no-jpeg))
+      (should-not (text-property-not-all 0 (length tty) 'display nil tty))
+      (should (string-match-p "\\`\n+drgnx\n\n" (substring-no-properties tty))))))
+
+(ert-deftest drgnx-start/a-missing-logo-file-leaves-the-logo-out ()
+  (drgnx-start-test--with 'vscode
+    (drgnx-start-test--graphical
+      (let ((drgnx-start--logo-file "etc/images/no-such-logo.png") (noninteractive nil))
+        (drgnx-start-maybe-show)                                  ; no error, no prompt: the page shows
+        (should (drgnx-start-test--shown-p))
+        (should-not (drgnx-start-test--logo-at))
+        (should (string-match-p "\\`\n+drgnx\n\n" (drgnx-start-test--text)))
+        ;; remembered: drawing the page again looks for the file no more
+        (should (eq (drgnx-cache-peek 'drgnx-start--logos
+                                      (cons 180 (expand-file-name "etc/images/no-such-logo.png" drgnx-dir)))
+                    'none))
+        (let ((readable (symbol-function 'file-readable-p)))
+          (cl-letf (((symbol-function 'file-readable-p)
+                     (lambda (file) (if (string-suffix-p "no-such-logo.png" file)
+                                        (error "Looked for the file again")
+                                      (funcall readable file)))))
+            (drgnx-start-test--redraw)))
+        (should-not (drgnx-start-test--logo-at))))))
+
+(ert-deftest drgnx-start/one-image-per-size ()
+  (drgnx-start-test--with 'vscode
+    (drgnx-start-test--graphical
+      (let* ((made 0) (looked 0)
+             (create (symbol-function 'create-image)) (readable (symbol-function 'file-readable-p)))
+        (cl-letf (((symbol-function 'create-image) (lambda (&rest args) (cl-incf made) (apply create args)))
+                  ((symbol-function 'file-readable-p)
+                   (lambda (file) (when (string-suffix-p "drgnx-logo.jpg" file) (cl-incf looked)) (funcall readable file))))
+          (drgnx-start-maybe-show)
+          (let ((first (drgnx-start-test--logo)))
+            (should first)
+            (drgnx-start-test--redraw)
+            (drgnx-start-test--redraw)
+            (should (= made 1))                                    ; drawn three times, made once
+            (should (= looked 1))                                  ; and the file looked at once
+            (should (eq first (drgnx-start-test--logo)))
+            (let ((drgnx-start-test--width 100)) (drgnx-start-test--redraw))   ; another size: another image
+            (should (= made 2))
+            (drgnx-start-test--redraw)                              ; back to the first size: cached
+            (should (= made 2))
+            (should (= (drgnx-cache-size 'drgnx-start--logos) 2))))))))
+
 (ert-deftest drgnx-start/not-over-a-file ()
   (drgnx-start-test--with 'vscode
     (with-temp-buffer

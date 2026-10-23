@@ -386,7 +386,12 @@ three keys that open everything (the files, the commands, all keys — the same 
 active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a Folder…**, **Open the Work
 Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move between the buttons, `Return` presses
 one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
-edge), with plain bullets before the keys. Its bottom line is the status bar's quiet form (the folder, the branch,
+edge), with plain bullets before the keys. In a graphical window that shows JPEG images, the Black Dragon logo (the
+dragon, wings spread) sits above the name, on the block's left edge like every line under it: nine lines of your
+default font tall (so it grows with the font and the display's scaling), lower when a narrow window would otherwise
+cut it off. It carries its own dark background, so a light theme shows it as a dark tile. It is drgnx's
+`etc/images/drgnx-logo.jpg`, made once per size and kept; if the file is missing the page shows without it. A
+terminal, or a build without JPEG support, shows the page without the logo. Its bottom line is the status bar's quiet form (the folder, the branch,
 agents, jobs and tests, nothing about a cursor position), never Emacs's raw mode line.
 
 It shows itself only where nothing is lost: in the editor window you used last, and only when that window shows
