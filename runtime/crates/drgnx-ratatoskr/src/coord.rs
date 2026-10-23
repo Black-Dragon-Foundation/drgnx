@@ -158,7 +158,7 @@ pub async fn serve(
     let now = now();
     let answer = match params {
         Params::CardsSettle(p) => {
-            let (card, choice) = (int(p.card), p.choice.into_inner());
+            let (card, choice) = (int(p.card), p.choice.as_str().to_owned());
             w.write(move |tx: &Tx| cards::card_settle(tx, card, &choice, now))
                 .await
                 .map(|settled| json!(api::Settled { settled }))
