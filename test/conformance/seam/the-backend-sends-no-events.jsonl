@@ -1,0 +1,16 @@
+{"scenario": "seam/the-backend-sends-no-events", "requires": ["v1", "lisp-backend"], "doc": "Task 12: behind the front the Lisp backend broadcasts no events event (drgnx-hub--events-check is not started): the front's writer broadcasts the event log. A job/propose's message and card rows reach a subscriber from the front, each row is in the log once, and after the backend's 2 s tick has run the front never had to drop a backend events event."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Seam\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": "$any"}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"events": {"$contains": [{"kind": "card", "job": "$job"}]}}}, "within_ms": 10000}
+{"do": "connect", "conn": "d", "hub": "h"}
+{"do": "expect_silent", "conn": "d", "for_ms": 3000}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "lacks": "dropped the Lisp backend's events event"}
+{"do": "send", "conn": "d", "json": {"id": 4, "method": "events/since", "params": {"since": 0}}}
+{"do": "expect", "conn": "d", "json": {"id": 4, "result": {"events": [{"kind": "message"}, {"kind": "card", "job": "$job"}]}}}

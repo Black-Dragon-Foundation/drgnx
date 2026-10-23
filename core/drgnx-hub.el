@@ -483,8 +483,10 @@ which the next call looks."
                         (append (list :root (drgnx-agent-session-cwd s)) (drgnx-hub--edit-paths (list (plist-get item :path))))))
 
 (defun drgnx-hub--events-soon ()
-  "Send subscribers the new events soon: one `events' event per `drgnx-hub-events-interval' at the most often."
-  (drgnx-timer-soon 'hub-events drgnx-hub-events-interval #'drgnx-hub--events-send :owner :core))
+  "Send subscribers the new events soon: one `events' event per `drgnx-hub-events-interval' at the most often.  Behind
+the front (`drgnx-hub--behind-front') nothing: the front broadcasts the event log."
+  (unless drgnx-hub--behind-front
+    (drgnx-timer-soon 'hub-events drgnx-hub-events-interval #'drgnx-hub--events-send :owner :core)))
 
 (defun drgnx-hub--events-check ()
   "Events another process added (a coordination server, the CLI) or this one without a broadcast (a job's review,
@@ -571,7 +573,7 @@ for an agent that is not here (or exited) stays queued."
     (drgnx-job-tick)
     (drgnx-hub--prune-registrations)
     (drgnx-hub--drop-stuck)
-    (drgnx-hub--events-check)
+    (unless drgnx-hub--behind-front (drgnx-hub--events-check))   ; behind the front, the front broadcasts the log
     (when (zerop (% (cl-incf drgnx-hub--ticks) 30)) (drgnx-hub--housekeeping))))
 
 (defun drgnx-hub--flush (s)
@@ -728,7 +730,10 @@ when it cannot start for any other reason.  It serves on DRGNX_HUB_SERVE_SOCKET 
 backend), else on `drgnx-hub-socket'; both that and DRGNX_HUB_PARENT_PID are read and unset before anything starts a
 process (`drgnx-hub--take-serve-env').  A DRGNX_HUB_SERVE_SOCKET that is set but not an absolute name is exit 1: it
 never falls back to the front's socket.  So is one without DRGNX_HUB_SERVE_SECRET: the backend serves only Ratatoskr
-(`drgnx-hub--secret')."
+(`drgnx-hub--secret').
+With a serve socket it is the backend behind Ratatoskr's front: `drgnx-hub--behind-front' is set, the coordination
+writers call the front (`drgnx-coord-writer' `front', `drgnx-hub-call-front'), and the front broadcasts the event
+log (no `events' from here).  Without one it is the standalone Lisp hub and writes work.db itself (`local')."
   (pcase-let* ((`(,serve ,parent ,secret) (drgnx-hub--take-serve-env))
                (socket (cond ((consp serve)
                               (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is not an absolute name: %s" (cadr serve))
@@ -737,7 +742,9 @@ never falls back to the front's socket.  So is one without DRGNX_HUB_SERVE_SECRE
                               (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is set without DRGNX_HUB_SERVE_SECRET")
                               (kill-emacs 1))
                              (t (or serve (drgnx-hub-socket))))))
-    (setq drgnx-hub--secret (and serve secret))
+    (setq drgnx-hub--secret (and serve secret)
+          drgnx-hub--behind-front (and serve t)
+          drgnx-coord-writer (if serve 'front 'local))
     (drgnx-gc-batch-setup)
     (setq drgnx-timer-report-file "hub-timers-report.eld")   ; the hub's stopped timers go to a file of their own
     (drgnx-sandbox-vc-mode 1)                       ; the hub's own git never runs in a job's folder either
