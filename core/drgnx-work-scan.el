@@ -72,21 +72,24 @@
         (push (or (gethash (plist-get n :id) drgnx-work-scan--patched) n) out)))
     out))
 
-(defun drgnx-work-scan--links (id kind column other)
-  "((OTHER . ORIGIN)…) of the KIND links whose COLUMN end is ID, parsed now or stored (and not replaced), by OTHER."
+(defun drgnx-work-scan--links (id kind column)
+  "((OTHER . ORIGIN)…) of the KIND links whose COLUMN end (\"src\" or \"dst\") is ID, parsed now or stored (and not
+replaced), by OTHER (the other end).  The two selects are literal, so the schema-7 view check reads them."
   (let (out)
     (dolist (e drgnx-work-scan--edges)
       (when (and (equal (nth (if (equal column "src") 0 1) e) id) (eq (nth 2 e) kind))
         (push (cons (nth (if (equal column "src") 1 0) e) (nth 3 e)) out)))
     (dolist (r (sqlite-select (drgnx-work-db-read)
-                              (format "select %s, origin, source from edge where %s = ? and kind = ?" other column)
+                              (if (equal column "src")
+                                  "select dst, origin, source from edge where src = ? and kind = ?"
+                                "select src, origin, source from edge where dst = ? and kind = ?")
                               (list id (symbol-name kind))))
       (unless (or (drgnx-work-scan--hidden-p (nth 2 r)) (assoc (car r) out))
         (push (cons (car r) (intern (nth 1 r))) out)))
     (sort out (lambda (a b) (string< (car a) (car b))))))
 
-(defun drgnx-work-scan--edges-from (src kind) (drgnx-work-scan--links src kind "src" "dst"))
-(defun drgnx-work-scan--edges-to (dst kind) (drgnx-work-scan--links dst kind "dst" "src"))
+(defun drgnx-work-scan--edges-from (src kind) (drgnx-work-scan--links src kind "src"))
+(defun drgnx-work-scan--edges-to (dst kind) (drgnx-work-scan--links dst kind "dst"))
 
 (defun drgnx-work-scan--flag (v) (and v (not (eq v :false)) v))
 

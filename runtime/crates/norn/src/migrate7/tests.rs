@@ -579,7 +579,9 @@ fn every_schema_6_lisp_write_fails_on_7() {
             }
         }
     }
-    assert!(writes.len() >= 6, "{writes:#?}");
+    // Task 16 deleted the editor's node/edge/file writers; what is left is drgnx-work-db's own `meta` writes (the
+    // `local` writer mode's migration), which must fail on 7 all the same
+    assert!(writes.len() >= 3, "{writes:#?}");
     for w in &writes {
         let sql = w.replace('?', "null");
         let r = c.execute_batch(&sql);
