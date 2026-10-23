@@ -362,6 +362,21 @@ async fn delete_copies_refuses_names_that_leave_the_data_folder() {
 }
 
 #[tokio::test]
+async fn delete_copies_refuses_a_listed_copy_that_resolves_outside() {
+    let f = fx().await;
+    // backup/ itself is a link to a folder elsewhere: its file is listed under the data folder's name, is a regular
+    // file, and resolves outside, so only the canonical-path check keeps it
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("work-pre7-19990101.db");
+    std::fs::write(&theirs, "keep me").unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), f.dir.path().join("backup")).unwrap();
+    let named = f.dir.path().join("backup/work-pre7-19990101.db");
+    assert!(deletable_copies(f.writer.path()).contains(&named));
+    assert!(delete_copies(f.writer.path(), std::slice::from_ref(&named)).is_empty());
+    assert!(theirs.exists());
+}
+
+#[tokio::test]
 async fn a_tick_driven_change_deletes_nothing() {
     let f = fx().await;
     opted_in(&f).await;
