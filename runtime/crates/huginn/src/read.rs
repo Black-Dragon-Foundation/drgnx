@@ -1119,7 +1119,15 @@ mod tests {
             let id = row["id"].as_str().expect("every row has an id");
             assert!(ids.insert(id), "duplicate id {id}");
             let text = row["text"].as_str().expect("every row has a text");
-            match (row["expect"].as_str(), read(text)) {
+            // An id starting `bytes-` is one byte per character (README.md).
+            let bytes: Vec<u8> = if id.starts_with("bytes-") {
+                text.chars()
+                    .map(|c| u8::try_from(u32::from(c)).expect("a bytes- row is below U+0100"))
+                    .collect()
+            } else {
+                text.as_bytes().to_vec()
+            };
+            match (row["expect"].as_str(), read_all(&bytes, Limits::default())) {
                 (Some("accept"), Ok(nodes)) => {
                     let actual = dump_all(&nodes);
                     if !same(&row["dump"], &actual) {
