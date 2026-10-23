@@ -79,7 +79,7 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
           (should-not (drgnx-work-node "task:a#1"))
           (should (drgnx-work-edges-to "task:a#1" 'implements))           ; recorded links are kept
           (should (equal (drgnx-work-db-version) drgnx-work-db-schema-version))
-          (should (= (caar (sqlite-select (drgnx-work-db) "pragma busy_timeout")) 5000)))
+          (should (= (caar (sqlite-select (drgnx-work-fixture--db) "pragma busy_timeout")) 5000)))
       (drgnx-work-db-close-all)
       (delete-directory dir t))))
 
@@ -89,7 +89,7 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
          (process-environment (cons (concat "DRGNX_DATA_DIR=" dir) process-environment))
          (drgnx-work-db--handles nil))
     (unwind-protect
-        (let ((db (sqlite-open (drgnx-work-db-file))))
+        (let ((db (drgnx-work-fixture-as-hub (sqlite-open (drgnx-work-db-file)))))   ; the other process: the hub's stand-in
           (sqlite-execute db "create table meta (key text primary key, value text)")
           (sqlite-execute db "create table node (id text primary key, kind text, title text, path text, line integer,
                             status text, parent text, ord integer, source text, data text, updated real)")

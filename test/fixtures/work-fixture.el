@@ -19,11 +19,16 @@
 (defvar drgnx-work-db-gate-hub-standin nil
   "Non-nil while the fixture, the hub's stand-in, opens work.db for writing: the one-writer gate lets that through.")
 
+(defmacro drgnx-work-fixture-as-hub (&rest body)
+  "BODY as the hub's stand-in: in the `local' writer mode, past the one-writer gate (test/support/work-db-gate.el).
+For a test's own seeding (the rows the hub would write) only: the code under test never runs inside it."
+  (declare (indent 0))
+  `(let ((drgnx-coord-writer 'local) (drgnx-work-db-gate-hub-standin t)) ,@body))
+
 (defun drgnx-work-fixture--db ()
-  "The read-write handle, as the hub's stand-in: in the `local' writer mode, past the one-writer gate
-\(test/support/work-db-gate.el).  Only the fixture's own writes use it; product code never does."
-  (let ((drgnx-coord-writer 'local) (drgnx-work-db-gate-hub-standin t))
-    (drgnx-work-db)))
+  "The read-write handle, as the hub's stand-in (`drgnx-work-fixture-as-hub').  Only the fixture's own writes use
+it; product code never does."
+  (drgnx-work-fixture-as-hub (drgnx-work-db)))
 
 (defconst drgnx-work-fixture--columns '(:kind :title :path :line :status :parent :ord :source))
 

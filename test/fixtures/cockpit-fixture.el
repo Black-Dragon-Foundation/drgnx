@@ -93,6 +93,10 @@ the state store sees it."
   "What the hub answers the editor's five writes (`cards/settle', `messages/send', `messages/mark', `events/add',
 `review/mark'), applied to the fixture's store with the Lisp writers (the hub's own writer is Rust: its rows live in
 the conformance suite): the result, or `:none' for any other METHOD."
+  (drgnx-work-fixture-as-hub (drgnx-cockpit-fixture--hub-write method params)))
+
+(defun drgnx-cockpit-fixture--hub-write (method params)
+  "`drgnx-cockpit-fixture-hub-write''s answer to METHOD with PARAMS, as the hub's stand-in."
   (pcase method
     ("cards/settle" (list :settled (and (drgnx-coord-card-settle (plist-get params :card) (plist-get params :choice)) t)))
     ("messages/send" (drgnx-coord-send :job (plist-get params :job) :recipient (plist-get params :recipient)
@@ -110,6 +114,24 @@ the conformance suite): the result, or `:none' for any other METHOD."
                               :summary (plist-get e :summary) :data (plist-get e :data)))
      t)
     (_ :none)))
+
+;; A test's own coordination rows (what an agent or the hub did meanwhile), written by the hub's stand-in: the code
+;; under test runs outside it, so in gate mode (DRGNX_WORK_DB_GATE=1) a write of its own still fails.
+(defun drgnx-cockpit-fixture-send (&rest args)
+  "`drgnx-coord-send' on ARGS, as the hub."
+  (drgnx-work-fixture-as-hub (apply #'drgnx-coord-send args)))
+
+(defun drgnx-cockpit-fixture-event (&rest args)
+  "`drgnx-coord-event-add' on ARGS, as the hub."
+  (drgnx-work-fixture-as-hub (apply #'drgnx-coord-event-add args)))
+
+(defun drgnx-cockpit-fixture-status (&rest args)
+  "`drgnx-coord-force-status' on ARGS, as the hub."
+  (drgnx-work-fixture-as-hub (apply #'drgnx-coord-force-status args)))
+
+(defun drgnx-cockpit-fixture-register (&rest args)
+  "`drgnx-coord-agent-register' on ARGS, as the hub."
+  (drgnx-work-fixture-as-hub (apply #'drgnx-coord-agent-register args)))
 
 (defmacro drgnx-cockpit-fixture-with (&rest body)
   "BODY in the cockpit fixture (see the commentary): ROOT REPO SPEC PLAN BOARD WT-A WT-B TREE SHA SESSIONS are bound,
@@ -153,30 +175,32 @@ and (PLAN-LINE N) is task N's heading line."
              (drgnx-cockpit-fixture-write board (format "* repo\n:PROPERTIES:\n:PROJECT_ROOT: %s\n:END:\n** TODO Write the docs\n:PROPERTIES:\n:PLAN_FILE: %s\n:END:\n"
                                                         repo plan))
              (drgnx-work-fixture-with-hub (drgnx-work-scan (list repo) :board board))
-             ;; the job: plan tasks 2, 3, 4
-             (drgnx-coord-job-create :id "jx" :title "M99 — the plan" :plan plan :repo repo
-                                     :tasks '((:n 2 :title "task 2" :role "implement")
-                                              (:n 3 :title "task 3" :role "implement" :deps (2))
-                                              (:n 4 :title "task 4" :role "test" :deps (2))))
-             (drgnx-coord-job-set "jx" :status "running")
-             (drgnx-coord-claim "jx#2" "s-1" 0)
-             (drgnx-coord-set-status "jx#2" "s-1" "running" 0)
-             (drgnx-coord-decide :kind "build" :subject "the parser" :task "jx#2" :author "s-1" :seen 0 :job "jx")
-             (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "2 files"
-                                    :data (list :root (directory-file-name tree) :paths '("a.el" "b.el")))
-             (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :summary "12 passed, 0 failed: make test"
-                                    :data '(:command "make test" :passed 12 :failed 0))
-             (drgnx-coord-send :job "jx" :sender "s-1" :recipient "user" :text "[escalation] which way?" :seen (drgnx-coord-version))
-             (let ((card (drgnx-coord-card-create :job "jx" :task "jx#3" :kind "ask" :title "Pick a name")))
-               (drgnx-coord-card-settle card "foo")
-               (drgnx-coord-card-set card :state "open"))
-             (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "chat started" :data (list :head sha))
-             (drgnx-coord-agent-register :id "ext:claude-code:42" :kind "claude-code" :name "Claude Code"
-                                         :cwd (directory-file-name wt-a) :worktree (directory-file-name wt-a) :branch "wt-a"
-                                         :base sha :task "jx#4")
-             (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "start" :summary "Claude Code started")
-             (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "edit" :summary "2 files"
-                                    :data (list :root (directory-file-name wt-a) :paths '("README" "new.txt")))
+             ;; the coordination rows the hub would hold, written by its stand-in
+             (drgnx-work-fixture-as-hub
+               ;; the job: plan tasks 2, 3, 4
+               (drgnx-coord-job-create :id "jx" :title "M99 — the plan" :plan plan :repo repo
+                                       :tasks '((:n 2 :title "task 2" :role "implement")
+                                                (:n 3 :title "task 3" :role "implement" :deps (2))
+                                                (:n 4 :title "task 4" :role "test" :deps (2))))
+               (drgnx-coord-job-set "jx" :status "running")
+               (drgnx-coord-claim "jx#2" "s-1" 0)
+               (drgnx-coord-set-status "jx#2" "s-1" "running" 0)
+               (drgnx-coord-decide :kind "build" :subject "the parser" :task "jx#2" :author "s-1" :seen 0 :job "jx")
+               (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "2 files"
+                                      :data (list :root (directory-file-name tree) :paths '("a.el" "b.el")))
+               (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :summary "12 passed, 0 failed: make test"
+                                      :data '(:command "make test" :passed 12 :failed 0))
+               (drgnx-coord-send :job "jx" :sender "s-1" :recipient "user" :text "[escalation] which way?" :seen (drgnx-coord-version))
+               (let ((card (drgnx-coord-card-create :job "jx" :task "jx#3" :kind "ask" :title "Pick a name")))
+                 (drgnx-coord-card-settle card "foo")
+                 (drgnx-coord-card-set card :state "open"))
+               (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "chat started" :data (list :head sha))
+               (drgnx-coord-agent-register :id "ext:claude-code:42" :kind "claude-code" :name "Claude Code"
+                                           :cwd (directory-file-name wt-a) :worktree (directory-file-name wt-a) :branch "wt-a"
+                                           :base sha :task "jx#4")
+               (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "start" :summary "Claude Code started")
+               (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "edit" :summary "2 files"
+                                      :data (list :root (directory-file-name wt-a) :paths '("README" "new.txt"))))
              (setq sessions (list (list :id "s-1" :name "claude · jx#2" :cwd tree :task "jx#2" :job "jx" :status 'idle)
                                   (list :id "s-2" :name "chat" :cwd repo :task (format "task:%s#5" plan) :status 'busy)))
              ,@body)

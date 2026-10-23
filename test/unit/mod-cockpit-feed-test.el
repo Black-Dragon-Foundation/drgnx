@@ -126,8 +126,8 @@ buffers are killed after: they owned their hooks and their timers."
       (let* ((footer (drgnx-view-row-start (drgnx-cockpit-feed-test--view b) :footer))
              (before (with-current-buffer b (buffer-substring-no-properties (point-min) footer)))
              (changes (drgnx-cockpit-feed-test--changes b
-                        (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "1 file"
-                                               :data (list :root tree :paths '("c.el")))
+                        (drgnx-cockpit-fixture-event :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "1 file"
+                                                     :data (list :root tree :paths '("c.el")))
                         (drgnx-cockpit-feed-schedule)
                         (drgnx-cockpit-feed-test--tick))))
         (should changes)
@@ -143,7 +143,7 @@ buffers are killed after: they owned their hooks and their timers."
         (set-window-point w 1)                ; where it starts (the buttons above moved it)
         (should (= 1 (window-point w) (window-start w)))
         (dotimes (i 30)
-          (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :data (list :paths (list (format "f%d.el" i)))))
+          (drgnx-cockpit-fixture-event :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :data (list :paths (list (format "f%d.el" i)))))
         (drgnx-cockpit-feed-schedule)
         (drgnx-cockpit-feed-test--tick)
         (with-current-buffer b
@@ -178,8 +178,8 @@ buffers are killed after: they owned their hooks and their timers."
 
 (ert-deftest drgnx-cockpit-feed/answer-routes-by-kind-of-agent ()
   (drgnx-cockpit-feed-test--with
-    (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)
-    (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
+    (drgnx-cockpit-fixture-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)
+    (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
     (let* ((job-q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-1"))))
            (ext-q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "ext:claude-code:42"))))
            (native-q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-2"))))
@@ -231,7 +231,7 @@ buffers are killed after: they owned their hooks and their timers."
         (let ((busy (drgnx-agents--make :id "s-4" :name "busy" :status 'busy :mode 'interrupt))
               (idle (drgnx-agents--make :id "s-5" :name "idle" :status 'idle :mode 'interrupt :acp-id "acp-5")))
           (setq mirrors (append (list busy idle) mirrors))
-          (drgnx-coord-send :sender "s-4" :recipient "user" :text "[escalation] keep going?" :question t)
+          (drgnx-cockpit-fixture-send :sender "s-4" :recipient "user" :text "[escalation] keep going?" :question t)
           (should (eq (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-4"))) "yes")
                       'session))
           (should (equal (drgnx-agent-session-queue busy) '("yes")))
@@ -239,7 +239,7 @@ buffers are killed after: they owned their hooks and their timers."
           (should-not prompts)
           (should-not (drgnx-coord-inbox "s-4" '("queued")))
           ;; …idle: the answer starts its turn
-          (drgnx-coord-send :sender "s-5" :recipient "user" :text "[escalation] start?" :question t)
+          (drgnx-cockpit-fixture-send :sender "s-5" :recipient "user" :text "[escalation] start?" :question t)
           (should (eq (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-5"))) "go")
                       'session))
           (should (equal prompts (list (list idle "go"))))
@@ -247,7 +247,7 @@ buffers are killed after: they owned their hooks and their timers."
           (setq prompts nil))
         ;; a hub session's mirror whose mode interrupts: the answer waits in the store, the hub gives it when it is free
         (setf (drgnx-agent-session-mode m2) 'interrupt)
-        (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] which file?" :question t)
+        (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] which file?" :question t)
         (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-2")))))
           (should (eq (drgnx-cockpit-answer q "a.el") 'message))
           (should (equal (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "s-2" '("queued"))) '("a.el")))
@@ -255,7 +255,7 @@ buffers are killed after: they owned their hooks and their timers."
         ;; a session of this Emacs, busy, in the default mode: queued in it
         (let ((local (drgnx-agents--make :id "s-3" :name "local" :status 'busy :mode 'queue)))
           (push local mirrors)
-          (drgnx-coord-send :sender "s-3" :recipient "user" :text "[escalation] go on?" :question t)
+          (drgnx-cockpit-fixture-send :sender "s-3" :recipient "user" :text "[escalation] go on?" :question t)
           (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-3"))) "yes")
           (should (equal (drgnx-agent-session-queue local) '("yes")))
           ;; a reply to an agent with no question: queued too
@@ -289,7 +289,7 @@ buffers are killed after: they owned their hooks and their timers."
           (should-not (drgnx-cockpit-feed-test--open-p (plist-get q :id)))
           (should-not drgnx-cockpit-feed--in-flight)
           ;; a refused call lands too, and closes nothing
-          (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+          (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
           (let ((q2 (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-2")))))
             (drgnx-cockpit-answer q2 "spaces")
             (funcall (nth 2 (car pending)) nil "no such session")
@@ -321,22 +321,22 @@ setups define them."
     (drgnx-cockpit-feed-note-questions)
     (let ((n0 (drgnx-needs-you-count)))
       ;; another process asks (no hub event): the module's look (`cockpit-waiting') moves the count, whatever shows
-      (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] ok?" :question t)
+      (drgnx-cockpit-fixture-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] ok?" :question t)
       (drgnx-cockpit--waiting)
       (should (= (drgnx-needs-you-count) (1+ n0)))
       (drgnx-cockpit--waiting)
       (should (= (drgnx-needs-you-count) (1+ n0)))
-      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+      (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
       (drgnx-cockpit--waiting)
       (should (= (drgnx-needs-you-count) (+ n0 2)))
       ;; a store write that asks nothing leaves it
-      (drgnx-coord-event-add :agent "s-1" :kind "edit" :data '(:paths ("x.el")))
+      (drgnx-cockpit-fixture-event :agent "s-1" :kind "edit" :data '(:paths ("x.el")))
       (drgnx-cockpit--waiting)
       (should (= (drgnx-needs-you-count) (+ n0 2))))))
 
 (ert-deftest drgnx-cockpit-feed/questions-are-the-questions-set ()
   (drgnx-cockpit-feed-test--with-notices
-    (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
+    (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
     (drgnx-cockpit-feed-note-questions)
     (let* ((q (seq-find (lambda (q) (equal (plist-get q :agent) "s-2")) (drgnx-cockpit-feed--open-questions)))
            (item (drgnx-cockpit-feed-test--item (cons 'question (plist-get q :id)))))
@@ -356,7 +356,7 @@ setups define them."
   (drgnx-cockpit-feed-test--with-notices
     (drgnx-cockpit-feed-note-questions)
     (let* ((n0 (drgnx-needs-you-count))
-           (cid (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?")))
+           (cid (drgnx-work-fixture-as-hub (drgnx-coord-card-create :job "jx" :kind "ask" :title "go?"))))
       (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :messages nil
                                           :cards (list (list :id cid :kind "ask" :title "go?")))))
       (should (= (drgnx-needs-you-count) (1+ n0)))      ; the jobs set alone holds it
@@ -369,7 +369,7 @@ setups define them."
   (drgnx-cockpit-feed-test--with-notices
     (drgnx-cockpit-feed-note-questions)
     (let* ((n0 (drgnx-needs-you-count))
-           (mid (plist-get (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] ok?" :job "jx") :id)))
+           (mid (plist-get (drgnx-cockpit-fixture-send :sender "s-1" :recipient "user" :text "[escalation] ok?" :job "jx") :id)))
       (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :cards nil
                                           :messages (list (list :id mid :sender "s-1" :text "[escalation] ok?" :state "queued")))))
       (drgnx-cockpit-feed-note-questions)
@@ -383,7 +383,7 @@ setups define them."
     (let ((b (drgnx-cockpit-timeline-buffer)))
       (set-window-buffer (selected-window) b)
       (drgnx-notice-set 'extra (list (list :id '(extra . 1) :text "one") (list :id '(extra . 2) :text "two")))
-      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+      (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
       (drgnx-cockpit-feed--changed)
       (drgnx-cockpit-feed-test--tick)
       (should (> (drgnx-needs-you-count) 3))
@@ -395,7 +395,7 @@ setups define them."
 (ert-deftest drgnx-cockpit-feed/the-status-bar-is-not-called ()
   (drgnx-cockpit-feed-test--with-notices
     (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (ert-fail "the cockpit called the status bar"))))
-      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+      (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
       (drgnx-cockpit-feed-note-questions)
       (drgnx-cockpit--waiting)
       (drgnx-cockpit-feed--changed)
@@ -427,7 +427,7 @@ setups define them."
           (should (equal opened (list (format "task:%s#2" plan))))))
       ;; a new event: one chip at the right of its row; the other rows stay as they were
       (let ((others (with-current-buffer b (list (drgnx-cockpit-feed-test--line "Claude Code") (drgnx-cockpit-feed-test--line "chat")))))
-        (drgnx-coord-set-status "jx#2" "s-1" "done" (drgnx-coord-version))
+        (drgnx-work-fixture-as-hub (drgnx-coord-set-status "jx#2" "s-1" "done" (drgnx-coord-version)))
         (drgnx-cockpit-feed-schedule)
         (drgnx-cockpit-feed-test--tick)
         (with-current-buffer b
@@ -435,8 +435,8 @@ setups define them."
           (should (equal others (list (drgnx-cockpit-feed-test--line "Claude Code") (drgnx-cockpit-feed-test--line "chat"))))))
       ;; many events: the row fits its window, the newest is shown, the older ones one click away
       (dotimes (i 40)
-        (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :data (list :paths (list (format "f%d.el" i)))))
-      (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :data '(:passed 3 :failed 1))
+        (drgnx-cockpit-fixture-event :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :data (list :paths (list (format "f%d.el" i)))))
+      (drgnx-cockpit-fixture-event :agent "s-1" :job "jx" :task "jx#2" :kind "test" :data '(:passed 3 :failed 1))
       (drgnx-cockpit-feed-schedule)
       (drgnx-cockpit-feed-test--tick)
       (with-current-buffer b
@@ -456,7 +456,7 @@ setups define them."
 
 (ert-deftest drgnx-cockpit-feed/a-held-answer-is-not-said-to-be-queued ()
   (drgnx-cockpit-feed-test--with
-    (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)
+    (drgnx-cockpit-fixture-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)
     (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "ext:claude-code:42"))))
           (said nil) (drgnx-coord-queue-limit 0))   ; its queue is full: the store holds the message
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
@@ -471,8 +471,8 @@ setups define them."
       (set-window-buffer (selected-window) b)
       ;; 80 newer chips in s-1's row and in the jobs row
       (dotimes (i 80)
-        (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :data (list :paths (list (format "f%d.el" i))))
-        (drgnx-coord-event-add :job "jx" :kind "job" :data '(:status "running")))
+        (drgnx-cockpit-fixture-event :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :data (list :paths (list (format "f%d.el" i))))
+        (drgnx-cockpit-fixture-event :job "jx" :kind "job" :data '(:status "running")))
       (drgnx-cockpit-feed-schedule)
       (drgnx-cockpit-feed-test--tick)
       (with-current-buffer b
@@ -495,7 +495,7 @@ setups define them."
       ;; two questions, room for one: `‹ N ◐' says a hidden chip waits
       (with-current-buffer b
         (should-not (string-match-p (format "‹ [0-9]+ %s %s" mark mark) (drgnx-cockpit-feed-test--line "claude · jx#2"))))
-      (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and the tests?" :question t :job "jx")
+      (drgnx-cockpit-fixture-send :sender "s-1" :recipient "user" :text "[escalation] and the tests?" :question t :job "jx")
       (let ((drgnx-cockpit-timeline-name-width 60))
         (with-current-buffer b
           (drgnx-cockpit-feed--draw-now)                 ; g: read anew, every row fitted again
@@ -508,8 +508,8 @@ setups define them."
     (let ((mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
       ;; 310 newer events of another agent, and a test that only failed: s-1's question is outside the timeline's
       ;; 300 events
-      (dotimes (i 310) (drgnx-coord-event-add :agent "s-2" :kind "edit" :data (list :paths (list (format "f%d.el" i)))))
-      (drgnx-coord-event-add :agent "s-2" :kind "test" :data '(:failed 2))
+      (dotimes (i 310) (drgnx-cockpit-fixture-event :agent "s-2" :kind "edit" :data (list :paths (list (format "f%d.el" i)))))
+      (drgnx-cockpit-fixture-event :agent "s-2" :kind "test" :data '(:failed 2))
       (let ((b (drgnx-cockpit-timeline-buffer)))
         (set-window-buffer (selected-window) b)
         (with-current-buffer b
@@ -539,7 +539,7 @@ setups define them."
       (should (= n0 (length (plist-get (drgnx-cockpit-model :sessions sessions) :questions))))
       (should-not (funcall waiting-p task5))
       ;; s-2 asks: the graph marks its task, the one count goes up, the timeline gets a waiting chip
-      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
+      (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] tabs or spaces?" :question t)
       (drgnx-cockpit-feed-note-questions)
       (should (funcall waiting-p task5))
       (should (= (drgnx-needs-you-count) (1+ n0)))
@@ -622,7 +622,7 @@ setups define them."
       (drgnx-cockpit-fixture-hide-pane w)
       (should-not (drgnx-timer-active-p (cons 'cockpit-feed-check b)))
       ;; events while hidden: the draw on its way finds it hidden; after that nothing is armed, whatever comes
-      (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "chat ended")
+      (drgnx-cockpit-fixture-event :agent "s-2" :kind "stop" :summary "chat ended")
       (drgnx-cockpit-feed--hub-event "agent" nil)
       (when (drgnx-timer-active-p (cons 'drgnx-view b)) (drgnx-cockpit-feed-test--tick))
       (dotimes (_ 5) (drgnx-cockpit-feed--hub-event "agent" nil) (drgnx-cockpit-feed-schedule 0))
@@ -634,7 +634,7 @@ setups define them."
   (drgnx-cockpit-feed-test--with
     (let* ((b (drgnx-cockpit-timeline-buffer)) (w (drgnx-cockpit-fixture-show-pane 'timeline b 'bottom)))
       (drgnx-cockpit-fixture-hide-pane w)
-      (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "chat ended")
+      (drgnx-cockpit-fixture-event :agent "s-2" :kind "stop" :summary "chat ended")
       (drgnx-cockpit-feed--hub-event "agent" nil)
       (when (drgnx-timer-active-p (cons 'drgnx-view b)) (drgnx-cockpit-feed-test--tick))
       (with-current-buffer b (should-not (string-search "stopped" (buffer-string))))
@@ -659,7 +659,7 @@ setups define them."
       (drgnx-cockpit-feed-test--tick)
       (drgnx-cockpit-fixture-hide-pane w)
       (let ((drawn (plist-get (drgnx-view-stats view) :rows-drawn)) (skips (plist-get (drgnx-view-stats view) :stale-skips)))
-        (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "chat ended")
+        (drgnx-cockpit-fixture-event :agent "s-2" :kind "stop" :summary "chat ended")
         (dotimes (_ 5) (drgnx-cockpit-feed--hub-event "agent" nil))
         (drgnx-cockpit-feed-test--tick)
         (should (> (plist-get (drgnx-view-stats view) :stale-skips) skips))
@@ -675,8 +675,8 @@ setups define them."
       (let ((hd (plist-get (drgnx-view-stats (drgnx-cockpit-feed-test--view h)) :rows-drawn))
             (td (plist-get (drgnx-view-stats (drgnx-cockpit-feed-test--view tl)) :rows-drawn))
             (rows (drgnx-view-row-count (drgnx-cockpit-feed-test--view tl))))
-        (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "1 file"
-                               :data (list :root tree :paths '("c.el")))
+        (drgnx-cockpit-fixture-event :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :summary "1 file"
+                                     :data (list :root tree :paths '("c.el")))
         (drgnx-cockpit-feed--hub-event "agent" nil)
         (drgnx-cockpit-feed-test--tick)
         (should (= 1 (- (plist-get (drgnx-view-stats (drgnx-cockpit-feed-test--view h)) :rows-drawn) hd)))

@@ -121,8 +121,8 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
     (should (= (point) (point-min)))
     ;; a file the agent reports from another process (its MCP server): listed at the next look at the store
     (drgnx-cockpit-fixture-write (concat wt-a "docs/later.md") "later\n")
-    (drgnx-coord-event-add :agent drgnx-cockpit-edits-test--ext :kind "edit" :summary "1 file"
-                           :data (list :root (directory-file-name wt-a) :paths '("docs/later.md")))
+    (drgnx-cockpit-fixture-event :agent drgnx-cockpit-edits-test--ext :kind "edit" :summary "1 file"
+                                 :data (list :root (directory-file-name wt-a) :paths '("docs/later.md")))
     (drgnx-cockpit-edits--look)
     (drgnx-cockpit-edits-test--settle e)
     (should (equal drgnx-cockpit-edits--files '("README" "new.txt" "docs/later.md")))
@@ -322,8 +322,8 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (drgnx-cockpit-edits-test--hide e)
     (drgnx-cockpit-fixture-write (concat wt-a "docs/while-hidden.md") "hidden\n")
-    (drgnx-coord-event-add :agent drgnx-cockpit-edits-test--ext :kind "edit" :summary "1 file"
-                           :data (list :root (directory-file-name wt-a) :paths '("docs/while-hidden.md")))
+    (drgnx-cockpit-fixture-event :agent drgnx-cockpit-edits-test--ext :kind "edit" :summary "1 file"
+                                 :data (list :root (directory-file-name wt-a) :paths '("docs/while-hidden.md")))
     (should-not (seq-filter #'drgnx-timer-active-p (drgnx-cockpit-edits-test--keys e)))
     (drgnx-cockpit-fixture-show-pane 'agent-edits e 'editor)
     (should (drgnx-timer-active-p (cons 'cockpit-edits-check e)))
@@ -457,7 +457,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
   ;; a chat session stopped in a linked worktree (the user may work there): a request, never a question
   (drgnx-cockpit-fixture-with
     (let ((drgnx-cockpit-edits--last nil) (temporary-file-directory (drgnx-cockpit-edits-test--tmp root)) (ledger (concat wt-b ".superpowers/sdd/p/progress.md")))
-      (drgnx-coord-agent-register :id "s-9" :name "chat" :cwd (directory-file-name wt-b))
+      (drgnx-cockpit-fixture-register :id "s-9" :name "chat" :cwd (directory-file-name wt-b))
       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))   ; s-9 is not among them: "stopped"
                 ((symbol-function 'drgnx-hub-call)
                  (lambda (method params cb &rest _)
@@ -488,7 +488,7 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
         (should (= 1 notified))
         ;; an outside agent that says it stopped, in the worktree it registered: still only a request — its worktree may
         ;; be the user's own, and a stop event proves nothing
-        (drgnx-coord-event-add :agent ext :kind "stop" :summary "stopped")
+        (drgnx-cockpit-fixture-event :agent ext :kind "stop" :summary "stopped")
         (drgnx-cockpit-edits-test--goto "README" "+more")
         (call-interactively #'drgnx-cockpit-edits-revert-file)
         (drgnx-cockpit-edits-test--goto "new.txt")
@@ -546,7 +546,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
 (ert-deftest drgnx-cockpit-edits/revert-direct-asks-first ()
   (drgnx-cockpit-edits-test--job
     (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited) answer nil)
-    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-fixture-status "jx#2" "done" "s-1")
     (drgnx-cockpit-edits-revert-file "README")
     (should (string-match-p "\\`Put README back as " (car asked)))
     (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))
@@ -556,17 +556,17 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
 (ert-deftest drgnx-cockpit-edits/a-job-worktree-is-reverted-only-when-its-agent-is-known-stopped ()
   (drgnx-cockpit-edits-test--job
     ;; no session of it here: absence proves nothing — a request
-    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-fixture-status "jx#2" "done" "s-1")
     (drgnx-cockpit-edits-revert-file "README")
     ;; its mirror exited, but its task is still running: a request
-    (drgnx-coord-force-status "jx#2" "running" "s-1")
+    (drgnx-cockpit-fixture-status "jx#2" "running" "s-1")
     (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
     (drgnx-cockpit-edits-revert-file "README")
     ;; exited and done, but another agent registered its cwd in the worktree: a request
-    (drgnx-coord-force-status "jx#2" "done" "s-1")
-    (drgnx-coord-agent-register :id "ext:zed:9" :kind "zed" :cwd (concat tree "sub"))
+    (drgnx-cockpit-fixture-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-fixture-register :id "ext:zed:9" :kind "zed" :cwd (concat tree "sub"))
     (drgnx-cockpit-edits-revert-file "README")
-    (drgnx-coord-agent-register :id "ext:zed:9" :clear '(:cwd))
+    (drgnx-cockpit-fixture-register :id "ext:zed:9" :clear '(:cwd))
     (should-not asked)
     (should (equal (inbox) (make-list 3 "[revert] please undo your changes to README")))
     (should (= 3 notified))
@@ -585,7 +585,7 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
 (ert-deftest drgnx-cockpit-edits/a-job-folder-must-be-its-worktrees-top-on-its-branch ()
   (drgnx-cockpit-edits-test--job
     (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
-    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-fixture-status "jx#2" "done" "s-1")
     ;; the task worktree on another branch than the job's: a request
     (drgnx-cockpit-fixture-git tree "checkout" "-q" "-b" "elsewhere")
     (drgnx-cockpit-edits-revert-file "README")
@@ -605,19 +605,19 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
 (ert-deftest drgnx-cockpit-edits/a-revert-checks-again-after-the-question ()
   (drgnx-cockpit-edits-test--job
     (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
-    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-fixture-status "jx#2" "done" "s-1")
     ;; while the question waits, the task is taken up again: a request instead, the file kept
-    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) (drgnx-coord-force-status "jx#2" "running" "s-1") t)))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) (drgnx-cockpit-fixture-status "jx#2" "running" "s-1") t)))
       (drgnx-cockpit-edits-revert-file "README"))
     (should (= 1 (length asked)))
     (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))
     (should (equal (inbox) '("[revert] please undo your changes to README")))
     ;; another agent comes to work in it (through a link to it: true names count)
-    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-fixture-status "jx#2" "done" "s-1")
     (let ((link (concat root "link-to-tree")))
       (make-symbolic-link (directory-file-name tree) link)
       (cl-letf (((symbol-function 'yes-or-no-p)
-                 (lambda (prompt) (push prompt asked) (drgnx-coord-agent-register :id "ext:zed:9" :kind "zed" :cwd link) t)))
+                 (lambda (prompt) (push prompt asked) (drgnx-cockpit-fixture-register :id "ext:zed:9" :kind "zed" :cwd link) t)))
         (drgnx-cockpit-edits-revert-file "n2.txt")))
     (should (= 2 (length asked)))
     (should (file-exists-p (concat tree "n2.txt")))
@@ -629,8 +629,8 @@ NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's t
 (ert-deftest drgnx-cockpit-edits/a-git-failure-never-deletes ()
   (drgnx-cockpit-edits-test--job
     (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
-    (drgnx-coord-force-status "jx#2" "done" "s-1")
-    (drgnx-coord-agent-register :id "s-1" :base "0000000000000000000000000000000000000001")   ; no such commit
+    (drgnx-cockpit-fixture-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-fixture-register :id "s-1" :base "0000000000000000000000000000000000000001")   ; no such commit
     (should-error (drgnx-cockpit-edits-revert-file "n2.txt") :type 'error)
     (should-error (drgnx-cockpit-edits-revert-file "README") :type 'error)
     (should-not asked)                                                   ; it failed before asking anything
