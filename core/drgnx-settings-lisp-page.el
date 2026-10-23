@@ -82,7 +82,7 @@ when provenance is not certain: (WON . SOURCE)."
   (let* ((exists (file-exists-p file))
          (index (and exists (ignore-errors (drgnx-lisp-index-get file))))
          (rec (gethash (file-truename file) drgnx-settings-lisp-page--loads)))
-    (list :file file :role role :exists exists
+    (list :file file :role role :exists exists :emacs-dir (plist-get opts :emacs-dir)
           :on (if (plist-member opts :on) (and (plist-get opts :on) t) t) :early (plist-get opts :early)
           :loaded (and exists (drgnx-settings-lisp-page--loaded-p file loaded) t)
           :seconds (plist-get rec :seconds) :error (plist-get rec :error) :parent (plist-get rec :parent)
@@ -173,7 +173,10 @@ entries as settings and their problems as findings."
                                                  (format " in %d ms" (round (* 1000 (plist-get row :seconds))))
                                                "")))
                            (t "not loaded"))
-                     (when-let* ((p (plist-get row :parent))) (format "by %s" (file-name-nondirectory p)))))
+                     (when-let* ((p (plist-get row :parent))) (format "by %s" (file-name-nondirectory p)))
+                     (when-let* ((d (plist-get row :emacs-dir)))
+                       (format "user-emacs-directory is %s only while it loads (a setq of it is undone afterwards; \
+what loads later sees drgnx's)" d))))
      " · ")))
 
 (defun drgnx-settings-lisp-page--put (beg file line &optional var)
@@ -223,7 +226,7 @@ entries as settings and their problems as findings."
     (erase-buffer)
     (insert (propertize "Your Lisp files, in load order, then the data files drgnx reads\n" 'face 'bold)
             (propertize "RET opens a file at the line.  On a setting's line, Settings: Move into Settings moves it into \
-settings.el.\n\n" 'face 'shadow))
+settings.el.  t turns the file of the line on (loads now) or off (from the next start); a adds a file.\n\n" 'face 'shadow))
     (mapc #'drgnx-settings-lisp-page--insert-row (drgnx-settings-lisp-page-rows))
     (goto-char (point-min))
     (forward-line (1- line))))

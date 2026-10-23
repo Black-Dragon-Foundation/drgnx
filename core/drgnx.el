@@ -55,7 +55,7 @@
 the start.  Provenance records which of its forms sets what (`drgnx-settings-prov-with-load')."
   (let ((file (or file (drgnx-user-config-file))))
     (drgnx-settings-prov-with-load file
-      (when (file-exists-p file)
+      (when (and (file-exists-p file) (drgnx-user-lisp-on-p file))   ; the file's switch (Settings: Lisp Files, bisect)
         (condition-case err (load file nil 'nomessage 'nosuffix)
           (error (drgnx-notify 'config 'fail (format "%s: %s (the rest of it did not run)" (abbreviate-file-name file)
                                                      (error-message-string err))

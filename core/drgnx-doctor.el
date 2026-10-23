@@ -26,6 +26,7 @@
 
 (declare-function package-built-in-p "package")
 (declare-function drgnx-portable-config-problems "drgnx-portable")
+(declare-function drgnx-user-lisp-bootstraps "drgnx-user-lisp" (&optional files))
 (declare-function drgnx-notice-save-dir "drgnx-notice-save")
 (declare-function drgnx-notice-save-last-file "drgnx-notice-save")
 (declare-function drgnx-notice-save-pid-live-p "drgnx-notice-save")
@@ -428,6 +429,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :config-files (drgnx-doctor--config-files)
            :settings-leftovers (drgnx-doctor--settings-leftovers)
            :settings-stayed (drgnx-doctor--settings-stayed)
+           :user-lisp-bootstraps (condition-case nil (progn (require 'drgnx-user-lisp) (drgnx-user-lisp-bootstraps)) (error nil))
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
            :notices (drgnx-doctor--notices)
@@ -655,6 +657,17 @@ severity, the fix the first `:fix'."
                      :doc "No old settings file (keys.eld, agents.eld …) is left beside settings.el after the move into it"
                      :check (lambda (f) (drgnx-doctor--settings-leftovers-check (plist-get f :settings-leftovers)
                                                                                 (plist-get f :settings-stayed))))
+
+(drgnx-doctor-define 'user-lisp-bootstrap :group "drgnx"
+                     :doc "A package-initialize, straight.el or elpaca bootstrap in a Lisp file you added (not drgnx's package manager)"
+                     :check (lambda (f)
+                              (when-let* ((bs (plist-get f :user-lisp-bootstraps)))
+                                (list 'info
+                                      (mapconcat (lambda (b) (format "%s:%s is a %s bootstrap"
+                                                                     (abbreviate-file-name (plist-get b :file))
+                                                                     (plist-get b :line) (plist-get b :kind)))
+                                                 bs "\n")
+                                      "drgnx manages packages itself (drgnx sync); nothing is blocked, but the bootstrap may install a second set"))))
 
 (drgnx-doctor-define 'checkout-clean :group "drgnx"
                      :doc "The checkout's init/ has no local changes (install.sh's update needs that)"

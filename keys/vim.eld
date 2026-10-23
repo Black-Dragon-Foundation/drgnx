@@ -395,6 +395,8 @@
         (settings-migration-report :none "a rare, deliberate choice; in the palette")
         (settings-migrate-old-files :none "a rare, deliberate choice; in the palette")
         (settings-move-old-files-away :none "a rare, deliberate choice; in the palette")
+        (settings-lisp-files-toggle "t")
+        (settings-add-lisp-file "a")
         (settings-lisp-files :none "in the palette and the Options menu")
         (settings-lisp-files-open "RET")
         (settings-move-into :none "it rewrites a line of your Lisp: only when asked; in the palette")

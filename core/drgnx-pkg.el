@@ -24,6 +24,7 @@
 (require 'drgnx-face-state)
 (require 'drgnx-modules)
 (require 'drgnx-settings-file)
+(require 'drgnx-user-lisp)
 (require 'drgnx-pkg-activate)
 
 (defvar native-comp-eln-load-path)
@@ -1127,8 +1128,10 @@ comes back.  One lock held throughout.  Returns (:ok :generation :restored :smok
   "Find the module that makes FAILS true: FAILS is called with a configuration directory (a copy of
 the user's, whose settings.el turns some modules off: its `drgnx-modules-disabled') and returns non-nil when the
 problem shows.
-Halves the enabled modules each round.  Returns the module; `:package-settings' when the problem shows with
-every module off but goes once settings.el's entries for packages and Emacs are off too (FAILS called with
+Halves the enabled modules and your Lisp files (the listed ones that are on, config.el, custom.el; turned off in the
+copy's `drgnx-user-lisp-files') each round.  Returns the module, or your Lisp file's expanded name (a string);
+`:package-settings' when the problem shows with every module off but goes once settings.el's entries for
+packages and Emacs are off too (FAILS called with
 DRGNX_PACKAGE_SETTINGS=off in `process-environment'); else `:not-a-module'.  The user's own files are never changed."
   (let* ((user (drgnx-user-dir))
          (state (drgnx-modules-read-state))
@@ -1142,13 +1145,18 @@ DRGNX_PACKAGE_SETTINGS=off in `process-environment'); else `:not-a-module'.  The
                                          ;; external modules (`drgnx-modules-external'): turned off as external/NAME
                                          (mapcar (lambda (e) (intern (format "external/%s" (plist-get e :name))))
                                                  (plist-get state :external)))))
+         (modules candidates)
+         ;; your Lisp files (listed ones that are on, config.el, custom.el) are candidates beside the modules, as names
+         (files (drgnx-user-lisp-bisect-files))
          (tmp (make-temp-file "drgnx-bisect" t)))
+    (setq candidates (append candidates files))
     (cl-flet ((try (on)
                 (delete-directory tmp t)
                 (if (file-directory-p user) (copy-directory user tmp nil t t) (make-directory tmp t))
-                ;; the copy's settings.el, with the modules off: only that entry changes, the rest of the file stays
+                ;; the copy's settings.el, with the modules and files off: only those entries change, the rest stays
                 (drgnx-settings-file-put (expand-file-name "settings.el" tmp) 'drgnx-settings nil 'drgnx-modules-disabled
-                                         (append off (seq-difference candidates on)))
+                                         (append off (seq-difference modules on)))
+                (drgnx-user-lisp-bisect-put (expand-file-name "settings.el" tmp) (seq-difference files on))
                 (funcall fails tmp)))
       (unwind-protect
           (progn
@@ -1344,6 +1352,8 @@ ExecStart= line after the check and before anything is written.  Never restarts 
                                (:not-a-module "the problem shows with every module off: not a module (try drgnx safe)")
                                (:package-settings
                                 "the problem comes with settings.el's values for packages and Emacs (Settings: Turn Off Package Settings; then look at settings.el)")
+                               ((pred stringp)
+                                (format "the problem comes with your Lisp file %s (turn it off in Settings: Lisp Files)" m))
                                (_ (format "the problem comes with module %s (turn it off in Preferences: Modules)" m))))
            0))
         (`("service-unit" "--refresh")
