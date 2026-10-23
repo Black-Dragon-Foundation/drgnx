@@ -44,6 +44,8 @@ fn world() -> &'static World {
         let coord = Arc::new(Coord::new(CoordDb::spawn(&file), Arc::new(NoHub)));
         let who = Identity::Session {
             agent: "s-0000000a".into(),
+            sid: "s1".into(),
+            profile: None,
             job: Some("j1".into()),
             task: None,
             home: dir,

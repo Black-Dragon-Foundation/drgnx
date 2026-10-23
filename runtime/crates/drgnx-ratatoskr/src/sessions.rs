@@ -70,6 +70,8 @@ impl Row {
     pub fn identity(&self) -> Identity {
         Identity::Session {
             agent: self.agent.clone(),
+            sid: self.sid.clone(),
+            profile: None,
             job: self.job.clone(),
             task: self.task.clone(),
             home: PathBuf::from(self.cwd.as_deref().unwrap_or("/")),
@@ -743,6 +745,8 @@ mod tests {
             live[&a.sid].row.identity(),
             Identity::Session {
                 agent: "s-0000000a".into(),
+                sid: a.sid.clone(),
+                profile: None,
                 job: Some("j1".into()),
                 task: None,
                 home: PathBuf::from("/w"),

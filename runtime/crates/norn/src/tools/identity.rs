@@ -185,6 +185,8 @@ mod tests {
     fn session(agent: &str) -> Identity {
         Identity::Session {
             agent: agent.into(),
+            sid: "s1".into(),
+            profile: None,
             job: Some("j".into()),
             task: Some("j#1".into()),
             home: PathBuf::from("/w"),

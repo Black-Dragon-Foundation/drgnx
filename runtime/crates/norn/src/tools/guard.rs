@@ -337,6 +337,8 @@ mod tests {
         let tool = guarded(Ran);
         let who = Identity::Session {
             agent: "s-1".into(),
+            sid: "s1".into(),
+            profile: None,
             job: None,
             task: None,
             home: PathBuf::from("/w"),

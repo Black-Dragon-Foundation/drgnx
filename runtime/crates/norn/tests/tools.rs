@@ -131,6 +131,8 @@ async fn call_on(coord: &Arc<Coord>, who: &Identity, name: &str, args: Value) ->
 fn session(agent: &str, job: Option<&str>, home: &Path) -> Identity {
     Identity::Session {
         agent: agent.into(),
+        sid: "s1".into(),
+        profile: None,
         job: job.map(str::to_owned),
         task: None,
         home: home.to_path_buf(),
@@ -651,6 +653,8 @@ fn identity_of(v: &Value) -> Identity {
     } else {
         Identity::Session {
             agent: text("agent").unwrap(),
+            sid: "s1".into(),
+            profile: None,
             job: text("job"),
             task: text("task"),
             home: PathBuf::from("/nonexistent-parity"),

@@ -21,8 +21,9 @@ pub type Tx = urdr::Connection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoordError {
-    /// The file is missing or below schema 6: the Lisp side makes it.
-    NotReady { schema: u32 },
+    /// The store is not open, with the text that says why (today: missing or below schema 6, which the Lisp side
+    /// makes; from Urdr's Task 12 the opening rule's text, or a failed migration's reason).
+    NotReady(String),
     /// The file is a newer schema than this writer knows: readable, never written.
     ReadOnly { schema: u32 },
     /// Another writer held the database past the busy timeout.
@@ -36,12 +37,7 @@ pub enum CoordError {
 impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CoordError::NotReady { schema } => {
-                write!(
-                    f,
-                    "work.db is not ready (schema {schema}); the Lisp side makes it"
-                )
-            }
+            CoordError::NotReady(text) => f.write_str(text),
             CoordError::ReadOnly { schema } => {
                 write!(
                     f,
@@ -97,6 +93,13 @@ struct Open {
 pub struct CoordDb {
     path: Arc<PathBuf>,
     state: Arc<Mutex<Open>>,
+}
+
+/// The not-ready text of a file at SCHEMA (0: missing).
+fn not_ready(schema: u32) -> CoordError {
+    CoordError::NotReady(format!(
+        "work.db is not ready (schema {schema}); the Lisp side makes it"
+    ))
 }
 
 fn file_id(path: &Path) -> Option<(u64, u64)> {
@@ -179,12 +182,12 @@ impl CoordDb {
     fn handle(&self, for_write: bool) -> Result<Handle, CoordError> {
         let st = self.state.lock().unwrap();
         match (&st.held, &st.handle) {
-            (Held::Closed { schema }, _) => Err(CoordError::NotReady { schema: *schema }),
+            (Held::Closed { schema }, _) => Err(not_ready(*schema)),
             (Held::Newer { schema }, _) if for_write => {
                 Err(CoordError::ReadOnly { schema: *schema })
             }
             (_, Some(h)) => Ok(h.clone()),
-            _ => Err(CoordError::NotReady { schema: 0 }),
+            _ => Err(not_ready(0)),
         }
     }
 
@@ -193,7 +196,7 @@ impl CoordDb {
     /// write and read goes through here, the front's methods and the coordination tools alike.
     async fn ready(&self, for_write: bool) -> Result<Handle, CoordError> {
         match self.handle(for_write) {
-            Err(CoordError::NotReady { .. }) => {
+            Err(CoordError::NotReady(_)) => {
                 let db = self.clone();
                 let _ = tokio::task::spawn_blocking(move || db.tick()).await;
                 self.handle(for_write)
@@ -277,13 +280,13 @@ pub(crate) mod tests {
         let db = CoordDb::spawn(&file);
         // Missing: not ready, and nothing is created.
         let e = db.write(|_| Ok(())).await.unwrap_err();
-        assert_eq!(e, CoordError::NotReady { schema: 0 });
+        assert_eq!(e, not_ready(0));
         assert!(!file.exists());
         // Schema 5: not ready, with the text the design names.
         make(&file, 5);
         db.tick();
         let e = db.write(|_| Ok(())).await.unwrap_err();
-        assert_eq!(e, CoordError::NotReady { schema: 5 });
+        assert!(matches!(e, CoordError::NotReady(_)));
         assert_eq!(
             e.to_string(),
             "work.db is not ready (schema 5); the Lisp side makes it"

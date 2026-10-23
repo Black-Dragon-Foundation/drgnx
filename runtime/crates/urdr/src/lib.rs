@@ -3,7 +3,11 @@
 //! One thread owns the connection(s) and runs closures sent over a bounded channel, so SQLite never runs on an async
 //! worker (`thread`). Read-only connections never checkpoint (`open`). Schema migrations are data (`migrate`). The
 //! public API carries no application types.
+//!
+//! [`graph`] is the graph store of `work.db` schema 7 (docs/develop/store.md). The graph layer is generic: kinds, link
+//! names and policy are the caller's.
 
+pub mod graph;
 mod migrate;
 mod open;
 mod thread;

@@ -7,21 +7,32 @@ use std::sync::{Arc, Mutex};
 
 use mimir::BoxFuture;
 
+use urdr::graph::{ReadPool, WriterHandle};
+
+use crate::deny::{DenyList, SharedDeny};
 use crate::store::CoordDb;
 
+pub mod graph;
 pub mod guard;
 pub mod identity;
 pub mod job;
 pub mod read;
 pub mod report;
+pub mod tracker;
+
+pub use tracker::{ToolSets, tools_for};
 
 /// Who is calling a tool.  Never built from a tool argument or an environment variable ([`identity`] holds its
 /// rules).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Identity {
-    /// From a session socket (Task 10); `home` is the cwd the session was minted with.
+    /// From a session socket (Task 10); `home` is the cwd the session was minted with.  `sid` and `profile` (the
+    /// Urdr plan's Task 0) name the session in its writes' `tx` rows and in grants (`session:SID`, `profile:NAME`);
+    /// `profile` is `None` until `msession` keeps it (Urdr Task 15b).
     Session {
         agent: String,
+        sid: String,
+        profile: Option<String>,
         job: Option<String>,
         task: Option<String>,
         home: PathBuf,
@@ -57,6 +68,16 @@ pub struct Coord {
     hub: Arc<dyn Hub>,
     rates: Mutex<guard::Rates>,
     clock: Clock,
+    graph: Option<GraphStore>,
+}
+
+/// The graph store the schema-7 tools read and write through (the Urdr plan): set by the hub once its writer is
+/// open ([`Coord::with_graph`]); `None` before (and in the p2–p3 tests).
+#[derive(Clone)]
+pub struct GraphStore {
+    pub writer: WriterHandle,
+    pub pool: ReadPool,
+    pub deny: SharedDeny,
 }
 
 impl Coord {
@@ -76,7 +97,26 @@ impl Coord {
             hub,
             rates: Mutex::default(),
             clock,
+            graph: None,
         }
+    }
+
+    /// This `Coord` with the graph store G.
+    pub fn with_graph(mut self, g: GraphStore) -> Coord {
+        self.graph = Some(g);
+        self
+    }
+
+    /// The graph store, once the hub has opened it.
+    pub fn graph(&self) -> Option<&GraphStore> {
+        self.graph.as_ref()
+    }
+
+    /// The deny-list in force now (a snapshot: a reload replaces the list, never edits it).
+    pub fn deny(&self) -> Option<Arc<DenyList>> {
+        self.graph
+            .as_ref()
+            .map(|g| g.deny.read().unwrap_or_else(|e| e.into_inner()).clone())
     }
 
     /// The store the tools write through.
@@ -103,5 +143,7 @@ pub fn tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     let mut all = report::tools();
     all.extend(job::tools());
     all.extend(read::tools());
+    all.extend(tracker::tools());
+    all.extend(graph::tools());
     all
 }

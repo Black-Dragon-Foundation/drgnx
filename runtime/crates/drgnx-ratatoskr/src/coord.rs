@@ -97,7 +97,7 @@ fn fail(e: CoordError) -> Error {
         CoordError::ReadOnly { .. } => (ErrorCode::Schema, e.to_string()),
         CoordError::Busy => (ErrorCode::Internal, "work.db is busy; retry".into()),
         CoordError::Refused(text) => (ErrorCode::InvalidParams, text.clone()),
-        CoordError::NotReady { .. } => (ErrorCode::Internal, e.to_string()),
+        CoordError::NotReady(_) => (ErrorCode::Internal, e.to_string()),
         CoordError::Sql(_) => {
             tracing::warn!("a coordination write failed: {e}");
             (ErrorCode::Internal, e.to_string())
