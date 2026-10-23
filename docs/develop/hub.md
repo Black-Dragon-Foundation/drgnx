@@ -135,13 +135,20 @@ user's (an agent outside a sandbox, a debugger it starts) from reading that memo
 `/proc/PID/mem`, and keeps the hub from writing a core file. It does not stop root or a process with
 `CAP_SYS_PTRACE`. Its children start dumpable again (an exec resets it); the hub's listening sockets are never passed
 to one (close-on-exec, and `draugr::spawn` checks in debug builds that none of them is among a child's descriptors).
+It fails closed (design §6.2): when hardening fails — on macOS a hub started under a debugger or tracer, whose
+`PT_DENY_ATTACH` is refused; on another platform always — the hub still serves, but takes no key. `gateway/keys` and a
+`gateway/register` that carries keys are `not-allowed` at `keys` ("this hub cannot protect keys: WHY") and nothing is
+taken; `status`'s `gateway.keys_refused` says WHY, and so do `ratatoskr doctor --json` (`gateway.keys_refused`) and
+the text of `ratatoskr status` and `ratatoskr doctor` (a line "keys: refused, this hub cannot protect keys: WHY"). The
+editor keeps its keys for the next hand-over; start the hub outside the debugger (`drgnx hub restart`).
 
 ### Status, doctor and restart
 
 `ratatoskr status [--json]` is `status` as a user client (with `"running": true` added with `--json`); with no hub it
 prints `{"running": false}` and exits 1. `ratatoskr doctor --json` prints `{binary: {path, commit, test_hooks},
-running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings}?, socket_dir: {path, mode,
-ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key). `ratatoskr restart` calls `restart`.
+running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings, keys_refused?}?, socket_dir:
+{path, mode, ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key;
+`keys_refused` only from a hub that could not be hardened, above). `ratatoskr restart` calls `restart`.
 
 **`restart`** (user class) answers `true`, then the hub stops as for `shutdown` (its backend first; in phase 1 there
 are no turns to cancel) and exits **75**. Under `--supervisor self`, where nothing would start it again, it releases
@@ -364,9 +371,9 @@ with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
 last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since` (0), at most `limit` (200, at most
 1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
 says `backend: {state: running|starting|missing|failed, pid?}` and `gateway: {port?, registrations, requests,
-errors, fallbacks, bytes_in, bytes_out, providers, keys_held, warnings}`, the front's own gateway
+errors, fallbacks, bytes_in, bytes_out, providers, keys_held, keys_refused?, warnings}`, the front's own gateway
 ([Registrations](#registrations)): `providers` is how many the table has, `keys_held` the providers whose key the hub
-holds (never a key), `errors` the requests answered with no status or one of 400 and up. The front also serves the
+holds (never a key), `keys_refused` why it takes none (only when it could not be hardened), `errors` the requests answered with no status or one of 400 and up. The front also serves the
 gateway's methods, `gateway/{register,unregister,keys,set-budget}`, `config/providers` and `spend`. Every other method
 goes to the Lisp backend (next section).
 

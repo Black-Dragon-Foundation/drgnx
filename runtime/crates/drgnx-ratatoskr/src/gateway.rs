@@ -168,6 +168,9 @@ pub struct Gate {
     keys: Arc<RwLock<Keys>>,
     /// The ids whose key is held (`Keys` lists none).
     held: Mutex<BTreeSet<String>>,
+    /// Why keys are refused: the process could not be made not dumpable (`server::harden`), or no one said it was.
+    /// Fails closed (design §6.2): `None` only once the server's hardening succeeded.
+    keys_refused: Mutex<Option<String>>,
     db: OnceLock<urdr::Handle>,
     /// The engine and the loopback port, once it listens.
     engine: OnceLock<(Arc<Gateway>, u16)>,
@@ -192,6 +195,7 @@ impl Gate {
             providers: Arc::new(RwLock::new(BTreeMap::new())),
             keys: Arc::new(RwLock::new(Keys::new())),
             held: Mutex::new(BTreeSet::new()),
+            keys_refused: Mutex::new(Some("the hub was not hardened".into())),
             db: OnceLock::new(),
             engine: OnceLock::new(),
             warnings: Mutex::new(Vec::new()),
@@ -388,8 +392,9 @@ impl Gate {
             owner,
             sid,
         } = p;
-        // the keys first: memory only
+        // the keys first: memory only, and only in a hub that keeps other processes out of it
         if let Some(k) = keys {
+            self.protects_keys()?;
             self.take_keys(k);
         }
         let (restrictions, kept_or) = match &openrouter {
@@ -575,7 +580,25 @@ impl Gate {
         }
     }
 
-    /// `gateway/keys` (and a registration's `keys`): to memory, nowhere else.
+    /// The server's hardening (`server::harden`): `Ok` lets keys in, an `Err` says why they are refused.
+    pub fn set_hardened(&self, hardened: Result<(), String>) {
+        *lock(&self.keys_refused) = hardened.err();
+    }
+
+    /// `not-allowed` at `keys` while this hub cannot keep other processes out of its memory (design §6.2, fail
+    /// closed): `gateway/keys` and a `gateway/register` that carries keys are refused, and nothing is taken.
+    pub fn protects_keys(&self) -> Result<(), Error> {
+        match &*lock(&self.keys_refused) {
+            None => Ok(()),
+            Some(why) => Err(Error {
+                code: ErrorCode::NotAllowed,
+                message: format!("this hub cannot protect keys: {why}"),
+                path: Some("keys".into()),
+            }),
+        }
+    }
+
+    /// `gateway/keys` (and a registration's `keys`): to memory, nowhere else.  Callers check `protects_keys` first.
     pub fn take_keys(&self, keys: ProviderKeys) {
         let pairs: Vec<_> = keys.into_pairs().collect();
         let ids: Vec<String> = pairs.iter().map(|(id, _)| id.clone()).collect();
@@ -709,6 +732,7 @@ impl Gate {
             bytes_out,
             providers: read(&self.providers).len() as u64,
             keys_held: lock(&self.held).iter().cloned().collect(),
+            keys_refused: lock(&self.keys_refused).clone(),
             warnings: lock(&self.warnings).clone(),
         }
     }
@@ -1149,6 +1173,7 @@ mod tests {
         front.mcp.open_store(env, socket, db.clone());
         front.gate.open_store(db);
         front.gate.listen(None).await.unwrap();
+        front.gate.set_hardened(Ok(())); // as `serve` does once `harden` succeeded
         Hub {
             dir,
             front,
@@ -1641,6 +1666,46 @@ mod tests {
         g.restore(&h.front.mcp).await;
         assert!(g.regs.find(&hash).is_none());
         assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+    }
+
+    /// Review m2: a hub whose hardening failed refuses a registration that carries keys, takes none of them, and
+    /// says why; a registration without keys is not affected.  A gate no one hardened refuses too (fail closed).
+    #[tokio::test]
+    async fn an_unhardened_hub_refuses_a_keyed_registration() {
+        let h = hub().await;
+        let g = &h.front.gate;
+        table(g).await;
+        g.set_hardened(Err("cannot make the hub not dumpable: EPERM".into()));
+        let e = g
+            .register(
+                register_params(
+                    json!({"chain": [["keyed", null]], "keys": {"keyed": "canary-key-m2"}}),
+                ),
+                None,
+                &h.front.mcp,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.path.as_deref(), e.message.as_str()),
+            (
+                ErrorCode::NotAllowed,
+                Some("keys"),
+                "this hub cannot protect keys: cannot make the hub not dumpable: EPERM"
+            )
+        );
+        assert!(g.status().keys_held.is_empty());
+        assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+        assert!(
+            g.register(
+                register_params(json!({"chain": [["local", null]]})),
+                None,
+                &h.front.mcp
+            )
+            .await
+            .is_ok()
+        );
+        assert!(Gate::new(g.coord.clone()).protects_keys().is_err());
     }
 
     #[tokio::test]

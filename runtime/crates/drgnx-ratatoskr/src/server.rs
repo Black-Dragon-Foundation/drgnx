@@ -118,7 +118,7 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
-    harden();
+    let hardened = harden();
     let cap_path = paths::cap_path(&socket);
     let (listener, cap) = match bind(&socket, &cap_path) {
         Ok(x) => x,
@@ -189,6 +189,8 @@ pub async fn run(args: ServeArgs) -> Exit {
         coord_db,
         Arc::new(ToBackend(backend.clone())),
     ));
+    // before anything is served: a hub that could not be hardened takes no key
+    front.gate.set_hardened(hardened);
     #[cfg(feature = "test-hooks")]
     front
         .ignore_shutdown
@@ -317,27 +319,32 @@ pub async fn run(args: ServeArgs) -> Exit {
 }
 
 /// The process made not dumpable, before it holds a key (design §6.2): no core file, and no other process of the user
-/// may `ptrace` it or read its memory.  Linux and Android: `PR_SET_DUMPABLE 0`; macOS: `PT_DENY_ATTACH`; elsewhere
-/// nothing can be done, and the log says so.
-pub fn harden() {
+/// may `ptrace` it or read its memory.  Linux and Android: `PR_SET_DUMPABLE 0`; macOS: `PT_DENY_ATTACH` (it fails
+/// when the hub was started under a debugger or tracer); elsewhere nothing can be done.  An `Err` says why: the hub
+/// then serves, but refuses every key (`Gate::set_hardened`, fail closed), and `status`/`doctor` say so.
+pub fn harden() -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    if let Err(e) =
-        rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
-    {
-        tracing::warn!("cannot make the hub not dumpable: {e}");
-    }
+    let r = rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
+        .map_err(|e| format!("cannot make the hub not dumpable: {e}"));
     #[cfg(target_os = "macos")]
-    {
+    let r = {
         // SAFETY: PT_DENY_ATTACH takes no address or data
-        if unsafe { libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) } != 0 {
-            tracing::warn!(
+        let denied = unsafe { libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) };
+        if denied != 0 {
+            Err(format!(
                 "cannot deny debuggers the hub: {}",
                 std::io::Error::last_os_error()
-            );
+            ))
+        } else {
+            Ok(())
         }
-    }
+    };
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-    tracing::warn!("this platform cannot keep other processes out of the hub's memory");
+    let r = Err("this platform cannot keep other processes out of the hub's memory".to_string());
+    if let Err(why) = &r {
+        tracing::warn!("{why}: provider keys are refused");
+    }
+    r
 }
 
 /// The Lisp backend for this hub (its socket's directory made private here, under the lock), its events to EVENTS;
@@ -537,7 +544,7 @@ mod tests {
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0, "fork failed");
         if pid == 0 {
-            harden();
+            let _ = harden(); // what it did is read back below
             // SAFETY: prctl(PR_GET_DUMPABLE) takes no pointer
             let d = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) } as u8;
             // SAFETY: one byte from a live buffer to the pipe's write end

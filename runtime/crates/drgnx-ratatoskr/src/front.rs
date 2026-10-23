@@ -413,12 +413,12 @@ impl Front {
             Params::GatewayUnregister(p) => {
                 self.gate.unregister(&p.token.0).await.map(|b| json!(b))
             }
-            Params::GatewayKeys(p) => {
+            Params::GatewayKeys(p) => self.gate.protects_keys().map(|()| {
                 let before = self.gate.keys_held();
                 self.gate.take_keys(p.keys);
                 self.keys_changed(&before);
-                Ok(json!(true))
-            }
+                json!(true)
+            }),
             Params::GatewayEditorToken(_) => {
                 self.gate.editor_token(s.peer_pid).await.map(|r| json!(r))
             }
@@ -783,11 +783,13 @@ mod tests {
         let f = gated(dir.path(), Arc::new(Semaphore::new(0)));
         let v = serde_json::to_value(f.status_with_backend().await).unwrap();
         assert_eq!(v["backend"], json!({"state": "running", "pid": 42}));
-        // the gateway's numbers are the front's own, counted since start; the Lisp hub's keys are gone
+        // the gateway's numbers are the front's own, counted since start; the Lisp hub's keys are gone; a front no
+        // one hardened (`serve` does, review m2) refuses keys and says so
         assert_eq!(
             v["gateway"],
             json!({"registrations": 0, "requests": 0, "errors": 0, "fallbacks": 0, "bytes_in": 0,
-                   "bytes_out": 0, "providers": 0, "keys_held": [], "warnings": []})
+                   "bytes_out": 0, "providers": 0, "keys_held": [], "warnings": [],
+                   "keys_refused": "the hub was not hardened"})
         );
         assert!(
             v.get("gateway_port").is_none() && v.get("registrations").is_none(),

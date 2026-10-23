@@ -104,7 +104,9 @@ shorthands come back, without reopening them.
   changes) holds no key. The Lisp hub behind Ratatoskr registers its agents through Ratatoskr, without keys.
 - **The hub is not dumpable.** Another program running as you (an agent outside a sandbox, a debugger) cannot read
   the hub's memory, and so your keys, with `ptrace` or `/proc/PID/mem`, and the hub writes no core file. This does
-  not stop root, or a program given the `CAP_SYS_PTRACE` capability. `ratatoskr stop` signals only the process that
+  not stop root, or a program given the `CAP_SYS_PTRACE` capability. A hub that cannot protect itself this way (on
+  macOS, one started under a debugger) takes no key at all: `ratatoskr doctor` and `ratatoskr status` print "keys:
+  refused, this hub cannot protect keys" with the reason; restart the hub outside the debugger. `ratatoskr stop` signals only the process that
   is actually listening on the hub's socket, asked of the system (on Linux through a pidfd, which cannot hit a reused
   pid), never a process named by a file or a command line: a program that calls itself `ratatoskr` is never stopped
   by mistake.
