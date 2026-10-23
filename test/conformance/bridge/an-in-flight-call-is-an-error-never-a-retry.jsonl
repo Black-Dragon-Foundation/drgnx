@@ -16,7 +16,7 @@
 {"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "report_test", "arguments": {"command": "during", "passed": 1, "failed": 0}}}}
 {"do": "expect_silent", "conn": "b", "for_ms": 300}
 {"do": "kill", "hub": "h", "signal": "KILL"}
-{"do": "expect_next", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "the drgnx hub went away during this call; whether it took effect is unknown — check with read_inbox, task_status or read_decisions before you retry"}], "isError": true}}, "within_ms": 5000}
+{"do": "expect_next", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "the drgnx hub went away during this call; whether it took effect is unknown — check with read_inbox, task_status or read_decisions before you retry (if you passed req, retrying with the same req is safe)"}], "isError": true}}, "within_ms": 5000}
 {"do": "expect_exit", "hub": "h", "signal": "KILL"}
 {"do": "start", "hub": "h2", "same_root_as": "h"}
 {"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}

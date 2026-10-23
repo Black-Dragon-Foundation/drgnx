@@ -8,7 +8,7 @@
 {"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}, "within_ms": 5000}
 {"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "method": "notifications/initialized"}}
 {"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
-{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}, {"type": "text", "text": "$string"}], "isError": "$absent"}}}
 {"do": "sql_expect", "sql": "select id glob 'ext:codex:[1-9]*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]', kind from agent", "rows": [[1, "codex"]]}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
