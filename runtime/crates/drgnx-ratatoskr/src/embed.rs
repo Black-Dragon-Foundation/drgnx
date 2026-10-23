@@ -504,11 +504,21 @@ mod tests {
     async fn put(db: &CoordDb, id: &str, source: Option<&str>, title: &str, data: Value) {
         let (id, source, title) = (id.to_owned(), source.map(str::to_owned), title.to_owned());
         db.write(meta(), move |tx| {
-            let t = tx.id();
-            tx.sql().execute(
-                "insert into entity(id, kind, title, data, origin, source, ver, created_tx, updated_tx) \
-                 values (?1, 'task', ?2, ?3, 'recorded', ?4, 1, ?5, ?5)",
-                (id, title, data.to_string(), source, t),
+            urdr::graph::entity::create(
+                tx,
+                urdr::graph::entity::EntityNew {
+                    id,
+                    kind: "task".into(),
+                    project: None,
+                    title: Some(title),
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data,
+                    origin: urdr::graph::entity::Origin::Recorded,
+                    source,
+                },
             )?;
             Ok(())
         })
