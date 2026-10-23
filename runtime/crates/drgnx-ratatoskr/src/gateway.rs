@@ -148,7 +148,7 @@ impl Ledger for WorkLedger {
                 .0
                 .write(
                     urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "gateway"),
-                    move |tx| norn::write::spend::add_spend(tx.sql(), &r, at),
+                    move |tx| norn::write::spend::add_spend(tx, &r, at),
                 )
                 .await
             {
@@ -167,6 +167,8 @@ pub struct Gate {
     /// The ids whose key is held (`Keys` lists none).
     held: Mutex<BTreeSet<String>>,
     db: OnceLock<urdr::Handle>,
+    /// The editor token the hub's own embedder uses (memory only, made when first asked for).
+    embed_token: OnceLock<String>,
     /// The engine and the loopback port, once it listens.
     engine: OnceLock<(Arc<Gateway>, u16)>,
     warnings: Mutex<Vec<ProviderWarning>>,
@@ -191,6 +193,7 @@ impl Gate {
             keys: Arc::new(RwLock::new(Keys::new())),
             held: Mutex::new(BTreeSet::new()),
             db: OnceLock::new(),
+            embed_token: OnceLock::new(),
             engine: OnceLock::new(),
             warnings: Mutex::new(Vec::new()),
             warned: Mutex::new(BTreeSet::new()),
@@ -269,6 +272,35 @@ impl Gate {
         tokio::spawn(bifrost::listen::serve_tcp(gw, listener, port));
         tracing::info!(port, "the gateway on 127.0.0.1:{port}");
         Ok(rx)
+    }
+
+    /// The embedder for the first provider of kind `tei` that can embed (by id), through this gateway's loopback
+    /// listener with an editor token of its own (kept in memory only, never in `runtime.db`); `None` when there is no
+    /// such provider.  Err: the gateway is not listening.
+    pub fn embedder(&self) -> Result<Option<crate::embed::Tei>, Error> {
+        let (_, port) = self.engine()?;
+        let Some(id) = read(&self.providers)
+            .values()
+            .find(|p| p.kind == Kind::Tei && p.caps.embed)
+            .map(|p| p.id.clone())
+        else {
+            return Ok(None);
+        };
+        let token = match self.embed_token.get() {
+            Some(t) => t.clone(),
+            None => {
+                let t = token().map_err(|e| internal(format!("no token: {e}")))?;
+                write(&self.regs.0).insert(
+                    token_hash(t.as_bytes()),
+                    Kept {
+                        reg: Registration::editor(),
+                        owner: None,
+                    },
+                );
+                self.embed_token.get_or_init(|| t).clone()
+            }
+        };
+        Ok(Some(crate::embed::Tei::new(*port, token, &id)))
     }
 
     /// At start, after the sessions came back: the last provider table, then the registrations of live owners (each

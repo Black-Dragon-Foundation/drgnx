@@ -49,6 +49,7 @@ pub mod conn;
 pub mod coord;
 pub mod dispatch;
 pub mod doctor;
+pub mod embed;
 pub mod forward;
 pub mod front;
 pub mod gateway;
