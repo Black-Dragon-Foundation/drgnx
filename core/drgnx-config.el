@@ -427,12 +427,23 @@ A symbolic link is stamped by its target, as `drgnx-file-stamp' does."
       (let ((cell (assoc key value))) (if cell (cdr cell) (cdr (assoc key (plist-get def :default)))))
     (let ((m (plist-member value key))) (if m (cadr m) (plist-get (plist-get def :default) key)))))
 
+(defvar drgnx-settings-shim-areas '(agents ai keys modules large-files session)
+  "The old config files whose values moved into settings.el and that `drgnx-config-get' still answers, from the
+settings (the shim, `drgnx-settings-migrate-shim'; docs/develop/settings.md, \"The migration and the shim\").  An
+area leaves this list when its callers read the settings themselves (unified-settings Tasks 15 and 16).")
+
+(declare-function drgnx-settings-migrate-shim "drgnx-settings-migrate" (name state))
+
 (defun drgnx-config-get (name &optional key root)
   "Config file NAME's applied value (ROOT for a project file), or KEY's value in it: the default's when KEY is absent.
 The applied value is the file's data, the default when the file is absent and, when the file has a mistake, its last
 good copy (`:last-good') or the default.  An `mtime' file costs one stat, and is read again when it changed; a
-`start' file is read once.  Do not change the value returned: it is shared."
-  (let ((value (plist-get (drgnx-config--current name root) :value)))
+`start' file is read once.  While NAME is in `drgnx-settings-shim-areas' (and drgnx-settings-migrate is loaded), the
+value is the plist settings.el's entries give.  Do not change the value returned: it is shared."
+  (let* ((st (drgnx-config--current name root))
+         (value (if (and (null root) (memq name drgnx-settings-shim-areas) (fboundp 'drgnx-settings-migrate-shim))
+                    (drgnx-settings-migrate-shim name st)
+                  (plist-get st :value))))
     (if key (drgnx-config--lookup (gethash name drgnx-config--defs) value key) value)))
 
 (defun drgnx-config-reread (name &optional root)
@@ -869,10 +880,16 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
   "Take settings.el's values for packages and Emacs out of Emacs now; drgnx's own stay." t)
 (autoload 'drgnx-settings-turn-on-package-settings "drgnx-settings-apply"
   "Apply settings.el's values for packages and Emacs again now." t)
+(autoload 'drgnx-settings-migration-report "drgnx-settings-migrate"
+  "What the move of the old settings files into settings.el did." t)
+(autoload 'drgnx-settings-migrate-old-files "drgnx-settings-migrate"
+  "Move the old settings files into settings.el now, while it does not exist." t)
+(autoload 'drgnx-settings-migrate-move-away "drgnx-settings-migrate"
+  "Move the old settings files settings.el already holds into migrated-DATE/." t)
 
 (defun drgnx-config-register-commands ()
-  "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File and Turn Off / Turn On Package
-Settings, in the registry."
+  "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File, Turn Off / Turn On Package
+Settings, Migration Report, Migrate Old Files and Move Old Files Away, in the registry."
   (drgnx-command-define 'config-open :category "Preferences" :title "Open Config File…" :command #'drgnx-config-open
                         :doc "Open one of drgnx's config files, at its mistake when it has one")
   (drgnx-command-define 'config-reset :category "Preferences" :title "Reset Config File…" :command #'drgnx-config-reset
@@ -887,7 +904,16 @@ Settings, in the registry."
                         :doc "Take settings.el's values for packages and Emacs out now (your Lisp's stay); drgnx's own stay")
   (drgnx-command-define 'settings-package-on :category "Settings" :title "Turn On Package Settings"
                         :command #'drgnx-settings-turn-on-package-settings
-                        :doc "Apply settings.el's values for packages and Emacs again now, where your Lisp does not set them"))
+                        :doc "Apply settings.el's values for packages and Emacs again now, where your Lisp does not set them")
+  (drgnx-command-define 'settings-migration-report :category "Settings" :title "Migration Report"
+                        :command #'drgnx-settings-migration-report
+                        :doc "What moved from the old files into settings.el, each key at its line; what stayed and why")
+  (drgnx-command-define 'settings-migrate-old-files :category "Settings" :title "Migrate Old Files"
+                        :command #'drgnx-settings-migrate-old-files
+                        :doc "Move the old files (keys.eld, agents.eld …) into settings.el now, while it does not exist")
+  (drgnx-command-define 'settings-move-old-files-away :category "Settings" :title "Move Old Files Away"
+                        :command #'drgnx-settings-migrate-move-away
+                        :doc "Move old settings files settings.el already holds into migrated-DATE/ (a copy is kept)"))
 
 (provide 'drgnx-config)
 ;;; drgnx-config.el ends here

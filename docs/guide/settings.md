@@ -154,7 +154,42 @@ is not loaded yet gets a plain buffer-local value.
 
 ## Packages' settings (Task 31)
 
-## Moving from the old files (Task 14)
+## Moving from the old files
+
+Before `settings.el`, drgnx kept its own settings in six files of the config dir: `agents.eld`, `ai.eld`, `keys.eld`,
+`modules.eld`, `large-files.eld` and `session.eld`. The first start of a drgnx with Settings moves them into
+`settings.el`, once:
+
+1. Each file is read as drgnx reads it today, and each key becomes an entry: `:profiles` of `agents.eld` becomes
+   `drgnx-agents-profiles`, `:layers` of `keys.eld` becomes `drgnx-keys-layers`, and so on (`drgnx-AREA-KEY`;
+   `modules.eld`'s `:theme` becomes `drgnx-look-theme`). A comment above a key, or at the end of its line, goes
+   above its entry. A comment inside a value, or outside the keys, is not carried; the old file keeps it.
+2. `settings.el` is written once, then read back, and its values are compared with the old files'. If anything
+   differs, `settings.el` is removed again, nothing moves, and a notice says so: drgnx keeps reading the old files.
+3. Then each old file is copied to `<state>/backups/migrated-YYYY-MM-DD/` and moved to
+   `<config>/migrated-YYYY-MM-DD/`. That folder is in your config dir, so it travels: another machine's git sees the
+   move.
+4. One notice says "Your settings moved into settings.el (N files)", with **Show Report**.
+
+This happens only while `settings.el` does not exist. A start after a crash between steps 2 and 3 finds
+`settings.el` and never moves anything again; the doctor's `settings-migrated` line then names the old files
+("already migrated") and **Settings: Move Old Files Away** moves them, with a copy, when `settings.el` holds the same
+values. One that differs stays.
+
+- **A file with a mistake is not moved.** Nor is one with keys this drgnx does not know, or one a newer drgnx wrote.
+  It stays where it is and drgnx still reads it as before; the report says why it stayed.
+- **`keys.eld`'s `:layers nil`** means "drgnx's default stack", so it gets no entry.
+- **Settings: Migration Report** shows each old key and its setting at its line in `settings.el`, what stayed and
+  why, and the `custom.el` entries Settings could hold (Tidy moves those). The report is kept in
+  `<state>/settings-migration.eld`.
+- **Settings: Migrate Old Files** runs the move now, for example after you fixed a file that stayed. It runs only
+  while `settings.el` does not exist.
+- **Two machines.** Move on one machine first: commit and push your config dir before you start drgnx on another
+  machine, and pull there first ([second-machine.md](second-machine.md#moving-to-settingsel-on-two-machines)).
+- **Untouched:** `config.el`, `custom.el`, `projects.eld`, `layouts.eld`, `packages.eld`, the lock and the state
+  files. A project's `.drgnx/*.eld` files are in its repository and never move by themselves.
+- Until each part of drgnx reads its settings directly, code that asks for the old files' values gets them from
+  `settings.el`. Safe mode reads your keys from there too.
 
 ## Safe mode and Turn Off Package Settings
 
