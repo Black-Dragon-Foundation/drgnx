@@ -1,0 +1,28 @@
+{
+  "setup": [
+    "insert into job values ('j1', 'Messages', null, null, 'running', 1.0, null)",
+    "insert into jtask (id, job, n, title, role, status, agent, lease_until) values ('j1#1', 'j1', 1, 'One', 'implement', 'running', 's-1', 9000.0)",
+    "insert into jtask (id, job, n, title, role, status, agent, lease_until) values ('j1#2', 'j1', 2, 'Two', 'test', 'running', 's-2', 9000.0)"
+  ],
+  "clock": [],
+  "tables": ["message"],
+  "calls": [
+    {"tool": "send_message", "now": 100.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"to": "s-2", "text": "hello", "seen_version": 0}},
+    {"tool": "send_message", "now": 101.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"to": "user", "text": "need a hand?\u0007", "seen_version": 0}},
+    {"tool": "send_message", "now": 102.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"to": "ghost", "text": "anyone?", "seen_version": 0}},
+    {"tool": "send_message", "now": 103.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"to": "s-2", "text": "  \n ", "seen_version": 0}},
+    {"tool": "send_message", "now": 104.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"to": "s-2", "text": "__REP:x:2100__", "seen_version": 0}},
+    {"tool": "read_inbox", "now": 105.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {}},
+    {"tool": "read_inbox", "now": 106.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {}},
+    {"tool": "ack", "now": 107.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"id": 1}},
+    {"tool": "ack", "now": 108.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"id": 1}},
+    {"tool": "ack", "now": 109.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"id": 2}},
+    {"tool": "ack", "now": 110.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"id": 77}},
+    {"tool": "read_inbox", "now": 111.5, "identity": null, "args": {}},
+    {"tool": "send_message", "now": 112.5, "identity": null, "args": {"to": "user", "text": "who am i", "seen_version": 0}},
+    {"tool": "send_message", "now": 113.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"to": "user", "text": "from outside", "seen_version": 0}},
+    {"tool": "send_message", "now": 114.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"to": "s-2", "text": "no hub", "seen_version": 0}},
+    {"tool": "read_inbox", "now": 115.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {}},
+    {"tool": "send_message", "now": 116.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"to": "s-1", "text": "back", "seen_version": 9}}
+  ]
+}

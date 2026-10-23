@@ -729,3 +729,143 @@ async fn every_tool_fixture_replays() {
         }
     }
 }
+
+// ---- Task 8's rules the oracle cannot reach ----
+
+/// A hub that runs two sessions.
+struct SessionsHub;
+
+impl Hub for SessionsHub {
+    fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
+        Box::pin(async {
+            Some(vec![
+                serde_json::from_value(json!({"id": "hub-7", "name": "claude · b"})).unwrap(),
+                serde_json::from_value(json!({"id": "hub-8", "job": "other"})).unwrap(),
+            ])
+        })
+    }
+    fn notify(&self) {}
+}
+
+#[tokio::test]
+async fn send_message_resolves_a_hub_session_by_id_or_name() {
+    let w = World::new(&[]);
+    let coord = Arc::new(Coord::new(w.db.clone(), Arc::new(SessionsHub)));
+    let who = session("s-1", None, w.dir.path());
+    for (to, id) in [("hub-7", 1), ("claude · b", 2), ("hub-8", 3)] {
+        let (error, text) = call_on(
+            &coord,
+            &who,
+            "send_message",
+            json!({"to": to, "text": "hi", "seen_version": 0}),
+        )
+        .await;
+        assert!(!error, "{to}: {text}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["id"],
+            id,
+            "{to}"
+        );
+    }
+    assert_eq!(
+        w.count("select count(*) from message where recipient = 'hub-7'"),
+        2,
+        "a name is stored as the session's id"
+    );
+    let (error, text) = call_on(
+        &coord,
+        &who,
+        "send_message",
+        json!({"to": "ghost", "text": "hi", "seen_version": 0}),
+    )
+    .await;
+    assert_eq!(
+        (error, text.as_str()),
+        (
+            true,
+            "No agent \"ghost\" (list_agents names them; \"user\" is the user)"
+        ),
+        "a hub answered, so the suffix about no hub is not there"
+    );
+}
+
+#[tokio::test]
+async fn read_decisions_sets_seen_only_when_it_changed() {
+    let w = World::new(&[]);
+    let who = session("s-1", Some("j1"), w.dir.path());
+    let other = session("s-2", Some("j1"), w.dir.path());
+    let (error, text) = w
+        .call(
+            &who,
+            "record_decision",
+            json!({"kind": "build", "subject": "A", "reason": "r", "seen_version": 0}),
+        )
+        .await;
+    assert!(!error, "{text}");
+    let rowid = |agent: &str| {
+        w.text(&format!(
+            "select rowid from meta where key = 'seen:{agent}'"
+        ))
+    };
+    assert_eq!(rowid("s-2"), None);
+    assert!(!w.call(&other, "read_decisions", json!({})).await.0);
+    let first = rowid("s-2").expect("the first read sets seen");
+    assert_eq!(
+        w.text("select value from meta where key = 'seen:s-2'"),
+        Some("1".into())
+    );
+    // a row that would take the next rowid: a second `insert or replace` of seen:s-2 would move it
+    w.conn()
+        .execute("insert into meta values ('zz', '1')", [])
+        .unwrap();
+    assert!(!w.call(&other, "read_decisions", json!({})).await.0);
+    assert_eq!(
+        rowid("s-2"),
+        Some(first),
+        "nothing changed: nothing written"
+    );
+}
+
+#[tokio::test]
+async fn a_held_write_is_counted_and_a_good_one_clears_it() {
+    let w = World::new(&["insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)"]);
+    let who = session("s-1", Some("j1"), w.dir.path());
+    let (error, text) = w
+        .call(
+            &who,
+            "record_decision",
+            json!({"kind": "build", "subject": "A", "reason": "r", "seen_version": 0}),
+        )
+        .await;
+    assert!(!error, "{text}");
+    let held = |a: &str| w.text(&format!("select value from meta where key = 'held:{a}'"));
+    let stale = || {
+        w.call(
+            &who,
+            "send_message",
+            json!({"to": "user", "text": "x", "seen_version": 0}),
+        )
+    };
+    for n in ["1", "2"] {
+        let (error, text) = stale().await;
+        assert!(
+            !error && text.starts_with("HELD: the decision log moved on"),
+            "{text}"
+        );
+        assert_eq!(held("s-1").as_deref(), Some(n));
+    }
+    let (error, text) = w
+        .call(
+            &who,
+            "send_message",
+            json!({"to": "user", "text": "x", "seen_version": 1}),
+        )
+        .await;
+    assert!(!error, "{text}");
+    assert_eq!(held("s-1").as_deref(), Some("0"));
+    assert_eq!(
+        w.count("select count(*) from message"),
+        1,
+        "a held write stored nothing"
+    );
+}

@@ -1,0 +1,33 @@
+{
+  "setup": [
+    "insert into node values ('plan:a', 'plan', 'Plan A', 'docs/plans/a.md', 1, null, null, 0, 'f1', '{\"branch\":\"feat-a\",\"merged\":true}', 1.0)",
+    "insert into node values ('spec:s', 'spec', 'Spec S', 'docs/specs/s.md', 1, null, null, 0, 'f2', null, 1.0)",
+    "insert into edge values ('plan:a', 'spec:s', 'derives', 'parsed', 'f1')",
+    "insert into node values ('task:a#1', 'task', 'One', 'docs/plans/a.md', 3, 'done', 'plan:a', 1, 'f1', null, 1.0)",
+    "insert into node values ('task:a#2', 'task', 'Two', 'docs/plans/a.md', 9, 'open', 'plan:a', 2, 'f1', null, 1.0)",
+    "insert into node values ('step:a#1.1', 'step', 'step one', 'docs/plans/a.md', 4, 'open', 'task:a#1', 1, 'f1', null, 1.0)",
+    "insert into node values ('step:a#2.1', 'step', 'step two', 'docs/plans/a.md', 10, 'done', 'task:a#2', 1, 'f1', null, 1.0)",
+    "insert into node values ('step:a#2.2', 'step', 'step three', 'docs/plans/a.md', 11, 'open', 'task:a#2', 2, 'f1', null, 1.0)",
+    "insert into node values ('todo:a1', 'todo', 'a todo', 'docs/plans/a.md', 20, 'done', 'plan:a', 3, 'f1', null, 1.0)",
+    "insert into node values ('todo:a2', 'todo', 'another', 'docs/plans/a.md', 21, 'open', 'plan:a', 4, 'f1', null, 1.0)",
+    "insert into node values ('commit:c1', 'commit', 'c1', null, null, null, null, null, 'recorded', '{\"sha\":\"c1\",\"date\":100,\"repo\":\"/r\",\"seq\":0}', 1.0)",
+    "insert into node values ('commit:c2', 'commit', 'c2', null, null, null, null, null, 'recorded', '{\"sha\":\"c2\",\"date\":200,\"repo\":\"/r\",\"seq\":1}', 1.0)",
+    "insert into node values ('commit:c3', 'commit', 'c3', null, null, null, null, null, 'recorded', '{\"sha\":\"c3\",\"date\":300,\"repo\":\"/r\",\"seq\":2}', 1.0)",
+    "insert into edge values ('commit:c1', 'task:a#1', 'implements', 'recorded', 'recorded')",
+    "insert into edge values ('commit:c1', 'plan:a', 'implements', 'recorded', 'recorded')",
+    "insert into edge values ('commit:c2', 'plan:a', 'implements', 'recorded', 'recorded')",
+    "insert into edge values ('commit:c3', 'todo:a1', 'implements', 'recorded', 'recorded')",
+    "insert into node values ('plan:b', 'plan', 'Plan B', 'docs/plans/0-b.md', 1, null, null, 0, 'f3', '{\"merged\":\"yes\",\"branch\":\"ignored\"}', 1.0)",
+    "insert into node values ('task:b#1', 'task', 'B one', 'docs/plans/0-b.md', 3, 'open', 'plan:b', 1, 'f3', null, 1.0)",
+    "insert into node values ('plan:c', 'plan', 'Plan C', 'docs/plans/c.md', 1, null, null, 0, 'f4', '{\"branch\":\"feat-c\",\"extra\":[1,2]}', 1.0)",
+    "insert into edge values ('plan:c', 'spec:s', 'derives', 'parsed', 'f4')",
+    "insert into edge values ('plan:c', 'spec:a-first', 'derives', 'parsed', 'f4')",
+    "insert into node values ('plan:d', 'plan', null, null, 1, null, null, 0, 'f5', null, 1.0)"
+  ],
+  "clock": [],
+  "tables": [],
+  "calls": [
+    {"tool": "work_status", "now": 500.5, "identity": null, "args": {}},
+    {"tool": "work_status", "now": 501.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {}}
+  ]
+}

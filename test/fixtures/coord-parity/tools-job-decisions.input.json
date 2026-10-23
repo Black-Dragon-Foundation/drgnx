@@ -1,0 +1,27 @@
+{
+  "setup": [
+    "insert into job values ('j1', 'Decisions', null, null, 'running', 1.0, null)",
+    "insert into jtask (id, job, n, title, role, status, agent, lease_until) values ('j1#1', 'j1', 1, 'One', 'implement', 'running', 's-1', 9000.0)",
+    "insert into jtask (id, job, n, title, role, status) values ('j1#2', 'j1', 2, 'Two', 'test', 'ready')"
+  ],
+  "clock": [],
+  "tables": ["decision"],
+  "calls": [
+    {"tool": "record_decision", "now": 200.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "build", "subject": "A", "task": "j1#1", "paths": "src/a.rs", "reason": "needed", "seen_version": 0}},
+    {"tool": "record_decision", "now": 201.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "wait", "subject": "B", "task": "j1#2", "reason": "later", "seen_version": 1}},
+    {"tool": "send_message", "now": 202.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"to": "user", "text": "stale", "seen_version": 0}},
+    {"tool": "read_decisions", "now": 203.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {}},
+    {"tool": "read_decisions", "now": 204.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"since": 1}},
+    {"tool": "read_decisions", "now": 205.5, "identity": null, "args": {"since": 0}},
+    {"tool": "record_decision", "now": 206.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"kind": "replaces", "subject": "A2", "task": "j1#1", "reason": "better", "replaces": 1, "seen_version": 2}},
+    {"tool": "record_decision", "now": 207.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "replaces", "subject": "A3", "task": "j1#1", "reason": "mine", "replaces": 1, "seen_version": 3}},
+    {"tool": "record_decision", "now": 208.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "build", "subject": "C", "task": "j1#1", "reason": "r", "seen_version": 4}},
+    {"tool": "record_decision", "now": 208.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "build", "subject": "D", "task": "j1#1", "reason": "r", "seen_version": 5}},
+    {"tool": "record_decision", "now": 208.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "build", "subject": "E", "task": "j1#1", "reason": "r", "seen_version": 6}},
+    {"tool": "record_decision", "now": 208.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "build", "subject": "F", "task": "j1#1", "reason": "r", "seen_version": 7}},
+    {"tool": "record_decision", "now": 208.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "build", "subject": "G", "task": "j1#1", "reason": "r", "seen_version": 8}},
+    {"tool": "record_decision", "now": 209.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"kind": "build", "subject": "H", "reason": "r", "seen_version": 99}},
+    {"tool": "record_decision", "now": 210.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"kind": "build", "subject": "X", "reason": "r", "seen_version": 0}},
+    {"tool": "record_decision", "now": 211.5, "identity": null, "args": {"kind": "build", "subject": "Y", "reason": "r", "seen_version": 0}}
+  ]
+}
