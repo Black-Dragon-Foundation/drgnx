@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use crate::coord::{self, Writer};
 use crate::dispatch::Caller;
-use norn::deny::{DenyList, Source, Verdict};
+use norn::deny::{DenyList, may_export, may_import};
 use norn::grants::{self, Access, What, Who};
 use norn::parsed;
 use norn::project::{self, ProjectCache};
@@ -1123,21 +1123,6 @@ pub async fn settle(
 
 // ----------------------------------------------------------------------------------------------------- copies
 
-/// Whether E may leave the store or come in: its record passes the personal-notes deny-list (an unknown source form
-/// does not).
-fn allowed(deny: &DenyList, e: &Ent) -> bool {
-    let src = match &e.source {
-        None => Some(Source::Recorded),
-        Some(s) => Source::parse(s),
-    };
-    src.is_some_and(|s| {
-        !matches!(
-            deny.check_record(&s, &e.id, &e.data),
-            Verdict::Denied { .. }
-        )
-    })
-}
-
 fn port(r: export::Report) -> Value {
     json!(api::PortAnswer {
         dir: show(&r.dir),
@@ -1171,8 +1156,11 @@ async fn export_of(w: &Writer, tools: &Coord, p: api::ExportParams) -> Result<Va
         history: p.history == Some(true),
         with_activity: p.with_activity == Some(true),
     };
-    let allow: export::Allow =
-        Arc::new(move |e: &Ent| allowed(&deny, e) && project.is_none_or(|n| e.project == Some(n)));
+    // door 5: the personal-notes deny-list (`norn::deny::may_export`)
+    let allow: export::Allow = Arc::new(move |e: &Ent| {
+        may_export(&deny, e.source.as_deref(), &e.id, &e.data)
+            && project.is_none_or(|n| e.project == Some(n))
+    });
     Ok(port(export::export(&g.pool, dir, opts, allow).await))
 }
 
@@ -1190,7 +1178,10 @@ async fn import(
         ));
     }
     let (g, deny) = store(tools)?;
-    let allow: export::Allow = Arc::new(move |e: &Ent| e.kind != "grant" && allowed(&deny, e));
+    // door 2: the personal-notes deny-list (`norn::deny::may_import`)
+    let allow: export::Allow = Arc::new(move |e: &Ent| {
+        e.kind != "grant" && may_import(&deny, e.source.as_deref(), &e.id, &e.data)
+    });
     let r = export::import(&g.writer, PathBuf::from(p.dir.as_str()), allow).await;
     w.signals.wrote();
     Ok(port(r))
