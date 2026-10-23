@@ -668,6 +668,8 @@ budgets: this is a recorded baseline, not a regression gate.
 | `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
 | `mcp-tool-call` | `tools/call read_inbox` over a session socket (initialized, `hello` called once before) | 100 |
 | `coord-write` | `events/add` through the main socket, answered with the new id | 100 |
+| `gateway-added-latency` | an agent's `POST /v1/messages` to the mock provider, head read: `direct-first-byte` against the mock, `gateway-first-byte` through the gateway with an agent token (the difference is the gateway's) | 50 each |
+| `gateway-editor-fim-latency` | the editor's FIM-sized request, a 2 KiB `POST /completions` with a 64-token answer: `direct-fim` against the mock, `gateway-fim` as `/p/mock/completions` with the editor token; compare the median and p95 | 100 each |
 
 ```
 cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
@@ -723,9 +725,13 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `mcp_message` | bytes as the lines of one MCP connection through `mimir::serve` with the 16 `norn` tools over a schema-6 `work.db` (a file from the oracle's fixture, shared by all inputs), as given and after a legacy `initialize` handshake; every answer line must be JSON |
 | `jsonrpc_parse` | a line through `jsonrpc::parse` and mimir's `lenient_id`: an error is `-32700` (only for non-JSON) or `-32600`; a parsed request or result has the id `lenient_id` reads |
 | `text_one_line` | text (and a length limit and the `header` flag from the first two bytes) through `text::one_line`, `coord_line` and `cut`: no `CONTROL` character (`one_line`: no newline, tab or CR either), never over the limit |
+| `sse_usage` | bytes through `bifrost::usage::Scanner`, whole, byte by byte and in pieces of sizes the first two bytes pick: the same `Usage` every way, no panic |
+| `provider_merge` | a body and OpenRouter restrictions (flags, `only` and `ignore` lines, then the body) through `rewrite::body`: when the restrictions apply, the answer is a JSON object whose `provider` carries all of them; with nothing to apply the bytes stay |
+| `gateway_admit` | a request head (token class, listener, header style from the first byte; target and headers as lines) through `admit::head`: an admission belongs to its listener, takes a path of its class and stays under the body cap; a refusal is a 4xx with a JSON body |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
-`jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send) and the unit tables (gleipnir's targets). The
+`jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
+the gateway's targets, the SSE fixtures (`test/fixtures/sse`) and a few hand-made heads and bodies. The
 bridge's `classify`, `id_in_prefix` and `read_bounded` are private to `mimir::bridge`, so they are not targets; the
 bridge's lines are covered by `jsonrpc_parse` and `mcp_message`. A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.
