@@ -820,7 +820,7 @@ until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' 
     (condition-case err
         (drgnx-hub-call method params (lambda (r err)
                                         (funcall land)
-                                        (cond (err (message "drgnx hub: %s" err))
+                                        (cond (err (drgnx-notify 'hub 'warn (format "drgnx hub: %s" err)))
                                               ((or (null accept) (funcall accept r)) (funcall done)))))
       (error (funcall land) (signal (car err) (cdr err))))))
 
