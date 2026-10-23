@@ -1,0 +1,14 @@
+{
+  "results": [0, 1, 2, null, 2, 0, null, null, 2, null, 0, 2],
+  "tables": {
+    "event": [],
+    "meta": [
+      {"key": "compat-read", "value": "6"},
+      {"key": "held:a1", "value": "0"},
+      {"key": "log-version", "value": "2"},
+      {"key": "migrate-6-dropped", "value": "0"},
+      {"key": "schema", "value": "6"},
+      {"key": "seen:a1", "value": "2"}
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "setup": [],
+  "clock": [],
+  "calls": [
+    {"fn": "drgnx-coord-version", "args": {}},
+    {"fn": "drgnx-coord--bump", "args": {}},
+    {"fn": "drgnx-coord--bump", "args": {}},
+    {"fn": "drgnx-coord-set-seen", "args": {"agent": "a1", "version": 2}},
+    {"fn": "drgnx-coord-seen", "args": {"agent": "a1"}},
+    {"fn": "drgnx-coord-seen", "args": {"agent": "a2"}},
+    {"fn": "drgnx-coord-note-held", "args": {"agent": "a1", "held": true}},
+    {"fn": "drgnx-coord-note-held", "args": {"agent": "a1", "held": true}},
+    {"fn": "drgnx-coord-held", "args": {"agent": "a1"}},
+    {"fn": "drgnx-coord-note-held", "args": {"agent": "a1", "held": false}},
+    {"fn": "drgnx-coord-held", "args": {"agent": "a1"}},
+    {"fn": "drgnx-coord-version", "args": {}}
+  ]
+}

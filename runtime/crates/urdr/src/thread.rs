@@ -27,7 +27,7 @@ pub struct Handle {
 impl Store {
     /// Open the file (migrating a read-write one) on the caller, then move the connection to its own thread.
     pub fn spawn(spec: StoreSpec) -> Result<(Store, Handle)> {
-        let writable = matches!(spec.mode, Mode::ReadWrite { .. });
+        let writable = !matches!(spec.mode, Mode::ReadOnly);
         let conn = open_store(&spec)?;
         let (tx, mut rx) = mpsc::channel::<Job>(QUEUE);
         let thread = std::thread::Builder::new()

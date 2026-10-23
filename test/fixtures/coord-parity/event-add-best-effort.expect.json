@@ -1,0 +1,14 @@
+{
+  "results": [1, 2],
+  "tables": {
+    "event": [
+      {"id": 1, "at": 300.0, "agent": "a1", "job": null, "task": null, "kind": "test", "summary": "tests ran", "data": {"passed": 3, "failed": 0}, "turn": null},
+      {"id": 2, "at": 301.0, "agent": "a1", "job": null, "task": null, "kind": "test", "summary": "again", "data": null, "turn": null}
+    ],
+    "meta": [
+      {"key": "compat-read", "value": "6"},
+      {"key": "migrate-6-dropped", "value": "0"},
+      {"key": "schema", "value": "6"}
+    ]
+  }
+}
