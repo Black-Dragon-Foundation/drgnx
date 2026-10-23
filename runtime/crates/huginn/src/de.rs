@@ -91,7 +91,7 @@ fn is_keyword(name: &str) -> bool {
 
 fn is_plist(items: &[Node]) -> bool {
     !items.is_empty()
-        && items.len() % 2 == 0
+        && items.len().is_multiple_of(2)
         && items
             .iter()
             .step_by(2)
@@ -177,7 +177,7 @@ impl<'de> Deserializer<'de> {
                     return v.visit_seq(SeqDe::new(self.0.items(true)?));
                 }
             },
-            Val::Tail(items, _) if items.is_empty() => return v.visit_unit(),
+            Val::Tail([], _) => return v.visit_unit(),
             Val::Tail(items, _) => items,
         };
         if is_plist(items) {
@@ -448,7 +448,10 @@ impl<'de> PlistMap<'de> {
 impl<'de> MapAccess<'de> for PlistMap<'de> {
     type Error = Error;
 
-    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>, Error> {
+    fn next_key_seed<K: DeserializeSeed<'de>>(
+        &mut self,
+        seed: K,
+    ) -> Result<Option<K::Value>, Error> {
         let Some(key) = self.items.get(self.at) else {
             return Ok(None);
         };
@@ -484,7 +487,10 @@ struct AlistMap<'de> {
 impl<'de> MapAccess<'de> for AlistMap<'de> {
     type Error = Error;
 
-    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>, Error> {
+    fn next_key_seed<K: DeserializeSeed<'de>>(
+        &mut self,
+        seed: K,
+    ) -> Result<Option<K::Value>, Error> {
         let Some(entry) = self.entries.next() else {
             return Ok(None);
         };
@@ -519,7 +525,10 @@ impl<'de> EnumAccess<'de> for EnumDe<'de> {
     type Error = Error;
     type Variant = VariantDe<'de>;
 
-    fn variant_seed<V: DeserializeSeed<'de>>(self, seed: V) -> Result<(V::Value, Self::Variant), Error> {
+    fn variant_seed<V: DeserializeSeed<'de>>(
+        self,
+        seed: V,
+    ) -> Result<(V::Value, Self::Variant), Error> {
         let value = seed
             .deserialize(BorrowedStrDeserializer::<Error>::new(self.name))
             .map_err(|e| spanned(e, self.span))?;
@@ -630,7 +639,10 @@ mod tests {
         assert_eq!(m, BTreeMap::from([("a".into(), 1), ("b".into(), 2)]));
         let n = node(r#"((a 1 2) (b))"#);
         let m: BTreeMap<String, Vec<i64>> = from_node(&n).expect("fits");
-        assert_eq!(m, BTreeMap::from([("a".into(), vec![1, 2]), ("b".into(), vec![])]));
+        assert_eq!(
+            m,
+            BTreeMap::from([("a".into(), vec![1, 2]), ("b".into(), vec![])])
+        );
     }
 
     #[test]
@@ -677,9 +689,19 @@ mod tests {
         let n = node(src);
         let err = serde_path_to_error::deserialize::<_, Outer>(Deserializer::new(&n))
             .expect_err("unknown key");
-        assert!(err.path().to_string().starts_with("inner"), "{}", err.path());
+        assert!(
+            err.path().to_string().starts_with("inner"),
+            "{}",
+            err.path()
+        );
         let at = src.find(":bogus").unwrap();
-        assert_eq!(err.inner().span, Span { start: at, end: at + 6 });
+        assert_eq!(
+            err.inner().span,
+            Span {
+                start: at,
+                end: at + 6
+            }
+        );
         assert!(err.inner().message.contains("bogus"));
     }
 
@@ -693,7 +715,13 @@ mod tests {
         }
         let err = from_node::<S>(&node(src)).unwrap_err();
         let at = src.find("\"x\"").unwrap();
-        assert_eq!(err.span, Span { start: at, end: at + 3 });
+        assert_eq!(
+            err.span,
+            Span {
+                start: at,
+                end: at + 3
+            }
+        );
     }
 
     #[test]
@@ -705,9 +733,18 @@ mod tests {
             Strict,
             Limit(u32),
         }
-        assert_eq!(from_node::<OnError>(&node("last-good")).unwrap(), OnError::LastGood);
-        assert_eq!(from_node::<OnError>(&node("\"strict\"")).unwrap(), OnError::Strict);
-        assert_eq!(from_node::<OnError>(&node("(limit 5)")).unwrap(), OnError::Limit(5));
+        assert_eq!(
+            from_node::<OnError>(&node("last-good")).unwrap(),
+            OnError::LastGood
+        );
+        assert_eq!(
+            from_node::<OnError>(&node("\"strict\"")).unwrap(),
+            OnError::Strict
+        );
+        assert_eq!(
+            from_node::<OnError>(&node("(limit 5)")).unwrap(),
+            OnError::Limit(5)
+        );
         assert!(from_node::<OnError>(&node("(strict 1)")).is_err());
         assert!(from_node::<OnError>(&node("other")).is_err());
     }

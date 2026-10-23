@@ -102,9 +102,24 @@ pub fn parse_settings(
     }
 
     match meta.iter().find(|(k, _)| k == ":version") {
-        Some((_, Node { datum: Datum::Int(1), .. })) => {}
-        Some((_, Node { datum: Datum::Int(n), span })) if *n > 1 => {
-            return Err(refuse(*span, format!("version {n} was written by a newer drgnx")));
+        Some((
+            _,
+            Node {
+                datum: Datum::Int(1),
+                ..
+            },
+        )) => {}
+        Some((
+            _,
+            Node {
+                datum: Datum::Int(n),
+                span,
+            },
+        )) if *n > 1 => {
+            return Err(refuse(
+                *span,
+                format!("version {n} was written by a newer drgnx"),
+            ));
         }
         Some((_, node)) => return Err(refuse(node.span, "unsupported :version")),
         None => return Err(refuse(top.span, "the file has no :version")),
