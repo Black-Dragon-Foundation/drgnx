@@ -640,10 +640,16 @@ The server's own messages wait for `initialized' (the fire function sends it)."
     (drgnx-perf-w--arm #'drgnx-perf-w--autosave-fire)
     t))
 
+(declare-function nidhogg-workers--test-keyboard-auto-save "nidhogg-blk.c")
+
 (defun drgnx-perf-w--autosave-fire ()
+  "Auto-save as the keyboard loop does after typing.  Only that auto-save may write on a worker (`do-auto-save' from
+Lisp stays synchronous), so on a Nidhogg with the workers this is `read_char''s own call; elsewhere `do-auto-save'."
   (with-current-buffer drgnx-perf-w--as-buffer
     (setq drgnx-perf-w--as-size (buffer-size)))
-  (do-auto-save t))
+  (if (fboundp 'nidhogg-workers--test-keyboard-auto-save)
+      (nidhogg-workers--test-keyboard-auto-save t)
+    (do-auto-save t)))
 
 (defun drgnx-perf-w-autosave-done ()
   (and (> drgnx-perf-w--as-size 0) (file-exists-p drgnx-perf-w--as-file)

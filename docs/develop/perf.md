@@ -591,7 +591,7 @@ only after `DRGNX_PERF_LANDED` names its step.
 | `explorer-expand` | `big/` of 5,000 files expanded, listing cache cleared (the bench's operation) | `:expand_ms` 80, no 16 ms stall (ot8) |
 | `explorer-git` | the status of a 25k-file repository read in the background | input p95 16, no 16 ms stall (ot5) |
 | `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
-| `autosave-typing` | a 50 MB buffer, `do-auto-save` at the first key; the digest is the auto-save file's md5 | input max 50, `:complete-ms` 1000 (ot8) |
+| `autosave-typing` | a 50 MB buffer, the keyboard loop's auto-save at the first key (`nidhogg-workers--test-keyboard-auto-save`, `read_char`'s call: a `do-auto-save` from Lisp never leaves the main thread); the digest is the auto-save file's md5 | input max 50, `:complete-ms` 1000 (ot8) |
 
 `agent-stream`, `terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
 endless `seq` loop), so a digest that is equal on and off needs a fixed-length run; that is DEFERRED, not done here.
