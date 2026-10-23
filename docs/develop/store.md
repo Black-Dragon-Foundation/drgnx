@@ -205,7 +205,9 @@ Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the
   or an edit can commit while it answers. The write therefore stores a vector only for an entity that, inside the
   writer's tx, is live at the `ver` and with the text that was read (an excise blanks in place without a new
   version, so the text is compared too); the others are stale again and the next batch sends their text of now.
-  Test: `embed::tests::a_text_changed_while_the_provider_answers_gets_no_old_vector` (a held provider).
+  Test: `embed::tests::a_text_changed_while_the_provider_answers_gets_no_old_vector` (a held provider). The
+  `embed::tests` provider is `ratatoskr-mock llm`, found beside the test binary and built there when missing (the
+  run's own target dir and profile, so `--target-dir` and `--release` runs work too).
 - **Door 4.** An entity whose source, id or `data.path` the personal-notes deny-list denies (or whose source form is
   unknown) is never sent, whatever the scan's door let in. It stays stale and is looked at again each round.
 - **Schedule.** `embed::Timer`: a round starts when the graph writer has seen no write that put text (its `texts`

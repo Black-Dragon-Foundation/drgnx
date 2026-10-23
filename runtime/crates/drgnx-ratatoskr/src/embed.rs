@@ -438,15 +438,29 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
 
-    /// `ratatoskr-mock`, next to the test binary's own directory; built once when it is not there.
+    /// `ratatoskr-mock`, next to the test binary's own directory; built once when it is not there, into the run's own
+    /// target dir and profile (DIR is `<target dir>/<profile dir>`, `debug` for the dev profile), so a run with
+    /// `--target-dir` or `--release` finds it.
     fn mock_binary() -> PathBuf {
         let exe = std::env::current_exe().unwrap();
         let dir = exe.parent().unwrap().parent().unwrap();
         let bin = dir.join("ratatoskr-mock");
         if !bin.exists() {
             let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let profile = dir.file_name().unwrap().to_str().unwrap();
+            let profile = if profile == "debug" { "dev" } else { profile };
             let ok = Command::new(cargo)
-                .args(["build", "-p", "domr", "--bin", "ratatoskr-mock"])
+                .args([
+                    "build",
+                    "-p",
+                    "domr",
+                    "--bin",
+                    "ratatoskr-mock",
+                    "--profile",
+                    profile,
+                ])
+                .arg("--target-dir")
+                .arg(dir.parent().unwrap())
                 .status()
                 .unwrap()
                 .success();
