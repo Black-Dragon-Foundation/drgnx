@@ -1,0 +1,16 @@
+{"scenario": "store/the-hub-migrates-before-it-serves", "requires": ["v1"], "doc": "A schema-6 work.db from the shaped fixture (its $HOME made the root's home): the hub moves it to schema 7 before it serves, so when the first ping answers the file is schema 7 with schema 6's rows behind the compat views (the deny-list's rows under ~/org left out), the decisions entities, and status says when it moved."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6-shaped.sql", "sql": ["update node set id = replace(id, '$' || 'HOME', '$HOME'), path = replace(path, '$' || 'HOME', '$HOME'), parent = replace(parent, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME'), data = replace(data, '$' || 'HOME', '$HOME')", "update edge set src = replace(src, '$' || 'HOME', '$HOME'), dst = replace(dst, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME')", "update file set path = replace(path, '$' || 'HOME', '$HOME')", "update job set plan = replace(plan, '$' || 'HOME', '$HOME'), repo = replace(repo, '$' || 'HOME', '$HOME')", "update agent set cwd = replace(cwd, '$' || 'HOME', '$HOME'), worktree = replace(worktree, '$' || 'HOME', '$HOME'), plan = replace(plan, '$' || 'HOME', '$HOME'), task = replace(task, '$' || 'HOME', '$HOME')"]}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}
+{"do": "sql_expect", "sql": "select count(*) from node", "rows": [[967]]}
+{"do": "sql_expect", "sql": "select count(*) from edge", "rows": [[165]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'decision'", "rows": [[4]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where title like '%CANARY%'", "rows": [[0]]}
+{"do": "sql_expect", "sql": "select json_extract(value, '$.tables.node') from kv where key = 'migrate-7'", "rows": [["[970,967]"]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready", "migrated_at": "$number", "failed": "$absent"}}}}

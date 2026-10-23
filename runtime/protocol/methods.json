@@ -6703,11 +6703,56 @@
             "additionalProperties": false,
             "description": "work.db as the front's writer has it.",
             "properties": {
+              "backup_ok": {
+                "description": "Whether that copy passed its check.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "denied_in": {
+                "description": "The copies that still hold what the migration's deny-list kept out of work.db (the pre-migration copy,\n`work.db.schema5`): the doctor offers removing them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "failed": {
+                "description": "Why the move from schema 6 failed (it is not tried again until the hub restarts; `work.db` is still schema 6).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "last_backup": {
+                "description": "The newest backup copy (Task 17's daily ones).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "migrated_at": {
+                "description": "When the move from schema 6 committed (unix seconds; none for a file made at schema 7).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "schema": {
                 "description": "`meta.schema` at the last look (0: no file).",
                 "format": "uint64",
                 "minimum": 0,
                 "type": "integer"
+              },
+              "wal_bytes": {
+                "description": "The size of `work.db-wal` (0 without one).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "writer": {
                 "$ref": "#/$defs/WriterState"
@@ -6727,7 +6772,7 @@
             "type": "object"
           },
           "WriterState": {
-            "description": "Whether the front's writer can write work.db: only a schema-6 file the Lisp side made.",
+            "description": "Whether the front's writer can write work.db: a schema-7 file the hub made or migrated (`not-ready` while the\nmigration waits or after it failed, `read-only` for a newer file).",
             "enum": [
               "ready",
               "not-ready",
@@ -6924,5 +6969,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 6
+  "schema": 7
 }

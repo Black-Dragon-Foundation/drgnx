@@ -1,6 +1,7 @@
 {"scenario": "mcp/an-outside-bridge-is-ext-and-unverified", "requires": ["v1", "fake-backend"], "doc": "An outside agent's bridge: a hello without a proof but with its cwd (service class), mcp/attach {kind: claude}, then MCP on the same connection.  Its identity is ext:claude:PID-HASH of the bridge's parent (the harness's here), and a job's tool (claim_task) is a tool error."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "b", "hub": "h", "as": "raw"}
 {"do": "expect_next", "conn": "b", "json": {"event": "challenge", "data": {"nonce": "$string"}}, "within_ms": 2000}
 {"do": "send", "conn": "b", "json": {"id": 1, "method": "hello", "params": {"proto": 1, "nonce": "0123456789abcdef0123456789abcdef", "client": "mcp-bridge", "cwd": "$HOME"}}}

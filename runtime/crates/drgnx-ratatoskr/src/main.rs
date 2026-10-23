@@ -46,6 +46,21 @@ fn main() -> ExitCode {
         Command::Relay { args } => return code(gleipnir::net::relay::main(args.into_iter())),
         // Its own single-threaded runtime; it reads no environment variable but, outside, the data dir's.
         Command::McpBridge(args) => return ExitCode::from(drgnx_ratatoskr::bridge::main(args)),
+        // No runtime: the migration and the copy run on this thread, and refuse while a hub holds the store.
+        Command::Store(cli::StoreCommand::MigrateCheck { db, scratch, json }) => {
+            return code(drgnx_ratatoskr::store_cli::migrate_check(
+                &Env::process(),
+                &db,
+                &scratch,
+                json,
+            ));
+        }
+        Command::Store(cli::StoreCommand::RestorePre7 { yes }) => {
+            return code(drgnx_ratatoskr::store_cli::restore_pre7(
+                &Env::process(),
+                yes,
+            ));
+        }
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),

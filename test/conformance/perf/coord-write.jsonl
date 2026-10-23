@@ -1,5 +1,6 @@
 {"scenario": "perf/coord-write", "requires": ["v1", "fake-backend", "perf"], "doc": "The baseline of a coordination write through the main socket: events/add answered with the new id, 100 times (--perf records every sample, no budget)."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "measure", "name": "events-add", "repeat": 100, "steps": [{"do": "send", "conn": "c", "json": {"id": 1, "method": "events/add", "params": {"kind": "comment", "agent": "user", "summary": "looks good"}}}, {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$number"}}}]}

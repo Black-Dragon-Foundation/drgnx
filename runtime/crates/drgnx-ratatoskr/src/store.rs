@@ -72,6 +72,15 @@ impl WorkDb {
         .await
     }
 
+    /// `meta.KEY` of work.db (the `kv` table behind schema 7's `meta` view); none without a file or the key.
+    pub async fn meta(&self, key: &'static str) -> Result<Option<String>, String> {
+        self.run(move |c| match c {
+            None => Ok(None),
+            Some(c) => urdr::meta(c, key).map_err(|e| e.to_string()),
+        })
+        .await
+    }
+
     /// The newest event's id: where the front's `events` broadcast starts (0 without a file, a table or a row).
     pub async fn last_event_id(&self) -> Result<u64, String> {
         self.run(|c| match c {

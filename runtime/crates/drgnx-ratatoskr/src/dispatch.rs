@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(r.error.code, ErrorCode::Schema);
         assert_eq!(
             r.error.message,
-            "work.db is schema 9, newer than this hub's 6: update drgnx"
+            "work.db is schema 9, newer than this hub's 7: update drgnx"
         );
         // a method that only reads still runs on a read-only hub, and its dropped keys are listed
         let c = prelude(

@@ -1,6 +1,7 @@
 {"scenario": "coord/events-add-is-broadcast-once", "requires": ["v1", "fake-backend"], "doc": "events/add writes one row and the front's writer broadcasts it once as an events event {since, last, events} (design 5.3); nothing follows in the next second (the 2 s tick finds nothing new)."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}

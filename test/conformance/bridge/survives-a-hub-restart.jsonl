@@ -1,6 +1,7 @@
 {"scenario": "bridge/survives-a-hub-restart", "requires": ["v1", "fake-backend"], "doc": "The gate row, initialize era (2025-06-18): an agent's bridge on its session socket outlives a hub restart. After a TERM and a start on the same root, the next tools/call works with no new handshake from the agent (the bridge replays it and drops the answer), and both report_test calls are events."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}

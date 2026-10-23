@@ -309,8 +309,9 @@ worth nothing on another connection, because each connection's challenge differs
      the class does not change;
    - no proof leaves the class as it is (`service` on the main socket).
 4. The reply is `{proto: 1, proto_min: 1, drgnx_version, schema, records: 2, class, methods, runtime: {version,
-   commit}, proof?}`. `drgnx_version` is the build commit, `schema` is work.db's `meta.schema` (0 when there is no
-   work.db yet), and `methods` names every method of the registry. `proof` is the hub's own, `HMAC-SHA256(cap,
+   commit}, proof?}`. `drgnx_version` is the build commit, `schema` is work.db's `meta.schema` (Ratatoskr makes
+   or migrates the file before it serves, so 7 unless the file is newer, or older and its migration failed; the Lisp hub says 0
+   when there is no work.db yet), and `methods` names every method of the registry. `proof` is the hub's own, `HMAC-SHA256(cap,
    "drgnx-hub hub " + nonce + " " + HUB_NONCE)`. It is sent only after a valid client proof.
 
 A connection answers one `hello`: a second one is `proto` "hello was already answered on this connection", whatever
@@ -327,10 +328,23 @@ session dir is never the backend's `hub-HASH.d/` (review M10): a sandbox is give
 it reaches `backend.sock`. The per-session sockets of later phases (`mcp.sock`, `search.sock`, `gateway.sock`) go in
 the same directory.
 
-**`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`),
-and never writes it. It reads `meta.schema` at the start and every 2 s. While it is above this hub's 6, the hub is
-read-only: a method that writes is `schema`, and `status.read_only` is the schema. A work.db that does not exist yet
-(a fresh install) is schema 0 and has no events.
+**The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
+`norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
+missing file is made at schema 7, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 7. A newer file (above 7) makes the hub read-only; a
+file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
+the rest. A failed migration is not tried again until the hub restarts. The coordination writer
+(`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
+
+**`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 7,
+the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
+
+**Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
+newest pre-migration copy that checks is put back as `work.db`, and the schema-7 file is kept aside with its `-wal`
+and `-shm` as `work.db.schema7-<unix>`. Then install the drgnx from before the move to schema 7: its hub opens
+schema 6. `ratatoskr store migrate-check --db FILE --scratch DIR [--json]` migrates a copy and prints only counts
+(the dry run before a rollout).
 
 **`ratatoskr methods --json|--markdown`** prints the registry: `runtime/protocol/methods.json`'s content, or the table
 in [The registry](#the-registry-protocol-v1).
@@ -348,7 +362,7 @@ An error is `{"id", "error": {"code", "message", "path"?}}`. Every line goes thr
 | 2b | `not-allowed` | the Lisp backend's own connection calls a method the front does not serve, or `subscribe` (the seam rule, next section) |
 | 3 | `proto` | a call (not `hello`) on a user connection whose hello said a newer protocol |
 | 4 | `invalid-params` with `path` | the typed decode failed. Keys the method does not know are dropped and listed in the answer's `ignored` |
-| 5 | `schema` | the method writes while the hub is read-only: "work.db is schema N, newer than this hub's 6: update drgnx" |
+| 5 | `schema` | the method writes while the hub is read-only: "work.db is schema N, newer than this hub's 7: update drgnx" |
 | 6 | `internal` | the handler failed |
 
 A notification (no `id`) is dispatched the same way and never answered. Every refusal (steps 1–5, and a handler's own,
@@ -452,16 +466,17 @@ runs `drgnx-hub--events-check`, so that log line is a sign of an older backend.
 (`runtime/crates/drgnx-ratatoskr/src/coord.rs`; [coordination.md](coordination.md#who-writes-what)): the editor's
 `cards/settle`, `messages/send`, `messages/mark`, `events/add` and `review/mark`, and the seam's `coord/*` methods,
 which the Lisp job runner calls until it moves (phase 6). Each is decoded by the registry, written in one transaction
-and answered typed. A work.db that is not ready (missing, below schema 6: the Lisp side makes it) is `internal` "work.db
-is not ready (schema N); the Lisp side makes it" (the writer looks at the file once more first, so a file the Lisp
-side just made is written at once); a newer one is `schema`; a busy one `internal` "work.db is busy; retry" (a
+and answered typed. A work.db that is not ready (below schema 6, or a migration that failed) is `internal` with the
+opening rule's text (the writer looks at the file once more first); a newer one is `schema`; a busy one `internal` "work.db is busy; retry" (a
 `best_effort` event and `coord/agent`'s `seen` answer `{}`); a writer's refusal (a `seen` from the future, a review
 state) `invalid-params` with its text. `coord/prune` never fails (`{pruned: false}`). `coord/notify` is the front's
 too: its writes and every `coord/notify`, from any class, feed one coalescer that sends the backend at most one
 `coord/notify` notification (no id, never awaited) each 0.25 s, waiting up to 10 s for a backend that is starting;
 the backend runs delivery and the clash scan as before. `status` says `store: {schema, writer: ready | not-ready |
-read-only, writes}`, the writer's state from the schema at the last tick and the transactions the front's methods
-committed since start.
+read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, denied_in?}`: the writer's state
+from its opening rule's last answer, the transactions the front's methods committed since start, when the move from
+schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list kept
+out of the migration (`last_backup` and `backup_ok` come with the daily backups).
 
 **The backend writes through the front.** `drgnx-hub-main` with a serve socket sets `drgnx-hub--behind-front` and
 `drgnx-coord-writer` to `front`; without one (the v0 hub, `lisp-hub.sh`) the writer is `local`. Behind the front

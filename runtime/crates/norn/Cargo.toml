@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`): drgnx-ratatoskr's test-hooks
+test-hooks = []
+
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }

@@ -1,6 +1,7 @@
 {"scenario": "perf/mcp-tool-call", "requires": ["v1", "fake-backend", "perf"], "doc": "The baseline of a tool call over a session socket: tools/call read_inbox on an initialized MCP connection, 100 times (--perf records every sample, no budget)."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}

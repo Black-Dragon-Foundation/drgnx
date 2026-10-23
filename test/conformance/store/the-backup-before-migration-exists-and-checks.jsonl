@@ -1,0 +1,11 @@
+{"scenario": "store/the-backup-before-migration-exists-and-checks", "requires": ["v1"], "doc": "Before it moves a schema-6 work.db the hub copies it to <data>/backup/work-pre7-<unix>.db (0600, in a 0700 dir): the copy named in meta.migrate-7 passes integrity_check and is the schema-6 file, every row of it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6-shaped.sql", "sql": ["update node set id = replace(id, '$' || 'HOME', '$HOME'), path = replace(path, '$' || 'HOME', '$HOME'), parent = replace(parent, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME'), data = replace(data, '$' || 'HOME', '$HOME')", "update edge set src = replace(src, '$' || 'HOME', '$HOME'), dst = replace(dst, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME')", "update file set path = replace(path, '$' || 'HOME', '$HOME')", "update job set plan = replace(plan, '$' || 'HOME', '$HOME'), repo = replace(repo, '$' || 'HOME', '$HOME')", "update agent set cwd = replace(cwd, '$' || 'HOME', '$HOME'), worktree = replace(worktree, '$' || 'HOME', '$HOME'), plan = replace(plan, '$' || 'HOME', '$HOME'), task = replace(task, '$' || 'HOME', '$HOME')"]}
+{"do": "start", "hub": "h"}
+{"do": "file", "path": "$DATA/backup", "mode": "700"}
+{"do": "file", "path": "$DATA/backup/work-pre7-*.db", "mode": "600"}
+{"do": "sql_expect", "sql": "select json_extract(value, '$.backup') from kv where key = 'migrate-7'", "rows": [["$capture:backup"]]}
+{"do": "sql_expect", "path": "$backup", "sql": "pragma integrity_check", "rows": [["ok"]]}
+{"do": "sql_expect", "path": "$backup", "sql": "select value from meta where key = 'schema'", "rows": [["6"]]}
+{"do": "sql_expect", "path": "$backup", "sql": "select (select count(*) from node), (select count(*) from edge), (select count(*) from decision), (select count(*) from jtask)", "rows": [[970, 169, 4, 5]]}

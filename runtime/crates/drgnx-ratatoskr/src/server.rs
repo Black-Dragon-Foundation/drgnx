@@ -8,7 +8,10 @@
 //!    0600, and the agent sockets (test-hooks) bound as `s/SID/hub.sock`, each session's dir private and apart from
 //!    the backend's `hub-HASH.d/` (review M10);
 //! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick, and the
-//!    writer (`norn::store::CoordDb`), which opens a schema-6 file now and at each tick ([`crate::coord`]);
+//!    store (`open_store`): the graph writer with `norn::migrate7`'s opening rule (a missing file made at schema 7,
+//!    a schema-6 one migrated after a checked copy), waited for, so a migration ends before the first request; the
+//!    coordination writer (`norn::store::CoordDb`) on the same file, and the graph store the tools use
+//!    ([`crate::coord`]);
 //! 6. the processes `runtime.db` recorded reaped, then the Lisp backend started (and kept running) on its own socket,
 //!    the sessions' `mcp.sock` of live owners bound again ([`crate::sessions`]; their owners watched each second),
 //!    the gateway listening on 127.0.0.1 and its registrations of live owners kept ([`crate::gateway`]; pruned each
@@ -37,7 +40,7 @@ use crate::{Exit, log, runtime_db};
 use runstav::paths::{self, Env};
 use runstav::proof::Cap;
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -163,17 +166,14 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
-    // the writer: a blocking first look at the file, before anything is served
-    let coord_db = {
-        let path = paths::data_dir(&env).join("work.db");
-        match tokio::task::spawn_blocking(move || norn::store::CoordDb::spawn(path)).await {
-            Ok(db) => db,
-            Err(e) => {
-                tracing::error!("cannot start: no work.db writer: {e}");
-                remove_all(&agent_paths);
-                remove(&socket, &cap_path);
-                return Exit::CannotStart;
-            }
+    // the graph writer: work.db made at schema 7, or a schema-6 file migrated, before anything is served
+    let (graph_writer, graph, coord_db) = match open_store(&env).await {
+        Ok(x) => x,
+        Err(e) => {
+            tracing::error!("cannot start: no work.db writer: {e}");
+            remove_all(&agent_paths);
+            remove(&socket, &cap_path);
+            return Exit::CannotStart;
         }
     };
     // what a crashed run left (its backend's group): killed before a new backend starts
@@ -182,11 +182,12 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     let (events_tx, events_rx) = tokio::sync::mpsc::channel(relay::QUEUE);
     let backend = new_backend(&env, &socket, runtime.clone(), events_tx);
-    let front = Arc::new(Front::new(
+    let front = Arc::new(Front::with_graph(
         cap,
         socket.clone(),
         work_db,
         coord_db,
+        Some(graph),
         Arc::new(ToBackend(backend.clone())),
     ));
     #[cfg(feature = "test-hooks")]
@@ -215,6 +216,15 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // read-only at start and at each tick while work.db is newer than this hub
     front.set_schema(front.work_db.schema().await.unwrap_or(0));
+    front.note_migration(
+        front
+            .work_db
+            .meta(norn::migrate7::REPORT_KEY)
+            .await
+            .ok()
+            .flatten()
+            .as_deref(),
+    );
     tokio::spawn(watch_schema(front.clone()));
     tokio::spawn(relay::run(events_rx, front.clone()));
     tokio::spawn(coord::broadcast_events(front.clone()));
@@ -302,6 +312,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     remove_all(&agent_paths);
     remove(&socket, &cap_path);
     let _ = tokio::task::spawn_blocking(move || store.shutdown()).await;
+    let _ = tokio::task::spawn_blocking(move || graph_writer.shutdown()).await;
     if exit == Exit::Restart && args.supervisor == Supervisor::SelfDetached {
         // nothing supervises this hub, so `main` executes the binary again: the lock stays held until the exec
         // closes it (every descriptor is close-on-exec), and the new image takes it
@@ -387,6 +398,76 @@ async fn accept(listener: UnixListener, front: Arc<Front>, socket: Socket) {
     }
 }
 
+/// The store at start (Urdr Task 11): the data dir made when missing, the graph writer spawned on `<data>/work.db` with
+/// the migration's opening rule (`norn::migrate7`: a missing file made at schema 7, a schema-6 one migrated after a
+/// checked copy in `<data>/backup/`), and its first answer waited for, so a migration ends before the first request;
+/// then the coordination store on the same file, and the graph store the tools use (a read pool, the deny-list).  A
+/// migration that failed or waits is no reason not to start: writes answer its text, `status.store` and the doctor
+/// say why.
+async fn open_store(
+    env: &Env,
+) -> Result<
+    (
+        urdr::graph::Writer,
+        norn::tools::GraphStore,
+        norn::store::CoordDb,
+    ),
+    String,
+> {
+    let data = paths::data_dir(env);
+    // made 0700 when missing; one that is there (perhaps a link the user made) is used as it is
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .map_err(|e| format!("{}: {e}", data.display()))?;
+    let home = env
+        .vars
+        .get("HOME")
+        .filter(|h| Path::new(h).is_absolute())
+        .map(PathBuf::from)
+        .ok_or("HOME is not set to an absolute path: the personal-notes deny-list needs it")?;
+    let config = paths::config_dir(env);
+    let path = data.join("work.db");
+    let opts = norn::migrate7::MigrateOpts {
+        backup_dir: data.join("backup"),
+        home: home.clone(),
+        config_dir: config.clone(),
+    };
+    let mut guard = urdr::graph::guard::Guard::default();
+    norn::grants::register(&mut guard);
+    let (writer, handle) = urdr::graph::Writer::spawn(
+        &path,
+        urdr::graph::WriterOpts {
+            guard: Arc::new(guard),
+            ..urdr::graph::WriterOpts::default()
+        },
+        norn::migrate7::open_rule(opts),
+    )
+    .map_err(|e| e.to_string())?;
+    // the writer runs the rule before it serves anything: a tick's answer comes after it
+    handle.tick().await;
+    match handle.status().last_open {
+        Some(urdr::graph::OpenOutcome::Ready { schema }) => {
+            tracing::info!(schema, "work.db is open")
+        }
+        Some(other) => tracing::warn!("work.db is not open for writing: {other:?}"),
+        None => {}
+    }
+    let deny: norn::deny::SharedDeny = Arc::new(std::sync::RwLock::new(Arc::new(
+        norn::deny::DenyList::load(&home, &config),
+    )));
+    let graph = norn::tools::GraphStore {
+        writer: handle.clone(),
+        pool: urdr::graph::ReadPool::open(&path, 4),
+        deny,
+    };
+    let db = tokio::task::spawn_blocking(move || norn::store::CoordDb::with_graph(handle))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((writer, graph, db))
+}
+
 /// work.db's schema every 2 s: read-only while it is newer than this hub's.  A read that fails keeps the last state.
 /// The writer looks at the file too (opened when it is there, again when it was replaced), and the `events`
 /// broadcaster sends what the Lisp backend wrote meanwhile (`drgnx-hub--events-check`'s 2 s).
@@ -396,9 +477,16 @@ async fn watch_schema(front: Arc<Front>) {
     every.tick().await;
     loop {
         every.tick().await;
+        // the graph writer first: it runs its opening rule again while not ready, and on a replaced file
+        if let Some(w) = front.writer.db.graph_writer() {
+            w.tick().await;
+        }
         match front.work_db.schema().await {
             Ok(n) => front.set_schema(n),
             Err(e) => tracing::warn!("cannot read work.db's schema: {e}"),
+        }
+        if let Ok(report) = front.work_db.meta(norn::migrate7::REPORT_KEY).await {
+            front.note_migration(report.as_deref());
         }
         let db = front.writer.db.clone();
         let _ = tokio::task::spawn_blocking(move || db.tick()).await;

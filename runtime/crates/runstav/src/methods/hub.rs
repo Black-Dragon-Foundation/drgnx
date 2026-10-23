@@ -100,7 +100,8 @@ pub struct Backend {
     pub pid: Option<u64>,
 }
 
-/// Whether the front's writer can write work.db: only a schema-6 file the Lisp side made.
+/// Whether the front's writer can write work.db: a schema-7 file the hub made or migrated (`not-ready` while the
+/// migration waits or after it failed, `read-only` for a newer file).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WriterState {
@@ -118,6 +119,25 @@ pub struct StoreStatus {
     pub writer: WriterState,
     /// The transactions the front's methods committed since the hub started.
     pub writes: u64,
+    /// When the move from schema 6 committed (unix seconds; none for a file made at schema 7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated_at: Option<f64>,
+    /// Why the move from schema 6 failed (it is not tried again until the hub restarts; `work.db` is still schema 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<String>,
+    /// The size of `work.db-wal` (0 without one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wal_bytes: Option<u64>,
+    /// The newest backup copy (Task 17's daily ones).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_backup: Option<String>,
+    /// Whether that copy passed its check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_ok: Option<bool>,
+    /// The copies that still hold what the migration's deny-list kept out of work.db (the pre-migration copy,
+    /// `work.db.schema5`): the doctor offers removing them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_in: Vec<String>,
 }
 
 /// The coordination tools the front serves: the sessions' sockets, and the outside bridges connected now.

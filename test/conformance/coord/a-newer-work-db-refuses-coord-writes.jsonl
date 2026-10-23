@@ -1,11 +1,12 @@
-{"scenario": "coord/a-newer-work-db-refuses-coord-writes", "requires": ["v1", "fake-backend"], "doc": "work.db of schema 9: the front's writes are schema, from the writer before the tick and from the dispatcher after it, and status says the writer is read-only."}
+{"scenario": "coord/a-newer-work-db-refuses-coord-writes", "requires": ["v1", "fake-backend"], "doc": "work.db of schema 9 when the hub starts: the front's writes are schema, from the writer and from the dispatcher, before the tick and after it, and status says the writer is read-only (the hub never migrates it)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["create table meta (key text primary key, value text)", "insert into meta values ('schema', '9')"]}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "sqlite", "path": "$DATA/work.db", "sql": ["create table meta (key text primary key, value text)", "insert into meta values ('schema', '9')"]}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "cards/settle", "params": {"card": 1, "choice": "x"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "schema"}}}
 {"do": "expect_silent", "conn": "c", "for_ms": 2600}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "messages/send", "params": {"recipient": "user", "text": "x"}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "schema", "message": "work.db is schema 9, newer than this hub's 6: update drgnx"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "schema", "message": "work.db is schema 9, newer than this hub's 7: update drgnx"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"read_only": 9, "store": {"schema": 9, "writer": "read-only", "writes": 0}}}}

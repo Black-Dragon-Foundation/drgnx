@@ -1,6 +1,7 @@
 {"scenario": "mcp/bad-argument-is-a-tool-error-with-its-path", "requires": ["v1", "fake-backend"], "doc": "Over a session socket, an argument of the wrong type is a tool error (isError) whose _meta dev.drgnx/error names its path, and the tool never runs (no event row)."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}

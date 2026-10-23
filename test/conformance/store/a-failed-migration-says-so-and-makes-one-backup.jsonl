@@ -1,0 +1,15 @@
+{"scenario": "store/a-failed-migration-says-so-and-makes-one-backup", "requires": ["v1", "test-hooks"], "doc": "A migration that fails after its copy (a test hook fails the entities step): work.db stays schema 6, status.store.failed says why and the writer is not ready, writes answer the reason, and 5 s of ticks later the hub has neither tried again nor made a second copy."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_MIGRATE7_FAIL": "entities"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"store": {"writer": "not-ready", "failed": "$string", "migrated_at": "$absent"}}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "events/add", "params": {"kind": "comment", "summary": "x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "internal"}}}
+{"do": "expect_silent", "conn": "c", "for_ms": 5000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"store": {"writer": "not-ready", "failed": "$string"}}}}
+{"do": "sql_expect", "sql": "select value from meta where key = 'schema'", "rows": [["6"]]}
+{"do": "sql_expect", "sql": "select count(*) from sqlite_master where name in ('entity', 'kv')", "rows": [[0]]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(ls $DATA/backup | grep -c '^work-pre7-')\" = 1"], "expect_code": 0}
