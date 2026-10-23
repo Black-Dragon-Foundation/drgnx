@@ -340,7 +340,11 @@ header doc)` returns NAME:
 - `:dir` is `config` (`drgnx-user-dir`, the default), `state` (`drgnx-state-dir`) or `project` (`ROOT/.drgnx/`:
   untrusted, read-only, no last good copy, 64 KiB).
 - `:shape` is `plist` (the default) or `alist`, and the `:schema`'s head must be the same. The schema is validated
-  when the file is defined (`drgnx-schema-validate`).
+  when the file is defined (`drgnx-schema-validate`). Shape `settings` is a settings file, `(HEAD :version 1
+  ENTRY…)`, with the schema `(settings HEAD)`: the layer checks only its head and `:version` (no form, a newer one or
+  a wrong head is a mistake), keeps its last good copy (`(drgnx-config-last-good-file NAME)` names it) and refuses
+  `drgnx-config-update`; `drgnx-settings-file` reads its entries and writes it ([settings.md](settings.md), "The
+  writer"). `settings.el` (config file `settings`) is the one.
 - `:version` is the format this drgnx writes (1). `:reload` is `mtime` (the default: a get costs one stat, and a
   changed file is applied at once) or `start` (read at the first get, then only on `drgnx-config-reread`). Use
   `start` only where applying a change mid-session is unsafe.

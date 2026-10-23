@@ -14,6 +14,8 @@
 ;;   or alist entries that changed are replaced in the text, so comments and unknown keys stay byte for byte.  They
 ;;   refuse a file with a mistake and a newer one (`drgnx-config-refused').  `drgnx-config-write-text' replaces the
 ;;   whole file by an editor's text, after the same checks on that text and a stamp check.
+;; - Shape `settings' is a settings file, `(HEAD :version 1 ENTRY…)': this layer reads it, keeps its last good copy
+;;   and says its mistake; `drgnx-settings-file' parses its entries and writes it (docs/develop/settings.md).
 ;; It requires only cl-lib, subr-x, drgnx-paths, drgnx-file and drgnx-schema, so the `emacs --batch -Q' hub loads it.
 
 ;;; Code:
@@ -80,14 +82,16 @@ writes, which apply what they write themselves.")
                                     (last-good t) max-bytes migrate header doc on-mistake)
   "Declare the config file NAME (a symbol): FILE (a file name) in DIR.  Return NAME.
 DIR: `config' (`drgnx-user-dir'), `state' (`drgnx-state-dir') or `project' (ROOT/.drgnx/, read-only and untrusted).
-SHAPE: `plist' or `alist', the top form.  VERSION: the format this drgnx writes; a plist's `:version', missing
-meaning 1.  SCHEMA: a `drgnx-schema' whose head is SHAPE, validated now.  DEFAULT: the value applied when the file
-is absent or has a mistake.  RELOAD: `mtime' (a get stats the file and reads it again when it changed) or `start'
-\(read at the first get, then only by `drgnx-config-reread').  LAST-GOOD: on a mistake, apply the last good copy
-rather than DEFAULT (never for a project file).  MAX-BYTES: the read and write limit (1 MiB; 64 KiB for a project
-file).  MIGRATE: ((FROM . FN)…), FN taking format FROM's data to FROM+1's.  HEADER: the comment a new file starts
-with.  DOC: one line for the reference.  ON-MISTAKE: a string saying what happens instead of using the file,
-when that is not its last good copy or the defaults (the notice and the reference say it).
+SHAPE: `plist' or `alist', the top form, or `settings', a settings file (HEAD :version 1 ENTRY…) whose SCHEMA is
+\(settings HEAD) and whose entries `drgnx-settings-file' reads and writes.  VERSION: the format this drgnx writes; a
+plist's `:version', missing meaning 1.  SCHEMA: a `drgnx-schema' whose head is SHAPE, validated now.  DEFAULT: the
+value applied when the file is absent or has a mistake.  RELOAD: `mtime' (a get stats the file and reads it
+again when it changed) or `start' (read at the first get, then only by `drgnx-config-reread').  LAST-GOOD: on a
+mistake, apply the last good copy rather than DEFAULT (never for a project file).  MAX-BYTES: the read and write
+limit (1 MiB; 64 KiB for a project file).  MIGRATE: ((FROM . FN)…), FN taking format FROM's data to FROM+1's.
+HEADER: the comment a new file starts with.  DOC: one line for the reference.  ON-MISTAKE: a string saying what
+happens instead of using the file, when that is not its last good copy or the defaults (the notice and the
+reference say it).
 In a module's setup the definition is undone at teardown: the previous one comes back, if any.  Redefining NAME
 drops what was applied from it."
   (unless (and name (symbolp name)) (error "drgnx-config: %S is not a config file name" name))
@@ -95,13 +99,16 @@ drops what was applied from it."
     (error "drgnx-config: %s: :file must be a file name, not %S" name file))
   (unless (memq dir '(config state project))
     (error "drgnx-config: %s: :dir must be config, state or project, not %S" name dir))
-  (unless (memq shape '(plist alist)) (error "drgnx-config: %s: :shape must be plist or alist, not %S" name shape))
+  (unless (memq shape '(plist alist settings))
+    (error "drgnx-config: %s: :shape must be plist, alist or settings, not %S" name shape))
   (unless (memq reload '(start mtime)) (error "drgnx-config: %s: :reload must be start or mtime, not %S" name reload))
   (unless (and (integerp version) (> version 0)) (error "drgnx-config: %s: :version must be 1 or more" name))
   (unless (or (null max-bytes) (natnump max-bytes)) (error "drgnx-config: %s: :max-bytes must be a size" name))
   (unless (or (null on-mistake) (stringp on-mistake)) (error "drgnx-config: %s: :on-mistake must be a string" name))
   (unless (eq (car-safe schema) shape) (error "drgnx-config: %s: a %s file needs a (%s …) schema" name shape shape))
-  (drgnx-schema-validate schema)
+  (if (not (eq shape 'settings)) (drgnx-schema-validate schema)
+    (unless (and (cadr schema) (symbolp (cadr schema)) (null (cddr schema)))
+      (error "drgnx-config: %s: a settings file's schema is (settings HEAD)" name)))
   (unless (drgnx-config--migrate-ok-p migrate)
     (error "drgnx-config: %s: :migrate must be an alist of (FORMAT . FUNCTION)" name))
   (let* ((project (eq dir 'project))
@@ -201,14 +208,28 @@ keep only the files in those folders; nil keeps every file."
 (defun drgnx-config--version-of (def data)
   "DATA's format by DEF's rules: an integer, or a string saying why it has none.
 An alist file is always 1.  A plist file's `:version', 1 when it is missing; 0 for a list that does not start with a
-keyword (a bare list some files had before they were plists)."
+keyword (a bare list some files had before they were plists).  A settings file's `drgnx-config--settings-version'."
   (cond ((eq (plist-get def :shape) 'alist) 1)
+        ((eq (plist-get def :shape) 'settings) (drgnx-config--settings-version (cadr (plist-get def :schema)) data))
         ((and (consp data) (not (keywordp (car data)))) 0)
         ((not (proper-list-p data)) 1)                  ; the schema says what is wrong with it
         (t (let ((m (plist-member data :version)))
              (cond ((null m) 1)
                    ((natnump (cadr m)) (cadr m))
                    (t "its :version is not a whole number"))))))
+
+(defun drgnx-config--settings-version (head data)
+  "The format of DATA, a settings file's form of head HEAD, by the rules both settings readers share (`huginn' and
+`drgnx-settings-file'): the first `:version' among the keyword pairs after HEAD, a whole number; else a string
+saying why it has none."
+  (if (not (and (consp data) (proper-list-p data) (eq (car data) head)))
+      (format "expected (%s …)" head)
+    (let ((rest (cdr data)) (found nil))
+      (while (and (not found) (keywordp (car rest)) (cdr rest))
+        (if (eq (car rest) :version) (setq found rest) (setq rest (cddr rest))))
+      (cond ((null found) "the file has no :version")
+            ((natnump (cadr found)) (cadr found))
+            (t "unsupported :version")))))
 
 (defun drgnx-config--put-version (data version)
   "The plist DATA with `:version' VERSION, in place of its own, else first."
@@ -230,16 +251,22 @@ keyword (a bare list some files had before they were plists)."
                   data)))))
 
 (defun drgnx-config--unknown (def data)
-  "The paths of DATA's keys DEF's schema does not name; a plist file's own `:version' is not one."
-  (let ((keys (drgnx-schema-unknown-keys (plist-get def :schema) data)))
-    (if (eq (plist-get def :shape) 'plist) (delete '(:version) keys) keys)))
+  "The paths of DATA's keys DEF's schema does not name; a plist file's own `:version' is not one.  A settings file
+has none: its entries are not keys of a schema."
+  (unless (eq (plist-get def :shape) 'settings)
+    (let ((keys (drgnx-schema-unknown-keys (plist-get def :schema) data)))
+      (if (eq (plist-get def :shape) 'plist) (delete '(:version) keys) keys))))
 
 (defun drgnx-config--analyze (def r file)
-  "The config read of FILE from R, `drgnx-file-read's result for it, by DEF's rules (see `drgnx-config-read')."
+  "The config read of FILE from R, `drgnx-file-read's result for it, by DEF's rules (see `drgnx-config-read').
+A settings file (shape `settings') that holds no form, or one in a newer format, is a mistake, as `huginn' has it."
   (let ((text (plist-get r :text)) (data (plist-get r :data)) (want (plist-get def :version))
+        (settings (eq (plist-get def :shape) 'settings))
         status problem version)
     (pcase (plist-get r :status)
-      ('absent (setq status 'absent data nil))
+      ('absent (if (and settings text)
+                   (setq status 'problem problem (drgnx-config--at-top text "the file holds no form"))
+                 (setq status 'absent data nil)))
       ('unreadable (setq status 'problem problem (plist-get r :problem)))
       (_
        (let ((v (drgnx-config--version-of def data)))
@@ -249,9 +276,12 @@ keyword (a bare list some files had before they were plists)."
                   (let ((m (drgnx-config--migrate def data v)))
                     (if (eq (car m) 'problem) (setq status 'problem problem (drgnx-config--at-top text (cdr m)))
                       (setq status 'migrated data (cdr m)))))
+                 ((and settings (> v want))
+                  (setq status 'problem
+                        problem (drgnx-config--at-top text (format "version %d was written by a newer drgnx" v))))
                  ((> v want) (setq status 'newer))
                  (t (setq status 'ok)))
-           (unless (eq status 'problem)
+           (unless (or settings (eq status 'problem))
              (when-let* ((bad (drgnx-schema-check (plist-get def :schema) data)))
                (setq problem (drgnx-config--at-top
                               text (concat (if (eq status 'newer) (format "a newer drgnx's format %d: " v) "")
@@ -283,6 +313,11 @@ not name.  ST: `drgnx-file-stamp'."
   "Where DEF's last good copy is kept: <state>/config-good/NAME.eld."
   (let ((default-directory "/"))
     (expand-file-name (format "config-good/%s.eld" (plist-get def :name)) (drgnx-state-dir))))
+
+(defun drgnx-config-last-good-file (name)
+  "Where config file NAME's last good copy is kept (<state>/config-good/NAME.eld), whether or not there is one yet.
+The layer writes it when a good read of the file has a new stamp; read it, never write it."
+  (drgnx-config--good-file (drgnx-config--def name)))
 
 (defun drgnx-config--last-good (def)
   "(DATA) of DEF's last good copy when it reads well against the schema (an older format migrated), else nil."
@@ -632,6 +667,8 @@ mistake or is newer, and leaves it as it was; a project file is read-only.  TIME
 filters and sentinels: `drgnx-file-busy' at once).  Then the listeners run."
   (let ((def (drgnx-config--def name)))
     (when (eq (plist-get def :dir) 'project) (error "%s is read-only" name))
+    (when (eq (plist-get def :shape) 'settings)
+      (error "%s is a settings file: `drgnx-settings-file-put' writes it, one entry at a time" name))
     (let* ((file (drgnx-config--path def root))
            (max (plist-get def :max-bytes))
            (migrated nil) (wrote nil))
@@ -826,15 +863,20 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
     (message "drgnx: %s now has format %d; the old one is backed up beside it"
              (drgnx-config--shown file) (plist-get (drgnx-config--def name) :version))))
 
+(autoload 'drgnx-settings-file-sort "drgnx-settings-file"
+  "Sort a settings file's entries by name, then its sections by kind and name." t)
+
 (defun drgnx-config-register-commands ()
-  "Open, Reset and Migrate Config File…, in the registry (Preferences)."
+  "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File, in the registry."
   (drgnx-command-define 'config-open :category "Preferences" :title "Open Config File…" :command #'drgnx-config-open
                         :doc "Open one of drgnx's config files, at its mistake when it has one")
   (drgnx-command-define 'config-reset :category "Preferences" :title "Reset Config File…" :command #'drgnx-config-reset
                         :doc "Put one of drgnx's config files back to its defaults; the old one is backed up")
   (drgnx-command-define 'config-migrate :category "Preferences" :title "Migrate Config File…"
                         :command #'drgnx-config-migrate
-                        :doc "Write a config file an older drgnx made in this drgnx's format; the old one is backed up"))
+                        :doc "Write a config file an older drgnx made in this drgnx's format; the old one is backed up")
+  (drgnx-command-define 'settings-sort-file :category "Settings" :title "Sort File" :command #'drgnx-settings-file-sort
+                        :doc "Sort settings.el or the workspace settings file you are in: entries by name, then sections"))
 
 (provide 'drgnx-config)
 ;;; drgnx-config.el ends here
