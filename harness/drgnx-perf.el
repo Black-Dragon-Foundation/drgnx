@@ -104,10 +104,77 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   "Glitnir's frame-time record (`glitnir-stats'; RESET clears it), or nil on a build or a root without it."
   (and (fboundp 'glitnir-stats) (glitnir-stats nil reset)))
 
+;;;; The stall watchdog (docs/develop/perf.md, "The stalls probe")
+
+(defvar nidhogg-watchdog-mode)
+(defvar nidhogg-watchdog-threshold)
+(defvar nidhogg-watchdog-record-functions)
+(declare-function nidhogg-watchdog-mode "nidhogg-watchdog")
+(declare-function nidhogg-watchdog-drain-now "nidhogg-watchdog")
+(declare-function nidhogg-watchdog-stats "nidhogg-watchdog")
+
+(defvar drgnx-perf--watchdog-applied nil "Non-nil once $DRGNX_PERF_WATCHDOG has been applied in this session.")
+(defvar drgnx-perf--stalls nil "While recording: the stall records the watchdog resolved, newest first.")
+
+(defun drgnx-perf--watchdog-env ()
+  "Apply $DRGNX_PERF_WATCHDOG once per session: unset or `default' runs `nidhogg-watchdog-mode' at 100 ms (the shipped
+configuration), `on' at 1 ms (the stress case), `off' leaves it off.  Without the feature, nothing."
+  (when (and (not drgnx-perf--watchdog-applied) (featurep 'nidhogg-watchdog))
+    (setq drgnx-perf--watchdog-applied t)
+    (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
+           (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100))))
+      (when (and (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode) (nidhogg-watchdog-mode -1))
+      (when ms
+        (setq nidhogg-watchdog-threshold ms)
+        (nidhogg-watchdog-mode 1)))))
+
+(defun drgnx-perf--watchdog-on-p ()
+  (and (featurep 'nidhogg-watchdog) (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode))
+
+(defun drgnx-perf--stall-record (record)
+  "A `nidhogg-watchdog-record-functions' entry: keep RECORD's wall time and whether the user felt it."
+  (push (cons (plist-get record :wall-ms) (plist-get record :felt)) drgnx-perf--stalls))
+
+(defun drgnx-perf--stalls-begin ()
+  "Drain what came before, and start keeping the records."
+  (setq drgnx-perf--stalls nil)
+  (when (drgnx-perf--watchdog-on-p)
+    (nidhogg-watchdog-drain-now)
+    (nidhogg-watchdog-stats t)
+    (add-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)))
+
+(defun drgnx-perf--stalls-end ()
+  "The probe's keys (:stalls :stalls-felt :stall-max-ms :watchdog) for the workload just run: only :watchdog nil
+without the watchdog."
+  (if (not (drgnx-perf--watchdog-on-p))
+      (list :watchdog nil)
+    (nidhogg-watchdog-drain-now)
+    (remove-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)
+    (let ((s (nidhogg-watchdog-stats)) (walls (delq nil (mapcar #'car drgnx-perf--stalls))))
+      (list :stalls (length drgnx-perf--stalls)
+            :stalls-felt (length (seq-filter #'cdr drgnx-perf--stalls))
+            :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
+            :watchdog (list :missed (or (plist-get s :missed) 0)
+                            :monitor-cpu-ms (drgnx-perf--round (or (plist-get s :monitor-cpu-ms) 0.0))
+                            :drain-p95-ms (drgnx-perf--round (or (plist-get s :drain-p95-ms) 0.0)))))))
+
+(defun drgnx-perf--gc-row (pauses)
+  "(:count N :max MS :p95 MS) of PAUSES (ms); :max and :p95 are nil with no collection."
+  (list :count (length pauses)
+        :max (and pauses (drgnx-perf--round (apply #'max pauses)))
+        :p95 (and pauses (drgnx-perf--round (drgnx-perf--p95 pauses)))))
+
+(defun drgnx-perf--typing-row (latencies)
+  "(:ge16 PERCENT :p95 MS) of the commands' LATENCIES (ms): the share at or over one 60 Hz frame, and the tail."
+  (list :ge16 (if latencies (drgnx-perf--round (/ (* 100.0 (seq-count (lambda (l) (>= l 16)) latencies)) (length latencies))) 0.0)
+        :p95 (and latencies (drgnx-perf--round (drgnx-perf--p95 latencies)))))
+
 (defun drgnx-perf-begin ()
-  "Start recording: every command's latency, every GC pause, memory, and Glitnir's frame-time record (the
-compose probe: reset here, read by `drgnx-perf-end' under :compose)."
+  "Start recording: every command's latency, every GC pause, memory, Glitnir's frame-time record (the
+compose probe: reset here, read by `drgnx-perf-end' under :compose) and the stall watchdog's records (`:stalls')."
   (drgnx-perf--glitnir-env)
+  (drgnx-perf--watchdog-env)
+  (drgnx-perf--stalls-begin)
   (drgnx-perf--compose-stats t)
   (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil
         drgnx-perf--gc-pauses nil drgnx-perf--gc-last gc-elapsed
@@ -126,8 +193,12 @@ without Glitnir)."
   (remove-hook 'post-command-hook #'drgnx-perf--post)
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
   (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start)
-              (compose (drgnx-perf--compose-stats)))
+              (compose (drgnx-perf--compose-stats))
+              (stalls (drgnx-perf--stalls-end)))
     (append
+     stalls
+     (list :gc (drgnx-perf--gc-row drgnx-perf--gc-pauses)
+           :typing (drgnx-perf--typing-row drgnx-perf--latencies))
      (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
            :alloc (drgnx-perf-stats drgnx-perf--allocs)
            :cpu_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--cpus))
@@ -311,6 +382,26 @@ most workloads, where there is no p95)."
 (defconst drgnx-perf-gated-metrics '(:alloc :cpu_ms :rows :processes :rss_kb)
   "The metrics a budget can fail a run on: what load does not move.  Every other path (wall clock) is reported.")
 
+(defvar drgnx-perf-watchdog-gated nil
+  "Non-nil once the watchdog rows (`:stalls', `:gc') are seeded: they then fail a run.  Until then they are reported
+(docs/develop/perf.md: a new row is reported first).")
+
+(defconst drgnx-perf-gc-p95-min-collections 20
+  "A GC p95 is judged only over at least this many collections (fewer: the tail is the maximum).")
+
+(defun drgnx-perf--gated-p (path)
+  "Whether a budget at PATH can fail a run."
+  (or (memq (car path) drgnx-perf-gated-metrics)
+      (and drgnx-perf-watchdog-gated (memq (car path) '(:stalls :gc)))))
+
+(defun drgnx-perf--watchdog-row-skipped-p (results w path)
+  "Whether the watchdog row at PATH of W has nothing to judge: the stalls rows without the watchdog (`:watchdog' nil),
+the GC max with no collection, the GC p95 over fewer than `drgnx-perf-gc-p95-min-collections' collections."
+  (let ((gcs (or (drgnx-perf--get results w '(:gc :count)) 0)))
+    (or (and (eq (car path) :stalls) (not (drgnx-perf--get results w '(:watchdog))))
+        (and (equal path '(:gc :max)) (= gcs 0))
+        (and (equal path '(:gc :p95)) (< gcs drgnx-perf-gc-p95-min-collections)))))
+
 (defun drgnx-perf--cpu-factor ()
   "$DRGNX_PERF_CPU_FACTOR (a number; default 1, 2 on hosted runners): the headroom CPU budgets get."
   (let ((env (getenv "DRGNX_PERF_CPU_FACTOR")))
@@ -331,7 +422,8 @@ hold.  Gated: `drgnx-perf-gated-metrics' — allocation (:alloc :p50, measured x
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (memq (car path) drgnx-perf-gated-metrics) (drgnx-perf--budget-applies-p b emacs-major))
+        (when (and (drgnx-perf--gated-p path) (drgnx-perf--budget-applies-p b emacs-major)
+                   (not (and (assq w results) (drgnx-perf--watchdog-row-skipped-p results w path))))
           (let ((v (drgnx-perf--get results w path))
                 (limit (if (eq (car path) :cpu_ms) (* limit cpu-factor) limit)))
             (cond ((not (assq w results)) (cl-pushnew (format "%s: not measured" w) out :test #'equal))
@@ -345,7 +437,7 @@ and that it is reported, not judged.  A p95 or p99 below n = 100 has no value."
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (not (memq (car path) drgnx-perf-gated-metrics)) (assq w results)
+        (when (and (not (drgnx-perf--gated-p path)) (assq w results)
                    (drgnx-perf--budget-applies-p b emacs-major))
           (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
                         (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
@@ -581,6 +673,15 @@ the recording's end finishes the answer and starts it over.  Returns the session
   "Replay NAME's transcript buffer, drawn (not shown)."
   (require 'drgnx-agents-ui)
   (drgnx-agents-ui-transcript-buffer (drgnx-perf-replay-session (drgnx-perf-replay--get name))))
+
+(defun drgnx-perf-live-mb ()
+  "The live Lisp heap in MB after a collection, from `garbage-collect-heapsize' (Nidhogg), else `drgnx-perf-heap-mb'."
+  (if (fboundp 'garbage-collect-heapsize)
+      (let ((bytes 0))
+        (dolist (e (garbage-collect-heapsize))
+          (when (and (numberp (nth 1 e)) (numberp (nth 2 e))) (cl-incf bytes (* (nth 1 e) (nth 2 e)))))
+        (/ bytes 1048576.0))
+    (drgnx-perf-heap-mb)))
 
 (defun drgnx-perf-heap-mb ()
   "The live Lisp heap in MB after a collection: SIZE × USED over `garbage-collect''s entries."

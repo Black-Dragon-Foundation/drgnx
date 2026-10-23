@@ -38,7 +38,7 @@ this at an exported REF.")
   "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
   '("USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
-    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR")
+    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_WATCHDOG")
   "The only variables a session inherits; everything else (keys, tokens) stays out.  Not HOME: a session's is
 RUN/home (`drgnx-ui-session-env').")
 (defvar drgnx-ui-session-tier 'ui
@@ -656,7 +656,7 @@ variables (a later entry wins): a test puts a package's directory on the daemon'
 \(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.  Only names in
 `drgnx-ui-session-extra-env-names' are taken; anything else signals.")
 
-(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH" "DRGNX_PERF_GLITNIR")
+(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_WATCHDOG")
   "The variables `drgnx-ui-session-extra-env' may set.  Not HOME, DISPLAY, the bus, XDG_RUNTIME_DIR or TMPDIR:
 a later entry wins, so one of those would move a session out of its run directory or onto the user's desktop.")
 
