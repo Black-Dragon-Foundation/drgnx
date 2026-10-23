@@ -19,6 +19,7 @@ use crate::store::WorkDb;
 use crate::version::COMMIT;
 use runstav::line::MAX_HUB_LINE;
 use runstav::methods::Params;
+use runstav::methods::gateway::KeysHeld;
 use runstav::methods::hub::{HubStatus, Runtime, StoreStatus, WriterState};
 use runstav::methods::mcp::AttachAnswer;
 use runstav::proof::Cap;
@@ -203,6 +204,16 @@ impl Front {
             .lock()
             .expect("subscribers")
             .retain(|_, out| out.push(line.clone()));
+    }
+
+    /// `gateway/keys-changed` to the subscribers when the held keys' ids are no longer BEFORE (ids only).  A
+    /// restarted hub holds none: a reconnecting editor asks `gateway/keys-held`, and hears this when its handover
+    /// fills the set again.
+    fn keys_changed(&self, before: &KeysHeld) {
+        let now = self.gate.keys_held();
+        if now != *before {
+            self.broadcast("gateway/keys-changed", json!(now));
+        }
     }
 
     pub fn status(&self) -> HubStatus {
@@ -393,18 +404,25 @@ impl Front {
             }),
             // the gateway's: keys and registrations never reach the backend
             Params::Spend(p) => self.gate.spend(&caller, p).await.map(|r| json!(r)),
-            Params::GatewayRegister(p) => self
-                .gate
-                .register(p, s.peer_pid, &self.mcp)
-                .await
-                .map(|r| json!(r)),
+            Params::GatewayRegister(p) => {
+                let before = self.gate.keys_held();
+                let r = self.gate.register(p, s.peer_pid, &self.mcp).await;
+                self.keys_changed(&before);
+                r.map(|r| json!(r))
+            }
             Params::GatewayUnregister(p) => {
                 self.gate.unregister(&p.token.0).await.map(|b| json!(b))
             }
             Params::GatewayKeys(p) => {
+                let before = self.gate.keys_held();
                 self.gate.take_keys(p.keys);
+                self.keys_changed(&before);
                 Ok(json!(true))
             }
+            Params::GatewayEditorToken(_) => {
+                self.gate.editor_token(s.peer_pid).await.map(|r| json!(r))
+            }
+            Params::GatewayKeysHeld(_) => Ok(json!(self.gate.keys_held())),
             Params::GatewaySetBudget(p) => self.gate.set_budget(p).await.map(|b| json!(b)),
             Params::ConfigProviders(p) => self.gate.config_providers(p).await.map(|r| json!(r)),
             other => match coord::serve(&self.writer, &caller, other).await {

@@ -1,0 +1,32 @@
+{"scenario": "gateway/an-editor-token-survives-a-restart", "requires": ["v1", "fake-backend"], "doc": "gateway/editor-token answers a token and the loopback URL; the token carries a /p/mock/chat/completions request to the mock provider (spend row: no job, agent editor). After a TERM and a start on the same root the gateway listens on the same port, the editor row is still in runtime.db, and the same token passes again."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/chat/completions", "body": "{\"id\": \"chat-1\", \"object\": \"chat.completion\", \"usage\": {\"prompt_tokens\": 3, \"completion_tokens\": 1}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "openai", "base": "http://127.0.0.1:$port", "auth": "none", "messages": false, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw", "registrations": 1}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "chat-1"}}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"agent": "editor", "provider": "mock", "status": 200, "job": null}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select class, listener, agent, chain, job is null, budget is null from registration", "rows": [["editor", "loopback", "editor", "[]", 1, 1]]}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"gateway": {"port": "$gw", "registrations": 1, "providers": 1}}}}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "subscribe"}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": true}}
+{"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"again\"}]}"}
+{"do": "expect_http", "conn": "g2", "status": 200, "body_json": {"id": "chat-1"}}
+{"do": "expect", "conn": "c2", "json": {"event": "request", "data": {"agent": "editor", "provider": "mock", "status": 200}}}
+{"do": "sql_expect", "sql": "select count(*), max(job) is null, min(agent), max(agent), min(provider), sum(input), sum(output) from spend", "rows": [[2, 1, "editor", "editor", "mock", 6, 2]]}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "$tok"}

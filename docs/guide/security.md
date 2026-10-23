@@ -110,6 +110,23 @@ shorthands come back, without reopening them.
   hub warns you when the provider list is applied, in its log once, and in `ratatoskr doctor`. Use `https` for it.
   A keyless provider (a local Ollama) gets no warning.
 
+## Where your keys live
+
+The hub holds your provider keys, in its memory only (above). What else gets near them:
+
+- **Agents** get a token, never a key. It reaches only Anthropic's Messages API, along the agent's own provider list,
+  and only on the hub's port or the agent's session socket.
+- **The editor** can take a token of its own for its AI requests (chat, completion, embeddings), so the request
+  carries the token and the hub adds the key. That token reaches only a provider's own paths
+  (`http://127.0.0.1:PORT/p/PROVIDER/…`), one provider per request, and only on the hub's port on this machine:
+  never an agent's session socket, and never the Messages API agents use. One process holds one such token (asking
+  again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
+  your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly.
+- **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
+  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
+- **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,
+  so the programs your Emacs starts (shells, `compile`, agents) still see them.
+
 ## Who an agent is
 
 The coordination tools (hello, reports, messages, tasks, decisions) act as one agent, and the agent never says

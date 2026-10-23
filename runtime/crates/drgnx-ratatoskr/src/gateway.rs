@@ -11,8 +11,13 @@
 //! - **A chain is judged** when it is registered: a step whose provider is not in the table ("not configured"), does
 //!   not speak Messages ("the gateway cannot carry it") or has no key ("no key") cannot be used; with none usable the
 //!   registration is refused (`invalid-params`, path `chain`, every step's reason; fail closed).
+//! - **The editor's token** (`gateway/editor-token`, call 15): a registration of class `editor` — no chain, budget or
+//!   restrictions, agent `editor` in its spend rows — owned by the caller's process, on the loopback listener only (a
+//!   row that says otherwise is dropped at start).  One per owner: a second call deletes the owner's earlier one.  It
+//!   is a `registration` row like an agent's, so it is kept across a restart and pruned with its owner.
 //! - **Keys** are held in memory only (`bifrost::keys::Keys`): never `runtime.db`, a file, a log, the environment or
-//!   the backend.  The ids whose key is held are what `status` and the doctor name.
+//!   the backend.  The ids whose key is held are what `status`, the doctor and `gateway/keys-held` name; the front
+//!   tells user subscribers `gateway/keys-changed` when that set changes.
 //! - **The provider table** is the editor's (`config/providers`), replaced whole; its last good copy is kept in
 //!   `runtime.db`'s `kv` (it holds no key).  A keyed provider over clear-text `http` off loopback is applied, with a
 //!   warning in the answer, logged once per provider per start (the user's answer 4).
@@ -36,12 +41,12 @@ use bifrost::{Auth, Caps, Class, Kind, ListenerId, Provider, Registration, Restr
 use norn::store::{CoordDb, CoordError};
 use runstav::methods::Params;
 use runstav::methods::gateway::{
-    DataCollection, OpenrouterRestrictions, ProviderAuth, ProviderCap, ProviderConfig,
-    ProviderKind, ProviderWarning, ProvidersApplied, ProvidersParams, RegisterParams,
-    Registration as Registered, SetBudgetParams, Spend, SpendParams,
+    DataCollection, EditorToken, KeysHeld, OpenrouterRestrictions, ProviderAuth, ProviderCap,
+    ProviderConfig, ProviderKind, ProviderWarning, ProvidersApplied, ProvidersParams,
+    RegisterParams, Registration as Registered, SetBudgetParams, Spend, SpendParams,
 };
 use runstav::methods::hub::GatewayStatus;
-use runstav::types::ProviderKeys;
+use runstav::types::{Id, ProviderKeys};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -519,6 +524,57 @@ impl Gate {
         Ok(true)
     }
 
+    /// `gateway/editor-token` from a connection whose peer is PEER_PID: a registration of class `editor` owned by that
+    /// process (with its start time), good on the loopback listener only.  The owner's earlier editor tokens go
+    /// first, so a reconnecting editor rotates; the row is written before the answer.
+    pub async fn editor_token(&self, peer_pid: Option<i32>) -> Result<EditorToken, Error> {
+        let owner = owner_of(None, peer_pid)?.ok_or_else(|| {
+            error(
+                ErrorCode::NotAllowed,
+                "an editor token needs its owner, and the caller's process cannot be read",
+                None,
+            )
+        })?;
+        let token = token().map_err(|e| internal(format!("no token: {e}")))?;
+        let hash = token_hash(token.as_bytes());
+        let db = self.db()?;
+        let port = self.engine()?.1;
+        let kept = Kept {
+            reg: Registration::editor(),
+            owner: Some(owner),
+        };
+        let _one = self.serial.lock().await;
+        let earlier: Vec<String> = read(&self.regs.0)
+            .iter()
+            .filter(|(_, k)| k.reg.class == Class::Editor && k.owner == Some(owner))
+            .map(|(h, _)| h.clone())
+            .collect();
+        for h in &earlier {
+            write(&self.regs.0).remove(h);
+            delete(db, h).await;
+        }
+        insert(db, &hash, &kept, None).await.map_err(|e| {
+            internal(format!(
+                "cannot record the editor's token in runtime.db: {e}"
+            ))
+        })?;
+        write(&self.regs.0).insert(hash, kept);
+        Ok(EditorToken {
+            token,
+            url: format!("http://127.0.0.1:{port}"),
+        })
+    }
+
+    /// `gateway/keys-held`: the ids whose key the hub holds, never a key.
+    pub fn keys_held(&self) -> KeysHeld {
+        KeysHeld {
+            providers: lock(&self.held)
+                .iter()
+                .filter_map(|id| Id::new(id.as_str()).ok())
+                .collect(),
+        }
+    }
+
     /// `gateway/keys` (and a registration's `keys`): to memory, nowhere else.
     pub fn take_keys(&self, keys: ProviderKeys) {
         let pairs: Vec<_> = keys.into_pairs().collect();
@@ -676,19 +732,35 @@ impl Gate {
             }
             None => None,
         };
-        let class = match row.class.as_str() {
-            "editor" => Class::Editor,
-            _ => Class::Agent,
-        };
         let owner = match (row.owner, row.owner_start) {
             (Some(o), Some(s)) => {
                 Some((u32::try_from(o).unwrap_or(0), u64::try_from(s).unwrap_or(0)))
             }
             _ => None,
         };
+        match row.class.as_str() {
+            "agent" => {}
+            // the editor's: loopback only and owned, whatever else the row says (call 15)
+            "editor" if listener != ListenerId::Loopback => {
+                return Err(format!(
+                    "an editor token on listener {:?}: it is good on the loopback listener only",
+                    row.listener
+                ));
+            }
+            "editor" if owner.is_none() => {
+                return Err("an editor token without an owner".into());
+            }
+            "editor" => {
+                return Ok(Kept {
+                    reg: Registration::editor(),
+                    owner,
+                });
+            }
+            c => return Err(format!("class {c:?}")),
+        }
         Ok(Kept {
             reg: Registration {
-                class,
+                class: Class::Agent,
                 job: row.job.clone(),
                 task: row.task.clone(),
                 agent: row.agent.clone(),
@@ -1379,6 +1451,217 @@ mod tests {
             "no key in runtime.db"
         );
         assert!(!r.token.is_empty());
+    }
+
+    /// The status of one `POST PATH` with TOKEN over S (Host: HOST), the connection closed after.
+    async fn status_over<S>(mut s: S, host: &str, token: &str, path: &str) -> u16
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let req = format!(
+            "POST {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\n\
+             Content-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            s.read_to_end(&mut answer),
+        )
+        .await
+        .expect("the gateway answers")
+        .unwrap();
+        let text = String::from_utf8_lossy(&answer);
+        text.split(' ')
+            .nth(1)
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no status line: {text}"))
+    }
+
+    fn me() -> i32 {
+        std::process::id() as i32
+    }
+
+    #[tokio::test]
+    async fn an_editor_token_is_loopback_only() {
+        let h = hub().await;
+        let g = &h.front.gate;
+        table(g).await;
+        let t = g.editor_token(Some(me())).await.unwrap();
+        let port = g.status().port.unwrap();
+        assert_eq!(t.url, format!("http://127.0.0.1:{port}"));
+        assert_eq!(
+            g.regs
+                .find(&token_hash(t.token.as_bytes()))
+                .map(|r| r.listener),
+            Some(ListenerId::Loopback)
+        );
+        // a live session with its own gateway.sock (an agent's registration bound it)
+        let p: runstav::methods::mcp::SessionParams =
+            decoded("mcp/session", json!({"agent": "s-1", "owner": me()}));
+        let sid = h.front.mcp.open(p).await.unwrap().sid;
+        let agent = g
+            .register(
+                register_params(json!({"chain": [["local", null]], "sid": sid.as_str()})),
+                None,
+                &h.front.mcp,
+            )
+            .await
+            .unwrap();
+        let sock = agent.socket.unwrap();
+        // the editor's token: not on the session's socket, on the loopback listener its own path (admitted: the
+        // keyless provider at 127.0.0.1:8 does not answer, so 502)
+        let path = "/p/chat/chat/completions";
+        let unix = || async { tokio::net::UnixStream::connect(&sock).await.unwrap() };
+        assert_eq!(
+            status_over(unix().await, "localhost", &t.token, path).await,
+            401
+        );
+        let tcp = || async {
+            tokio::net::TcpStream::connect(("127.0.0.1", port as u16))
+                .await
+                .unwrap()
+        };
+        let host = format!("127.0.0.1:{port}");
+        assert_eq!(status_over(tcp().await, &host, &t.token, path).await, 502);
+        // and the agent's token never reaches /p/…
+        assert_eq!(
+            status_over(unix().await, "localhost", &agent.token, path).await,
+            404
+        );
+        // a kept editor row bound to a session is dropped at start, not admitted
+        let db = g.db().unwrap().clone();
+        let sid2 = sid.as_str().to_owned();
+        db.write(move |c| {
+            c.execute(
+                "update registration set listener = ?1 where class = 'editor'",
+                [format!("session:{sid2}")],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        write(&g.regs.0).clear();
+        g.restore(&h.front.mcp).await;
+        assert!(g.regs.find(&token_hash(t.token.as_bytes())).is_none());
+        assert_eq!(
+            rows_of(h.dir.path(), "select class from registration"),
+            vec![vec![json!("agent")]]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_editor_token_replaces_the_first() {
+        let h = hub().await;
+        let g = &h.front.gate;
+        let first = g.editor_token(Some(me())).await.unwrap();
+        // another process's editor token is its own
+        let mut other = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let theirs = g.editor_token(Some(other.id() as i32)).await.unwrap();
+        let second = g.editor_token(Some(me())).await.unwrap();
+        assert_ne!(first.token, second.token);
+        assert!(g.regs.find(&token_hash(first.token.as_bytes())).is_none());
+        assert!(g.regs.find(&token_hash(second.token.as_bytes())).is_some());
+        assert!(g.regs.find(&token_hash(theirs.token.as_bytes())).is_some());
+        let mut hashes = rows_of(
+            h.dir.path(),
+            "select hash from registration where class = 'editor'",
+        );
+        hashes.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        let mut want = vec![
+            vec![json!(token_hash(second.token.as_bytes()))],
+            vec![json!(token_hash(theirs.token.as_bytes()))],
+        ];
+        want.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        assert_eq!(hashes, want, "one row per owner");
+        // pruned with its owner
+        other.kill().unwrap();
+        other.wait().unwrap();
+        g.prune(&h.front.mcp).await;
+        assert!(g.regs.find(&token_hash(theirs.token.as_bytes())).is_none());
+        assert_eq!(g.status().registrations, 1);
+        // a caller whose process cannot be read gets none
+        let e = g.editor_token(None).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotAllowed);
+    }
+
+    #[tokio::test]
+    async fn editor_rows_carry_no_chain_budget_or_restrictions() {
+        let h = hub().await;
+        let g = &h.front.gate;
+        let t = g.editor_token(Some(me())).await.unwrap();
+        let hash = token_hash(t.token.as_bytes());
+        assert_eq!(g.regs.find(&hash), Some(Registration::editor()));
+        assert_eq!(
+            rows_of(
+                h.dir.path(),
+                "select class, listener, job, task, agent, chain, budget, openrouter, owner from registration"
+            ),
+            vec![vec![
+                json!("editor"),
+                json!("loopback"),
+                Value::Null,
+                Value::Null,
+                json!("editor"),
+                json!("[]"),
+                Value::Null,
+                Value::Null,
+                json!(me()),
+            ]]
+        );
+        // a row that says more is read back as the editor's all the same, and a budget never reaches it
+        let db = g.db().unwrap().clone();
+        db.write(|c| {
+            c.execute_batch(
+                "update registration set job = 'j1', chain = '[[\"keyed\",\"m\"]]', budget = 1, \
+                 openrouter = '{\"zdr\": true}' where class = 'editor'",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        write(&g.regs.0).clear();
+        g.restore(&h.front.mcp).await;
+        assert_eq!(g.regs.find(&hash), Some(Registration::editor()));
+        let p: SetBudgetParams = decoded("gateway/set-budget", json!({"job": "j1", "budget": 7}));
+        g.set_budget(p).await.unwrap();
+        assert_eq!(g.regs.find(&hash).and_then(|r| r.budget), None);
+        // an editor row without an owner is dropped
+        db.write(|c| {
+            c.execute_batch("update registration set owner = null, owner_start = null")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        write(&g.regs.0).clear();
+        g.restore(&h.front.mcp).await;
+        assert!(g.regs.find(&hash).is_none());
+        assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+    }
+
+    #[tokio::test]
+    async fn keys_held_is_ids_only() {
+        let h = hub().await;
+        let g = &h.front.gate;
+        assert!(g.keys_held().providers.is_empty());
+        let keys: runstav::methods::gateway::KeysParams = decoded(
+            "gateway/keys",
+            json!({"keys": {"openrouter": "canary-key-7", "anthropic": "canary-key-8"}}),
+        );
+        g.take_keys(keys.keys);
+        let held = g.keys_held();
+        let ids: Vec<&str> = held.providers.iter().map(Id::as_str).collect();
+        assert_eq!(ids, ["anthropic", "openrouter"]);
+        let text = serde_json::to_string(&held).unwrap();
+        assert_eq!(text, r#"{"providers":["anthropic","openrouter"]}"#);
+        assert!(!text.contains("canary"));
+        // the answer passes the registry's check of gateway/keys-held's result
+        let m = registry::find("gateway/keys-held").unwrap();
+        assert_eq!((m.check_result)(&json!(held)).unwrap(), json!(held));
     }
 
     #[tokio::test]

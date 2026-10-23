@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 54, "{names:?}");
+        assert_eq!(names.len(), 56, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -465,6 +465,9 @@ mod tests {
             "gateway/keys",
             "gateway/set-budget",
             "config/providers",
+            // the editor's token and the held keys' ids (Task 22b)
+            "gateway/editor-token",
+            "gateway/keys-held",
         ];
         want.extend(FRONT_WRITES);
         want.sort();
