@@ -28,8 +28,12 @@ zeroize.workspace = true
 sha2.workspace = true
 tracing.workspace = true
 bytes = "1"               # request and response bodies (already in the tree through hyper)
+tower-service = "0.3"    # the connector trait (already in the tree through hyper-util)
 http = "1"                # request, response and header types (already in the tree through hyper)
 
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
+# The TLS tests (tests/tls.rs, tests/common): certificates made at run time, an in-test TLS server.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
