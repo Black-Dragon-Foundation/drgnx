@@ -44,7 +44,8 @@ pub const RESTARTING_ERROR: &str = "drgnx hub restarting";
 
 /// The tool error of a `tools/call` that was in flight when the socket dropped (never sent again).
 pub const WENT_AWAY: &str = "the drgnx hub went away during this call; whether it took effect is unknown — check with \
-                             read_inbox, task_status or read_decisions before you retry";
+                             read_inbox, task_status or read_decisions before you retry (if you passed req, \
+                             retrying with the same req is safe)";
 
 /// The `-32603` message of any other request in flight when the socket dropped.
 pub const WENT_AWAY_ERROR: &str = "the drgnx hub went away during this request";

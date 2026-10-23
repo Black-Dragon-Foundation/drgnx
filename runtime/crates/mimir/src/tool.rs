@@ -39,6 +39,13 @@ pub enum ToolResult {
         text: String,
         structured: Option<Value>,
     },
+    /// As `Ok`, with more `content` items after the text (e.g. `resource_link`s) and the result's `_meta`.
+    Rich {
+        text: String,
+        structured: Option<Value>,
+        content: Vec<Value>,
+        meta: Option<Value>,
+    },
     Err(String),
 }
 

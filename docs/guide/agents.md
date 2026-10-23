@@ -360,6 +360,24 @@ them instead.
 - **Agents are told** when someone else changes a task they hold or are assigned, when a task they wait on becomes
   ready, and when they lose a claim. Notices about the same task are merged until read.
 
+### Tools for tracking work
+
+Five tools carry this to agents, on by default for every session, including agents outside drgnx:
+
+- `task_read`: one task by id (with its links, notes and history), a search by words, the tasks that are ready, the
+  agent's own.
+- `task_write`: create, update, claim, hand off, split, complete, link, label.
+- `note_add`: a progress note, finding, question or handoff about a task, decision, plan, file or symbol.
+- `graph_read`: what is around an entity, a path between two, who changed what, who touched a file.
+- `access_request`: asks you to let the agent read another project. It never waits; you answer on a card.
+
+Agents see their own project and the projects you granted them. What other agents (and the agent itself, earlier)
+wrote is handed over as untrusted data with its author, never as instructions. Every answer says how many notices wait,
+and an agent's first `hello` brings a short brief: its project, its tasks, what is ready, its notices.
+
+To turn the five tools off for a profile, set `:tracker-tools off` on it in `agents.eld`; for one task, the user sets
+it with `tasks/write` (op `tools`). A session keeps the list it started with.
+
 ## What an agent can read
 
 drgnx's store (tasks, decisions, notes, and how they link) is shared by every agent, but each agent reads only its

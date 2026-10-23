@@ -349,7 +349,9 @@ mod tests {
                 text,
                 "No tool takes `agent': you are s-1, from the process that started this server"
             ),
-            ToolResult::Ok { text, .. } => panic!("the guard let it run: {text}"),
+            ToolResult::Ok { text, .. } | ToolResult::Rich { text, .. } => {
+                panic!("the guard let it run: {text}")
+            }
         }
         for k in IDENTITY_ARGS {
             let mut args = serde_json::Map::new();

@@ -1,7 +1,8 @@
 //! The 16 coordination tools as a client sees them: their names (the Lisp's), the size of `tools/list` against the
 //! 6k-token budget (storage §6.1), and what every tool does with a bad argument (Task 8).
 
-use norn::tools::tools;
+use mimir::Tool;
+use norn::tools::{Ctx, ToolSets, tools, tools_for};
 use serde_json::{Value, json};
 
 /// The tool names `core/drgnx-coord-mcp.el` defines, in the order it lists them: a line that opens a tool is
@@ -36,41 +37,79 @@ fn lisp_names() -> Vec<String> {
 fn tool_names_are_the_lisp_names() {
     let mut lisp = lisp_names();
     assert_eq!(lisp.len(), 16, "the Lisp defines 16 tools: {lisp:?}");
-    let mut rust: Vec<String> = tools().iter().map(|t| t.name().to_owned()).collect();
+    let mut rust: Vec<String> = tools_for(ToolSets { tracker: false })
+        .iter()
+        .map(|t| t.name().to_owned())
+        .collect();
     lisp.sort();
     rust.sort();
     assert_eq!(rust, lisp);
 }
 
-/// `tools/list`'s `tools` as `mimir` serves it: in name order, each with its description and input schema.
-fn listing() -> Value {
-    let mut all = tools();
+/// `tools/list`'s `tools` as `mimir` serves it: in name order, each with its description, input schema and (when it
+/// declares one) output schema.
+fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
     all.sort_by_key(|t| t.name());
     Value::Array(
         all.iter()
             .map(|t| {
-                json!({
+                let mut o = json!({
                     "name": t.name(),
                     "description": t.description(),
                     "inputSchema": t.input_schema(),
-                })
+                });
+                if let Some(s) = t.output_schema() {
+                    o["outputSchema"] = s;
+                }
+                o
             })
             .collect(),
     )
 }
 
-/// What `tools/list` may weigh: about 6k tokens at 4 bytes a token.
-const BUDGET_BYTES: usize = 24_000;
+/// What `tools/list` may weigh: about 9k tokens at 4 bytes a token for the 21 tools (answer 1, option A), and
+/// p2-p3's 6k for the 16 without the tracker set.
+const BUDGET_BYTES: usize = 36_000;
+const BUDGET_BYTES_16: usize = 24_000;
 
 #[test]
 fn the_tool_list_fits_the_budget() {
-    let bytes = json!({"tools": listing()}).to_string().len();
-    // the number goes in the ledger
-    eprintln!("tools/list for the 16 tools: {bytes} bytes (budget {BUDGET_BYTES})");
+    let bytes = json!({"tools": listing(tools())}).to_string().len();
+    let bytes16 = json!({"tools": listing(tools_for(ToolSets { tracker: false }))})
+        .to_string()
+        .len();
+    // the numbers go in the ledger
+    eprintln!(
+        "tools/list for the 21 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 16: {bytes16} (budget {BUDGET_BYTES_16})"
+    );
     assert!(
         bytes <= BUDGET_BYTES,
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
+    assert!(
+        bytes16 <= BUDGET_BYTES_16,
+        "tools/list without the tracker tools is {bytes16} bytes, over {BUDGET_BYTES_16}"
+    );
+}
+
+#[test]
+fn no_tool_takes_an_identity_or_class_or_project() {
+    let banned = [
+        "agent", "from", "sender", "as", "identity", "class", "project", "actor",
+    ];
+    for tool in tools() {
+        let schema = tool.input_schema();
+        let props = schema.get("properties").and_then(Value::as_object);
+        for key in props.into_iter().flat_map(|p| p.keys()) {
+            // `access_request` names the project it asks to read, not the caller's
+            let own = tool.name() == "access_request" && key == "project";
+            assert!(
+                own || !banned.contains(&key.as_str()),
+                "{} takes `{key}`",
+                tool.name()
+            );
+        }
+    }
 }
 
 /// The JSON type names of a property's schema (`"type": "string"` or `["string", "null"]`), without `null`.

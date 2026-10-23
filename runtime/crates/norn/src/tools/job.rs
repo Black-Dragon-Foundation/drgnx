@@ -9,6 +9,8 @@ use mimir::BoxFuture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use urdr::graph::entity::{self, Origin};
+use urdr::graph::link;
 
 use super::guard::{CoordTool, guarded, text_cut};
 use super::{Coord, Ctx, Identity};
@@ -253,6 +255,8 @@ struct RecordDecisionArgs {
     replaces: Option<i64>,
     /// The decision-log version you last read (read_decisions)
     seen_version: u64,
+    /// Entities it is about (ids): `about` links from the decision
+    about: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -300,15 +304,35 @@ async fn record_decision(
         job: who.job().map(str::to_owned),
     };
     let now = coord.now();
+    let about = args.about.unwrap_or_default();
+    // with `about`, the decision belongs to the caller's project and each target must be in its scope
+    let caller = if about.is_empty() {
+        None
+    } else {
+        Some(super::tracker::caller_of(coord, who, true).await?)
+    };
+    let meta = match &caller {
+        Some(c) => c.tx_meta("mcp:record_decision"),
+        None => who.tx_meta("mcp:record_decision"),
+    };
     let result = coord
         .db()
-        .write(who.tx_meta("mcp:record_decision"), move |tx| {
+        .write(meta, move |tx| {
             let r = decide(tx, d, now)?;
             let held = match &r {
                 DecideResult::Held(h) => Some(h.version),
                 _ => None,
             };
             note_held(tx, &me, held)?;
+            if let (DecideResult::Ok { n, .. }, Some(caller)) = (&r, &caller) {
+                let from = entity::by_id(tx.sql(), &format!("decision:{n}"))?;
+                for id in &about {
+                    let (target, _) = crate::tracker::visible(tx, caller, id, "entity")?;
+                    if let Some(from) = &from {
+                        link::add(tx, from.n, "about", target.n, None, Origin::Recorded, None)?;
+                    }
+                }
+            }
             Ok(r)
         })
         .await

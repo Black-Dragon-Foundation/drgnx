@@ -509,7 +509,25 @@ or a hub session named by id or name (asked last); an outside agent's `send_mess
 `read.rs` has `read_inbox` (its rows are as they were read, then marked `read`), `ack`, `read_decisions` (the caller's
 `seen:ID` is written only when it changed), `task_status` and `work_status`: the work tracker's plans from the `node`
 and `edge` tables, read-only, sorted by path, with the counts of `drgnx-work-counts`. The size of `tools/list` is
-measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byte (about 6k-token) budget.
+measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byte (about 6k-token) budget for the 16
+tools and 36,000 bytes (about 9k tokens) for the 21 with the tracker set.
+
+**The tracker and graph tools** (`tools/tracker.rs`, `tools/graph.rs`; storage §6.1, §6.4) are `RichTool`s behind the
+same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or the 16 above with `tracker: false`.
+- **The caller** comes from the identity (`Caller::from_identity`) with the project of its folder, resolved once and
+  kept in `Coord::projects()`. Writes register a new project; reads use only one the store knows. It is never an
+  argument.
+- **Answers** are text plus `structuredContent` (`Authored` text: `{text, by, class, tx, project, trust}`), a
+  `resource_link` (`drgnx://entity/ID`) per entity named, and `_meta["dev.drgnx/notices"] = n`, with a last text line
+  `notices: n (read_inbox)` only when n > 0. Untrusted text, the caller's own included, is fenced in the text. Lists
+  hold 50 rows and a `next_cursor` (`o:N`).
+- `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. `access_request` makes (or
+  finds) one open `access` card per session and target and answers `{requested: card}` for a known project and an
+  unknown one alike.
+- `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
+  `about: [id]`.
+- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities lack a vector; the vector half
+  waits for the embedder (Task 12b).
 
 **Where Rust and Lisp differ, on purpose:**
 - an identity's error texts name the agent's id instead of `DRGNX_AGENT`;
