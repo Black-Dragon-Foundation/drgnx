@@ -27,6 +27,7 @@
   "drgnx-git/the-status-run-reads-the-branch-from-the-cache"
   "drgnx-hub-client/coord-mcp-stays-service-class"
   "drgnx-hub-client/editor-traffic-over-ratatoskr"
+  "drgnx-hub-client/keys-again-after-a-restart"
   "drgnx-hub-client/mirror-over-ratatoskr"
   "drgnx-hub-client/outside-coord-server-still-works"
   "drgnx-hub-client/ping-probe-and-coord-mcp-skip-the-challenge"
@@ -70,6 +71,7 @@
  (darwin
   "drgnx-hub-client/coord-mcp-stays-service-class"
   "drgnx-hub-client/editor-traffic-over-ratatoskr"
+  "drgnx-hub-client/keys-again-after-a-restart"
   "drgnx-hub-client/mirror-over-ratatoskr"
   "drgnx-hub-client/outside-coord-server-still-works"
   "drgnx-hub-client/ping-probe-and-coord-mcp-skip-the-challenge"

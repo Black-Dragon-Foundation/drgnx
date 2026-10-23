@@ -7,9 +7,11 @@
 ;; - `legacy': no challenge, no `hello' ("no method hello", as the Lisp hub of before protocol 1 answers); it ends on
 ;;   `shutdown'.
 ;; HOLD-HELLO: hello answers wait for `drgnx-fake-hub-release'.  SILENT: methods never answered.  ERRORS: an alist
-;; (METHOD . (:code :message :path)) of methods answered with that error.  DELAY: seconds before the answer to any other
-;; method (hello and ping answer at once).
-;; `drgnx-fake-hub-lines' are the requests read, oldest first.  The cap file is written beside SOCKET.
+;; (METHOD . (:code :message :path)) of methods answered with that error.  RESULTS: an alist (METHOD . RESULT) of methods
+;; answered with that result (the others with true).  DELAY: seconds before the answer to any other method (hello and
+;; ping answer at once).
+;; `drgnx-fake-hub-lines' are the requests read, oldest first; `drgnx-fake-hub-event' sends an event to every client.
+;; The cap file is written beside SOCKET.
 (require 'cl-lib)
 (require 'drgnx-hub-client)
 
@@ -48,7 +50,8 @@
            (drgnx-fake-hub--send conn (list :id id :result t))
            (drgnx-fake-hub-stop server))
           (t (let* ((err (cdr (assoc method (process-get server :errors))))
-                    (answer (if err (list :id id :error err) (list :id id :result t)))
+                    (result (assoc method (process-get server :results)))
+                    (answer (if err (list :id id :error err) (list :id id :result (if result (cdr result) t))))
                     (delay (process-get server :delay)))
                (if delay (run-at-time delay nil #'drgnx-fake-hub--send conn answer)
                  (drgnx-fake-hub--send conn answer)))))))
@@ -68,7 +71,7 @@
     (process-put conn :nonce (substring (secure-hash 'sha256 (format "%s %s" (random) (float-time))) 0 32))
     (drgnx-fake-hub--send conn (list :event "challenge" :data (list :nonce (process-get conn :nonce))))))
 
-(cl-defun drgnx-fake-hub-start (socket &key (mode 'v1) hold-hello silent (records 2) errors delay)
+(cl-defun drgnx-fake-hub-start (socket &key (mode 'v1) hold-hello silent (records 2) errors results delay)
   "Serve SOCKET as MODE (see the file's commentary), its hello saying RECORDS; the server process."
   (drgnx-hub--private-dir (file-name-directory socket))
   (let ((cap (secure-hash 'sha256 (format "cap %s %s" (random) (float-time))))
@@ -82,6 +85,7 @@
     (process-put server :silent silent)
     (process-put server :records records)
     (process-put server :errors errors)
+    (process-put server :results results)
     (process-put server :delay delay)
     server))
 
@@ -94,6 +98,11 @@
   "Send the hello answers SERVER holds."
   (dolist (h (reverse (process-get server :held))) (drgnx-fake-hub--send (car h) (cdr h)))
   (process-put server :held nil))
+
+(defun drgnx-fake-hub-event (server event data)
+  "Send EVENT (a string) with DATA to every connection SERVER accepted."
+  (dolist (p (process-list))
+    (when (eq (process-get p :fake) server) (drgnx-fake-hub--send p (list :event event :data data)))))
 
 (defun drgnx-fake-hub-close-clients (server)
   "Close every connection SERVER accepted."

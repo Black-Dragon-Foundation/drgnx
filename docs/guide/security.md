@@ -98,7 +98,10 @@ shorthands come back, without reopening them.
   held only in its memory: never in a file, its database, its log, an environment or a command line, and never
   passed to the Lisp hub behind it. Agents get a token instead, which works only for them and only on the hub's own
   port or their session's socket; the hub keeps a hash of it, never the token. `ratatoskr doctor` names the providers
-  whose key the hub holds, never a key. A restarted hub has no key until your editor connects again.
+  whose key the hub holds, never a key. A restarted hub has no key until your editor connects again; when it asks
+  for one, the editor reads the provider's environment variable again and never prompts (no Keychain, no `.gpg`
+  file), else it tells you to run AI: Load Keys. The provider list the editor sends the hub (and again when ai.eld
+  changes) holds no key. The Lisp hub behind Ratatoskr registers its agents through Ratatoskr, without keys.
 - **The hub is not dumpable.** Another program running as you (an agent outside a sandbox, a debugger) cannot read
   the hub's memory, and so your keys, with `ptrace` or `/proc/PID/mem`, and the hub writes no core file. This does
   not stop root, or a program given the `CAP_SYS_PTRACE` capability. `ratatoskr stop` signals only the process that
@@ -107,7 +110,8 @@ shorthands come back, without reopening them.
   by mistake.
 - **Providers over plain http.** A provider's URL is `https`, or `http` for any host. A provider that takes a key
   at an `http` address off this machine (a server on your LAN) still works, but its key travels in clear text: the
-  hub warns you when the provider list is applied, in its log once, and in `ratatoskr doctor`. Use `https` for it.
+  hub warns you when the provider list is applied, in its log once, and in `ratatoskr doctor`, and your editor shows
+  it once per provider each time it starts. Use `https` for it.
   A keyless provider (a local Ollama) gets no warning.
 
 ## Where your keys live

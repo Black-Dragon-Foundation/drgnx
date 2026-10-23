@@ -583,8 +583,8 @@ the hello goes without a version), so the first hello of an Emacs carries `drgnx
 `DRGNX_EMACS` and `DRGNX_DIR` from `(drgnx-emacs-program)` and `drgnx-dir`; provider-key variable names unset). It
 never waits: CALLBACK gets nil when a hub answers, or the reason (the process's output) when `ensure` fails or passes
 `drgnx-hub-ensure-deadline` (10 s, a layer timer `hub-ensure`). A second call while it runs joins it. `drgnx-hub-ensure`
-(commands, the CLI) waits for that and then hands over the keys; in a daemon path (`inhibit-interaction`) it returns at
-once and the keys go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
+(commands, the CLI) waits for that and then hands over the provider table and the keys ([Keys](#keys)); in a daemon
+path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
 no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
 
 The hub's `notice` event (sent when the binary on disk changed) is posted by `drgnx-hub--note-notice` (an editor's
@@ -991,8 +991,8 @@ and served until the session closes) instead, for an agent in a sandbox without 
   caller's pid as the system reports it (the peer's credentials), with that process's start time. At start and on
   each tick (1 s) the hub prunes a registration whose owner is gone or whose pid now names another process (another
   start time), and one bound to a session that closed (M9b1-10). One without an owner stays until it is
-  unregistered. The Lisp backend registers its agents with the editor's pid as `owner`: without it, the backend would
-  own them and its restart would prune them.
+  unregistered. The Lisp backend registers the agents it starts with its own pid as `owner`: they are its children,
+  so they end with it, and so do their tokens.
 - **Across a restart** the rows are read back (a row that does not read is dropped and logged), owners checked again,
   the sessions' sockets bound again, and the gateway's port too: `runtime.db`'s `kv.gateway_port` is tried first,
   else a free one (logged), and the one used is kept.
@@ -1027,7 +1027,8 @@ pauses without waiting for the next request. `spend {job?, task?, agent?}` sums 
 ## Keys
 
 Provider keys reach the hub from a user connection only: `gateway/keys {keys: {PROVIDER: KEY}}` (an editor hands its
-keys over with each subscription, `drgnx hub start` too) and a registration's `keys`. They are held in Ratatoskr's
+keys over once each subscription is answered, `drgnx-hub-ensure` and so `drgnx hub start` too) and a registration's
+`keys`. They are held in Ratatoskr's
 memory only (`bifrost::keys::Keys`): never in `runtime.db`, a file, a log, an environment, a command line or the Lisp
 backend; the last key handed over for a provider wins. `status` and the doctor name the providers whose key is held
 (`keys_held`), never a key. A restarted hub holds no key until an editor connects again; meanwhile a request that
@@ -1037,6 +1038,29 @@ subscriber for the providers kept registrations need) tells the editor to hand t
 
 The Lisp hub (v0, before Ratatoskr) still has its own gateway, `core/drgnx-gateway.el`: registrations in
 `<state>/hub/registrations.eld` (hashes only), the port in `<state>/hub/port`, keys in its memory, curl per request.
+Behind Ratatoskr (`drgnx-hub--behind-front`) the Lisp backend runs none of it — no listener, no registrations.eld, no
+port file — and holds no key:
+- `drgnx-hub-register` calls the front's `gateway/register` (`drgnx-hub-call-front`), with the backend's pid as
+  `owner` and never `keys` (that connection refuses a `gateway/register` that carries them). The front judges the
+  chain and its keys; a refusal fails the agent's start with the front's text, and there is no direct route.
+- `drgnx-job-resume`'s budget goes to the front as `gateway/set-budget`.
+- The front's `budget {job, spent, budget}` notification lands in `drgnx-hub--method` and goes to
+  `drgnx-job--gateway-event`: the job pauses, its busy sessions stop, a "spent N of M USD: paused" card.
+
+**The editor's side** (`core/drgnx-hub-client.el`):
+- **The provider table.** Once a subscription is answered (`drgnx-hub--subscribed`), and from `drgnx-hub-ensure`, an
+  editor sends `config/providers` with the effective table — the presets and ai.eld, as `drgnx-ai-providers` resolves
+  them: `{id, kind, base (the :url), auth ("none" without a :key-env, "x-api-key" for :auth x-api-key, else
+  "bearer"), messages, caps, price?}` — then its keys. It never carries a key. A change to ai.eld sends it again
+  (`drgnx-ai--config-changed` on `drgnx-config-changed-functions`, then `drgnx-hub-resend-providers`: only from an
+  editor subscribed to a proven hub). Each of the answer's `warnings` (a keyed provider at `http://` off this machine)
+  becomes a `hub` notice once per provider per Emacs session (`drgnx-hub--clear-text-told`).
+- **`gateway/need-keys`** (`drgnx-hub--need-keys`, on the subscription) is answered only on a proven connection
+  (`drgnx-hub--event-conn`'s `:drgnx-proven`). For each provider the key is looked for again in its `:key-env`
+  variable (never `drgnx-ai--keys`); found keys go with `gateway/keys` and are kept nowhere. It runs in a process
+  filter, a daemon path, so auth-source is never read and nothing asks; a key not found is a `hub` notice
+  "agents need your P key in the drgnx hub: run AI: Load Keys". The keys and the table go after the subscription's
+  answer, so the need-keys a hub sends a new subscriber is about the keys it held before them.
 
 ## The editor's token
 

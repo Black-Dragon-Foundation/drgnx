@@ -139,6 +139,21 @@ ai.eld never adds or changes one: a cloned repository must not choose where your
 
 (defun drgnx-ai-provider (id) (alist-get id (drgnx-ai-providers)))
 
+(declare-function drgnx-hub-resend-providers "drgnx-hub-client")
+
+(defun drgnx-ai--config-changed (name)
+  "A listener on `drgnx-config-changed-functions': when ai.eld changed, the hub gets the provider table again
+\(`drgnx-hub-resend-providers': only from an editor connected to it).  A key never goes with it."
+  (when (and (eq name 'ai) (fboundp 'drgnx-hub-resend-providers))
+    (drgnx-hub-resend-providers)))
+
+(add-hook 'drgnx-config-changed-functions #'drgnx-ai--config-changed)
+
+(defun drgnx-ai-unload-function ()
+  "Remove the ai.eld listener (`unload-feature'); nil, so the feature unloads as usual."
+  (remove-hook 'drgnx-config-changed-functions #'drgnx-ai--config-changed)
+  nil)
+
 ;; A project's role may name a provider that is not on this machine (paid calls on every pause, your code sent
 ;; away).  The user confirms that once per project, from a command they ran; until then (and after a no) only the
 ;; local steps of the project's chain are used.

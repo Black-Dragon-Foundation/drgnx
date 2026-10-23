@@ -1,0 +1,17 @@
+{"scenario": "gateway/a-lisp-agent-registers-through-the-front", "requires": ["v1", "lisp-backend"], "doc": "Task 23: an agent the Lisp backend starts on a gateway profile (:ai claude-openrouter) is registered by the front's gateway (gateway/register through the backend's front connection, owner the backend): status.gateway.registrations is 1, and the mock ACP agent's environment has ANTHROPIC_BASE_URL = the gateway's URL and a token, never the key (a canary the user connection handed over)."}
+{"do": "start", "hub": "h"}
+{"do": "install_bin", "to": "$DATA/bin/ratatoskr"}
+{"do": "write_file", "path": "$CONFIG/agents.eld", "text": "(:mcp (coordination) :profiles ((\"mock-acp\" :ai claude-openrouter :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\") :env (\"MOCK_ACP_LOG=$ROOT/acp.log\"))))\n"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "https://openrouter.ai/api/v1", "auth": "bearer", "messages": true, "caps": ["chat", "fim", "embed"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-key-lisp-agent"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-acp", "cwd": "$HOME"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:agent"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"gateway": {"port": "$capture:gw", "registrations": 1}}}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "env ANTHROPIC_BASE_URL=http://127.0.0.1:$gw ANTHROPIC_AUTH_TOKEN=", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "lacks": "canary"}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/kill", "params": {"id": "$agent"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": "$any"}, "within_ms": 10000}
