@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 30] = [
+pub const VERBS: [&str; 33] = [
     "start",
     "root",
     "rename",
@@ -33,6 +33,9 @@ pub const VERBS: [&str; 30] = [
     "spawn_conn",
     "sql_expect",
     "capture_file",
+    "http",
+    "expect_http",
+    "file_grep",
 ];
 
 #[derive(Debug)]
@@ -292,6 +295,9 @@ mod tests {
 {"do": "spawn_conn", "conn": "b", "argv": ["cat"]}
 {"do": "sql_expect", "sql": "select 1", "rows": [[1]]}
 {"do": "capture_file", "path": "$ROOT/x.json", "capture": "p", "json_path": "a"}
+{"do": "http", "conn": "h", "to": "tcp:127.0.0.1:1", "method": "POST", "path": "/", "headers": {"a": "b"}, "body": "x", "read": "head", "close_after": true}
+{"do": "expect_http", "conn": "h", "status": 200, "headers": {"content-type": "$any"}, "body_contains": "x", "body_json": {}, "within_ms": 100}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "secret"}
 "#;
 
     #[test]
@@ -322,6 +328,21 @@ mod tests {
             verbs,
             ["connect", "spawn_conn", "sql_expect", "capture_file"]
         );
+    }
+
+    #[test]
+    fn http_verbs_parse() {
+        let s = parse(
+            r#"{"scenario": "t/http"}
+{"do": "spawn", "capture": "m", "argv": ["x"], "capture_stdout": {"regex": "PORT (\\d+)", "name": "port"}}
+{"do": "http", "to": "unix:$ROOT/s", "path": "/", "body_bytes": {"fill": "a", "n": 10}, "read": {"bytes": 4}}
+{"do": "expect_http", "status": 429, "body_json": {"error": "$any"}}
+{"do": "file_grep", "paths": ["$ROOT/*.log"], "absent": "k"}
+"#,
+        )
+        .unwrap();
+        let verbs: Vec<&str> = s.steps.iter().map(|x| x.verb.as_str()).collect();
+        assert_eq!(verbs, ["spawn", "http", "expect_http", "file_grep"]);
     }
 
     #[test]

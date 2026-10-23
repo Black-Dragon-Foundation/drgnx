@@ -5,6 +5,7 @@
 //! `domr connect-as --socket PATH` (the connection of another uid, relayed over stdio).
 
 mod exec;
+mod http;
 mod hub;
 mod matcher;
 mod report;
