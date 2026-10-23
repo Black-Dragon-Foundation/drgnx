@@ -157,7 +157,12 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
   (`core/drgnx-deny.el`, held to the same table of cases as the hub's check) before it sends anything: it skips
   files the rules deny, and drops a plan's `**Spec:**` that names one, even through a link. The hub checks again
   (defence in depth). The code indexer asks the same check with the opt-ins ignored: a file you opened for the store
-  is not opened for the code index.
+  is not opened for the code index. A scan root inside `~/org` (or `~/org` itself) is refused the same way, opt-ins
+  ignored, with "the work tracker never reads a project inside ~/org (personal notes)": nothing under it is read and
+  git never runs there (nor in a repository inside `~/org` that a project contains); the other roots are scanned.
+- **The entity embedder skips them too.** When the hub makes the store's search vectors (a `tei` embedding provider
+  in your providers), an entity whose source, path or id the rules deny is never sent, even one stored before you
+  added its folder to your deny list.
 - **The code search index never reads `~/org`.** `drgnx search index` refuses a project whose root is inside
   `~/org` (or reaches it through a link) with "the search index never reads ~/org (personal notes)", before it
   reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose

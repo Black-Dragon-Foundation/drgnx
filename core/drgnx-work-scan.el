@@ -105,10 +105,19 @@ applied to the node as the scan sees it, and remembered to be sent with the requ
       (when rec (puthash id rec drgnx-work-scan--updates))
       (puthash id n (if own drgnx-work-scan--nodes drgnx-work-scan--patched)))))
 
+(defconst drgnx-work-scan-personal-notes-refusal "the work tracker never reads a project inside ~/org (personal notes)"
+  "Why a scan root inside ~/org is refused (it is listed in `drgnx-work-scan''s :refused).")
+
+(defun drgnx-work--org-p (dir)
+  "Non-nil when DIR is inside ~/org with the user's opt-ins ignored (the hard tier, as the search indexer reads it:
+`drgnx-search-denied-p'): no scan root there is read, and no git runs there."
+  (drgnx-deny-path-p (directory-file-name (expand-file-name dir)) t))
+
 (defun drgnx-work--git (dir &rest args)
   "git ARGS in DIR: its output (trimmed) or nil.  Nil too in a job's snapshot folder, where the VC guard refuses git
-(`drgnx-sandbox-vc'): the tracker reads the main repository (`drgnx-work-source-functions')."
-  (when (file-directory-p dir)
+(`drgnx-sandbox-vc'): the tracker reads the main repository (`drgnx-work-source-functions'); and inside ~/org
+\(`drgnx-work--org-p'), where git never runs."
+  (when (and (not (drgnx-work--org-p dir)) (file-directory-p dir))
     (with-temp-buffer
       (let ((default-directory (file-name-as-directory dir)))
         (condition-case nil
@@ -204,9 +213,9 @@ is none: the scan's own door, beside the hub's."
 ;;;; Ledgers and commits
 
 (defun drgnx-work--repos (roots)
-  "Git repositories under ROOTS (the roots themselves and their direct subdirectories)."
+  "Git repositories under ROOTS (the roots themselves and their direct subdirectories), none inside ~/org."
   (delete-dups
-   (seq-filter (lambda (d) (file-exists-p (expand-file-name ".git" d)))
+   (seq-filter (lambda (d) (and (not (drgnx-work--org-p d)) (file-exists-p (expand-file-name ".git" d))))
                (seq-mapcat (lambda (r) (cons (file-name-as-directory r)
                                              (seq-filter #'file-directory-p (mapcar #'file-name-as-directory (ignore-errors (directory-files r t "\\`[^.]"))))))
                            roots))))
@@ -426,9 +435,13 @@ nothing: its time is kept)."
                 (and updates (list :updates (vconcat updates))))))))
 
 (cl-defun drgnx-work-scan-collect (roots &key board)
-  "Read ROOTS (directories) and BOARD (an org file) and work out what the hub is to be told: (:params P :files N),
-P the `graph/put-parsed' params, or nil when nothing changed.  Reads only; the database is read-only here."
-  (let* ((roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
+  "Read ROOTS (directories) and BOARD (an org file) and work out what the hub is to be told: (:params P :files N
+:refused LIST), P the `graph/put-parsed' params, or nil when nothing changed; LIST the roots inside ~/org, refused
+before anything under them is read or any git runs there, as (:source (:path ROOT) :why TEXT).  Reads only; the
+database is read-only here."
+  (let* ((given (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
+         (refused (seq-filter #'drgnx-work--org-p given))
+         (roots (seq-difference given refused))
          (repos (drgnx-work--repos roots))
          (drgnx-work-scan--nodes (make-hash-table :test #'equal)) (drgnx-work-scan--base (make-hash-table :test #'equal))
          (drgnx-work-scan--order nil) (drgnx-work-scan--edges nil)
@@ -494,7 +507,10 @@ P the `graph/put-parsed' params, or nil when nothing changed.  Reads only; the d
     (dolist (p (drgnx-work-scan--nodes-of 'plan)) (drgnx-work--git-facts (plist-get p :id)))
     (drgnx-work--check-commits)
     (list :params (drgnx-work-scan--params (car roots) found seen changed)
-          :files (length (seq-filter (lambda (f) (gethash f found)) changed)))))
+          :files (length (seq-filter (lambda (f) (gethash f found)) changed))
+          :refused (mapcar (lambda (r) (list :source (list :path (directory-file-name r))
+                                             :why drgnx-work-scan-personal-notes-refusal))
+                           refused))))
 
 (defconst drgnx-work-scan-request-max 800000
   "Bytes of one `graph/put-parsed' line: the hub refuses a line over 1 MiB.")
@@ -538,17 +554,19 @@ refused sources as plists (:source (:kind K :path P) :why TEXT).  Signals the hu
   "Bring the store up to date with ROOTS (directories) and BOARD (an org file): the scan reads, then sends everything
 in ONE `graph/put-parsed' to the hub and waits for its answer (a `--batch' Emacs would exit before an asynchronous
 one came; no timer runs the scan).  Nothing changed: nothing is sent.  Returns (:files N :changed N :retired N
-:refused LIST) — how many files were read again, and what the hub did."
-  (let* ((c (drgnx-work-scan-collect roots :board board)) (params (plist-get c :params)))
+:refused LIST) — how many files were read again, and what the hub did; LIST starts with the roots refused here
+\(inside ~/org: `drgnx-work-scan-collect')."
+  (let* ((c (drgnx-work-scan-collect roots :board board)) (params (plist-get c :params))
+         (r (if params (drgnx-work-scan-send params) (list :changed 0 :retired 0 :refused nil))))
     (append (list :files (plist-get c :files))
-            (if params (drgnx-work-scan-send params) (list :changed 0 :retired 0 :refused nil)))))
+            (plist-put r :refused (append (plist-get c :refused) (plist-get r :refused))))))
 
 (defun drgnx-work--check-commits ()
   "Mark the commits no branch, tag or HEAD reaches any more (rebased, squashed, amended, pruned) as
 gone, and their tasks stale — every scan, whatever changed.  Two git calls per repository."
   (let ((by-repo (seq-group-by (lambda (c) (plist-get c :repo)) (drgnx-work-scan--nodes-of 'commit))) gone)
     (pcase-dolist (`(,repo . ,commits) by-repo)
-      (when (and repo (file-directory-p repo))
+      (when (and repo (not (drgnx-work--org-p repo)) (file-directory-p repo))
         (let* ((shas (mapcar (lambda (c) (plist-get c :sha)) commits))
                (missing (with-temp-buffer
                           (insert (string-join shas "\n") "\n")

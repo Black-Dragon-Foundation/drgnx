@@ -195,6 +195,49 @@ changed, nothing refused; `drgnx-work-scan-test--refused' sets a refusal), no hu
                                                                       (drgnx-work-scan-test--entities params)))))
       (should-not (seq-find (lambda (e) (equal (plist-get e :kind) "spec")) (drgnx-work-scan-test--entities params))))))
 
+(ert-deftest drgnx-work-scan/a-root-inside-org-is-refused-before-any-git ()
+  ;; ~/org and a project in it (both git repositories, the project's plan opted in): refused as the search indexer
+  ;; refuses them (hard tier, opt-ins ignored) before anything under them is read or any git runs there; the other
+  ;; root is scanned
+  (drgnx-work-scan-test--with-org home root
+    (let* ((org (concat home "org/")) (notes (concat org "proj/")) (allow (concat home "config/personal-notes-allow.json"))
+           gits reads code out)
+      (make-directory (concat notes "docs/plans") t)
+      (make-directory (concat notes ".superpowers/sdd/n") t)
+      (write-region "# Private plan\n\n### Task 1: one\n- [ ] a\n" nil (concat notes "docs/plans/n.md") nil 'silent)
+      (write-region "# SDD ledger — plan: docs/plans/n.md\nTask 1: complete (commits abc1234..def5678)\n" nil
+                    (concat notes ".superpowers/sdd/n/progress.md") nil 'silent)
+      (write-region "# Plan\n\n### Task 1: one\n- [ ] a\n" nil (concat root "docs/plans/p.md") nil 'silent)
+      (dolist (d (list org notes root)) (let ((default-directory d)) (call-process "git" nil nil nil "init" "-q")))
+      (make-directory (concat home "config") t)
+      (write-region (format "{\"version\": 1, \"paths\": [\"%sdocs/plans/n.md\"]}" notes) nil allow nil 'silent)
+      (set-file-modes allow #o600)
+      (cl-letf* ((cp (symbol-function 'call-process))
+                 ((symbol-function 'call-process)
+                  (lambda (program &rest args) (when (equal program "git") (push default-directory gits)) (apply cp program args)))
+                 (cpr (symbol-function 'call-process-region))
+                 ((symbol-function 'call-process-region)
+                  (lambda (start end program &rest args)
+                    (when (equal program "git") (push default-directory gits))
+                    (apply cpr start end program args)))
+                 (df (symbol-function 'directory-files))
+                 ((symbol-function 'directory-files) (lambda (dir &rest args) (push dir reads) (apply df dir args)))
+                 (ifc (symbol-function 'insert-file-contents))
+                 ((symbol-function 'insert-file-contents) (lambda (file &rest args) (push file reads) (apply ifc file args))))
+        (drgnx-work-scan-test--recording
+          (setq out (with-output-to-string (setq code (drgnx-work-cli-run (list "scan" notes org root)))))))
+      (should (eql code 0))
+      (dolist (r (list notes org))
+        (should (string-search (format "refused: %s (%s)" (directory-file-name r) drgnx-work-scan-personal-notes-refusal) out)))
+      (let ((inside (lambda (f) (string-prefix-p org (file-name-as-directory (expand-file-name f))))))
+        (should-not (seq-filter inside gits))
+        (should-not (seq-filter inside reads)))
+      ;; the other root: its plan was sent, and nothing of org
+      (let ((params (cdr (car (drgnx-work-scan-test--puts)))))
+        (should (seq-find (lambda (e) (equal (plist-get e :id) (concat "plan:" root "docs/plans/p.md")))
+                          (drgnx-work-scan-test--entities params)))
+        (should-not (string-search org (format "%S" params)))))))
+
 ;;;; Recording
 
 (defun drgnx-work-scan-test--repo (root)
