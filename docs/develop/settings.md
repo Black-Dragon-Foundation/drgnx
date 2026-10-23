@@ -492,6 +492,40 @@ in safe mode and with every module off).
 - Tests: `drgnx-user-lisp/*` (`test/unit/user-lisp-test.el`) and row C15 in
   `test/unit/settings-compat-lisp-files-test.el`, in child Emacsen.
 
+## Tidy custom.el and en/disable-command (Task 30)
+
+`core/drgnx-settings-tidy.el`, autoloaded from `core/drgnx-config.el`.
+
+- **The plan.** `(drgnx-settings-tidy-plan &key remove file)` writes nothing: a refusal `(:refused REASON :why TEXT)`
+  or `(:file :old :new :changed :entries :dropped :deduped :removed :undefined)`. It reads `custom-file` with
+  `drgnx-file-read-bounded`, its top-level forms with `read` (`read-eval` and `read-circle` off, positions kept), and
+  takes the one `custom-set-variables` form's entries `'(VAR VALUE [NOW [REQUESTS [COMMENT]]])` as data. It refuses a
+  file that does not read, no such form or several, an entry of another shape, a variable twice, and a comment inside
+  the form other than Customize's header lines (printing again would lose it). An entry is dropped when it has no
+  comment and its value expression is a constant (self-evaluating or quoted) `equal` to the evaluated `standard-value`
+  (as Customize compares). `package-selected-packages` keeps the first of each package. REMOVE may name only
+  variables nothing defines (`drgnx-settings-tidy--undefined-p`: not bound, no `standard-value`, `custom-autoload`,
+  `custom-type`, not special). The kept entries are printed as `custom-save-variables` prints (sorted by name, the
+  four header lines, a value of 60 characters or more on its own line indented by `indent-pp-sexp`) and replace the
+  form's text; every other byte stays. The new text is read back: the same top-level forms in the same order, only
+  the form changed, holding exactly the kept entries. Nothing reads the session's `saved-value` properties and
+  `custom-save-variables` is never called (design §8.4, review M7).
+- **Apply and undo.** `drgnx-settings-tidy-apply PLAN` takes custom.el's drgnx lock through
+  `drgnx-settings-move--with-lock` (a modified buffer visiting it refuses), refuses when the file changed since the
+  plan, keeps a backup (`drgnx-file-backup`) and writes with `drgnx-file-write-text`: `drgnx-file-write` reads its
+  text back as one data form, and custom.el holds several forms and code, so the check above stands in for its
+  read-back. The record is the plan plus `:bak` (`drgnx-settings-tidy--undo`, this session's last 20);
+  `drgnx-settings-tidy-undo` refuses unless the file is exactly what Tidy wrote.
+- **Move offers.** `(drgnx-settings-tidy-move-offers PLAN)` → `((VAR . WHY)…)` through `drgnx-settings-move-plan`
+  (kind `custom-set-variables`); the command lists them, Move itself stays its own command.
+- **en/disable-command.** `core/drgnx-config.el` adds `drgnx-settings-tidy-disable-command` `:around`
+  `en/disable-command` at load (it applies when novice.el loads); it binds `user-init-file` to custom.el for the call.
+- **Doctor.** The `custom-file` check (group drgnx, fact `:custom-file` from `drgnx-settings-tidy-facts`): INFO with
+  the size, entries and dormant entries; no row when custom.el is missing.
+- Tests: `drgnx-settings-tidy/*` (`test/unit/settings-tidy-test.el`) and rows C4, C20
+  (`test/unit/settings-compat-custom-test.el`), each in a child Emacs. Mutation: with the entries printed from the
+  session's `saved-value` in place of the file's form, `keeps-hand-edits-made-since-start` goes red.
+
 ## Testing in a child Emacs (Task 5)
 
 A compatibility row runs in a child Emacs of its own, under a fresh temporary HOME and config dir, so it never sees

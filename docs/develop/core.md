@@ -2314,7 +2314,10 @@ each guard that is off (and when the guards cannot be read); facts without `:tru
 project's (after requiring `drgnx-doctor-config-features`). FAIL names each mistake as "FILE line L: TEXT" (the file's
 last good copy is in use meanwhile); WARN for a file a newer drgnx wrote; INFO for unknown keys ("a newer drgnx, or a
 typo?") and for a file in an older format; otherwise OK, "N files read". The doctor reads and never writes. See
-[files.md](../guide/files.md). `checkout-clean` (group drgnx) is the fact `:checkout-init`: `git -C CHECKOUT status
+[files.md](../guide/files.md). `custom-file` (group drgnx) is the fact `:custom-file` (`drgnx-settings-tidy-facts`):
+always INFO, custom.el's size, entries and dormant entries (variables nothing defines), with Settings: Tidy custom.el
+as the fix when there are dormant ones; no row when custom.el is missing ([settings.md](settings.md), Task 30).
+`checkout-clean` (group drgnx) is the fact `:checkout-init`: `git -C CHECKOUT status
 --porcelain -- init/` (`GIT_OPTIONAL_LOCKS=0`, bounded at 5 s). A change there is a WARN, because install.sh's update needs
 `init/` unchanged; the fix is to move it to `config.el` or `custom.el` in the config folder and `git checkout -- init/`.
 Without a `.git` (not a checkout) the check is absent. `config-dir` (group drgnx) is the fact `:config-dir`, `(:dir

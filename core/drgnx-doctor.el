@@ -371,6 +371,31 @@ are none."
                                   (mapconcat #'abbreviate-file-name dirs ", "))
                     "take them out of safe-local-variable-directories (custom.el) and use Trust This Folder: its code waits for review"))))
 
+(declare-function drgnx-settings-tidy-facts "drgnx-settings-tidy" (&optional file))
+
+(defun drgnx-doctor--custom-file (&optional file)
+  "The fact of the `custom-file' check: custom.el's size, entries and dormant entries (`drgnx-settings-tidy-facts'
+of FILE, default custom.el), nil when it is missing, or (:error MESSAGE)."
+  (condition-case err (progn (require 'drgnx-settings-tidy) (drgnx-settings-tidy-facts file))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--custom-file-check (c)
+  "The `custom-file' check of the fact C (`drgnx-doctor--custom-file'): information only; nil (no row) when
+custom.el is missing."
+  (cond ((null c) nil)
+        ((plist-get c :error) (list 'info (format "could not check: %s" (plist-get c :error)) nil))
+        (t (let ((dormant (plist-get c :dormant)) (n (plist-get c :entries)))
+             (list 'info
+                   (concat (format "%s: %s, %d entr%s, %d dormant" (file-name-nondirectory (plist-get c :file))
+                                   (file-size-human-readable (plist-get c :bytes) 'iec " ") n (if (= n 1) "y" "ies")
+                                   (length dormant))
+                           (if dormant (format " (nothing in this Emacs defines %s)"
+                                               (mapconcat #'symbol-name dormant ", "))
+                             "")
+                           (if (plist-get c :problem) (format "\n%s" (plist-get c :problem)) ""))
+                   (and (or dormant (plist-get c :problem))
+                        "Settings: Tidy custom.el (it lists the dormant entries, with Remove)"))))))
+
 (defun drgnx-doctor--config-dir ()
   "The fact of the `config-dir' check: (:dir THE-CONFIG-DIR :moved WHERE-IT-BELONGS-OR-NIL :ignored IGNORED),
 IGNORED being `drgnx-paths-ignored'."
@@ -447,6 +472,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :settings-stayed (drgnx-doctor--settings-stayed)
            :dir-locals-trusted (drgnx-doctor--dir-locals-trusted)
            :user-lisp-bootstraps (condition-case nil (progn (require 'drgnx-user-lisp) (drgnx-user-lisp-bootstraps)) (error nil))
+           :custom-file (drgnx-doctor--custom-file)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
            :notices (drgnx-doctor--notices)
@@ -689,6 +715,10 @@ severity, the fix the first `:fix'."
                                                                      (plist-get b :line) (plist-get b :kind)))
                                                  bs "\n")
                                       "drgnx manages packages itself (drgnx sync); nothing is blocked, but the bootstrap may install a second set"))))
+
+(drgnx-doctor-define 'custom-file :group "drgnx"
+                     :doc "custom.el's size and its entries nothing defines (information)"
+                     :check (lambda (f) (drgnx-doctor--custom-file-check (plist-get f :custom-file))))
 
 (drgnx-doctor-define 'checkout-clean :group "drgnx"
                      :doc "The checkout's init/ has no local changes (install.sh's update needs that)"

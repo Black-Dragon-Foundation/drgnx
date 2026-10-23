@@ -899,11 +899,21 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
   "Move a setting of settings.el to the end of config.el as a `setopt', with a diff first." t)
 (autoload 'drgnx-settings-move-undo "drgnx-settings-move"
   "Put both files of the last move back as they were." t)
+(autoload 'drgnx-settings-tidy-custom-file "drgnx-settings-tidy"
+  "Tidy custom.el's `custom-set-variables' form, with a diff first." t)
+(autoload 'drgnx-settings-tidy-undo "drgnx-settings-tidy"
+  "Put custom.el back as it was before the last Tidy custom.el." t)
+(autoload 'drgnx-settings-tidy-disable-command "drgnx-settings-tidy"
+  "Around `en/disable-command': its line goes to custom.el, not the checkout's init.el.")
+
+;; enable-command and disable-command (novice.el) write to `user-init-file', the checkout's init/init.el: send them to
+;; custom.el (design §8.4).  Always on, as Doom does; the advice applies when novice.el loads.
+(advice-add 'en/disable-command :around #'drgnx-settings-tidy-disable-command)
 
 (defun drgnx-config-register-commands ()
   "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File, Turn Off / Turn On Package
 Settings, Keep Module Entries…, Migration Report, Migrate Old Files, Move Old Files Away, Lisp Files (and its Open at
-Line), Move into Settings…, Move to My Lisp… and Undo Move, in the registry."
+Line), Move into Settings…, Move to My Lisp…, Undo Move, Tidy custom.el and Undo Tidy, in the registry."
   (drgnx-command-define 'config-open :category "Preferences" :title "Open Config File…" :command #'drgnx-config-open
                         :doc "Open one of drgnx's config files, at its mistake when it has one")
   (drgnx-command-define 'config-reset :category "Preferences" :title "Reset Config File…" :command #'drgnx-config-reset
@@ -947,7 +957,13 @@ Line), Move into Settings…, Move to My Lisp… and Undo Move, in the registry.
                         :doc "Move a setting of settings.el to the end of config.el as a setopt: a diff first, one Undo")
   (drgnx-command-define 'settings-move-undo :category "Settings" :title "Undo Move"
                         :command #'drgnx-settings-move-undo
-                        :doc "Put both files of the last Move into Settings or Move to My Lisp back as they were"))
+                        :doc "Put both files of the last Move into Settings or Move to My Lisp back as they were")
+  (drgnx-command-define 'settings-tidy-custom-file :category "Settings" :title "Tidy custom.el"
+                        :command #'drgnx-settings-tidy-custom-file
+                        :doc "Drop custom.el's entries equal to the default, print it as Customize does: a diff, one Undo")
+  (drgnx-command-define 'settings-tidy-undo :category "Settings" :title "Undo Tidy"
+                        :command #'drgnx-settings-tidy-undo
+                        :doc "Put custom.el back as it was before the last Tidy custom.el"))
 
 (provide 'drgnx-config)
 ;;; drgnx-config.el ends here
