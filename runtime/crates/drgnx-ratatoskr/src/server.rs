@@ -435,6 +435,7 @@ async fn open_store(
         .ok_or("HOME is not set to an absolute path: the personal-notes deny-list needs it")?;
     let config = paths::config_dir(env);
     let path = data.join("work.db");
+    crate::backup_timer::seed(&data.join("backup"));
     let opts = norn::migrate7::MigrateOpts {
         backup_dir: data.join("backup"),
         home: home.clone(),
@@ -518,8 +519,30 @@ async fn watch_schema(front: Arc<Front>) {
             }
             front.writer.signals.notify_soon();
         }
+        nightly_backup(&front);
         front.writer.signals.events_soon();
     }
+}
+
+/// The nightly backup (`backup_timer`): at 03:00 local time, or at the first tick after a missed one, once the store
+/// is open and ready and no excise runs.  The copy runs on its own task, so the tick goes on.
+fn nightly_backup(front: &Front) {
+    let Some(g) = front.tools.graph() else { return };
+    let ready = matches!(
+        g.writer.status().last_open,
+        Some(urdr::graph::OpenOutcome::Ready { .. })
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if !ready || !crate::backup_timer::due_at(now) || !crate::backup_timer::begin() {
+        return;
+    }
+    let g = g.clone();
+    tokio::spawn(async move {
+        crate::graph::run_backup(&g).await;
+        crate::backup_timer::finish();
+    });
 }
 
 /// Under the lock: agent socket A at `hub.sock` in its session dir, `<socket dir>/s/SID/` (`paths::make_session_dir`:

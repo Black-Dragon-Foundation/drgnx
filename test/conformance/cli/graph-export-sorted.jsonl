@@ -1,0 +1,17 @@
+{"scenario": "cli/graph-export-sorted", "requires": ["v1", "fake-backend"], "doc": "ratatoskr graph export (Urdr Task 17; storage §8.2): three tasks written through the hub, then exported from the command line to --out: entities.jsonl has them sorted by id, a second export of an unchanged store is byte for byte the same, and --project without --out is a usage error (exit 2) that writes nothing."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "zebra", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "create", "title": "apple", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/write", "params": {"op": "create", "title": "mango", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$string"}}}
+{"do": "run", "args": ["graph", "export", "--out", "$ROOT/exp1", "--json"], "expect_code": 0, "expect_stdout": {"dir": "$string", "entities": "$number", "links": "$number"}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "export LC_ALL=C; f=$ROOT/exp1/entities.jsonl; test \"$(grep -c '\"kind\":\"task\"' $f)\" -ge 3 && grep -o '^{\"id\":\"[^\"]*\"' $f | sort -c"], "expect_code": 0}
+{"do": "run", "args": ["graph", "export", "--out", "$ROOT/exp2"], "expect_code": 0, "expect_stdout": "exported"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cmp $ROOT/exp1/entities.jsonl $ROOT/exp2/entities.jsonl && cmp $ROOT/exp1/links.jsonl $ROOT/exp2/links.jsonl"], "expect_code": 0}
+{"do": "run", "args": ["graph", "export", "--project", "alpha"], "expect_code": 2, "expect_stderr": "--out"}

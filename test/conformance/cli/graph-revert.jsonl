@@ -1,0 +1,19 @@
+{"scenario": "cli/graph-revert", "requires": ["v1", "fake-backend"], "doc": "ratatoskr graph revert (Urdr Task 17; storage §6.6): a title changed in one tx is put back by `graph revert --tx N` from the command line, as a new version the user's tx writes; --cascade only lists; a revert with no target or both is a usage error."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "one", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:task", "title": "one", "ver": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "update", "id": "$task", "ver": 1, "title": "two"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$task", "ver": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/sql", "params": {"sql": "select updated_tx from entity where id = ?1", "params": ["$task"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"columns": ["updated_tx"], "rows": [["$capture:t"]], "truncated": false}}}
+{"do": "run", "args": ["graph", "revert", "--tx", "$t", "--cascade", "--json"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select title, ver from entity where id = '$task'", "rows": [["two", 2]]}
+{"do": "run", "args": ["graph", "revert", "--tx", "$t", "--json"], "expect_code": 0, "expect_stdout": {"reverted": {"entities": ["$number"], "links": []}}}
+{"do": "sql_expect", "sql": "select title, ver from entity where id = '$task'", "rows": [["one", 3]]}
+{"do": "sql_expect", "sql": "select t.actor, t.class from entity e join tx t on t.id = e.updated_tx where e.id = '$task'", "rows": [["user", "user"]]}
+{"do": "run", "args": ["graph", "revert"], "expect_code": 2, "expect_stderr": "--tx"}
+{"do": "run", "args": ["graph", "revert", "--tx", "1", "--entity", "x"], "expect_code": 2}

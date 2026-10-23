@@ -17,6 +17,7 @@
 //! - [`excise`] (Task 8): blanking a text everywhere it was kept, then scrubbing the file.
 
 pub mod backup;
+pub mod compact;
 pub mod entity;
 pub mod excise;
 pub mod export;

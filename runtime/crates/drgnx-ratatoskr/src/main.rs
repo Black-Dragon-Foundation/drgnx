@@ -61,6 +61,8 @@ fn main() -> ExitCode {
                 yes,
             ));
         }
+        // No runtime: a blocking client of the running hub (started first when none runs).
+        Command::Graph(g) => return code(drgnx_ratatoskr::graph_cli::run(&Env::process(), g)),
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),

@@ -93,6 +93,25 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
         (should (eql 1 (car r)))
         (should (string-search "Ratatoskr is not built: run `drgnx runtime build'" (cdr r)))))))
 
+(ert-deftest drgnx-bin/graph-execs-ratatoskr ()
+  ;; drgnx graph … is `ratatoskr graph …' with every argument (quoted SQL included) unchanged and the exit status
+  ;; coming back; no Emacs runs; with no binary the message says how to build
+  (drgnx-bin-test--with-setup ()
+    (let* ((log (expand-file-name "rtsk.log" dir)) (fake (expand-file-name "ratatoskr" dir))
+           (env (append (list (concat "DRGNX_RATATOSKR_BIN=" fake) "DRGNX_EMACS=/an/emacs") env))
+           (call (lambda (env &rest args) (apply #'drgnx-bin-test--call drgnx-bin-test--bin env "graph" args))))
+      (write-region (format "#!/bin/sh\nprintf '%%s|' \"$@\" >> '%s'\necho >> '%s'\nexit ${FAKE_EXIT:-0}\n" log log) nil fake)
+      (set-file-modes fake #o755)
+      (should (eql 0 (car (funcall call env "backup" "now"))))
+      (should (eql 0 (car (funcall call env "sql" "select 1 as a, 'x y' as b" "--json"))))
+      (should (equal (split-string (drgnx-bin-test--slurp log) "\n" t)
+                     '("graph|backup|now|" "graph|sql|select 1 as a, 'x y' as b|--json|")))
+      (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+      (should (eql 3 (car (funcall call (cons "FAKE_EXIT=3" env) "scrub"))))
+      (let ((r (funcall call (cons "DRGNX_RATATOSKR_BIN=/nonexistent/ratatoskr" env) "backup")))
+        (should (eql 1 (car r)))
+        (should (string-search "Ratatoskr is not built: run `drgnx runtime build'" (cdr r)))))))
+
 (ert-deftest drgnx-bin/no-nidhogg-is-an-error-never-a-bare-emacs ()
   ;; drgnx runs only on Nidhogg: with no $DRGNX_EMACS, no record and no nidhogg on PATH, a bare `emacs' there is
   ;; not run; the error names the installer

@@ -627,6 +627,17 @@ pub struct BackupAnswer {
     pub removed: Vec<String>,
 }
 
+/// What a scrub did (`graph/scrub`; the excise's own report carries the same three fields).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScrubAnswer {
+    pub vacuumed: bool,
+    pub wal_truncated: bool,
+    /// `readers` or `writer`: what kept the WAL from being truncated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct CompactParams {
     /// Say what would go, change nothing.
@@ -886,6 +897,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "graph/compact", GraphCompact(CompactParams) -> CompactAnswer,
             classes: [User], writes: true, home: Front,
             doc: "parsed entities' old versions thinned and retired sessions' link stats folded (authored facts never)",
+        ),
+        method!(
+            "graph/scrub", GraphScrub(Empty) -> ScrubAnswer,
+            classes: [User], writes: true, home: Front,
+            doc: "VACUUM and a WAL checkpoint (TRUNCATE) of work.db as a writer request, saying when readers keep the WAL from being truncated",
         ),
         method!(
             "graph/settings", GraphSettings(SettingsParams) -> Settings,

@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 74, "{names:?}");
+        assert_eq!(names.len(), 75, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
-    const FRONT_WRITES: [&str; 26] = [
+    const FRONT_WRITES: [&str; 27] = [
         "cards/settle",
         "messages/send",
         "messages/mark",
@@ -447,6 +447,7 @@ mod tests {
         "graph/proposed",
         "graph/import",
         "graph/compact",
+        "graph/scrub",
         "graph/settings",
         "graph/privacy",
         "tasks/write",

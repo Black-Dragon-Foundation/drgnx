@@ -414,6 +414,15 @@ fn log_reason(env: &Env) -> Option<(String, PathBuf)> {
 
 /// `ensure`: the exit code (0 running, 1 not started, 3 a Lisp hub serves).
 pub fn ensure(env: &Env, timeout: Duration) -> i32 {
+    ensure_say(env, timeout, true)
+}
+
+/// `ensure` for a command that has output of its own (`graph`): the socket path is not printed.
+pub fn ensure_quiet(env: &Env, timeout: Duration) -> i32 {
+    ensure_say(env, timeout, false)
+}
+
+fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
     let socket = paths::socket_path(env);
     // a socket directory that is not this user's private one: nothing there is trusted, and no hub could start there
     if let Some(why) = client::refused(&socket) {
@@ -431,7 +440,9 @@ pub fn ensure(env: &Env, timeout: Duration) -> i32 {
         return 3;
     }
     if client::ping(&socket, Duration::from_secs(1)).is_some() {
-        println!("{}", socket.display());
+        if say {
+            println!("{}", socket.display());
+        }
         return 0;
     }
     let exe = match crate::idle::resolve_exe() {
@@ -452,7 +463,9 @@ pub fn ensure(env: &Env, timeout: Duration) -> i32 {
     let mut ended = None;
     loop {
         if client::ping(&socket, Duration::from_secs(1)).is_some() {
-            println!("{}", socket.display());
+            if say {
+                println!("{}", socket.display());
+            }
             return 0;
         }
         // a hub that ended early (cannot start; or it lost a race to another `ensure`, whose hub then answers)

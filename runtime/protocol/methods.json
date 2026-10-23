@@ -5669,6 +5669,47 @@
       "classes": [
         "user"
       ],
+      "doc": "VACUUM and a WAL checkpoint (TRUNCATE) of work.db as a writer request, saying when readers keep the WAL from being truncated",
+      "home": "front",
+      "name": "graph/scrub",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a scrub did (`graph/scrub`; the excise's own report carries the same three fields).",
+        "properties": {
+          "blocked_by": {
+            "description": "`readers` or `writer`: what kept the WAL from being truncated.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vacuumed": {
+            "type": "boolean"
+          },
+          "wal_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "vacuumed",
+          "wal_truncated"
+        ],
+        "title": "ScrubAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the store's settings (only_user_closes: only I close my tasks), written in a user-class tx only",
       "home": "front",
       "name": "graph/settings",

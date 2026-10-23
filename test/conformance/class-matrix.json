@@ -42,6 +42,7 @@
   "graph/put-parsed": ["user"],
   "graph/record": ["user"],
   "graph/revert": ["user"],
+  "graph/scrub": ["user"],
   "graph/settings": ["user"],
   "graph/sql": ["user"],
   "hello": ["user", "agent", "service"],

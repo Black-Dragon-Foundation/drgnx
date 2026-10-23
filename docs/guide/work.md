@@ -173,6 +173,30 @@ item per line, sorted so a change touches only its lines), `tx.jsonl` (who chang
 appear in it. Importing a folder is safe to repeat: items that are already there at that version or later are
 skipped.
 
+Each night at 03:00 (or at the first moment after a missed one: the hub was off, the laptop asleep) the hub makes a
+new dated copy, checks it and rotates the old ones. No copy starts while an excise runs. `drgnx doctor` warns when the
+newest copy is more than 48 hours old or failed its check.
+
+## The graph from the command line
+
+`drgnx graph …` talks to the running hub (it starts one when none runs), so it works the same from a shell as from
+the editor. Every command takes `--json` and then prints the hub's answer as one line; otherwise it prints text. It
+exits 0 when it did what you asked, 1 when it did not (a failed backup, a revert that was blocked, an error) and 2 for
+a command line it does not understand.
+
+| Command | What it does |
+|---|---|
+| `drgnx graph export [--project P --out DIR] [--since TX] [--with activity] [--history]` | Writes the export folder (default `<data>/export/`). `--project` needs `--out` and never writes into a repository unless `--out` names it. |
+| `drgnx graph import DIR` | Reads an export folder back (safe to repeat; never creates a grant). |
+| `drgnx graph backup [now]` | Makes and checks a dated copy now and rotates the old ones. |
+| `drgnx graph revert --tx N` or `--entity ID --to-ver V` `[--cascade]` | Puts a change back as a new version of yours. `--cascade` only lists what depends on it. |
+| `drgnx graph excise ID\|TX [--field F]… --reason R [--rotate-backups] [--transcripts] [--yes]` | Blanks a text in every version, every search row and the copies the hub keeps, then vacuums the file. It cannot be undone: in a terminal it asks first; from a script it needs `--yes`. If readers keep the WAL open it says "close drgnx editors and run `drgnx graph scrub`". |
+| `drgnx graph scrub` | Vacuums `work.db` and truncates its WAL. Run it again after closing editors if an excise could not finish. |
+| `drgnx graph grants [list [--who W] \| grant WHO WHAT [--access read\|edit-user-tasks] [--expires T] \| revoke ID]` | Lists, makes and revokes access grants. `T` is unix seconds or a span such as `12h` or `7d`. |
+| `drgnx graph sql 'SELECT …'` | One read-only query (no writes, no `PRAGMA`), with a row cap and a deadline. |
+| `drgnx graph compact [--dry-run]` | Thins old history: a parsed item (spec, plan, step, commit) keeps its current version and the last old version of each day; the counters of sessions that ended fold into one total per file. Things you and your agents wrote (tasks, decisions, notes, grants) are never touched. |
+| `drgnx graph proposed accept\|reject TX…` | Settles changes an agent proposed. |
+
 ## Tests
 
 `test/unit/work-test.el` (the scan: specs, plans, ledgers, branches, merges, renames, the board) and
