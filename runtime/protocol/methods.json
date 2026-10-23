@@ -3810,6 +3810,533 @@
     },
     {
       "classes": [
+        "user"
+      ],
+      "doc": "what a tracker scan read, by typed source, in one transaction: every path a record carries checked against the personal-notes deny-list (a denied path refuses its whole source), unchanged entities untouched, derived statuses, collected keys",
+      "home": "front",
+      "name": "graph/put-parsed",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "LinkOrigin": {
+            "description": "Who made a link: read from a file, or inferred (a ledger's commits, a worktree's branch).",
+            "enum": [
+              "parsed",
+              "inferred"
+            ],
+            "type": "string"
+          },
+          "ParsedEntity": {
+            "description": "One entity a source holds.  `data` carries what the Lisp readers see as columns (`path`, `line`, `parent`, `ord`)\nand the rest (`sha`, `date`, `repo`, …); a key set to `null` is left out.",
+            "properties": {
+              "data": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/JsonObject"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "kind": {
+                "description": "spec, plan, task, step, ruling, todo, file, commit or branch.",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Status"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ParsedLink": {
+            "description": "One link a source holds, by the ids of its ends.  `kind` is a link kind of storage §5.4 (`on-branch` is read as\n`on_branch`); `ledger-of` (a ledger's plan) is kept as `relates` with `data.was`, as the migration keeps it.",
+            "properties": {
+              "dst": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "kind": {
+                "maxLength": 32,
+                "type": "string"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LinkOrigin"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "src": {
+                "maxLength": 4352,
+                "type": "string"
+              }
+            },
+            "required": [
+              "src",
+              "kind",
+              "dst"
+            ],
+            "type": "object"
+          },
+          "ParsedSource": {
+            "description": "One source of a scan: everything it holds now (a `file` or `spec` source replaces what it held before; a `commit`\nor `branch` source adds).",
+            "properties": {
+              "entities": {
+                "items": {
+                  "$ref": "#/$defs/ParsedEntity"
+                },
+                "maxItems": 10000,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "links": {
+                "items": {
+                  "$ref": "#/$defs/ParsedLink"
+                },
+                "maxItems": 10000,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "mtime": {
+                "description": "The file's modification time as the scan saw it (the Lisp `file` view's `mtime`).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "source": {
+                "$ref": "#/$defs/SourceRef"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "type": "object"
+          },
+          "ParsedUpdate": {
+            "description": "A derived attribute the scan computed (a ledger's `done`, a task whose steps are all done, git facts).",
+            "properties": {
+              "data_patch": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/JsonObject"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A merge patch of `gone`, `stale`, `range-stale`, `merged` (true, false or null), `branch`, `worktree`, `repo`\n(text or null; the two paths absolute)."
+              },
+              "id": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Status"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "`open` or `done`, on a parsed task, step or plan."
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "SourceKind": {
+            "description": "Where what a scan read came from.",
+            "oneOf": [
+              {
+                "const": "file",
+                "description": "A file the scan read (a plan, a ledger, the board): its entities carry its path.",
+                "type": "string"
+              },
+              {
+                "const": "spec",
+                "description": "A spec: its own source, one `spec:PATH` entity.",
+                "type": "string"
+              },
+              {
+                "const": "commit",
+                "description": "Commits (`commit:SHA`): no path.",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "Branches (`branch:…`): no path.",
+                "type": "string"
+              }
+            ]
+          },
+          "SourceRef": {
+            "description": "A source, typed: never a free string the hub would read as a relative path.  `path` for `file` and `spec` only.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/SourceKind"
+              },
+              "path": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AbsPath"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "collected": {
+            "description": "Keys the job-commit collector is done with (`job ID`), kept so it never collects them twice.",
+            "items": {
+              "maxLength": 133,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "gone": {
+            "description": "Sources that are gone: what they held retired, their file forgotten.  `file` and `spec` only.",
+            "items": {
+              "$ref": "#/$defs/SourceRef"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The scan's root, for the tx's actor (`scan:ROOT`)."
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/ParsedSource"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "updates": {
+            "items": {
+              "$ref": "#/$defs/ParsedUpdate"
+            },
+            "maxItems": 10000,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "PutParsedParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Refusal": {
+            "additionalProperties": false,
+            "description": "What was not stored, and why (a refused source stores nothing of itself; WHY never names a denied path).",
+            "properties": {
+              "id": {
+                "description": "The id of a refused update.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SourceRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The refused source, as sent."
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "why"
+            ],
+            "type": "object"
+          },
+          "SourceKind": {
+            "description": "Where what a scan read came from.",
+            "oneOf": [
+              {
+                "const": "file",
+                "description": "A file the scan read (a plan, a ledger, the board): its entities carry its path.",
+                "type": "string"
+              },
+              {
+                "const": "spec",
+                "description": "A spec: its own source, one `spec:PATH` entity.",
+                "type": "string"
+              },
+              {
+                "const": "commit",
+                "description": "Commits (`commit:SHA`): no path.",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "Branches (`branch:…`): no path.",
+                "type": "string"
+              }
+            ]
+          },
+          "SourceRef": {
+            "description": "A source, typed: never a free string the hub would read as a relative path.  `path` for `file` and `spec` only.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/SourceKind"
+              },
+              "path": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AbsPath"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`graph/put-parsed`'s answer: entities made or given a new version, entities retired, and what was refused.",
+        "properties": {
+          "changed": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refused": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Refusal"
+            },
+            "type": "array"
+          },
+          "retired": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "changed",
+          "retired"
+        ],
+        "title": "PutParsedAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "commits that did a task (implements links), once per collected key (the request's key: a second record answers the first)",
+      "home": "front",
+      "name": "graph/record",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "RecordCommit": {
+            "description": "One commit `graph/record` records.",
+            "properties": {
+              "date": {
+                "description": "The commit time (unix seconds).",
+                "format": "double",
+                "type": "number"
+              },
+              "seq": {
+                "description": "Its place among the repository's commits (`drgnx-work--put-commits`: older is smaller).",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sha": {
+                "description": "4 to 64 hex digits.",
+                "maxLength": 64,
+                "type": "string"
+              },
+              "subject": {
+                "$ref": "#/$defs/Text"
+              }
+            },
+            "required": [
+              "sha",
+              "date",
+              "subject"
+            ],
+            "type": "object"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "collected": {
+            "description": "The job-commit collector's key (`job ID`): the request's key, so a second record of the same job answers the\nfirst answer and writes nothing.",
+            "maxLength": 133,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/$defs/RecordCommit"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "repo": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The main repository the commits are in."
+          },
+          "task": {
+            "description": "The task, step or todo the commits did (an entity id).",
+            "maxLength": 4352,
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "repo",
+          "commits"
+        ],
+        "title": "RecordParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`graph/record`'s answer: the commits' ids, in the order sent.",
+        "properties": {
+          "ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "title": "RecordAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
         "user",
         "agent",
         "service"

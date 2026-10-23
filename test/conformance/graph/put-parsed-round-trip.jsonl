@@ -1,0 +1,20 @@
+{"scenario": "graph/put-parsed-round-trip", "requires": ["v1", "fake-backend"], "doc": "A scan's plan through graph/put-parsed (Urdr Task 15a): the plan, its task and step stored as parsed entities with their parent links and file time, read back through the Lisp readers' node, edge and file views; the same scan again writes nothing; a derived status is one new version; the file gone retires all it held."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/work/docs/plans/p.md", "text": "# P\n### Task 1: one\n- [ ] a\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "graph/put-parsed", "params": {"root": "$ROOT/work", "sources": [{"source": {"kind": "file", "path": "$ROOT/work/docs/plans/p.md"}, "mtime": 10.5, "entities": [{"id": "plan:$ROOT/work/docs/plans/p.md", "kind": "plan", "title": "P", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 1}}, {"id": "task:$ROOT/work/docs/plans/p.md#1", "kind": "task", "title": "one", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 2, "parent": "plan:$ROOT/work/docs/plans/p.md", "ord": 1}}, {"id": "step:$ROOT/work/docs/plans/p.md#1.1", "kind": "step", "title": "a", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 3, "parent": "task:$ROOT/work/docs/plans/p.md#1", "ord": 1}}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"changed": 3, "retired": 0, "refused": []}}}
+{"do": "sql_expect", "sql": "select kind, title, status, line, parent, ord from node order by line", "rows": [["plan", "P", "open", 1, null, null], ["task", "one", "open", 2, "plan:$ROOT/work/docs/plans/p.md", 1], ["step", "a", "open", 3, "task:$ROOT/work/docs/plans/p.md#1", 1]]}
+{"do": "sql_expect", "sql": "select path, mtime from file", "rows": [["$ROOT/work/docs/plans/p.md", 10.5]]}
+{"do": "sql_expect", "sql": "select count(*) from link where kind = 'parent_of' and origin = 'parsed' and source = '$ROOT/work/docs/plans/p.md'", "rows": [[2]]}
+{"do": "sql_expect", "sql": "select distinct t.actor, t.class, t.tool from entity e join tx t on t.id = e.created_tx", "rows": [["scan:$ROOT/work", "system", "scan"]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/put-parsed", "params": {"root": "$ROOT/work", "sources": [{"source": {"kind": "file", "path": "$ROOT/work/docs/plans/p.md"}, "mtime": 10.5, "entities": [{"id": "plan:$ROOT/work/docs/plans/p.md", "kind": "plan", "title": "P", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 1}}, {"id": "task:$ROOT/work/docs/plans/p.md#1", "kind": "task", "title": "one", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 2, "parent": "plan:$ROOT/work/docs/plans/p.md", "ord": 1}}, {"id": "step:$ROOT/work/docs/plans/p.md#1.1", "kind": "step", "title": "a", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 3, "parent": "task:$ROOT/work/docs/plans/p.md#1", "ord": 1}}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"changed": 0, "retired": 0, "refused": []}}}
+{"do": "sql_expect", "sql": "select count(*), max(ver) from entity", "rows": [[3, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/put-parsed", "params": {"updates": [{"id": "task:$ROOT/work/docs/plans/p.md#1", "status": "done"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"changed": 1, "retired": 0, "refused": []}}}
+{"do": "sql_expect", "sql": "select status from node where kind = 'task'", "rows": [["done"]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "graph/put-parsed", "params": {"gone": [{"kind": "file", "path": "$ROOT/work/docs/plans/p.md"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"changed": 0, "retired": 3, "refused": []}}}
+{"do": "sql_expect", "sql": "select (select count(*) from node) + (select count(*) from file)", "rows": [[0]]}

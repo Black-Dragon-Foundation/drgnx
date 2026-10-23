@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 54, "{names:?}");
+        assert_eq!(names.len(), 56, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
-    const FRONT_WRITES: [&str; 15] = [
+    const FRONT_WRITES: [&str; 17] = [
         "cards/settle",
         "messages/send",
         "messages/mark",
@@ -437,6 +437,9 @@ mod tests {
         "coord/card-set",
         "coord/held",
         "coord/prune",
+        // the graph store's (Urdr Task 15a): the tracker scan's door
+        "graph/put-parsed",
+        "graph/record",
     ];
 
     #[test]
@@ -615,7 +618,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 40);
+        assert_eq!(with, 41);
     }
 
     #[test]
