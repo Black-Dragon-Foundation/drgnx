@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-onboard-test--with (&rest body)
   "BODY with only provider `o' (Ollama, a mock serving two models and answering chat and fill-in-the-middle)
@@ -405,28 +406,32 @@ with BODY."
           (should (string-match-p "run this step again" (cadr r))))))))
 
 (ert-deftest drgnx-onboard/openrouter-key-goes-to-the-keychain ()
+  ;; binary: the key goes to the Keychain and to the hub, which alone holds it; the features are tested through it
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
-    (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (prompted 0))
-      (unwind-protect
-          (let ((system-type 'darwin) (noninteractive nil))          ; the drgnx app: the Keychain may be used
-            (cl-letf (((symbol-function 'completing-read)
-                       (drgnx-ai-onboard-test--answer '(("Set up AI with" . "openrouter"))))
-                      ((symbol-function 'read-passwd) (lambda (&rest _) (cl-incf prompted) "sk-or-test-123"))
-                      ((symbol-function 'auth-source-search)        ; the Keychain gives the key back, once stored
-                       (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
-                                              (list (list :secret "sk-or-test-123"))))))
-              (let ((r (drgnx-onboard--ai-step '(:interactive t))))
-                (should (= prompted 1))
-                (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
-                (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp calls)))   ; never in argv
-                (dolist (role '(complete edit chat)) (should (eq (car (car (drgnx-ai-role role))) 'openrouter)))
-                (should (equal (drgnx-ai-role 'embed) '((tei))))            ; no embeddings there: step 5's
-                (should (string-match-p "semantic search needs a local model or TEI" (cadr r)))
-                (should (string-match-p "Ask the Codebase answered" (cadr r)))
-                (should (eq (car r) 'ok))
-                (should-not (string-search "sk-or-test-123" (cadr r)))
-                (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
-        (delete-process mock)))))
+    (drgnx-test-with-ratatoskr root
+      (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (prompted 0))
+        (unwind-protect
+            (let ((system-type 'darwin) (noninteractive nil))          ; the drgnx app: the Keychain may be used
+              (cl-letf (((symbol-function 'completing-read)
+                         (drgnx-ai-onboard-test--answer '(("Set up AI with" . "openrouter"))))
+                        ((symbol-function 'read-passwd) (lambda (&rest _) (cl-incf prompted) "sk-or-test-123"))
+                        ((symbol-function 'auth-source-search)        ; the Keychain gives the key back, once stored
+                         (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
+                                                (list (list :secret "sk-or-test-123"))))))
+                (let ((r (drgnx-onboard--ai-step '(:interactive t))))
+                  (should (= prompted 1))
+                  (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
+                  (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp calls)))   ; never in argv
+                  (should (member "openrouter" (drgnx-hub-keys-held)))       ; the hub holds it…
+                  (should-not (gethash 'openrouter drgnx-ai--keys))          ; …and this Emacs does not
+                  (dolist (role '(complete edit chat)) (should (eq (car (car (drgnx-ai-role role))) 'openrouter)))
+                  (should (equal (drgnx-ai-role 'embed) '((tei))))            ; no embeddings there: step 5's
+                  (should (string-match-p "semantic search needs a local model or TEI" (cadr r)))
+                  (should (string-match-p "Ask the Codebase answered" (cadr r)))
+                  (should (eq (car r) 'ok))
+                  (should-not (string-search "sk-or-test-123" (cadr r)))
+                  (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
+          (delete-process mock))))))
 
 (ert-deftest drgnx-ai-onboard/cli-exit-stops-the-job ()
   ;; `drgnx onboard' in batch: while a job is waited on, ending Emacs (Ctrl-C) stops the job; the entry is gone
@@ -545,23 +550,26 @@ with BODY."
 
 (ert-deftest drgnx-ai-onboard/typed-key-cleared-and-env-noted ()
   ;; The string `read-passwd' returned is zeroed once the key is stored (the in-memory key is a copy); with
-  ;; OPENROUTER_API_KEY set the environment's key wins over the stored one, and the result says so.
+  ;; OPENROUTER_API_KEY set the environment's key wins over the stored one (it goes to the hub on each connect), it
+  ;; stays in the environment, and the result says so.  Binary: the typed key goes to the hub.
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
-    (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (typed nil))
-      (unwind-protect
-          (let ((system-type 'darwin) (noninteractive nil)
-                (process-environment (cons "OPENROUTER_API_KEY=sk-env-456" process-environment)))
-            (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (setq typed (copy-sequence "sk-or-test-123"))))
-                      ((symbol-function 'auth-source-search)
-                       (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
-                                              (list (list :secret "sk-or-test-123"))))))
-              (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive t))))
-                (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
-                (should (equal typed (make-string (length typed) 0)))      ; cleared, not just dropped
-                (should (equal (drgnx-ai-key 'openrouter) "sk-env-456"))
-                (should (string-match-p "OPENROUTER_API_KEY is set in the environment, which wins over the stored key" (cadr r)))
-                (should-not (string-search "sk-env-456" (cadr r))))))
-        (delete-process mock)))))
+    (drgnx-test-with-ratatoskr root
+      (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (typed nil))
+        (unwind-protect
+            (let ((system-type 'darwin) (noninteractive nil)
+                  (process-environment (cons "OPENROUTER_API_KEY=sk-env-456" process-environment)))
+              (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (setq typed (copy-sequence "sk-or-test-123"))))
+                        ((symbol-function 'auth-source-search)
+                         (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
+                                                (list (list :secret "sk-or-test-123"))))))
+                (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive t))))
+                  (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
+                  (should (equal typed (make-string (length typed) 0)))      ; cleared, not just dropped
+                  (should (equal (getenv "OPENROUTER_API_KEY") "sk-env-456"))
+                  (should-not (gethash 'openrouter drgnx-ai--keys))
+                  (should (string-match-p "OPENROUTER_API_KEY is set in the environment, which wins over the stored key" (cadr r)))
+                  (should-not (string-search "sk-env-456" (cadr r))))))
+          (delete-process mock))))))
 
 (ert-deftest drgnx-onboard/openrouter-from-the-cli-asks-for-no-key ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
@@ -609,12 +617,13 @@ with BODY."
                                 (cadr (drgnx-onboard--ai-setup 'ollama '(:interactive nil)))))))))
 
 (ert-deftest drgnx-onboard/chat-needs-its-module ()
-  ;; the ide preset leaves extra/llm (gptel) off: a chat model that answers is not Chat yet
+  ;; the ide preset leaves extra/llm (gptel) off: a chat model that answers is not Chat yet.  Binary: OpenRouter is
+  ;; asked through the hub, which holds the key
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (let ((mock (drgnx-ai-test-mock-llm port script llm-log))
           (process-environment (cons "OPENROUTER_API_KEY=sk-or-test-123" process-environment)))
       (unwind-protect
-          (progn
+          (drgnx-test-with-ratatoskr root
             (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
             (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive nil))))
               (should (eq (car r) 'warn))

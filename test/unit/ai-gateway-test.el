@@ -87,7 +87,7 @@ this Emacs connected: it holds the editor token and the hub holds a's key.  Skip
                                              (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
                                        process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai-detected nil)
-          (drgnx-ai-via-gateway t) (drgnx-ai-gateway-test--sent nil)
+          (drgnx-ai-gateway-test--sent nil)
           (drgnx-hub--client nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil)
           (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
           (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
@@ -222,7 +222,7 @@ no provider key; the mock got the hub's key and never the editor's token."
 
 (ert-deftest drgnx-ai-gateway/the-indexer-gets-a-url-and-no-key ()
   (drgnx-ai-gateway-test--with nil
-    (let ((env (drgnx-search-index--job-env root)))
+    (let ((env (drgnx-search-index--job-env)))
       (should (member (concat "DRGNX_AI_GATEWAY_URL=" (cdr drgnx-hub--editor)) env))
       (should-not (seq-find (lambda (e) (string-match-p "_API_KEY=\\|\\`[AB]_KEY=" e)) env))
       (should-not (string-search drgnx-ai-gateway-test--key (prin1-to-string env)))
@@ -291,7 +291,7 @@ no provider key; the mock got the hub's key and never the editor's token."
 (ert-deftest drgnx-ai-gateway/a-daemon-path-never-waits-for-the-hub ()
   ;; no hub, no token (this test starts none; DRGNX_NO_HUB_START is set): a timer or hook asks and hears an error at once,
   ;; the provider's reason, and nothing waited for the hub
-  (let ((drgnx-ai-via-gateway t) (drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (inhibit-interaction t)
+  (let ((drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (inhibit-interaction t)
         (drgnx-hub--client nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil) (drgnx-hub--ensuring nil)
         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (waited nil) result
         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" (make-temp-file "drgnx-ai-gw" t)) "DRGNX_NO_HUB_START=1"

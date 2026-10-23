@@ -269,6 +269,9 @@ The `claude-adapter` check reads the `package.json` of the Claude Code adapter t
 run, without running it. It wants `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. The deprecated
 `@zed-industries/claude-agent-acp`, an older version, or a program of no package drgnx knows is a warning, with the
 one-line command that fixes it, or advice when the adapter is not in a global npm prefix ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+The `ai-env-keys` check names the provider key variables set in this Emacs's environment (never a value), as
+information: "OPENROUTER_API_KEY is set in this Emacs's environment; children inherit it; agents use the copy the hub
+holds". drgnx leaves them there ([security.md](security.md#where-your-keys-live)).
 
 **What drgnx has told you.** Each running drgnx writes the problems it knows (the notices that are still true, and
 the last 50 warnings and failures) to its own file in `~/.local/state/drgnx/notices/`, two seconds after a change; at

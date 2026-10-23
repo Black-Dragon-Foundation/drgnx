@@ -206,8 +206,13 @@ at each start, and **Shell: Reload Environment**). So when an agent's program wa
 directory on your shell's `PATH`, run Shell: Reload Environment: the agents the hub starts from then on find it. When
 it went somewhere your shell's `PATH` does not reach (onboarding's Agents step adds such a directory to the running
 Emacs only), run `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
-With no hub to be had, an agent your Emacs starts goes to its provider directly and says so; an agent the hub
-starts (a durable session, a job's) always goes through the gateway. The Agents list's **Via** column shows which.
+Only the hub holds keys: once it has taken a key, your Emacs forgets its copy (a key you set in the environment stays
+there; [security.md](security.md#where-your-keys-live)). So an agent of a profile with a key (OpenRouter, Anthropic,
+Kimi, DeepSeek) always goes through the gateway, and with no hub to be had it does not start: "the drgnx hub is not
+running; agents reach providers through it". `drgnx-agents-use-gateway` set to nil changes nothing for them; it only
+sends an Ollama agent (no key) to Ollama directly. An Ollama agent with no hub to be had also goes directly and says
+so. An agent the hub starts (a durable session, a job's) always goes through the gateway. The Agents list's **Via**
+column shows which.
 
 ### When the hub restarts
 

@@ -849,8 +849,8 @@ another `records'; a `drgnx_version' other than the binary on disk's, when that 
   (drgnx-hub--ping-socket (drgnx-hub-socket)))
 
 (defun drgnx-hub--held-keys ()
-  "The provider keys this Emacs already holds, asking no one: a provider's environment variable, else a key loaded
-this session (`drgnx-ai--keys': from a command the user ran).  (:PROVIDER KEY…)."
+  "The provider keys this Emacs holds now, asking no one: a provider's environment variable, else a key a command the
+user ran found and the hub has not taken yet (`drgnx-ai--keys').  (:PROVIDER KEY…)."
   (require 'drgnx-ai)                   ; the provider list: not needed to load the client, only to hand keys over
   (cl-loop for (id . p) in (drgnx-ai-providers)
            for env = (plist-get p :key-env)
@@ -859,9 +859,36 @@ this session (`drgnx-ai--keys': from a command the user ran).  (:PROVIDER KEY…
 
 (defun drgnx-hub--send-keys ()
   "Hand the hub the keys this Emacs holds (`drgnx-hub--held-keys'), over the socket: never in an environment, an
-argument or a file.  The hub keeps them in memory only, so they go again on each start and each (re)connect."
+argument or a file, and only to a hub that proved itself (`drgnx-hub--transmit').  Once the hub took them this Emacs
+drops them (`drgnx-hub--keys-taken'): the hub alone holds them, in memory, and those in the environment go again on
+each start and each (re)connect.  The call's id."
   (when-let* ((keys (drgnx-hub--held-keys)))
-    (drgnx-hub-call "gateway/keys" (list :keys keys) #'ignore)))
+    (drgnx-hub-call "gateway/keys" (list :keys keys) (lambda (_result err) (drgnx-hub--keys-taken keys err)))))
+
+(defun drgnx-hub--keys-taken (keys err)
+  "The hub answered a `gateway/keys' that carried KEYS: without ERR it took them, and this Emacs drops them
+\(`drgnx-hub--drop-keys').  A refusal, a deadline or a closed connection keeps them for the next hand-over."
+  (unless err (drgnx-hub--drop-keys keys)))
+
+(declare-function drgnx-ai-forget-keys "drgnx-ai")
+
+(defun drgnx-hub--drop-keys (keys)
+  "The hub took KEYS (:PROVIDER KEY…) over a connection that proved itself (`gateway/keys', or `gateway/register'
+with them, answered): this Emacs keeps none of them (`drgnx-ai-forget-keys').  Not in an Emacs that serves the hub
+itself (the standalone Lisp hub): there the key table is the hub's own."
+  (unless (process-live-p (bound-and-true-p drgnx-hub--server))
+    (require 'drgnx-ai)
+    (drgnx-ai-forget-keys keys)))
+
+(defun drgnx-hub-hand-over-keys ()
+  "Hand the hub the keys this Emacs holds now, without waiting (AI: Load Keys): to the hub this Emacs is subscribed to
+when it proved itself (`drgnx-hub--send-keys'); else the hub is found or started and connected to, and the hand-over
+that follows takes them.  Signals when no hub can be had (Ratatoskr not built, starting it off here)."
+  (if (and (process-live-p drgnx-hub--events) (process-get drgnx-hub--events :drgnx-proven))
+      (drgnx-hub--send-keys)
+    (unless (process-live-p drgnx-hub--subscribing)
+      (drgnx-hub--ensure-running #'drgnx-hub--ensured)
+      (drgnx-hub-connect))))
 
 ;;;; The provider table, and keys the hub asks for again
 
@@ -994,8 +1021,11 @@ why it cannot."
 
 (defun drgnx-hub-give-key (id key)
   "Hand the hub provider ID's KEY over the socket and wait for it (a command the user ran: a key found in a store that
-asks); the hub's list of held keys then includes ID.  The key is kept nowhere here."
-  (drgnx-hub-call-sync "gateway/keys" (list :keys (list (intern (concat ":" (symbol-name id))) key)))
+asks); the hub's list of held keys then includes ID.  The key is kept nowhere here: once the hub took it this Emacs
+drops it (`drgnx-hub--drop-keys')."
+  (let ((keys (list (intern (concat ":" (symbol-name id))) key)))
+    (drgnx-hub-call-sync "gateway/keys" (list :keys keys))
+    (drgnx-hub--drop-keys keys))
   (unless (eq drgnx-hub--keys-held :unknown)
     (cl-pushnew (symbol-name id) drgnx-hub--keys-held :test #'equal)))
 

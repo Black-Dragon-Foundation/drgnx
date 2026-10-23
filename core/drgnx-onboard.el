@@ -13,7 +13,6 @@
 
 ;;; Code:
 (require 'cl-lib)
-(defvar drgnx-ai-via-gateway)           ; drgnx-ai.el
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-guard)
@@ -462,7 +461,7 @@ locked version.  BYTES: the downloads' size from the lock, nil when it does not 
 (declare-function drgnx-ai-role "drgnx-ai")
 (declare-function drgnx-ai-user-role "drgnx-ai")
 (declare-function drgnx-ai-set-role "drgnx-ai")
-(declare-function drgnx-ai-key "drgnx-ai")
+(declare-function drgnx-ai-key-held-p "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-request "drgnx-ai-client")
 
@@ -522,7 +521,7 @@ is still loading) reads \"not tested\" and counts as neither asked nor failed."
          (_ (let ((done nil))
               (drgnx-ai-probe (lambda () (setq done t)))
               (drgnx-onboard--wait (lambda () done) 3)))
-         (key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0) (untested 0)
+         (key (drgnx-ai-key-held-p 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0) (untested 0)
          (plan (mapcar (lambda (role)
                          (let* ((cap (if (eq role 'complete) 'fim 'chat))
                                 (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap (plist-get ctx :interactive))) (drgnx-ai-role role)))
@@ -1026,7 +1025,7 @@ environment in the CLI, which never reads those stores — then its model for co
 feature tested.  The embed role stays: OpenRouter has no embedding model here."
   (let* ((interactive (plist-get ctx :interactive))
          (app (and interactive (not noninteractive)))
-         (key (drgnx-ai-key 'openrouter interactive))
+         (key (drgnx-ai-key-held-p 'openrouter interactive))   ; the hub holds one, or this Emacs finds one
          (new (and app (read-passwd (if key "OpenRouter API key (openrouter.ai/keys; empty: keep the one you have): "
                                       "OpenRouter API key (from openrouter.ai/keys): ")))))
     (when (equal new "") (setq new nil))
@@ -1040,8 +1039,10 @@ feature tested.  The embed role stays: OpenRouter has no embedding model here."
                                  ;; a copy goes in (drgnx keeps it in memory); the typed string is zeroed either way
                                  (condition-case err
                                      (prog1 (drgnx-ai-store-key 'openrouter (copy-sequence new))
-                                       ;; the hub holds it from now on (over the socket, in its memory only)
-                                       (when drgnx-ai-via-gateway (drgnx-hub-give-key 'openrouter new)))
+                                       ;; the hub holds it from now on (over the socket, in its memory only); this
+                                       ;; Emacs then drops its copy
+                                       (require 'drgnx-hub-client)
+                                       (drgnx-hub-give-key 'openrouter new))
                                    (user-error (cadr err))
                                    (error (format "the key is stored, but the hub did not take it (%s)" (error-message-string err))))
                                (clear-string new))))

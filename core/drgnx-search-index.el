@@ -333,8 +333,8 @@ Reads each job's job.eld and looks for its exit file; only a job of ROOT without
            when (string-match-p "\\`\\(XDG_\\(STATE\\|CONFIG\\|CACHE\\|DATA\\)_HOME\\|DRGNX_[A-Z0-9_]*_DIR\\)=." e)
            collect e))
 
-(defun drgnx-search-index--job-env (_root)
-  "\"NAME=value\"… for the indexing job of the project at _ROOT: the XDG and DRGNX_*_DIR variables set here, and the
+(defun drgnx-search-index--job-env ()
+  "\"NAME=value\"… for an indexing job: the XDG and DRGNX_*_DIR variables set here, and the
 gateway's address (`DRGNX_AI_GATEWAY_URL') when this Emacs has it.  No key and no token: the job ensures the hub and
 asks it for an editor token of its own (`drgnx-ai-gateway-credentials'), so the token is pruned with the job, not with
 the editor; the embed role is the project's, resolved by the job from its working directory."
@@ -379,7 +379,7 @@ Never lists the jobs (the re-index timer calls this), but a job of ROOT without 
                                       "-l" "drgnx-search-index" "-f" "drgnx-search-index-cli" root)
                                 (and rebuild (list "--rebuild")))
                         :cwd root :memory-max "1G" :nice 10
-                        :env (drgnx-search-index--job-env root)))))
+                        :env (drgnx-search-index--job-env)))))
 
 (provide 'drgnx-search-index)
 ;;; drgnx-search-index.el ends here

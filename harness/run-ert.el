@@ -19,11 +19,6 @@
 (defvar drgnx-coord-writer)
 (setq drgnx-coord-writer 'local)
 
-;; The editor's AI goes through the hub's gateway (core/drgnx-ai.el).  The unit suite asks its mock providers direct,
-;; as a keyed provider did before; a test of the gateway route binds `t'.
-(defvar drgnx-ai-via-gateway)
-(setq drgnx-ai-via-gateway nil)
-
 (defun drgnx-run-ert-drain-events ()
   "Handle the events queued for a command loop batch Emacs does not have (file-notify events from a test's
 watches): while one waits in the input queue, Emacs runs no process sentinel — later tests would never hear
