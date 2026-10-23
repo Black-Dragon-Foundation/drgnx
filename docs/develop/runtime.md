@@ -317,7 +317,10 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `run` | `capture`, `bin`, `args`, `env`, `hub`, `concurrent`, `retry_ms`, `expect_code`, `expect_stdout`, `expect_stderr` | run `BIN ARGS` to completion (30 s) in the hub's root (else the `root` step's): `ensure`, `stop`, `status`, `restart`. `DRGNX_HUB_PARENT_PID` is the harness's, so a hub it starts detached ends with the harness. `concurrent: N` runs N copies at once, each of which must satisfy the expectations; `retry_ms` repeats the run until they hold. The capture is `{stdout, code, json}`; `expect_stdout` is a string the output contains or a pattern for its JSON (`$capture:NAME` / `$NAME` work in both); `expect_stderr` is a string the error output contains |
 | `rename`, `remove` | `from`, `to` / `path` | rename-replace a file, remove one (an update of a binary on disk) |
 | `install_bin` | `to` | copy the hub under test to `to` (0755), a binary a scenario can replace |
-| `spawn` | `capture`, `argv` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends |
+| `spawn` | `capture`, `argv`, `capture_stdout: {regex, name}` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends. `capture_stdout`: the first stdout line that matches within 5 s, its group captured as `name` (a number stays a number). The regex is a small form: literal text and at most one group, `(\d+)`, `([0-9]+)`, `(\w+)`, `(\S+)` or `(.+)`; `\x` in the literals is `x` |
+| `http` | `conn` (default `c`), `to` (`"tcp:HOST:PORT"` or `"unix:PATH"`; without it the open connection is used again), `method` (GET), `path`, `headers`, `body` or `body_bytes {fill, n}`, `read` (`"all"` (default), `"head"` or `{bytes: N}`), `close_after` (true: close the connection after the read), `within_ms` (5000) | one HTTP/1.1 request, a `Host` and a `Content-Length` added when missing. `read: "head"` leaves the body unread; `{bytes: N}` reads until N body bytes are in. A server that answers early and closes without reading all of a big body is not an error |
+| `expect_http` | `conn`, `status`, `headers` (pattern; names compare lower-case), `body_contains`, `body_json` (pattern; a chunked body is decoded), `within_ms` (5000) | the response read so far must match; more is read until `within_ms` |
+| `file_grep` | `paths` (globs: `*` and `?` in a component, `**` for any depth), `absent` | no file matching the globs contains the text (bytes, binary files too: `runtime.db`, logs). Symlinks are skipped; a glob set that matches no file at all is an error |
 | `connect` | `conn` (default `c`), `hub`, `socket` (`"main"`, `"backend"`, the Lisp backend's own socket, or `"agent:SID"`), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` connects raw (the `challenge` stays buffered). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
 | `hello` | `conn`, `proof`, `proto`, `expect_class`, `expect_error`, `expect_result`, `capture` | the v1 macro: read the `challenge`, send `hello` with the proof, check the class and, for `valid`, the hub's proof. `proof` is `valid`, `wrong`, `none` or `replay:NAME`. `capture: NAME` keeps the line it sent; `replay:NAME` sends such a line again, as is. `expect_error: CODE` wants the refusal with that code; `expect_result` is a pattern for the reply. A connection is challenged once: a second `hello` on it uses the nonce the first one read |
 | `chmod` | `path`, `mode`, `owner` | change a mode (octal string) and/or the owner: `"other"` gives the path to uid and gid 65534, `"self"` back to the harness's (root does it itself; anyone else through passwordless `sudo -n chown`, so such a row needs `sudo`) |
@@ -339,7 +342,20 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello` goes on a fresh connection each time |
 | `measure` | `name`, `repeat`, `steps` | times the steps, `repeat` times, and records the milliseconds for `--perf` |
 
-**Variables** in strings: `$ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
+**`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
+
+- `llm --script FILE [--log FILE] [--tls CERT KEY] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
+  provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`; TLS with the PEM files, else plain). FILE is a JSON array
+  of answers `{path, match?, status (200; 0 = never answer), delay_ms, body ("{}"), headers {name: value}, once,
+  chunks [[delay_ms, text]…], content_type, no_end}`. The first answer whose `path` is a prefix of the request path and
+  whose `match` occurs in the body answers; none: 404 `{}`. `chunks` streams (the head at once, no length, each text
+  after its delay, then the close; `no_end`: the connection is dropped instead). The log is JSONL:
+  `{"request": {method, path, headers (lower-case names), body}}` per request, then `{"closed": true}` when the client
+  hangs up before the answer ended. It ends when `--parent` is gone.
+- `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
+  tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
+
+**Variables** in strings: `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
 $HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the scenarios' directory, absolute: its
 `fixtures/`), `$EMACS` (`$DRGNX_EMACS`, else `emacs`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are

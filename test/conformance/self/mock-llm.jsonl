@@ -1,0 +1,16 @@
+{"scenario": "self/mock-llm", "requires": ["v0"], "doc": "The harness's own row for ratatoskr-mock llm: the first matching answer wins, a stream arrives in pieces, a 429 carries its headers, an unmatched path is a 404, a once answer goes after one use, and a client that hangs up mid-stream is logged."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/limited", "status": 429, "headers": {"retry-after": "7"}, "body": "{\"error\": \"slow down\"}"}, {"path": "/echo", "match": "needle", "body": "{\"hit\": true}"}, {"path": "/once", "once": true, "body": "{\"first\": true}"}, {"path": "/slow", "chunks": [[0, "data: a\n\n"], [3000, "data: b\n\n"]]}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "http", "conn": "a", "to": "tcp:127.0.0.1:$port", "method": "POST", "path": "/limited", "body": "{}"}
+{"do": "expect_http", "conn": "a", "status": 429, "headers": {"retry-after": "7"}, "body_json": {"error": "slow down"}}
+{"do": "http", "conn": "b", "to": "tcp:127.0.0.1:$port", "method": "POST", "path": "/echo", "body": "a needle in it"}
+{"do": "expect_http", "conn": "b", "status": 200, "body_json": {"hit": true}}
+{"do": "http", "conn": "c", "to": "tcp:127.0.0.1:$port", "method": "POST", "path": "/echo", "body": "nothing"}
+{"do": "expect_http", "conn": "c", "status": 404, "body_json": {}}
+{"do": "http", "conn": "d", "to": "tcp:127.0.0.1:$port", "path": "/once"}
+{"do": "expect_http", "conn": "d", "status": 200, "body_json": {"first": true}}
+{"do": "http", "conn": "e", "to": "tcp:127.0.0.1:$port", "path": "/once"}
+{"do": "expect_http", "conn": "e", "status": 404}
+{"do": "http", "conn": "f", "to": "tcp:127.0.0.1:$port", "path": "/slow", "read": {"bytes": 5}, "close_after": true}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "{\"closed\":true}", "within_ms": 5000}

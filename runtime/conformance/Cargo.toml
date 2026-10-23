@@ -21,3 +21,4 @@ runstav = { path = "../crates/runstav", version = "0.1.0" }   # the paths rule (
 getrandom.workspace = true
 serde_json.workspace = true
 libc.workspace = true
+rustls.workspace = true      # ratatoskr-mock llm --tls (already in the lock file through bifrost)

@@ -34,6 +34,8 @@ pub struct Runner<'a> {
     hubs: Vec<Hub>,
     conns: BTreeMap<String, Conn>,
     spawned: BTreeMap<String, Child>,
+    /// The connections of `http` steps.
+    http: BTreeMap<String, crate::http::Exchange>,
     caps: Captures,
     perf: &'a mut Vec<(String, Vec<f64>)>,
     started: usize,
@@ -45,7 +47,7 @@ pub struct Runner<'a> {
 type R<T = ()> = Result<T, String>;
 
 /// Longest first, so `$SOCKET_DIR` is not read as `$SOCKET` and `_DIR`.
-const VAR_NAMES: [&str; 14] = [
+const VAR_NAMES: [&str; 15] = [
     "BACKEND_SOCKET",
     "SCENARIOS",
     "SOCKET_DIR",
@@ -54,6 +56,7 @@ const VAR_NAMES: [&str; 14] = [
     "SOCKET",
     "CONFIG",
     "STATE",
+    "MOCK",
     "ROOT",
     "HOME",
     "DATA",
@@ -70,6 +73,7 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
         hubs: vec![],
         conns: BTreeMap::new(),
         spawned: BTreeMap::new(),
+        http: BTreeMap::new(),
         caps: Captures::default(),
         perf,
         started: 0,
@@ -386,6 +390,16 @@ impl Runner<'_> {
             self.cfg.scenarios.to_string_lossy().into_owned(),
         );
         m.insert("EMACS".into(), emacs());
+        // ratatoskr-mock is built beside domr
+        if let Some(dir) = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(Path::to_path_buf))
+        {
+            m.insert(
+                "MOCK".into(),
+                dir.join("ratatoskr-mock").to_string_lossy().into_owned(),
+            );
+        }
         m
     }
 
@@ -648,6 +662,9 @@ impl Runner<'_> {
             "class_matrix" => self.class_matrix(step),
             "bad_params" => self.bad_params(step),
             "measure" => self.measure(step),
+            "http" => self.http(step),
+            "expect_http" => self.expect_http(step),
+            "file_grep" => self.file_grep(step),
             v => Err(format!("verb {v} has no executor")),
         }
     }
@@ -893,16 +910,46 @@ impl Runner<'_> {
     fn spawn(&mut self, step: &Step) -> R {
         let argv = self.strings(None, step, "argv")?;
         let (prog, rest) = argv.split_first().ok_or("\"argv\" needs a program")?;
-        let child = Command::new(prog)
+        // capture_stdout {regex, name}: the first stdout line that matches, within 5 s, becomes the capture `name`
+        let grab = match step.obj.get("capture_stdout") {
+            Some(Value::Object(c)) => Some((
+                str_of(c, "regex")
+                    .ok_or("capture_stdout needs \"regex\"")?
+                    .to_string(),
+                str_of(c, "name")
+                    .ok_or("capture_stdout needs \"name\"")?
+                    .to_string(),
+            )),
+            Some(_) => return Err("\"capture_stdout\" is {regex, name}".into()),
+            None => None,
+        };
+        let mut child = Command::new(prog)
             .args(rest)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(if grab.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("cannot start {prog}: {e}"))?;
         let name = str_of(&step.obj, "capture")
             .ok_or("\"capture\" names the pid")?
             .to_string();
+        if let (Some((regex, cap)), Some(out)) = (grab, child.stdout.take()) {
+            match crate::http::wait_capture(out, &regex, Duration::from_secs(5)) {
+                Ok(v) => {
+                    let value = v.parse::<u64>().map_or(Value::String(v), |n| json!(n));
+                    self.caps.0.insert(cap, value);
+                }
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e);
+                }
+            }
+        }
         self.caps.0.insert(name.clone(), json!(child.id()));
         if let Some(t) = start_time(child.id()) {
             self.caps.0.insert(format!("{name}_start"), json!(t));
@@ -1558,6 +1605,118 @@ impl Runner<'_> {
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         Ok(())
+    }
+
+    /// One HTTP/1.1 request on connection `conn` (opened to `to`; without `to` the open one is used again).
+    fn http(&mut self, step: &Step) -> R {
+        use crate::http::{Exchange, ReadMode};
+        let idx = self.hub_index(None).ok();
+        let name = str_of(&step.obj, "conn").unwrap_or("c").to_string();
+        let mut ex = if step.obj.contains_key("to") {
+            let to = self.text(idx, step, "to")?;
+            if let Some(old) = self.http.remove(&name) {
+                old.close();
+            }
+            Exchange::connect(&to)?
+        } else {
+            let mut ex = self
+                .http
+                .remove(&name)
+                .ok_or_else(|| format!("no http connection named {name:?} (give \"to\")"))?;
+            ex.restart();
+            ex
+        };
+        let method = str_of(&step.obj, "method").unwrap_or("GET");
+        let path = self.text(idx, step, "path")?;
+        let mut head = format!("{method} {path} HTTP/1.1\r\n");
+        let (mut has_host, mut has_len) = (false, false);
+        if let Some(h) = step.obj.get("headers") {
+            let h = h.as_object().ok_or("\"headers\" is an object")?;
+            for (k, v) in h {
+                has_host |= k.eq_ignore_ascii_case("host");
+                has_len |= k.eq_ignore_ascii_case("content-length");
+                let v = Self::capture_text(&self.subst(idx, v, true));
+                head.push_str(&format!("{k}: {v}\r\n"));
+            }
+        }
+        if !has_host {
+            head.push_str("Host: localhost\r\n");
+        }
+        let body: Option<Vec<u8>> = if let Some(b) = step.obj.get("body_bytes") {
+            let b = b.as_object().ok_or("\"body_bytes\" is {fill, n}")?;
+            let n = b
+                .get("n")
+                .and_then(Value::as_u64)
+                .ok_or("body_bytes needs \"n\"")? as usize;
+            Some(str_of(b, "fill").unwrap_or("a").repeat(n).into_bytes())
+        } else if step.obj.contains_key("body") {
+            Some(self.text(idx, step, "body")?.into_bytes())
+        } else {
+            None
+        };
+        if let Some(b) = &body
+            && !has_len
+        {
+            head.push_str(&format!("Content-Length: {}\r\n", b.len()));
+        }
+        head.push_str("\r\n");
+        let mut data = head.into_bytes();
+        data.extend(body.unwrap_or_default());
+        // a server may answer early and close without reading all of a big body: the answer still counts
+        let sent = ex.send(&data);
+        let mode = ReadMode::parse(step.obj.get("read"))?;
+        let read = ex.read(&mode, Instant::now() + ms(&step.obj, "within_ms", 5000));
+        match (sent, read) {
+            (_, Ok(())) => {}
+            (Err(e), Err(_)) | (Ok(()), Err(e)) => return Err(e),
+        }
+        if step
+            .obj
+            .get("close_after")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            ex.close();
+        } else {
+            self.http.insert(name, ex);
+        }
+        Ok(())
+    }
+
+    /// The response read so far on `conn` must match; more is read up to `within_ms`.
+    fn expect_http(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let name = str_of(&step.obj, "conn").unwrap_or("c").to_string();
+        let want = crate::http::Want {
+            status: step.obj.get("status").and_then(Value::as_u64),
+            headers: step.obj.get("headers").map(|h| self.subst(idx, h, false)),
+            body_contains: if step.obj.contains_key("body_contains") {
+                Some(self.text(idx, step, "body_contains")?)
+            } else {
+                None
+            },
+            body_json: step.obj.get("body_json").map(|j| self.subst(idx, j, false)),
+        };
+        let mut ex = self
+            .http
+            .remove(&name)
+            .ok_or_else(|| format!("no http connection named {name:?}"))?;
+        let r = crate::http::expect(
+            &mut ex,
+            &want,
+            &mut self.caps,
+            ms(&step.obj, "within_ms", 5000),
+        );
+        self.http.insert(name, ex);
+        r
+    }
+
+    /// No file matching `paths` contains `absent`.
+    fn file_grep(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let paths = self.strings(idx, step, "paths")?;
+        let absent = self.text(idx, step, "absent")?;
+        crate::http::file_grep_absent(&paths, absent.as_bytes())
     }
 
     fn sqlite(&mut self, step: &Step) -> R {

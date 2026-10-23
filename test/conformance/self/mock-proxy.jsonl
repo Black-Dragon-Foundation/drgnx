@@ -1,0 +1,12 @@
+{"scenario": "self/mock-proxy", "requires": ["v0"], "doc": "The harness's own row for ratatoskr-mock proxy: CONNECT is logged and tunnelled to a listener (the mock llm), anything else gets 405."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/", "body": "{\"via\": \"tunnel\"}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "spawn", "capture": "proxy", "argv": ["$MOCK", "proxy", "--log", "$ROOT/proxy.log"], "capture_stdout": {"regex": "MOCK-PROXY-PORT (\\d+)", "name": "pport"}}
+{"do": "http", "conn": "t", "to": "tcp:127.0.0.1:$pport", "method": "CONNECT", "path": "127.0.0.1:$port", "read": "head"}
+{"do": "expect_http", "conn": "t", "status": 200}
+{"do": "http", "conn": "t", "path": "/"}
+{"do": "expect_http", "conn": "t", "status": 200, "body_json": {"via": "tunnel"}}
+{"do": "file", "path": "$ROOT/proxy.log", "contains": "{\"connect\":\"127.0.0.1:$port\"}"}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$pport", "path": "/plain"}
+{"do": "expect_http", "conn": "g", "status": 405}
