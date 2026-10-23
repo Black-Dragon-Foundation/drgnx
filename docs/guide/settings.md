@@ -117,6 +117,15 @@ explains the value Emacs has; it never works out a value of its own.
 
 ## Changes apply at once (Task 13)
 
+Edit `settings.el` by hand, let another program write it, or pull a new copy: drgnx notices and applies the changes
+without a restart. It watches the folder, and also checks the file when you come back to the Emacs window and before the
+Settings page draws, so a change is never missed. A value you took out of the file goes back to what it would be
+without it. Nothing asks you anything; a file that does not read keeps the last good values and says so once.
+
+Settings that drgnx owns (keys, agents, look, modules...) take effect right away: when one changes, from the file,
+the Settings page or a `setq` in `config.el`, drgnx runs the setting's `:apply` the next time Emacs is idle. At start the
+same happens once for every such setting whose value you changed in `config.el`.
+
 ## Modules and your settings
 
 drgnx's modules choose some values for you (the tree-sitter modes, Evil's undo system, the frame's scroll bars).

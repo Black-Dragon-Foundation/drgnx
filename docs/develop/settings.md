@@ -452,3 +452,22 @@ never a `load`. Each entry runs under `condition-case`: one message per variable
 itself on the hook and on `drgnx-settings-explain-functions` (layer `L1`) when loaded; `core/drgnx.el` requires it
 with the other settings files, so the overrides apply from the first buffer on (rows C12 and C21 check it with only
 `drgnx` loaded).
+
+## Live changes and `:apply` (Task 13)
+
+`core/drgnx-settings-live.el`. `drgnx-settings-live-start` (idempotent; `drgnx-settings-live-stop` undoes it) watches the
+directory of every file in `(drgnx-settings-live-files)` with `file-notify` and adds `drgnx-settings-live--focus` to
+`after-focus-change-function`. Both, and the Settings page, end in `(drgnx-settings-live-check &optional FILES)`: a
+file is synced only when its `drgnx-file-stamp` is not the one last synced (the inode sees a rename over the file).
+Workspace files join `drgnx-settings-live-files` in Task 17.
+
+`(drgnx-settings-live-sync FILE)` for settings.el re-runs `drgnx-settings-apply-global` (idempotent), tears down
+variables the applied entries had and the file no longer names, calls `drgnx-settings-prov-watch` for the rest, and
+runs `drgnx-settings-changed-functions` with FILE and CHANGES, a list of `(SCOPE VAR OLD NEW)` (SCOPE nil for the top
+level; `:unset` for an added or removed entry). It returns CHANGES, never signals and never prompts.
+
+`:apply` is called with no arguments, after the variable changed. Every own setting with an `:apply` carries a
+variable watcher that only queues the variable; the queue runs on an idle tick through `drgnx-timer` (key
+`settings-apply`), once per variable however many changes came. `drgnx-settings-apply-pass` runs at the end of init
+for each such setting whose value is not its default and not the one its `:apply` last ran for. Settings declared
+after `drgnx-settings-live-start` get their watcher at the next sync.
