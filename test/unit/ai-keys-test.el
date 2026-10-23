@@ -42,8 +42,8 @@
             (should (drgnx-ai-keys-test--auth-source-cached-p))
             (drgnx-test-wait (lambda () (zerop (hash-table-count drgnx-ai--keys))) :secs 20 :what "the hub took the key")
             (drgnx-test-wait (lambda () (member "openrouter" (drgnx-hub-keys-held))) :secs 20 :what "keys-changed")
-            ;; nowhere in this Emacs: its key table, auth-source's cache, the keys a hand-over would send
-            (should-not (string-search canary (prin1-to-string (drgnx-hub--held-keys))))
+            ;; nowhere in this Emacs: its key table, auth-source's cache (a later hand-over reads a quiet store again,
+            ;; keeping nothing: review M3)
             (should-not (drgnx-ai-keys-test--auth-source-cached-p))
             ;; gptel's backend for OpenRouter carries the editor token
             (let ((spec (drgnx-ai-gptel-spec 'openrouter "openrouter/auto")))
@@ -54,6 +54,22 @@
               (should (= (length with) 1))
               (should (string-search "\"gateway/keys\"" (car with)))))
         (advice-remove 'drgnx-hub--send-line #'drgnx-ai-keys-test--record)))))
+
+(ert-deftest drgnx-ai/a-usable-check-keeps-no-key ()
+  ;; review M2: AI: Choose and onboarding ask whether a provider is usable for every keyed provider the hub does not
+  ;; hold, reading its key as a command would; that check keeps nothing — not the key, not auth-source's copy of the
+  ;; netrc file — whether the hub has said which keys it holds or not
+  (drgnx-ai-gateway-test--with nil
+    (let* ((canary "sk-b-canary-m2")
+           (auth-sources (list (drgnx-ai-keys-test--netrc root "127.0.0.1" canary)))
+           (auth-source-netrc-cache nil) (password-data (make-hash-table :test #'equal)))
+      (should-not (member "b" (drgnx-hub-keys-held)))
+      (dolist (held (list (drgnx-hub-keys-held) :unknown))
+        (let ((drgnx-hub--keys-held held))
+          (should (drgnx-ai-usable-p 'b 'chat t))                ; found: the check read the store
+          (should (zerop (hash-table-count drgnx-ai--keys)))
+          (should-not auth-source-netrc-cache)
+          (should-not (drgnx-ai-keys-test--auth-source-cached-p)))))))
 
 (ert-deftest drgnx-ai/the-environment-is-left-as-it-was ()
   ;; a key the user put in this Emacs's environment goes to the hub and stays where the user put it
@@ -78,7 +94,6 @@
           (auth-source-netrc-cache nil) (password-data (make-hash-table :test #'equal)))
       (should (memq 'a (drgnx-ai-load-keys)))
       (drgnx-test-wait (lambda () (zerop (hash-table-count drgnx-ai--keys))) :secs 20 :what "the hub took the key")
-      (should-not (drgnx-hub--held-keys))
       (should-not (drgnx-ai-keys-test--auth-source-cached-p))
       (setq drgnx-ai-gateway-test--sent nil)
       (should (equal (car (drgnx-ai-gateway-test--ask 'chat '(:messages [(:role "user" :content "x")]))) "hi"))

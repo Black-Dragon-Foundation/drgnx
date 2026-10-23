@@ -24,7 +24,8 @@
 (require 'drgnx-work-db)                ; `drgnx-work-db-schema-version', which the hello says
 
 (declare-function drgnx-ai-providers "drgnx-ai")
-(defvar drgnx-ai--keys)
+(declare-function drgnx-ai-provider "drgnx-ai")
+(declare-function drgnx-ai-key "drgnx-ai")
 (defvar drgnx-hub--server)              ; drgnx-hub.el: this Emacs's hub socket, when it is the hub
 (defvar drgnx-hub--editor)              ; the editor token and the held keys: defined below, used by `drgnx-hub-disconnect'
 (defvar drgnx-hub--keys-held)
@@ -849,13 +850,16 @@ another `records'; a `drgnx_version' other than the binary on disk's, when that 
   (drgnx-hub--ping-socket (drgnx-hub-socket)))
 
 (defun drgnx-hub--held-keys ()
-  "The provider keys this Emacs holds now, asking no one: a provider's environment variable, else a key a command the
-user ran found and the hub has not taken yet (`drgnx-ai--keys').  (:PROVIDER KEY…)."
+  "The provider keys this Emacs can hand over now, asking no one, for each keyed provider of the effective table
+\(`drgnx-ai-key' without INTERACTIVE): its environment variable, else a key AI: Load Keys found and the hub has not
+taken yet (`drgnx-ai--keys'), else auth-source's sources that never ask (`drgnx-ai--quiet-sources': a plain
+~/.authinfo, never a .gpg file, the Keychain or the keyring), read without keeping anything.  So a hub that restarted
+gets back the keys that live in a quiet file (design §5.6).  (:PROVIDER KEY…).  An empty key is no key: it would
+replace a good one in the hub."
   (require 'drgnx-ai)                   ; the provider list: not needed to load the client, only to hand keys over
   (cl-loop for (id . p) in (drgnx-ai-providers)
-           for env = (plist-get p :key-env)
-           for key = (and env (let ((v (getenv env))) (if (and v (not (string-empty-p v))) v (gethash id drgnx-ai--keys))))
-           when key append (list (intern (concat ":" (symbol-name id))) key)))
+           for key = (and (plist-get p :key-env) (drgnx-ai-key id nil))
+           when (and (stringp key) (not (string-empty-p key))) append (list (intern (concat ":" (symbol-name id))) key)))
 
 (defun drgnx-hub--send-keys ()
   "Hand the hub the keys this Emacs holds (`drgnx-hub--held-keys'), over the socket: never in an environment, an
@@ -942,9 +946,10 @@ itself sends the provider table again.  Anywhere else nothing: the next connecti
 (defun drgnx-hub--need-keys (event data)
   "`gateway/need-keys' (DATA (:providers [ID…])): agents need the keys of these providers and the hub holds none (it
 restarted; keys live in its memory only).  Only for a hub that proved itself (`:drgnx-proven' of the connection the
-event came on).  Each key is looked for again, in the provider's environment variable — never in a copy kept here
-\(`drgnx-ai--keys' is not consulted) — and the ones found go with `gateway/keys' and are kept nowhere.  This runs in a
-process filter, a daemon path: auth-source is never read and nothing asks (design §5.6); a key not found is a notice
+event came on).  Each key is looked for again as the hand-over does (`drgnx-ai-key' without INTERACTIVE: the
+environment, else auth-source's sources that never ask, read without keeping anything), and the ones found go with
+`gateway/keys'; once the hub took them this Emacs keeps none (`drgnx-hub--keys-taken').  This runs in a process
+filter, a daemon path: nothing asks — no .gpg file, Keychain or keyring (design §5.6); a key not found is a notice
 saying how to load it."
   (when (and (equal event "gateway/need-keys") (processp drgnx-hub--event-conn)
              (process-get drgnx-hub--event-conn :drgnx-proven))
@@ -952,13 +957,12 @@ saying how to load it."
     (let ((providers (drgnx-ai-providers)) keys missing)
       (dolist (name (plist-get data :providers))
         (when (stringp name)
-          (let* ((p (cdr (cl-find-if (lambda (e) (equal (symbol-name (car e)) name)) providers)))
-                 (env (plist-get p :key-env))
-                 (key (and env (getenv env))))
-            (if (and key (not (string-empty-p key)))
+          (let* ((e (cl-find-if (lambda (e) (equal (symbol-name (car e)) name)) providers))
+                 (key (and (plist-get (cdr e) :key-env) (drgnx-ai-key (car e) nil))))
+            (if (and (stringp key) (not (string-empty-p key)))
                 (setq keys (append keys (list (intern (concat ":" name)) key)))
               (push name missing)))))
-      (when keys (drgnx-hub-call "gateway/keys" (list :keys keys) #'ignore))
+      (when keys (drgnx-hub-call "gateway/keys" (list :keys keys) (lambda (_result err) (drgnx-hub--keys-taken keys err))))
       (dolist (name (nreverse missing))
         (drgnx-notify 'hub 'warn (format "agents need your %s key in the drgnx hub: run AI: Load Keys" name)
                       :id (intern (concat "need-key-" name)) :command 'drgnx-ai-load-keys)))))
@@ -973,6 +977,11 @@ secret of this process: kept in memory only, fetched again on every proven (re)c
   "The ids (strings) of the providers whose key the hub holds, as `gateway/keys-held' and `gateway/keys-changed'
 said, or `:unknown' before the hub answered.  Never a key.")
 
+(defvar drgnx-hub--keys-had nil
+  "The ids (strings) of the providers whose key a hub held during this Emacs session, as `gateway/keys-held' and
+`gateway/keys-changed' said.  Never a key.  After a hub restart, one it no longer holds is a notice
+\(`drgnx-hub--keys-lost').")
+
 (defvar drgnx-hub-editor-token-hook nil
   "Functions of no arguments run (inside the guard) when the hub gave this Emacs its editor token: what needed the
 gateway's address (gptel's backend) can be set up.")
@@ -983,10 +992,39 @@ gateway's address (gptel's backend) can be set up.")
     (setq drgnx-hub--editor (cons (plist-get result :token) (plist-get result :url)))
     (drgnx-guard-run-hook 'drgnx-hub-editor-token-hook)))
 
+(defun drgnx-hub--keys-note ()
+  "The hub said which keys it holds (`drgnx-hub--keys-held'): each is one it had (`drgnx-hub--keys-had'), and its
+`key-lost' notice goes."
+  (dolist (name drgnx-hub--keys-held)
+    (cl-pushnew name drgnx-hub--keys-had :test #'equal)
+    (drgnx-notice-clear 'hub (intern (concat "key-lost-" name)))))
+
+(defun drgnx-hub--keys-lost ()
+  "After the hub answered `gateway/keys-held' on a (re)connect: a keyed provider whose key a hub held earlier in this
+session (`drgnx-hub--keys-had'), which this hub does not hold and which this Emacs cannot hand over again without
+asking (`drgnx-hub--held-keys': the environment, a quiet file), is a notice saying how to load it.  That is a hub
+that restarted while the key lived only in a store that asks (a .gpg file, the Keychain, the keyring): without the
+notice ghost text and chat would fail with no word why.  Keys this connection's hand-over carried are found again
+here, so an answer that came before the hub took them raises nothing.  Runs in a process filter: nothing asks."
+  (when (listp drgnx-hub--keys-held)
+    (when-let* ((gone (seq-filter (lambda (name)
+                                    (and (not (member name drgnx-hub--keys-held))
+                                         (plist-get (drgnx-ai-provider (intern name)) :key-env)))
+                                  drgnx-hub--keys-had)))
+      (let ((here (drgnx-hub--held-keys)))
+        (dolist (name gone)
+          (unless (plist-get here (intern (concat ":" name)))
+            (drgnx-notify 'hub 'warn (format "the drgnx hub restarted without your %s key: run AI: Load Keys" name)
+                          :id (intern (concat "key-lost-" name)) :life 'condition :command 'drgnx-ai-load-keys)))))))
+
 (defun drgnx-hub--keys-held-answered (result _err)
-  "The answer to `gateway/keys-held': RESULT (:providers [ID…])."
+  "The answer to `gateway/keys-held': RESULT (:providers [ID…]).  A key the hub held before and lost is a notice
+\(`drgnx-hub--keys-lost')."
   (when (consp result)
-    (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get result :providers) nil)))))
+    (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get result :providers) nil)))
+    (require 'drgnx-ai)
+    (drgnx-hub--keys-lost)
+    (drgnx-hub--keys-note)))
 
 (defun drgnx-hub--fetch-editor ()
   "Ask the hub for this Emacs's editor token and for the keys it holds: the ids of the two calls."
@@ -997,7 +1035,8 @@ gateway's address (gptel's backend) can be set up.")
   "`gateway/keys-changed' (DATA (:providers [ID…])) from a hub that proved itself: the keys it holds now."
   (when (and (equal event "gateway/keys-changed") (processp drgnx-hub--event-conn)
              (process-get drgnx-hub--event-conn :drgnx-proven))
-    (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get data :providers) nil)))))
+    (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get data :providers) nil)))
+    (drgnx-hub--keys-note)))
 
 (defun drgnx-hub-keys-held ()
   "The ids (strings) of the providers whose key the hub holds, or `:unknown' when the hub has not said yet."

@@ -510,7 +510,7 @@ mod tests {
             "{t}"
         );
         assert!(
-            t.contains("| `cards/settle` | user | `{card: natnum, choice: string}` | `{settled: boolean}` | yes | front |"),
+            t.contains("| `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes | front |"),
             "{t}"
         );
         assert!(

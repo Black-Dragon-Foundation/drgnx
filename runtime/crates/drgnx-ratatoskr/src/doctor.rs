@@ -2,9 +2,10 @@
 //!
 //! `doctor --json` is
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
-//! warnings}?, socket_dir: {path, mode, ok}, sqlite, job_agents, sandbox: {backend, version, ok, reason, fix,
-//! landlock_abi, in_use}}`.  `gateway` is the running hub's (its `status`): `keys_held` names providers only, and
-//! `warnings` are its clear-text providers (`config/providers`). `sandbox` is the job sandbox's check
+//! warnings, keys_refused?}?, socket_dir: {path, mode, ok}, sqlite, job_agents, sandbox: {backend, version, ok, reason,
+//! fix, landlock_abi, in_use}}`.  `gateway` is the running hub's (its `status`): `keys_held` names providers only,
+//! `warnings` are its clear-text providers (`config/providers`), and `keys_refused` (only when there is one) says why
+//! the hub takes no key: it could not keep other processes out of its memory (on macOS, started under a debugger). `sandbox` is the job sandbox's check
 //! (`gleipnir::check`), `in_use` false until phase 6.
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet
 //! (the hub makes it private at its first start); `mode` is then null.
@@ -116,6 +117,9 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
                 "keys_held": g.get("keys_held").cloned().unwrap_or_else(|| json!([])),
                 "warnings": g.get("warnings").cloned().unwrap_or_else(|| json!([])),
             });
+            if let Some(why) = g.get("keys_refused").filter(|w| w.is_string()) {
+                v["gateway"]["keys_refused"] = why.clone();
+            }
         }
     }
     v
@@ -184,6 +188,7 @@ fn summary(v: &Value) -> String {
             "\nread-only: work.db is schema {n}, newer than this hub's"
         ));
     }
+    out.push_str(&keys_refused_line(&v["gateway"]));
     out.push_str(&format!("\njob agents: {}", text(&v["job_agents"])));
     out
 }
@@ -249,9 +254,18 @@ fn text(v: &Value, sandbox: &Check) -> String {
     if let Some(r) = v.get("running") {
         out.push_str(&format!("\nrunning: pid {}", r["pid"]));
     }
+    out.push_str(&keys_refused_line(&v["gateway"]));
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
     out
+}
+
+/// A line for a running hub that refuses keys (its GATEWAY status says why), else nothing.
+fn keys_refused_line(gateway: &Value) -> String {
+    gateway["keys_refused"]
+        .as_str()
+        .map(|why| format!("\nkeys: refused, this hub cannot protect keys: {why}"))
+        .unwrap_or_default()
 }
 
 /// `restart`: ask the running hub to restart (it answers, then exits 75 or re-executes itself).
@@ -445,6 +459,52 @@ mod tests {
             );
         }
         assert!(sandbox_line(&working()).contains("job agents do not use it yet"));
+    }
+
+    /// Review m2: a hub that refuses keys (on macOS, started under a debugger) says why in `doctor` and `status`.
+    #[test]
+    fn a_hub_that_refuses_keys_says_so() {
+        let env = Env::new(
+            &[
+                ("XDG_STATE_HOME", "/nonexistent/s"),
+                ("HOME", "/nonexistent/h"),
+            ],
+            1000,
+        );
+        let why = "cannot deny debuggers the hub: Operation not permitted (os error 1)";
+        let up = report(
+            &env,
+            Path::new("/b"),
+            Some(Running {
+                pid: 7,
+                commit: None,
+                gateway: Some(
+                    json!({"port": 4100, "registrations": 0, "providers": 0, "keys_refused": why}),
+                ),
+            }),
+            &working(),
+        );
+        assert_eq!(up["gateway"]["keys_refused"], why);
+        let line = format!("keys: refused, this hub cannot protect keys: {why}");
+        assert!(text(&up, &working()).contains(&line));
+        let s = summary(
+            &json!({"pid": 5, "socket": "/s", "runtime": {"commit": "c1"},
+                                "gateway": {"keys_refused": why}, "job_agents": JOB_AGENTS}),
+        );
+        assert!(s.contains(&line), "{s}");
+        // a hub that takes keys: no such key, no such line
+        let fine = report(
+            &env,
+            Path::new("/b"),
+            Some(Running {
+                pid: 7,
+                commit: None,
+                gateway: Some(json!({"port": 4100, "registrations": 0, "providers": 0})),
+            }),
+            &working(),
+        );
+        assert!(fine["gateway"].get("keys_refused").is_none());
+        assert!(!text(&fine, &working()).contains("keys: refused"));
     }
 
     #[test]

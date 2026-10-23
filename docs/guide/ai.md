@@ -234,8 +234,9 @@ provider through per request.
 - **A provider is usable when the hub holds its key** (`drgnx hub status`, the hub's `gateway/keys-held`, kept up to
   date as keys come and go) or it needs none. A key your environment has is handed to the hub when your editor
   connects; a key found by a command you run (Keychain, keyring, `.authinfo`) is handed over by that command, once.
-- **The search indexer** is a background job: it is given the gateway's address only, asks the hub for a token of its
-  own, and goes with it when it ends. It never has a key in its environment.
+- **The search indexer** is a background job: it asks the hub for a token of its own, which comes with the gateway's
+  current address, and goes with it when it ends. It is given no key, token or address in its environment, so it never
+  sends its token to a port the hub left after a restart.
 - **gptel** gets a backend at the gateway (`/p/PROVIDER/chat/completions`) once the hub gave your editor its token.
 
 ## Keys

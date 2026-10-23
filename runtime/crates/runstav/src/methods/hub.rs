@@ -193,6 +193,9 @@ pub struct GatewayStatus {
     pub providers: u64,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub keys_held: Vec<String>,
+    /// Why this hub refuses keys (it could not keep other processes out of its memory); absent when it takes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys_refused: Option<String>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub warnings: Vec<ProviderWarning>,
 }

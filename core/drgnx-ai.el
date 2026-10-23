@@ -270,10 +270,11 @@ decrypts); the Keychain or a keyring may prompt; a plist entry is not known to b
 
 (defvar auth-sources)
 (defvar auth-source-do-cache)
+(defvar auth-source-netrc-cache)
 (declare-function auth-source-search "auth-source")
 (declare-function auth-source-forget+ "auth-source")
 
-(defun drgnx-ai-key (id &optional interactive)
+(defun drgnx-ai-key (id &optional interactive keep)
   "The key of provider ID, or nil: its environment variable, else auth-source (host of its URL).  Only when
 INTERACTIVE (a command the user ran) are sources that may prompt (.gpg files, the Keychain, the keyring) consulted;
 the Keychain and the keyring only in an interactive Emacs, and the keyring only when a session bus can be reached
@@ -282,9 +283,11 @@ file it is asked to read may still ask for its passphrase on standard input.  Wi
 interactive command still gets the system's store (the Keychain, the keyring).
 auth-source's own cache is not used: it is keyed by the search alone, so a miss from a source that was left
 out would hide the key for hours.
-Only the hand-over uses the key itself (AI: Load Keys, a command that finds one, onboarding, an agent's registration):
-a key found in auth-source waits in `drgnx-ai--keys' until the hub takes it, and is forgotten then.  Every other
-caller only asks whether there is one."
+Only the hand-over uses the key itself (AI: Load Keys, a command that finds one, onboarding, an agent's registration).
+With KEEP (AI: Load Keys) a key found in auth-source waits in `drgnx-ai--keys' until the hub takes it, and is
+forgotten then.  Without KEEP nothing stays behind: the key is not put in `drgnx-ai--keys', and auth-source's netrc
+file cache (the whole file's text) is this call's own, gone when it returns.  A caller that only asks whether there
+is one (`drgnx-ai-key-held-p', `drgnx-ai-usable-p') so keeps no key (design §5.6)."
   (let ((p (drgnx-ai-provider id)))
     (or (and (plist-get p :key-env) (let ((v (getenv (plist-get p :key-env)))) (and v (not (string-empty-p v)) v)))
         (gethash id drgnx-ai--keys)
@@ -298,10 +301,15 @@ caller only asks whether there is one."
                                      ((not (or (eq system-type 'darwin) (drgnx-ai--secret-service-p))) auth-sources)
                                      (t (append auth-sources (list (drgnx-ai--secret-source))))))
                  (auth-source-do-cache nil)
-                 (found (and auth-sources (car (auth-source-search :host host :max 1 :create nil))))
+                 (found (and auth-sources
+                             (car (if keep (auth-source-search :host host :max 1 :create nil)
+                                    ;; the file's parse is this call's own: the outer cache is neither read nor filled
+                                    (let ((auth-source-netrc-cache nil))
+                                      (auth-source-search :host host :max 1 :create nil))))))
                  (secret (plist-get found :secret))
-                 (key (if (functionp secret) (funcall secret) secret)))
-            (when key (puthash id key drgnx-ai--keys))
+                 (key (if (functionp secret) (funcall secret) secret))
+                 (key (and (stringp key) (not (string-empty-p key)) key)))   ; an empty password is no key
+            (when (and key keep) (puthash id key drgnx-ai--keys))
             key)))))
 
 (declare-function auth-source-forget-all-cached "auth-source")
@@ -343,7 +351,9 @@ there is no token yet."
   (let* ((why nil)
          (tok (condition-case e (drgnx-hub-editor-token (drgnx-ai--waits-p interactive waits))
                 (error (setq why (error-message-string e)) nil))))
-    (if tok (cons (or (let ((u (getenv "DRGNX_AI_GATEWAY_URL"))) (and u (not (string-empty-p u)) u)) (cdr tok)) (car tok))
+    ;; the address is the one that came with the token, over the proven socket: never one from the environment, which
+    ;; may name a port the hub left after a restart (and another process took)
+    (if tok (cons (cdr tok) (car tok))
       ;; waited and failed: the hub's reason; else it is on its way
       (if (and why (drgnx-ai--waits-p interactive waits)) (signal 'drgnx-ai-gateway-unavailable (list why))
         (signal 'drgnx-ai-gateway-unavailable nil)))))
@@ -388,7 +398,7 @@ feature that never asks: ghost text, chat, agents.  This Emacs forgets each key 
   (interactive)
   (let* ((ids (delete-dups (mapcar #'car (apply #'append (mapcar (lambda (r) (drgnx-ai-role (car r))) drgnx-ai-default-roles)))))
          (keyed (seq-filter (lambda (id) (plist-get (drgnx-ai-provider id) :key-env)) ids))
-         (found (seq-filter (lambda (id) (drgnx-ai-key id t)) keyed))
+         (found (seq-filter (lambda (id) (drgnx-ai-key id t t)) keyed))   ; kept until the hand-over takes them
          (missing (seq-difference keyed found))
          (why (when found
                 (require 'drgnx-hub-client)

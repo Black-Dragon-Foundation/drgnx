@@ -334,13 +334,12 @@ Reads each job's job.eld and looks for its exit file; only a job of ROOT without
            collect e))
 
 (defun drgnx-search-index--job-env ()
-  "\"NAME=value\"… for an indexing job: the XDG and DRGNX_*_DIR variables set here, and the
-gateway's address (`DRGNX_AI_GATEWAY_URL') when this Emacs has it.  No key and no token: the job ensures the hub and
-asks it for an editor token of its own (`drgnx-ai-gateway-credentials'), so the token is pruned with the job, not with
-the editor; the embed role is the project's, resolved by the job from its working directory."
-  (append
-   (drgnx-search-index--dir-env)
-   (when-let* ((tok (bound-and-true-p drgnx-hub--editor))) (list (concat "DRGNX_AI_GATEWAY_URL=" (cdr tok))))))
+  "\"NAME=value\"… for an indexing job: the XDG and DRGNX_*_DIR variables set here.  No key, no token and no
+gateway address: the job ensures the hub and asks it for an editor token of its own (`drgnx-ai-gateway-credentials'),
+which comes with the gateway's current address, so the token is pruned with the job, not with the editor, and a port
+the hub left after a restart is never used; the embed role is the project's, resolved by the job from its working
+directory."
+  (drgnx-search-index--dir-env))
 
 (defconst drgnx-search-index--start-grace 30
   "Seconds a job just started may take to hold the lock: a second start in that time waits for it.")

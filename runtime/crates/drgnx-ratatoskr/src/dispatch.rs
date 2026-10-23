@@ -725,4 +725,37 @@ mod tests {
             "status has the params: {status}"
         );
     }
+
+    /// Review m2 (design §6.2, fail closed): a hub that could not be hardened (on macOS, started under a debugger)
+    /// takes no key over `gateway/keys`, says why, and its status says so too; once hardened it takes them.
+    #[tokio::test]
+    async fn an_unhardened_hub_takes_no_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path(), Arc::new(NoBackend));
+        let out = Arc::new(Outbox::new(1));
+        let mut u = user(&f);
+        let keys =
+            r#"{"id":1,"method":"gateway/keys","params":{"keys":{"openrouter":"sk-canary-m2"}}}"#;
+        f.gate
+            .set_hardened(Err("cannot deny debuggers the hub: busy".into()));
+        f.line(&mut u, &out, keys).await;
+        let answer = out.take_lines().join("\n");
+        assert!(
+            answer.contains("not-allowed")
+                && answer.contains("this hub cannot protect keys: cannot deny debuggers the hub"),
+            "{answer}"
+        );
+        assert!(f.gate.keys_held().providers.is_empty());
+        let status = f.gate.status();
+        assert_eq!(
+            status.keys_refused.as_deref(),
+            Some("cannot deny debuggers the hub: busy")
+        );
+        f.gate.set_hardened(Ok(()));
+        f.line(&mut u, &out, keys).await;
+        let answer = out.take_lines().join("\n");
+        assert!(answer.contains(r#""result":true"#), "{answer}");
+        assert_eq!(f.gate.keys_held().providers.len(), 1);
+        assert!(f.gate.status().keys_refused.is_none());
+    }
 }

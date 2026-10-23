@@ -132,7 +132,8 @@ is deleted. Rules:
   missing file is `Error::Missing`, a `meta.schema` other than the expected one is `Error::Schema { found }`, with
   nothing written. The Lisp side makes and migrates `work.db`.
 - **One thread.** `norn::store::CoordDb` owns the connection on `urdr`'s store thread, so no statement runs on an async
-  worker. `write` runs its closure inside `BEGIN IMMEDIATE` (committed on `Ok`, rolled back on `Err`); `read` runs
+  worker. `write` runs its closure inside `BEGIN IMMEDIATE` (committed on `Ok`, rolled back on `Err`, and on a failed COMMIT that
+  left the transaction open, so the one writer never stays stuck in it); `read` runs
   outside a transaction. The closure gets `&Tx` (the connection, already in the transaction).
 - **Not ready.** Below schema 6 (or missing) a write is `NotReady { schema }`: "work.db is not ready (schema N); the
   Lisp side makes it". A newer schema is opened read-only; a write is `ReadOnly { schema }`.

@@ -484,7 +484,7 @@ started, stays."
                     ((symbol-function 'drgnx-jobs-list) (lambda () nil)))
             (drgnx-search-index-start "/tmp/some-project"))
           (let ((env (plist-get (cddr started) :env)))
-            (should (member "DRGNX_AI_GATEWAY_URL=http://127.0.0.1:4711" env))
+            (should-not (cl-find-if (lambda (e) (string-search "127.0.0.1:4711" e)) env))   ; the job asks the hub itself
             (should-not (cl-find-if (lambda (e) (string-match-p "sk-secret\\|SEARCH_TEST_KEY\\|tok-of-the-editor" e)) env))
             (dolist (e '("XDG_STATE_HOME=/tmp/xs" "XDG_CONFIG_HOME=/tmp/xc"
                          "XDG_CACHE_HOME=/tmp/xk" "XDG_DATA_HOME=/tmp/xd" "DRGNX_DATA_DIR=/tmp/dd"))

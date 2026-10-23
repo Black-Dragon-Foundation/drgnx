@@ -135,13 +135,20 @@ user's (an agent outside a sandbox, a debugger it starts) from reading that memo
 `/proc/PID/mem`, and keeps the hub from writing a core file. It does not stop root or a process with
 `CAP_SYS_PTRACE`. Its children start dumpable again (an exec resets it); the hub's listening sockets are never passed
 to one (close-on-exec, and `draugr::spawn` checks in debug builds that none of them is among a child's descriptors).
+It fails closed (design §6.2): when hardening fails — on macOS a hub started under a debugger or tracer, whose
+`PT_DENY_ATTACH` is refused; on another platform always — the hub still serves, but takes no key. `gateway/keys` and a
+`gateway/register` that carries keys are `not-allowed` at `keys` ("this hub cannot protect keys: WHY") and nothing is
+taken; `status`'s `gateway.keys_refused` says WHY, and so do `ratatoskr doctor --json` (`gateway.keys_refused`) and
+the text of `ratatoskr status` and `ratatoskr doctor` (a line "keys: refused, this hub cannot protect keys: WHY"). The
+editor keeps its keys for the next hand-over; start the hub outside the debugger (`drgnx hub restart`).
 
 ### Status, doctor and restart
 
 `ratatoskr status [--json]` is `status` as a user client (with `"running": true` added with `--json`); with no hub it
 prints `{"running": false}` and exits 1. `ratatoskr doctor --json` prints `{binary: {path, commit, test_hooks},
-running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings}?, socket_dir: {path, mode,
-ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key). `ratatoskr restart` calls `restart`.
+running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings, keys_refused?}?, socket_dir:
+{path, mode, ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key;
+`keys_refused` only from a hub that could not be hardened, above). `ratatoskr restart` calls `restart`.
 
 **`restart`** (user class) answers `true`, then the hub stops as for `shutdown` (its backend first; in phase 1 there
 are no turns to cancel) and exits **75**. Under `--supervisor self`, where nothing would start it again, it releases
@@ -364,9 +371,9 @@ with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
 last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since` (0), at most `limit` (200, at most
 1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
 says `backend: {state: running|starting|missing|failed, pid?}` and `gateway: {port?, registrations, requests,
-errors, fallbacks, bytes_in, bytes_out, providers, keys_held, warnings}`, the front's own gateway
+errors, fallbacks, bytes_in, bytes_out, providers, keys_held, keys_refused?, warnings}`, the front's own gateway
 ([Registrations](#registrations)): `providers` is how many the table has, `keys_held` the providers whose key the hub
-holds (never a key), `errors` the requests answered with no status or one of 400 and up. The front also serves the
+holds (never a key), `keys_refused` why it takes none (only when it could not be hardened), `errors` the requests answered with no status or one of 400 and up. The front also serves the
 gateway's methods, `gateway/{register,unregister,keys,set-budget}`, `config/providers` and `spend`. Every other method
 goes to the Lisp backend (next section).
 
@@ -712,7 +719,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | backend |
 | `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes | backend |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes | backend |
-| `cards/settle` | user | `{card: natnum, choice: string}` | `{settled: boolean}` | yes | front |
+| `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes | front |
 | `config/providers` | user | `{providers: [{auth: "bearer" \| "x-api-key" \| "none", base: ProviderUrl, caps: ["chat" \| "fim" \| "embed"], id: Id, kind: "openai" \| "ollama" \| "llamacpp" \| "tei" \| "anthropic", messages: boolean, price?: {input: Usd, output: Usd}}]}` | `{applied: natnum, warnings?: [ProviderWarning]}` | no | front |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes | front |
 | `coord/card-create` | user | `{data?: JsonObject, job?: Id, kind?: string, task?: TaskRef, title?: Text}` | `{id: natnum}` | yes | front |
@@ -1030,7 +1037,8 @@ Provider keys reach the hub from a user connection only: `gateway/keys {keys: {P
 keys over once each subscription is answered, `drgnx-hub-ensure` and so `drgnx hub start` too) and a registration's
 `keys`. They are held in Ratatoskr's
 memory only (`bifrost::keys::Keys`): never in `runtime.db`, a file, a log, an environment, a command line or the Lisp
-backend; the last key handed over for a provider wins. `status` and the doctor name the providers whose key is held
+backend; the last key handed over for a provider wins. An empty key is no key: it is skipped, so it never replaces a
+held one or marks its provider held (the editor never sends one either). `status` and the doctor name the providers whose key is held
 (`keys_held`), never a key. A restarted hub holds no key until an editor connects again; meanwhile a request that
 needs one fails over or answers "no key", and the `gateway/need-keys {providers}` event (also sent to each new
 subscriber for the providers kept registrations need) tells the editor to hand them over. The hub is not dumpable
@@ -1056,18 +1064,33 @@ port file — and holds no key:
   editor subscribed to a proven hub). Each of the answer's `warnings` (a keyed provider at `http://` off this machine)
   becomes a `hub` notice once per provider per Emacs session (`drgnx-hub--clear-text-told`).
 - **`gateway/need-keys`** (`drgnx-hub--need-keys`, on the subscription) is answered only on a proven connection
-  (`drgnx-hub--event-conn`'s `:drgnx-proven`). For each provider the key is looked for again in its `:key-env`
-  variable (never `drgnx-ai--keys`); found keys go with `gateway/keys` and are kept nowhere. It runs in a process
-  filter, a daemon path, so auth-source is never read and nothing asks; a key not found is a `hub` notice
+  (`drgnx-hub--event-conn`'s `:drgnx-proven`). For each provider the key is looked for again as the hand-over does
+  (`drgnx-ai-key` without INTERACTIVE: its `:key-env` variable, else auth-source's sources that never ask, read
+  without keeping anything); found keys go with `gateway/keys` and are dropped once taken. It runs in a process
+  filter, a daemon path, so nothing asks (no `.gpg` file, Keychain or keyring); a key not found is a `hub` notice
   "agents need your P key in the drgnx hub: run AI: Load Keys". The keys and the table go after the subscription's
   answer, so the need-keys a hub sends a new subscriber is about the keys it held before them.
+- **The hand-over's keys** (`drgnx-hub--held-keys`, on every proven (re)connect) are, for each keyed provider of the
+  effective table, the same quiet read: the environment, a key AI: Load Keys found that no hub took yet, else a plain
+  `~/.authinfo`/`~/.netrc` entry. So a hub that restarted gets back the keys that live in a quiet file, and the editor
+  keeps none of them afterwards.
+- **A key the hub lost** (`drgnx-hub--keys-lost`). A hub's `need-keys` names only what agents need, never the
+  editor's own providers, so the editor checks itself: when `gateway/keys-held` answers, a keyed provider whose key a
+  hub held earlier in this Emacs session (`drgnx-hub--keys-had`, ids only), which this hub does not hold and which the
+  quiet read cannot find (it lived in a store that asks), is a `hub` condition "the drgnx hub restarted without your P
+  key: run AI: Load Keys". It goes when `keys-held` or `keys-changed` names the provider again. The editor decides
+  this rather than the hub because only the editor knows which providers it used: the hub's table holds every keyed
+  preset, and a hub-side list would warn about providers the user never set up.
 - **The drop** (design §5.6). When a `gateway/keys` the editor sent is answered without an error
   (`drgnx-hub--keys-taken`), and after `drgnx-hub-give-key` or an agent's `gateway/register` that carried keys, the
   editor forgets them: `drgnx-hub--drop-keys` → `drgnx-ai-forget-keys` removes each from `drgnx-ai--keys` (unless a
   newer key for the provider replaced it meanwhile) and calls `auth-source-forget-all-cached`. `drgnx-hub--transmit` sends
   `gateway/keys` only on a proven connection, so a key goes only to a hub that proved itself. The environment is
   left as it is (`drgnx doctor`'s `ai-env-keys` names the variables set). An Emacs that serves the standalone Lisp hub
-  skips the drop: there `drgnx-ai--keys` is the hub's own table. AI: Load Keys (`drgnx-ai-load-keys`) reads the keys
+  skips the drop: there `drgnx-ai--keys` is the hub's own table. Only AI: Load Keys keeps a key it reads
+  (`drgnx-ai-key`'s KEEP) until the hand-over takes it; every other read, and above all a usability check
+  (`drgnx-ai-key-held-p`, `drgnx-ai-usable-p`: AI: Choose, onboarding), keeps nothing — not in `drgnx-ai--keys`, and
+  auth-source's netrc file cache is bound for that read alone. AI: Load Keys (`drgnx-ai-load-keys`) reads the keys
   as a command and calls `drgnx-hub-hand-over-keys`: sent at once to a proven subscription, else the hub is started
   and connected and the hand-over that follows takes them. Keyed providers and agent profiles have no direct route
   (`drgnx-ai-route`, `drgnx-ai-agent-env`): without a hub a request skips the provider and an agent fails closed.

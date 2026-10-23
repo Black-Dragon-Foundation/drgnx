@@ -104,7 +104,9 @@ shorthands come back, without reopening them.
   changes) holds no key. The Lisp hub behind Ratatoskr registers its agents through Ratatoskr, without keys.
 - **The hub is not dumpable.** Another program running as you (an agent outside a sandbox, a debugger) cannot read
   the hub's memory, and so your keys, with `ptrace` or `/proc/PID/mem`, and the hub writes no core file. This does
-  not stop root, or a program given the `CAP_SYS_PTRACE` capability. `ratatoskr stop` signals only the process that
+  not stop root, or a program given the `CAP_SYS_PTRACE` capability. A hub that cannot protect itself this way (on
+  macOS, one started under a debugger) takes no key at all: `ratatoskr doctor` and `ratatoskr status` print "keys:
+  refused, this hub cannot protect keys" with the reason; restart the hub outside the debugger. `ratatoskr stop` signals only the process that
   is actually listening on the hub's socket, asked of the system (on Linux through a pidfd, which cannot hit a reused
   pid), never a process named by a file or a command line: a program that calls itself `ratatoskr` is never stopped
   by mistake.
@@ -134,7 +136,12 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
   socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, the
   gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
-  runs, a key found waits in memory and goes when the editor connects. A provider with a key is never asked directly,
+  runs, a key AI: Load Keys found waits in memory and goes when the editor connects. Checking whether a provider is
+  usable (AI: Choose, onboarding's checks) reads its key only to see that there is one, and keeps nothing: neither the
+  key nor auth-source's copy of the file. When the hub restarts (an update, `drgnx hub restart`), the editor hands
+  over again the keys it can read without asking: your environment and a plain `~/.authinfo`. A key that lives only in
+  your Keychain, keyring or a `.gpg` file cannot be read without asking, so a notice says "the drgnx hub restarted
+  without your … key: run AI: Load Keys". A provider with a key is never asked directly,
   and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
   hub is not running; agents reach providers through it".
 - **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's

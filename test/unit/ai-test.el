@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-ai)
 (require 'drgnx-ai-probe)
+(require 'drgnx-hub-client)             ; its variables are let-bound below
 (require 'drgnx-file)
 (require 'drgnx-jobs)
 (require 'auth-source)
@@ -233,6 +234,27 @@ LOG/security.calls."
         (with-temp-file plain (insert "machine openrouter.ai password sk-or-new-789\n")))   ; replaced: the old one is not served
       (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))
         (should (equal (drgnx-ai-key 'openrouter) "sk-or-new-789"))))))
+
+(ert-deftest drgnx-ai/an-empty-key-is-never-handed-over ()
+  ;; review m1: an empty password in a store, or an empty key waiting here, is no key: in the hub it would replace a
+  ;; good one and every request would go upstream with an empty Bearer
+  (drgnx-ai-test--with root
+    (require 'drgnx-hub-client)
+    (let ((auth-sources (list (concat root "authinfo"))))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (list (list :secret (lambda () ""))))))
+        (should-not (drgnx-ai-key 'openrouter))
+        (should-not (gethash 'openrouter drgnx-ai--keys))))
+    (puthash 'openrouter "" drgnx-ai--keys)
+    (should-not (plist-member (drgnx-hub--held-keys) :openrouter))
+    (puthash 'openrouter "sk-or-test-123" drgnx-ai--keys)
+    (should (equal (plist-get (drgnx-hub--held-keys) :openrouter) "sk-or-test-123"))))
+
+(ert-deftest drgnx-ai/the-gateway-url-comes-with-the-token ()
+  ;; review m4: the token and the address the hub gave over the proven socket go together; an address in the
+  ;; environment (a port the hub left after a restart, which another process may hold) never gets the token
+  (let ((drgnx-hub--editor '("tok-m4" . "http://127.0.0.1:4711"))
+        (process-environment (cons "DRGNX_AI_GATEWAY_URL=http://127.0.0.1:9" process-environment)))
+    (should (equal (drgnx-ai-gateway-credentials) '("http://127.0.0.1:4711" . "tok-m4")))))
 
 (ert-deftest drgnx-ai/a-batch-emacs-never-searches-the-keychain-even-when-asked ()
   (drgnx-ai-test--with root
