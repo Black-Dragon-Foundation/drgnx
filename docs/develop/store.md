@@ -184,6 +184,21 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
 
 ## Vectors (Task 12b)
 
+Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the gateway, never by the store itself.
+
+- **Provider.** The first provider of kind `tei` with the `embed` cap in `config/providers`. Texts (`title`, a blank
+  line, `body`, at most 8000 characters) go to the gateway's own loopback listener as the editor's
+  `POST /p/PROVIDER/embed`, with an in-memory editor token (never stored). The request is counted in `spend` like
+  any other. The model name is `tei:PROVIDER`. The hub never starts the provider.
+- **Round.** `embed::fill` takes up to 64 stale entities (`vec_stale`) per request and stores the vectors with
+  `vec_put` in one `system` tx (tool `embedder`). A failed batch is tried once more; failing twice stops the round.
+- **Door 4.** An entity whose source, id or `data.path` the personal-notes deny-list denies (or whose source form is
+  unknown) is never sent, whatever the scan's door let in. It stays stale and is looked at again each round.
+- **Schedule.** `embed::Timer`: a round starts when the graph writer has seen no write for a minute and none runs.
+  After a stop the next round begins by sending one text; it goes on only when the provider answers.
+- **Spend.** `norn::write::spend::add_spend` takes the write's `Tx` and sets the row's `tx` (class `system`, tool
+  `gateway`).
+
 ## Readers (Task 6)
 
 Reads never go through the writer. `urdr::graph::ReadPool` (`graph/pool.rs`) holds a few connections (the hub uses

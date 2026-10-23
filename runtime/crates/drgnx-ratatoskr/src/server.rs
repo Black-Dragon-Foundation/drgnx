@@ -483,6 +483,9 @@ async fn watch_schema(front: Arc<Front>) {
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     every.tick().await;
     let mut privacy = norn::privacy::Watch::default();
+    let embed = Arc::new(std::sync::Mutex::new(crate::embed::Timer::new(
+        std::time::Instant::now(),
+    )));
     loop {
         every.tick().await;
         // the graph writer first: it runs its opening rule again while not ready, and on a replaced file
@@ -520,8 +523,62 @@ async fn watch_schema(front: Arc<Front>) {
             front.writer.signals.notify_soon();
         }
         nightly_backup(&front);
+        embed_idle(&front, &embed);
         front.writer.signals.events_soon();
     }
+}
+
+/// The entity embedder (`embed`): a round after a quiet minute, when the store is ready and a `tei` provider is in the
+/// table.  It never starts the provider; the round runs on its own task.
+fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Timer>>) {
+    let Some(g) = front.tools.graph() else { return };
+    let st = g.writer.status();
+    if !matches!(st.last_open, Some(urdr::graph::OpenOutcome::Ready { .. })) {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let (due, probe) = {
+        let mut t = timer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let due = t.due(st.writes, now);
+        (due, t.probing())
+    };
+    if !due {
+        return;
+    }
+    let Ok(Some(e)) = front.gate.embedder() else {
+        timer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(false, now);
+        return;
+    };
+    let (front, timer, deny) = (
+        front.clone(),
+        timer.clone(),
+        g.deny
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+    );
+    tokio::spawn(async move {
+        let out = crate::embed::run(&front.writer.db, &e, &deny, probe).await;
+        let stopped = matches!(out, crate::embed::Outcome::Stopped { .. });
+        match &out {
+            crate::embed::Outcome::Stopped { embedded, why } => {
+                tracing::info!(embedded, "the embedder stopped: {why}");
+            }
+            crate::embed::Outcome::Filled { embedded, denied } => {
+                tracing::info!(embedded, denied, "entity vectors made");
+            }
+            crate::embed::Outcome::Nothing => {}
+        }
+        timer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(stopped, std::time::Instant::now());
+    });
 }
 
 /// The nightly backup (`backup_timer`): at 03:00 local time, or at the first tick after a missed one, once the store
