@@ -413,12 +413,59 @@ without the binary."
                      (,(append '(:proto_min 2) ok) incompatible)
                      (,(append '(:records 1) ok) restart-when-idle)
                      (,(append '(:drgnx_version "def") ok) restart-when-idle)
-                     (,(append (list :schema (1+ drgnx-work-db-schema-version)) ok) restart-when-idle)
+                     (,(append (list :schema (+ 2 drgnx-hub-schema-readable-max)) ok) restart-when-idle)
                      (,(append (list :schema (1- drgnx-work-db-schema-version)) ok) restart-when-idle)))
         (should (equal (list (car row) (drgnx-hub-skew (car row))) row)))))
   ;; no binary on disk: its version is not compared
   (cl-letf (((symbol-function 'drgnx-hub-client-binary-version) #'ignore))
     (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :drgnx_version "def" :schema 6)) 'ok))))
+
+(ert-deftest drgnx-hub-client/skew-accepts-schema-7 ()
+  ;; the hub's schema 7 is read through the compatibility views: not a reason to restart
+  (cl-letf (((symbol-function 'drgnx-hub-client-binary-version) #'ignore))
+    (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema 7)) 'ok))
+    (should (eq (drgnx-hub-skew (list :proto 1 :proto_min 1 :records 2 :schema 8)) 'restart-when-idle))))
+
+(ert-deftest drgnx-hub-client/mcp-session-passes-the-profile ()
+  (let (sent)
+    (cl-letf (((symbol-function 'drgnx-hub-client-binary) (lambda () "ratatoskr"))
+              ((symbol-function 'drgnx-hub-call-sync) (lambda (m p &optional _) (setq sent (cons m p)) (list :sid "s1" :socket "/x"))))
+      (let ((drgnx-hub--behind-front nil) (inhibit-interaction nil))
+        (should (equal (drgnx-hub-mcp-session "a" :profile "claude (OpenRouter)") '(:sid "s1" :socket "/x")))
+        (should (equal (plist-get (cdr sent) :profile) "claude-OpenRouter"))
+        (should-not (plist-member (cdr sent) :tools))))))
+
+(ert-deftest drgnx-hub-client/mcp-session-passes-the-tool-switch ()
+  (let (sent)
+    (cl-letf (((symbol-function 'drgnx-hub-client-binary) (lambda () "ratatoskr"))
+              ((symbol-function 'drgnx-hub-call-sync) (lambda (m p &optional _) (setq sent (cons m p)) (list :sid "s1" :socket "/x"))))
+      (let ((drgnx-hub--behind-front nil) (inhibit-interaction nil))
+        (drgnx-hub-mcp-session "a" :profile "p" :tools '(:tracker :false))
+        (should (equal (plist-get (cdr sent) :tools) '(:tracker :false)))
+        (should (equal (json-serialize (drgnx-hub--jsonable (plist-get (cdr sent) :tools))) "{\"tracker\":false}"))))))
+
+(ert-deftest drgnx-hub-client/the-close-option-is-sent-on-connect-and-change ()
+  (let (calls (drgnx-store-only-i-close-my-tasks nil))
+    (cl-letf (((symbol-function 'drgnx-hub-call)
+               (lambda (m p cb &rest _) (push (cons m p) calls) (funcall cb nil nil) 1))
+              ((symbol-function 'drgnx-hub--open) (lambda (&rest _) (make-pipe-process :name "close-option-test" :noquery t)))
+              ((symbol-function 'drgnx-hub--call-on) #'ignore)
+              ((symbol-function 'drgnx-hub--send-keys) #'ignore)
+              (drgnx-hub--client nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil))
+      (unwind-protect
+          (progn
+            ;; on connect: the current value, false
+            (drgnx-hub-connect)
+            (should (equal (car calls) '("graph/settings" :set (:only_user_closes :false))))
+            ;; on change: at once, true (a connection is live)
+            (setq calls nil)
+            (setq drgnx-hub--events drgnx-hub--subscribing)
+            (drgnx-hub--only-closes-set 'drgnx-store-only-i-close-my-tasks t)
+            (should drgnx-store-only-i-close-my-tasks)
+            (should (equal (car calls) '("graph/settings" :set (:only_user_closes t)))))
+        (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
+        (when (processp drgnx-hub--subscribing) (delete-process drgnx-hub--subscribing))
+        (when (processp drgnx-hub--events) (delete-process drgnx-hub--events))))))
 
 (ert-deftest drgnx-hub-client/records-pause-the-mirror ()
   ;; a hub that sends another record layout is not mirrored until it changes
