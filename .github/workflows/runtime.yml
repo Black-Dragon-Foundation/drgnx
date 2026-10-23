@@ -256,7 +256,7 @@ jobs:
       - run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
       - if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -- -D warnings
 
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
@@ -280,7 +280,7 @@ jobs:
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
   # a pull request runs none. A crash uploads its input.
   fuzz:
-    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec)
+    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, mcp_message, jsonrpc_parse, text_one_line)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -315,7 +315,7 @@ jobs:
       - name: Run each target
         run: |
           failed=""
-          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec; do
+          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec mcp_message jsonrpc_parse text_one_line; do
             echo "::group::$target ($FUZZ_SECONDS s)"
             cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS" || failed="$failed $target"
             echo "::endgroup::"
@@ -415,4 +415,4 @@ jobs:
       # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
       - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -- -D warnings
