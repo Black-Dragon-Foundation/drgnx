@@ -178,7 +178,36 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
 
 ## Backup (Task 7)
 
+`graph::backup` makes dated copies of the file without a second writer.
+
+- **`vacuum_into(pool, dest)`** runs `VACUUM INTO dest.tmp` on a read-pool connection (a snapshot; writes go on),
+  sets it 0600, runs `check` on the tmp, and only then renames it to `dest`. The directory is made 0700. A failed
+  check deletes the tmp and leaves any copy already at `dest` (same day included) untouched.
+- **`check(dest)`** runs `PRAGMA integrity_check` and FTS5's `integrity-check` (index only, which is all a
+  contentless table can be checked for) on the copy. A failed check deletes that copy and answers the failure in the
+  `Report` (`ok: false`, `error`); copies under other names stay, so yesterday's remains.
+- **`rotate(dir, Policy { daily: 7, weekly: 4 })`** keeps the newest 7 `work-YYYYMMDD.db` and the newest 4 Sundays,
+  and removes the rest. Other names (`work-pre7-*.db`, `.tmp`) are never touched.
+
 ## Export and import (Task 7)
+
+`graph::export` writes and reads a directory of JSONL files.
+
+- **Files.** `entities.jsonl` and `links.jsonl` hold the current state, one object per line, sorted by id (links by
+  src, kind, dst), keys in a fixed order, with ids only (no database-local numbers). `tx.jsonl` is the tx log
+  (`since` limits it). `history.jsonl` (option) has every earlier version of an exported entity.
+- **Content.** Authored entities (`recorded`, `imported`) and the links between them. Parsed entities are rebuilt
+  from their files. With `with_activity`: `inferred` entities and `session` entities, `touched` links and
+  `link_stat.jsonl`.
+- **`allow`** (door 5 for export, door 2 for import) is asked for every entity; a refused one leaves no line, no
+  history, and no link to it.
+- **No half exports.** The files are written into `dir.tmp` and renamed; a failure or panic removes `dir.tmp`, and an
+  earlier export at `dir` stays until the new one replaces it. `<data>/export/` is made 0700.
+- **Import** is idempotent by `id` and `ver`: a record present at that version or later is skipped; an older one is
+  updated (the old row goes to `entity_hist`); an absent one is created at the record's `ver`. One tx per 500
+  records (`actor` and `tool` `import`, class `system`, `imported = 0`: real versions). A different kind under an
+  existing id, a bad line, or a link with a missing end is refused with its line number. Because the class is
+  `system`, kinds the guard reserves for the user are refused too.
 
 ## Excise (Task 8)
 

@@ -118,6 +118,18 @@ so reading a file again replaces exactly what that file gave. The database migra
 updates it (a `work.db` from a newer drgnx is left alone, with an error saying so); since schema 2 it also keeps what
 the agent gateway carried, one row per request (`spend`: job, task, agent, provider, model, tokens, cost).
 
+## Backups and exports
+
+The store keeps dated copies of `work.db` (`backup/work-YYYYMMDD.db`: the last 7 days and the last 4 Sundays; each
+copy is checked and a bad one is deleted, so the previous good one stays). `work-pre7-*.db`, made before the move to
+the new store, is only ever removed by you.
+
+An export is a folder of plain JSONL files: `entities.jsonl` and `links.jsonl` (what you and your agents wrote, one
+item per line, sorted so a change touches only its lines), `tx.jsonl` (who changed what), and on request
+`history.jsonl` and the activity (sessions, what they touched). Notes you keep outside the store's reach never
+appear in it. Importing a folder is safe to repeat: items that are already there at that version or later are
+skipped.
+
 ## Tests
 
 `test/unit/work-test.el` (the scan: specs, plans, ledgers, branches, merges, renames, the board) and
