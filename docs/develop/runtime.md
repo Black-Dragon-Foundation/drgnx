@@ -522,8 +522,11 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
-- `llm --script FILE [--log FILE] [--tls CERT KEY] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
-  provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`; TLS with the PEM files, else plain). FILE is a JSON array
+- `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
+  provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`). With `--tls` it makes a certificate authority and a
+  leaf for `localhost` and 127.0.0.1 at start (`rcgen`), writes the CA's certificate (no key) to CA_FILE, prints
+  `MOCK-LLM-CA CA_FILE` before the port line and serves TLS; the keys never leave its memory, so no test key is
+  committed. Without it, plain HTTP. FILE is a JSON array
   of answers `{path, match?, status (200; 0 = never answer), delay_ms, body ("{}"), headers {name: value}, once,
   chunks [[delay_ms, text]…], content_type, no_end}`. The first answer whose `path` is a prefix of the request path and
   whose `match` occurs in the body answers; none: 404 `{}`. `chunks` streams (the head at once, no length, each text
@@ -695,7 +698,11 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
   (`lisp-backend`: a git repo made with `run`, `fixtures/plan-budget.md`, `job/propose` and `job/approve`, a job
   registration with a budget that one priced request passes; a `card` event of kind `budget`, `job/status` `paused`,
   then 429 `budget_exceeded`), `streaming-first-chunk-first`, `a-bad-token-is-refused-before-the-body` (a 20 MiB
-  `Content-Length`, no body sent, 401 within 1 s), `proxy-from-the-environment`.
+  `Content-Length`, no body sent, 401 within 1 s), `proxy-from-the-environment` (`linux`: `HTTPS_PROXY` and
+  `SSL_CERT_FILE` in the hub's environment, an https provider from `ratatoskr-mock llm --tls`, the proxy's `CONNECT`).
+- **TLS:** `tls-with-the-system-store` (`linux`: the platform verifier reads `SSL_CERT_FILE`; a hub without the
+  mock's CA gets 502 and nothing reaches the mock, a hub on the same root with `SSL_CERT_FILE` naming it gets the
+  answer). Each TLS row sets `SSL_CERT_FILE` in its own `start` only, so CI sets nothing.
 - **Chain and budget:** `no-proxy-is-respected`, `the-last-step-passes-its-refusal-through`, `every-step-failing-says-why`,
   `no-fallback-once-started`, `budget-refuses-at-equal`, `openrouter-restrictions-reach-the-body`,
   `a-hang-up-stops-the-upstream`, `request-events-and-spend-rows`.
@@ -709,11 +716,9 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
   `editor-fim-through-the-gateway`, `editor-embed-through-the-gateway`, `editor-stream-through-the-gateway`,
   `an-editor-token-is-refused-on-the-messages-path`, `an-agent-token-is-refused-on-the-editor-paths`,
   `editor-requests-carry-no-restrictions`, `an-openrouter-base-keeps-its-v1`.
-- **Not rows yet:** the TLS rows (`tls-with-the-system-store`, and `proxy-from-the-environment` and
-  `no-proxy-is-respected` over `https`) need a certificate authority and a server key at run time; the repo's leak scan
-  refuses a committed private key, and the test image has no `openssl`. The proxy rows use a plain-HTTP provider: the
-  connector tunnels through `HTTP_PROXY` for any scheme, so they prove the same environment rules. A kill -9 between a
-  registration's row write and its answer is declined (phase 6's `op` rows are the target).
+- **Not rows:** `no-proxy-is-respected` keeps a plain-HTTP provider (the connector tunnels through `HTTP_PROXY` for any
+  scheme, so it proves the `NO_PROXY` rule without TLS). A kill -9 between a registration's row write and its answer is
+  declined (phase 6's `op` rows are the target).
 
 ## Building and installing Ratatoskr
 

@@ -22,3 +22,6 @@ getrandom.workspace = true
 serde_json.workspace = true
 libc.workspace = true
 rustls.workspace = true      # ratatoskr-mock llm --tls (already in the lock file through bifrost)
+# ratatoskr-mock llm --tls: the CA and the leaf are made at start (no key file is ever committed or written). Already
+# in the lock file as bifrost's dev-dependency, ring only (no aws-lc).
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }

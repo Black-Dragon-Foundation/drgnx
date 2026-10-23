@@ -371,6 +371,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac",
  "libc",
+ "rcgen",
  "runstav",
  "rusqlite",
  "rustls",

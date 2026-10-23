@@ -1,11 +1,11 @@
-{"scenario": "gateway/proxy-from-the-environment", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: a hub started with HTTP_PROXY and HTTPS_PROXY pointing at ratatoskr-mock proxy tunnels its upstream requests through a CONNECT: the agent gets the answer and the proxy's log has CONNECT localhost:PORT. (The connector tunnels whatever the scheme, so a plain-HTTP provider proves the rule without a TLS certificate; the repo's leak scan refuses a committed private key for a TLS fixture, see the Task 24 report.)"}
+{"scenario": "gateway/proxy-from-the-environment", "requires": ["v1", "fake-backend", "linux"], "doc": "Task 24, gate row: a hub started with HTTPS_PROXY pointing at ratatoskr-mock proxy and SSL_CERT_FILE naming the CA that ratatoskr-mock llm --tls made at start reaches an https provider through a CONNECT tunnel: the agent gets the answer and the proxy's log has CONNECT localhost:PORT. The certificate and keys are made at run time (nothing committed)."}
 {"do": "root"}
-{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--tls", "$ROOT/ca.pem", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
 {"do": "spawn", "capture": "proxy", "argv": ["$MOCK", "proxy", "--log", "$ROOT/proxy.log"], "capture_stdout": {"regex": "MOCK-PROXY-PORT (\\d+)", "name": "pport"}}
-{"do": "start", "hub": "h", "env": {"HTTP_PROXY": "http://127.0.0.1:$pport", "HTTPS_PROXY": "http://127.0.0.1:$pport"}}
+{"do": "start", "hub": "h", "env": {"HTTPS_PROXY": "http://127.0.0.1:$pport", "SSL_CERT_FILE": "$ROOT/ca.pem"}}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "https://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
