@@ -45,8 +45,6 @@ pub const READY_WITHIN: Duration = Duration::from_secs(10);
 pub const CALL_DEADLINE: Duration = Duration::from_secs(30);
 /// How long a notification to the backend (`coord/notify`) waits for a starting backend, and then to be written.
 pub const NOTIFY_DEADLINE: Duration = Duration::from_secs(10);
-/// How long `status` waits for the backend's own `status`.
-pub const STATUS_DEADLINE: Duration = Duration::from_secs(1);
 /// How long restart-when-idle waits for each of the backend's two lists.
 pub const IDLE_DEADLINE: Duration = Duration::from_secs(2);
 /// The first wait before a restart, doubled after each early exit up to [`BACKOFF_MAX`].
@@ -536,15 +534,16 @@ impl Backend {
         }
     }
 
-    /// METHOD (no params) to the backend as a notification: no id, never answered.  A starting backend is waited for
+    /// METHOD with PARAMS to the backend as a notification: no id, never answered.  A starting backend is waited for
     /// up to [`NOTIFY_DEADLINE`], and the line must be written within it again or the connection is given up (as a
     /// line it would not read).  Without a backend (missing, the hub stopping, none within the deadline) it is
     /// dropped: a backend that starts runs delivery anyway.
-    pub async fn notify(&self, method: &str) {
+    pub async fn notify(&self, method: &str, params: Value) {
         let Ok(Ok(link)) = timeout(NOTIFY_DEADLINE, self.link()).await else {
             return;
         };
-        let line = json!({"method": method, "params": {}, "caller": {"class": "user"}}).to_string();
+        let line =
+            json!({"method": method, "params": params, "caller": {"class": "user"}}).to_string();
         let written = timeout(NOTIFY_DEADLINE, async {
             let mut w = link.writer.lock().await;
             w.write_all(line.as_bytes()).await?;
@@ -557,38 +556,20 @@ impl Backend {
         }
     }
 
-    /// The backend's state and pid, and, while it runs, the gateway's port and registrations from its own `status`.
+    /// The backend's state and pid (the gateway's numbers are the front's since Task 22: the backend is not asked).
     pub async fn info(&self) -> BackendInfo {
-        let phase = self.phase.borrow().clone();
-        let (state, pid) = match &phase {
+        let (state, pid) = match &*self.phase.borrow() {
             Phase::Missing(_) => (BackendState::Missing, None),
             Phase::Starting(pid) => (BackendState::Starting, *pid),
             Phase::Running(l) => (BackendState::Running, Some(l.pid)),
             Phase::Failed | Phase::Stopped => (BackendState::Failed, None),
         };
-        let mut info = BackendInfo {
+        BackendInfo {
             backend: Some(BackendStatus {
                 state,
                 pid: pid.and_then(|p| u64::try_from(p).ok()),
             }),
-            gateway_port: None,
-            registrations: None,
-        };
-        if let Phase::Running(_) = phase {
-            let id = self.next_id();
-            let line = Zeroizing::new(
-                json!({"id": id, "method": "status", "params": {}, "caller": {"class": "user"}})
-                    .to_string(),
-            );
-            if let Ok(s) = self
-                .request_within(id, "status", line, STATUS_DEADLINE)
-                .await
-            {
-                info.gateway_port = s.get("gateway_port").and_then(Value::as_u64);
-                info.registrations = s.get("registrations").and_then(Value::as_u64);
-            }
         }
-        info
     }
 
     /// The turns running (restart-when-idle, [`crate::idle`]): the backend's `busy` sessions plus its `running` jobs,

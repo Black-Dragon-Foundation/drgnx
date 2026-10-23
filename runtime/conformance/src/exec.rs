@@ -838,6 +838,8 @@ impl Runner<'_> {
     /// `run`: the program with `args` in the hub's root (else the `root` step's, else a new one), its environment
     /// the root's (and `DRGNX_HUB_PARENT_PID` the harness's, so a hub it starts detached ends with the scenario).
     /// `concurrent` N starts N copies at once; `retry_ms` tries again until `expect_code` and `expect_stdout` hold.
+    /// `drop_ptrace` runs it without `CAP_SYS_PTRACE` when the harness has it (root on a CI host): under `setpriv`
+    /// (a row with it is skipped where `setpriv` is missing, `scenario::gate`).
     fn run(&mut self, step: &Step) -> R {
         let hub_name = str_of(&step.obj, "hub");
         let idx = match hub_name {
@@ -849,8 +851,22 @@ impl Runner<'_> {
             Some(r) => r,
             None => Root::new()?,
         };
-        let bin = self.bin(step, &root)?;
-        let args = self.strings(idx, step, "args")?;
+        let mut bin = self.bin(step, &root)?;
+        let mut args = self.strings(idx, step, "args")?;
+        if step.obj.get("drop_ptrace").and_then(Value::as_bool) == Some(true)
+            && crate::scenario::ptrace_effective()
+        {
+            let mut wrapped: Vec<String> = [
+                "--inh-caps=-sys_ptrace",
+                "--bounding-set=-sys_ptrace",
+                "--",
+            ]
+            .map(String::from)
+            .into();
+            wrapped.push(bin.to_string_lossy().into_owned());
+            wrapped.append(&mut args);
+            (bin, args) = (PathBuf::from("setpriv"), wrapped);
+        }
         let mut extra = vec![(
             "DRGNX_HUB_PARENT_PID".to_string(),
             std::process::id().to_string(),
@@ -1534,6 +1550,16 @@ impl Runner<'_> {
                     return Err(format!("{pattern} does not contain {text:?}"));
                 }
                 std::thread::sleep(Duration::from_millis(50));
+            }
+            // "at_most" N: and no more than N times (a line logged once)
+            if let Some(most) = step.obj.get("at_most").and_then(Value::as_u64) {
+                let n = std::fs::read_to_string(glob_file(&pattern))
+                    .map_or(0, |t| t.matches(text.as_str()).count());
+                if n > most as usize {
+                    return Err(format!(
+                        "{pattern} contains {text:?} {n} times, at most {most} wanted"
+                    ));
+                }
             }
         }
         let path = glob_file(&pattern);

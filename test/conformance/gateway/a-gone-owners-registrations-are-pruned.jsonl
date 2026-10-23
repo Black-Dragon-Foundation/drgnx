@@ -1,0 +1,16 @@
+{"scenario": "gateway/a-gone-owners-registrations-are-pruned", "requires": ["v1", "fake-backend"], "doc": "A registration whose owner (a spawned sleep, with its start time) ends is pruned within a tick or two: status counts none and runtime.db has no row."}
+{"do": "start", "hub": "h"}
+{"do": "spawn", "capture": "P", "argv": ["sleep", "60"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "local", "kind": "anthropic", "base": "http://127.0.0.1:9", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["local", null]], "owner": "$P"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$string"}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select owner, owner_start is not null from registration", "rows": [["$P", 1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"registrations": 1}}}}
+{"do": "kill", "pid": "$P", "signal": "KILL"}
+{"do": "pid", "capture": "P", "alive": false, "within_ms": 2000}
+{"do": "run", "args": ["status", "--json"], "retry_ms": 5000, "expect_code": 0, "expect_stdout": {"gateway": {"registrations": 0}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from registration", "rows": [[0]]}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "pruned a registration"}

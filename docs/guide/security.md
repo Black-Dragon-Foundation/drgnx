@@ -94,6 +94,21 @@ shorthands come back, without reopening them.
   hub showed, in its answer to their hello, that it read the same cap file. A hub that cannot show it is closed and
   you are told; a hub of an older drgnx (before Ratatoskr) still gets your editor's calls but never a key. The
   coordination servers your agents run never read the cap: they stay at the level of a connection without a proof.
+- **Your keys stay in the hub's memory.** The gateway runs inside Ratatoskr, and the keys your editor hands it are
+  held only in its memory: never in a file, its database, its log, an environment or a command line, and never
+  passed to the Lisp hub behind it. Agents get a token instead, which works only for them and only on the hub's own
+  port or their session's socket; the hub keeps a hash of it, never the token. `ratatoskr doctor` names the providers
+  whose key the hub holds, never a key. A restarted hub has no key until your editor connects again.
+- **The hub is not dumpable.** Another program running as you (an agent outside a sandbox, a debugger) cannot read
+  the hub's memory, and so your keys, with `ptrace` or `/proc/PID/mem`, and the hub writes no core file. This does
+  not stop root, or a program given the `CAP_SYS_PTRACE` capability. `ratatoskr stop` signals only the process that
+  is actually listening on the hub's socket, asked of the system (on Linux through a pidfd, which cannot hit a reused
+  pid), never a process named by a file or a command line: a program that calls itself `ratatoskr` is never stopped
+  by mistake.
+- **Providers over plain http.** A provider's URL is `https`, or `http` for any host. A provider that takes a key
+  at an `http` address off this machine (a server on your LAN) still works, but its key travels in clear text: the
+  hub warns you when the provider list is applied, in its log once, and in `ratatoskr doctor`. Use `https` for it.
+  A keyless provider (a local Ollama) gets no warning.
 
 ## Who an agent is
 

@@ -1,8 +1,10 @@
 //! The commands that ask a running hub (or the machine) something: `status`, `doctor --json` and `restart`.
 //!
 //! `doctor --json` is
-//! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, socket_dir: {path, mode, ok}, sqlite, job_agents,
-//! sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use}}`. `sandbox` is the job sandbox's check
+//! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
+//! warnings}?, socket_dir: {path, mode, ok}, sqlite, job_agents, sandbox: {backend, version, ok, reason, fix,
+//! landlock_abi, in_use}}`.  `gateway` is the running hub's (its `status`): `keys_held` names providers only, and
+//! `warnings` are its clear-text providers (`config/providers`). `sandbox` is the job sandbox's check
 //! (`gleipnir::check`), `in_use` false until phase 6.
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet
 //! (the hub makes it private at its first start); `mode` is then null.
@@ -20,21 +22,21 @@ use std::time::Duration;
 
 const ASK: Duration = Duration::from_secs(5);
 
-/// `doctor`'s whole ask of a running hub (the user connection and its `status`, whose backend part takes up to 1 s),
+/// `doctor`'s whole ask of a running hub (the user connection and its `status`),
 /// and the least a ping after it gets: together under the 2 s the editor's doctor waits for the report (review M2),
 /// so a slow hub is reported as running, not as a binary that gave no answer.
 const DOCTOR_ASK: Duration = Duration::from_millis(1500);
 const DOCTOR_PING: Duration = Duration::from_millis(300);
 /// The sandbox check inside `doctor`, run beside the hub ask: a slow probe is reported as one that did not finish.
 const DOCTOR_CHECK: Duration = Duration::from_millis(1400);
-// core/drgnx-doctor.el waits 2 s for `doctor --json`; the ask leaves room for the backend's 1 s status
+// core/drgnx-doctor.el waits 2 s for `doctor --json`
 const _: () = assert!(DOCTOR_ASK.as_millis() + DOCTOR_PING.as_millis() < 2000);
-const _: () = assert!(DOCTOR_ASK.as_millis() > crate::backend::STATUS_DEADLINE.as_millis());
 
-/// The running hub's pid and commit, for the report.
+/// The running hub's pid and commit, and its `status`'s `gateway`, for the report.
 pub struct Running {
     pub pid: u32,
     pub commit: Option<String>,
+    pub gateway: Option<Value>,
 }
 
 /// The socket directory's state.
@@ -106,6 +108,15 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
     });
     if let Some(r) = running {
         v["running"] = json!({"pid": r.pid, "commit": r.commit});
+        if let Some(g) = r.gateway {
+            v["gateway"] = json!({
+                "port": g["port"],
+                "registrations": g["registrations"],
+                "providers": g["providers"],
+                "keys_held": g.get("keys_held").cloned().unwrap_or_else(|| json!([])),
+                "warnings": g.get("warnings").cloned().unwrap_or_else(|| json!([])),
+            });
+        }
     }
     v
 }
@@ -197,10 +208,15 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
                     .and_then(|p| u32::try_from(p).ok())
                     .unwrap_or(0),
                 commit: s["runtime"]["commit"].as_str().map(str::to_string),
+                gateway: s.get("gateway").cloned(),
             })
             .or_else(|| {
                 client::ping(&socket, left().max(DOCTOR_PING))
-                    .map(|pid| Running { pid, commit: None })
+                    .map(|pid| Running {
+                        pid,
+                        commit: None,
+                        gateway: None,
+                    })
             });
         let check = check
             .join()
@@ -297,10 +313,20 @@ mod tests {
             Some(Running {
                 pid: 7,
                 commit: Some("abc".into()),
+                gateway: Some(json!({"port": 4100, "registrations": 2, "requests": 9, "providers": 3,
+                    "keys_held": ["openrouter"],
+                    "warnings": [{"provider": "lan", "text": "lan's key travels in clear text over http://192.0.2.10; use https"}]})),
             }),
             &working(),
         );
         assert_eq!(up["running"], json!({"pid": 7, "commit": "abc"}));
+        // the gateway's ids and warnings only, never its traffic
+        assert_eq!(
+            up["gateway"],
+            json!({"port": 4100, "registrations": 2, "providers": 3, "keys_held": ["openrouter"],
+                   "warnings": [{"provider": "lan", "text": "lan's key travels in clear text over http://192.0.2.10; use https"}]})
+        );
+        assert!(open.get("gateway").is_none());
     }
 
     #[test]

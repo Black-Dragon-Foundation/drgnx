@@ -20,6 +20,9 @@ pub mod usage;
 
 use crate::budget::Price;
 
+/// The URL type of [`Provider::base`], so a caller builds one without naming `http` itself.
+pub use http::Uri;
+
 /// A provider's API family: it decides the paths an editor token may reach ([`Kind::paths`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

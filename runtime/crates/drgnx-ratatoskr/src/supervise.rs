@@ -16,12 +16,15 @@
 //!
 //! `stop` signals nothing unless the lock is really held: the lock file is probed with `flock` first, so a stale file
 //! naming a live pid (a reused one) is "not running".  A held lock gets a `shutdown` over the socket; only when that
-//! does not release it is the pid in the file sent SIGTERM, and then only if its start time is still the recorded
-//! one and its executable is this ratatoskr.  A Lisp hub from before Ratatoskr (a lock directory) gets the v0
+//! does not release it is SIGTERM sent, and only to the process listening on the hub's socket
+//! ([`peer::listener_of`]; through a pidfd on Linux and Android) when it is the pid the lock names with the start
+//! time it recorded ([`lock::signal_target`]).  Anything else is refused with "signal it yourself"; a command line or
+//! an executable's path is never evidence.  A Lisp hub from before Ratatoskr (a lock directory) gets the v0
 //! `shutdown`, and SIGTERM only for a pid whose command line names `drgnx-hub-main`.
 
 use crate::client::{self, Client};
 use crate::lock::{self, Holder, Procs};
+use crate::peer;
 use runstav::paths::{self, Env};
 use serde_json::json;
 use std::ffi::OsString;
@@ -574,9 +577,16 @@ fn stop_ratatoskr(
         println!("stopped Ratatoskr{}", named(pid));
         return 0;
     }
-    match lock::signal_target(pid, start, start_time_of, lock::is_ratatoskr) {
+    // the target is the process listening on the socket, never what the lock's text or a command line names
+    let signalled = peer::listener_of(socket).and_then(|listener| {
+        let p = lock::signal_target(pid, start, &listener, start_time_of)?;
+        listener
+            .terminate()
+            .map(|()| p)
+            .map_err(|e| format!("SIGTERM to pid {p} failed ({e})"))
+    });
+    match signalled {
         Ok(p) => {
-            term(p);
             if wait_released(lock_path, timeout) {
                 println!("stopped Ratatoskr (pid {p}, by SIGTERM)");
                 0
@@ -590,8 +600,8 @@ fn stop_ratatoskr(
         }
         Err(why) => {
             eprintln!(
-                "ratatoskr stop: the hub did not stop within {} s and {why}",
-                timeout.as_secs()
+                "ratatoskr stop: the hub did not stop and {why}; signal it yourself{}",
+                pid.map_or_else(String::new, |p| format!(": pid {p}"))
             );
             1
         }

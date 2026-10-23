@@ -1,0 +1,5 @@
+{"scenario": "lifecycle/stop-ends-a-non-dumpable-hub", "requires": ["v1", "test-hooks"], "doc": "The hub is not dumpable and ignores shutdown (--test-ignore-shutdown), so `stop` reaches its signal: it finds the process listening on the hub's socket (its pidfd on Linux), signals it, prints \"stopped Ratatoskr (pid N, by SIGTERM)\" and the hub is gone. `stop` runs without CAP_SYS_PTRACE (setpriv where the harness has it), which would see through a non-dumpable process."}
+{"do": "start", "hub": "h", "args": ["--test-ignore-shutdown"]}
+{"do": "run", "args": ["stop", "--timeout", "2"], "drop_ptrace": true, "expect_code": 0, "expect_stdout": "stopped Ratatoskr (pid $PID(h), by SIGTERM)"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 5000}
+{"do": "file", "path": "$SOCKET", "exists": false}
