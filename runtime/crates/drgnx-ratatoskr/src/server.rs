@@ -548,6 +548,19 @@ mod tests {
                 unsafe { libc::pause() };
             }
         }
+        // the child is killed and reaped however the test ends, a failed assertion below included: a child left in
+        // pause() would hold the test's output open, and the run would never end
+        struct Reap(libc::pid_t);
+        impl Drop for Reap {
+            fn drop(&mut self) {
+                // SAFETY: SIGKILL to our own child (blocked in pause), then waitpid on it
+                unsafe {
+                    libc::kill(self.0, libc::SIGKILL);
+                    libc::waitpid(self.0, std::ptr::null_mut(), 0);
+                }
+            }
+        }
+        let child = Reap(pid);
         // SAFETY: the parent owns its copies of both ends
         let (mut r, w) = unsafe {
             (
@@ -569,11 +582,7 @@ mod tests {
             );
         }
         drop((r, w));
-        // SAFETY: SIGKILL to our own child (blocked in its read), then waitpid on it
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-            libc::waitpid(pid, std::ptr::null_mut(), 0);
-        }
+        drop(child);
         // and this test binary is still dumpable
         // SAFETY: prctl(PR_GET_DUMPABLE) takes no pointer
         assert_eq!(unsafe { libc::prctl(libc::PR_GET_DUMPABLE) }, 1);
