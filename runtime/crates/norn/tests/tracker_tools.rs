@@ -36,6 +36,7 @@ mod tools {
         file: PathBuf,
         db: CoordDb,
         coord: Arc<Coord>,
+        hub: Arc<QuietHub>,
     }
 
     struct Out {
@@ -63,13 +64,14 @@ mod tools {
                     &dir.path().join("config"),
                 )))),
             };
-            let coord =
-                Arc::new(Coord::new(db.clone(), Arc::new(QuietHub::default())).with_graph(graph));
+            let hub = Arc::new(QuietHub::default());
+            let coord = Arc::new(Coord::new(db.clone(), hub.clone()).with_graph(graph));
             World {
                 dir,
                 file,
                 db,
                 coord,
+                hub,
             }
         }
 
@@ -550,6 +552,47 @@ mod tools {
             0
         );
         assert_eq!(w.count("select count(*) from tx"), txs, "no tx was written");
+    }
+
+    /// `note_add` about a `file:` or `sym:` id nobody recorded makes it a bare entity of the caller's project, so the
+    /// note has an end; any other unknown id is refused and writes nothing. A new note tells the hub once, its replay
+    /// never.
+    #[tokio::test]
+    async fn note_add_makes_unrecorded_code_and_refuses_other_unknown_ids() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let told = || w.hub.told.load(std::sync::atomic::Ordering::SeqCst);
+        for (about, kind) in [("file:src/new.rs", "file"), ("sym:new_fn", "symbol")] {
+            let before = told();
+            let args = json!({"about": about, "text": "seen", "req": format!("n-{kind}")});
+            let o = w.call(&a, "note_add", args.clone()).await;
+            assert!(!o.err, "{about}: {}", o.text);
+            assert_eq!(o.structured["note"]["about"], about);
+            assert_eq!(told(), before + 1, "{about}: the new note tells the hub");
+            let (k, p): (String, i64) = w
+                .conn()
+                .query_row(
+                    "select kind, project from entity where id = ?1",
+                    [about],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!((k.as_str(), p), (kind, w.project_n(&h)), "{about}");
+            let again = w.call(&a, "note_add", args).await;
+            assert_eq!(again.structured, o.structured, "{about}");
+            assert_eq!(told(), before + 1, "{about}: a replay tells nobody");
+        }
+        let entities = w.count("select count(*) from entity");
+        let o = w
+            .call(&a, "note_add", json!({"about": "task:nope", "text": "x"}))
+            .await;
+        assert!(o.err, "{}", o.text);
+        assert_eq!(w.count("select count(*) from entity"), entities);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'note'"),
+            2
+        );
     }
 
     #[tokio::test]

@@ -2395,6 +2395,137 @@ mod tests {
         assert_eq!(title, "first");
     }
 
+    /// The user's `graph/revert`: `cascade` only says what a tx's revert or a version put back would do (nothing is
+    /// written); without it the entity is put back to the version.
+    #[tokio::test]
+    async fn a_cascade_revert_writes_nothing_and_a_version_is_put_back() {
+        let (_dir, w, _, _) = fixture().await;
+        let made = task_write(
+            &w,
+            json!({"op": "create", "title": "first", "project": MINE}),
+        )
+        .await;
+        let id = made["id"].as_str().unwrap().to_owned();
+        task_write(
+            &w,
+            json!({"op": "update", "id": id, "ver": made["ver"], "title": "second", "project": MINE}),
+        )
+        .await;
+        let t = count(&w, "select max(id) from tx").await;
+        let n = count(&w, "select n from entity where kind = 'task'").await;
+        let txs = count(&w, "select count(*) from tx").await;
+        let me = user(false);
+        let rev = |p: Value| revert(&w, &me, serde_json::from_value(p).unwrap());
+        for p in [
+            json!({"tx": t, "cascade": true}),
+            json!({"entity": id, "ver": 1, "cascade": true}),
+        ] {
+            let r = rev(p.clone()).await.unwrap();
+            assert_eq!(
+                (&r["listed"], &r["reverted"]["entities"]),
+                (&json!(true), &json!([n])),
+                "{p}: {r}"
+            );
+            assert_eq!(count(&w, "select count(*) from tx").await, txs, "{p}");
+            let title = text_of(&w, "select title from entity where kind = 'task'").await;
+            assert_eq!(title, "second", "{p}");
+        }
+        let r = rev(json!({"entity": id, "ver": 1})).await.unwrap();
+        assert_eq!(r["reverted"]["entities"], json!([n]), "{r}");
+        assert!(r.get("listed").is_none(), "{r}");
+        let title = text_of(&w, "select title from entity where kind = 'task'").await;
+        assert_eq!(title, "first");
+    }
+
+    /// The user's `graph/proposed`: `accept` marks an agent's proposed tx accepted and keeps its change; `reject`
+    /// reverts it (a proposed entity is retired).
+    #[tokio::test]
+    async fn the_user_accepts_and_rejects_proposed_txs() {
+        let (_dir, w, _, _) = fixture().await;
+        let mut propose = Vec::new();
+        for id in ["task:p1", "task:p2"] {
+            let mut m = TxMeta::new("agent:s1", TxClass::Agent, "mcp:task_write/create");
+            m.session = Some("s1".into());
+            m.state = urdr::graph::TxState::Proposed;
+            let t =
+                w.db.write(m, move |tx| {
+                    entity::create(
+                        tx,
+                        entity::EntityNew {
+                            id: id.into(),
+                            kind: "task".into(),
+                            project: None,
+                            title: Some(id.into()),
+                            status: Some("open".into()),
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({}),
+                            origin: entity::Origin::Recorded,
+                            source: None,
+                        },
+                    )?;
+                    Ok(tx.id())
+                })
+                .await
+                .unwrap();
+            propose.push(t);
+        }
+        let state = |t: i64| {
+            w.db.read(move |c| {
+                Ok(c.query_row("select state from tx where id = ?1", [t], |r| {
+                    r.get::<_, String>(0)
+                })?)
+            })
+        };
+        let me = user(false);
+        let decide = |p: Value| proposed(&w, &me, serde_json::from_value(p).unwrap());
+        let r = decide(json!({"accept": [propose[0]]})).await.unwrap();
+        assert!(r["reverted"].is_object(), "{r}");
+        assert_eq!(state(propose[0]).await.unwrap(), "accepted");
+        let r = decide(json!({"reject": [propose[1]]})).await.unwrap();
+        let p2 = count(&w, "select n from entity where id = 'task:p2'").await;
+        assert_eq!(r["reverted"]["entities"], json!([p2]), "{r}");
+        assert_eq!(state(propose[1]).await.unwrap(), "reverted");
+        let live = count(
+            &w,
+            "select count(*) from entity where kind = 'task' and retired_tx is null",
+        )
+        .await;
+        assert_eq!(live, 1, "p1 kept, p2 retired");
+    }
+
+    /// An access card that names no session can't be settled with `session`: refused, no grant, the card open.
+    #[tokio::test]
+    async fn a_session_choice_on_a_card_without_a_session_is_refused() {
+        let (_dir, w, _, _) = fixture().await;
+        let data = json!({"profile": "p1", "project": MINE, "target": THEIRS, "reason": "r", "known": true,
+                          "choices": ["session", "project", "profile", "refuse"]});
+        let card =
+            w.db.write(TxMeta::new("agent:s1", TxClass::Agent, "test"), move |tx| {
+                cards::card_create(
+                    tx,
+                    NewCard {
+                        job: None,
+                        task: None,
+                        kind: Some("access".into()),
+                        title: Some("asks to read".into()),
+                        data: Some(data),
+                    },
+                    1.0,
+                )
+            })
+            .await
+            .unwrap();
+        let e = settle(&w, &user(false), card, "session".into(), now())
+            .await
+            .unwrap_err();
+        assert!(e.message.contains("names no session"), "{}", e.message);
+        assert!(grants_now(&w).await.is_empty());
+        let open = count(&w, "select count(*) from card where state = 'open'").await;
+        assert_eq!(open, 1);
+    }
+
     /// Review finding 10 (Task 15b: `expires` = the session's end for `session`): a session grant from an access card
     /// expires; a project or profile grant lasts until it is revoked.
     #[tokio::test]

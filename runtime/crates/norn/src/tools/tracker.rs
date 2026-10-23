@@ -1210,8 +1210,9 @@ async fn note_add(coord: &Coord, who: &Identity, a: NoteAddArgs) -> Result<Answe
             }
             let target = match tracker::visible(tx, &c2, &about, "entity") {
                 Ok((e, _)) => e,
-                // a file or symbol nobody recorded yet: made as a bare entity of the project, so the note has an end
-                Err(WriteError::Refused(_)) if code && c2.project.is_some() => {
+                // a file or symbol nobody recorded yet: made as a bare entity of the project (the caller has one: a
+                // caller without is refused above), so the note has an end
+                Err(WriteError::Refused(_)) if code => {
                     let kind = if about.starts_with("file:") {
                         "file"
                     } else {
