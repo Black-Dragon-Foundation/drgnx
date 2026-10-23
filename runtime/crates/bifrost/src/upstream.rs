@@ -41,7 +41,9 @@ pub struct UpstreamOpts {
 
 impl Default for UpstreamOpts {
     fn default() -> Self {
-        Self { connect_timeout: Duration::from_secs(10) }
+        Self {
+            connect_timeout: Duration::from_secs(10),
+        }
     }
 }
 
@@ -107,7 +109,9 @@ impl Service<Uri> for Dial {
     fn call(&mut self, dst: Uri) -> Self::Future {
         let mut http = self.http.clone();
         match self.proxy.intercept(&dst) {
-            None => Box::pin(async move { http.call(dst).await.map_err(|e| Box::new(e) as BoxError) }),
+            None => {
+                Box::pin(async move { http.call(dst).await.map_err(|e| Box::new(e) as BoxError) })
+            }
             Some(hop) => {
                 let mut tunnel = Tunnel::new(hop.uri().clone(), http);
                 if let Some(auth) = hop.basic_auth() {
@@ -139,7 +143,9 @@ fn tls_connector(dial: Dial) -> Result<Connector, UpstreamError> {
 
 #[cfg(not(feature = "platform-verifier"))]
 fn tls_connector(_dial: Dial) -> Result<Connector, UpstreamError> {
-    Err(UpstreamError::Unsupported("no certificate verifier in this build"))
+    Err(UpstreamError::Unsupported(
+        "no certificate verifier in this build",
+    ))
 }
 
 /// The gateway's HTTP/1.1 client. Cheap to share behind an `Arc`; connections are pooled.
@@ -160,8 +166,13 @@ impl Upstream {
         http.set_connect_timeout(Some(opts.connect_timeout));
         http.set_nodelay(true);
         http.enforce_http(false);
-        let connector = tls_connector(Dial { http, proxy: Arc::new(proxy) })?;
-        Ok(Self { client: Client::builder(TokioExecutor::new()).build(connector) })
+        let connector = tls_connector(Dial {
+            http,
+            proxy: Arc::new(proxy),
+        })?;
+        Ok(Self {
+            client: Client::builder(TokioExecutor::new()).build(connector),
+        })
     }
 
     /// Send `req` (an absolute URI) and return the response as soon as its head is read; the body streams.
@@ -188,10 +199,10 @@ fn kind_of(e: &(dyn StdError + 'static)) -> Option<Kind> {
     if e.is::<ProxyFailure>() {
         return Some(Kind::Proxy);
     }
-    if let Some(inner) = e.downcast_ref::<io::Error>().and_then(io::Error::get_ref) {
-        if let Some(k) = kind_of(inner) {
-            return Some(k);
-        }
+    if let Some(inner) = e.downcast_ref::<io::Error>().and_then(io::Error::get_ref)
+        && let Some(k) = kind_of(inner)
+    {
+        return Some(k);
     }
     e.source().and_then(kind_of)
 }
@@ -230,7 +241,9 @@ mod tests {
     use super::*;
 
     fn get(url: &str) -> http::Request<Full<Bytes>> {
-        http::Request::get(url).body(Full::new(Bytes::new())).unwrap()
+        http::Request::get(url)
+            .body(Full::new(Bytes::new()))
+            .unwrap()
     }
 
     /// Read until the blank line that ends a request head; returns the head.
@@ -262,7 +275,10 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let resp = direct().send(get(&format!("http://127.0.0.1:{port}/x"))).await.unwrap();
+        let resp = direct()
+            .send(get(&format!("http://127.0.0.1:{port}/x")))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..], b"hello");
@@ -276,7 +292,9 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let up = Upstream::with_proxy(
-            UpstreamOpts { connect_timeout: Duration::from_millis(100) },
+            UpstreamOpts {
+                connect_timeout: Duration::from_millis(100),
+            },
             Matcher::builder().build(),
         )
         .unwrap();
@@ -305,9 +323,14 @@ mod tests {
             let _ = tx.send(head);
             let _ = s.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await;
         });
-        let m = Matcher::builder().https(format!("http://127.0.0.1:{pport}")).build();
+        let m = Matcher::builder()
+            .https(format!("http://127.0.0.1:{pport}"))
+            .build();
         let up = Upstream::with_proxy(UpstreamOpts::default(), m).unwrap();
-        let err = up.send(get("https://localhost:4443/v1/messages")).await.unwrap_err();
+        let err = up
+            .send(get("https://localhost:4443/v1/messages"))
+            .await
+            .unwrap_err();
         assert!(matches!(err, UpstreamError::Proxy(_)), "{err}");
         let head = rx.await.unwrap();
         assert!(head.starts_with("CONNECT localhost:4443 "), "{head}");
@@ -329,16 +352,25 @@ mod tests {
         tokio::spawn(async move {
             let (mut s, _) = l.accept().await.unwrap();
             read_head(&mut s).await;
-            s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").await.unwrap();
+            s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
         });
         let m = Matcher::builder()
             .http(format!("http://127.0.0.1:{pport}"))
             .no("127.0.0.1")
             .build();
         let up = Upstream::with_proxy(UpstreamOpts::default(), m).unwrap();
-        let resp = up.send(get(&format!("http://127.0.0.1:{port}/"))).await.unwrap();
+        let resp = up
+            .send(get(&format!("http://127.0.0.1:{port}/")))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 204);
-        assert_eq!(seen.load(Ordering::SeqCst), 0, "the proxy must not be dialled for a NO_PROXY host");
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            0,
+            "the proxy must not be dialled for a NO_PROXY host"
+        );
     }
 
     #[tokio::test]
@@ -349,12 +381,17 @@ mod tests {
         tokio::spawn(async move {
             let (mut s, _) = l.accept().await.unwrap();
             read_head(&mut s).await;
-            s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n").await.unwrap();
+            s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n")
+                .await
+                .unwrap();
             // The second chunk is written only after the client has read the first.
             wait.await.unwrap();
             s.write_all(b"3\r\ntwo\r\n0\r\n\r\n").await.unwrap();
         });
-        let resp = direct().send(get(&format!("http://127.0.0.1:{port}/"))).await.unwrap();
+        let resp = direct()
+            .send(get(&format!("http://127.0.0.1:{port}/")))
+            .await
+            .unwrap();
         let mut body = resp.into_body();
         let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
         assert_eq!(&first[..], b"one");

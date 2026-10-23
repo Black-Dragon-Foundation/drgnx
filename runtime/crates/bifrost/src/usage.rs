@@ -35,10 +35,11 @@ struct Raw {
 }
 
 fn num(o: &serde_json::Map<String, Value>, key: &str, into: &mut Option<u64>) {
-    if let Some(n) = o.get(key).and_then(Value::as_f64) {
-        if n.is_finite() && n >= 0.0 {
-            *into = Some(n.round() as u64);
-        }
+    if let Some(n) = o.get(key).and_then(Value::as_f64)
+        && n.is_finite()
+        && n >= 0.0
+    {
+        *into = Some(n.round() as u64);
     }
 }
 
@@ -57,10 +58,10 @@ impl Raw {
             num(u, "completion_tokens", &mut self.completion_tokens);
             num(u, "cache_read_input_tokens", &mut self.cache_read);
             num(u, "cache_creation_input_tokens", &mut self.cache_write);
-            if let Some(c) = u.get("cost").and_then(Value::as_f64) {
-                if c.is_finite() {
-                    self.cost = Some(c);
-                }
+            if let Some(c) = u.get("cost").and_then(Value::as_f64)
+                && c.is_finite()
+            {
+                self.cost = Some(c);
             }
         }
         num(o, "prompt_eval_count", &mut self.prompt_eval_count);
@@ -68,12 +69,26 @@ impl Raw {
     }
 
     fn usage(&self) -> Usage {
-        let i = self.input_tokens.or(self.prompt_tokens).or(self.prompt_eval_count).unwrap_or(0);
+        let i = self
+            .input_tokens
+            .or(self.prompt_tokens)
+            .or(self.prompt_eval_count)
+            .unwrap_or(0);
         let cr = self.cache_read.unwrap_or(0);
         let cw = self.cache_write.unwrap_or(0);
         let input = (i as f64 + 1.25 * cw as f64 + 0.1 * cr as f64).round() as u64;
-        let output = self.output_tokens.or(self.completion_tokens).or(self.eval_count).unwrap_or(0);
-        Usage { input, output, cache_read: cr, cache_write: cw, cost: self.cost }
+        let output = self
+            .output_tokens
+            .or(self.completion_tokens)
+            .or(self.eval_count)
+            .unwrap_or(0);
+        Usage {
+            input,
+            output,
+            cache_read: cr,
+            cache_write: cw,
+            cost: self.cost,
+        }
     }
 }
 
@@ -120,11 +135,18 @@ impl Scanner {
     pub fn feed(&mut self, chunk: &[u8]) {
         let mut chunk = chunk;
         if self.mode == Mode::Undecided {
-            let Some(at) = chunk.iter().position(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n')) else {
+            let Some(at) = chunk
+                .iter()
+                .position(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+            else {
                 return;
             };
             chunk = &chunk[at..];
-            self.mode = if chunk[0] == b'{' { Mode::Json } else { Mode::Sse };
+            self.mode = if chunk[0] == b'{' {
+                Mode::Json
+            } else {
+                Mode::Sse
+            };
         }
         match self.mode {
             Mode::Json => {
@@ -138,7 +160,10 @@ impl Scanner {
     pub fn usage(&self) -> Usage {
         if self.mode == Mode::Json {
             let mut raw = Raw::default();
-            if let Some(Ok(v)) = serde_json::Deserializer::from_slice(&self.body).into_iter::<Value>().next() {
+            if let Some(Ok(v)) = serde_json::Deserializer::from_slice(&self.body)
+                .into_iter::<Value>()
+                .next()
+            {
                 raw.take(&v);
             }
             return raw.usage();
@@ -233,7 +258,9 @@ mod tests {
 
     #[test]
     fn openrouter_cost_wins() {
-        let u = scan("data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"cost\":0.0042}}\n\n");
+        let u = scan(
+            "data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"cost\":0.0042}}\n\n",
+        );
         assert_eq!(u.cost, Some(0.0042));
     }
 
@@ -278,19 +305,23 @@ mod tests {
 
     #[test]
     fn comments_ignored() {
-        let u = scan(": OPENROUTER PROCESSING\n\ndata: {\"usage\":{\"input_tokens\":3}}\n: keep-alive\n\n");
+        let u = scan(
+            ": OPENROUTER PROCESSING\n\ndata: {\"usage\":{\"input_tokens\":3}}\n: keep-alive\n\n",
+        );
         assert_eq!(u.input, 3);
     }
 
     #[test]
     fn done_sentinel_ignored() {
-        let u = scan("data: {\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}\n\ndata: [DONE]\n\n");
+        let u =
+            scan("data: {\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}\n\ndata: [DONE]\n\n");
         assert_eq!((u.input, u.output), (3, 4));
     }
 
     #[test]
     fn multi_line_data() {
-        let u = scan("data: {\"usage\":\ndata: {\"input_tokens\":8,\ndata: \"output_tokens\":2}}\n\n");
+        let u =
+            scan("data: {\"usage\":\ndata: {\"input_tokens\":8,\ndata: \"output_tokens\":2}}\n\n");
         assert_eq!((u.input, u.output), (8, 2));
     }
 
@@ -305,7 +336,9 @@ mod tests {
 
     #[test]
     fn openai_chat_json_usage() {
-        let u = scan("{\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":6,\"total_tokens\":17}}");
+        let u = scan(
+            "{\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":6,\"total_tokens\":17}}",
+        );
         assert_eq!((u.input, u.output), (11, 6));
     }
 

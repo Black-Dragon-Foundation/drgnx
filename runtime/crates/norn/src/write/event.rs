@@ -169,7 +169,9 @@ mod tests {
         let long = format!("a\nb\u{202e}c{}", "x".repeat(300));
         let id = event(&c, ev(EventKind::Edit, &long, None)).unwrap();
         let s: String = c
-            .query_row("select summary from event where id = ?1", [id], |r| r.get(0))
+            .query_row("select summary from event where id = ?1", [id], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(s.chars().count(), 200);
         assert!(s.starts_with("a b c"), "{s:?}");
@@ -186,7 +188,11 @@ mod tests {
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&d).unwrap();
         assert_eq!(v, serde_json::json!({"truncated": true, "size": size}));
-        let id = event(&c, ev(EventKind::Edit, "s", Some(serde_json::json!({"k": 1})))).unwrap();
+        let id = event(
+            &c,
+            ev(EventKind::Edit, "s", Some(serde_json::json!({"k": 1}))),
+        )
+        .unwrap();
         let d: String = c
             .query_row("select data from event where id = ?1", [id], |r| r.get(0))
             .unwrap();
@@ -196,7 +202,11 @@ mod tests {
     #[test]
     fn turn_is_one_for_start_and_stop_only() {
         let c = db();
-        let mut e = ev(EventKind::Start, "s", Some(serde_json::json!({"turn": true})));
+        let mut e = ev(
+            EventKind::Start,
+            "s",
+            Some(serde_json::json!({"turn": true})),
+        );
         e.turn = true;
         let a = event(&c, e.clone()).unwrap();
         e.kind = EventKind::Edit;
@@ -216,7 +226,9 @@ mod tests {
             "/../../../core/drgnx-coord.el"
         ))
         .unwrap();
-        let at = src.find("(defconst drgnx-coord-event-kinds").expect("defconst");
+        let at = src
+            .find("(defconst drgnx-coord-event-kinds")
+            .expect("defconst");
         let rest = &src[at..];
         let open = rest.find("'(").expect("quoted list") + 2;
         let close = rest[open..].find(')').expect("end of list") + open;

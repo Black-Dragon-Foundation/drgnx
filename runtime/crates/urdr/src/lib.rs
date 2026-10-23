@@ -39,7 +39,9 @@ pub enum Error {
     /// `Mode::ReadWriteExisting`: the file does not exist.
     Missing,
     /// `Mode::ReadWriteExisting`: `meta.schema` is not the expected one; nothing was written.
-    Schema { found: u32 },
+    Schema {
+        found: u32,
+    },
     /// A write closure asked for a rollback with an error of its own, which the caller keeps.
     Aborted,
 }
@@ -59,7 +61,9 @@ impl fmt::Display for Error {
             Error::Closed => write!(f, "the store is closed"),
             Error::Panicked => write!(f, "a store closure panicked"),
             Error::Missing => write!(f, "the database file does not exist"),
-            Error::Schema { found } => write!(f, "the database is schema {found}, not the expected one"),
+            Error::Schema { found } => {
+                write!(f, "the database is schema {found}, not the expected one")
+            }
             Error::Aborted => write!(f, "the write was rolled back"),
         }
     }

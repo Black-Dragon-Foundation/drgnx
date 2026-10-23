@@ -65,7 +65,12 @@ fn event_of(args: &Value, clock: &mut impl Iterator<Item = f64>) -> Event {
     }
 }
 
-fn call(conn: &Connection, fn_name: &str, args: &Value, clock: &mut impl Iterator<Item = f64>) -> Value {
+fn call(
+    conn: &Connection,
+    fn_name: &str,
+    args: &Value,
+    clock: &mut impl Iterator<Item = f64>,
+) -> Value {
     let agent = || args["agent"].as_str().unwrap().to_owned();
     let ok = |r: Result<u64, CoordError>| json!(r.unwrap());
     match fn_name {
@@ -150,14 +155,26 @@ fn every_writer_fixture_replays() {
     inputs.sort();
     assert!(!inputs.is_empty(), "no cases in {}", dir.display());
     for path in inputs {
-        let name = path.file_name().unwrap().to_string_lossy().replace(".input.json", "");
+        let name = path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace(".input.json", "");
         let input = expand(serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap());
         let expect_path = dir.join(format!("{name}.expect.json"));
         let expect: Value = serde_json::from_slice(&std::fs::read(&expect_path).unwrap()).unwrap();
         let mut got = replay(&input);
         // Only the tables the case expects are compared.
-        let wanted: Vec<String> = expect["tables"].as_object().unwrap().keys().cloned().collect();
-        got["tables"].as_object_mut().unwrap().retain(|k, _| wanted.contains(k));
+        let wanted: Vec<String> = expect["tables"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        got["tables"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|k, _| wanted.contains(k));
         assert_eq!(norm(got), norm(expand(expect)), "case {name}");
     }
 }

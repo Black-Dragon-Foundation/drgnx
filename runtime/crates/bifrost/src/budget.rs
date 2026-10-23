@@ -15,7 +15,9 @@ pub fn cost(u: &Usage, price: Option<&Price>) -> f64 {
         return c;
     }
     match price {
-        Some(p) => (u.input as f64 * p.input_per_m + u.output as f64 * p.output_per_m) / 1_000_000.0,
+        Some(p) => {
+            (u.input as f64 * p.input_per_m + u.output as f64 * p.output_per_m) / 1_000_000.0
+        }
         None => 0.0,
     }
 }
@@ -38,8 +40,15 @@ mod tests {
 
     #[test]
     fn price_when_no_cost() {
-        let p = Price { input_per_m: 3.0, output_per_m: 15.0 };
-        let mut u = Usage { input: 1_000_000, output: 100_000, ..Usage::default() };
+        let p = Price {
+            input_per_m: 3.0,
+            output_per_m: 15.0,
+        };
+        let mut u = Usage {
+            input: 1_000_000,
+            output: 100_000,
+            ..Usage::default()
+        };
         assert!((cost(&u, Some(&p)) - 4.5).abs() < 1e-9);
         assert_eq!(cost(&u, None), 0.0);
         u.cost = Some(0.25);

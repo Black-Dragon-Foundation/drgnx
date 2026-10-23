@@ -4,7 +4,9 @@ use bifrost::usage::{Scanner, Usage};
 use proptest::prelude::*;
 
 fn fixture(name: &str) -> Vec<u8> {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures/sse").join(name);
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../test/fixtures/sse")
+        .join(name);
     std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
 
@@ -30,7 +32,10 @@ fn scan_cut(b: &[u8], cuts: &[usize]) -> Usage {
 #[test]
 fn the_fixtures_give_their_known_usage() {
     let a = scan_whole(&fixture("anthropic.txt"));
-    assert_eq!((a.input, a.output, a.cache_read, a.cache_write), (25 + 10 + 10, 15, 100, 8));
+    assert_eq!(
+        (a.input, a.output, a.cache_read, a.cache_write),
+        (25 + 10 + 10, 15, 100, 8)
+    );
     let o = scan_whole(&fixture("openrouter.txt"));
     assert_eq!((o.input, o.output, o.cost), (10, 5, Some(0.0042)));
     let i = scan_whole(&fixture("openai.txt"));

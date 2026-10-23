@@ -41,7 +41,9 @@ fn client() -> Upstream {
 }
 
 fn get(port: u16) -> http::Request<Full<Bytes>> {
-    http::Request::get(format!("https://localhost:{port}/")).body(Full::new(Bytes::new())).unwrap()
+    http::Request::get(format!("https://localhost:{port}/"))
+        .body(Full::new(Bytes::new()))
+        .unwrap()
 }
 
 #[tokio::test]
@@ -49,7 +51,10 @@ async fn https_with_the_fixture_ca_through_ssl_cert_file() {
     let srv = tls_server(localhost_leaf(&fixture().ca)).await;
     let resp = client().send(get(srv.port)).await.unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(&resp.into_body().collect().await.unwrap().to_bytes()[..], b"ok");
+    assert_eq!(
+        &resp.into_body().collect().await.unwrap().to_bytes()[..],
+        b"ok"
+    );
     assert_eq!(srv.requests.load(Ordering::SeqCst), 1);
 }
 
@@ -59,12 +64,22 @@ async fn an_unknown_ca_is_refused() {
     let srv = tls_server(localhost_leaf(&other)).await;
     let err = client().send(get(srv.port)).await.unwrap_err();
     assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
-    assert_eq!(srv.requests.load(Ordering::SeqCst), 0, "no request bytes may reach an unverified server");
+    assert_eq!(
+        srv.requests.load(Ordering::SeqCst),
+        0,
+        "no request bytes may reach an unverified server"
+    );
 }
 
 #[tokio::test]
 async fn a_wrong_hostname_is_refused() {
-    let leaf = make_leaf(&fixture().ca, &["wrong.test"], false, (2020, 1, 1), (2046, 1, 1));
+    let leaf = make_leaf(
+        &fixture().ca,
+        &["wrong.test"],
+        false,
+        (2020, 1, 1),
+        (2046, 1, 1),
+    );
     let srv = tls_server(leaf).await;
     let err = client().send(get(srv.port)).await.unwrap_err();
     assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
@@ -73,7 +88,13 @@ async fn a_wrong_hostname_is_refused() {
 
 #[tokio::test]
 async fn an_expired_leaf_is_refused() {
-    let leaf = make_leaf(&fixture().ca, &["localhost"], true, (2019, 1, 1), (2020, 1, 1));
+    let leaf = make_leaf(
+        &fixture().ca,
+        &["localhost"],
+        true,
+        (2019, 1, 1),
+        (2020, 1, 1),
+    );
     let srv = tls_server(leaf).await;
     let err = client().send(get(srv.port)).await.unwrap_err();
     assert!(matches!(err, UpstreamError::Tls(_)), "{err}");

@@ -36,10 +36,16 @@ impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CoordError::NotReady { schema } => {
-                write!(f, "work.db is not ready (schema {schema}); the Lisp side makes it")
+                write!(
+                    f,
+                    "work.db is not ready (schema {schema}); the Lisp side makes it"
+                )
             }
             CoordError::ReadOnly { schema } => {
-                write!(f, "work.db is schema {schema}, newer than this drgnx: read-only")
+                write!(
+                    f,
+                    "work.db is schema {schema}, newer than this drgnx: read-only"
+                )
             }
             CoordError::Busy => write!(f, "work.db is busy"),
             CoordError::Refused(text) => f.write_str(text),
@@ -173,7 +179,9 @@ impl CoordDb {
         let st = self.state.lock().unwrap();
         match (&st.held, &st.handle) {
             (Held::Closed { schema }, _) => Err(CoordError::NotReady { schema: *schema }),
-            (Held::Newer { schema }, _) if for_write => Err(CoordError::ReadOnly { schema: *schema }),
+            (Held::Newer { schema }, _) if for_write => {
+                Err(CoordError::ReadOnly { schema: *schema })
+            }
             (_, Some(h)) => Ok(h.clone()),
             _ => Err(CoordError::NotReady { schema: 0 }),
         }
@@ -240,8 +248,11 @@ pub(crate) mod tests {
     pub(crate) fn make(path: &Path, schema: u32) {
         let c = urdr::Connection::open(path).unwrap();
         c.execute_batch(DDL).unwrap();
-        c.execute("update meta set value = ?1 where key = 'schema'", [schema.to_string()])
-            .unwrap();
+        c.execute(
+            "update meta set value = ?1 where key = 'schema'",
+            [schema.to_string()],
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -276,7 +287,13 @@ pub(crate) mod tests {
         std::fs::rename(&next, &file).unwrap();
         db.tick();
         let n: i64 = db
-            .read(|c| Ok(c.query_row("select count(*) from meta where key = 'a'", [], |r| r.get(0))?))
+            .read(|c| {
+                Ok(
+                    c.query_row("select count(*) from meta where key = 'a'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
             .await
             .unwrap();
         assert_eq!(n, 0, "the writer follows the new file");
@@ -312,7 +329,13 @@ pub(crate) mod tests {
             .unwrap_err();
         assert_eq!(e, CoordError::Refused("no".into()));
         let n: i64 = db
-            .read(|c| Ok(c.query_row("select count(*) from meta where key = 'z'", [], |r| r.get(0))?))
+            .read(|c| {
+                Ok(
+                    c.query_row("select count(*) from meta where key = 'z'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
             .await
             .unwrap();
         assert_eq!(n, 0);

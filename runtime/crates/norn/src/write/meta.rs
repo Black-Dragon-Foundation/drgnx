@@ -4,11 +4,12 @@
 use crate::store::{CoordError, Tx};
 
 fn get(conn: &Tx, key: &str) -> Result<u64, CoordError> {
-    let v: Option<String> = match conn.query_row("select value from meta where key = ?1", [key], |r| r.get(0)) {
-        Ok(v) => Some(v),
-        Err(urdr::SqliteError::QueryReturnedNoRows) => None,
-        Err(e) => return Err(e.into()),
-    };
+    let v: Option<String> =
+        match conn.query_row("select value from meta where key = ?1", [key], |r| r.get(0)) {
+            Ok(v) => Some(v),
+            Err(urdr::SqliteError::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
     // `string-to-number`: text that is not a number reads as 0.
     Ok(v.and_then(|s| s.trim().parse().ok()).unwrap_or(0))
 }
@@ -48,7 +49,11 @@ pub fn seen(conn: &Tx, agent: &str) -> Result<u64, CoordError> {
 /// is not stored (the Lisp ignores its argument beyond truthiness).
 pub fn note_held(tx: &Tx, agent: &str, held: Option<u64>) -> Result<(), CoordError> {
     let key = format!("held:{agent}");
-    let n = if held.is_some() { get(tx, &key)? + 1 } else { 0 };
+    let n = if held.is_some() {
+        get(tx, &key)? + 1
+    } else {
+        0
+    };
     put(tx, &key, n)
 }
 
