@@ -30,32 +30,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: ripgrep and Rust (Homebrew)
-        run: brew install ripgrep rust
-      # the editor's tests run against Ratatoskr; runtime.yml's macos job tests the runtime itself, so this is the build only.
-      # With the test hooks: some client tests need --idle-tick-ms (a test binary, never installed)
-      - name: Ratatoskr (cargo build, for the client's tests)
-        run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
-          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
-      - name: install.sh parses under macOS's bash 3.2
-        if: ${{ !cancelled() }}
-        run: /bin/bash -n install.sh
-      - name: install.sh prints the macOS plan and changes nothing
-        if: ${{ !cancelled() }}
-        run: /bin/bash install.sh --dry-run
       - name: Nidhogg (the release tarball) for the suite
         id: nidhogg
-        if: ${{ !cancelled() }}
         run: /bin/bash test/container/nidhogg.sh macos
-      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
-      # Whatever the steps before said, once there is an Emacs: without Ratatoskr only the tests that need it fail
-      - name: Unit suite, the files in parallel (no :timing tests)
-        if: ${{ !cancelled() && steps.nidhogg.outcome == 'success' }}
+      # TEMPORARY (ci-gl-1): the one test again and again, then its whole file, with busy loops beside
+      - name: GL-1 stress, the one test
         env:
-          DRGNX_TEST_RERUN: "1"
-          DRGNX_TEST_NO_TIMING: "1"
-        run: DRGNX_TEST_JOBS="$(sysctl -n hw.ncpu)" bin/drgnx test
+          DRGNX_TEST_DIR: ${{ github.workspace }}/test/unit/mod-remote-test.el
+          DRGNX_TEST_SELECTOR: '"the-starting-buffer\\|an-answer-read-inside"'
+        run: bin/drgnx test --stress 25 --load "$(sysctl -n hw.ncpu)"
 
   install:
     name: Real install (macOS 27)
