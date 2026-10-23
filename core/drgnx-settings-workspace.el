@@ -306,11 +306,12 @@ holding DIR; else the file whose `:project' is DIR's Urdr project, with that pro
                        (drgnx-settings-workspace--shared-entries (car match) (cdr match)) (cdr match) (cdr place)))))
 
 (defun drgnx-settings-workspace--hook-result (groups-fn)
-  "The dir-local items GROUPS-FN gives for the current buffer; nil, with one message, when it fails."
+  "The dir-local items GROUPS-FN gives for the current buffer; nil, with one notice, when it fails."
   (condition-case err
       (when-let* ((place (drgnx-settings-workspace--place)))
         (drgnx-settings-workspace--items (cdr (funcall groups-fn place))))
-    (error (message "drgnx: workspace settings were not applied in %s: %s" (buffer-name) (error-message-string err))
+    (error (drgnx-settings-file--warn (format "workspace settings were not applied in %s: %s" (buffer-name)
+                                              (error-message-string err)))
            nil)))
 
 (defun drgnx-settings-workspace--private-variables ()
@@ -470,8 +471,8 @@ with dir-local values), without re-running their major mode.  Returns the buffer
           (when-let* ((place (ignore-errors (drgnx-settings-workspace--place))))
             (when (and (string-prefix-p root (car place)) (or buffer-file-name dir-local-variables-alist))
               (condition-case err (progn (drgnx-settings-workspace--rehack-buffer) (push b done))
-                (error (message "drgnx: %s: workspace settings were not applied again: %s" (buffer-name)
-                                (error-message-string err)))))))))
+                (error (drgnx-settings-file--warn (format "%s: workspace settings were not applied again: %s"
+                                                          (buffer-name) (error-message-string err))))))))))
     (nreverse done)))
 
 (defun drgnx-settings-workspace-files ()

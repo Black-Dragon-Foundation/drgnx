@@ -26,6 +26,7 @@
     ("core/drgnx-notice.el" . 2)
     ("core/drgnx-notice-save.el" . 1)
     ("core/drgnx-settings-apply.el" . 1) ; settings.el's problems when the notice itself failed
+    ("core/drgnx-settings-workspace.el" . 1) ; a workspace file's problems when the notice itself failed
     ("core/drgnx-timer.el" . 1)
     ("core/drgnx-tty-fallback.el" . 1)
     ;; processes with no notice model of their own: the hub, the sandbox plumbing, the MCP bridge, batch entry
@@ -38,6 +39,7 @@
     ("core/drgnx-sandbox-proxy.el" . 2)
     ("core/drgnx-sandbox-relay.el" . 2)
     ("core/drgnx-search-mcp.el" . 1)
+    ("core/drgnx-settings-defaults.el" . 1) ; the batch entry points' settings.el apply (hub, search CLIs, onboard)
     ;; gryphn is dead: no work on or for it
     ("core/drgnx-compat-gryphn.el" . 1)
     ;; modules/: replies to a command just run

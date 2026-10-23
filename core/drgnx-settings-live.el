@@ -59,7 +59,7 @@ added or removed.  A function that signals is skipped; nothing here prompts.")
   (when-let* ((fn (drgnx-settings-live--apply-fn var)))
     (puthash var (and (default-boundp var) (default-value var)) drgnx-settings-live--applied)
     (condition-case err (let ((inhibit-interaction t)) (funcall fn))
-      (error (message "drgnx: :apply of %s failed: %s" var (error-message-string err))))))
+      (error (drgnx-settings-file--warn (format ":apply of %s failed: %s" var (error-message-string err)))))))
 
 (defun drgnx-settings-live--run-queue ()
   "Run the queued `:apply's (the idle tick)."
@@ -98,7 +98,7 @@ Never signals, never prompts."
                  (done (gethash var drgnx-settings-live--applied 'none)))
             (unless (if (eq done 'none) (custom--standard-value-p var val) (equal val done))
               (drgnx-settings-live--run-apply var)))))
-    (error (message "drgnx: the :apply pass failed: %s" (error-message-string err)))))
+    (error (drgnx-settings-file--warn (format "the :apply pass failed: %s" (error-message-string err))))))
 
 ;;;; Reading a changed file
 
@@ -122,8 +122,8 @@ Never signals, never prompts."
     (run-hook-wrapped 'drgnx-settings-changed-functions
                       (lambda (fn)
                         (condition-case e (funcall fn file changes)
-                          (error (message "drgnx: %s, run because %s changed, failed: %s" fn file
-                                          (error-message-string e))))
+                          (error (drgnx-settings-file--warn (format "%s, run because %s changed, failed: %s" fn file
+                                                                    (error-message-string e)))))
                         nil)))
   changes)
 
@@ -132,7 +132,7 @@ Never signals, never prompts."
 For settings.el: `drgnx-settings-apply-global' pushes every entry (idempotent), variables the file no longer names
 are torn down, new ones are watched for provenance, and `drgnx-settings-changed-functions' runs with FILE and the
 changes.  For a workspace file: `drgnx-settings-workspace-sync' re-hacks its roots' open buffers when it changed, and
-the hook runs the same way.  Another file only has its stamp recorded.  Nothing prompts; a failure is one message
+the hook runs the same way.  Another file only has its stamp recorded.  Nothing prompts; a failure is one notice
 and nil."
   (condition-case err
       (let ((inhibit-interaction t))
@@ -150,7 +150,7 @@ and nil."
               (drgnx-settings-live--run-changed file (drgnx-settings-live--changes old new)))))
          ((drgnx-settings-workspace-file-p file)
           (drgnx-settings-live--run-changed file (drgnx-settings-workspace-sync file)))))
-    (error (message "drgnx: settings: applying %s failed: %s" file (error-message-string err)) nil)))
+    (error (drgnx-settings-file--warn (format "applying %s failed: %s" file (error-message-string err))) nil)))
 
 (defun drgnx-settings-live-check (&optional files)
   "Sync every file of FILES (default `drgnx-settings-live-files') whose stamp is not the one last synced.
@@ -161,7 +161,8 @@ Cheap when nothing changed: one `file-attributes' per file.  Returns the files s
           (unless (equal (drgnx-file-stamp file) (gethash file drgnx-settings-live--stamps))
             (drgnx-settings-live-sync file)
             (push file synced)))
-      (error (message "drgnx: settings: the stamp check failed: %s" (error-message-string err))))
+      (error (drgnx-settings-file--warn (format "the settings files' stamp check failed: %s"
+                                                (error-message-string err)))))
     (nreverse synced)))
 
 ;;;; Watching
@@ -214,7 +215,7 @@ nothing.  Never signals."
           (drgnx-settings-live--watch-file file))
         (drgnx-settings-live--watch-own)
         (add-function :after after-focus-change-function #'drgnx-settings-live--focus))
-    (error (message "drgnx: settings: watching the files failed: %s" (error-message-string err)))))
+    (error (drgnx-settings-file--warn (format "watching the settings files failed: %s" (error-message-string err))))))
 
 (provide 'drgnx-settings-live)
 ;;; drgnx-settings-live.el ends here
