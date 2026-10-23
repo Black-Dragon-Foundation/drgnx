@@ -1,0 +1,19 @@
+{"scenario": "gateway/an-editor-token-is-refused-on-the-messages-path", "requires": ["v1", "fake-backend"], "doc": "Task 24, editor row, gate of the token classes: the editor's token has the /p/PROVIDER/… paths only; on an agent's /v1/messages (and /v1/models) it is 404, and the provider is never asked."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "m", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "m", "status": 404}
+{"do": "http", "conn": "x", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "x-api-key": "$tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "x", "status": 404}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "GET", "path": "/v1/models", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok"}}
+{"do": "expect_http", "conn": "g", "status": 404}
+{"do": "file", "path": "$ROOT/llm.log", "lacks": "request"}

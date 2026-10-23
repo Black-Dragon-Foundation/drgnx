@@ -1,0 +1,24 @@
+{"scenario": "gateway/keys-are-never-on-disk-or-in-the-backend", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: two canary keys (one by gateway/keys, one in a registration's `keys`) are used by requests: the provider's log shows both in its Authorization header, while no file of the hub's roots (runtime.db and its -wal, work.db, logs, the config and data directories) holds either canary and the fake backend's log has neither. The mock's own log sits beside the roots, not in them."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"gateway/keys\": {\"result\": true}}"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "bearer", "messages": true, "caps": ["chat"]}, {"id": "b", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "bearer", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"a": "canary-key-disk-1"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$capture:tok_a"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "gateway/register", "params": {"chain": [["b", null]], "owner": "$HARNESS_PID", "keys": {"b": "canary-key-disk-2"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"token": "$capture:tok_b"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"gateway": {"port": "$capture:gw", "keys_held": ["a", "b"]}}}}
+{"do": "http", "conn": "g1", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok_a", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g1", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok_b", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g2", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "Bearer canary-key-disk-1"}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "Bearer canary-key-disk-2"}
+{"do": "file_grep", "paths": ["$ROOT/home/**", "$ROOT/run/**", "$ROOT/state/**", "$ROOT/data/**", "$ROOT/config/**"], "absent": "canary-key-disk"}
+{"do": "file", "path": "$STATE/fake-backend.log", "lacks": "canary"}

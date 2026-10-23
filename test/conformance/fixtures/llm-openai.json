@@ -1,0 +1,5 @@
+[
+  {"path": "/chat/completions", "body": "{\"id\": \"chat-1\", \"object\": \"chat.completion\", \"usage\": {\"prompt_tokens\": 3, \"completion_tokens\": 1}}"},
+  {"path": "/completions", "body": "{\"id\": \"cmpl-1\", \"choices\": [{\"text\": \"x\"}], \"usage\": {\"prompt_tokens\": 5, \"completion_tokens\": 1}}"},
+  {"path": "/embeddings", "body": "{\"id\": \"emb-1\", \"data\": [], \"usage\": {\"prompt_tokens\": 4, \"total_tokens\": 4}}"}
+]

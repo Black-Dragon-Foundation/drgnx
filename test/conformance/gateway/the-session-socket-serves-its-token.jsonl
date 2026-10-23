@@ -1,0 +1,19 @@
+{"scenario": "gateway/the-session-socket-serves-its-token", "requires": ["v1", "fake-backend"], "doc": "Task 24: a token registered with a session (`sid`) is answered with the session's socket (SDIR/gateway.sock, no URL) and serves its holder there, over a Unix socket: the request reaches the provider and one spend row is written for the agent."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["a", null]], "agent": "s-0000000a", "sid": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$capture:tok", "socket": "$capture:gsock", "url": "$absent"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "http", "conn": "u", "to": "unix:$gsock", "method": "POST", "path": "/v1/messages", "headers": {"Host": "localhost", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "u", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"agent": "s-0000000a", "provider": "a", "status": 200}}}
+{"do": "sql_expect", "sql": "select provider, agent, status from spend", "rows": [["a", "s-0000000a", 200]]}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1}

@@ -1,0 +1,23 @@
+{"scenario": "gateway/need-keys-after-a-restart", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: keys live in the hub's memory only. A registration that needs `openrouter` is kept across a TERM and a start on the same root, but the key is not: the new hub holds none (gateway/keys-held is empty) and a subscriber is sent gateway/need-keys {providers: [openrouter]}; the editor's job is to hand the key over again."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "https://openrouter.ai/api/v1", "auth": "bearer", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-key-restart"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["openrouter", null]], "agent": "a1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "gateway/keys-held"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"providers": ["openrouter"]}}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": true}}
+{"do": "expect", "conn": "c2", "json": {"event": "gateway/need-keys", "data": {"providers": ["openrouter"]}}}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "gateway/keys-held"}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"providers": []}}}
+{"do": "send", "conn": "c2", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c2", "json": {"id": 3, "result": {"gateway": {"registrations": 1, "keys_held": []}}}}
+{"do": "file_grep", "paths": ["$ROOT/home/**", "$ROOT/run/**", "$ROOT/state/**", "$ROOT/data/**", "$ROOT/config/**"], "absent": "canary-key-restart"}
