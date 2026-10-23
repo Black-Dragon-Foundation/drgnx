@@ -545,6 +545,12 @@ fn revert_answer(out: hist::Revert, listed: bool) -> api::RevertAnswer {
 /// `graph/revert`: a tx (blocked: nothing written, the later txs named), or an entity put back to a version; with
 /// `cascade` only what it would do.
 async fn revert(w: &Writer, caller: &Caller, p: api::RevertParams) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed(
+            "",
+            "only the user reverts: the backend's connection never does",
+        ));
+    }
     let cascade = p.cascade == Some(true);
     let a = match (p.tx, p.entity, p.ver) {
         (Some(t), _, _) => {
@@ -584,6 +590,12 @@ async fn revert(w: &Writer, caller: &Caller, p: api::RevertParams) -> Result<Val
 
 /// `graph/proposed`.
 async fn proposed(w: &Writer, caller: &Caller, p: api::ProposedParams) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed(
+            "",
+            "only the user settles proposed changes: the backend's connection never does",
+        ));
+    }
     let (txs, accept) = match (p.accept, p.reject) {
         (Some(a), None) => (a.into_inner(), true),
         (None, Some(r)) => (r.into_inner(), false),
@@ -2090,6 +2102,57 @@ mod tests {
             settings(&w, &user(false), get).await.unwrap(),
             json!({"only_user_closes": true})
         );
+    }
+
+    /// Review finding 9: history's writes are the user's, as scrub, compact, excise, grants and import are; the
+    /// backend's connection is refused before anything is written (a revert, its cascade look, a version put back,
+    /// a proposed tx accepted or rejected).
+    #[tokio::test]
+    async fn the_backend_cannot_revert_or_settle_proposed_txs() {
+        let (_dir, w, _, _) = fixture().await;
+        let made = task_write(
+            &w,
+            json!({"op": "create", "title": "first", "project": MINE}),
+        )
+        .await;
+        let id = made["id"].as_str().unwrap().to_owned();
+        task_write(
+            &w,
+            json!({"op": "update", "id": id, "ver": made["ver"], "title": "second", "project": MINE}),
+        )
+        .await;
+        let t = count(&w, "select max(id) from tx").await;
+        let txs = count(&w, "select count(*) from tx").await;
+        for p in [
+            json!({"tx": t}),
+            json!({"tx": t, "cascade": true}),
+            json!({"entity": id, "ver": 1}),
+        ] {
+            let e = revert(&w, &user(true), serde_json::from_value(p.clone()).unwrap())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed, "{p}");
+        }
+        for p in [json!({"accept": [t]}), json!({"reject": [t]})] {
+            let e = proposed(&w, &user(true), serde_json::from_value(p.clone()).unwrap())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed, "{p}");
+        }
+        assert_eq!(count(&w, "select count(*) from tx").await, txs);
+        let title = text_of(&w, "select title from entity where kind = 'task'").await;
+        assert_eq!(title, "second");
+        // the user's own revert still runs
+        let r = revert(
+            &w,
+            &user(false),
+            serde_json::from_value(json!({"tx": t})).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(r["reverted"].is_object(), "{r}");
+        let title = text_of(&w, "select title from entity where kind = 'task'").await;
+        assert_eq!(title, "first");
     }
 
     #[test]

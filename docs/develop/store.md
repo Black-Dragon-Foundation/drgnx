@@ -644,7 +644,9 @@ is `not-allowed` even though its class is `user`.
 - **`graph/revert {tx} | {entity, ver}, cascade?`** → `{reverted?: {entities, links}, blocked?, listed?}`: a tx is put
   back by new versions, or blocked (nothing written) by the later txs named; an entity goes back to a version as a
   new one. `cascade` only lists. A reverted grant changes scopes at once. **`graph/proposed {accept | reject: [tx]}`**
-  settles proposed txs the same way (`hist::settle_proposed`).
+  settles proposed txs the same way (`hist::settle_proposed`). Both are the user's: the backend's connection is
+  `not-allowed` before anything is read or written, its `cascade` look included (as for scrub, compact, excise,
+  grants and import).
 - **`graph/excise {target: tx | id, fields?, reason, rotate_backups?, transcripts?}`** → the excise report, the
   scrub's (`vacuumed`, `wal_truncated`, `blocked_by`), and the copies outside `work.db` that hold an excised value:
   `backups_holding` (or `backups_removed` with `rotate_backups`) and `transcripts_holding` (or `transcripts_redacted`:

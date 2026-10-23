@@ -686,7 +686,7 @@ What was in flight is gone: a turn that was running, the queue, a pending permis
 The front serves the store (`work.db`, schema 7) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`, never forwarded to the backend. A write the backend's connection asks for among
-them (grants, settings, excise, import, `tasks/write`) is `not-allowed`. `cards/settle` of an `access` card makes a
+them (grants, settings, excise, import, revert, proposed txs, scrub, compact, `tasks/write`) is `not-allowed`. `cards/settle` of an `access` card makes a
 grant (or refuses) and of a `close` card closes the task (or rejects), in the settle's tx; the backend's connection
 can only refuse and reject. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
 the session socket lists 21 tools, or 16 without the tracker tools (the task's setting first, then the profile's, else
