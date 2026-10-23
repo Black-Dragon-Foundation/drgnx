@@ -12,11 +12,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::entity::{self, Ent, Lease, Origin, Update};
-use super::guard;
+use super::entity::{self, Ent, Lease, Origin, Snap, Update};
 use super::link::{self, Direction, Link};
 use super::schema::SENTINEL;
-use super::search::fts_put;
 use super::tx::{Class, Tx, TxState};
 use super::writer::WriteError;
 
@@ -88,32 +86,6 @@ struct Hist {
     kind: String,
     snap: Snap,
     field_tx: BTreeMap<String, i64>,
-}
-
-/// The fields a version carries and a restore sets (no `kind`, no lease).
-#[derive(Clone, Debug, PartialEq)]
-struct Snap {
-    project: Option<i64>,
-    title: Option<String>,
-    status: Option<String>,
-    body: Option<String>,
-    priority: Option<i64>,
-    assignee: Option<String>,
-    data: Value,
-}
-
-impl Snap {
-    fn of(e: &Ent) -> Snap {
-        Snap {
-            project: e.project,
-            title: e.title.clone(),
-            status: e.status.clone(),
-            body: e.body.clone(),
-            priority: e.priority,
-            assignee: e.assignee.clone(),
-            data: e.data.clone(),
-        }
-    }
 }
 
 const HIST_COLS: &str =
@@ -424,96 +396,6 @@ pub fn link_history(conn: &Connection, n: i64) -> rusqlite::Result<Vec<LinkVersi
     Ok(out)
 }
 
-/// Copy entity E's current row to `entity_hist`, valid until this tx (entity's own copy is private to it).
-fn to_hist(tx: &Tx<'_>, e: &Ent) -> Result<(), WriteError> {
-    tx.sql().execute(
-        "insert into entity_hist (n, ver, tx_from, tx_to, kind, project, title, status, body, priority, assignee, \
-         data, field_tx) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![
-            e.n,
-            e.ver,
-            e.updated_tx,
-            tx.id(),
-            e.kind,
-            e.project,
-            e.title,
-            e.status,
-            e.body,
-            e.priority,
-            e.assignee,
-            e.data.to_string(),
-            serde_json::to_string(&e.field_tx).expect("a map of integers"),
-        ],
-    )?;
-    Ok(())
-}
-
-/// Give entity CUR a new version holding SNAP, and (when RETIRED is `Some`) the new `retired_tx`. False, writing
-/// nothing, when nothing would change.
-fn apply(
-    tx: &mut Tx<'_>,
-    cur: &Ent,
-    snap: &Snap,
-    retired: Option<Option<i64>>,
-) -> Result<bool, WriteError> {
-    guard::check(tx.guard(), tx.meta(), &cur.kind)?;
-    let old = Snap::of(cur);
-    let mut changed: Vec<&str> = Vec::new();
-    if snap.project != old.project {
-        changed.push("project");
-    }
-    if snap.title != old.title {
-        changed.push("title");
-    }
-    if snap.status != old.status {
-        changed.push("status");
-    }
-    if snap.body != old.body {
-        changed.push("body");
-    }
-    if snap.priority != old.priority {
-        changed.push("priority");
-    }
-    if snap.assignee != old.assignee {
-        changed.push("assignee");
-    }
-    if snap.data != old.data {
-        changed.push("data");
-    }
-    let new_retired = retired.unwrap_or(cur.retired_tx);
-    if changed.is_empty() && new_retired == cur.retired_tx {
-        return Ok(false);
-    }
-    let id = tx.id();
-    let mut field_tx = cur.field_tx.clone();
-    for f in &changed {
-        field_tx.insert((*f).to_string(), id);
-    }
-    to_hist(tx, cur)?;
-    tx.sql().execute(
-        "update entity set project = ?2, title = ?3, status = ?4, body = ?5, priority = ?6, assignee = ?7, \
-         data = ?8, field_tx = ?9, ver = ?10, updated_tx = ?11, retired_tx = ?12 where n = ?1",
-        params![
-            cur.n,
-            snap.project,
-            snap.title,
-            snap.status,
-            snap.body,
-            snap.priority,
-            snap.assignee,
-            snap.data.to_string(),
-            serde_json::to_string(&field_tx).expect("a map of integers"),
-            cur.ver + 1,
-            id,
-            new_retired,
-        ],
-    )?;
-    if changed.contains(&"title") || changed.contains(&"body") {
-        fts_put(tx, cur.n, snap.title.as_deref(), snap.body.as_deref())?;
-    }
-    Ok(true)
-}
-
 /// Revert TARGET as a new tx (`tx.reverts = target`), or answer `Blocked` writing nothing.
 pub fn revert(tx: &mut Tx<'_>, target: i64) -> Result<Revert, WriteError> {
     let out = revert_one(tx, target, &BTreeSet::new())?;
@@ -585,7 +467,7 @@ fn revert_one(tx: &mut Tx<'_>, target: i64, ignore: &BTreeSet<i64>) -> Result<Re
             if cur.retired_tx.is_some() {
                 false
             } else {
-                apply(tx, &cur, &Snap::of(&cur), Some(Some(me)))?
+                entity::set_version(tx, &cur, &Snap::of(&cur), Some(Some(me)))?
             }
         } else {
             let prev = hist_version(tx.sql(), cur.n, first - 1)?.ok_or_else(|| {
@@ -596,7 +478,7 @@ fn revert_one(tx: &mut Tx<'_>, target: i64, ignore: &BTreeSet<i64>) -> Result<Re
                 ))
             })?;
             let retired = (cur.retired_tx == Some(target)).then_some(None);
-            apply(tx, &cur, &prev.snap, retired)?
+            entity::set_version(tx, &cur, &prev.snap, retired)?
         };
         if changed {
             entities.push(cur.n);
@@ -661,7 +543,7 @@ pub fn restore(tx: &mut Tx<'_>, n: i64, ver: i64) -> Result<Update, WriteError> 
     }
     let h = hist_version(tx.sql(), n, ver)?
         .ok_or_else(|| WriteError::Refused(format!("entity {n} has no version {ver}")))?;
-    if apply(tx, &cur, &h.snap, None)? {
+    if entity::set_version(tx, &cur, &h.snap, None)? {
         Ok(Update::Done { ver: cur.ver + 1 })
     } else {
         Ok(Update::Done { ver: cur.ver })

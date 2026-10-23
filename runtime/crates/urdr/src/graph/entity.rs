@@ -488,6 +488,99 @@ pub fn retire(tx: &mut Tx<'_>, n: i64) -> Result<(), WriteError> {
     Ok(())
 }
 
+/// The fields a version carries and a restoring write sets (no `kind`, no lease: `entity_hist` keeps neither).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Snap {
+    pub(crate) project: Option<i64>,
+    pub(crate) title: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) body: Option<String>,
+    pub(crate) priority: Option<i64>,
+    pub(crate) assignee: Option<String>,
+    pub(crate) data: Value,
+}
+
+impl Snap {
+    pub(crate) fn of(e: &Ent) -> Snap {
+        Snap {
+            project: e.project,
+            title: e.title.clone(),
+            status: e.status.clone(),
+            body: e.body.clone(),
+            priority: e.priority,
+            assignee: e.assignee.clone(),
+            data: e.data.clone(),
+        }
+    }
+}
+
+/// Give entity CUR a new version holding SNAP (history's revert and restore: an older version's fields) and, when
+/// RETIRED is `Some`, that `retired_tx` (`Some(None)` un-retires). The lease is left as it is. False, writing
+/// nothing, when nothing would change. The guard is checked first.
+pub(crate) fn set_version(
+    tx: &mut Tx<'_>,
+    cur: &Ent,
+    snap: &Snap,
+    retired: Option<Option<i64>>,
+) -> Result<bool, WriteError> {
+    guard::check(tx.guard(), tx.meta(), &cur.kind)?;
+    let old = Snap::of(cur);
+    let mut changed: Vec<&str> = Vec::new();
+    if snap.project != old.project {
+        changed.push("project");
+    }
+    if snap.title != old.title {
+        changed.push("title");
+    }
+    if snap.status != old.status {
+        changed.push("status");
+    }
+    if snap.body != old.body {
+        changed.push("body");
+    }
+    if snap.priority != old.priority {
+        changed.push("priority");
+    }
+    if snap.assignee != old.assignee {
+        changed.push("assignee");
+    }
+    if snap.data != old.data {
+        changed.push("data");
+    }
+    let new_retired = retired.unwrap_or(cur.retired_tx);
+    if changed.is_empty() && new_retired == cur.retired_tx {
+        return Ok(false);
+    }
+    let id = tx.id();
+    let mut field_tx = cur.field_tx.clone();
+    for f in &changed {
+        field_tx.insert((*f).to_string(), id);
+    }
+    to_hist(tx, cur)?;
+    tx.sql().execute(
+        "update entity set project = ?2, title = ?3, status = ?4, body = ?5, priority = ?6, assignee = ?7, \
+         data = ?8, field_tx = ?9, ver = ?10, updated_tx = ?11, retired_tx = ?12 where n = ?1",
+        params![
+            cur.n,
+            snap.project,
+            snap.title,
+            snap.status,
+            snap.body,
+            snap.priority,
+            snap.assignee,
+            snap.data.to_string(),
+            serde_json::to_string(&field_tx).expect("a map of integers"),
+            cur.ver + 1,
+            id,
+            new_retired,
+        ],
+    )?;
+    if changed.contains(&"title") || changed.contains(&"body") {
+        fts_put(tx, cur.n, snap.title.as_deref(), snap.body.as_deref())?;
+    }
+    Ok(true)
+}
+
 /// The current row of the entity ID, retired or not.
 pub fn by_id(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ent>> {
     conn.query_row(

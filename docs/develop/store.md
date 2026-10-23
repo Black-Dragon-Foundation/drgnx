@@ -89,6 +89,9 @@ All in `urdr::graph::{entity, link}`; every function takes the write's `&mut Tx`
   - Title or body changes delete and re-insert the FTS row by rowid (never a partial `UPDATE`).
   - A change that changes nothing writes nothing and answers `Done` with the current `ver`.
 - `entity::retire` sets `retired_tx` as a new version; the row stays.
+- `entity::set_version` (crate-private) gives an entity a new version holding an older version's fields and, when
+  asked, a new `retired_tx` (`None` un-retires); the lease stays. History's revert and restore write through it, so
+  every entity version, its `entity_hist` row and its FTS row are written in `entity.rs`.
 - `link::add` refuses a missing or retired end and answers `existed: true` for a current `(src, kind, dst)`; `data`
   is set once. `link::retire` and `retire_by_source` set `tx_to`; a re-add is a new row. `link::stat_bump` counts in
   `link_stat`, unversioned.
