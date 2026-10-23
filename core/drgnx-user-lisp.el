@@ -45,7 +45,6 @@
 (declare-function drgnx-lisp-index-get "drgnx-lisp-index" (file))
 (declare-function drgnx-settings-area-update "drgnx-settings-area" (vars fn &optional always))
 (declare-function drgnx-settings-lisp-page-rows "drgnx-settings-lisp-page" ())
-(declare-function drgnx-command-define "drgnx-registry" (id &rest args))
 (autoload 'drgnx-settings-lisp-page-note-load "drgnx-settings-lisp-page")
 (autoload 'drgnx-settings-lisp-page-rows "drgnx-settings-lisp-page")
 
@@ -397,23 +396,9 @@ The other entries stay; a file OFF that is not listed gets an entry."
         (setq raw (drgnx-user-lisp--updated raw file (lambda (o) (drgnx-user-lisp--plist-put o :on nil)))))
       (drgnx-settings-file-put settings-file 'drgnx-settings nil 'drgnx-user-lisp-files raw))))
 
-;;;; Commands
-
-(defun drgnx-user-lisp-register-commands ()
-  "Settings: Turn a Lisp File On or Off (on the Lisp files page) and Add Lisp File…, in the registry."
-  (drgnx-command-define 'settings-lisp-files-toggle :category "Settings" :title "Turn a Lisp File On or Off"
-                        :command #'drgnx-user-lisp-toggle
-                        :map '(drgnx-settings-lisp-page . drgnx-settings-lisp-page-mode-map)
-                        :when (lambda () (derived-mode-p 'drgnx-settings-lisp-page-mode))
-                        :doc "Turn the Lisp file of this line on (loads now) or off (takes effect at the next start)")
-  (drgnx-command-define 'settings-add-lisp-file :category "Settings" :title "Add Lisp File…"
-                        :command #'drgnx-user-lisp-add-file
-                        :map '(drgnx-settings-lisp-page . drgnx-settings-lisp-page-mode-map)
-                        :doc "Add an existing init.el or other Lisp file without copying it: its early-init.el, findings, :emacs-dir"))
-
-(if (featurep 'drgnx-registry)
-    (drgnx-user-lisp-register-commands)
-  (with-eval-after-load 'drgnx-registry (drgnx-user-lisp-register-commands)))
+;; The commands (Turn a Lisp File On or Off, Add Lisp File…) are registered with the other Settings commands in
+;; `drgnx-config-register-commands': registering here at load would run inside whatever loads this file first (a
+;; module's setup), which then owns their deferred key maps.
 
 (provide 'drgnx-user-lisp)
 ;;; drgnx-user-lisp.el ends here

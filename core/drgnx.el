@@ -43,6 +43,8 @@
                                         ; so the first file visited (before `drgnx-init' too) gets them
 (require 'drgnx-settings-live)
 (require 'drgnx-lisp-index)
+(require 'drgnx-settings-lisp-page)       ; told of every load of your Lisp; its keymap is there for the keys apply
+                                        ; (a map of a library not loaded yet waits in an after-load entry per apply)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 

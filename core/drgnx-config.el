@@ -893,6 +893,10 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
   "Your Lisp files in load order, what each sets at which line and whether it won." t)
 (autoload 'drgnx-settings-lisp-page-open "drgnx-settings-lisp-page"
   "Open the file of the Lisp files page's line at point, at its line." t)
+(autoload 'drgnx-user-lisp-toggle "drgnx-user-lisp"
+  "Turn the Lisp file of the line on (loads now) or off (at the next start)." t)
+(autoload 'drgnx-user-lisp-add-file "drgnx-user-lisp"
+  "Add an existing init.el or other Lisp file to your Lisp files without copying it." t)
 (autoload 'drgnx-settings-move-into-settings "drgnx-settings-move"
   "Move a setting's line of your Lisp into settings.el, with a diff first." t)
 (autoload 'drgnx-settings-move-to-lisp "drgnx-settings-move"
@@ -949,6 +953,15 @@ Line), Move into Settings…, Move to My Lisp…, Undo Move, Tidy custom.el and 
                         :map '(drgnx-settings-lisp-page . drgnx-settings-lisp-page-mode-map)
                         :when (lambda () (derived-mode-p 'drgnx-settings-lisp-page-mode))
                         :doc "Open the file of this line of the Lisp files page, at its line")
+  (drgnx-command-define 'settings-lisp-files-toggle :category "Settings" :title "Turn a Lisp File On or Off"
+                        :command #'drgnx-user-lisp-toggle
+                        :map '(drgnx-settings-lisp-page . drgnx-settings-lisp-page-mode-map)
+                        :when (lambda () (derived-mode-p 'drgnx-settings-lisp-page-mode))
+                        :doc "Turn the Lisp file of this line on (loads now) or off (takes effect at the next start)")
+  (drgnx-command-define 'settings-add-lisp-file :category "Settings" :title "Add Lisp File…"
+                        :command #'drgnx-user-lisp-add-file
+                        :map '(drgnx-settings-lisp-page . drgnx-settings-lisp-page-mode-map)
+                        :doc "Add an existing init.el or other Lisp file without copying it: its early-init.el, findings, :emacs-dir")
   (drgnx-command-define 'settings-move-into :category "Settings" :title "Move into Settings…"
                         :command #'drgnx-settings-move-into-settings
                         :doc "Move a setting's line of your Lisp into settings.el: a diff of both files first, one Undo")
