@@ -208,8 +208,8 @@ pub enum TaskAnswer {
 }
 
 /// Run OP for CALLER in TX: one tx and one `event`, plus the notices it raises. A conflict or a lost lease writes
-/// nothing (no event); a refusal is an error, so the caller's request rolls back. The hub's `notify()` is the
-/// caller's, after `COMMIT`.
+/// nothing (no event; a request rolls it back with [`op_or_roll_back`]); a refusal is an error, so the caller's
+/// request rolls back. The hub's `notify()` is the caller's, after `COMMIT`.
 pub fn op(tx: &mut Tx<'_>, caller: &Caller, op: TaskOp) -> Result<TaskAnswer, WriteError> {
     let name = op.name();
     let subject = op.subject().map(str::to_owned);
@@ -280,6 +280,25 @@ pub fn op(tx: &mut Tx<'_>, caller: &Caller, op: TaskOp) -> Result<TaskAnswer, Wr
         TaskOp::Label { id, add, remove } => ops::label(tx, caller, &id, &add, &remove)?,
         TaskOp::Tools { id, tracker } => ops::tools(tx, caller, &id, tracker)?,
     };
+    // The ops answer from the entity as they read it; an `Update` may have changed the title since.
+    let answer = match answer {
+        TaskAnswer::Done {
+            id,
+            title,
+            ver,
+            lease,
+            parts,
+        } => TaskAnswer::Done {
+            title: entity::by_id(tx.sql(), &id)?
+                .and_then(|e| e.title)
+                .unwrap_or(title),
+            id,
+            ver,
+            lease,
+            parts,
+        },
+        other => other,
+    };
     match &answer {
         TaskAnswer::Done {
             id,
@@ -311,6 +330,32 @@ pub fn op(tx: &mut Tx<'_>, caller: &Caller, op: TaskOp) -> Result<TaskAnswer, Wr
         TaskAnswer::Conflict { .. } | TaskAnswer::LeaseLost { .. } => {}
     }
     Ok(answer)
+}
+
+impl TaskAnswer {
+    /// Whether the op wrote: a conflict or a lost lease wrote nothing.
+    pub fn wrote(&self) -> bool {
+        matches!(self, TaskAnswer::Done { .. } | TaskAnswer::Proposed { .. })
+    }
+}
+
+/// [`op`] as a request's whole write closure: an answer that wrote nothing (a conflict, a lost lease) goes into KEPT
+/// and the request fails, so its savepoint rolls back and no empty `tx` row commits. The caller answers with what
+/// KEPT holds when the write failed.
+pub fn op_or_roll_back(
+    tx: &mut Tx<'_>,
+    caller: &Caller,
+    op: TaskOp,
+    kept: &std::sync::Mutex<Option<TaskAnswer>>,
+) -> Result<TaskAnswer, WriteError> {
+    let answer = self::op(tx, caller, op)?;
+    if answer.wrote() {
+        return Ok(answer);
+    }
+    *kept
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(answer);
+    Err(refused("the op wrote nothing; rolled back"))
 }
 
 /// The user accepts a close card: task ID done at VER (the card's), with its event, as [`op`] would ([`ops::accept_close`]).

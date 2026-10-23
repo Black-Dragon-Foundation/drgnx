@@ -7,6 +7,7 @@
 //! untrusted text), `resource_link` items for the entities it names, and `_meta["dev.drgnx/notices"]`.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use mimir::{ArgsError, BoxFuture, Tool, ToolResult, typed};
 use schemars::JsonSchema;
@@ -1084,21 +1085,27 @@ async fn task_write(coord: &Coord, who: &Identity, a: TaskWriteArgs) -> Result<A
     meta.req = req;
     let writer = coord.db().graph_writer().ok_or("work.db is not open yet")?;
     let c2 = caller.clone();
+    // a conflict or a lost lease rolls the request back (no empty tx row) and answers from here
+    let kept = Arc::new(Mutex::new(None));
+    let k2 = kept.clone();
     let written = writer
         .write(meta, move |tx| {
-            let answer = tracker::op(tx, &c2, op)?;
+            let answer = tracker::op_or_roll_back(tx, &c2, op, &k2)?;
             Ok((answer, tx.id()))
         })
-        .await
-        .map_err(|e| err(e.into()))?;
-    let (answer, tx) = written.value;
-    if matches!(
-        answer,
-        TaskAnswer::Done { .. } | TaskAnswer::Proposed { .. }
-    ) && !written.replayed
-    {
-        coord.hub().notify();
-    }
+        .await;
+    let (answer, tx) = match written {
+        Ok(written) => {
+            if !written.replayed {
+                coord.hub().notify();
+            }
+            written.value
+        }
+        Err(e) => match kept.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            Some(answer) => (answer, 0),
+            None => return Err(err(e.into())),
+        },
+    };
     let proj = caller.project;
     let project = coord
         .db()

@@ -263,10 +263,12 @@ modules and `core/drgnx-cockpit-model.el` for a `drgnx-coord-` writer or a `sqli
 ## The tracker (`runtime/crates/norn/src/tracker`)
 
 Tasks agents share, besides a job's tasks. `tracker::op(tx, caller, TaskOp)` runs one op in the caller's tx (the
-`task_write` tool and `tasks/write` call it) and adds one `event` of kind `task` (`summary` "OP ID: TITLE", `data
-{op, id, ver[, parts]}`). The answer is `Done {id, title, ver, lease, parts}`, `Conflict {id, ver, changed_since,
-next}`, `LeaseLost {by, how, tx, note, next}` or `Proposed {card}`; a refusal is `WriteError::Refused` with what to
-do instead, and rolls the request back. A conflict or a lost lease writes nothing but the tx row and no event.
+`task_write` tool and `tasks/write` call it through `tracker::op_or_roll_back`) and adds one `event` of kind `task`
+(`summary` "OP ID: TITLE", the title after the op; `data {op, id, ver[, parts]}`). The answer is `Done {id, title, ver,
+lease, parts}`, `Conflict {id, ver, changed_since, next}`, `LeaseLost {by, how, tx, note, next}` or `Proposed
+{card}`; a refusal is `WriteError::Refused` with what to do instead, and rolls the request back. A conflict or a lost
+lease writes nothing: `op_or_roll_back` keeps its answer aside and rolls the request back, so not even a tx row
+commits, and the caller answers with the kept answer.
 
 - **A tracker task** is an entity of kind `task`, origin `recorded`, id `task:<pp>-<5 base36>` (`pp`: the first two
   letters of its project's first alias), in its creator's project (a caller without a project makes none, the user

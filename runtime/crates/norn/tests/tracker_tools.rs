@@ -377,6 +377,52 @@ mod tools {
     }
 
     #[tokio::test]
+    async fn a_conflict_or_a_lost_lease_commits_no_tx_row() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let (a1, a2) = (w.agent("a1", &h), w.agent("a2", &h));
+        let made = create(&w, &a1, "first").await;
+        let id = id_of(&made);
+        let claim = w
+            .call(&a1, "task_write", json!({"op": "claim", "id": id}))
+            .await;
+        assert!(!claim.err, "{}", claim.text);
+        let lease = claim.structured["done"]["lease"].as_i64().unwrap();
+        let txs = w.count("select count(*) from tx");
+        let stale = w
+            .call(
+                &a2,
+                "task_write",
+                json!({"op": "update", "id": id, "ver": ver_of(&made), "title": "stale"}),
+            )
+            .await;
+        assert!(stale.structured.get("conflict").is_some(), "{}", stale.text);
+        let lost = w
+            .call(
+                &a2,
+                "task_write",
+                json!({"op": "heartbeat", "id": id, "lease": lease}),
+            )
+            .await;
+        assert!(lost.structured.get("lease_lost").is_some(), "{}", lost.text);
+        assert_eq!(w.count("select count(*) from tx"), txs);
+        // and the holder's own heartbeat still writes
+        let beat = w
+            .call(
+                &a1,
+                "task_write",
+                json!({"op": "heartbeat", "id": id, "lease": lease}),
+            )
+            .await;
+        assert!(
+            !beat.err && beat.structured.get("done").is_some(),
+            "{}",
+            beat.text
+        );
+        assert_eq!(w.count("select count(*) from tx"), txs + 1);
+    }
+
+    #[tokio::test]
     async fn lists_cap_at_50_with_a_cursor() {
         let w = World::new().await;
         let h = w.place("pa");

@@ -529,6 +529,71 @@ fn a_stale_ver_is_a_conflict_with_changed_since() {
 }
 
 #[test]
+fn a_done_answer_carries_the_new_title() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let t = fx.task(&a, "first");
+    let TaskAnswer::Done { title, .. } = ok(fx.update(&a, &t, |f| f.title = Some("second".into())))
+    else {
+        unreachable!()
+    };
+    assert_eq!(title, "second");
+    assert_eq!(
+        fx.count(&format!(
+            "select count(*) from event where summary = 'update {t}: second'"
+        )),
+        1,
+        "the event says it too"
+    );
+}
+
+#[test]
+fn a_conflict_or_a_lost_lease_rolls_its_request_back() {
+    let mut fx = Fx::new();
+    let (a, b) = (fx.agent("a"), fx.agent("b"));
+    let t = fx.task(&a, "first");
+    let lease = fx.claim(&a, &t);
+    let txs = fx.count("select count(*) from tx");
+    let ops = [
+        TaskOp::Update {
+            id: t.clone(),
+            ver: 1,
+            title: Some("stale".into()),
+            body: None,
+            priority: None,
+            acceptance: None,
+            status: None,
+        },
+        TaskOp::Heartbeat {
+            id: t.clone(),
+            lease,
+        },
+    ];
+    for op in ops {
+        let kept = std::sync::Mutex::new(None);
+        let mut tx = Tx::for_test(&mut fx.c, b.tx_meta("mcp:task_write/x"), guard());
+        let r = op_or_roll_back(&mut tx, &b, op, &kept);
+        assert!(matches!(r, Err(WriteError::Refused(_))), "{r:?}");
+        drop(tx);
+        let kept = kept.into_inner().unwrap();
+        assert!(
+            matches!(
+                kept,
+                Some(TaskAnswer::Conflict { .. } | TaskAnswer::LeaseLost { .. })
+            ),
+            "{kept:?}"
+        );
+    }
+    assert_eq!(fx.count("select count(*) from tx"), txs);
+    // a write that wrote goes through
+    let kept = std::sync::Mutex::new(None);
+    let mut tx = Tx::for_test(&mut fx.c, a.tx_meta("mcp:task_write/x"), guard());
+    let r = op_or_roll_back(&mut tx, &a, TaskOp::Heartbeat { id: t, lease }, &kept);
+    assert!(matches!(r, Ok(TaskAnswer::Done { .. })), "{r:?}");
+    assert!(kept.into_inner().unwrap().is_none());
+}
+
+#[test]
 fn label_and_link_need_no_ver() {
     let mut fx = Fx::new();
     let (a, b) = (fx.agent("a"), fx.agent("b"));

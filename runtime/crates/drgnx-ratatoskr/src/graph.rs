@@ -17,7 +17,7 @@
 //!   rest `internal`; what only the user may do, asked by the backend's connection, is `not-allowed`.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crate::coord::{self, Writer};
@@ -1520,7 +1520,10 @@ async fn tasks_write(
     };
     let name = p.project.as_ref().map(|x| x.to_string());
     let op = task_op(p);
-    let answer = w
+    // a conflict or a lost lease rolls the request back (no empty tx row) and answers from here
+    let kept = Arc::new(Mutex::new(None));
+    let k2 = kept.clone();
+    let written = w
         .write(caller, "tasks/write", move |tx| {
             let mut who = StoreCaller::user(false);
             who.project = match (&name, &found) {
@@ -1528,11 +1531,19 @@ async fn tasks_write(
                 (None, Some(p)) => Some(project::register(tx, p)?),
                 (None, None) => None,
             };
-            Ok(tracker::op(tx, &who, op)?)
+            Ok(tracker::op_or_roll_back(tx, &who, op, &k2)?)
         })
-        .await
-        .map_err(coord::fail)?;
-    w.signals.notify_soon();
+        .await;
+    let answer = match written {
+        Ok(answer) => {
+            w.signals.notify_soon();
+            answer
+        }
+        Err(e) => match kept.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            Some(answer) => answer,
+            None => return Err(coord::fail(e)),
+        },
+    };
     Ok(match answer {
         TaskAnswer::Done {
             id,
@@ -1652,6 +1663,63 @@ mod tests {
         w.db.read(move |c| Ok(c.query_row(sql, [], |r| r.get(0))?))
             .await
             .unwrap()
+    }
+
+    async fn task_write(w: &Writer, p: Value) -> Value {
+        tasks_write(w, &user(false), serde_json::from_value(p).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn tasks_write_answers_the_new_title_and_a_conflict_commits_no_tx_row() {
+        let (_dir, w, _, _) = fixture().await;
+        let made = task_write(
+            &w,
+            json!({"op": "create", "title": "first", "project": MINE}),
+        )
+        .await;
+        let id = made["id"].as_str().unwrap().to_owned();
+        let renamed = task_write(
+            &w,
+            json!({"op": "update", "id": id, "ver": made["ver"], "title": "second", "project": MINE}),
+        )
+        .await;
+        assert_eq!(renamed["title"], "second", "{renamed}");
+        let txs = count(&w, "select count(*) from tx").await;
+        let stale = task_write(
+            &w,
+            json!({"op": "update", "id": id, "ver": made["ver"], "title": "third", "project": MINE}),
+        )
+        .await;
+        assert!(stale.get("conflict").is_some(), "{stale}");
+        assert_eq!(count(&w, "select count(*) from tx").await, txs);
+    }
+
+    /// The registry's class door stops an agent's `graph/grants` first (the row `grants/an-agent-cannot-grant-itself`);
+    /// this one holds without it.
+    #[tokio::test]
+    async fn grants_refuse_an_agent_past_the_registry() {
+        let (_dir, w, _, _) = fixture().await;
+        for class in [Class::Agent, Class::Service] {
+            let caller = Caller {
+                class,
+                sid: Some("s1".into()),
+                job: None,
+                conn_id: 2,
+                backend: false,
+            };
+            for p in [
+                json!({"grant": {"who": "session:s1", "what": "*", "access": "read"}}),
+                json!({"revoke": "grant:x"}),
+            ] {
+                let e = grants_of(&w, &caller, serde_json::from_value(p).unwrap())
+                    .await
+                    .unwrap_err();
+                assert_eq!(e.code, ErrorCode::NotAllowed, "{class:?}");
+            }
+        }
+        assert!(grants_now(&w).await.is_empty());
     }
 
     #[tokio::test]
