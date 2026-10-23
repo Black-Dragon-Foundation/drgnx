@@ -423,6 +423,15 @@ fn updates_set_status_from_the_fixed_list() {
         (t.data["stale"].clone(), t.data.get("range-stale")),
         (json!(true), None)
     );
+    // a later update's status on its own: a new version with that status (URDR-MUT-RECORD-1, parsed.rs:734)
+    let a = put(
+        &mut c,
+        &f.deny,
+        json!({"updates": [{"id": task, "status": "open"}]}),
+    );
+    assert_eq!((a.changed, a.refused.len()), (1, 0), "{a:?}");
+    let t = entity::by_id(&c, &task).unwrap().unwrap();
+    assert_eq!(t.status.as_deref(), Some("open"));
     // a status off the list, or on a kind that takes none
     for (id, status) in [
         (task.clone(), "blocked"),
