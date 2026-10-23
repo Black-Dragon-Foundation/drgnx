@@ -632,11 +632,13 @@
 
 (ert-deftest drgnx-file/every-shipped-eld-still-reads ()
   ;; keys/*.eld, settings/**/*.eld and the test fixtures the config layer reads: the new checks refuse none
+  ;; (not huginn's conformance data: random-seeded.eld is one datum per line, not one form)
   (let* ((in (lambda (sub) (expand-file-name sub drgnx-dir)))
          (files (append (directory-files (funcall in "keys") t "\\.eld\\'")
                         (and (file-directory-p (funcall in "settings"))
                              (directory-files-recursively (funcall in "settings") "\\.eld\\'"))
-                        (directory-files-recursively (funcall in "test/fixtures") "\\.eld\\'"))))
+                        (cl-remove-if (lambda (f) (string-search "/fixtures/huginn/" f))
+                                      (directory-files-recursively (funcall in "test/fixtures") "\\.eld\\'")))))
     (should (>= (length files) 20))
     (dolist (f files)
       (ert-info (f)

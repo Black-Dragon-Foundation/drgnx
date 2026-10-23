@@ -6,6 +6,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
+(require 'drgnx-paths)
 (require 'drgnx-file)
 (load (expand-file-name "test/fixtures/huginn/gen.el" drgnx-dir) nil t)
 
