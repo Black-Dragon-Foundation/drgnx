@@ -12,6 +12,7 @@
 
 pub mod decode;
 pub mod events;
+pub mod jsonrpc;
 pub mod line;
 pub mod methods;
 pub mod paths;
