@@ -503,9 +503,31 @@ each `require` took, the functions most often on the stack (a CPU profile), and 
 session most of the time is not drgnx's: the harness's own minimal configuration starts in about a second (the
 compositor, the first frame, fonts); drgnx's own init is ~220 ms in batch and ~200 ms to a daemon's server.
 
+## The stalls probe (the stall watchdog)
+
+On a Nidhogg with `nidhogg-watchdog` the perf lab reads the watchdog per workload. `drgnx-perf-begin` drains it
+(`nidhogg-watchdog-drain-now`) and collects its records through `nidhogg-watchdog-record-functions`; `drgnx-perf-end`
+drains again and reports `(:stalls N :stalls-felt N :stall-max-ms F :gc (:count N :max F :p95 F) :typing (:ge16 F :p95 F)
+:watchdog (:missed N :monitor-cpu-ms F :drain-p95-ms F))`. `:typing :ge16` is the percent of commands at 16 ms or more.
+Without the feature the probe reports `:watchdog nil` and no stalls row is judged. The soak also prints `(:heap :live_mb
+F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
+
+**The switch.** `DRGNX_PERF_WATCHDOG` is read once when a session records: unset or `default` runs
+`nidhogg-watchdog-mode` at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off.
+
+**Budgets.** `(W (:stalls) 0)`, `(W (:gc :max) 250)` and `(W (:gc :p95) 50)` for every input workload. They are
+reported until seeded (`drgnx-perf-watchdog-gated`), as every new row is. The GC max is skipped when the workload
+collected nothing, and the GC p95 is judged only over at least 20 collections; below that the tail is the maximum. A GC pause includes Lisp finalizers and the image-cache prune, so a
+long pause is not always the collector's own marking.
+
+**A/B.** Gated: `bin/drgnx test --perf --ab-env DRGNX_PERF_WATCHDOG=default,off` (the shipped watchdog against none).
+Reported stress: `--ab-env DRGNX_PERF_WATCHDOG=on,off` (1 ms; not a gate, PD-13).
+
+Tests: `test/unit/perf-watchdog-test.el`.
+
 ## Slow frames in another configuration
 
-A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s
+Start with Show Freezes (the watchdog's report) and the stalls probe above. A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s
 frames seen with an earlier reference configuration do not reproduce in an isolated session ([scenarios.md](scenarios.md)):
 they depend on live state — restored workspace layouts, many buffers, language servers. To see what a slow frame
 spends in your own daemon — this changes it while it runs (advice and wrapped hook entries, undone at the end:

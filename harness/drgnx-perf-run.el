@@ -1171,13 +1171,14 @@ each round; fails when RSS grows by more than 20% from the first round or passes
          (process-environment (cons (format "DRGNX_UI_MAX_RUNTIME=%d" (+ (* 60 minutes) 900)) process-environment))
          (s (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)) (sess (drgnx-ui-own-session (plist-get s :name)))
          (loads (seq-filter (lambda (w) (plist-get (cdr w) :actions)) (drgnx-perf-run--workloads)))
-         samples over)
+         samples over live-mb)
     (unwind-protect
         (while (progn (unless samples (drgnx-perf-run--check-gc sess)) (< (float-time) deadline))
           (dolist (w loads) (ignore-errors (drgnx-perf-run-workload sess (cdr w))))   ; each cleans up after itself
-          (let* ((r (drgnx-perf-run--call sess (format "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb) :census %s))"
+          (let* ((r (drgnx-perf-run--call sess (format "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb) :live_mb (drgnx-perf-live-mb) :census %s))"
                                                        drgnx-perf-run--census-form)))
                  (census (drgnx-perf-run--census-lines (plist-get r :census))))
+            (setq live-mb (plist-get r :live_mb))
             (push (plist-get r :rss_kb) samples)
             (setq over (append over (cdr census)))
             (message "soak: round %d, %d MB" (length samples) (/ (car samples) 1024))
@@ -1188,6 +1189,7 @@ each round; fails when RSS grows by more than 20% from the first round or passes
     (let* ((rounds (reverse samples)) (first (car rounds)) (last (car samples))
            (growth (and first (> first 0) (/ (* 100.0 (- last first)) first))))
       (princ (format "soak: %d rounds in %d min; RSS %d → %d MB (%+.1f%%)\n" (length rounds) minutes (/ first 1024) (/ last 1024) growth))
+      (princ (format "soak: (:heap :live_mb %s) after the last collection (reported, not gated)\n" (drgnx-perf--round live-mb)))
       (dolist (o (delete-dups over)) (princ (format "FAIL soak: %s\n" o)))
       (cond ((or (> growth 20) (> last (* 400 1024)))
              (princ "FAIL soak: memory grew more than 20% or passed 400 MB\n") 1)
