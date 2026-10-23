@@ -65,6 +65,7 @@
 
 (declare-function tramp-dissect-file-name "tramp")
 (declare-function tramp-get-connection-process "tramp")
+(declare-function tramp-get-connection-property "tramp-cache")
 (declare-function eglot--guess-contact "eglot")
 (declare-function eglot "eglot")
 (declare-function eglot-current-server "eglot")
@@ -217,12 +218,43 @@ for a remote buffer that is a round trip (about forty TRAMP calls).  Nothing is 
 that visits the file, eglot attaches the buffer to the running server as usual.  Eglot's own loop over all buffers
 when a server has answered runs in a process filter, so it is skipped for remote buffers too; the buffers of a
 server's project are attached by `drgnx-lang--attach-buffers' (which binds `drgnx-lang--attaching'), and a buffer
-whose mode is set while its project's server starts joins it once it has answered (`drgnx-lang--joins-a-start-p')."
+whose mode is set while its project's server starts joins it once it has answered (`drgnx-lang--joins-a-start-p').
+A remote buffer let through while TRAMP is in the middle of a call on its connection is attached once the call is
+over (`drgnx-lang--after-tramp'): TRAMP refuses the calls eglot would make there."
   (when (or (and drgnx-lang--attaching buffer-file-name (string-prefix-p drgnx-lang--attaching buffer-file-name))
             (drgnx-lang--user-command-p)
             (not (file-remote-p default-directory))
             (drgnx-lang--joins-a-start-p))
-    (apply activate args)))
+    (if (and (file-remote-p default-directory) (drgnx-lang--tramp-busy-p))
+        (drgnx-lang--after-tramp (current-buffer) activate args)
+      (apply activate args))))
+
+(defun drgnx-lang--tramp-busy-p ()
+  "Is TRAMP in the middle of a call on the connection of the current remote buffer?  Code that runs then (a timer a
+process filter started while TRAMP's call waited: `drgnx-lang--after-tramp') cannot use the connection: TRAMP
+signals \"Forbidden reentrant call of Tramp\".  Asks the process table only."
+  (and (featurep 'tramp)
+       (ignore-errors
+         (when-let* ((proc (tramp-get-connection-process
+                            (tramp-dissect-file-name (or buffer-file-name default-directory)))))
+           (tramp-get-connection-property proc "locked")))))
+
+(defun drgnx-lang--after-tramp (buffer activate args)
+  "Call ACTIVATE with ARGS in BUFFER from a timer that runs once the TRAMP calls in progress are over.
+TRAMP keeps the timers out of its calls by binding `timer-list' to nil (`with-tramp-suspended-timers').  A timer
+started inside a call goes on that binding instead: on macOS a long command fills the host's terminal, Emacs runs the
+process filters while it waits to write the rest, and jsonrpc's filter starts the timer that handles a server's
+answer, which then runs inside TRAMP's call (or would be dropped when the call returns).  This timer goes on the
+top-level list, which no TRAMP call sees."
+  (let ((timer-list (default-toplevel-value 'timer-list)))
+    (run-at-time 0 nil #'drgnx-lang--activate-after-tramp buffer activate args)
+    (set-default-toplevel-value 'timer-list timer-list)))
+
+(defun drgnx-lang--activate-after-tramp (buffer activate args)
+  "Call ACTIVATE with ARGS in BUFFER, when it is live (`drgnx-lang--after-tramp')."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (with-demoted-errors "Remote: language server: %S" (apply activate args)))))
 
 (defun drgnx-lang--joins-a-start-p ()
   "Is the current remote buffer's file under the root of a server started in the last `eglot-connect-timeout' seconds

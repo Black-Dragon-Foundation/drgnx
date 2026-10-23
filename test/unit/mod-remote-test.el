@@ -693,6 +693,35 @@ set, the file joins the server of that start; after the start's `eglot-connect-t
             (should-not (drgnx-remote-test--managed-p d)))
         (advice-remove 'after-find-file answer-first)))))
 
+(ert-deftest drgnx-remote/an-answer-read-inside-a-tramp-call-attaches-the-project ()
+  "On macOS a long TRAMP command fills the host's terminal, and Emacs, waiting to write the rest, runs the process
+filters and the timers they start, which TRAMP's own timer suspension does not hold back: the server's answer is then
+handled inside TRAMP's call, with the connection locked, and every call eglot makes there is refused.  Here the visit
+of b.py, outside a command and with its mode set, waits for the answer in a write of a TRAMP command, as a macOS
+terminal makes it wait.  Both buffers are managed once the call is over, and TRAMP refused nothing."
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook (list #'drgnx-lang--maybe-eglot))
+           (eglot-sync-connect nil) a b (b-mode nil) (inside nil)
+           (python-mode-hook (list (lambda () (when (string-suffix-p "/b.py" buffer-file-name) (setq b-mode t)))))
+           (answer-inside (lambda (proc &rest _)              ; a TRAMP command's write, in b.py's visit after its mode
+                            (when (and b-mode (not inside) (process-get proc 'tramp-vector)
+                                       (tramp-get-connection-property proc "locked"))
+                              (setq inside t)
+                              (drgnx-test-wait (lambda () (with-current-buffer a (eglot-current-server)))
+                                               :what "the server's answer, inside TRAMP's call")))))
+      (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+      (drgnx-lang-probe-remote root)
+      (let ((drgnx-lang--user-command t)) (setq a (find-file-noselect (concat root "a.py"))))
+      (should-not (with-current-buffer a (eglot-current-server)))   ; no answer yet
+      (advice-add 'process-send-string :before answer-inside)
+      (unwind-protect (setq b (find-file-noselect (concat root "b.py")))   ; a timer opens it
+        (advice-remove 'process-send-string answer-inside))
+      (should inside)                                               ; the answer came inside a TRAMP call
+      (drgnx-remote-test--wait-for-server a)
+      (should (drgnx-remote-test--managed-p a))
+      (should (drgnx-remote-test--managed-p b))
+      (should-not (seq-find (lambda (m) (string-match-p "reentrant" m)) messages)))))
+
 (ert-deftest drgnx-remote/open-remote-manages-the-buffers-it-started-servers-for ()
   (drgnx-remote-test--with
     (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook nil) (eglot-sync-connect nil) (python-mode-hook nil) a b)
