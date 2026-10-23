@@ -101,7 +101,7 @@
  ;; The off-the-main-thread workloads (Task 8; off-the-main-thread design §17.6, harness/drgnx-perf-workloads.el).  Every
  ;; budget is the design's table (V2 §1: 16 ms a key, 50 ms the worst key, 100 ms a stall; or drgnx's existing row), fixed
  ;; here, never taken from a first run.  Report-only until the step that moves the work lands (DRGNX_PERF_LANDED names it).
- ;; :stalls-ge16 / :stalls-ge100 count the watchdog's stalls (DRGNX_PERF_WATCHDOG=on for the 16 ms ones); :ts, :lsp, :image
+ ;; :stalls-ge16 / :stalls-ge100 count the watchdog's stalls (DRGNX_PERF_WATCHDOG=16 or on for the 16 ms ones); :ts, :lsp, :image
  ;; and :expand_ms are the workload's own measures.
  (lsp-burst (:input :p95) 16 :report-only ot4) (lsp-burst (:stalls-ge16) 0 :report-only ot4)
  (lsp-burst (:lsp :handler_ms :max) 50 :report-only ot4)       ; a response's handler within 50 ms of its last byte

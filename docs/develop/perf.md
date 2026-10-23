@@ -473,7 +473,8 @@ Without the feature the probe reports `:watchdog nil` and no stalls row is judge
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 
 **The switch.** `DRGNX_PERF_WATCHDOG` is read once when a session records: unset or `default` runs
-`nidhogg-watchdog-mode` at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off.
+`nidhogg-watchdog-mode` at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), a number at that many
+ms (`16`: what the `stalls-ge16` rows mean), `off` leaves it off.
 
 **Budgets.** `(W (:stalls) 0)`, `(W (:gc :max) 250)` and `(W (:gc :p95) 50)` for every input workload. They are
 reported until seeded (`drgnx-perf-watchdog-gated`), as every new row is. The GC max is skipped when the workload
@@ -499,7 +500,7 @@ On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without
 `:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase, the main thread's waits for a
 worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
 `:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
-`DRGNX_PERF_WATCHDOG=on`).
+`DRGNX_PERF_WATCHDOG=16`, the threshold the gates' A/Bs run with, or `on`).
 
 **Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it at idle
 through `drgnx-timer-*` and records `:complete-ms`. The work can outlast the keys (a compile flood, the reparse after a

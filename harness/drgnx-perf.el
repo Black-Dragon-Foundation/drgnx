@@ -118,11 +118,14 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
 
 (defun drgnx-perf--watchdog-env ()
   "Apply $DRGNX_PERF_WATCHDOG once per session: unset or `default' runs `nidhogg-watchdog-mode' at 100 ms (the shipped
-configuration), `on' at 1 ms (the stress case), `off' leaves it off.  Without the feature, nothing."
+configuration), `on' at 1 ms (the stress case), a number at that many ms (16: the gates' `stalls-ge16' rows), `off'
+leaves it off.  Without the feature, nothing."
   (when (and (not drgnx-perf--watchdog-applied) (featurep 'nidhogg-watchdog))
     (setq drgnx-perf--watchdog-applied t)
     (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
-           (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100))))
+           (ms (cond ((equal v "off") nil) ((equal v "on") 1)
+                     ((and v (string-match-p "\\`[1-9][0-9]*\\'" v)) (string-to-number v))
+                     (t 100))))
       (when (and (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode) (nidhogg-watchdog-mode -1))
       (when ms
         (setq nidhogg-watchdog-threshold ms)
