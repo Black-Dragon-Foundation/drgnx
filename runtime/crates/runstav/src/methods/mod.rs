@@ -1,5 +1,5 @@
 //! Every method of the hub protocol, one definition each, grouped as the hub's parts are: the hub itself
-//! ([`hub`]), the gateway and spend ([`gateway`]), agent sessions ([`agents`]), jobs ([`jobs`]), coordination
+//! ([`hub`]), the gateway, its provider table and spend ([`gateway`]), agent sessions ([`agents`]), jobs ([`jobs`]), coordination
 //! ([`coord`]) and the coordination tools' sockets ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
@@ -110,6 +110,8 @@ params! {
     GatewayRegister(gateway::RegisterParams),
     GatewayUnregister(gateway::UnregisterParams),
     GatewayKeys(gateway::KeysParams),
+    GatewaySetBudget(gateway::SetBudgetParams),
+    ConfigProviders(gateway::ProvidersParams),
     AgentsList(Empty),
     AgentsStart(agents::StartParams),
     AgentsGet(agents::ById),

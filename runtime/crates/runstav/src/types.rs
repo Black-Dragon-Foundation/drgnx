@@ -448,8 +448,9 @@ impl JsonSchema for StringOrNumber {
     }
 }
 
-/// Provider id → key: at most 32, each at most 4096.  Kept secret: no `Debug`, and the only serialisation is the
-/// re-encode of a method's params for the backend link (Task 15), which must carry the keys.
+/// Provider id → key: at most 32, each at most 4096.  Kept secret: no `Debug`; the front keeps them in the gateway's
+/// memory (Task 22) and never forwards them.  The serialisation exposes them only because every method's params
+/// re-encode (`Params::to_value`); no line to the backend carries `gateway/*` params any more.
 pub struct ProviderKeys(BTreeMap<Id, SecretString>);
 
 impl ProviderKeys {
@@ -464,6 +465,13 @@ impl ProviderKeys {
     /// Provider → key.
     pub fn iter(&self) -> impl Iterator<Item = (&Id, &SecretString)> {
         self.0.iter()
+    }
+
+    /// Provider id → key, taken (the keys move, never copied: the gateway's memory holds them from here).
+    pub fn into_pairs(self) -> impl Iterator<Item = (String, SecretString)> {
+        self.0
+            .into_iter()
+            .map(|(id, key)| (id.as_str().to_owned(), key))
     }
 }
 

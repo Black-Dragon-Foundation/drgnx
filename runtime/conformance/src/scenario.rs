@@ -195,6 +195,8 @@ pub struct Host {
     pub fake_backend: bool,
     pub lisp_backend: bool,
     pub perf: bool,
+    /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
+    pub ptrace_stays: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -239,7 +241,38 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
     }
+    if h.ptrace_stays
+        && s.steps
+            .iter()
+            .any(|st| st.obj.get("drop_ptrace").and_then(Value::as_bool) == Some(true))
+    {
+        // with the capability a non-dumpable process is no obstacle, so the row would not test what it says
+        return skip("CAP_SYS_PTRACE is effective and setpriv is missing", true);
+    }
     Gate::Run
+}
+
+/// Has this process `CAP_SYS_PTRACE` (bit 19 of `CapEff` in `/proc/self/status`)?  Linux only; on macOS (and Android,
+/// where the harness does not run) nothing to drop: false.
+pub fn ptrace_effective() -> bool {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("CapEff:"))
+                .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
+        })
+        .is_some_and(|caps| caps & (1 << 19) != 0)
+}
+
+/// Can `setpriv` run here?
+pub fn setpriv_available() -> bool {
+    std::process::Command::new("setpriv")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// Does `CMD -n true` succeed (passwordless sudo)?
@@ -363,6 +396,34 @@ mod tests {
             "{{\"scenario\": \"t/row\", \"requires\": [{requires}]}}\n"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_drop_ptrace_row_is_skipped_only_where_the_capability_stays() {
+        let s = parse(
+            "{\"scenario\": \"t/p\", \"requires\": [\"v1\"]}\n\
+             {\"do\": \"run\", \"args\": [\"stop\"], \"drop_ptrace\": true}\n",
+        )
+        .unwrap();
+        let stays = Host {
+            linux: true,
+            ptrace_stays: true,
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &stays),
+            Gate::Skip {
+                reason: "CAP_SYS_PTRACE is effective and setpriv is missing".into(),
+                excused: true
+            }
+        );
+        // a row without the step runs anyway
+        assert_eq!(gate(&row("\"v1\""), &stays), Gate::Run);
+        let dropped = Host {
+            linux: true,
+            ..Host::default()
+        };
+        assert_eq!(gate(&s, &dropped), Gate::Run);
     }
 
     #[test]

@@ -1,0 +1,11 @@
+{"scenario": "gateway/a-lan-http-provider-is-allowed-with-a-warning", "requires": ["v1", "fake-backend"], "doc": "A keyed provider at http:// off loopback is applied with a clear-text warning (the user's answer 4): config/providers answers it, the hub log has it once after two calls, status and doctor --json list it; a keyless one at the same kind of URL has none."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "lan", "kind": "openai", "base": "http://192.0.2.10:8080", "auth": "bearer", "messages": true, "caps": ["chat"]}, {"id": "lan-free", "kind": "ollama", "base": "http://192.0.2.11:11434", "auth": "none", "messages": false, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2, "warnings": [{"provider": "lan", "text": "lan's key travels in clear text over http://192.0.2.10; use https"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/providers", "params": {"providers": [{"id": "lan", "kind": "openai", "base": "http://192.0.2.10:8080", "auth": "bearer", "messages": true, "caps": ["chat"]}, {"id": "lan-free", "kind": "ollama", "base": "http://192.0.2.11:11434", "auth": "none", "messages": false, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": 2, "warnings": [{"provider": "lan"}]}}}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "clear text", "count": 1, "at_most": 1}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"providers": 2, "warnings": [{"provider": "lan"}]}}}}
+{"do": "run", "args": ["doctor", "--json"], "expect_stdout": {"gateway": {"providers": 2, "warnings": [{"provider": "lan", "text": "lan's key travels in clear text over http://192.0.2.10; use https"}]}}}

@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 52, "{names:?}");
+        assert_eq!(names.len(), 54, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -408,8 +408,6 @@ mod tests {
             "agents/send",
             "agents/start",
             "agents/stop",
-            "gateway/register",
-            "gateway/unregister",
         ];
         want.extend(FRONT_WRITES);
         want.extend(
@@ -460,6 +458,13 @@ mod tests {
             "mcp/session",
             "mcp/session-close",
             "mcp/attach",
+            // the gateway (Task 22): registrations, keys, the provider table and spend
+            "spend",
+            "gateway/register",
+            "gateway/unregister",
+            "gateway/keys",
+            "gateway/set-budget",
+            "config/providers",
         ];
         want.extend(FRONT_WRITES);
         want.sort();
@@ -484,6 +489,7 @@ mod tests {
         assert_eq!(from("events"), Some(Home::Front));
         assert_eq!(from("challenge"), Some(Home::Front));
         assert_eq!(from("job"), Some(Home::Backend));
+        assert_eq!(from("budget"), Some(Home::Front));
         let methods = methods_json();
         assert_eq!(
             methods["methods"][0]["home"],
@@ -609,7 +615,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 38);
+        assert_eq!(with, 40);
     }
 
     #[test]

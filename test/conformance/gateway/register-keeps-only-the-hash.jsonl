@@ -1,0 +1,10 @@
+{"scenario": "gateway/register-keeps-only-the-hash", "requires": ["v1", "fake-backend"], "doc": "gateway/register answers a token and the loopback URL; runtime.db keeps one row whose hash is the token's SHA-256, and the token itself is in no file under the root (database, log, backend log)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "local", "kind": "anthropic", "base": "http://127.0.0.1:9", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1, "warnings": []}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["local", null]], "job": "j1", "agent": "a1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "spawn", "capture": "hasher", "argv": ["sh", "-c", "printf %s '$tok' | (sha256sum 2>/dev/null || shasum -a 256)"], "capture_stdout": {"regex": "(\\w+)", "name": "hash"}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*), min(hash) = '$hash', min(job), min(agent), min(listener) from registration", "rows": [[1, 1, "j1", "a1", "loopback"]]}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "$tok"}

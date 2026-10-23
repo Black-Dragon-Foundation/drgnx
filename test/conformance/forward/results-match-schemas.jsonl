@@ -16,7 +16,7 @@
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "ping"}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": {"pid": "$PID(h)"}}}
 {"do": "send", "conn": "c", "json": {"id": 6, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"backend": {"state": "running"}, "gateway_port": "$number", "registrations": "$number"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"backend": {"state": "running"}, "gateway": {"registrations": "$number"}}}}
 {"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/list"}}
 {"do": "expect", "conn": "c", "json": {"id": 7, "result": {"sessions": [{"id": "$sid", "profile": "mock-acp"}]}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/get", "params": {"id": "$sid"}}}

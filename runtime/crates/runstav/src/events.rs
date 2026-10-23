@@ -1,8 +1,10 @@
 //! The events a hub sends unasked, `{event, data}`: the nine the Lisp backend broadcast on main (`core/drgnx-hub.el`,
-//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge` and `notice`.  Each names the side that sends
-//! it ([`EventType::from`]): `events` is the front's since the front writes work.db (its writer's new rows), the
-//! other eight the backend's.  The front relays a backend event only when it decodes as its type (strict: an unknown
-//! key is an error with its path).
+//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice` and `gateway/need-keys`.  Each names
+//! the side that sends it ([`EventType::from`]): `events` is the front's since the front writes work.db (its writer's
+//! new rows), and the gateway's `request`, `budget` and `fallback` since the front serves the gateway (Task 22; a
+//! job's `fallback`, with its `job`, still comes from the backend's job runner); the other five are the backend's.
+//! The front relays a backend event only when it decodes as its type (strict: an unknown key is an error with its
+//! path).
 
 use crate::methods::agents::{Entry, Snapshot};
 use crate::methods::hub::EventsPage;
@@ -129,6 +131,14 @@ pub struct Request {
     pub cost: Option<f64>,
 }
 
+/// Providers whose key the hub does not hold, though a registration needs it: an editor hands its keys over.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NeedKeys {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub providers: Vec<String>,
+}
+
 /// The front's nonce, sent on accept: the client's proof covers it.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -191,7 +201,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "fallback",
             Fallback,
-            Backend,
+            Front,
             "a request or a task moved to the next provider or profile"
         ),
         event!("card", Card, Backend, "a job's card needs the user"),
@@ -201,17 +211,18 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             Backend,
             "a job's status, tasks or open cards changed"
         ),
-        event!(
-            "budget",
-            Budget,
-            Backend,
-            "a job's spend reached its budget"
-        ),
+        event!("budget", Budget, Front, "a job's spend reached its budget"),
         event!(
             "request",
             Request,
-            Backend,
+            Front,
             "the gateway forwarded a request: its tokens and cost"
+        ),
+        event!(
+            "gateway/need-keys",
+            NeedKeys,
+            Front,
+            "a registration needs keys the hub does not hold (to user connections)"
         ),
         event!(
             "challenge",
@@ -281,7 +292,7 @@ mod tests {
         let ours: BTreeSet<String> = events()
             .iter()
             .map(|e| e.name.to_string())
-            .filter(|n| n != "challenge" && n != "notice")
+            .filter(|n| !["challenge", "notice", "gateway/need-keys"].contains(&n.as_str()))
             .collect();
         assert_eq!(ours, found);
         assert_eq!(found.len(), 9, "{found:?}");
@@ -293,7 +304,13 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 11);
+        assert_eq!(events().len(), 12);
+        assert_eq!(event("request").map(|e| e.from), Some(Home::Front));
+        assert_eq!(
+            (event("gateway/need-keys").unwrap().check)(&json!({"providers": ["openrouter"]}))
+                .unwrap(),
+            json!({"providers": ["openrouter"]})
+        );
         assert!(event("agent-entries").is_some());
         assert!(event("nope").is_none());
     }
