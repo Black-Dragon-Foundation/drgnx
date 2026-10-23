@@ -32,8 +32,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
-use urdr::graph::OpenOutcome;
 use tokio::sync::Semaphore;
+use urdr::graph::OpenOutcome;
 
 /// What `status` and the doctor say of job agents in this phase.
 pub const JOB_AGENTS: &str = "unsandboxed (as on main; the sandbox comes with phase 6)";

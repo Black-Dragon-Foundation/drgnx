@@ -571,7 +571,15 @@ mod tests {
     #[test]
     fn store_parses() {
         assert_eq!(
-            p(&["store", "migrate-check", "--db", "c/work.db", "--scratch", "c/s", "--json"]),
+            p(&[
+                "store",
+                "migrate-check",
+                "--db",
+                "c/work.db",
+                "--scratch",
+                "c/s",
+                "--json"
+            ]),
             Ok(Command::Store(StoreCommand::MigrateCheck {
                 db: PathBuf::from("c/work.db"),
                 scratch: PathBuf::from("c/s"),

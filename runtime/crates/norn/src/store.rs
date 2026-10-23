@@ -368,10 +368,11 @@ pub(crate) mod tests {
             .await
             .unwrap();
         // A schema-6 write on schema 7 fails (the view refuses it, until Task 12's writers).
-        assert!(db
-            .write(|c| Ok(c.execute("insert into meta values ('a', '1')", [])?))
-            .await
-            .is_err());
+        assert!(
+            db.write(|c| Ok(c.execute("insert into meta values ('a', '1')", [])?))
+                .await
+                .is_err()
+        );
         // A replaced file: migrated and opened again at the next tick; the old rows are gone. Its `-wal` and `-shm`
         // go with it (a WAL left beside a new file would be read into it; connections to the old file never remove
         // the new one's, as SQLite sees their file moved).

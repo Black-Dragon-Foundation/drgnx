@@ -585,8 +585,8 @@ fn load_jtasks(conn: &Connection) -> Result<Vec<OldJTask>, Stop> {
 type OldJdep = (Option<String>, Option<String>);
 
 fn load_jdeps(conn: &Connection) -> Result<Vec<OldJdep>, Stop> {
-    let mut stmt = conn
-        .prepare("select cast(task as text), cast(dep as text) from old_jdep order by rowid")?;
+    let mut stmt =
+        conn.prepare("select cast(task as text), cast(dep as text) from old_jdep order by rowid")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -745,7 +745,10 @@ fn stamp(db: &Path) -> Stamp {
     let mut wal = db.as_os_str().to_owned();
     wal.push("-wal");
     let (wal_size, wal_mtime) = fs::metadata(PathBuf::from(wal)).map_or((0, 0), |w| {
-        (w.size(), i128::from(w.mtime()) * 1_000_000_000 + i128::from(w.mtime_nsec()))
+        (
+            w.size(),
+            i128::from(w.mtime()) * 1_000_000_000 + i128::from(w.mtime_nsec()),
+        )
     });
     Some((
         m.dev(),
@@ -899,11 +902,7 @@ fn norn_guard() -> Arc<Guard> {
     Arc::new(g)
 }
 
-fn migrate(
-    conn: &mut Connection,
-    path: &Path,
-    opts: &MigrateOpts,
-) -> Result<MigrateReport, Stop> {
+fn migrate(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> Result<MigrateReport, Stop> {
     let started = Instant::now();
     match schema_of(conn).map_err(Stop::Failed)? {
         6 => {}
@@ -1083,14 +1082,11 @@ fn fill(
         let Some(old_id) = &t.id else { continue };
         let id = format!("task:{old_id}");
         let job = t.job.as_ref().and_then(|j| jobs.get(j));
-        let at = [
-            job.and_then(|j| j.created),
-            task_times.get(old_id).copied(),
-        ]
-        .into_iter()
-        .flatten()
-        .reduce(f64::min)
-        .unwrap_or(now);
+        let at = [job.and_then(|j| j.created), task_times.get(old_id).copied()]
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
+            .unwrap_or(now);
         let mut data = object(t.data.as_deref());
         data.insert("job".into(), json!(t.job));
         data.insert("n".into(), json!(t.n));
@@ -1289,7 +1285,10 @@ fn fill(
     }
     for (parent, child) in parents {
         let (Some(pk), Some(ck)) = (kind_of.get(&parent), kind_of.get(&child)) else {
-            if matches!(kind_of.get(&child).map(String::as_str), Some("task" | "step")) {
+            if matches!(
+                kind_of.get(&child).map(String::as_str),
+                Some("task" | "step")
+            ) {
                 report.count("parent->dropped".into());
             }
             continue;
@@ -1346,7 +1345,10 @@ fn fill(
     for l in links {
         match (group_of.get(&l.src), group_of.get(&l.dst)) {
             (Some(a), Some(b)) => links_of[*a.max(b)].push(l),
-            _ => report.count(format!("{}->dropped", l.label.split("->").next().unwrap_or(""))),
+            _ => report.count(format!(
+                "{}->dropped",
+                l.label.split("->").next().unwrap_or("")
+            )),
         }
     }
     hook(path, "entities")?;
@@ -1410,10 +1412,21 @@ fn fill(
         }
         for l in group_links {
             let (Some(&s), Some(&d)) = (n_of.get(&l.src), n_of.get(&l.dst)) else {
-                report.count(format!("{}->dropped", l.label.split("->").next().unwrap_or("")));
+                report.count(format!(
+                    "{}->dropped",
+                    l.label.split("->").next().unwrap_or("")
+                ));
                 continue;
             };
-            let added = link::add(&mut tx, s, &l.kind, d, l.data, l.origin, l.source.as_deref())?;
+            let added = link::add(
+                &mut tx,
+                s,
+                &l.kind,
+                d,
+                l.data,
+                l.origin,
+                l.source.as_deref(),
+            )?;
             if added.existed {
                 report.count(format!("{}->merged", l.label));
                 continue;

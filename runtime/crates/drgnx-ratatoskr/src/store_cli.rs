@@ -141,10 +141,7 @@ fn restore(env: &Env, yes: bool) -> Result<String, String> {
         .filter(|s| fs::symlink_metadata(with_suffix(&live, s)).is_ok())
         .collect();
     if !yes {
-        let mut said = format!(
-            "would put back {} as work.db\n",
-            file_name(&copies[0])
-        );
+        let mut said = format!("would put back {} as work.db\n", file_name(&copies[0]));
         for s in &present {
             said.push_str(&format!(
                 "would move work.db{s} to {}{s}\n",
@@ -172,8 +169,12 @@ fn restore(env: &Env, yes: bool) -> Result<String, String> {
     };
     for s in &present {
         let to = with_suffix(&aside, s);
-        fs::rename(with_suffix(&live, s), &to)
-            .map_err(|e| format!("cannot move work.db{s} aside: {e} (the copy is {})", tmp.display()))?;
+        fs::rename(with_suffix(&live, s), &to).map_err(|e| {
+            format!(
+                "cannot move work.db{s} aside: {e} (the copy is {})",
+                tmp.display()
+            )
+        })?;
         said.push_str(&format!("moved work.db{s} to {}\n", file_name(&to)));
     }
     for s in &SUFFIXES[1..] {
@@ -382,9 +383,7 @@ mod tests {
         // counts only: no title, body, project or content path, in either form
         let home = r.home.to_str().unwrap();
         for out in [report.to_string(), text(&report)] {
-            for content in [
-                "Spec ", "Plan ", "CANARY", "/w/alpha", "/org/", "notes.org",
-            ] {
+            for content in ["Spec ", "Plan ", "CANARY", "/w/alpha", "/org/", "notes.org"] {
                 assert!(!out.contains(content), "{content:?} in {out}");
             }
             assert!(
@@ -508,9 +507,11 @@ mod tests {
         let kept = urdr::Connection::open(r.data.join(base)).unwrap();
         assert_eq!(urdr::meta(&kept, "schema").unwrap().unwrap(), "7");
         let held: i64 = kept
-            .query_row("select count(*) from event where summary = 'held'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "select count(*) from event where summary = 'held'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(held, 1);
     }
