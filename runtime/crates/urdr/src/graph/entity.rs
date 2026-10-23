@@ -882,6 +882,40 @@ mod tests {
         assert_eq!(fts_hits(t.sql(), "renamed"), vec![n]);
     }
 
+    /// Review finding 7: a vector is of the text it was made from. A new title or body drops it in the same tx (the
+    /// embedder makes the new one); a change that leaves the text alone keeps it.
+    #[test]
+    fn a_text_change_drops_the_vector() {
+        use crate::graph::search::{vec_put, vec_stale};
+        let mut conn = db();
+        let mut t = tx(&mut conn, "user", Class::User);
+        let n = create(&mut t, new_task("task:a")).unwrap().n;
+        let vecs = |t: &Tx<'_>| -> i64 {
+            t.sql()
+                .query_row("select count(*) from entity_vec where n = ?1", [n], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
+        vec_put(&mut t, n, "m", &[0.6, 0.8]).unwrap();
+        let status = Changes {
+            status: Some(Some("done".into())),
+            ..Changes::default()
+        };
+        update(&mut t, n, None, status).unwrap();
+        assert_eq!(vecs(&t), 1, "the text did not change");
+        update(&mut t, n, None, title("renamed")).unwrap();
+        assert_eq!(vecs(&t), 0, "the title changed");
+        assert_eq!(vec_stale(t.sql(), "m", 10).unwrap(), [n]);
+        vec_put(&mut t, n, "m", &[0.6, 0.8]).unwrap();
+        let body = Changes {
+            body: Some(Some("another body".into())),
+            ..Changes::default()
+        };
+        update(&mut t, n, None, body).unwrap();
+        assert_eq!(vecs(&t), 0, "the body changed");
+    }
+
     /// Checkpoint CONN's WAL into PATH (truncating it), then scan PATH's bytes for TOKEN.
     fn in_file(conn: &Connection, path: &std::path::Path, token: &str) -> bool {
         conn.query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))

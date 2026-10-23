@@ -15,6 +15,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Put entity N's FTS row (rowid = N): delete, then insert (never a partial `UPDATE`). The replaced row's tokens
 /// stay in the index under a tombstone (the old text is in `entity_hist` anyway) until [`fts_delete`] or a merge.
+///
+/// The text changed (every caller puts a new title or body, or a new entity), so N's vector is dropped in the same
+/// tx: a vector is always of the text it was made from, and [`vec_stale`] lists N for the embedder again.
 pub fn fts_put(
     tx: &mut Tx<'_>,
     n: i64,
@@ -27,6 +30,7 @@ pub fn fts_put(
         "insert into entity_fts(rowid, title, body) values (?1, ?2, ?3)",
         params![n, title, body],
     )?;
+    sql.execute("delete from entity_vec where n = ?1", params![n])?;
     tx.put_text();
     Ok(())
 }

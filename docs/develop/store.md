@@ -88,7 +88,8 @@ All in `urdr::graph::{entity, link}`; every function takes the write's `&mut Tx`
     tx's actor and class.
   - Otherwise the old row goes to `entity_hist` (`tx_from` = its `updated_tx`, `tx_to` = this tx), the changes
     apply (`data_patch` is an RFC 7396 merge patch), `ver` and `field_tx` and `updated_tx` follow.
-  - Title or body changes delete and re-insert the FTS row by rowid (never a partial `UPDATE`).
+  - Title or body changes delete and re-insert the FTS row by rowid (never a partial `UPDATE`) and drop the
+    entity's vector ("Search" below).
   - A change that changes nothing writes nothing and answers `Done` with the current `ver`.
 - `entity::retire` sets `retired_tx` as a new version; the row stays.
 - `entity::set_version` (crate-private) gives an entity a new version holding an older version's fields and, when
@@ -181,7 +182,12 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
   from the Lisp quantizer.
 - **Fusion.** `rrf(lists, 60)` sums `1 / (k + rank)` over the lists (rank from 1), best first.
 - **Staleness.** `vec_put` replaces an entity's vector; `vec_stale(conn, model, limit)` lists live entities with
-  text and no vector of that model (the indexer's work list; Task 12b supplies the `Embedder`).
+  text and no vector of that model (the indexer's work list; Task 12b supplies the `Embedder`). A vector is always
+  of its entity's current text: `fts_put`, which every write of a new title or body goes through, deletes the
+  entity's `entity_vec` row in the same tx, so `vec_stale` lists it again and no vector of an old text is kept.
+  (Chosen over a vector that records the version it was made from and a `vec_stale` that lists mismatches: that
+  needs a column and leaves the old text's vector in the file until the embedder runs, which may be never when no
+  provider answers.)
 
 ## Vectors (Task 12b)
 

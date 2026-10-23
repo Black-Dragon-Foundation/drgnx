@@ -851,6 +851,44 @@ mod tests {
         assert!(all.iter().all(|(_, _, current)| *current), "{all:?}");
     }
 
+    /// Stale vectors (review finding 7): a changed title drops the vector in the same tx, so the next round embeds
+    /// the new text, and no vector is left of the old one.
+    #[tokio::test]
+    async fn an_edited_text_is_embedded_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        put(&db, "task:note", None, "the old words", json!({})).await;
+        let e = Fake::new(false);
+        let deny = allow_all(dir.path());
+        assert_eq!(
+            fill(&db, &e, &deny).await,
+            Outcome::Filled {
+                embedded: 1,
+                denied: 0
+            }
+        );
+        retitle(&db, "task:note", "the new words").await;
+        assert_eq!(
+            vectors(&db).await,
+            0,
+            "the edit dropped the old text's vector"
+        );
+        assert_eq!(
+            fill(&db, &e, &deny).await,
+            Outcome::Filled {
+                embedded: 1,
+                denied: 0
+            }
+        );
+        let all = vectors_and_texts(&db).await;
+        assert_eq!(
+            all,
+            [("task:note".to_owned(), "the new words".to_owned(), true)]
+        );
+        let old = urdr::graph::search::vec::quantize(&Fake::vector("the old words")).0;
+        assert_ne!(bits_of(&db, "task:note").await, Some(old));
+    }
+
     #[test]
     fn a_round_starts_after_a_quiet_minute_and_probes_after_a_stop() {
         let t0 = Instant::now();
