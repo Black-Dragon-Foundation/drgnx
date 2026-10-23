@@ -506,7 +506,9 @@ On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without
 `:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase (`worker-wait` as its total
 and as `worker-wait-REASON` per reason; the A/B explains with them, see below; `treesit-with-waits` is `treesit`
 (Nidhogg counts every synchronous parse there, the workers on or off) plus `treesit-wait`, the main thread's whole
-tree-sitter time, an explain line next to input, cpu and stalls, not a verdict), the main thread's waits for a
+tree-sitter time; `image-with-waits` is `image` plus the `display` and `image-pixels` waits, the main thread's whole
+time for images, so a decode moved into a wait for `nh-img` does not count as gone; both are explain lines next to
+input, cpu and stalls, not verdicts), the main thread's waits for a
 worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
 `:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
 `DRGNX_PERF_WATCHDOG=16`, the threshold the gates' A/Bs run with, or `on`).

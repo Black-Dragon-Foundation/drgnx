@@ -245,6 +245,12 @@ Nidhogg reports `worker-wait' by reason (a plist): the probe gives its total as 
   (if (not (drgnx-perf--workers-p))
       (list :workers nil)
     (let* ((s (nidhogg-workers-stats)) (ph (drgnx-perf--workers-phases (plist-get s :phase-ms))))
+      ;; the main thread's whole time for images: its own image work and its waits for nh-img (the display and
+      ;; image-pixels reasons), so an image decode moved into a wait is not counted as gone
+      (when (numberp (plist-get ph 'image))
+        (setq ph (append ph (list 'image-with-waits
+                                  (drgnx-perf--round (+ (plist-get ph 'image) (or (plist-get ph 'worker-wait-display) 0)
+                                                        (or (plist-get ph 'worker-wait-image-pixels) 0)))))))
       ;; the main thread's whole tree-sitter time: its synchronous parses (Nidhogg counts them in `treesit' with the
       ;; workers on or off) and its waits for nh-parse, so a parse moved into a wait is not counted as gone
       (when (numberp (plist-get ph 'treesit))

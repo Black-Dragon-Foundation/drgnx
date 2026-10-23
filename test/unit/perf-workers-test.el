@@ -43,7 +43,9 @@
         (should (equal (plist-get w :phase-ms)
                        (list 'image (drgnx-perf--round 5.6) 'treesit-wait (drgnx-perf--round 2.0)
                              'worker-wait (drgnx-perf--round 203.25) 'worker-wait-display (drgnx-perf--round 200.25)
-                             'worker-wait-image-pixels (drgnx-perf--round 3.0) 'worker-wait-drain (drgnx-perf--round 0.0))))
+                             'worker-wait-image-pixels (drgnx-perf--round 3.0) 'worker-wait-drain (drgnx-perf--round 0.0)
+                             ;; image + its waits (display, image-pixels), each rounded first
+                             'image-with-waits (drgnx-perf--round (+ 5.6 (drgnx-perf--round 200.25) 3.0)))))
         (should (equal (plist-get w :wait-ms) (drgnx-perf--round 205.25)))))
     ;; treesit-with-waits: the synchronous parses plus the waits for nh-parse
     (cl-letf (((symbol-function 'nidhogg-workers-stats)
