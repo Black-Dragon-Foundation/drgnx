@@ -263,6 +263,59 @@ tier needs it: its helper starts a session itself (GL-T8-1). Either way the chil
   - links in the metadata are refused;
   - a remote-looking `gitdir:` is not found.
 
+## mimir: the MCP server
+
+`crates/mimir` is a tools-only MCP server, hand-written on runstav's `jsonrpc` (library evaluation §12: rmcp is a
+dev-dependency for the interop test only). It names no drgnx type: `norn` gives it the coordination tools, and
+Ratatoskr gives it a connection.
+
+- **`serve(ctx, tools, info, r, w, limits) -> End`** serves one connection: newline-delimited JSON-RPC 2.0, one
+  message per line. A line over `limits.max_in` (1 MiB) ends the connection (`End::LineTooLong`); an answer over
+  `limits.max_out` (16 MiB) becomes `-32603`. A `\r` before the newline is dropped and blank lines are skipped. One
+  worker answers the lines in order, one at a time, and is the only writer, so answers keep request order. Every line
+  read before the end is answered. `End` is `ClientClosed`, `LineTooLong` or `Io(kind)`. `ServerInfo` defaults to
+  `{name: "drgnx", version: CRATE_VERSION}`; the name stays `drgnx`, so tool names (`mcp__drgnx__…`) and permission
+  rules do not change.
+- **Two protocol eras** (`version`):
+  - **`initialize`** (2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25): `negotiate` echoes the client's version when
+    it is one of these, else answers `2025-11-25`. The answer is `{protocolVersion, capabilities: {tools:
+    {listChanged: false}}, serverInfo}`. Before `initialize`, a request other than `initialize`, `ping` or
+    `server/discover` is `-32600` "initialize first": an error, never silence, since a client's discovery probe falls
+    back only after an error or a timeout.
+  - **Stateless 2026-07-28**: a request whose `params._meta["io.modelcontextprotocol/protocolVersion"]` is set is
+    served on its own, with no handshake, unless `initialize` already chose the old era for the connection (the
+    `_meta` check comes first). Another version is `-32022` with `data: {supported: ["2026-07-28", "2025-11-25"],
+    requested}`, and a missing `io.modelcontextprotocol/clientCapabilities` is `-32602`. `server/discover` answers
+    `supportedVersions: ["2026-07-28"]`, `capabilities: {tools: {}}`, the server's name and version in
+    `_meta["io.modelcontextprotocol/serverInfo"]`, `ttlMs: 3600000` and `cacheScope: "public"`; `tools/list` carries
+    the same `ttlMs` and `cacheScope`, and every result carries `resultType: "complete"`.
+- **`tools/list`** gives `{name, description, inputSchema, outputSchema?}` in name order, the same every time.
+- **`tools/call`** follows MCP 2025-11-25 (design §4.6 item 7, contract Task 10 as amended):
+  - params that are not a CallToolRequest (`name` a string, `arguments` an object or absent) and an unknown tool
+    (`Unknown tool: NAME`) are `-32602`;
+  - arguments that fail the tool's `check` are a result, `{content: [{type: "text", text: "PATH: what is wrong"}],
+    isError: true, _meta: {"dev.drgnx/error": {code: "invalid-arguments", path: PATH}}}`, and the tool never runs;
+  - `ToolResult::Err(text)` is `{content: [text], isError: true}`; `Ok` is `{content: [text]}`, with
+    `structuredContent` only when the tool declares an `outputSchema`;
+  - a tool runs on its own task, so a panic is `-32603` (logged) and the connection goes on.
+  Otherwise an unknown method is `-32601`, a line that is not JSON (or not UTF-8) `-32700` with `id: null`, a batch or
+  any other invalid request `-32600` (on the request's `id` when it can be read), and notifications, results and
+  errors from the client get no answer.
+- **Tools** (`tool`) implement `Tool<Ctx>`: `name` (1–128 characters of `A-Za-z0-9_-.`, `valid_name`),
+  `description`, `input_schema`, `output_schema`, `check` and `call`. `typed::<Args>()` is a tool's typed arguments:
+  `.schema()` is the `inputSchema` (schemars, JSON Schema 2020-12, every object closed with `additionalProperties:
+  false`, the top's `$schema` and `title` left out; no arguments is `{"type": "object", "additionalProperties":
+  false}`), `.check(args)` is what `check` returns, and `.decode(args)` is what `call` starts with. The decode is
+  runstav's `decode::typed` with unknown keys refused: an `ArgsError { path, message }` is `PATH: unknown key`,
+  `PATH: required, missing`, or serde's message at its path (`items[2].name`; `arguments` for the whole). The default
+  `check` accepts anything, so a tool with arguments overrides it.
+
+`cargo test -p mimir` runs `server::tests` (both eras over an in-memory pipe: the handshake, the stateless rules,
+every error shape, a bad argument that never reaches the tool, a 1 MiB line that ends the connection, a panicking
+tool) and `tests/interop.rs`: rmcp 3.6's client over a Unix socket pair, with `initialize` at each of the four old
+versions, `server/discover` at 2026-07-28 and its automatic probe, lists the tools, calls `echo`, and gets a bad
+argument back as a tool error with its path and an unknown tool as a protocol error.
+
 ## The conformance harness
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
