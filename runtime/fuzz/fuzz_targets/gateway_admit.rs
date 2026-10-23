@@ -61,7 +61,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let registry = Mem(BTreeMap::from([
-        (token_hash(TOKENS[0].as_bytes()), agent(ListenerId::Loopback)),
+        (
+            token_hash(TOKENS[0].as_bytes()),
+            agent(ListenerId::Loopback),
+        ),
         (token_hash(TOKENS[1].as_bytes()), Registration::editor()),
         (
             token_hash(TOKENS[2].as_bytes()),
@@ -88,7 +91,11 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut req = http::Request::builder().method("POST").uri(uri);
     if flags & 16 == 0 {
-        let name = if flags & 32 != 0 { "localhost" } else { "127.0.0.1" };
+        let name = if flags & 32 != 0 {
+            "localhost"
+        } else {
+            "127.0.0.1"
+        };
         req = req.header(HOST, format!("{name}:{PORT}"));
     }
     if let Some(token) = TOKENS.get(usize::from(flags & 3)) {
@@ -116,7 +123,10 @@ fuzz_target!(|data: &[u8]| {
 
     match admit::head(&parts, &on, PORT, &registry, &providers) {
         Ok(a) => {
-            assert_eq!(a.registration.listener, on, "a token is good on its own listener only");
+            assert_eq!(
+                a.registration.listener, on,
+                "a token is good on its own listener only"
+            );
             match (a.registration.class, &a.route) {
                 (Class::Agent, Route::Chain) => {}
                 (Class::Editor, Route::Provider { id, rest }) => {

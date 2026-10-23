@@ -34,7 +34,11 @@ fuzz_target!(|data: &[u8]| {
     else {
         return;
     };
-    let provider = if flags & 4 != 0 { "openrouter" } else { "other" };
+    let provider = if flags & 4 != 0 {
+        "openrouter"
+    } else {
+        "other"
+    };
     let path = if flags & 8 != 0 {
         "/v1/messages?beta=true"
     } else {
