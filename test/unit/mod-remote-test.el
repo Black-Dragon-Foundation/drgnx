@@ -658,6 +658,10 @@ is attached by the next start (a Reconnect) and one of another host never is."
       (with-current-buffer other                                   ; looks like a file on another host; nothing is read
         (setq buffer-file-name "/ssh:elsewhere:/srv/p/c.py" default-directory "/ssh:elsewhere:/srv/p/" major-mode 'python-mode))
       (drgnx-remote-test--wait-for-server a)
+      (princ (format "GL1 a=%s b=%s b-mode=%s timers=%S msgs=%S\n" (drgnx-remote-test--managed-p a)
+                     (drgnx-remote-test--managed-p b) (buffer-local-value 'major-mode b)
+                     (mapcar #'timer--function timer-list) (seq-remove #'string-empty-p messages))
+             #'external-debugging-output)
       (should (drgnx-remote-test--managed-p a))                    ; the buffer whose visit started the server
       (should (drgnx-remote-test--managed-p b))                    ; the project's other buffer, from the connect hook
       (should-not (drgnx-remote-test--managed-p other))
