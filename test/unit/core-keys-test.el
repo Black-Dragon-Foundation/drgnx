@@ -318,7 +318,7 @@ keys); every binding is undone after."
          (with-current-buffer "*drgnx keys*"
            (should (string-search "Key conflicts" (buffer-string)))
            (should (string-match-p "C-o .*Open File" (buffer-string)))
-           (should (string-search "keys.eld: no command nope" (buffer-string))))
+           (should (string-search "settings.el: no command nope" (buffer-string))))
          (kill-buffer "*drgnx keys*"))
       (delete-directory state t))))
 

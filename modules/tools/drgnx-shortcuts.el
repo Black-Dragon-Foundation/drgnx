@@ -241,7 +241,7 @@ conflict of the resolution."
         (drgnx-shortcuts--button "[Record a Key]" (lambda () (drgnx-shortcuts--record sid 'change))
                                  'drgnx-shortcuts-suggest sid))
       (insert "\n"))
-    (dolist (p (seq-filter (lambda (p) (string-search "keys.eld" p)) (plist-get drgnx-keys-last :problems)))
+    (dolist (p (seq-filter (lambda (p) (string-prefix-p "settings.el" p)) (plist-get drgnx-keys-last :problems)))
       (insert (propertize p 'face 'drgnx-shortcuts-conflict) "\n"))
     (insert "Filter: " (if drgnx-shortcuts--filter (format "\"%s\"" drgnx-shortcuts--filter) "—")
             "   Keys: " (or drgnx-shortcuts--keys-filter "—") "   "
@@ -461,7 +461,7 @@ has several), or gives them to a command without keys; `add' adds them to its ke
        (drgnx-shortcuts--toggle 'changed))
 
 (defun drgnx-shortcuts-set-tty-fallback ()
-  "Choose the Alt+Shift key a terminal that cannot send this command's key sends instead (keys.eld :tty-fallback)."
+  "Choose the Alt+Shift key a terminal that cannot send this command's key sends instead (`drgnx-keys-tty-fallback' in settings.el)."
   (interactive)
   (let* ((row (drgnx-shortcuts--row (drgnx-shortcuts--id-at-point)))
          (chords (seq-uniq (mapcan (lambda (k) (unless (drgnx-shortcuts-terminal-p (car k)) (drgnx-tty-fallback-chords (list (car k)))))

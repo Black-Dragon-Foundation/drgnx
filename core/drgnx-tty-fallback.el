@@ -196,21 +196,22 @@ chords.  Empty when TABLE is clean."
     (nreverse out)))
 
 (defun drgnx-tty-fallback-problems (table &optional overrides)
-  "The keys.eld :tty-fallback entries TABLE could not apply, as lines (`drgnx-tty-fallback-notify' makes them notices).
+  "The `drgnx-keys-tty-fallback' entries TABLE could not apply, as lines (`drgnx-tty-fallback-notify' makes them notices).
 With OVERRIDES (the :tty-fallback value TABLE was made with), also each entry that is not (CHORD . KEY) or names a
 chord the profile needs no fallback for (one a plain terminal sends, or no key of the profile)."
   (append
    (delq nil (mapcar (pcase-lambda (`(,chord . ,row))
                        (when-let* ((r (plist-get row :rejected)))
-                         (format "keys.eld :tty-fallback %s → %s not used: %s" chord (car r) (cdr r))))
+                         (format "settings.el drgnx-keys-tty-fallback %s → %s not used: %s" chord (car r) (cdr r))))
                      table))
    (if (and overrides (not (proper-list-p overrides)))
-       (list (format "keys.eld :tty-fallback %S is not a list of (CHORD . KEY)" overrides))
+       (list (format "settings.el drgnx-keys-tty-fallback %S is not a list of (CHORD . KEY)" overrides))
      (delq nil (mapcar (lambda (o)
                          (cond ((not (and (consp o) (stringp (car o)) (key-valid-p (car o))))
-                                (format "keys.eld :tty-fallback %S is not (CHORD . KEY)" o))
+                                (format "settings.el drgnx-keys-tty-fallback %S is not (CHORD . KEY)" o))
                                ((not (seq-find (lambda (r) (equal (key-parse (car r)) (key-parse (car o)))) table))
-                                (format "keys.eld :tty-fallback %s: the profile needs no fallback for it" (car o)))))
+                                (format "settings.el drgnx-keys-tty-fallback %s: the profile needs no fallback for it"
+                                        (car o)))))
                        overrides)))))
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))

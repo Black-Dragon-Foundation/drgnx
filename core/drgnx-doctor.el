@@ -495,7 +495,7 @@ and ignored when older than 7 days."
 
 (defun drgnx-doctor--with-terminal-notices (result facts)
   "RESULT, a check result (STATUS DETAIL FIX), with the `terminal' notices of FACTS' sessions after its detail
-\(the keys.eld :tty-fallback lines that could not apply); a clean RESULT becomes `warn'."
+\(the `drgnx-keys-tty-fallback' lines that could not apply); a clean RESULT becomes `warn'."
   (let ((texts (mapcar (lambda (f) (plist-get (car f) :text))
                        (drgnx-doctor--notices-found 'terminal (drgnx-doctor--notices-datas (plist-get facts :notices))))))
     (if (or (null result) (null texts))
@@ -890,7 +890,7 @@ MODEL), as a sentence, or nil."
                                       (conflicts (list 'info (format "%d key conflicts, resolved by layer order (%s): %s" (length conflicts)
                                                                      (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < ")
                                                                      (string-join (seq-take conflicts 3) "; "))
-                                                       "see Keyboard Shortcuts › Key conflicts; change them in keys.eld (docs/guide/keys.md)"))
+                                                       "see Keyboard Shortcuts › Key conflicts; change them in settings.el (docs/guide/keys.md)"))
                                       (t (list 'ok (format "no key conflicts (%s)"
                                                            (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < "))
                                                nil))))))

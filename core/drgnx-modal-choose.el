@@ -215,7 +215,7 @@ stays; the doctor says what waits).  Never asks; an error is said in *Messages*.
         (drgnx-modal--forget-pending)
         layers)
     (error (require 'drgnx-notice)
-           (drgnx-notify 'keys 'warn (format "the key stack waiting in keys.eld was not applied: %s"
+           (drgnx-notify 'keys 'warn (format "the key stack waiting in settings.el (drgnx-keys-pending-layers) was not applied: %s"
                                              (error-message-string err))
                          :id 'pending-layers)
            nil)))
