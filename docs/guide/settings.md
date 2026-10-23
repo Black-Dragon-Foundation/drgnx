@@ -313,7 +313,8 @@ These four read and write their settings directly now:
 
 - The Keyboard Shortcuts editor, Keyboard Profile…, Preferences: Modules, Color Theme, Keep drgnx Running and
   Onboarding write `settings.el` through the settings writer: only the entry that changes, your comments and the rest
-  of the file stay. They refuse a `settings.el` that does not read, or an entry of these settings that does not fit,
+  of the file stay (a comment inside the value they rewrite, such as within the `drgnx-keys-bind` list, goes, as
+  [Comments](#editing-by-hand) says). They refuse a `settings.el` that does not read, or an entry of these settings that does not fit,
   and change nothing.
 - A `setq` of one of them in `config.el` counts too: at the end of the start drgnx applies it (a module you put in
   `drgnx-modules-disabled` there is turned off).
