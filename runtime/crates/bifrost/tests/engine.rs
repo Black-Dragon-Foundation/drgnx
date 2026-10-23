@@ -312,8 +312,15 @@ impl Gw {
 
     /// One request on a new connection, read to its end.
     async fn call(&self, token: &str, path: &str, body: &str) -> Reply {
-        let (mut sender, _conn) = open(TcpStream::connect(("127.0.0.1", self.port)).await.unwrap()).await;
-        read(sender.send_request(self.request(token, path, body)).await.unwrap()).await
+        let (mut sender, _conn) =
+            open(TcpStream::connect(("127.0.0.1", self.port)).await.unwrap()).await;
+        read(
+            sender
+                .send_request(self.request(token, path, body))
+                .await
+                .unwrap(),
+        )
+        .await
     }
 }
 
@@ -379,7 +386,12 @@ async fn a_stream_passes_through_and_the_first_chunk_goes_first() {
         {"path": "/a/v1/messages", "chunks": [[0, MESSAGE_START], [1500, MESSAGE_DELTA]]}
     ]));
     let mut gw = Gw::start(
-        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::XApiKey)],
+        vec![provider(
+            "a",
+            Kind::Anthropic,
+            &mock.url("/a"),
+            Auth::XApiKey,
+        )],
         vec![(AGENT, agent(&["a"], None))],
         &[("a", "sk-a")],
         0.0,
@@ -400,10 +412,16 @@ async fn a_stream_passes_through_and_the_first_chunk_goes_first() {
         "the first chunk came after {:?}, with the last",
         sent.elapsed()
     );
-    assert!(text(&first).starts_with("event: message_start"), "{first:?}");
+    assert!(
+        text(&first).starts_with("event: message_start"),
+        "{first:?}"
+    );
     assert!(!text(&first).contains("message_delta"));
     let rest = body.collect().await.unwrap().to_bytes();
-    assert_eq!(text(&first) + &text(&rest), format!("{MESSAGE_START}{MESSAGE_DELTA}"));
+    assert_eq!(
+        text(&first) + &text(&rest),
+        format!("{MESSAGE_START}{MESSAGE_DELTA}")
+    );
     let row = gw.row().await;
     assert_eq!((row.input, row.output, row.status), (10, 5, 200));
 }
@@ -445,7 +463,8 @@ async fn a_rate_limit_moves_to_the_next_provider() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_last_provider_429_is_passed_through_with_retry_after() {
-    let refusal = "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"later\"}}";
+    let refusal =
+        "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"later\"}}";
     let mock = Mock::start(json!([
         {"path": "/a/", "status": 500, "body": "{}"},
         {"path": "/b/", "status": 429, "body": refusal, "headers": {"Retry-After": "7"}}
@@ -465,12 +484,19 @@ async fn the_last_provider_429_is_passed_through_with_retry_after() {
     assert_eq!(reply.headers[RETRY_AFTER], "7");
     assert_eq!(reply.headers[CONTENT_TYPE], "application/json");
     assert_eq!(reply.body, refusal);
+    // the passed-through refusal is a completed request: one row, with its status. The row may already be sent when
+    // the reply is read, so the events are taken in order up to it (the fallback comes first).
+    let mut before = Vec::new();
+    let row = loop {
+        match gw.until(|_| true).await {
+            GatewayEvent::Request(row) => break row,
+            e => before.push(e),
+        }
+    };
     assert_eq!(
-        fallbacks(&gw.pending()),
+        fallbacks(&before),
         vec![("a".to_string(), "b".to_string(), "HTTP 500".to_string())]
     );
-    // the passed-through refusal is a completed request: one row, with its status
-    let row = gw.row().await;
     assert_eq!((row.provider.as_str(), row.status), ("b", 429));
 }
 
@@ -496,9 +522,19 @@ async fn a_dead_or_failing_provider_moves_on_too() {
     assert_eq!(reply.body, "{\"ok\":true}");
     let moves = fallbacks(&gw.pending());
     assert_eq!(moves.len(), 2, "{moves:?}");
-    assert_eq!((moves[0].0.as_str(), moves[0].1.as_str()), ("dead", "failing"));
+    assert_eq!(
+        (moves[0].0.as_str(), moves[0].1.as_str()),
+        ("dead", "failing")
+    );
     assert!(moves[0].2.starts_with("no answer ("), "{moves:?}");
-    assert_eq!(moves[1], ("failing".to_string(), "good".to_string(), "HTTP 503".to_string()));
+    assert_eq!(
+        moves[1],
+        (
+            "failing".to_string(),
+            "good".to_string(),
+            "HTTP 503".to_string()
+        )
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -537,7 +573,10 @@ async fn when_every_provider_fails_the_agent_hears_why() {
         vec![("ghost", "nomsg"), ("nomsg", "nokey"), ("nokey", "dead")]
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(gw.book.rows().is_empty(), "no provider answered: no spend row");
+    assert!(
+        gw.book.rows().is_empty(),
+        "no provider answered: no spend row"
+    );
     assert!(
         !gw.pending()
             .iter()
@@ -599,10 +638,17 @@ async fn spend_is_recorded_once_per_request() {
     let mut gw = Gw::start(vec![priced], vec![(AGENT, agent(&["a"], None))], &[], 0.0).await;
     let reply = gw.call(AGENT, "/v1/messages", "{}").await;
     assert_eq!(reply.status, 200);
-    assert_eq!(reply.body, format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}"));
+    assert_eq!(
+        reply.body,
+        format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}")
+    );
     let row = gw.row().await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(gw.book.rows(), vec![row.clone()], "one row for three chunks");
+    assert_eq!(
+        gw.book.rows(),
+        vec![row.clone()],
+        "one row for three chunks"
+    );
     assert!(
         !gw.pending()
             .iter()
@@ -614,7 +660,11 @@ async fn spend_is_recorded_once_per_request() {
     assert_eq!(row.provider, "a");
     assert_eq!(row.model.as_deref(), Some("a-model"));
     assert_eq!((row.input, row.output, row.status), (10, 5, 200));
-    assert!((row.cost - (10.0 * 3.0 + 5.0 * 15.0) / 1e6).abs() < 1e-12, "{}", row.cost);
+    assert!(
+        (row.cost - (10.0 * 3.0 + 5.0 * 15.0) / 1e6).abs() < 1e-12,
+        "{}",
+        row.cost
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -654,7 +704,10 @@ async fn the_budget_stops_new_requests_at_equal() {
     assert_eq!(reply.status, 429);
     let error = reply.json();
     assert_eq!(error["error"]["type"], "budget_exceeded");
-    assert_eq!(error["error"]["message"], "the job's budget (1 USD) is spent");
+    assert_eq!(
+        error["error"]["message"],
+        "the job's budget (1 USD) is spent"
+    );
     assert_eq!(
         gw.pending(),
         vec![GatewayEvent::Budget {
@@ -681,10 +734,7 @@ async fn budget_event_after_the_crossing_request() {
     assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 200);
     let row = gw.row().await;
     assert!((row.cost - 0.6).abs() < 1e-12);
-    match gw
-        .until(|e| matches!(e, GatewayEvent::Budget { .. }))
-        .await
-    {
+    match gw.until(|e| matches!(e, GatewayEvent::Budget { .. })).await {
         GatewayEvent::Budget { job, spent, budget } => {
             assert_eq!(job, "j1");
             assert!((spent - 1.1).abs() < 1e-9, "{spent}");
@@ -729,7 +779,10 @@ async fn a_hang_up_stops_the_upstream() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let row = gw.row().await;
-    assert_eq!((row.provider.as_str(), row.status, row.input), ("a", 200, 10));
+    assert_eq!(
+        (row.provider.as_str(), row.status, row.input),
+        ("a", 200, 10)
+    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(gw.book.rows().len(), 1);
 }
@@ -737,7 +790,12 @@ async fn a_hang_up_stops_the_upstream() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_key_sends_need_keys_once_a_minute() {
     let mut gw = Gw::start(
-        vec![provider("nokey", Kind::Anthropic, &dead_url(), Auth::Bearer)],
+        vec![provider(
+            "nokey",
+            Kind::Anthropic,
+            &dead_url(),
+            Auth::Bearer,
+        )],
         vec![(AGENT, agent(&["nokey"], None))],
         &[],
         0.0,
@@ -821,7 +879,10 @@ async fn keep_alive_checks_the_token_on_each_request() {
     )
     .await;
     assert_eq!(second.status, 401);
-    assert_eq!(second.json()["error"]["message"], "not a drgnx gateway token");
+    assert_eq!(
+        second.json()["error"]["message"],
+        "not a drgnx gateway token"
+    );
     assert_eq!(mock.requests().len(), 1);
 }
 
@@ -955,7 +1016,10 @@ async fn the_editor_route_passes_the_body_unchanged() {
     }
     for request in mock.requests() {
         assert_eq!(request["path"], "/api/v1/chat/completions");
-        assert_eq!(request["body"], sent, "the bytes exactly as the editor sent them");
+        assert_eq!(
+            request["body"], sent,
+            "the bytes exactly as the editor sent them"
+        );
         assert_eq!(request["headers"]["authorization"], "Bearer sk-or");
     }
     assert_eq!(mock.requests().len(), 2);
@@ -1009,8 +1073,16 @@ async fn the_editor_route_streams_sse() {
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
     let mut body = response.into_body();
     let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(sent.elapsed() < Duration::from_millis(1200), "{:?}", sent.elapsed());
-    assert_eq!(text(&first), keep_alive, "the keep-alive comment is passed on, first");
+    assert!(
+        sent.elapsed() < Duration::from_millis(1200),
+        "{:?}",
+        sent.elapsed()
+    );
+    assert_eq!(
+        text(&first),
+        keep_alive,
+        "the keep-alive comment is passed on, first"
+    );
     let rest = body.collect().await.unwrap().to_bytes();
     assert_eq!(text(&rest), last);
     let row = gw.row().await;

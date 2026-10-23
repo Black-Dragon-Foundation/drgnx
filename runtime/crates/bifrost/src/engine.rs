@@ -100,7 +100,11 @@ pub enum GatewayEvent {
         why: String,
     },
     /// Job `job` has spent its budget: on a refusal, and after the request that reached it.
-    Budget { job: String, spent: f64, budget: f64 },
+    Budget {
+        job: String,
+        spent: f64,
+        budget: f64,
+    },
     /// A request needed these providers' keys, which the hub does not hold (at most once a minute per provider).
     NeedKeys { providers: Vec<String> },
 }
@@ -205,11 +209,7 @@ impl Gateway {
             }
             Err(_) => {
                 return answer(
-                    &Refusal::new(
-                        400,
-                        "invalid_request_error",
-                        "the request cannot be taken",
-                    ),
+                    &Refusal::new(400, "invalid_request_error", "the request cannot be taken"),
                     true,
                 );
             }
@@ -227,7 +227,10 @@ impl Gateway {
         let mut reasons = Vec::new();
         for (i, step) in reg.chain.iter().enumerate() {
             let next = reg.chain.get(i + 1);
-            match self.attempt(parts, &body, reg, step, target, next.is_none()).await {
+            match self
+                .attempt(parts, &body, reg, step, target, next.is_none())
+                .await
+            {
                 Attempt::Answer(answer) => return answer,
                 Attempt::Next(why) => {
                     if let Some(next) = next {
@@ -325,8 +328,16 @@ impl Gateway {
         id: &str,
         rest: &str,
     ) -> Response<ReplyBody> {
-        let failed =
-            |why: String| answer(&Refusal::new(502, "api_error", format!("no provider answered: {id}: {why}")), false);
+        let failed = |why: String| {
+            answer(
+                &Refusal::new(
+                    502,
+                    "api_error",
+                    format!("no provider answered: {id}: {why}"),
+                ),
+                false,
+            )
+        };
         let Some(provider) = read(&self.providers).get(id).cloned() else {
             return answer(
                 &Refusal::new(404, "not_found_error", "no such provider in the drgnx hub"),
@@ -339,7 +350,11 @@ impl Gateway {
             if provider.needs_key() && key.is_none() {
                 self.need_keys(id);
                 return answer(
-                    &Refusal::new(503, "api_error", format!("no key for {id} in the drgnx hub")),
+                    &Refusal::new(
+                        503,
+                        "api_error",
+                        format!("no key for {id} in the drgnx hub"),
+                    ),
                     false,
                 );
             }
@@ -368,7 +383,13 @@ impl Gateway {
     }
 
     /// An armed spend guard for a request to provider `id`.
-    fn spend(&self, reg: &Registration, id: &str, model: Option<String>, price: Option<Price>) -> Spend {
+    fn spend(
+        &self,
+        reg: &Registration,
+        id: &str,
+        model: Option<String>,
+        price: Option<Price>,
+    ) -> Spend {
         Spend {
             row: SpendRow {
                 job: reg.job.clone(),
@@ -440,7 +461,9 @@ fn upstream_request(
 
 /// The gateway's own error answer after the body was read; `close` ends the connection after it.
 fn answer(r: &Refusal, close: bool) -> Response<ReplyBody> {
-    let body = Full::new(r.body()).map_err(|never| match never {}).boxed_unsync();
+    let body = Full::new(r.body())
+        .map_err(|never| match never {})
+        .boxed_unsync();
     let mut response = Response::new(body);
     *response.status_mut() =
         StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -459,7 +482,8 @@ fn answer(r: &Refusal, close: bool) -> Response<ReplyBody> {
 /// the connection closes, so the client is not reset while it still sends (A-25). A client that waits for
 /// `100 Continue` has sent no body, and none is invited.
 fn refuse(r: &Refusal, parts: &Parts, incoming: Incoming) -> Response<ReplyBody> {
-    let unread = (!incoming.is_end_stream() && !parts.headers.contains_key(EXPECT)).then_some(incoming);
+    let unread =
+        (!incoming.is_end_stream() && !parts.headers.contains_key(EXPECT)).then_some(incoming);
     let drain = Drain {
         first: Some(r.body()),
         unread,
