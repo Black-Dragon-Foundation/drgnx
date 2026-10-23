@@ -1006,26 +1006,31 @@ mod tests {
         for n in 1..8 {
             f.link(n, "next", n + 1);
         }
+        // Between level 0 and level 1 (the third scope check) the walker holds no connection, and another reader
+        // (the pool has one) gets it there. The reader runs inside that check, so nothing depends on when a spawned
+        // task is first polled: one spawned at a level once lost the race to the whole walk on a loaded machine.
         struct Spy {
             pool: ReadPool,
             events: Arc<Mutex<Vec<&'static str>>>,
-            readers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
         }
         impl Scope for Spy {
             fn allows(&self, _: Option<i64>) -> Seen {
                 Seen::Full
             }
             fn valid(&self) -> bool {
-                let mut ev = self.events.lock().unwrap();
-                ev.push("level");
-                if ev.len() == 2 {
-                    let pool = self.pool.clone();
-                    let events = Arc::clone(&self.events);
-                    self.readers.lock().unwrap().push(tokio::spawn(async move {
-                        pool.with(move |_| events.lock().unwrap().push("reader"))
-                            .await
+                let checks = {
+                    let mut ev = self.events.lock().unwrap();
+                    ev.push("level");
+                    ev.len()
+                };
+                if checks == 3 {
+                    assert_eq!(self.pool.in_use(), 0, "the walker kept its connection");
+                    let (pool, events) = (self.pool.clone(), Arc::clone(&self.events));
+                    tokio::task::block_in_place(move || {
+                        tokio::runtime::Handle::current()
+                            .block_on(pool.with(move |_| events.lock().unwrap().push("reader")))
                             .unwrap();
-                    }));
+                    });
                 }
                 true
             }
@@ -1034,16 +1039,11 @@ mod tests {
         let spy = Spy {
             pool: f.pool.clone(),
             events: Arc::clone(&events),
-            readers: Mutex::new(Vec::new()),
         };
         let o = neighbors(&f.pool, walk(1, 7), &spy, Budget::default())
             .await
             .unwrap();
         assert_eq!(o.nodes.len(), 8);
-        let readers: Vec<_> = spy.readers.lock().unwrap().drain(..).collect();
-        for r in readers {
-            r.await.unwrap();
-        }
         let ev = events.lock().unwrap().clone();
         let at = ev.iter().position(|e| *e == "reader").unwrap();
         let last = ev.iter().rposition(|e| *e == "level").unwrap();
