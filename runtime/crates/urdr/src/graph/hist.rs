@@ -2,9 +2,8 @@
 //! of query", §6.3, §6.5). Policy-free: the class check is the caller's.
 //!
 //! A version of an entity is the current `entity` row or an `entity_hist` row; version V of entity N was written by
-//! tx `tx_from` and lasts until `tx_to`. `entity_hist` keeps no lease, origin or retirement: an old version answers
-//! the default lease, the entity's origin and source, and `retired_tx` only when the entity was retired at or before
-//! that version's tx.
+//! tx `tx_from` and lasts until `tx_to`. `entity_hist` keeps each version's lease, origin and `retired_tx` too, so an
+//! old version answers them as they were (URDR-HIST-RETIRED-1); its `source` is the entity's (it never changes).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -86,10 +85,14 @@ struct Hist {
     kind: String,
     snap: Snap,
     field_tx: BTreeMap<String, i64>,
+    lease: Lease,
+    /// `None` in a row written without one (a test's hand-made row): the entity's origin then.
+    origin: Option<Origin>,
+    retired_tx: Option<i64>,
 }
 
-const HIST_COLS: &str =
-    "ver, tx_from, kind, project, title, status, body, priority, assignee, data, field_tx";
+const HIST_COLS: &str = "ver, tx_from, kind, project, title, status, body, priority, assignee, data, field_tx, \
+     lease_holder, lease_epoch, lease_until, origin, retired_tx";
 
 fn hist_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Hist> {
     let bad = |col: usize, e: serde_json::Error| {
@@ -121,6 +124,15 @@ fn hist_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Hist> {
             Some(f) => serde_json::from_str(&f).map_err(|e| bad(10, e))?,
             None => BTreeMap::new(),
         },
+        lease: Lease {
+            holder: r.get(11)?,
+            epoch: r.get::<_, Option<i64>>(12)?.unwrap_or(0),
+            until: r.get(13)?,
+        },
+        origin: r
+            .get::<_, Option<String>>(14)?
+            .and_then(|o| Origin::parse(&o)),
+        retired_tx: r.get(15)?,
     })
 }
 
@@ -175,7 +187,6 @@ pub fn entity_as_of(conn: &Connection, n: i64, tx: i64) -> rusqlite::Result<Opti
         return Ok(None);
     };
     let approximate = tx_imported(conn, h.tx_from)?;
-    let retired_tx = cur.retired_tx.filter(|&r| r <= h.tx_from);
     Ok(Some(AsOf {
         ent: Ent {
             n,
@@ -187,15 +198,15 @@ pub fn entity_as_of(conn: &Connection, n: i64, tx: i64) -> rusqlite::Result<Opti
             body: h.snap.body,
             priority: h.snap.priority,
             assignee: h.snap.assignee,
-            lease: Lease::default(),
+            lease: h.lease,
             data: h.snap.data,
             field_tx: h.field_tx,
-            origin: cur.origin,
+            origin: h.origin.unwrap_or(cur.origin),
             source: cur.source,
             ver: h.ver,
             created_tx: cur.created_tx,
             updated_tx: h.tx_from,
-            retired_tx,
+            retired_tx: h.retired_tx,
         },
         approximate,
     }))
@@ -733,6 +744,64 @@ mod tests {
         let old = entity_as_of(&conn, n, t1).unwrap().unwrap();
         assert_eq!((old.ent.ver, old.ent.updated_tx), (1, t1));
         assert!(!old.approximate);
+    }
+
+    /// URDR-HIST-RETIRED-1: every version keeps its retirement, lease and origin, so an as-of read shows them as they
+    /// were: an entity retired then brought back is retired as of the time between; a lease held then is held.
+    #[test]
+    fn as_of_shows_retirement_and_lease_as_they_were() {
+        let mut conn = db();
+        let (t1, n) = create(&mut conn, user(), "task:a", "a");
+        let held = Lease {
+            holder: Some("agent:s1".into()),
+            epoch: 1,
+            until: Some(2_000_000_000.0),
+        };
+        let lease = |l: Lease| Changes {
+            lease: Some(l),
+            ..Changes::default()
+        };
+        let h2 = held.clone();
+        let (t2, _) = run(&mut conn, agent(), |tx| {
+            entity::update(tx, n, None, lease(h2)).unwrap()
+        });
+        let (t3, _) = run(&mut conn, agent(), |tx| {
+            entity::update(
+                tx,
+                n,
+                None,
+                lease(Lease {
+                    holder: None,
+                    epoch: 1,
+                    until: None,
+                }),
+            )
+            .unwrap()
+        });
+        let (t4, ()) = run(&mut conn, user(), |tx| entity::retire(tx, n).unwrap());
+        let (t5, _) = run(&mut conn, user(), |tx| entity::unretire(tx, n).unwrap());
+        let at = |t: i64| entity_as_of(&conn, n, t).unwrap().unwrap().ent;
+        assert_eq!(at(t1).lease, Lease::default());
+        assert_eq!(at(t2).lease, held, "the lease held as of then");
+        assert_eq!(at(t3).lease.holder, None);
+        assert_eq!(at(t3).lease.epoch, 1);
+        assert_eq!(at(t3).retired_tx, None);
+        assert_eq!(at(t4).retired_tx, Some(t4), "retired as of then");
+        assert_eq!(at(t5).retired_tx, None, "and back now");
+        assert_eq!(entity::by_n(&conn, n).unwrap().unwrap().retired_tx, None);
+        for t in [t1, t2, t3, t4, t5] {
+            assert_eq!(at(t).origin, Origin::Recorded);
+        }
+        // every version row carries the columns
+        let cols: i64 = conn
+            .query_row(
+                "select count(*) from pragma_table_info('entity_hist') where name in \
+                 ('retired_tx', 'lease_holder', 'lease_epoch', 'lease_until', 'origin')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 5);
     }
 
     #[test]

@@ -514,5 +514,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(held, 1);
+        // the restored schema-6 file migrates again, to today's schema 7: every version keeps its retirement, lease
+        // and origin (URDR-HIST-RETIRED-1)
+        let mut again = urdr::Connection::open(&live).unwrap();
+        norn::migrate7::run(&mut again, &live, &opts).unwrap();
+        let cols: i64 = again
+            .query_row(
+                "select count(*) from pragma_table_info('entity_hist') where name in \
+                 ('retired_tx', 'lease_holder', 'lease_epoch', 'lease_until', 'origin')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 5);
     }
 }

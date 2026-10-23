@@ -218,11 +218,12 @@ fn field_value(e: &Ent, field: &str) -> Value {
     }
 }
 
-/// Copy entity E's current row to `entity_hist`, valid until this tx.
+/// Copy entity E's current row to `entity_hist`, valid until this tx: its fields, lease, origin and retirement.
 fn to_hist(tx: &Tx<'_>, e: &Ent) -> Result<(), WriteError> {
     tx.sql().execute(
         "insert into entity_hist (n, ver, tx_from, tx_to, kind, project, title, status, body, priority, assignee, \
-         data, field_tx) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+         data, field_tx, lease_holder, lease_epoch, lease_until, origin, retired_tx) \
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             e.n,
             e.ver,
@@ -237,6 +238,11 @@ fn to_hist(tx: &Tx<'_>, e: &Ent) -> Result<(), WriteError> {
             e.assignee,
             e.data.to_string(),
             serde_json::to_string(&e.field_tx).expect("a map of integers"),
+            e.lease.holder,
+            e.lease.epoch,
+            e.lease.until,
+            e.origin.as_str(),
+            e.retired_tx,
         ],
     )?;
     Ok(())
@@ -499,7 +505,8 @@ pub fn unretire(tx: &mut Tx<'_>, n: i64) -> Result<bool, WriteError> {
     set_version(tx, &cur, &Snap::of(&cur), Some(None))
 }
 
-/// The fields a version carries and a restoring write sets (no `kind`, no lease: `entity_hist` keeps neither).
+/// The fields a restoring write sets from a version (no `kind`, lease, origin or retirement: a restore leaves those
+/// as they are, though `entity_hist` keeps them for as-of reads).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Snap {
     pub(crate) project: Option<i64>,
@@ -880,6 +887,40 @@ mod tests {
         };
         update(&mut t, n, None, c).unwrap();
         assert_eq!(fts_hits(t.sql(), "renamed"), vec![n]);
+    }
+
+    /// Review finding 7: a vector is of the text it was made from. A new title or body drops it in the same tx (the
+    /// embedder makes the new one); a change that leaves the text alone keeps it.
+    #[test]
+    fn a_text_change_drops_the_vector() {
+        use crate::graph::search::{vec_put, vec_stale};
+        let mut conn = db();
+        let mut t = tx(&mut conn, "user", Class::User);
+        let n = create(&mut t, new_task("task:a")).unwrap().n;
+        let vecs = |t: &Tx<'_>| -> i64 {
+            t.sql()
+                .query_row("select count(*) from entity_vec where n = ?1", [n], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
+        vec_put(&mut t, n, "m", &[0.6, 0.8]).unwrap();
+        let status = Changes {
+            status: Some(Some("done".into())),
+            ..Changes::default()
+        };
+        update(&mut t, n, None, status).unwrap();
+        assert_eq!(vecs(&t), 1, "the text did not change");
+        update(&mut t, n, None, title("renamed")).unwrap();
+        assert_eq!(vecs(&t), 0, "the title changed");
+        assert_eq!(vec_stale(t.sql(), "m", 10).unwrap(), [n]);
+        vec_put(&mut t, n, "m", &[0.6, 0.8]).unwrap();
+        let body = Changes {
+            body: Some(Some("another body".into())),
+            ..Changes::default()
+        };
+        update(&mut t, n, None, body).unwrap();
+        assert_eq!(vecs(&t), 0, "the body changed");
     }
 
     /// Checkpoint CONN's WAL into PATH (truncating it), then scan PATH's bytes for TOKEN.

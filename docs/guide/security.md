@@ -204,7 +204,8 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
   git never runs there (nor in a repository inside `~/org` that a project contains); the other roots are scanned.
 - **The entity embedder skips them too.** When the hub makes the store's search vectors (a `tei` embedding provider
   in your providers), an entity whose source, path or id the rules deny is never sent, even one stored before you
-  added its folder to your deny list.
+  added its folder to your deny list. A text you excise (or a file you revoke) while the provider is answering gets
+  no vector of what was sent.
 - **The code search index never reads `~/org`.** `drgnx search index` refuses a project whose root is inside
   `~/org` (or reaches it through a link) with "the search index never reads ~/org (personal notes)", before it
   reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose
@@ -261,10 +262,10 @@ widens what it sees.
   store's settings. An agent can only ask (an access card in the Work cockpit), never grant itself or another
   anything.
 - **An agent's request** (`access_request`) waits on a card in the Work cockpit with its reason. You answer with one
-  of four choices: **This session** (that session only, while it lives), **Its project** (every agent working in
-  the requester's project), **Its profile** (every session of its profile) or **Refuse**. The first three give a
-  read grant of the project it asked for; the agent is told either way. drgnx's own background process can refuse a
-  request for you, never grant one.
+  of four choices: **This session** (that session only, while it lives and for a day at most), **Its project**
+  (every agent working in the requester's project), **Its profile** (every session of its profile) or **Refuse**.
+  The first three give a read grant of the project it asked for; the agent is told either way. drgnx's own
+  background process can refuse a request for you, never grant one.
 - You can list, give and revoke grants directly too, through the hub method `graph/grants`.
 - Revoking takes effect at once: the next read by any agent runs without it, and a walk through the graph already
   running stops at its next step.

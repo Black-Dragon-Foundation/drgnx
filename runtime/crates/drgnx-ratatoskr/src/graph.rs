@@ -595,6 +595,12 @@ fn revert_answer(out: hist::Revert, listed: bool) -> api::RevertAnswer {
 /// `graph/revert`: a tx (blocked: nothing written, the later txs named), or an entity put back to a version; with
 /// `cascade` only what it would do.
 async fn revert(w: &Writer, caller: &Caller, p: api::RevertParams) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed(
+            "",
+            "only the user reverts: the backend's connection never does",
+        ));
+    }
     let cascade = p.cascade == Some(true);
     let a = match (p.tx, p.entity, p.ver) {
         (Some(t), _, _) => {
@@ -634,6 +640,12 @@ async fn revert(w: &Writer, caller: &Caller, p: api::RevertParams) -> Result<Val
 
 /// `graph/proposed`.
 async fn proposed(w: &Writer, caller: &Caller, p: api::ProposedParams) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed(
+            "",
+            "only the user settles proposed changes: the backend's connection never does",
+        ));
+    }
     let (txs, accept) = match (p.accept, p.reject) {
         (Some(a), None) => (a.into_inner(), true),
         (None, Some(r)) => (r.into_inner(), false),
@@ -955,6 +967,11 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
 /// An access card's choices that make a grant.
 const GRANT_CHOICES: [&str; 3] = ["session", "project", "profile"];
 
+/// How long a `session` grant from an access card lasts at most (Task 15b: `expires` = the session's end). The end
+/// is not known when the card is settled; a session id is never used again, so the grant opens nothing once its
+/// session is gone, and the expiry bounds the row, which would otherwise stay active for good.
+const SESSION_GRANT_SECS: f64 = 86_400.0;
+
 fn check_access(choice: &str, backend: bool) -> Result<(), Error> {
     match choice {
         c if GRANT_CHOICES.contains(&c) && backend => Err(not_allowed(
@@ -1050,7 +1067,8 @@ pub(crate) fn settle_access(
             let what = project_n(tx.sql(), &target)?
                 .ok_or_else(|| refused(format!("no project {target} in the store: refuse it")))?;
             let shown = who.to_string();
-            let g = grants::create(tx, who, What::Project(what), Access::Read, None)?;
+            let expires = matches!(who, Who::Session(_)).then_some(now + SESSION_GRANT_SECS);
+            let g = grants::create(tx, who, What::Project(what), Access::Read, expires)?;
             format!("granted ({}): {shown} may read {target}", g.id)
         }
         None => format!("refused: no access to {target}"),
@@ -2324,6 +2342,87 @@ mod tests {
             settings(&w, &user(false), get).await.unwrap(),
             json!({"only_user_closes": true})
         );
+    }
+
+    /// Review finding 9: history's writes are the user's, as scrub, compact, excise, grants and import are; the
+    /// backend's connection is refused before anything is written (a revert, its cascade look, a version put back,
+    /// a proposed tx accepted or rejected).
+    #[tokio::test]
+    async fn the_backend_cannot_revert_or_settle_proposed_txs() {
+        let (_dir, w, _, _) = fixture().await;
+        let made = task_write(
+            &w,
+            json!({"op": "create", "title": "first", "project": MINE}),
+        )
+        .await;
+        let id = made["id"].as_str().unwrap().to_owned();
+        task_write(
+            &w,
+            json!({"op": "update", "id": id, "ver": made["ver"], "title": "second", "project": MINE}),
+        )
+        .await;
+        let t = count(&w, "select max(id) from tx").await;
+        let txs = count(&w, "select count(*) from tx").await;
+        for p in [
+            json!({"tx": t}),
+            json!({"tx": t, "cascade": true}),
+            json!({"entity": id, "ver": 1}),
+        ] {
+            let e = revert(&w, &user(true), serde_json::from_value(p.clone()).unwrap())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed, "{p}");
+        }
+        for p in [json!({"accept": [t]}), json!({"reject": [t]})] {
+            let e = proposed(&w, &user(true), serde_json::from_value(p.clone()).unwrap())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed, "{p}");
+        }
+        assert_eq!(count(&w, "select count(*) from tx").await, txs);
+        let title = text_of(&w, "select title from entity where kind = 'task'").await;
+        assert_eq!(title, "second");
+        // the user's own revert still runs
+        let r = revert(
+            &w,
+            &user(false),
+            serde_json::from_value(json!({"tx": t})).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(r["reverted"].is_object(), "{r}");
+        let title = text_of(&w, "select title from entity where kind = 'task'").await;
+        assert_eq!(title, "first");
+    }
+
+    /// Review finding 10 (Task 15b: `expires` = the session's end for `session`): a session grant from an access card
+    /// expires; a project or profile grant lasts until it is revoked.
+    #[tokio::test]
+    async fn a_session_grant_from_an_access_card_expires() {
+        let (_dir, w, _, _) = fixture().await;
+        let at = now();
+        let card = access_card(&w, Some("p1")).await;
+        settle(&w, &user(false), card, "session".into(), at)
+            .await
+            .unwrap();
+        let card = access_card(&w, Some("p1")).await;
+        settle(&w, &user(false), card, "project".into(), at)
+            .await
+            .unwrap();
+        let gs = grants_now(&w).await;
+        let session = gs
+            .iter()
+            .find(|g| g.who == Who::Session("s1".into()))
+            .unwrap();
+        let ends = session.expires.expect("a session grant expires");
+        assert!(ends > at, "{ends} after {at}");
+        assert!(ends <= at + SESSION_GRANT_SECS, "a day at most: {ends}");
+        assert!(session.active(at) && !session.active(ends));
+        let project = gs
+            .iter()
+            .find(|g| matches!(g.who, Who::Project(_)))
+            .unwrap();
+        assert_eq!(project.expires, None);
     }
 
     #[test]

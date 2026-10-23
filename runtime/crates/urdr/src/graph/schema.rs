@@ -1,5 +1,6 @@
-//! Schema 7's graph tables as data (Task 2; storage §5.2 exactly, plus `tx.answer` (call 3) and `entity_vec.model`
-//! (Task 0's ruling: `search::vec_stale` lists entities without a vector of a model)).
+//! Schema 7's graph tables as data (Task 2; storage §5.2 exactly, plus `tx.answer` (call 3), `entity_vec.model`
+//! (Task 0's ruling: `search::vec_stale` lists entities without a vector of a model) and `entity_hist`'s lease,
+//! `origin` and `retired_tx` (URDR-HIST-RETIRED-1: an as-of read shows a version's retirement and lease as they were)).
 
 /// The graph tables and their indexes: `tx`, `entity`, `entity_hist`, `link`, `link_stat`, `entity_fts`
 /// (contentless, with delete, `secure-delete` set at creation), `entity_vec`, `project_alias`, `excise_log`.
@@ -46,6 +47,7 @@ create table entity_hist (
   n integer not null, ver integer not null, tx_from integer not null, tx_to integer not null,
   kind text, project integer, title text, status text, body text,
   priority integer, assignee text, data text, field_tx text,
+  lease_holder text, lease_epoch integer, lease_until real, origin text, retired_tx integer,
   primary key (n, ver));
 create index entity_hist_tx on entity_hist(n, tx_to);
 

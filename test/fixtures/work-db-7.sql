@@ -58,6 +58,7 @@ CREATE TABLE entity_hist (
   n integer not null, ver integer not null, tx_from integer not null, tx_to integer not null,
   kind text, project integer, title text, status text, body text,
   priority integer, assignee text, data text, field_tx text,
+  lease_holder text, lease_epoch integer, lease_until real, origin text, retired_tx integer,
   primary key (n, ver));
 
 CREATE TABLE link (
@@ -198,7 +199,7 @@ insert into "kv" values ('schema','7');
 
 insert into "kv" values ('compat-read','6');
 
-insert into "kv" values ('migrate-7','{"at":1792783185.8584085,"backup":"/tmp/work-db-7-genZKaMNw/scratch/work-pre7-1792783185.db","denied":{"edges":0,"files":0,"nodes":0},"denied_edges":0,"denied_files":0,"denied_in":[],"denied_nodes":0,"duplicates":0,"links":{"derives->derives":1,"jdep->blocks":1,"parent->parent_of":1,"replaces->supersedes":1},"ms":13.950933000000001,"no_project":7,"retyped":0,"tables":{"agent":[1,1],"card":[1,1],"decision":[2,2],"edge":[1,1],"event":[2,2],"file":[1,1],"jdep":[1,1],"job":[1,1],"jtask":[2,2],"message":[1,1],"meta":[3,3],"node":[3,3],"review_mark":[1,1],"spend":[1,1]},"txs":6}');
+insert into "kv" values ('migrate-7','{"at":1792795924.48444,"backup":"/tmp/work-db-7-genAH1hsW/scratch/work-pre7-1792795924.db","denied":{"edges":0,"files":0,"nodes":0},"denied_edges":0,"denied_files":0,"denied_in":[],"denied_nodes":0,"duplicates":0,"links":{"derives->derives":1,"jdep->blocks":1,"parent->parent_of":1,"replaces->supersedes":1},"ms":14.522912,"no_project":7,"retyped":0,"tables":{"agent":[1,1],"card":[1,1],"decision":[2,2],"edge":[1,1],"event":[2,2],"file":[1,1],"jdep":[1,1],"job":[1,1],"jtask":[2,2],"message":[1,1],"meta":[3,3],"node":[3,3],"review_mark":[1,1],"spend":[1,1]},"txs":6}');
 
 insert into "review_mark" values ('a1','src/a.rs','seen','h1',1700000080.0,NULL);
 
@@ -230,7 +231,7 @@ insert into "entity" values (6,'decision:1','decision',NULL,'Use one writer','ac
 
 insert into "entity" values (7,'decision:2','decision',NULL,'Use one writer, checked','active','Safer',NULL,NULL,NULL,0,NULL,'{"at":1700000041.0,"author":"user","job":"j1","kind":"design","n":2,"task":"j1#1","ver":2}','{"body":6,"data":6,"status":6,"title":6}','recorded',NULL,1,6,6,NULL);
 
-insert into "entity_hist" values (5,1,4,4,'task',NULL,'the second','running',NULL,NULL,'a1','{"job":"j1","n":2,"note":"x","role":"implement"}','{"assignee":4,"data":4,"status":4,"title":4}');
+insert into "entity_hist" values (5,1,4,4,'task',NULL,'the second','running',NULL,NULL,'a1','{"job":"j1","n":2,"note":"x","role":"implement"}','{"assignee":4,"data":4,"status":4,"title":4}',NULL,0,NULL,'recorded',NULL);
 
 insert into "link" values (1,2,'derives',1,NULL,'parsed','/w/p.md',2,4611686018427387904);
 

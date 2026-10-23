@@ -548,12 +548,15 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   `resource_link` (`drgnx://entity/ID`) per entity named, and `_meta["dev.drgnx/notices"] = n`, with a last text line
   `notices: n (read_inbox)` only when n > 0. Untrusted text, the caller's own included, is fenced in the text. Lists
   hold 50 rows and a `next_cursor` (`o:N`).
-- `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. `access_request` makes (or
+- `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. A caller without a project
+  (a folder that is no git repository) writes nothing: `task_write create` and `note_add` are refused ("you have no
+  project"). `access_request` makes (or
   finds) one open `access` card per session and target and answers `{requested: card}` for a known project and an
   unknown one alike.
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
-- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities lack a vector; the vector half
+- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
+  project and the projects granted to it) lack a vector; the vector half
   waits for the embedder (Task 12b).
 
 **Where Rust and Lisp differ, on purpose:**

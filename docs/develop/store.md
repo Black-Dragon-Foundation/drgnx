@@ -13,8 +13,9 @@ triggers and no foreign keys; the primitives write versions, FTS rows and stats 
 (`urdr/tests/one_write_path.rs`) fails when other Rust code writes these tables.
 
 - `tx.answer` holds a keyed request's answer (at most 64 KiB, else `{"truncated": true}`); `entity_vec.model` names
-  the embedding model, so `vec_stale` can list entities without a vector of a model. Both are departures from the
-  design's sketch.
+  the embedding model, so `vec_stale` can list entities without a vector of a model; `entity_hist` also keeps each
+  version's lease (`lease_holder`, `lease_epoch`, `lease_until`), `origin` and `retired_tx`, so an as-of read shows
+  them as they were (URDR-HIST-RETIRED-1). All three are departures from the design's sketch.
 - `entity.n` is an explicit integer key: the FTS rowid and the link ends. Entities are never deleted, so `n` is
   never reused.
 - `entity_fts` is `fts5(title, body, content='', contentless_delete=1)`. The DDL ends with
@@ -88,7 +89,8 @@ All in `urdr::graph::{entity, link}`; every function takes the write's `&mut Tx`
     tx's actor and class.
   - Otherwise the old row goes to `entity_hist` (`tx_from` = its `updated_tx`, `tx_to` = this tx), the changes
     apply (`data_patch` is an RFC 7396 merge patch), `ver` and `field_tx` and `updated_tx` follow.
-  - Title or body changes delete and re-insert the FTS row by rowid (never a partial `UPDATE`).
+  - Title or body changes delete and re-insert the FTS row by rowid (never a partial `UPDATE`) and drop the
+    entity's vector ("Search" below).
   - A change that changes nothing writes nothing and answers `Done` with the current `ver`.
 - `entity::retire` sets `retired_tx` as a new version; the row stays.
 - `entity::set_version` (crate-private) gives an entity a new version holding an older version's fields and, when
@@ -114,8 +116,9 @@ writer calls `guard::check_key`. An unregistered kind or key passes; a class oth
 - **As of a tx.** `tx_at(conn, at)` is the last tx at or before a time. `entity_as_of(conn, n, tx)` answers the
   current row if `updated_tx <= tx`, else the `entity_hist` row that held at `tx` (one seek on `entity_hist_tx`:
   the first `tx_to` past `tx`), none before creation. `approximate` is true when that version's tx is `imported`.
-  `entity_hist` keeps no lease, origin or retirement: an old version has the default lease, the entity's origin and
-  source, and `retired_tx` only if the entity was retired at or before it. `links_as_of(conn, n, kinds, direction,
+  Every `entity_hist` row keeps its version's lease, origin and `retired_tx` (written by `to_hist` with the fields),
+  so an old version answers them as they were: an entity retired and later brought back is retired as of the time
+  between, a lease held then is held; the source is the entity's. `links_as_of(conn, n, kinds, direction,
   tx)` is `tx_from <= tx < tx_to` on `link_out` / `link_in`.
 - **Who changed what.** `history(conn, n, since)` lists versions (tx, time, actor, class, tool, session, the fields
   that version set, from `field_tx`; `retired` for the retiring version; `since` is inclusive).
@@ -181,7 +184,12 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
   from the Lisp quantizer.
 - **Fusion.** `rrf(lists, 60)` sums `1 / (k + rank)` over the lists (rank from 1), best first.
 - **Staleness.** `vec_put` replaces an entity's vector; `vec_stale(conn, model, limit)` lists live entities with
-  text and no vector of that model (the indexer's work list; Task 12b supplies the `Embedder`).
+  text and no vector of that model (the indexer's work list; Task 12b supplies the `Embedder`). A vector is always
+  of its entity's current text: `fts_put`, which every write of a new title or body goes through, deletes the
+  entity's `entity_vec` row in the same tx, so `vec_stale` lists it again and no vector of an old text is kept.
+  (Chosen over a vector that records the version it was made from and a `vec_stale` that lists mismatches: that
+  needs a column and leaves the old text's vector in the file until the embedder runs, which may be never when no
+  provider answers.)
 
 ## Vectors (Task 12b)
 
@@ -193,6 +201,11 @@ Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the
   any other. The model name is `tei:PROVIDER`. The hub never starts the provider.
 - **Round.** `embed::fill` takes up to 64 stale entities (`vec_stale`) per request and stores the vectors with
   `vec_put` in one `system` tx (tool `embedder`). A failed batch is tried once more; failing twice stops the round.
+- **The write checks again.** The provider is awaited outside the writer, so an excise, a revoke's excise, a retire
+  or an edit can commit while it answers. The write therefore stores a vector only for an entity that, inside the
+  writer's tx, is live at the `ver` and with the text that was read (an excise blanks in place without a new
+  version, so the text is compared too); the others are stale again and the next batch sends their text of now.
+  Test: `embed::tests::a_text_changed_while_the_provider_answers_gets_no_old_vector` (a held provider).
 - **Door 4.** An entity whose source, id or `data.path` the personal-notes deny-list denies (or whose source form is
   unknown) is never sent, whatever the scan's door let in. It stays stale and is looked at again each round.
 - **Schedule.** `embed::Timer`: a round starts when the graph writer has seen no write that put text (its `texts`
@@ -649,7 +662,9 @@ is `not-allowed` even though its class is `user`.
 - **`graph/revert {tx} | {entity, ver}, cascade?`** → `{reverted?: {entities, links}, blocked?, listed?}`: a tx is put
   back by new versions, or blocked (nothing written) by the later txs named; an entity goes back to a version as a
   new one. `cascade` only lists. A reverted grant changes scopes at once. **`graph/proposed {accept | reject: [tx]}`**
-  settles proposed txs the same way (`hist::settle_proposed`).
+  settles proposed txs the same way (`hist::settle_proposed`). Both are the user's: the backend's connection is
+  `not-allowed` before anything is read or written, its `cascade` look included (as for scrub, compact, excise,
+  grants and import).
 - **`graph/excise {target: tx | id, fields?, reason, rotate_backups?, transcripts?}`** → the excise report, the
   scrub's (`vacuumed`, `wal_truncated`, `blocked_by`), and the copies outside `work.db` that hold an excised value:
   `backups_holding` (or `backups_removed` with `rotate_backups`) and `transcripts_holding` (or `transcripts_redacted`:
@@ -677,8 +692,9 @@ is `not-allowed` even though its class is `user`.
   op's `{conflict}`, `{lease_lost}` or `{proposed}`.
 
 **Cards the store settles** (`cards/settle`): an `access` card's choices are `session`, `project`, `profile` (a read
-grant of the target project for the requesting session, its project or its profile, made in the settle's tx) and
-`refuse`; `resolved` is `refuse`; the requester gets a message either way. A `close` card's are `accept` (the task
+grant of the target project for the requesting session, its project or its profile, made in the settle's tx; a
+`session` grant expires a day after the settle, since the session's end is not known then and a session id is never
+used again, while the other two last until revoked) and `refuse`; `resolved` is `refuse`; the requester gets a message either way. A `close` card's are `accept` (the task
 done as the user, its lease cleared, if it is still at the card's version: else the conflict, and the card stays
 open) and `reject` (`resolved` too: nothing changes, the proposing agent gets a notice). Any other choice is
 `invalid-params`. The backend's connection settles an access card only by refusing and a close card only by

@@ -632,8 +632,9 @@ fn import_entity(tx: &mut Tx<'_>, rec: &EntLine) -> Result<Outcome, WriteError> 
     }
     tx.sql().execute(
         "insert into entity_hist (n, ver, tx_from, tx_to, kind, project, title, status, body, priority, assignee, \
-         data, field_tx) select n, ver, updated_tx, ?2, kind, project, title, status, body, priority, assignee, \
-         data, field_tx from entity where n = ?1",
+         data, field_tx, lease_holder, lease_epoch, lease_until, origin, retired_tx) \
+         select n, ver, updated_tx, ?2, kind, project, title, status, body, priority, assignee, data, field_tx, \
+         lease_holder, lease_epoch, lease_until, origin, retired_tx from entity where n = ?1",
         params![cur.n, id],
     )?;
     tx.sql().execute(

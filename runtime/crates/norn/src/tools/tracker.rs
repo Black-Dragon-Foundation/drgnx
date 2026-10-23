@@ -24,7 +24,7 @@ use super::guard::{NO_IDENTITY_ARG, identity_arg, refuse_identity_args};
 use super::{Coord, Ctx, Identity};
 use crate::grants::{self, Access, Filter};
 use crate::project;
-use crate::scope::{self, Caller, StoreScope};
+use crate::scope::{self, Caller, Reach, StoreScope};
 use crate::store::CoordError;
 use crate::tracker::notices::notices_unread;
 use crate::tracker::{self, TaskAnswer, TaskOp};
@@ -726,11 +726,22 @@ struct FindQ {
     labels: Vec<String>,
 }
 
-/// Live entities with text and no vector: how far the vectors are behind.
-fn vectors_behind(c: &Connection) -> Result<i64, urdr::SqliteError> {
+/// Live entities in SCOPE with text and no vector: how far the vectors are behind for this caller (another
+/// project's texts are neither its lag nor its business).
+fn vectors_behind(c: &Connection, scope: &StoreScope) -> Result<i64, urdr::SqliteError> {
+    let within = match scope.reach() {
+        Reach::Everything => String::new(),
+        Reach::AnyProject => " and e.project is not null".into(),
+        Reach::Projects(ps) => format!(
+            " and e.project in ({})",
+            ps.iter().map(i64::to_string).collect::<Vec<_>>().join(", ")
+        ),
+    };
     c.query_row(
-        "select count(*) from entity e where e.retired_tx is null and (e.title is not null or e.body is not null) \
-         and not exists (select 1 from entity_vec v where v.n = e.n)",
+        &format!(
+            "select count(*) from entity e where e.retired_tx is null and (e.title is not null or e.body is not null) \
+             and not exists (select 1 from entity_vec v where v.n = e.n){within}"
+        ),
         [],
         |r| r.get(0),
     )
@@ -792,7 +803,7 @@ fn find(
         }
     }
     let mut a = page(rows, offset, "tasks");
-    let behind = vectors_behind(c)?;
+    let behind = vectors_behind(c, &look.scope)?;
     let vectors = if behind > 0 {
         format!("behind {behind}")
     } else {
@@ -1179,6 +1190,13 @@ async fn note_add(coord: &Coord, who: &Identity, a: NoteAddArgs) -> Result<Answe
         None
     };
     let caller = caller_of(coord, who, true).await?;
+    // a caller without a project writes nothing (Task 10): its note would be a stub every agent sees
+    if caller.project.is_none() {
+        return Err(
+            "you have no project: notes are made in the project (git repository) you work in"
+                .into(),
+        );
+    }
     let mut meta = caller.tx_meta("mcp:note_add");
     meta.req = a.req.clone();
     let writer = coord.db().graph_writer().ok_or("work.db is not open yet")?;

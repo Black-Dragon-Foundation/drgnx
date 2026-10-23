@@ -465,6 +465,93 @@ mod tools {
         assert!(o.text.contains("vectors: behind"));
     }
 
+    /// Review finding 11: `vectors: behind N` counts the caller's scope only; another project's texts are not its lag
+    /// (nor its business: the count would tell how much another project writes).
+    #[tokio::test]
+    async fn vectors_behind_counts_the_callers_scope_only() {
+        let w = World::new().await;
+        let (ha, hb) = (w.place("pa"), w.place("pb"));
+        let (a, b) = (w.agent("a1", &ha), w.agent("b1", &hb));
+        create(&w, &a, "tracker words here").await;
+        for i in 0..3 {
+            create(&w, &b, &format!("beta task {i}")).await;
+        }
+        let o = w
+            .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
+            .await;
+        let pa = w.project_n(&ha);
+        let mine = w.count(&format!(
+            "select count(*) from entity where project = {pa} and (title is not null or body is not null)"
+        ));
+        assert_eq!(
+            o.structured["vectors"],
+            format!("behind {mine}"),
+            "{}",
+            o.structured
+        );
+        // under a read grant of B, B's texts are in A's scope and count
+        w.grant_read(pa, w.project_n(&hb)).await;
+        let o = w
+            .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
+            .await;
+        let pb = w.project_n(&hb);
+        let both = w.count(&format!(
+            "select count(*) from entity where project in ({pa}, {pb}) and (title is not null or body is not null)"
+        ));
+        assert!(both > mine);
+        assert_eq!(o.structured["vectors"], format!("behind {both}"));
+    }
+
+    /// Review finding 8 (Task 10: "a caller with no project … writes nothing"): `note_add` from a folder that is no
+    /// project is refused, as `create` is, and writes no note (one would be a stub every agent sees).
+    #[tokio::test]
+    async fn note_add_without_a_project_writes_nothing() {
+        let w = World::new().await;
+        let nowhere = w.dir.path().join("nowhere");
+        std::fs::create_dir_all(&nowhere).unwrap();
+        w.coord
+            .projects()
+            .lock()
+            .unwrap()
+            .insert(nowhere.clone(), None);
+        let homeless = w.agent("h1", &nowhere);
+        let stub = w
+            .user_write(|tx| {
+                Ok(entity::create(
+                    tx,
+                    EntityNew {
+                        id: "task:stub".into(),
+                        kind: "task".into(),
+                        project: None,
+                        title: Some("a task of no project".into()),
+                        status: Some("open".into()),
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )?
+                .id)
+            })
+            .await;
+        let txs = w.count("select count(*) from tx");
+        let o = w
+            .call(
+                &homeless,
+                "note_add",
+                json!({"about": stub, "text": "a note of no project"}),
+            )
+            .await;
+        assert!(o.err && o.text.contains("no project"), "{}", o.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'note'"),
+            0
+        );
+        assert_eq!(w.count("select count(*) from tx"), txs, "no tx was written");
+    }
+
     #[tokio::test]
     async fn access_request_never_blocks_and_merges() {
         let w = World::new().await;
