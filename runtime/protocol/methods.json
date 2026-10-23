@@ -291,6 +291,7 @@
         "type": "object"
       },
       "doc": "a session's snapshot changed (at most one per session per 50 ms)",
+      "from": "backend",
       "name": "agent"
     },
     {
@@ -366,6 +367,7 @@
         "type": "object"
       },
       "doc": "a session's entries new or changed since the last time",
+      "from": "backend",
       "name": "agent-entries"
     },
     {
@@ -398,6 +400,7 @@
         "type": "object"
       },
       "doc": "a job's spend reached its budget",
+      "from": "backend",
       "name": "budget"
     },
     {
@@ -442,6 +445,7 @@
         "type": "object"
       },
       "doc": "a job's card needs the user",
+      "from": "backend",
       "name": "card"
     },
     {
@@ -469,6 +473,7 @@
         "type": "object"
       },
       "doc": "the hub's nonce, sent on accept",
+      "from": "front",
       "name": "challenge"
     },
     {
@@ -564,6 +569,7 @@
         "type": "object"
       },
       "doc": "the event log's new rows (at most 200 a time, every 0.25 s at most)",
+      "from": "front",
       "name": "events"
     },
     {
@@ -613,6 +619,7 @@
         "type": "object"
       },
       "doc": "a request or a task moved to the next provider or profile",
+      "from": "backend",
       "name": "fallback"
     },
     {
@@ -632,6 +639,7 @@
         "type": "object"
       },
       "doc": "a job's status, tasks or open cards changed",
+      "from": "backend",
       "name": "job"
     },
     {
@@ -662,6 +670,7 @@
         "type": "object"
       },
       "doc": "a task's claim ran out",
+      "from": "backend",
       "name": "lease-released"
     },
     {
@@ -704,6 +713,7 @@
         "type": "object"
       },
       "doc": "a message for the user from the hub itself",
+      "from": "front",
       "name": "notice"
     },
     {
@@ -777,6 +787,7 @@
         "type": "object"
       },
       "doc": "the gateway forwarded a request: its tokens and cost",
+      "from": "backend",
       "name": "request"
     }
   ],
@@ -786,6 +797,7 @@
         "user"
       ],
       "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
+      "home": "backend",
       "name": "agents/do",
       "params": {
         "$defs": {
@@ -885,6 +897,7 @@
         "user"
       ],
       "doc": "a session's snapshot, whole transcript and change number",
+      "home": "backend",
       "name": "agents/get",
       "params": {
         "$defs": {
@@ -1235,6 +1248,7 @@
         "user"
       ],
       "doc": "the session ends",
+      "home": "backend",
       "name": "agents/kill",
       "params": {
         "$defs": {
@@ -1271,6 +1285,7 @@
         "service"
       ],
       "doc": "the sessions: snapshots for the user, {id, name, job, task} for the others (an agent: its own job's)",
+      "home": "backend",
       "name": "agents/list",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1564,6 +1579,7 @@
         "user"
       ],
       "doc": "the user's answer to a permission request: the only way one is answered",
+      "home": "backend",
       "name": "agents/permission",
       "params": {
         "$defs": {
@@ -1623,6 +1639,7 @@
         "user"
       ],
       "doc": "a prompt to the session (queued or steering as its mode says)",
+      "home": "backend",
       "name": "agents/send",
       "params": {
         "$defs": {
@@ -1666,6 +1683,7 @@
         "user"
       ],
       "doc": "a session the hub holds",
+      "home": "backend",
       "name": "agents/start",
       "params": {
         "$defs": {
@@ -1757,6 +1775,7 @@
         "user"
       ],
       "doc": "the session's turn stops",
+      "home": "backend",
       "name": "agents/stop",
       "params": {
         "$defs": {
@@ -1788,11 +1807,992 @@
     },
     {
       "classes": [
+        "user"
+      ],
+      "doc": "an open card settled with a choice, once (drgnx-coord-card-settle)",
+      "home": "front",
+      "name": "cards/settle",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "card": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choice": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "card",
+          "choice"
+        ],
+        "title": "SettleParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`cards/settle`'s answer: false when the card was not open (nothing happens twice).",
+        "properties": {
+          "settled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "settled"
+        ],
+        "title": "Settled",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-agent-register, drgnx-coord-agent-seen)",
+      "home": "front",
+      "name": "coord/agent",
+      "params": {
+        "$defs": {
+          "AgentField": {
+            "description": "An agent's field `clear` sets to null.",
+            "enum": [
+              "kind",
+              "name",
+              "cwd",
+              "worktree",
+              "branch",
+              "base",
+              "plan",
+              "task",
+              "pid"
+            ],
+            "type": "string"
+          },
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "AgentRow": {
+            "description": "An agent that works (again): what is given is stored, what is not is kept.",
+            "properties": {
+              "base": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "branch": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "clear": {
+                "description": "Fields set to null after the rest is stored.",
+                "items": {
+                  "$ref": "#/$defs/AgentField"
+                },
+                "maxItems": 9,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "$ref": "#/$defs/AgentName"
+              },
+              "kind": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "pid": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan": {
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "worktree": {
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`{register: AgentRow}` or `{seen: AgentName}`: one of the two.",
+        "properties": {
+          "register": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seen": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This agent is alive now: stamped (telemetry: a busy work.db answers `{}`)."
+          }
+        },
+        "title": "AgentParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`coord/agent`'s answer: the registered agent's `id`, or the `seen` stamp (none when it was never registered).",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seen": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "title": "AgentResult",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-create)",
+      "home": "front",
+      "name": "coord/card-create",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "`ask` makes it a question to the user.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "CardCreateParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The id of what was made: a card's.",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CardCreated",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-set)",
+      "home": "front",
+      "name": "coord/card-set",
+      "params": {
+        "$defs": {
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A change (a reopened card) leaves a `card` event."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CardSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-decide)",
+      "home": "front",
+      "name": "coord/decide",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "author": {
+            "$ref": "#/$defs/AgentName"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "`build`, `wait`, `wont-build` or `replaces`.",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replaces": {
+            "description": "A decision's number, marked replaced when this one is current.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "seen": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "subject": {
+            "$ref": "#/$defs/Text"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "subject",
+          "author"
+        ],
+        "title": "DecideParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Decision": {
+            "additionalProperties": false,
+            "description": "One decision as the log has it (`drgnx-coord--decision-plist`).",
+            "properties": {
+              "at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "n": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "paths": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "replaces": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "subject": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ver": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`coord/decide`'s answer (`drgnx-coord-decide`): `{ok, n, status, version}`, `{held, version, changes}` or `{error}`.",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/$defs/Decision"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "held": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "n": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "Decided",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-note-held)",
+      "home": "front",
+      "name": "coord/held",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/AgentName"
+          },
+          "held": {
+            "description": "The agent's write was held (its count goes up by one), or went through (the count is 0).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent",
+          "held"
+        ],
+        "title": "HeldParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-create)",
+      "home": "front",
+      "name": "coord/job-create",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "NewTask": {
+            "description": "One task of a new job: without `deps` it starts `ready`, else `pending`.",
+            "properties": {
+              "deps": {
+                "description": "The numbers of the job's tasks this one waits on.",
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 1000,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "n": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "role": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "$ref": "#/$defs/Text"
+              }
+            },
+            "required": [
+              "n",
+              "title"
+            ],
+            "type": "object"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "plan": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/$defs/NewTask"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "title": {
+            "$ref": "#/$defs/Text"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "JobCreateParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The id of what was made: a job's.",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobCreated",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-set)",
+      "home": "front",
+      "name": "coord/job-set",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A change leaves a `job` event."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-renew, drgnx-coord-release-stale)",
+      "home": "front",
+      "name": "coord/leases",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "release_stale": {
+            "description": "Then the claims whose lease ran out are released.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "renew": {
+            "description": "These agents are alive: each one's claims are renewed.",
+            "items": {
+              "$ref": "#/$defs/AgentName"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "LeasesParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Released": {
+            "additionalProperties": false,
+            "description": "A claim whose lease ran out, released.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "released": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Released"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Leases",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
         "user",
         "agent",
         "service"
       ],
-      "doc": "a coordination server wrote: delivery runs now and the new events go out (a notification; users too, SB-T12-4)",
+      "doc": "a coordination server wrote: the new events go out, and the backend hears it (coalesced: one a 0.25 s) and runs delivery (a notification; users too, SB-T12-4)",
+      "home": "front",
       "name": "coord/notify",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1811,7 +2811,101 @@
       "classes": [
         "user"
       ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-events-prune-daily; never fails)",
+      "home": "front",
+      "name": "coord/prune",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`coord/prune`'s answer: whether the daily prune ran (the cap is held either way).",
+        "properties": {
+          "pruned": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pruned"
+        ],
+        "title": "Pruned",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-force-status)",
+      "home": "front",
+      "name": "coord/task-status",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The holder; `null` (or none) leaves the task without one."
+          },
+          "status": {
+            "$ref": "#/$defs/Status"
+          },
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task",
+          "status"
+        ],
+        "title": "TaskStatusParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's login-shell variables the hub allows, for the agents and jobs it starts next",
+      "home": "backend",
       "name": "env/set",
       "params": {
         "$defs": {
@@ -1878,7 +2972,158 @@
       "classes": [
         "user"
       ],
+      "doc": "an event in the log (drgnx-coord-event-add; best_effort: a busy work.db is no error)",
+      "home": "front",
+      "name": "events/add",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "EventKind": {
+            "description": "What an event can be (`drgnx-coord-event-kinds`).",
+            "enum": [
+              "start",
+              "stop",
+              "claim",
+              "release",
+              "status",
+              "decision",
+              "edit",
+              "test",
+              "question",
+              "answer",
+              "review",
+              "message",
+              "card",
+              "accept",
+              "revert",
+              "comment",
+              "job"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "best_effort": {
+            "description": "Telemetry: a busy work.db answers `{}`, not an error.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stored as `{\"truncated\": true, \"size\": N}` over 4096 characters; a start or stop with `turn: true` is a turn's."
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/EventKind"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cut to one line of at most 200 characters."
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "AddEventParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`events/add`'s answer: the event's id (none when a best-effort event met a busy work.db).",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "Added",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the event log after since (0), oldest first, at most limit (200; at most 1000)",
+      "home": "front",
       "name": "events/since",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2003,6 +3248,7 @@
         "user"
       ],
       "doc": "provider keys to the gateway's memory (never a file)",
+      "home": "backend",
       "name": "gateway/keys",
       "params": {
         "$defs": {
@@ -2050,6 +3296,7 @@
         "user"
       ],
       "doc": "an agent's token and the gateway's URL; its keys go to the gateway's memory",
+      "home": "backend",
       "name": "gateway/register",
       "params": {
         "$defs": {
@@ -2265,6 +3512,7 @@
         "user"
       ],
       "doc": "the token no longer forwards",
+      "home": "backend",
       "name": "gateway/unregister",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2294,6 +3542,7 @@
         "service"
       ],
       "doc": "a connection's first line: versions, and the proofs that make it a user connection",
+      "home": "front",
       "name": "hello",
       "params": {
         "$defs": {
@@ -2488,6 +3737,7 @@
         "user"
       ],
       "doc": "a proposed job runs, with an optional budget",
+      "home": "backend",
       "name": "job/approve",
       "params": {
         "$defs": {
@@ -2630,6 +3880,7 @@
         "user"
       ],
       "doc": "a task waits for the user, with a reason (the Work graph)",
+      "home": "backend",
       "name": "job/block",
       "params": {
         "$defs": {
@@ -2771,6 +4022,7 @@
         "user"
       ],
       "doc": "the user's action on a card (once: a settled card is an error)",
+      "home": "backend",
       "name": "job/card",
       "params": {
         "$defs": {
@@ -2924,6 +4176,7 @@
         "user"
       ],
       "doc": "a message acted on without an answer",
+      "home": "backend",
       "name": "job/dismiss",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2952,6 +4205,7 @@
         "user"
       ],
       "doc": "a task moves in its job's run order (the Work graph)",
+      "home": "backend",
       "name": "job/order",
       "params": {
         "$defs": {
@@ -3088,6 +4342,7 @@
         "user"
       ],
       "doc": "a job from a plan, proposed (approved at once with auto)",
+      "home": "backend",
       "name": "job/propose",
       "params": {
         "$defs": {
@@ -3266,6 +4521,7 @@
         "user"
       ],
       "doc": "a task goes to another profile (the Work graph)",
+      "home": "backend",
       "name": "job/reassign",
       "params": {
         "$defs": {
@@ -3397,6 +4653,7 @@
         "user"
       ],
       "doc": "the user's answer to an agent's message",
+      "home": "backend",
       "name": "job/reply",
       "params": {
         "$defs": {
@@ -3436,6 +4693,7 @@
         "user"
       ],
       "doc": "a stopped job runs again, with an optional new budget",
+      "home": "backend",
       "name": "job/resume",
       "params": {
         "$defs": {
@@ -3578,6 +4836,7 @@
         "user"
       ],
       "doc": "Start as Job: task n of a plan and the tasks it needs, proposed; the plan is only read",
+      "home": "backend",
       "name": "job/start-task",
       "params": {
         "$defs": {
@@ -3735,6 +4994,7 @@
         "user"
       ],
       "doc": "one job (with its decision log when asked), or every job",
+      "home": "backend",
       "name": "job/status",
       "params": {
         "$defs": {
@@ -3895,6 +5155,7 @@
         "user"
       ],
       "doc": "a job's agents stop and it waits",
+      "home": "backend",
       "name": "job/stop",
       "params": {
         "$defs": {
@@ -4021,6 +5282,7 @@
         "user"
       ],
       "doc": "a blocked task may run again (the Work graph)",
+      "home": "backend",
       "name": "job/unblock",
       "params": {
         "$defs": {
@@ -4144,11 +5406,295 @@
     },
     {
       "classes": [
+        "user"
+      ],
+      "doc": "a message moved on to delivered, read or acted, never back (drgnx-coord-mark)",
+      "home": "front",
+      "name": "messages/mark",
+      "params": {
+        "$defs": {
+          "MessageState": {
+            "description": "The states a message moves on to (never back; `held` stands apart).",
+            "enum": [
+              "delivered",
+              "read",
+              "acted"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/MessageState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "title": "MarkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`messages/mark`'s answer: whether the message moved on.",
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "changed"
+        ],
+        "title": "Changed",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a message, from the user (only the backend names another sender); held when seen is behind the decision log (drgnx-coord-send)",
+      "home": "front",
+      "name": "messages/send",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "answers": {
+            "description": "The question to the user (a message's id) this message answers.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "question": {
+            "description": "A message to `user` that is a question (the `ask_user` tool).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "recipient": {
+            "$ref": "#/$defs/AgentName",
+            "description": "`user`, an agent's id, or a job's task holder."
+          },
+          "seen": {
+            "description": "The decision-log version the sender last read: behind the log, nothing is sent and the answer is held.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sender": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only the Lisp backend names a sender (its agents' messages); an editor always sends as the user."
+          },
+          "text": {
+            "$ref": "#/$defs/Text"
+          }
+        },
+        "required": [
+          "recipient",
+          "text"
+        ],
+        "title": "SendParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Decision": {
+            "additionalProperties": false,
+            "description": "One decision as the log has it (`drgnx-coord--decision-plist`).",
+            "properties": {
+              "at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "n": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "paths": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "replaces": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "subject": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ver": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`messages/send`'s answer (`drgnx-coord-send`): `{ok, id, state}` (state `queued`, or `held` when the recipient's\nqueue is full or the two talk too much), or `{held, version, changes}` when the sender's `seen` is behind the log\n(nothing was sent; `changes` are the decisions after `seen`, newest first).",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/$defs/Decision"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "held": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "SendResult",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
         "user",
         "agent",
         "service"
       ],
       "doc": "the hub's pid",
+      "home": "front",
       "name": "ping",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4179,6 +5725,7 @@
         "user"
       ],
       "doc": "answers true, then the hub exits 75 for its supervisor to start it again",
+      "home": "front",
       "name": "restart",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4197,7 +5744,155 @@
       "classes": [
         "user"
       ],
+      "doc": "a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
+      "home": "front",
+      "name": "review/mark",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "EventKind": {
+            "description": "What an event can be (`drgnx-coord-event-kinds`).",
+            "enum": [
+              "start",
+              "stop",
+              "claim",
+              "release",
+              "status",
+              "decision",
+              "edit",
+              "test",
+              "question",
+              "answer",
+              "review",
+              "message",
+              "card",
+              "accept",
+              "revert",
+              "comment",
+              "job"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "ReviewEvent": {
+            "description": "The review's own event, written in the mark's transaction (its agent is the mark's).",
+            "properties": {
+              "data": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/JsonObject"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "job": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Id"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/EventKind"
+              },
+              "summary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ReviewState": {
+            "enum": [
+              "accepted",
+              "pending"
+            ],
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/AgentName"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReviewEvent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hash": {
+            "description": "The diff's hash the mark is for (the merge gate compares it).",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/ReviewState"
+          }
+        },
+        "required": [
+          "agent",
+          "path",
+          "state",
+          "hash"
+        ],
+        "title": "ReviewMarkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "answers true, then the hub exits",
+      "home": "front",
       "name": "shutdown",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4219,6 +5914,7 @@
         "service"
       ],
       "doc": "what a job's, task's or agent's requests came to (an agent: its own job's)",
+      "home": "backend",
       "name": "spend",
       "params": {
         "$defs": {
@@ -4321,6 +6017,7 @@
         "service"
       ],
       "doc": "the hub's state: versions, refusals, read-only, the backend",
+      "home": "front",
       "name": "status",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4396,6 +6093,42 @@
               "commit"
             ],
             "type": "object"
+          },
+          "StoreStatus": {
+            "additionalProperties": false,
+            "description": "work.db as the front's writer has it.",
+            "properties": {
+              "schema": {
+                "description": "`meta.schema` at the last look (0: no file).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "writer": {
+                "$ref": "#/$defs/WriterState"
+              },
+              "writes": {
+                "description": "The transactions the front's methods committed since the hub started.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema",
+              "writer",
+              "writes"
+            ],
+            "type": "object"
+          },
+          "WriterState": {
+            "description": "Whether the front's writer can write work.db: only a schema-6 file the Lisp side made.",
+            "enum": [
+              "ready",
+              "not-ready",
+              "read-only"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4517,6 +6250,17 @@
               "string",
               "null"
             ]
+          },
+          "store": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StoreStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The front's writer (none from a Lisp hub)."
           }
         },
         "required": [
@@ -4532,6 +6276,7 @@
         "user"
       ],
       "doc": "this connection receives the events from now on",
+      "home": "front",
       "name": "subscribe",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

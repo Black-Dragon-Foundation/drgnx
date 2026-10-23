@@ -651,42 +651,57 @@ a capitalised name a named type (below) or, in results, a record (`JobSummary`, 
 result may (a transcript entry's ACP fields, a job's tasks).
 
 <!-- hub-methods:begin -->
-| Method | Class | Params | Result | Writes |
-|---|---|---|---|---|
-| `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
-| `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
-| `agents/kill` | user | `{id: Id}` | `boolean` | yes |
-| `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
-| `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
-| `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes |
-| `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes |
-| `agents/stop` | user | `{id: Id}` | `boolean` | yes |
-| `coord/notify` | user, agent, service | `{}` | `boolean` | no |
-| `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
-| `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
-| `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
-| `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, task?: TaskRef}` | `{openrouter?: any, token: string, url: string}` | yes |
-| `gateway/unregister` | user | `{token: string}` | `boolean` | yes |
-| `hello` | user, agent, service | `{client?: string, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
-| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
-| `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
-| `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
-| `job/dismiss` | user | `{message: natnum}` | `boolean` | yes |
-| `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes |
-| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: AbsPath, repo?: AbsPath}` | `JobSummary` | yes |
-| `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes |
-| `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes |
-| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
-| `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: natnum, plan: AbsPath}` | `JobSummary` | yes |
-| `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
-| `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
-| `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
-| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
-| `restart` | user | `{}` | `boolean` | no |
-| `shutdown` | user | `{}` | `boolean` | no |
-| `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no |
-| `status` | user, agent, service | `{}` | `HubStatus` | no |
-| `subscribe` | user | `{}` | `boolean` | no |
+| Method | Class | Params | Result | Writes | Home |
+|---|---|---|---|---|---|
+| `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes | backend |
+| `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no | backend |
+| `agents/kill` | user | `{id: Id}` | `boolean` | yes | backend |
+| `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no | backend |
+| `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes | backend |
+| `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | backend |
+| `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes | backend |
+| `agents/stop` | user | `{id: Id}` | `boolean` | yes | backend |
+| `cards/settle` | user | `{card: natnum, choice: string}` | `{settled: boolean}` | yes | front |
+| `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes | front |
+| `coord/card-create` | user | `{data?: JsonObject, job?: Id, kind?: string, task?: TaskRef, title?: Text}` | `{id: natnum}` | yes | front |
+| `coord/card-set` | user | `{data?: JsonObject, id: natnum, state?: Status, title?: Text}` | `boolean` | yes | front |
+| `coord/decide` | user | `{author: AgentName, job?: Id, kind: string, paths?: Text, reason?: Text, replaces?: natnum, seen?: natnum, subject: Text, task?: TaskRef}` | `Decided` | yes | front |
+| `coord/held` | user | `{agent: AgentName, held: boolean}` | `boolean` | yes | front |
+| `coord/job-create` | user | `{data?: JsonObject, id: Id, plan?: string, repo?: string, tasks?: [{deps?: [natnum], n: natnum, role?: string, title: Text}], title: Text}` | `{id: string}` | yes | front |
+| `coord/job-set` | user | `{data?: JsonObject, id: Id, status?: Status}` | `boolean` | yes | front |
+| `coord/leases` | user | `{release_stale?: boolean, renew?: [AgentName]}` | `{released?: [Released]}` | yes | front |
+| `coord/notify` | user, agent, service | `{}` | `boolean` | no | front |
+| `coord/prune` | user | `{}` | `{pruned: boolean}` | yes | front |
+| `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes | front |
+| `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | backend |
+| `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes | front |
+| `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no | front |
+| `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | backend |
+| `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, task?: TaskRef}` | `{openrouter?: any, token: string, url: string}` | yes | backend |
+| `gateway/unregister` | user | `{token: string}` | `boolean` | yes | backend |
+| `hello` | user, agent, service | `{client?: string, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
+| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
+| `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | backend |
+| `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes | backend |
+| `job/dismiss` | user | `{message: natnum}` | `boolean` | yes | backend |
+| `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes | backend |
+| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: AbsPath, repo?: AbsPath}` | `JobSummary` | yes | backend |
+| `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes | backend |
+| `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes | backend |
+| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
+| `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: natnum, plan: AbsPath}` | `JobSummary` | yes | backend |
+| `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no | backend |
+| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |
+| `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes | backend |
+| `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes | front |
+| `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes | front |
+| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |
+| `restart` | user | `{}` | `boolean` | no | front |
+| `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes | front |
+| `shutdown` | user | `{}` | `boolean` | no | front |
+| `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | backend |
+| `status` | user, agent, service | `{}` | `HubStatus` | no | front |
+| `subscribe` | user | `{}` | `boolean` | no | front |
 <!-- hub-methods:end -->
 
 ### Classes
