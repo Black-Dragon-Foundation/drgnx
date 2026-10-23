@@ -86,7 +86,12 @@ fn reload(tx: &Tx<'_>, e: &Ent) -> Result<Ent, WriteError> {
 
 /// The fence (storage §6.3): CALLER holds E's lease, LEASE is its epoch and it has not run out. `None` when it holds;
 /// else the `lease_lost` answer.
-fn fence(tx: &Tx<'_>, caller: &Caller, e: &Ent, lease: i64) -> Result<Option<TaskAnswer>, WriteError> {
+fn fence(
+    tx: &Tx<'_>,
+    caller: &Caller,
+    e: &Ent,
+    lease: i64,
+) -> Result<Option<TaskAnswer>, WriteError> {
     let holds = e.lease.holder.as_deref() == Some(caller.actor.as_str())
         && e.lease.epoch == lease
         && e.lease.until.is_some_and(|u| u > tx.at());
@@ -273,7 +278,11 @@ pub fn create(tx: &mut Tx<'_>, caller: &Caller, t: NewTask) -> Result<TaskAnswer
         ));
     };
     let title = clean_title(&t.title)?;
-    let body = t.body.as_deref().map(|b| clean_text("body", b)).transpose()?;
+    let body = t
+        .body
+        .as_deref()
+        .map(|b| clean_text("body", b))
+        .transpose()?;
     let acceptance = t
         .acceptance
         .as_deref()
@@ -368,7 +377,11 @@ pub fn update(
         }
     }
     let title = f.title.as_deref().map(clean_title).transpose()?;
-    let body = f.body.as_deref().map(|b| clean_text("body", b)).transpose()?;
+    let body = f
+        .body
+        .as_deref()
+        .map(|b| clean_text("body", b))
+        .transpose()?;
     let acceptance = f
         .acceptance
         .as_deref()
@@ -985,7 +998,8 @@ pub fn unlink(
     if link::retire(tx, s.n, kind, d.n)? {
         notices::changed(tx, caller, &s, &["links"], None, None)?;
         if d.kind == "task" {
-            let says = (kind == "blocks" && is_ready(tx.sql(), d.n, tx.at())?).then_some("now ready");
+            let says =
+                (kind == "blocks" && is_ready(tx.sql(), d.n, tx.at())?).then_some("now ready");
             notices::changed(tx, caller, &d, &["links"], None, says)?;
         }
     }

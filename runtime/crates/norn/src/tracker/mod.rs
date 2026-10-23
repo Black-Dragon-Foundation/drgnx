@@ -323,7 +323,13 @@ pub fn accept_close(
     let answer = ops::accept_close(tx, caller, id, ver)?;
     if let TaskAnswer::Done { id, title, ver, .. } = &answer {
         let data = json!({"op": "update", "id": id, "ver": ver, "accepted": true});
-        task_event(tx, caller, &format!("close accepted {id}: {title}"), id, &data)?;
+        task_event(
+            tx,
+            caller,
+            &format!("close accepted {id}: {title}"),
+            id,
+            &data,
+        )?;
     }
     Ok(answer)
 }
@@ -366,10 +372,7 @@ pub fn ready(
         Reach::AnyProject => " and e.project is not null".into(),
         Reach::Projects(ps) => format!(
             " and e.project in ({})",
-            ps.iter()
-                .map(i64::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
+            ps.iter().map(i64::to_string).collect::<Vec<_>>().join(", ")
         ),
     };
     let sql = format!(
@@ -446,7 +449,10 @@ pub(crate) fn opt<T>(r: Result<T, urdr::SqliteError>) -> Result<Option<T>, urdr:
 pub(crate) fn is_parsed(e: &Ent) -> bool {
     e.origin == Origin::Parsed
         || e.id.starts_with("task:/")
-        || matches!(e.kind.as_str(), "spec" | "plan" | "step" | "ruling" | "todo")
+        || matches!(
+            e.kind.as_str(),
+            "spec" | "plan" | "step" | "ruling" | "todo"
+        )
 }
 
 /// The job of a job task (`task:JOB#N`, `data.job`), else `None`.
@@ -463,21 +469,22 @@ pub(crate) fn job_of(e: &Ent) -> Option<String> {
 
 /// Whether E was made by the user (its creating tx's class is `user`; answer 4, call 17).
 pub(crate) fn user_made(tx: &Tx<'_>, e: &Ent) -> Result<bool, WriteError> {
-    let class: Option<String> = opt(tx
-        .sql()
-        .query_row("select class from tx where id = ?1", [e.created_tx], |r| {
-            r.get(0)
-        }))?;
+    let class: Option<String> =
+        opt(tx
+            .sql()
+            .query_row("select class from tx where id = ?1", [e.created_tx], |r| {
+                r.get(0)
+            }))?;
     Ok(class.as_deref() == Some(Class::User.as_str()))
 }
 
 /// The actor of the tx that made E.
 pub(crate) fn creator(tx: &Tx<'_>, e: &Ent) -> Result<Option<String>, WriteError> {
-    Ok(opt(tx
-        .sql()
-        .query_row("select actor from tx where id = ?1", [e.created_tx], |r| {
-            r.get(0)
-        }))?)
+    Ok(opt(tx.sql().query_row(
+        "select actor from tx where id = ?1",
+        [e.created_tx],
+        |r| r.get(0),
+    ))?)
 }
 
 /// Whether "only I close my tasks" is on.
@@ -643,7 +650,9 @@ pub(crate) fn clean_labels(labels: &[String]) -> Result<Vec<String>, WriteError>
     let mut out: Vec<String> = Vec::new();
     for l in labels {
         no_secret("label", l)?;
-        let l = runstav::text::one_line(l, LABEL_MAX, false).trim().to_owned();
+        let l = runstav::text::one_line(l, LABEL_MAX, false)
+            .trim()
+            .to_owned();
         if !l.is_empty() && !out.contains(&l) {
             out.push(l);
         }

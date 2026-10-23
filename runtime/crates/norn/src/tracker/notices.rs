@@ -120,9 +120,8 @@ mod tests {
 
     /// The unread notices of AGENT, oldest first, as JSON.
     fn notices_of(fx: &Fx, agent: &str) -> Vec<Value> {
-        let mut stmt = fx
-            .c
-            .prepare(
+        let mut stmt =
+            fx.c.prepare(
                 "select text from message where recipient = ?1 and entity is not null \
                  and state in ('queued', 'delivered') order by id",
             )
@@ -167,9 +166,8 @@ mod tests {
             "counted for the tools"
         );
         // The row is a message from the tracker about the task, in the change's tx.
-        let (sender, entity, tx): (String, i64, i64) = fx
-            .c
-            .query_row(
+        let (sender, entity, tx): (String, i64, i64) =
+            fx.c.query_row(
                 "select sender, entity, tx from message where recipient = 'agent:a'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -233,9 +231,8 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0]["changes"], 1);
         assert_eq!(super::notices_unread(&fx.c, "agent:a").unwrap(), 1);
-        let rows: i64 = fx
-            .c
-            .query_row(
+        let rows: i64 =
+            fx.c.query_row(
                 "select count(*) from message where recipient = 'agent:a'",
                 [],
                 |r| r.get(0),
@@ -264,7 +261,8 @@ mod tests {
                 note: "c takes this one".into(),
             },
         ));
-        fx.c.execute("update message set state = 'read'", []).unwrap();
+        fx.c.execute("update message set state = 'read'", [])
+            .unwrap();
         // The first blocker done: the second still waits on the third, so nobody hears "now ready".
         fx.claim(&b, &first);
         let ver = fx.ver(&first);
@@ -297,7 +295,8 @@ mod tests {
         // A blocker set done says it too.
         let fourth = fx.task(&a, "fourth");
         fx.link(&a, &fourth, "blocks", &second);
-        fx.c.execute("update message set state = 'read'", []).unwrap();
+        fx.c.execute("update message set state = 'read'", [])
+            .unwrap();
         let ver = fx.ver(&fourth);
         ok(fx.run(
             &b,

@@ -142,7 +142,12 @@ impl Fx {
         self.c.query_row(sql, [], |r| r.get(0)).unwrap()
     }
 
-    fn update(&mut self, caller: &Caller, id: &str, f: impl FnOnce(&mut ops::Fields)) -> Result<TaskAnswer, WriteError> {
+    fn update(
+        &mut self,
+        caller: &Caller,
+        id: &str,
+        f: impl FnOnce(&mut ops::Fields),
+    ) -> Result<TaskAnswer, WriteError> {
         let mut fields = ops::Fields::default();
         f(&mut fields);
         let ver = self.ver(id);
@@ -211,7 +216,13 @@ fn no(r: Result<TaskAnswer, WriteError>) -> String {
 
 fn lost(r: Result<TaskAnswer, WriteError>) -> (Option<String>, LostHow, Option<String>) {
     match r {
-        Ok(TaskAnswer::LeaseLost { by, how, note, next, .. }) => {
+        Ok(TaskAnswer::LeaseLost {
+            by,
+            how,
+            note,
+            next,
+            ..
+        }) => {
             assert_eq!(next, "stop work on this task; read your notices");
             (by, how, note)
         }
@@ -234,18 +245,34 @@ fn create_in_own_project_only() {
             parent: None,
         },
     ));
-    let TaskAnswer::Done { id, title, ver, lease, .. } = got else {
+    let TaskAnswer::Done {
+        id,
+        title,
+        ver,
+        lease,
+        ..
+    } = got
+    else {
         unreachable!()
     };
     assert_eq!((title.as_str(), ver, lease), ("Parse the file", 1, None));
-    let suffix = id.strip_prefix("task:al-").expect("the alias's two letters");
+    let suffix = id
+        .strip_prefix("task:al-")
+        .expect("the alias's two letters");
     assert_eq!(suffix.len(), 5);
-    assert!(suffix.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()));
+    assert!(
+        suffix
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())
+    );
     let e = fx.ent(&id);
     assert_eq!(e.project, Some(fx.a));
     assert_eq!(e.status.as_deref(), Some("open"));
     assert_eq!(e.origin, Origin::Recorded);
-    assert_eq!(e.data, json!({"labels": ["parser"], "acceptance": "tests pass"}));
+    assert_eq!(
+        e.data,
+        json!({"labels": ["parser"], "acceptance": "tests pass"})
+    );
     // A caller without a project writes nothing.
     let homeless = fx.agent_in("s2", None);
     assert!(no(fx.run(&homeless, create("x"))).contains("no project"));
@@ -299,7 +326,12 @@ fn out_of_scope_is_no_such_task() {
     }
     // An id that does not exist reads the same.
     assert_eq!(
-        no(fx.run(&a, TaskOp::Claim { id: "task:be-zzzzz".into() })),
+        no(fx.run(
+            &a,
+            TaskOp::Claim {
+                id: "task:be-zzzzz".into()
+            }
+        )),
         "no such task: task:be-zzzzz"
     );
     // Under a read grant the task is seen, and still not written.
@@ -334,7 +366,12 @@ fn parsed_and_board_are_refused() {
     fx.write(scan.clone(), |tx| {
         entity::create(
             tx,
-            parsed("task:/w/alpha/docs/plan.md#3", "task", Some(pa), "/w/alpha/docs/plan.md"),
+            parsed(
+                "task:/w/alpha/docs/plan.md#3",
+                "task",
+                Some(pa),
+                "/w/alpha/docs/plan.md",
+            ),
         )
     });
     fx.write(scan, |tx| {
@@ -408,7 +445,15 @@ fn job_tasks_are_refused() {
         crate::write::jobs::job_create(tx, job, 1.0).map_err(|e| WriteError::Sql(e.to_string()))
     });
     let want = "this task belongs to job j; use claim_task, update_task or complete_task";
-    assert_eq!(no(fx.run(&a, TaskOp::Claim { id: "task:j#1".into() })), want);
+    assert_eq!(
+        no(fx.run(
+            &a,
+            TaskOp::Claim {
+                id: "task:j#1".into()
+            }
+        )),
+        want
+    );
     assert_eq!(
         no(fx.run(
             &fx.user(fx.a),
@@ -477,7 +522,10 @@ fn a_stale_ver_is_a_conflict_with_changed_since() {
     // Nothing written, no event.
     let e = fx.ent(&t);
     assert_eq!((e.ver, e.body), (2, None));
-    assert_eq!(fx.count("select count(*) from event where summary like 'update%'"), 1);
+    assert_eq!(
+        fx.count("select count(*) from event where summary like 'update%'"),
+        1
+    );
 }
 
 #[test]
@@ -511,7 +559,9 @@ fn label_and_link_need_no_ver() {
     fx.link(&a, &t, "relates", &u);
     fx.link(&b, &t, "relates", &u);
     assert_eq!(
-        fx.count("select count(*) from link where kind = 'relates' and tx_to = 4611686018427387904"),
+        fx.count(
+            "select count(*) from link where kind = 'relates' and tx_to = 4611686018427387904"
+        ),
         1
     );
     ok(fx.run(
@@ -523,7 +573,9 @@ fn label_and_link_need_no_ver() {
         },
     ));
     assert_eq!(
-        fx.count("select count(*) from link where kind = 'relates' and tx_to = 4611686018427387904"),
+        fx.count(
+            "select count(*) from link where kind = 'relates' and tx_to = 4611686018427387904"
+        ),
         0
     );
 }
@@ -639,7 +691,11 @@ fn claim_needs_ready() {
     assert_eq!(fx.claim(&b, &second), 1);
     let e = fx.ent(&second);
     assert_eq!(
-        (e.status.as_deref(), e.assignee.as_deref(), e.lease.holder.as_deref()),
+        (
+            e.status.as_deref(),
+            e.assignee.as_deref(),
+            e.lease.holder.as_deref()
+        ),
         (Some("claimed"), Some("agent:b"), Some("agent:b"))
     );
     // The claim links b's session to the task.
@@ -669,13 +725,34 @@ fn claim_after_expiry() {
     assert_eq!(fx.claim(&a, &t), 1);
     fx.expire(&t);
     assert_eq!(fx.claim(&b, &t), 2);
-    let (by, how, note) = lost(fx.run(&a, TaskOp::Heartbeat { id: t.clone(), lease: 1 }));
-    assert_eq!((by.as_deref(), how, note), (Some("agent:b"), LostHow::Reclaimed, None));
+    let (by, how, note) = lost(fx.run(
+        &a,
+        TaskOp::Heartbeat {
+            id: t.clone(),
+            lease: 1,
+        },
+    ));
+    assert_eq!(
+        (by.as_deref(), how, note),
+        (Some("agent:b"), LostHow::Reclaimed, None)
+    );
     // b holds it.
-    ok(fx.run(&b, TaskOp::Heartbeat { id: t.clone(), lease: 2 }));
+    ok(fx.run(
+        &b,
+        TaskOp::Heartbeat {
+            id: t.clone(),
+            lease: 2,
+        },
+    ));
     // An expired lease that nobody took over: still its holder's to lose.
     fx.expire(&t);
-    let (by, how, _) = lost(fx.run(&b, TaskOp::Heartbeat { id: t.clone(), lease: 2 }));
+    let (by, how, _) = lost(fx.run(
+        &b,
+        TaskOp::Heartbeat {
+            id: t.clone(),
+            lease: 2,
+        },
+    ));
     assert_eq!((by, how), (None, LostHow::Expired));
 }
 
@@ -725,7 +802,11 @@ fn a_lost_lease_is_refused_on_every_holder_op() {
         let (by, how, note) = lost(fx.run(&a, op));
         assert_eq!(
             (by.as_deref(), how, note.as_deref()),
-            (Some("agent:b"), LostHow::Reassign, Some("a is stuck; c takes it"))
+            (
+                Some("agent:b"),
+                LostHow::Reassign,
+                Some("a is stuck; c takes it")
+            )
         );
     }
     assert_eq!(fx.ent(&t), before, "nothing written");
@@ -782,7 +863,14 @@ fn reassign_bumps_the_epoch() {
         },
     ));
     let e = fx.ent(&t);
-    assert_eq!(e.lease, Lease { holder: None, epoch: 2, until: None });
+    assert_eq!(
+        e.lease,
+        Lease {
+            holder: None,
+            epoch: 2,
+            until: None
+        }
+    );
     assert_eq!(
         (e.status.as_deref(), e.assignee.as_deref()),
         (Some("open"), Some("agent:c"))
@@ -823,7 +911,13 @@ fn a_reconnecting_holder_with_an_old_epoch_is_refused() {
     let second = fx.claim(&a, &t);
     assert!(second > first);
     assert!(matches!(
-        fx.run(&a, TaskOp::Heartbeat { id: t.clone(), lease: first }),
+        fx.run(
+            &a,
+            TaskOp::Heartbeat {
+                id: t.clone(),
+                lease: first
+            }
+        ),
         Ok(TaskAnswer::LeaseLost { .. })
     ));
     assert!(matches!(
@@ -838,7 +932,13 @@ fn a_reconnecting_holder_with_an_old_epoch_is_refused() {
         Ok(TaskAnswer::LeaseLost { .. })
     ));
     assert_eq!(fx.ent(&t).status.as_deref(), Some("claimed"));
-    ok(fx.run(&a, TaskOp::Heartbeat { id: t.clone(), lease: second }));
+    ok(fx.run(
+        &a,
+        TaskOp::Heartbeat {
+            id: t.clone(),
+            lease: second,
+        },
+    ));
 }
 
 #[test]
@@ -951,16 +1051,18 @@ fn split_children_and_replace() {
         )),
         1
     );
-    assert!(no(fx.run(
-        &a,
-        TaskOp::Split {
-            id: t.clone(),
-            ver: fx.ver(&t),
-            parts: vec!["x".into()],
-            mode: Some("halves".into()),
-        }
-    ))
-    .contains("not a split mode"));
+    assert!(
+        no(fx.run(
+            &a,
+            TaskOp::Split {
+                id: t.clone(),
+                ver: fx.ver(&t),
+                parts: vec!["x".into()],
+                mode: Some("halves".into()),
+            }
+        ))
+        .contains("not a split mode")
+    );
 }
 
 #[test]
@@ -984,15 +1086,17 @@ fn a_blocks_cycle_is_refused_with_its_path() {
         t,
         format!("this would make a blocks cycle: {t3} → {t1} → {t2} → {t3}")
     );
-    assert!(no(fx.run(
-        &a,
-        TaskOp::Link {
-            src: t1.clone(),
-            kind: "blocks".into(),
-            dst: t1.clone(),
-        }
-    ))
-    .contains("itself"));
+    assert!(
+        no(fx.run(
+            &a,
+            TaskOp::Link {
+                src: t1.clone(),
+                kind: "blocks".into(),
+                dst: t1.clone(),
+            }
+        ))
+        .contains("itself")
+    );
     // Unlinked, the same link is fine.
     ok(fx.run(
         &a,
@@ -1041,15 +1145,17 @@ fn a_ready_link_into_another_project_is_refused() {
     // An association may point there under the grant; the source must be a's own.
     fx.link(&a, &mine, "relates", &theirs);
     fx.link(&a, &mine, "duplicates", &theirs);
-    assert!(no(fx.run(
-        &a,
-        TaskOp::Link {
-            src: theirs.clone(),
-            kind: "relates".into(),
-            dst: mine.clone(),
-        }
-    ))
-    .contains("another project"));
+    assert!(
+        no(fx.run(
+            &a,
+            TaskOp::Link {
+                src: theirs.clone(),
+                kind: "relates".into(),
+                dst: mine.clone(),
+            }
+        ))
+        .contains("another project")
+    );
 }
 
 #[test]
@@ -1065,11 +1171,26 @@ fn secrets_are_refused() {
     );
     let t = fx.task(&a, "fine");
     for (field, f) in [
-        ("body", ops::Fields { body: Some(secret.clone()), ..Default::default() }),
-        ("acceptance", ops::Fields { acceptance: Some(secret.clone()), ..Default::default() }),
+        (
+            "body",
+            ops::Fields {
+                body: Some(secret.clone()),
+                ..Default::default()
+            },
+        ),
+        (
+            "acceptance",
+            ops::Fields {
+                acceptance: Some(secret.clone()),
+                ..Default::default()
+            },
+        ),
     ] {
         let got = no(fx.update(&a, &t, |x| *x = f));
-        assert!(got.starts_with(&format!("the {field} looks like a secret")), "{got}");
+        assert!(
+            got.starts_with(&format!("the {field} looks like a secret")),
+            "{got}"
+        );
     }
     let got = no(fx.run(
         &a,
@@ -1090,7 +1211,10 @@ fn secrets_are_refused() {
         },
     ));
     assert!(got.starts_with("the note looks like a secret"), "{got}");
-    assert_eq!(fx.count("select count(*) from entity where kind = 'note'"), 0);
+    assert_eq!(
+        fx.count("select count(*) from entity where kind = 'note'"),
+        0
+    );
 }
 
 #[test]
@@ -1108,14 +1232,16 @@ fn every_op_is_one_tx_and_one_event() {
         );
         let got = fx.run(who, op);
         assert!(
-            matches!(got, Ok(TaskAnswer::Done { .. } | TaskAnswer::Proposed { .. })),
+            matches!(
+                got,
+                Ok(TaskAnswer::Done { .. } | TaskAnswer::Proposed { .. })
+            ),
             "{name}: {got:?}"
         );
         assert_eq!(fx.count("select count(*) from tx"), txs + 1, "{name}");
         assert_eq!(fx.count("select count(*) from event"), events + 1, "{name}");
-        let (kind, summary, by, at): (String, String, i64, String) = fx
-            .c
-            .query_row(
+        let (kind, summary, by, at): (String, String, i64, String) =
+            fx.c.query_row(
                 "select e.kind, e.summary, e.tx, t.actor from event e join tx t on t.id = e.tx \
                  order by e.id desc limit 1",
                 [],
@@ -1172,7 +1298,14 @@ fn every_op_is_one_tx_and_one_event() {
     );
     step(&mut fx, &a, TaskOp::Claim { id: t.clone() });
     let lease = fx.ent(&t).lease.epoch;
-    step(&mut fx, &a, TaskOp::Heartbeat { id: t.clone(), lease });
+    step(
+        &mut fx,
+        &a,
+        TaskOp::Heartbeat {
+            id: t.clone(),
+            lease,
+        },
+    );
     step(
         &mut fx,
         &a,
@@ -1277,7 +1410,10 @@ fn ready_is_computed() {
     assert_eq!(ids(&fx, &fx.agent_in("z", Some(fx.b)), &[]).len(), 1);
     assert_eq!(ids(&fx, &Caller::user(false), &[]).len(), 3);
     // Nothing stores readiness.
-    assert_eq!(fx.count("select count(*) from entity where status = 'ready'"), 0);
+    assert_eq!(
+        fx.count("select count(*) from entity where status = 'ready'"),
+        0
+    );
 }
 
 #[test]
@@ -1391,18 +1527,31 @@ fn only_i_close_turns_done_into_a_proposal() {
     // No status changed; a close card about the task, and the user told.
     let e = fx.ent(&t);
     assert_eq!((e.status.as_deref(), e.ver), (Some("claimed"), ver));
-    let (kind, entity, job, data, state): (String, i64, Option<String>, String, String) = fx
-        .c
-        .query_row(
+    let (kind, entity, job, data, state): (String, i64, Option<String>, String, String) =
+        fx.c.query_row(
             "select kind, entity, job, data, state from card where id = ?1",
             [card],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .unwrap();
-    assert_eq!((kind.as_str(), entity, job, state.as_str()), ("close", e.n, None, "open"));
+    assert_eq!(
+        (kind.as_str(), entity, job, state.as_str()),
+        ("close", e.n, None, "open")
+    );
     let data: serde_json::Value = serde_json::from_str(&data).unwrap();
-    assert_eq!((data["task"].as_str(), data["ver"].as_i64(), data["by"].as_str()), (Some(t.as_str()), Some(ver), Some("agent:a")));
-    assert!(data["note"].as_str().is_some_and(|n| n.starts_with("note:al-")));
+    assert_eq!(
+        (
+            data["task"].as_str(),
+            data["ver"].as_i64(),
+            data["by"].as_str()
+        ),
+        (Some(t.as_str()), Some(ver), Some("agent:a"))
+    );
+    assert!(
+        data["note"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("note:al-"))
+    );
     assert_eq!(
         fx.count("select count(*) from message where recipient = 'user' and entity is not null"),
         1
@@ -1417,11 +1566,15 @@ fn only_i_close_turns_done_into_a_proposal() {
         },
     ));
     let got = fx.update(&b, &t, |f| f.status = Some("done".into()));
-    assert!(matches!(got, Ok(TaskAnswer::Proposed { card: c }) if c == card), "{got:?}");
+    assert!(
+        matches!(got, Ok(TaskAnswer::Proposed { card: c }) if c == card),
+        "{got:?}"
+    );
     assert_eq!(fx.count("select count(*) from card"), 1);
-    let by: String = fx
-        .c
-        .query_row("select json_extract(data, '$.by') from card", [], |r| r.get(0))
+    let by: String =
+        fx.c.query_row("select json_extract(data, '$.by') from card", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(by, "agent:b");
     // Off again: done is done.
@@ -1468,7 +1621,9 @@ fn without_the_grant_in_review() {
     assert_eq!(fx.ent(&t).status.as_deref(), Some("in-review"));
     let got = no(fx.update(&a, &t, |f| f.status = Some("done".into())));
     assert!(got.starts_with("the user closes this task"), "{got}");
-    assert!(no(fx.update(&a, &t, |f| f.status = Some("blocked".into()))).contains("only in-review"));
+    assert!(
+        no(fx.update(&a, &t, |f| f.status = Some("blocked".into()))).contains("only in-review")
+    );
     // The user closes it.
     ok(fx.update(&fx.user(fx.a), &t, |f| f.status = Some("done".into())));
     assert_eq!(fx.ent(&t).status.as_deref(), Some("done"));
