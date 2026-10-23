@@ -1044,7 +1044,8 @@ when a step fails."
              results "\n"))
 
 (defun drgnx-perf-run--json-ready (v)
-  "V (a result: plists, stats, vectors) for `json-serialize': nil is null, a boolean :loaded is true or false."
+  "V (a result: plists, stats, vectors, lists) for `json-serialize': nil is null, a boolean :loaded is true or false,
+any other proper list (an A/B's side order, (\"a\" \"b\" ...)) an array."
   (cond ((null v) :null)
         ((vectorp v) (vconcat (mapcar #'drgnx-perf-run--json-ready v)))
         ((and (consp v) (keywordp (car v)))
@@ -1052,6 +1053,7 @@ when a step fails."
            (cl-loop for (k x) on v by #'cddr
                     do (setq out (nconc out (list k (if (eq k :loaded) (if x t :false) (drgnx-perf-run--json-ready x))))))
            out))
+        ((proper-list-p v) (vconcat (mapcar #'drgnx-perf-run--json-ready v)))
         (t v)))
 
 (defun drgnx-perf-run--write-results (file results)

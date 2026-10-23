@@ -260,4 +260,15 @@ form and a digest, and a setup form that reads."
             (should (= (length sizes) (plist-get want :messages)))
             (should (= (apply #'+ sizes) (plist-get want :bytes)))))))))
 
+(ert-deftest drgnx-perf-workers/results-json-takes-lists ()
+  ;; An --ab-env result carries the order the sides ran in, ("a" "b" "b" "a" ...): the results file writes it as an
+  ;; array (it failed with (wrong-type-argument symbolp "a") and no file, gate OT2's first A/B).
+  (let ((file (make-temp-file "perf-workers-json" nil ".json")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-run--write-results file '((ts-typing :status "judged" :order ("a" "b" "b" "a") :n 4)))
+          (let ((doc (with-temp-buffer (insert-file-contents file) (json-parse-buffer :object-type 'plist))))
+            (should (equal (plist-get (plist-get (plist-get doc :results) :ts-typing) :order) ["a" "b" "b" "a"]))))
+      (delete-file file))))
+
 ;;; perf-workers-test.el ends here
