@@ -1,0 +1,36 @@
+{"scenario": "excise/the-canary-is-gone", "requires": ["v1", "fake-backend"], "doc": "Excise (storage §8.3): one canary (12 characters or more, so the copies are searched for it) in a task's title and body (made by a keyed task_write, so its answer is kept), in a reassign note and the notices it sent, and in an access request's reason. Excising the task, the reassign's tx and the request's tx leaves no canary in work.db or its WAL; the first report names the planted backup and schema-5 copy that still hold it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$DATA/backup/work-pre7-19990101.db", "text": "an old copy: CANARYzq81xyz7"}
+{"do": "write_file", "path": "$DATA/work.db.schema5", "text": "an older copy: CANARYzq81xyz7"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid1", "socket": "$capture:sock1"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t2", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid2", "socket": "$string"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock1", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "CANARYzq81xyz7", "body": "CANARYzq81xyz7", "req": "k1"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"done": {"id": "$capture:t"}}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "claim", "id": "$t"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"done": {"ver": "$capture:v"}}}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/write", "params": {"op": "reassign", "id": "$t", "ver": "$v", "to": "agent:$sid2", "note": "CANARYzq81xyz7"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$t"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "graph/sql", "params": {"sql": "select updated_tx from entity where id = ?1", "params": ["$t"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"rows": [["$capture:rtx"]]}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "access_request", "arguments": {"project": "beta", "reason": "CANARYzq81xyz7"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"requested": "$number"}}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "graph/sql", "params": {"sql": "select max(id) from tx where tool = 'mcp:access_request'"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"rows": [["$capture:atx"]]}}}
+{"do": "sql_expect", "sql": "select count(*) > 0 from message where recipient in ('agent:$sid1', 'agent:$sid2')", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "graph/excise", "params": {"target": "$t", "reason": "a leak"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"tx": "$number", "backups_holding": {"$contains": ["$DATA/backup/work-pre7-19990101.db", "$DATA/work.db.schema5"]}}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "graph/excise", "params": {"target": "$rtx", "reason": "a leak"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"tx": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "graph/excise", "params": {"target": "$atx", "reason": "a leak"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"tx": "$number", "wal_truncated": true}}}
+{"do": "sql_expect", "sql": "select (select count(*) from entity where coalesce(title, '') || coalesce(body, '') || coalesce(data, '') like '%CANARYzq81xyz7%') + (select count(*) from card where coalesce(title, '') || coalesce(data, '') like '%CANARYzq81xyz7%') + (select count(*) from message where coalesce(text, '') like '%CANARYzq81xyz7%')", "rows": [[0]]}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*"], "absent": "CANARYzq81xyz7"}

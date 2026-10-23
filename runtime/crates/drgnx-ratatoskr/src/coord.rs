@@ -80,7 +80,7 @@ impl Writer {
     /// F in one transaction of the graph writer, its `tx` row from CALLER and METHOD (see [`tx_meta`]).  A store that
     /// was not ready is looked at again first (norn's store does, for the tools too): a work.db the migration just
     /// finished is written at once, not at the next tick.
-    async fn write<R, F>(
+    pub(crate) async fn write<R, F>(
         &self,
         caller: &Caller,
         method: &'static str,
@@ -128,7 +128,7 @@ pub fn tx_meta(caller: &Caller, method: &str) -> TxMeta {
 }
 
 /// A writer's error as the method answers it.
-fn fail(e: CoordError) -> Error {
+pub(crate) fn fail(e: CoordError) -> Error {
     let (code, message) = match &e {
         CoordError::ReadOnly { .. } => (ErrorCode::Schema, e.to_string()),
         CoordError::Busy => (ErrorCode::Internal, "work.db is busy; retry".into()),
@@ -193,13 +193,10 @@ pub async fn serve(
 ) -> Result<Result<Value, Error>, Box<Params>> {
     let now = now();
     let answer = match params {
+        // an access card settles into a grant, a close card into done (crate::graph); the rest as they are
         Params::CardsSettle(p) => {
             let (card, choice) = (int(p.card), p.choice.into_inner());
-            w.write(caller, "cards/settle", move |tx| {
-                cards::card_settle(tx, card, &choice, now)
-            })
-            .await
-            .map(|settled| json!(api::Settled { settled }))
+            return Ok(crate::graph::settle(w, caller, card, choice, now).await);
         }
         Params::MessagesSend(p) => {
             if p.sender.is_some() && !caller.backend {

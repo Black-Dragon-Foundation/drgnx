@@ -2,7 +2,8 @@
 //! which the front mints, and on the main socket for an outside agent's bridge.  Every method here is the front's own.
 //!
 //! - `mcp/session`: a session's `mcp.sock` in its directory (`runstav::paths::session_dir`); the socket is the
-//!   identity of whoever connects to it.
+//!   identity of whoever connects to it.  Its `profile` names it in grants; its `tools` (the profile's
+//!   `:tracker-tools`) choose the tool list with the task's own setting (Urdr Task 15b, calls 12 and 16).
 //! - `mcp/session-close`: that socket and its directory gone.
 //! - `mcp/attach`: a bridge for an agent outside drgnx turns its connection to MCP; its identity is the hub's to
 //!   compute from the peer process, never a claim.
@@ -29,6 +30,19 @@ pub struct SessionParams {
     pub cwd: Option<AbsPath>,
     /// The pid of the process the session belongs to: the session is closed when it is gone.
     pub owner: u64,
+    /// The drgnx profile the agent runs as (grants by `profile:NAME` name it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Id>,
+    /// The profile's tool sets (absent: the profile says nothing; the task's setting, else on, decides).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolSetsParam>,
+}
+
+/// Which tool sets a session's socket serves (call 16).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct ToolSetsParam {
+    /// The tracker and graph tools (`task_read`, `task_write`, `note_add`, `graph_read`, `access_request`).
+    pub tracker: bool,
 }
 
 /// `mcp/session`'s answer: the session's id and the socket to connect to.
@@ -61,7 +75,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "mcp/session", McpSession(SessionParams) -> SessionAnswer,
             classes: [User], writes: false, home: Front,
-            doc: "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db and closed with its owner",
+            doc: "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db with its profile and tool sets, and closed with its owner; the tracker tools unless the session's task or its profile turns them off",
         ),
         method!(
             "mcp/session-close", McpSessionClose(SessionCloseParams) -> bool,

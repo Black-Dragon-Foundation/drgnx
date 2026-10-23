@@ -3812,6 +3812,1202 @@
       "classes": [
         "user"
       ],
+      "doc": "a checked copy of work.db in <data>/backup/ (VACUUM INTO), then the old copies rotated",
+      "home": "front",
+      "name": "graph/backup",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a backup did: the checked copy, and the old copies rotation removed.",
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "removed": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "ok",
+          "bytes",
+          "ms"
+        ],
+        "title": "BackupAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "parsed entities' old versions thinned and retired sessions' link stats folded (authored facts never)",
+      "home": "front",
+      "name": "graph/compact",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dry_run": {
+            "description": "Say what would go, change nothing.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "CompactParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "link_stats": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "versions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "versions",
+          "link_stats",
+          "dry_run"
+        ],
+        "title": "CompactAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an entity (as of a tx) with who wrote it; its links, the notes about it and its history on request",
+      "home": "front",
+      "name": "graph/entity",
+      "params": {
+        "$defs": {
+          "Include": {
+            "description": "What `graph/entity` adds to the entity.",
+            "oneOf": [
+              {
+                "const": "links",
+                "description": "Its current links, both ways.",
+                "type": "string"
+              },
+              {
+                "const": "notes",
+                "description": "The notes `about` it.",
+                "type": "string"
+              },
+              {
+                "const": "history",
+                "description": "Every version, with its author.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "as_of": {
+            "description": "The entity as of this tx (its version then).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "include": {
+            "items": {
+              "$ref": "#/$defs/Include"
+            },
+            "maxItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "EntityParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One entity with who wrote it (`by` of its creating and its last tx); the store's columns as they are.",
+        "properties": {
+          "approximate": {
+            "description": "An as-of read of a version the migration synthesized (its time is the migration's).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "by": {
+            "description": "The authors: `{created: {tx, actor, class, at}, updated: {…}}`."
+          },
+          "entity": {
+            "description": "The entity's columns (`n`, `id`, `kind`, `project`, `title`, `status`, `body`, `data`, `ver`, …)."
+          },
+          "history": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "links": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notes": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entity",
+          "by"
+        ],
+        "title": "EntityAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an entity's (or a tx's) text blanked in every version, its search rows and copies in the coordination tables, then VACUUM and a WAL checkpoint; the backups and transcripts still holding it, removed or redacted on request",
+      "home": "front",
+      "name": "graph/excise",
+      "params": {
+        "$defs": {
+          "ExciseField": {
+            "description": "A field an excise blanks.",
+            "enum": [
+              "title",
+              "status",
+              "body",
+              "assignee",
+              "data"
+            ],
+            "type": "string"
+          },
+          "ExciseTarget": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "maxLength": 4352,
+                "type": "string"
+              }
+            ],
+            "description": "An excise's target: a tx, or an entity by id."
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fields": {
+            "description": "Default: an entity's title, body and data; a tx's every field.",
+            "items": {
+              "$ref": "#/$defs/ExciseField"
+            },
+            "maxItems": 5,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "reason": {
+            "$ref": "#/$defs/Text",
+            "description": "Kept in `excise_log` (never the content)."
+          },
+          "rotate_backups": {
+            "description": "Remove the backup copies and exports that still hold the excised text.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "target": {
+            "$ref": "#/$defs/ExciseTarget"
+          },
+          "transcripts": {
+            "description": "Redact the session transcripts that hold it, in place.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "target",
+          "reason"
+        ],
+        "title": "ExciseParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What an excise did (`ExciseReport`), what the scrub after it did (`ScrubReport`: the WAL truncated or what blocked\nit), and the files outside `work.db` that hold the excised text.",
+        "properties": {
+          "backups_holding": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "backups_removed": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "blanked": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "blocked_by": {
+            "description": "`readers` or `writer`: what kept the WAL from being truncated (close drgnx editors, then `graph scrub`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entities": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcripts_holding": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "transcripts_redacted": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tx": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "txs_blanked": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vacuumed": {
+            "type": "boolean"
+          },
+          "versions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wal_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tx",
+          "entities",
+          "versions",
+          "txs_blanked",
+          "blanked",
+          "vacuumed",
+          "wal_truncated"
+        ],
+        "title": "ExciseAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the store as sorted JSON lines (entities, links, txs; history and activity on request) in <data>/export/ or OUT, the personal-notes deny-list applied",
+      "home": "front",
+      "name": "graph/export",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "history": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "out": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default: `<data>/export/`."
+          },
+          "project": {
+            "description": "One project's entities only (its id or alias); needs `out`.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "`tx.jsonl` from this tx on.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "with_activity": {
+            "description": "Also `touched` links, `link_stat` and sessions.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "ExportParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What an export or import did.",
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "entities": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "links": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refused": {
+            "default": [],
+            "description": "Import: `[line, why]` of each record refused.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "txs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dir",
+          "entities",
+          "links",
+          "txs",
+          "skipped"
+        ],
+        "title": "PortAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks), revoke one; the store refuses a grant from any other class",
+      "home": "front",
+      "name": "graph/grants",
+      "params": {
+        "$defs": {
+          "GrantAccess": {
+            "enum": [
+              "read",
+              "edit-user-tasks"
+            ],
+            "type": "string"
+          },
+          "GrantsList": {
+            "properties": {
+              "active": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "who": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "NewGrant": {
+            "properties": {
+              "access": {
+                "$ref": "#/$defs/GrantAccess"
+              },
+              "expires": {
+                "description": "Unix seconds, in the future.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "what": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "who": {
+                "maxLength": 256,
+                "type": "string"
+              }
+            },
+            "required": [
+              "who",
+              "what",
+              "access"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NewGrant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "list": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrantsList"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revoke": {
+            "description": "A grant's id (`grant:…`).",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "GrantsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GrantView": {
+            "additionalProperties": false,
+            "description": "A grant as the user sees it.",
+            "properties": {
+              "access": {
+                "type": "string"
+              },
+              "active": {
+                "description": "Active and not expired now.",
+                "type": "boolean"
+              },
+              "expires": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "description": "`active` or `revoked`.",
+                "type": "string"
+              },
+              "what": {
+                "type": "string"
+              },
+              "who": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "who",
+              "what",
+              "access",
+              "status",
+              "active"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`graph/grants`' answer: the list, the new grant, or whether a grant was revoked.",
+        "properties": {
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrantView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/$defs/GrantView"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "revoked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "GrantsAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "every version of an entity, with its tx's author, class and tool",
+      "home": "front",
+      "name": "graph/history",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "since": {
+            "description": "Versions from this tx on.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "HistoryParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "versions": {
+            "default": [],
+            "description": "Each version: `{ver, tx, at, actor, class, tool, session, fields, imported}`.",
+            "items": true,
+            "type": "array"
+          }
+        },
+        "title": "HistoryAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an export read back, idempotent by version, the personal-notes deny-list applied; never a grant",
+      "home": "front",
+      "name": "graph/import",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dir": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "dir"
+        ],
+        "title": "ImportParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What an export or import did.",
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "entities": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "links": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refused": {
+            "default": [],
+            "description": "Import: `[line, why]` of each record refused.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "txs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dir",
+          "entities",
+          "links",
+          "txs",
+          "skipped"
+        ],
+        "title": "PortAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a breadth-first walk from an entity (depth 1 to 4, kinds past 3), within its budget: what stopped it in truncated",
+      "home": "front",
+      "name": "graph/neighbors",
+      "params": {
+        "$defs": {
+          "Direction": {
+            "description": "Which way links are followed.",
+            "enum": [
+              "out",
+              "in",
+              "both"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "as_of": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "depth": {
+            "description": "1 to 4 (default 1).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Direction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "kinds": {
+            "description": "The link kinds to follow (needed past depth 3).",
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NeighborsParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A walk's answer: the nodes and links found, how many were out of scope (`hidden`, never named), and why it\nstopped early.",
+        "properties": {
+          "hidden": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "links": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "nodes": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "truncated": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hidden"
+        ],
+        "title": "WalkAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a shortest path between two entities (at most 6 links), within its budget",
+      "home": "front",
+      "name": "graph/path",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "as_of": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "from": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "max_depth": {
+            "description": "1 to 6 (default 3).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "to": {
+            "maxLength": 4352,
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "PathParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A walk's answer: the nodes and links found, how many were out of scope (`hidden`, never named), and why it\nstopped early.",
+        "properties": {
+          "hidden": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "links": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "nodes": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "truncated": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hidden"
+        ],
+        "title": "WalkAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the personal-notes opt-ins and hard entries read again now and applied: a removed opt-in excises what came in",
+      "home": "front",
+      "name": "graph/privacy",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "reload": {
+            "description": "Read `personal-notes-allow.json` and `personal-notes-deny.json` again now and apply the change.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reload"
+        ],
+        "title": "PrivacyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What applying a change of the opt-ins did (`norn::privacy::PrivacyReport`).",
+        "properties": {
+          "added": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "backups_holding": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "excised": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ignored": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "excised"
+        ],
+        "title": "PrivacyAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "proposed txs accepted, or rejected (reverted newest first)",
+      "home": "front",
+      "name": "graph/proposed",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "accept": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "reject": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "ProposedParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Reverted": {
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "links": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a revert did: the entities given a restoring version and the links retired or added again, or the later txs\nthat block it (nothing written).  `listed`: a `cascade` look, nothing written either way.",
+        "properties": {
+          "blocked": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "listed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reverted": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reverted"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RevertAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "what a tracker scan read, by typed source, in one transaction: every path a record carries checked against the personal-notes deny-list (a denied path refuses its whole source), unchanged entities untouched, derived statuses, collected keys",
       "home": "front",
       "name": "graph/put-parsed",
@@ -4334,6 +5530,293 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a tx reverted (or an entity put back to a version) as a new tx of the user's; a later change to what it wrote blocks it and is named; cascade only lists",
+      "home": "front",
+      "name": "graph/revert",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cascade": {
+            "description": "List only: what the revert would do, or the later txs that block it; nothing is written.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "entity": {
+            "description": "Or put ENTITY back to version VER (a new version).",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tx": {
+            "description": "Revert this tx.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ver": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "RevertParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Reverted": {
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "links": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a revert did: the entities given a restoring version and the links retired or added again, or the later txs\nthat block it (nothing written).  `listed`: a `cascade` look, nothing written either way.",
+        "properties": {
+          "blocked": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "listed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reverted": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reverted"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RevertAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the store's settings (only_user_closes: only I close my tasks), written in a user-class tx only",
+      "home": "front",
+      "name": "graph/settings",
+      "params": {
+        "$defs": {
+          "Empty": {
+            "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+            "type": "object"
+          },
+          "SettingsSet": {
+            "properties": {
+              "only_user_closes": {
+                "description": "\"Only I close my tasks\" (`setting:only-user-closes`).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "get": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Empty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "set": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SettingsSet"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SettingsParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The store's settings.",
+        "properties": {
+          "only_user_closes": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "only_user_closes"
+        ],
+        "title": "Settings",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one read-only SELECT on a hardened connection of its own (no ATTACH, PRAGMA, writes, recursive CTEs or extension loading), with a deadline and a row cap",
+      "home": "front",
+      "name": "graph/sql",
+      "params": {
+        "$defs": {
+          "SqlParam": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/Text"
+              }
+            ],
+            "description": "A value bound to a `?` of `graph/sql`."
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "deadline_ms": {
+            "description": "At most 10000 (default 2000).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "params": {
+            "items": {
+              "$ref": "#/$defs/SqlParam"
+            },
+            "maxItems": 100,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "At most 10000 (default 1000).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sql": {
+            "description": "One `SELECT` (no `ATTACH`, `PRAGMA`, writes or recursive CTEs).",
+            "maxLength": 100000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "title": "SqlParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "default": [],
+            "description": "Each row's values (a blob as `{\"blob\": LEN}`).",
+            "items": {
+              "items": true,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "truncated"
+        ],
+        "title": "SqlAnswer",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -6270,7 +7753,7 @@
       "classes": [
         "user"
       ],
-      "doc": "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db and closed with its owner",
+      "doc": "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db with its profile and tool sets, and closed with its owner; the tracker tools unless the session's task or its profile turns them off",
       "home": "front",
       "name": "mcp/session",
       "params": {
@@ -6304,6 +7787,19 @@
             "maxLength": 512,
             "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
             "type": "string"
+          },
+          "ToolSetsParam": {
+            "description": "Which tool sets a session's socket serves (call 16).",
+            "properties": {
+              "tracker": {
+                "description": "The tracker and graph tools (`task_read`, `task_write`, `note_add`, `graph_read`, `access_request`).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "tracker"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6339,6 +7835,17 @@
             "minimum": 0,
             "type": "integer"
           },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The drgnx profile the agent runs as (grants by `profile:NAME` name it)."
+          },
           "sid": {
             "anyOf": [
               {
@@ -6359,6 +7866,17 @@
                 "type": "null"
               }
             ]
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolSetsParam"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The profile's tool sets (absent: the profile says nothing; the task's setting, else on, decides)."
           }
         },
         "required": [
@@ -7237,6 +8755,15 @@
                   "null"
                 ]
               },
+              "batches": {
+                "description": "The graph writer's batches (group commits) since the hub started.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "denied_in": {
                 "description": "The copies that still hold what the migration's deny-list kept out of work.db (the pre-migration copy,\n`work.db.schema5`): the doctor offers removing them.",
                 "items": {
@@ -7263,6 +8790,24 @@
                 "format": "double",
                 "type": [
                   "number",
+                  "null"
+                ]
+              },
+              "readers": {
+                "description": "The read pool's connections in use now.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "replays": {
+                "description": "Keyed requests answered from their stored first answer.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -7491,6 +9036,452 @@
         "type": "boolean"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "tasks by words (full text), status, assignee, labels and project, 50 a page",
+      "home": "front",
+      "name": "tasks/find",
+      "params": {
+        "$defs": {
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "assignee": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cursor": {
+            "description": "The `cursor` of the answer before: the next page.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "labels": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "project": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Words, ranked by full text."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "FindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A page of tasks: each `{id, title, status, priority, assignee, labels, project, ver, lease}`.",
+        "properties": {
+          "cursor": {
+            "description": "More follow: pass it back.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "title": "TaskList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the ready tracker tasks (open, nothing open blocks them, no live lease), by priority then age",
+      "home": "front",
+      "name": "tasks/ready",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "labels": {
+            "description": "Only tasks with every one of these labels.",
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "1 to 50 (default 50).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "Only this project's tasks.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "ReadyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A page of tasks: each `{id, title, status, priority, assignee, labels, project, ver, lease}`.",
+        "properties": {
+          "cursor": {
+            "description": "More follow: pass it back.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "title": "TaskList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools): done, a conflict with what changed, a lost lease, or a close proposal",
+      "home": "front",
+      "name": "tasks/write",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Op": {
+            "description": "A tracker operation.",
+            "enum": [
+              "create",
+              "update",
+              "claim",
+              "heartbeat",
+              "release",
+              "handoff",
+              "reassign",
+              "split",
+              "complete",
+              "link",
+              "unlink",
+              "label",
+              "tools"
+            ],
+            "type": "string"
+          },
+          "SplitMode": {
+            "description": "How a split goes: the parts as children (default), or in the task's place.",
+            "enum": [
+              "children",
+              "replace"
+            ],
+            "type": "string"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "acceptance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "add": {
+            "description": "Label: the labels added and removed.",
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "body": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dst": {
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The task (every op but create, link and unlink).",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "maxLength": 32,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lease": {
+            "description": "The lease epoch a claim answered (heartbeat, release, handoff, complete).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SplitMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "op": {
+            "$ref": "#/$defs/Op"
+          },
+          "parent": {
+            "description": "Create: the new task's parent.",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parts": {
+            "description": "Split: the parts' titles.",
+            "items": {
+              "$ref": "#/$defs/Text"
+            },
+            "maxItems": 20,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "Create: the project (its id or alias), or the folder whose project it is.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remove": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "src": {
+            "description": "Link, unlink: the link's ends and kind.",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "description": "Handoff, reassign: who next (none: back to open).",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracker": {
+            "description": "Tools: the tracker tools on or off for sessions working on this task (absent: the profile decides).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "ver": {
+            "description": "The version the change is based on (update, reassign, split).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "title": "WriteParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "AnyValue"
+      },
+      "writes": true
     }
   ],
   "proto": 1,

@@ -1,0 +1,36 @@
+{"scenario": "grants/access-request-to-grant-to-read", "requires": ["v1", "fake-backend"], "doc": "A session in project alpha asks to read beta (access_request: a card, never a wait); the user settles the card with project: a read grant of beta for alpha, made in the settle's tx, and a message to the session. The session's next read sees beta's task, its title fenced as untrusted text; once the user revokes the grant, its next read does not."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/beta && cd $ROOT/work/beta && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000100 +0000' GIT_COMMITTER_DATE='@1700000100 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m beta"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t2", "cwd": "$ROOT/work/beta", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sidb", "socket": "$capture:sockb"}}}
+{"do": "connect", "conn": "n", "hub": "h", "socket": "path:$sockb", "as": "raw"}
+{"do": "send", "conn": "n", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "n", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "n", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "the api"}}}}
+{"do": "expect", "conn": "n", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"done": {"id": "$capture:b1", "ver": 1}}}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "get", "id": "$b1"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "access_request", "arguments": {"project": "beta", "reason": "to read its api"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"requested": "$capture:card"}}}}
+{"do": "sql_expect", "sql": "select kind, state, json_extract(data, '$.target'), json_extract(data, '$.known') from card where id = $card", "rows": [["access", "open", "beta", 1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "cards/settle", "params": {"card": "$card", "choice": "project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"settled": true}}}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'grant'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from message where recipient = 'agent:$sid' and text like 'your access request (card $card): granted%'", "rows": [[1]]}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "get", "id": "$b1"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"task": {"id": "$b1", "title": {"text": "the api", "by": "$string", "class": "agent", "trust": "untrusted"}}}, "isError": "$absent"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "graph/grants", "params": {"list": {"active": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"grants": [{"id": "$capture:grant", "access": "read", "active": true}]}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "graph/grants", "params": {"revoke": "$grant"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"revoked": true}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "get", "id": "$b1"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}}

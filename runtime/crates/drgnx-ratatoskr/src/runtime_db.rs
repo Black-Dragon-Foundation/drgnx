@@ -6,6 +6,8 @@
 //! - `registration` and `kv` (3): the gateway's registrations, by the SHA-256 of their token (never the token), pruned
 //!   with their owner; and `gateway_port` and `providers` (the last good provider table, which holds no key)
 //!   ([`crate::gateway`]).
+//! - `msession.profile` and `msession.tools` (4): the profile a session runs as and its tool sets (`{"tracker": B}`,
+//!   none when the profile says nothing), so a socket bound again serves the same tools.
 //!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
@@ -31,6 +33,10 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
          job text, task text, agent text, chain text not null, budget real, openrouter text, owner integer, \
          owner_start integer, at real not null); \
          create table kv(key text primary key, value text not null);",
+    ),
+    (
+        4,
+        "alter table msession add column profile text; alter table msession add column tools text;",
     ),
 ];
 
@@ -104,7 +110,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("3"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("4"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
@@ -117,6 +123,10 @@ mod tests {
                 })
                 .unwrap();
         }
+        // a session keeps its profile and tool sets (4)
+        fresh
+            .prepare("select profile, tools from msession")
+            .unwrap();
     }
 
     fn rusqlite_like(path: &Path) -> urdr::Connection {

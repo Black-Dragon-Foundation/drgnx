@@ -16,6 +16,7 @@ pub struct ReadPool {
     /// Connections not in use. At most `size` exist at once: a call holds a permit while it holds one.
     idle: Arc<Mutex<Vec<Connection>>>,
     permits: Arc<Semaphore>,
+    size: usize,
 }
 
 impl ReadPool {
@@ -26,7 +27,13 @@ impl ReadPool {
             path: Arc::new(path.into()),
             idle: Arc::new(Mutex::new(Vec::with_capacity(size))),
             permits: Arc::new(Semaphore::new(size)),
+            size,
         }
+    }
+
+    /// The connections in use now (`status.store.readers`).
+    pub fn in_use(&self) -> usize {
+        self.size.saturating_sub(self.permits.available_permits())
     }
 
     /// Run F with one connection, off the async workers, and give the connection back. `Err` when no connection

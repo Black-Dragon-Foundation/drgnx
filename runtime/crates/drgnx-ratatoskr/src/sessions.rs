@@ -5,6 +5,9 @@
 //!   (`runstav::paths::session_dir`, Gleipnir 13b's: one directory per session, beside its agent `hub.sock` when it
 //!   has one). Whoever connects to it is that session's agent: [`Row::identity`], never a tool argument or an
 //!   environment variable.
+//! - **Its tools** (call 16): the tracker and graph tools (21 tools in all) unless the session's task
+//!   (`data.tracker_tools`) or else its profile (`tools.tracker` of `mcp/session`) turns them off (16); the profile
+//!   is the identity's too, for grants by `profile:NAME`.  Both are kept in the row.
 //! - **Recorded before bound** (design §3.3): the row is in `runtime.db` (`msession`) before the socket exists; a
 //!   bind that fails takes the row back.
 //! - **A connection:** the peer uid checked (as on every socket), at most [`MAX_CONNECTIONS`] at once (the next is
@@ -65,6 +68,10 @@ pub struct Row {
     /// `draugr::start_time` of the owner when the session was minted.
     pub owner_start: u64,
     pub at: f64,
+    /// The drgnx profile the agent runs as (grants by `profile:NAME`).
+    pub profile: Option<String>,
+    /// The profile's tracker tools on or off (`None`: the profile says nothing).
+    pub tracker: Option<bool>,
 }
 
 impl Row {
@@ -74,12 +81,37 @@ impl Row {
         Identity::Session {
             agent: self.agent.clone(),
             sid: self.sid.clone(),
-            profile: None,
+            profile: self.profile.clone(),
             job: self.job.clone(),
             task: self.task.clone(),
             home: PathBuf::from(self.cwd.as_deref().unwrap_or("/")),
         }
     }
+
+    /// The entity id of the session's task: a tracker task's own id, a job task's `task:JOB#N` (its `task` that, or
+    /// `N` with the job).
+    pub fn task_entity(&self) -> Option<String> {
+        let task = self.task.as_deref()?;
+        if task.starts_with("task:") {
+            Some(task.to_owned())
+        } else if task.contains('#') {
+            Some(norn::write::tasks::entity_id(task))
+        } else {
+            let job = self.job.as_deref()?;
+            Some(norn::write::tasks::entity_id(&format!("{job}#{task}")))
+        }
+    }
+}
+
+/// `msession.tools` of TRACKER.
+fn tools_text(tracker: Option<bool>) -> Option<String> {
+    tracker.map(|t| serde_json::json!({ "tracker": t }).to_string())
+}
+
+/// TEXT of `msession.tools` as the profile's tracker setting (anything else: none).
+fn tools_of(text: Option<String>) -> Option<bool> {
+    let v: serde_json::Value = serde_json::from_str(text.as_deref()?).ok()?;
+    v.get("tracker")?.as_bool()
 }
 
 /// Where sessions live: the hub's environment and main socket (for `session_dir`) and `runtime.db`.
@@ -104,7 +136,10 @@ struct Live {
 pub struct Sessions {
     uid: u32,
     tools: Arc<Coord>,
+    /// Every tool: an outside bridge's.
     list: ToolList,
+    /// A session's, made when first served: without the tracker tools (16), with them (21).
+    by_sets: [OnceLock<ToolList>; 2],
     store: OnceLock<Store>,
     live: Mutex<BTreeMap<String, Live>>,
     /// Outside bridges connected now.
@@ -206,8 +241,8 @@ async fn insert(db: &urdr::Handle, row: &Row) -> urdr::Result<()> {
     let r = row.clone();
     db.write(move |c| {
         c.execute(
-            "insert into msession(sid, agent, job, task, cwd, owner, owner_start, at) \
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "insert into msession(sid, agent, job, task, cwd, owner, owner_start, at, profile, tools) \
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             (
                 r.sid,
                 r.agent,
@@ -217,6 +252,8 @@ async fn insert(db: &urdr::Handle, row: &Row) -> urdr::Result<()> {
                 i64::from(r.owner),
                 i64::try_from(r.owner_start).unwrap_or(i64::MAX),
                 r.at,
+                r.profile,
+                tools_text(r.tracker),
             ),
         )?;
         Ok(())
@@ -237,7 +274,7 @@ async fn delete(db: &urdr::Handle, sid: &str) {
 async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
     db.read(|c| {
         let mut st = c.prepare(
-            "select sid, agent, job, task, cwd, owner, owner_start, at from msession order by at",
+            "select sid, agent, job, task, cwd, owner, owner_start, at, profile, tools from msession order by at",
         )?;
         let rows = st
             .query_map([], |r| {
@@ -250,6 +287,8 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
                     owner: u32::try_from(r.get::<_, i64>(5)?).unwrap_or(0),
                     owner_start: u64::try_from(r.get::<_, i64>(6)?).unwrap_or(0),
                     at: r.get(7)?,
+                    profile: r.get(8)?,
+                    tracker: tools_of(r.get(9)?),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -328,6 +367,7 @@ impl Sessions {
             uid,
             tools,
             list,
+            by_sets: [OnceLock::new(), OnceLock::new()],
             store: OnceLock::new(),
             live: Mutex::new(BTreeMap::new()),
             outside: Arc::new(AtomicUsize::new(0)),
@@ -407,6 +447,8 @@ impl Sessions {
             owner: owner as u32,
             owner_start,
             at: now(),
+            profile: p.profile.map(|n| n.as_str().to_owned()),
+            tracker: p.tools.map(|t| t.tracker),
         };
         // recorded before bound: a hub that dies in between leaves a row whose socket the next start binds
         insert(&store.db, &row)
@@ -423,15 +465,35 @@ impl Sessions {
                 return Err(internal(format!("cannot bind {}: {e}", path.display())));
             }
         };
-        self.listen(row, dir, path.clone(), listener);
+        let list = self.list_for(&row).await;
+        self.listen(row, dir, path.clone(), listener, list);
         Ok(SessionAnswer {
             sid,
             socket: path.to_string_lossy().into_owned(),
         })
     }
 
-    /// Serve ROW's socket PATH (in DIR) from LISTENER.
-    fn listen(&self, row: Row, dir: PathBuf, path: PathBuf, listener: UnixListener) {
+    /// The tools ROW's socket serves (call 16): the tracker tools as its task says, else as its profile says, else on.
+    async fn list_for(&self, row: &Row) -> ToolList {
+        let task = match row.task_entity() {
+            Some(id) => crate::graph::task_tools(&self.tools, id).await,
+            None => None,
+        };
+        let sets = crate::graph::tool_sets(task, row.tracker);
+        self.by_sets[usize::from(sets.tracker)]
+            .get_or_init(|| norn::tools::tools_for(sets).into())
+            .clone()
+    }
+
+    /// Serve ROW's socket PATH (in DIR) from LISTENER, with the tools LIST.
+    fn listen(
+        &self,
+        row: Row,
+        dir: PathBuf,
+        path: PathBuf,
+        listener: UnixListener,
+        list: ToolList,
+    ) {
         let cancel = CancellationToken::new();
         tokio::spawn(accept(
             listener,
@@ -440,7 +502,7 @@ impl Sessions {
             cancel.clone(),
             self.uid,
             self.tools.clone(),
-            self.list.clone(),
+            list,
         ));
         tracing::info!(
             sid = row.sid,
@@ -590,7 +652,10 @@ impl Sessions {
                     bind_socket(&path).map(|l| (dir, path, l))
                 });
             match bound {
-                Ok((dir, path, listener)) => self.listen(row, dir, path, listener),
+                Ok((dir, path, listener)) => {
+                    let list = self.list_for(&row).await;
+                    self.listen(row, dir, path, listener, list)
+                }
                 Err(e) => {
                     tracing::warn!(sid = row.sid, "cannot bind a session's mcp.sock again: {e}");
                     delete(&store.db, &row.sid).await;
@@ -783,18 +848,41 @@ mod tests {
         assert_eq!(count(&db, "select count(*) from msession"), 1);
         assert_eq!(h.front.mcp.status().sessions, 1);
         // what the socket's tools act as is the row's
-        let live = h.front.mcp.live.lock().unwrap();
+        {
+            let live = h.front.mcp.live.lock().unwrap();
+            assert_eq!(
+                live[&a.sid].row.identity(),
+                Identity::Session {
+                    agent: "s-0000000a".into(),
+                    sid: a.sid.clone(),
+                    profile: None,
+                    job: Some("j1".into()),
+                    task: None,
+                    home: PathBuf::from("/w"),
+                }
+            );
+        }
+        // a profile and its tool sets are kept with the row, and the profile is the identity's
+        let p = h
+            .front
+            .mcp
+            .open(params(
+                json!({"agent": "s-c", "owner": me(), "job": "j2", "task": "3",
+                                "profile": "p1", "tools": {"tracker": false}}),
+            ))
+            .await
+            .unwrap();
+        let kept = rows(&h.db).await.unwrap();
+        let row = kept.iter().find(|r| r.sid == p.sid).unwrap();
         assert_eq!(
-            live[&a.sid].row.identity(),
-            Identity::Session {
-                agent: "s-0000000a".into(),
-                sid: a.sid.clone(),
-                profile: None,
-                job: Some("j1".into()),
-                task: None,
-                home: PathBuf::from("/w"),
-            }
+            (row.profile.as_deref(), row.tracker),
+            (Some("p1"), Some(false))
         );
+        assert_eq!(row.task_entity().as_deref(), Some("task:j2#3"));
+        assert!(matches!(
+            row.identity(),
+            Identity::Session { profile: Some(ref n), .. } if n == "p1"
+        ));
     }
 
     #[tokio::test]
@@ -836,6 +924,8 @@ mod tests {
             owner,
             owner_start,
             at: 0.0,
+            profile: None,
+            tracker: None,
         };
         let start = draugr::start_time(me() as i32).unwrap();
         assert!(owner_alive(&row(me(), start)));
@@ -933,6 +1023,8 @@ mod tests {
             owner: me(),
             owner_start: draugr::start_time(me() as i32).unwrap() + 1,
             at: 1.0,
+            profile: None,
+            tracker: None,
         };
         insert(&h.db, &gone).await.unwrap();
         let gone_dir = paths::make_session_dir(&h.env, &h.socket, &gone.sid).unwrap();

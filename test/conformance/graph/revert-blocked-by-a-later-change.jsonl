@@ -1,0 +1,21 @@
+{"scenario": "graph/revert-blocked-by-a-later-change", "requires": ["v1", "fake-backend"], "doc": "graph/revert of a tx whose change a later tx changed again is blocked: the answer names the later tx and nothing is written (no tx row, the title as the later tx left it); with cascade it is only listed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "one", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:task", "ver": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "update", "id": "$task", "ver": 1, "title": "two"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"ver": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/sql", "params": {"sql": "select updated_tx from entity where id = ?1", "params": ["$task"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"rows": [["$capture:t2"]]}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "tasks/write", "params": {"op": "update", "id": "$task", "ver": 2, "title": "three"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"ver": 3}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "graph/sql", "params": {"sql": "select updated_tx, (select count(*) from tx) from entity where id = ?1", "params": ["$task"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"rows": [["$capture:t3", "$capture:txs"]]}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "graph/revert", "params": {"tx": "$t2"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"blocked": ["$t3"], "reverted": "$absent"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "graph/revert", "params": {"tx": "$t2", "cascade": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"blocked": ["$t3"], "listed": true}}}
+{"do": "sql_expect", "sql": "select title, ver, (select count(*) from tx) from entity where id = '$task'", "rows": [["three", 3, "$txs"]]}

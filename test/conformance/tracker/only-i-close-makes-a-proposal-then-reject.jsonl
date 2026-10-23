@@ -1,0 +1,31 @@
+{"scenario": "tracker/only-i-close-makes-a-proposal-then-reject", "requires": ["v1", "fake-backend"], "doc": "The user's answer 4 with \"only I close my tasks\" on: a granted session's complete of a user-made task is a close card; the user rejects it: the task is unchanged, the session gets a notice, and the task it blocks stays out of the session's ready list."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "graph/settings", "params": {"set": {"only_user_closes": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"only_user_closes": true}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "create", "title": "the user's", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:t"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/write", "params": {"op": "create", "title": "after it", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:dep"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "tasks/write", "params": {"op": "link", "src": "$t", "kind": "blocks", "dst": "$dep"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "graph/grants", "params": {"grant": {"who": "session:$sid", "what": "$t", "access": "edit-user-tasks"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"grant": {"active": true}}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "claim", "id": "$t"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"done": {"id": "$t", "ver": "$capture:ver", "lease": "$capture:lease"}}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "complete", "id": "$t", "lease": "$lease", "note": "all green"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"proposed": {"card": "$capture:card"}}}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "cards/settle", "params": {"card": "$card", "choice": "reject"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"settled": true}}}
+{"do": "sql_expect", "sql": "select c.state, c.choice, e.status, e.ver from card c join entity e on e.n = c.entity where c.id = $card", "rows": [["settled", "reject", "claimed", "$ver"]]}
+{"do": "sql_expect", "sql": "select count(*) from message where recipient = 'agent:$sid' and sender = 'tracker' and entity = (select n from entity where id = '$t')", "rows": [[1]]}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "ready"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"tasks": []}, "_meta": {"dev.drgnx/notices": 1}}}}

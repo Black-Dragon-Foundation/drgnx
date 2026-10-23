@@ -172,6 +172,43 @@ their hooks and timers."
       (should (equal (assoc "job/card" drgnx-cockpit-cards-test--calls) '("job/card" :card 8 :action "discuss" :arg "why A?")))
       (should (equal opened '("s-rev"))))))
 
+(defun drgnx-cockpit-cards-test--with-card (card)
+  "The test summary with CARD as its only card."
+  (let ((s (copy-tree drgnx-cockpit-cards-test--summary)))
+    (plist-put s :cards (list card))
+    s))
+
+(ert-deftest drgnx-cockpit-cards/an-access-card-offers-its-four-choices ()
+  (drgnx-cockpit-cards-test--with
+    (let ((drgnx-cockpit-cards-test--answer nil)
+          (card '(:id 21 :kind "access" :task :null :title "s1 (p) in r1 asks to read r2" :actions :null
+                      :data (:session "s1" :profile "p" :project "r1" :target "r2" :reason "the API it calls"))))
+      (drgnx-cockpit-cards--draw "j1" (drgnx-cockpit-cards-test--with-card card))
+      (should (string-search "asks to read r2" (drgnx-cockpit-cards-test--text 'cards)))
+      (should (string-search "Why: the API it calls" (drgnx-cockpit-cards-test--text 'cards)))
+      (dolist (label '("This session" "Its project" "Its profile" "Refuse"))
+        (should (drgnx-cockpit-cards-test--button 'cards label)))
+      ;; a choice settles the card through the hub: the grant is the hub's to make
+      (cl-letf (((symbol-function 'drgnx-coord-card-settle) (lambda (&rest _) t)))
+        (button-activate (drgnx-cockpit-cards-test--button 'cards "Its project")))
+      (should (equal (assoc "cards/settle" drgnx-cockpit-cards-test--calls)
+                     '("cards/settle" :card 21 :choice "project")))
+      (should-not (assoc "job/card" drgnx-cockpit-cards-test--calls)))))
+
+(ert-deftest drgnx-cockpit-cards/a-close-card-offers-accept-and-reject ()
+  (drgnx-cockpit-cards-test--with
+    (let ((drgnx-cockpit-cards-test--answer nil)
+          (card '(:id 22 :kind "close" :task :null :title "close task:r1-abcde: the parser?" :actions :null
+                      :data (:task "task:r1-abcde" :ver 3 :by "agent:s1" :note :null))))
+      (drgnx-cockpit-cards--draw "j1" (drgnx-cockpit-cards-test--with-card card))
+      (should (string-search "the parser?" (drgnx-cockpit-cards-test--text 'cards)))
+      (should (drgnx-cockpit-cards-test--button 'cards "Accept"))
+      (should-not (drgnx-cockpit-cards-test--button 'cards "This session"))
+      (cl-letf (((symbol-function 'drgnx-coord-card-settle) (lambda (&rest _) t)))
+        (button-activate (drgnx-cockpit-cards-test--button 'cards "Reject")))
+      (should (equal (assoc "cards/settle" drgnx-cockpit-cards-test--calls)
+                     '("cards/settle" :card 22 :choice "reject"))))))
+
 (ert-deftest drgnx-cockpit-cards/a-part-redraws-only-when-what-it-shows-changed ()
   (drgnx-cockpit-cards-test--with
     (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)

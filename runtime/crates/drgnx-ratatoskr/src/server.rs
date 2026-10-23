@@ -167,7 +167,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         }
     };
     // the graph writer: work.db made at schema 7, or a schema-6 file migrated, before anything is served
-    let (graph_writer, graph, coord_db) = match open_store(&env).await {
+    let (graph_writer, graph, coord_db, home) = match open_store(&env).await {
         Ok(x) => x,
         Err(e) => {
             tracing::error!("cannot start: no work.db writer: {e}");
@@ -190,6 +190,11 @@ pub async fn run(args: ServeArgs) -> Exit {
         Some(graph),
         Arc::new(ToBackend(backend.clone())),
     ));
+    let _ = front.dirs.set(crate::graph::StoreDirs {
+        home,
+        config: paths::config_dir(&env),
+        hub: hub_dir.clone(),
+    });
     #[cfg(feature = "test-hooks")]
     front
         .ignore_shutdown
@@ -411,6 +416,7 @@ async fn open_store(
         urdr::graph::Writer,
         norn::tools::GraphStore,
         norn::store::CoordDb,
+        PathBuf,
     ),
     String,
 > {
@@ -465,7 +471,7 @@ async fn open_store(
     let db = tokio::task::spawn_blocking(move || norn::store::CoordDb::with_graph(handle))
         .await
         .map_err(|e| e.to_string())?;
-    Ok((writer, graph, db))
+    Ok((writer, graph, db, home))
 }
 
 /// work.db's schema every 2 s: read-only while it is newer than this hub's.  A read that fails keeps the last state.
@@ -475,6 +481,7 @@ async fn watch_schema(front: Arc<Front>) {
     let mut every = tokio::time::interval(SCHEMA_TICK);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     every.tick().await;
+    let mut privacy = norn::privacy::Watch::default();
     loop {
         every.tick().await;
         // the graph writer first: it runs its opening rule again while not ready, and on a replaced file
@@ -490,6 +497,18 @@ async fn watch_schema(front: Arc<Front>) {
         }
         let db = front.writer.db.clone();
         let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+        // the personal-notes opt-ins: applied when their file changed (norn::privacy, Task 9b)
+        if let (Some(g), Some(d)) = (front.tools.graph(), front.dirs.get())
+            && let Some(r) =
+                norn::privacy::tick(&mut privacy, &g.writer, &g.deny, &d.home, &d.config).await
+        {
+            tracing::info!(
+                added = r.added.len(),
+                removed = r.removed.len(),
+                excised = r.excised,
+                "the personal-notes opt-ins changed and were applied"
+            );
+        }
         front.writer.signals.events_soon();
     }
 }

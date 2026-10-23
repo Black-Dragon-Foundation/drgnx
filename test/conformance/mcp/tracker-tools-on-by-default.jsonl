@@ -1,0 +1,15 @@
+{"scenario": "mcp/tracker-tools-on-by-default", "requires": ["v1", "fake-backend"], "doc": "The user's answer 1: a session with no profile tool sets and no task setting is served the tracker tools: tools/list has 21 tools, task_read, task_write, note_add, graph_read and access_request among them; msession keeps no tools setting."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$HOME", "owner": "$HARNESS_PID", "profile": "p1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select profile, tools from msession where sid = '$sid'", "rows": [["p1", null]]}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"tools": {"$contains": [{"name": "task_read"}, {"name": "task_write"}, {"name": "note_add"}, {"name": "graph_read"}, {"name": "access_request"}]}}}}

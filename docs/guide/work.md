@@ -104,6 +104,19 @@ looking at draws nothing; it catches up when you show it.
 `drgnx doctor` checks `work`: Emacs has SQLite (else the tracker is off), how many plans are tracked, and whether
 this Emacs can show SVG (else there is no graph; the tab shows the same tree).
 
+## Closing your tasks
+
+Agents may finish tasks you made only if you let them (an `edit-user-tasks` grant, [security.md](security.md#grants));
+without it, an agent's "done" is `in-review` and you close the task. With **only I close my tasks** on (the store
+setting `only_user_closes`, `graph/settings`), even a permitted "done" is a proposal: a **close card** in the Work
+cockpit, and the task stays as it was, so nothing that waits on it starts yet.
+
+- **Accept** closes the task as you, if nobody changed it since the agent proposed it. If someone did, drgnx says so
+  and the card stays open: look at the task, then accept or reject again.
+- **Reject** changes nothing; the agent that proposed it is told.
+
+Agents' own access requests come as cards too, with four choices: [security.md](security.md#grants).
+
 ## Status
 
 `drgnx work status` prints one line per plan: merged or on a branch, tasks, steps and TODOs done of all, commits

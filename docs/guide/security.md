@@ -169,6 +169,12 @@ widens what it sees.
   whatever path it takes (an agent's tool, a proposed change, an import, a scanned file), and the same holds for the
   store's settings. An agent can only ask (an access card in the Work cockpit), never grant itself or another
   anything.
+- **An agent's request** (`access_request`) waits on a card in the Work cockpit with its reason. You answer with one
+  of four choices: **This session** (that session only, while it lives), **Its project** (every agent working in
+  the requester's project), **Its profile** (every session of its profile) or **Refuse**. The first three give a
+  read grant of the project it asked for; the agent is told either way. drgnx's own background process can refuse a
+  request for you, never grant one.
+- You can list, give and revoke grants directly too, through the hub method `graph/grants`.
 - Revoking takes effect at once: the next read by any agent runs without it, and a walk through the graph already
   running stops at its next step.
 - An agent sees the grants given to it, never the others (they would name your other projects).

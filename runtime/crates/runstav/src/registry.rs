@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 56, "{names:?}");
+        assert_eq!(names.len(), 74, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
-    const FRONT_WRITES: [&str; 17] = [
+    const FRONT_WRITES: [&str; 26] = [
         "cards/settle",
         "messages/send",
         "messages/mark",
@@ -440,6 +440,29 @@ mod tests {
         // the graph store's (Urdr Task 15a): the tracker scan's door
         "graph/put-parsed",
         "graph/record",
+        // the store's methods for the user (Urdr Task 15b)
+        "graph/revert",
+        "graph/excise",
+        "graph/grants",
+        "graph/proposed",
+        "graph/import",
+        "graph/compact",
+        "graph/settings",
+        "graph/privacy",
+        "tasks/write",
+    ];
+
+    /// The store's methods that read only (Urdr Task 15b), the front's too.
+    const FRONT_READS: [&str; 9] = [
+        "graph/entity",
+        "graph/neighbors",
+        "graph/path",
+        "graph/history",
+        "graph/sql",
+        "graph/export",
+        "graph/backup",
+        "tasks/ready",
+        "tasks/find",
     ];
 
     #[test]
@@ -470,8 +493,16 @@ mod tests {
             "config/providers",
         ];
         want.extend(FRONT_WRITES);
+        want.extend(FRONT_READS);
         want.sort();
         assert_eq!(front, want, "the methods the front serves itself");
+        // every method of the store is the user's alone
+        assert!(
+            registry()
+                .iter()
+                .filter(|m| m.name.starts_with("graph/") || m.name.starts_with("tasks/"))
+                .all(|m| m.classes == [Class::User])
+        );
         // an outside agent's bridge attaches without a proof; minting a session's socket is the user's
         assert_eq!(
             find("mcp/attach").map(|m| m.classes),
@@ -598,8 +629,16 @@ mod tests {
         for m in registry() {
             let schema = (m.params)().to_value();
             let req = required(&schema);
-            if m.name == "coord/agent" {
-                // one of two keys, neither required on its own: its check refuses `{}`
+            if [
+                "coord/agent",
+                "graph/revert",
+                "graph/grants",
+                "graph/proposed",
+                "graph/settings",
+            ]
+            .contains(&m.name)
+            {
+                // one of several keys, none required on its own: its check refuses `{}`
                 assert!((m.decode)(&json!({})).is_err());
                 continue;
             }
@@ -618,7 +657,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 41);
+        assert_eq!(with, 50);
     }
 
     #[test]

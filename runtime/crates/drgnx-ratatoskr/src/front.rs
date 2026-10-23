@@ -1,6 +1,6 @@
 //! The front: what every connection shares, and the methods it serves itself (`Home::Front`) — `hello`, `ping`,
 //! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`] and
-//! [`crate::graph`] (`graph/put-parsed`, `graph/record`), the
+//! the store's methods of [`crate::graph`] (`graph/*`, `tasks/*`), the
 //! MCP hosting of [`crate::sessions`] (`mcp/*`) and the gateway of [`crate::gateway`] (`gateway/*`,
 //! `config/providers`, `spend`).  Every other method goes to [`Forward`].
 //!
@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
@@ -76,6 +76,8 @@ pub struct Front {
     pub gate: Gate,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
+    /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
+    pub dirs: OnceLock<crate::graph::StoreDirs>,
     forward: Arc<dyn Forward>,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
@@ -142,6 +144,7 @@ impl Front {
             mcp: Sessions::new(uid, tools.clone(), tool_list.clone()),
             gate,
             ignore_shutdown: AtomicBool::new(false),
+            dirs: OnceLock::new(),
             tools,
             tool_list,
             forward,
@@ -292,9 +295,18 @@ impl Front {
             last_backup: None,
             backup_ok: None,
             denied_in,
+            batches: None,
+            replays: None,
+            readers: None,
         };
+        if let Some(g) = self.tools.graph() {
+            st.readers = Some(g.pool.in_use() as u64);
+        }
         if let Some(w) = self.writer.db.graph_writer() {
-            let open = w.status().last_open;
+            let ws = w.status();
+            st.batches = Some(ws.batches);
+            st.replays = Some(ws.replays);
+            let open = ws.last_open;
             st.writer = match &open {
                 Some(OpenOutcome::Ready { .. }) => WriterState::Ready,
                 Some(OpenOutcome::ReadOnly { .. }) => WriterState::ReadOnly,
@@ -476,24 +488,29 @@ impl Front {
             }
             Params::GatewaySetBudget(p) => self.gate.set_budget(p).await.map(|b| json!(b)),
             Params::ConfigProviders(p) => self.gate.config_providers(p).await.map(|r| json!(r)),
-            // the graph store's: the tracker scan's door
-            Params::GraphPutParsed(p) => {
-                crate::graph::put_parsed(&self.writer, &self.tools, p).await
-            }
-            Params::GraphRecord(p) => {
-                crate::graph::record(&self.writer, &self.tools, &caller, p).await
-            }
-            other => match coord::serve(&self.writer, &caller, other).await {
+            // the graph store's (`graph/*`, `tasks/*`), then the coordination writes
+            other => match crate::graph::serve(
+                &self.writer,
+                &self.tools,
+                self.dirs.get(),
+                &caller,
+                other,
+            )
+            .await
+            {
                 Ok(result) => result,
-                Err(params) => {
-                    return Some(Forwarded {
-                        id,
-                        method,
-                        params: *params,
-                        ignored,
-                        caller,
-                    });
-                }
+                Err(params) => match coord::serve(&self.writer, &caller, *params).await {
+                    Ok(result) => result,
+                    Err(params) => {
+                        return Some(Forwarded {
+                            id,
+                            method,
+                            params: *params,
+                            ignored,
+                            caller,
+                        });
+                    }
+                },
             },
         };
         if let Err(e) = &result
@@ -635,7 +652,7 @@ mod tests {
         assert_eq!(
             v["store"],
             // the store's writer made the file (schema 7) when it was spawned: its WAL is there, empty
-            json!({"schema": 0, "writer": "not-ready", "wal_bytes": 0, "writes": 0})
+            json!({"schema": 0, "writer": "not-ready", "wal_bytes": 0, "writes": 0, "batches": 0, "replays": 0})
         );
         assert_eq!(v["mcp"], json!({"sessions": 0, "outside": 0}));
         assert!(v.get("read_only").is_none(), "{v}");

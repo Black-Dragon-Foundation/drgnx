@@ -313,6 +313,21 @@ pub fn op(tx: &mut Tx<'_>, caller: &Caller, op: TaskOp) -> Result<TaskAnswer, Wr
     Ok(answer)
 }
 
+/// The user accepts a close card: task ID done at VER (the card's), with its event, as [`op`] would ([`ops::accept_close`]).
+pub fn accept_close(
+    tx: &mut Tx<'_>,
+    caller: &Caller,
+    id: &str,
+    ver: i64,
+) -> Result<TaskAnswer, WriteError> {
+    let answer = ops::accept_close(tx, caller, id, ver)?;
+    if let TaskAnswer::Done { id, title, ver, .. } = &answer {
+        let data = json!({"op": "update", "id": id, "ver": ver, "accepted": true});
+        task_event(tx, caller, &format!("close accepted {id}: {title}"), id, &data)?;
+    }
+    Ok(answer)
+}
+
 /// The op's `event` (kind `task`; `event.task` is the entity id, so excise blanks it with the task).
 fn task_event(
     tx: &mut Tx<'_>,

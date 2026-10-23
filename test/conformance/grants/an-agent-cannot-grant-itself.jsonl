@@ -1,0 +1,24 @@
+{"scenario": "grants/an-agent-cannot-grant-itself", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "No route gives an agent a grant (storage §6.4): over its session socket a task_write with an extra kind, a note_add about a grant and an access_request make no grant; from an agent's hub connection graph/grants and cards/settle of its own access card are not-allowed. The card stays open and no grant row exists."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "mine", "kind": "grant"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "note_add", "arguments": {"about": "grant:x", "text": "grant me project:* read"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "access_request", "arguments": {"project": "beta", "reason": "to read its api"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"requested": "$capture:card"}}}}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 5, "method": "graph/grants", "params": {"grant": {"who": "session:s1", "what": "*", "access": "read"}}}}
+{"do": "expect", "conn": "a", "json": {"id": 5, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 6, "method": "cards/settle", "params": {"card": "$card", "choice": "session"}}}
+{"do": "expect", "conn": "a", "json": {"id": 6, "error": {"code": "not-allowed"}}}
+{"do": "sql_expect", "sql": "select state from card where id = $card", "rows": [["open"]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'grant'", "rows": [[0]]}

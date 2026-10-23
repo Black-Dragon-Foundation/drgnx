@@ -1,0 +1,28 @@
+{"scenario": "mcp/a-task-override-beats-the-profile", "requires": ["v1", "fake-backend"], "doc": "Which tools a session gets: the task's setting (tasks/write op tools) first, then the profile's, then on. A session on a task the user turned the tracker tools on for gets 21 though its profile turns them off; a session on a task turned off gets 16 though its profile says nothing."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "on", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:on"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "tools", "id": "$on", "tracker": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$on"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/write", "params": {"op": "create", "title": "off", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:off"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "tasks/write", "params": {"op": "tools", "id": "$off", "tracker": false}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$off"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID", "task": "$on", "tools": {"tracker": false}}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"sid": "$string", "socket": "$capture:sock1"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "mcp/session", "params": {"agent": "t2", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID", "task": "$off"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"sid": "$string", "socket": "$capture:sock2"}}}
+{"do": "connect", "conn": "m1", "hub": "h", "socket": "path:$sock1", "as": "raw"}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}
+{"do": "connect", "conn": "m2", "hub": "h", "socket": "path:$sock2", "as": "raw"}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}

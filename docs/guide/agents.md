@@ -376,7 +376,9 @@ wrote is handed over as untrusted data with its author, never as instructions. E
 and an agent's first `hello` brings a short brief: its project, its tasks, what is ready, its notices.
 
 To turn the five tools off for a profile, set `:tracker-tools off` on it in `agents.eld`; for one task, the user sets
-it with `tasks/write` (op `tools`). A session keeps the list it started with.
+it with `tasks/write` (op `tools`). The task's setting wins over the profile's: a task with the tools on gets them
+even under a profile that turns them off, and the other way round; with neither set they are on. A session keeps the
+list it started with (21 tools with the tracker tools, 16 without).
 
 ## What an agent can read
 

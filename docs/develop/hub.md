@@ -681,6 +681,17 @@ history into the transcript and the session is idle; an editor that reconnects f
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
 
+## The store
+
+The front serves the store (`work.db`, schema 7) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
+for the editor), all class `user`, never forwarded to the backend. A write the backend's connection asks for among
+them (grants, settings, excise, import, `tasks/write`) is `not-allowed`. `cards/settle` of an `access` card makes a
+grant (or refuses) and of a `close` card closes the task (or rejects), in the settle's tx; the backend's connection
+can only refuse and reject. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
+the session socket lists 21 tools, or 16 without the tracker tools (the task's setting first, then the profile's, else
+on). Each method's shape: [store.md](store.md#the-stores-methods-task-15b).
+
 ## Records 2
 
 What crosses the socket is JSON shaped by the record schemas of `core/drgnx-records.el` (docs/develop/core.md,
@@ -747,8 +758,23 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no | front |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no | front |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no | front |
+| `graph/backup` | user | `{}` | `BackupAnswer` | no | front |
+| `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes | front |
+| `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no | front |
+| `graph/excise` | user | `{fields?: ["title" \| "status" \| "body" \| "assignee" \| "data"], reason: Text, rotate_backups?: boolean, target: ExciseTarget, transcripts?: boolean}` | `ExciseAnswer` | yes | front |
+| `graph/export` | user | `{history?: boolean, out?: AbsPath, project?: string, since?: natnum, with_activity?: boolean}` | `PortAnswer` | no | front |
+| `graph/grants` | user | `{grant?: {access: "read" \| "edit-user-tasks", expires?: number, what: string, who: string}, list?: {active?: boolean, who?: string}, revoke?: string}` | `{grant?: GrantView, grants?: [GrantView], revoked?: boolean}` | yes | front |
+| `graph/history` | user | `{id: string, since?: natnum}` | `{versions?: [any]}` | no | front |
+| `graph/import` | user | `{dir: AbsPath}` | `PortAnswer` | yes | front |
+| `graph/neighbors` | user | `{as_of?: natnum, depth?: natnum, direction?: "out" \| "in" \| "both", id: string, kinds?: [string]}` | `{hidden: natnum, links?: [any], nodes?: [any], truncated?: string}` | no | front |
+| `graph/path` | user | `{as_of?: natnum, from: string, kinds?: [string], max_depth?: natnum, to: string}` | `{hidden: natnum, links?: [any], nodes?: [any], truncated?: string}` | no | front |
+| `graph/privacy` | user | `{reload: boolean}` | `{added?: [string], backups_holding?: [string], excised: natnum, ignored?: [string], removed?: [string]}` | yes | front |
+| `graph/proposed` | user | `{accept?: [natnum], reject?: [natnum]}` | `{blocked?: [integer], listed?: boolean, reverted?: Reverted}` | yes | front |
 | `graph/put-parsed` | user | `{collected?: [string], gone?: [{kind: "file" \| "spec" \| "commit" \| "branch", path?: AbsPath}], root?: AbsPath, sources?: [{entities?: [{data?: JsonObject, id: string, kind: string, status?: Status, title?: Text}], links?: [{dst: string, kind: string, origin?: "parsed" \| "inferred", src: string}], mtime?: number, source: {kind: "file" \| "spec" \| "commit" \| "branch", path?: AbsPath}}], updates?: [{data_patch?: JsonObject, id: string, status?: Status}]}` | `{changed: natnum, refused?: [Refusal], retired: natnum}` | yes | front |
 | `graph/record` | user | `{collected?: string, commits: [{date: number, seq?: integer, sha: string, subject: Text}], repo: AbsPath, task: string}` | `{ids?: [string]}` | yes | front |
+| `graph/revert` | user | `{cascade?: boolean, entity?: string, tx?: natnum, ver?: natnum}` | `{blocked?: [integer], listed?: boolean, reverted?: Reverted}` | yes | front |
+| `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes | front |
+| `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no | front |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | backend |
@@ -764,7 +790,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes | backend |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no | front |
-| `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, sid?: SessionId, task?: TaskRef}` | `{sid: string, socket: string}` | no | front |
+| `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no | front |
 | `mcp/session-close` | user | `{sid: SessionId}` | `boolean` | no | front |
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes | front |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes | front |
@@ -775,6 +801,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | front |
 | `status` | user, agent, service | `{}` | `HubStatus` | no | front |
 | `subscribe` | user | `{}` | `boolean` | no | front |
+| `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no | front |
+| `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no | front |
+| `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes | front |
 <!-- hub-methods:end -->
 
 ### Classes

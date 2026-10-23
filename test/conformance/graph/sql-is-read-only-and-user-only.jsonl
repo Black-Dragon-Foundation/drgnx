@@ -1,0 +1,19 @@
+{"scenario": "graph/sql-is-read-only-and-user-only", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "graph/sql runs one read-only SELECT with bound values and a row cap for the user; a write, a second statement or an ATTACH is invalid-params and changes nothing; an agent's connection is not-allowed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "graph/sql", "params": {"sql": "select 1 as one, ?1 as two", "params": ["a"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"columns": ["one", "two"], "rows": [[1, "a"]], "truncated": false}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/sql", "params": {"sql": "select 1 union all select 2", "rows": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"rows": [[1]], "truncated": true}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/sql", "params": {"sql": "delete from tx"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "sql"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "graph/sql", "params": {"sql": "select 1; delete from tx"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "path": "sql"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "graph/sql", "params": {"sql": "attach database ':memory:' as x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "path": "sql"}}}
+{"do": "sql_expect", "sql": "select count(*) from sqlite_master where name = 'tx'", "rows": [[1]]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 6, "method": "graph/sql", "params": {"sql": "select 1"}}}
+{"do": "expect", "conn": "a", "json": {"id": 6, "error": {"code": "not-allowed"}}}

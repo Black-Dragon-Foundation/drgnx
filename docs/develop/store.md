@@ -534,4 +534,59 @@ commits against its task (§9 step 3): each a `commit:<sha>` entity and an `impl
 tx is the caller's, keyed by `collected`: the same record again answers the first answer and writes nothing; a key
 already collected by a put writes nothing either. A denied repository or task is refused with the door-1 text.
 
+## The store's methods (Task 15b)
+
+Every other `graph/*` method and `tasks/*` are the front's, class `user` only (hub.md's table;
+`drgnx-ratatoskr/src/graph.rs`). Writes go through the front's writer as the user's tx (`actor user`, class `user`,
+tool the method's name); a write the backend's connection asks for (grants, settings, excise, import, `tasks/write`)
+is `not-allowed` even though its class is `user`.
+
+- **Reads:** `graph/entity {id, as_of?, include?: [links|notes|history]}` → `{entity, by: {created, updated},
+  approximate?, links?, notes?, history?}`; `graph/neighbors` and `graph/path` (`max_depth` 1 to 6, default 3; kinds
+  required past 3) walk with the walk budgets and answer `truncated` and `hidden`; `graph/history {id, since?}` →
+  `{versions}`. The user's scope is everything.
+- **`graph/sql {sql, params?, deadline_ms?, rows?}`** → `{columns, rows, truncated}`: one read-only `SELECT` through
+  `sqlro` (defaults 2000 ms, 1000 rows); a write, `ATTACH`, a `PRAGMA`, a second statement or a recursive CTE is
+  `invalid-params` at `sql`, a run past the deadline at `deadline_ms`.
+- **`graph/revert {tx} | {entity, ver}, cascade?`** → `{reverted?: {entities, links}, blocked?, listed?}`: a tx is put
+  back by new versions, or blocked (nothing written) by the later txs named; an entity goes back to a version as a
+  new one. `cascade` only lists. A reverted grant changes scopes at once. **`graph/proposed {accept | reject: [tx]}`**
+  settles proposed txs the same way (`hist::settle_proposed`).
+- **`graph/excise {target: tx | id, fields?, reason, rotate_backups?, transcripts?}`** → the excise report, the
+  scrub's (`vacuumed`, `wal_truncated`, `blocked_by`), and the copies outside `work.db` that hold an excised value:
+  `backups_holding` (or `backups_removed` with `rotate_backups`) and `transcripts_holding` (or `transcripts_redacted`:
+  the hub's `sessions/*.jsonl`, rewritten in place with `transcripts`). Exports are listed with the backups, not
+  made again.
+- **`graph/grants {list: {who?, active?}} | {grant: {who, what, access, expires?}} | {revoke: id}`**: `who` is
+  `project:ID` (or a slug), `profile:NAME` or `session:SID`; `what` is `project:ID`, `*` or `task:ID`; access `read`
+  or `edit-user-tasks`. Only the user's connection makes or revokes one (an agent's or the backend's is
+  `not-allowed`, the registry's class check aside); the store's grant guard refuses any other tx too.
+- **`graph/settings {get} | {set: {only_user_closes}}`** → `{only_user_closes}`: `kv` key `setting:only-user-closes`,
+  written in a user-class tx (the store's `setting:` guard). **`graph/privacy {reload}`** applies a change of the
+  personal-notes opt-ins (`norn::privacy`, Task 9b; until then it answers that it is not built yet); the hub's tick
+  also checks the opt-in files.
+- **Copies:** `graph/export {project?, out?, since?, history?, …}` (default `<data>/export/`), `graph/import {dir,
+  …}` (never a `grant`: grants are made only through `graph/grants`), `graph/backup` (a dated
+  `backup/work-YYYYMMDD.db`, rotated), `graph/compact` (Task 17; answers that it is not built yet).
+- **Tasks for the editor:** `tasks/ready {labels?, limit?, project?}` and `tasks/find {query?, status?, assignee?,
+  labels?, project?, cursor?}` → `{tasks: [{id, title, status, priority, assignee, labels, project, ver, lease}],
+  cursor?}` (50 at a time); `tasks/write {op, …}` runs one tracker op as the user (`create` needs `project` or
+  `cwd`; `tools {id, tracker?}` sets a task's tracker tools) and answers `{id, title, ver, lease?, parts?}` or the
+  op's `{conflict}`, `{lease_lost}` or `{proposed}`.
+
+**Cards the store settles** (`cards/settle`): an `access` card's choices are `session`, `project`, `profile` (a read
+grant of the target project for the requesting session, its project or its profile, made in the settle's tx) and
+`refuse`; `resolved` is `refuse`; the requester gets a message either way. A `close` card's are `accept` (the task
+done as the user, its lease cleared, if it is still at the card's version: else the conflict, and the card stays
+open) and `reject` (`resolved` too: nothing changes, the proposing agent gets a notice). Any other choice is
+`invalid-params`. The backend's connection settles an access card only by refusing and a close card only by
+rejecting (`not-allowed` otherwise). Other card kinds settle as before.
+
+**Sessions' tool sets:** `mcp/session` takes `profile?` and `tools?: {tracker}` (runtime.db `msession.profile` and
+`msession.tools`, migration 4). The session socket serves `norn::tools::tools_for` of: the task's
+`data.tracker_tools` if set, else the profile's `tools.tracker`, else on (21 tools; 16 without the tracker tools).
+The list is fixed when the socket opens, and again when a session comes back after a restart.
+
+`status.store` adds `batches` and `replays` (the writer's counters) and `readers` (read connections in use).
+
 ## The one-writer gate (Task 18)

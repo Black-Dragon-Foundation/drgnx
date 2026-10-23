@@ -138,6 +138,15 @@ pub struct StoreStatus {
     /// `work.db.schema5`): the doctor offers removing them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub denied_in: Vec<String>,
+    /// The graph writer's batches (group commits) since the hub started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batches: Option<u64>,
+    /// Keyed requests answered from their stored first answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replays: Option<u64>,
+    /// The read pool's connections in use now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readers: Option<u64>,
 }
 
 /// The coordination tools the front serves: the sessions' sockets, and the outside bridges connected now.

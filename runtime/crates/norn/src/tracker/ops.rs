@@ -450,6 +450,34 @@ fn propose_close(
     Ok(TaskAnswer::Proposed { card })
 }
 
+/// The user accepts a close card (call 17, Urdr Task 15b): task ID done if it is still at VER (the proposal's), the
+/// proposer's lease ended with it; else the conflict, nothing written.
+pub fn accept_close(
+    tx: &mut Tx<'_>,
+    caller: &Caller,
+    id: &str,
+    ver: i64,
+) -> Result<TaskAnswer, WriteError> {
+    if caller.class != Class::User {
+        return Err(refused("only the user accepts a close"));
+    }
+    let e = writable_task(tx, caller, id, false)?;
+    let mut changes = Changes {
+        status: Some(Some("done".into())),
+        ..Changes::default()
+    };
+    if e.lease.holder.is_some() {
+        changes.lease = Some(cleared(&e, false));
+    }
+    let ver = match apply(tx, &e, Some(ver), changes)? {
+        Ok(v) => v,
+        Err(c) => return Ok(c),
+    };
+    notices::changed(tx, caller, &e, &["status"], None, None)?;
+    notices::now_ready(tx, caller, e.n)?;
+    Ok(done(&e, ver, None))
+}
+
 /// `claim`: a ready task, or one whose lease ran out, becomes CALLER's (lease epoch + 1, 15 minutes, status
 /// `claimed`, assignee CALLER, a `works_on` link from its session).
 pub fn claim(tx: &mut Tx<'_>, caller: &Caller, id: &str) -> Result<TaskAnswer, WriteError> {

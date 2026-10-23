@@ -1,0 +1,22 @@
+{"scenario": "scope/an-outside-agent-without-a-project-reads-nothing", "requires": ["v1", "fake-backend"], "doc": "An outside agent whose bridge works in no git repository (its cwd the home folder) has no project and no grant: its ready list and its find are empty and a task's get is no such task, though the store holds a ready task."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "alpha work", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a1"}}}
+{"do": "connect", "conn": "b", "hub": "h", "as": "raw"}
+{"do": "expect_next", "conn": "b", "json": {"event": "challenge", "data": {"nonce": "$string"}}, "within_ms": 2000}
+{"do": "send", "conn": "b", "json": {"id": 1, "method": "hello", "params": {"proto": 1, "nonce": "0123456789abcdef0123456789abcdef", "client": "mcp-bridge", "cwd": "$HOME"}}}
+{"do": "expect", "conn": "b", "json": {"id": 1, "result": {"class": "service"}}}
+{"do": "send", "conn": "b", "json": {"id": 2, "method": "mcp/attach", "params": {"kind": "claude"}}}
+{"do": "expect", "conn": "b", "json": {"id": 2, "result": {"identity": "$string"}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": "$any"}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "ready"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"tasks": []}}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "find", "query": "work"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 5, "result": {"structuredContent": {"tasks": []}}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "get", "id": "$a1"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}}

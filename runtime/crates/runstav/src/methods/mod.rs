@@ -1,6 +1,7 @@
 //! Every method of the hub protocol, one definition each, grouped as the hub's parts are: the hub itself
 //! ([`hub`]), the gateway, its provider table and spend ([`gateway`]), agent sessions ([`agents`]), jobs ([`jobs`]), coordination
-//! ([`coord`]), the graph store ([`graph`]) and the coordination tools' sockets ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
+//! ([`coord`]), the graph store ([`graph`]), the tracker for the editor ([`tasks`]) and the coordination tools' sockets
+//! ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod coord;
@@ -9,6 +10,7 @@ pub mod graph;
 pub mod hub;
 pub mod jobs;
 pub mod mcp;
+pub mod tasks;
 
 use crate::registry::Method;
 use schemars::JsonSchema;
@@ -106,6 +108,24 @@ params! {
     CoordPrune(Empty),
     GraphPutParsed(graph::PutParsedParams),
     GraphRecord(graph::RecordParams),
+    GraphEntity(graph::EntityParams),
+    GraphNeighbors(graph::NeighborsParams),
+    GraphPath(graph::PathParams),
+    GraphHistory(graph::HistoryParams),
+    GraphRevert(graph::RevertParams),
+    GraphExcise(graph::ExciseParams),
+    GraphGrants(graph::GrantsParams),
+    GraphProposed(graph::ProposedParams),
+    GraphSql(graph::SqlParams),
+    GraphExport(graph::ExportParams),
+    GraphImport(graph::ImportParams),
+    GraphBackup(Empty),
+    GraphCompact(graph::CompactParams),
+    GraphSettings(graph::SettingsParams),
+    GraphPrivacy(graph::PrivacyParams),
+    TasksReady(tasks::ReadyParams),
+    TasksFind(tasks::FindParams),
+    TasksWrite(tasks::WriteParams),
     McpSession(mcp::SessionParams),
     McpSessionClose(mcp::SessionCloseParams),
     McpAttach(mcp::AttachParams),
@@ -143,6 +163,7 @@ pub(crate) fn all() -> Vec<Method> {
     let mut v = hub::methods();
     v.extend(coord::methods());
     v.extend(graph::methods());
+    v.extend(tasks::methods());
     v.extend(mcp::methods());
     v.extend(gateway::methods());
     v.extend(agents::methods());
