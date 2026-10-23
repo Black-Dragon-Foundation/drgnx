@@ -153,10 +153,79 @@ without the watchdog."
     (let ((s (nidhogg-watchdog-stats)) (walls (delq nil (mapcar #'car drgnx-perf--stalls))))
       (list :stalls (length drgnx-perf--stalls)
             :stalls-felt (length (seq-filter #'cdr drgnx-perf--stalls))
+            :stalls-ge16 (seq-count (lambda (w) (>= w 16)) walls)
+            :stalls-ge100 (seq-count (lambda (w) (>= w 100)) walls)
             :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
             :watchdog (list :missed (or (plist-get s :missed) 0)
                             :monitor-cpu-ms (drgnx-perf--round (or (plist-get s :monitor-cpu-ms) 0.0))
                             :drain-p95-ms (drgnx-perf--round (or (plist-get s :drain-p95-ms) 0.0)))))))
+
+;;;; The worker threads (docs/develop/perf.md, "The workers probe")
+
+(declare-function nidhogg-workers-apply "nidhogg-workers")
+(declare-function nidhogg-workers-stats "nidhogg-workers")
+
+(defvar drgnx-perf--workers-applied nil "Non-nil once $DRGNX_PERF_WORKERS has been applied in this session.")
+
+(defun drgnx-perf--workers-p () (featurep 'nidhogg-workers))
+
+(defun drgnx-perf--workers-env ()
+  "Apply $DRGNX_PERF_WORKERS once per session, before any workload: `nidhogg-workers-apply' gets the value as the
+Nidhogg switch grammar has it (`default', `on', `off', `inline', or +SW/-SW items) and `default' when it is unset or
+empty.  Without the feature, nothing."
+  (when (and (not drgnx-perf--workers-applied) (drgnx-perf--workers-p))
+    (setq drgnx-perf--workers-applied t)
+    (let ((v (getenv "DRGNX_PERF_WORKERS")))
+      (nidhogg-workers-apply (if (or (null v) (string-empty-p v)) "default" v)))))
+
+(defun drgnx-perf--workers-begin ()
+  "Zero the worker counters: the next `drgnx-perf--workers-end' reads this workload alone."
+  (when (drgnx-perf--workers-p) (nidhogg-workers-stats t)))
+
+(defun drgnx-perf--workers-fallbacks (stats)
+  "The fallbacks of every worker in STATS, summed."
+  (let ((n 0))
+    (cl-loop for (_k v) on stats by #'cddr
+             when (and (consp v) (keywordp (car v)))
+             do (dolist (f (plist-get v :fallbacks)) (when (consp f) (cl-incf n (or (cdr f) 0)))))
+    n))
+
+(defun drgnx-perf--workers-end ()
+  "(:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)) for the workload just run; (:workers nil)
+without the feature.  :phase-ms is the busy time of each phase, :wait-ms the main thread's waits for a worker
+(`treesit-wait' and `worker-wait'), :fallbacks the number of jobs that ran inline, :deferrals the deferred work."
+  (if (not (drgnx-perf--workers-p))
+      (list :workers nil)
+    (let* ((s (nidhogg-workers-stats)) (ph (plist-get s :phase-ms)))
+      (list :workers (list :phase-ms (cl-loop for (k v) on ph by #'cddr collect k collect (if (numberp v) (drgnx-perf--round v) v))
+                           :wait-ms (drgnx-perf--round (+ (or (plist-get ph :treesit-wait) 0) (or (plist-get ph :worker-wait) 0)))
+                           :fallbacks (drgnx-perf--workers-fallbacks s)
+                           :deferrals (plist-get s :deferrals))))))
+
+;;;; Completion metrics: how long until the work a workload started is done
+
+(defvar drgnx-perf--complete nil "While recording: (PREDICATE START-S DONE-MS) of the workload's completion metric.")
+
+(defun drgnx-perf-complete-poll ()
+  "Idle-timer function: when the predicate holds, note the ms since `drgnx-perf-complete-begin' (once)."
+  (when (and drgnx-perf--complete (null (nth 2 drgnx-perf--complete)) (funcall (nth 0 drgnx-perf--complete)))
+    (require 'drgnx-timer)
+    (setf (nth 2 drgnx-perf--complete) (drgnx-perf--round (* 1000 (- (drgnx-timer-now) (nth 1 drgnx-perf--complete)))))
+    (drgnx-timer-cancel 'perf-complete)))
+
+(defun drgnx-perf-complete-begin (predicate)
+  "Start timing until PREDICATE (a function of no arguments, the workload's `:complete-when') holds, polled at idle
+through the timer layer."
+  (require 'drgnx-timer)
+  (setq drgnx-perf--complete (list predicate (drgnx-timer-now) nil))
+  (drgnx-timer-start 'perf-complete 0.01 #'drgnx-perf-complete-poll :idle t :repeat t :owner :core))
+
+(defun drgnx-perf-complete-end ()
+  "(:complete-ms MS) since `drgnx-perf-complete-begin', or (:complete-ms nil) when it never held; stops the polling."
+  (drgnx-perf-complete-poll)
+  (when (fboundp 'drgnx-timer-cancel) (drgnx-timer-cancel 'perf-complete))
+  (prog1 (list :complete-ms (nth 2 drgnx-perf--complete))
+    (setq drgnx-perf--complete nil)))
 
 (defun drgnx-perf--gc-row (pauses)
   "(:count N :max MS :p95 MS) of PAUSES (ms); :max and :p95 are nil with no collection."
@@ -174,6 +243,8 @@ without the watchdog."
 compose probe: reset here, read by `drgnx-perf-end' under :compose) and the stall watchdog's records (`:stalls')."
   (drgnx-perf--glitnir-env)
   (drgnx-perf--watchdog-env)
+  (drgnx-perf--workers-env)
+  (drgnx-perf--workers-begin)
   (drgnx-perf--stalls-begin)
   (drgnx-perf--compose-stats t)
   (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil
@@ -194,9 +265,10 @@ without Glitnir)."
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
   (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start)
               (compose (drgnx-perf--compose-stats))
-              (stalls (drgnx-perf--stalls-end)))
+              (stalls (drgnx-perf--stalls-end))
+              (workers (drgnx-perf--workers-end)))
     (append
-     stalls
+     stalls workers
      (list :gc (drgnx-perf--gc-row drgnx-perf--gc-pauses)
            :typing (drgnx-perf--typing-row drgnx-perf--latencies))
      (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
@@ -407,7 +479,21 @@ the GC max with no collection, the GC p95 over fewer than `drgnx-perf-gc-p95-min
   (let ((env (getenv "DRGNX_PERF_CPU_FACTOR")))
     (if (and env (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" env)) (string-to-number env) 1)))
 
-(defun drgnx-perf--path-name (path) (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " "))
+(defun drgnx-perf--landed-steps ()
+  "The steps $DRGNX_PERF_LANDED names (comma or space separated), as strings."
+  (split-string (or (getenv "DRGNX_PERF_LANDED") "") "[, ]+" t))
+
+(defun drgnx-perf--report-only-p (budget)
+  "Whether BUDGET (WORKLOAD PATH LIMIT &rest PLIST) is a report-only row whose step has not landed: `:report-only STEP'
+in PLIST, STEP not in $DRGNX_PERF_LANDED.  Such a row never fails; it is reported."
+  (when-let* ((step (plist-get (nthcdr 3 budget) :report-only)))
+    (not (member (format "%s" step) (drgnx-perf--landed-steps)))))
+
+(defun drgnx-perf--landed-p (budget)
+  "Whether BUDGET is a `:report-only' row whose step has landed: from then on it is judged like any other."
+  (and (plist-get (nthcdr 3 budget) :report-only) (not (drgnx-perf--report-only-p budget))))
+
+(defun drgnx-perf--path-name (path)(mapconcat (lambda (k) (substring (symbol-name k) 1)) path " "))
 
 (defun drgnx-perf--budget-applies-p (budget emacs-major)
   "BUDGET is (WORKLOAD PATH LIMIT &rest PLIST); `:emacs MAJOR' in PLIST limits it to that Emacs major version."
@@ -422,7 +508,8 @@ hold.  Gated: `drgnx-perf-gated-metrics' — allocation (:alloc :p50, measured x
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (drgnx-perf--gated-p path) (drgnx-perf--budget-applies-p b emacs-major)
+        (when (and (or (drgnx-perf--gated-p path) (drgnx-perf--landed-p b)) (drgnx-perf--budget-applies-p b emacs-major)
+                   (not (drgnx-perf--report-only-p b))
                    (not (and (assq w results) (drgnx-perf--watchdog-row-skipped-p results w path))))
           (let ((v (drgnx-perf--get results w path))
                 (limit (if (eq (car path) :cpu_ms) (* limit cpu-factor) limit)))
@@ -437,11 +524,16 @@ and that it is reported, not judged.  A p95 or p99 below n = 100 has no value."
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (not (drgnx-perf--gated-p path)) (assq w results)
-                   (drgnx-perf--budget-applies-p b emacs-major))
-          (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
-                        (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
-                out))))
+        (when (and (assq w results) (drgnx-perf--budget-applies-p b emacs-major))
+          (cond ((drgnx-perf--report-only-p b)
+                 (push (format "%s %s %s (budget %s, report-only until %s lands): report" w (drgnx-perf--path-name path)
+                               (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit
+                               (plist-get (nthcdr 3 b) :report-only))
+                       out))
+                ((or (drgnx-perf--gated-p path) (drgnx-perf--landed-p b)))
+                (t (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
+                                 (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
+                         out))))))
     (nreverse out)))
 
 (defun drgnx-perf-history-append (file commit results &optional load)
@@ -587,6 +679,50 @@ lacks a number at PATH."
         (list :verdict 'not-comparable)
       (let ((ci (drgnx-perf--bootstrap-per-round (cl-mapcar #'- bs as) 2000 1)) (th (max 1.0 (* 0.10 (drgnx-perf--median as)))))
         (append (list :verdict (drgnx-perf--classify ci th)) ci (list :threshold th))))))
+
+(defconst drgnx-perf-ab-metric-paths
+  '((:input :p95) (:input :p99) (:input :max) (:cpu_ms :p50) (:cpu_ms :p90)
+    (:stalls-ge16) (:stalls-ge100) (:complete-ms))
+  "The probe values (read from each round's run) whose A/B verdict counts besides the wall samples: per-command input
+p95, p99 and max, the main thread's CPU ms, the stalls of 16 ms and of 100 ms or more, and the completion metric.
+The workers' phases are added per run by `drgnx-perf-ab-metric-verdicts'.")
+
+(defun drgnx-perf-ab-phase-paths (rounds)
+  "(:workers :phase-ms PHASE) for every PHASE (a number) either side of any of ROUNDS reports."
+  (let (phases)
+    (dolist (r rounds)
+      (dolist (side '(:a :b))
+        (let ((ph (drgnx-perf--path-value (plist-get r side) '(:workers :phase-ms))))
+          (cl-loop for (k v) on ph by #'cddr when (numberp v) do (cl-pushnew k phases)))))
+    (mapcar (lambda (k) (list :workers :phase-ms k)) (nreverse phases))))
+
+(defun drgnx-perf-ab-metric-verdicts (rounds)
+  "((PATH . VERDICT)…) for ROUNDS (see `drgnx-perf-ab-probe-verdict') over `drgnx-perf-ab-metric-paths' and each worker
+phase's ms: only the paths both sides report in every round (a path with no number is left out, not failed)."
+  (let (out)
+    (dolist (path (append drgnx-perf-ab-metric-paths (drgnx-perf-ab-phase-paths rounds)))
+      (let ((v (drgnx-perf-ab-probe-verdict rounds path)))
+        (unless (eq (plist-get v :verdict) 'not-comparable) (push (cons path v) out))))
+    (nreverse out)))
+
+(defun drgnx-perf-ab-digest-verdict (rounds)
+  "The correctness verdict on ROUNDS' `:digest' strings: (:verdict regressed :why digest) when any round's two sides
+differ, (:verdict no-regression) when all agree, (:verdict not-comparable) when no round has a digest on both sides."
+  (let ((pairs (delq nil (mapcar (lambda (r) (let ((a (plist-get (plist-get r :a) :digest)) (b (plist-get (plist-get r :b) :digest)))
+                                               (and (stringp a) (stringp b) (cons a b))))
+                                 rounds))))
+    (cond ((null pairs) (list :verdict 'not-comparable))
+          ((seq-some (lambda (p) (not (equal (car p) (cdr p)))) pairs) (list :verdict 'regressed :why 'digest))
+          (t (list :verdict 'no-regression)))))
+
+(defun drgnx-perf-cpuset-args (cpus)
+  "The container run arguments that give the lab CPUS cores (\"2\" or \"4\", $DRGNX_PERF_CPUS; review M14):
+`--cpuset-cpus 0-1' or `0-3'.  Nil for an empty CPUS; an error for any other."
+  (pcase (format "%s" (or cpus ""))
+    ("" nil)
+    ("2" (list "--cpuset-cpus" "0-1"))
+    ("4" (list "--cpuset-cpus" "0-3"))
+    (v (error "perf: DRGNX_PERF_CPUS must be 2 or 4, not %s" v))))
 
 (defun drgnx-perf--path-value (plist path)
   "The value at PATH (a list of keys) in the nested PLIST."

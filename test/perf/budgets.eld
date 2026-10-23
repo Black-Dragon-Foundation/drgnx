@@ -3,6 +3,8 @@
 ;; Input (set from the first measurements, 2026-10-17: p95 0.4–7.9 ms, max ≤ 25 ms): p95 within one 60 Hz frame
 ;; (16 ms), max 50 ms; redisplay p95 16 ms; GC while typing 100 ms; a GC pause p95 50 ms (spec).
 ;; Any hook function p95 2 ms (spec): judged by `drgnx test --perf --audit'.
+;; A row may end in `:report-only STEP': it is reported, never failed, until $DRGNX_PERF_LANDED names STEP (the workers'
+;; rows, Task 8; docs/develop/perf.md, "The workers probe").
 ((frames (:frame :p95) 500)
  (startup (:server_ms :p50) 1000)
  (startup (:modules_ms) 1800)

@@ -485,6 +485,47 @@ Reported stress: `--ab-env DRGNX_PERF_WATCHDOG=on,off` (1 ms; not a gate, PD-13)
 
 Tests: `test/unit/perf-watchdog-test.el`.
 
+## The workers probe (off-the-main-thread work)
+
+On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without the feature every row below reports
+`:workers nil` and nothing fails.
+
+**The switch.** `DRGNX_PERF_WORKERS` is read once per session, before any workload, and handed unchanged to
+`(nidhogg-workers-apply SPEC)`: `default` (also unset), `on`, `off`, `inline`, or `+SW`/`-SW` items such as
+`+nidhogg-workers-treesit+nidhogg-treesit-defer` (they have no commas, so `--ab-env` takes them). A step's gate is
+`--ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default`. Sessions and containers pass it on.
+
+**The probe.** `drgnx-perf-begin` resets `nidhogg-workers-stats`, `drgnx-perf-end` reports
+`:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase, the main thread's waits for a
+worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
+`:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
+`DRGNX_PERF_WATCHDOG=on`).
+
+**Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it at idle
+through `drgnx-timer-*` and records `:complete-ms`. `:digest FORM` returns a string (buffer text plus the visible faces,
+filter-call arguments or the message sequence) kept as `:digest`.
+
+**Report-only rows.** A budget row `(W PATH LIMIT :report-only STEP)` never fails, and the report lists it as
+`report`, until `DRGNX_PERF_LANDED` (comma separated) names STEP; the gate that lands a step adds it. From then on the
+row is judged like any other, wall-clock paths included.
+
+**The A/B verdict.** Besides the wall samples, p95 and the compose probe, each judged workload prints a verdict for
+per-command input p95, p99 and max, `:cpu_ms` p50 and p90, stalls of 16 and of 100 ms or more, `:complete-ms` and each
+worker phase's ms (a phase value is the run's total, so the statistic over the rounds is the median of the per-round
+differences; same rule: not worse unless the whole 95 % interval is above max (1 ms, 10 % of the REF median)). A path
+a side does not report is left out. A workload whose `:digest` differs between the sides is `regressed (digest)`.
+`--ab-env` counts all of these in the exit code (3 stays "inconclusive").
+
+**Machine shape.** `DRGNX_PERF_CPUS=2|4` runs `bin/drgnx test --container` with `--cpuset-cpus 0-1` or `0-3`
+(`drgnx-perf-cpuset-args`). The workers' A/B runs both shapes:
+
+```sh
+DRGNX_PERF_CPUS=2 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default
+DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default
+```
+
+Tests: `test/unit/perf-workers-test.el`.
+
 ## Slow frames in another configuration
 
 Start with Show Freezes (the watchdog's report) and the stalls probe above. A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s

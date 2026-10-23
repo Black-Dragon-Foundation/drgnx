@@ -936,6 +936,20 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
                                            (t v)))))
     out))
 
+(defun drgnx-perf-run--begin-form (spec &optional audit)
+  "The form that starts recording for workload SPEC: the probes, the audit when AUDIT, and the completion timer when
+SPEC has `:complete-when' (a form that is true once the work the actions started is done)."
+  (format "(progn %s (drgnx-perf-begin) %s t)" (if audit "(drgnx-perf-audit-begin)" "")
+          (if-let* ((cw (plist-get spec :complete-when))) (format "(drgnx-perf-complete-begin (lambda () %s))" cw) "")))
+
+(defun drgnx-perf-run--extras (sess spec)
+  "What SPEC adds to a run, read in SESS after the actions: `:complete-ms' (`:complete-when') and `:digest' (the string
+SPEC's `:digest' form returns: buffer text and faces, filter-call arguments or a message sequence)."
+  (append (and (plist-get spec :complete-when) (drgnx-perf-run--call sess "(drgnx-perf-complete-end)"))
+          (and (plist-get spec :digest)
+               (list :digest (plist-get (drgnx-perf-run--call sess (format "(list :digest (format \"%%s\" %s))" (plist-get spec :digest)))
+                                        :digest)))))
+
 (defun drgnx-perf-run-workload (sess spec &optional audit)
   "Run workload SPEC in SESS: its setup, then :repeat (3) runs, the medians of their numbers.  AUDIT:
 the hook audit on (its rows under :audit).  The probes, the audit and the teardown are undone even
@@ -950,9 +964,10 @@ when a step fails."
                 (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
                 (if (not actions)
                     (push (drgnx-perf-run--call sess measure 120) runs)
-                  (drgnx-perf-run--call sess (format "(progn %s (drgnx-perf-begin) t)" (if audit "(drgnx-perf-audit-begin)" "")))
+                  (drgnx-perf-run--call sess (drgnx-perf-run--begin-form spec audit))
                   (drgnx-ui-measure sess actions)
                   (push (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
+                                (drgnx-perf-run--extras sess spec)
                                 (and measure (drgnx-perf-run--call sess measure 120)))   ; what input cannot show
                         runs)
                   (when audit
@@ -968,7 +983,7 @@ when a step fails."
                                :hooks (plist-get (drgnx-perf-run--medians audit-hooks) :hooks))
                   r))))
         ;; never leave the probes or the audit on, nor what the workload made
-        (ignore-errors (drgnx-perf-run--call sess "(progn (when drgnx-perf--audit (drgnx-perf-audit-end)) (drgnx-perf-end) t)"))
+        (ignore-errors (drgnx-perf-run--call sess "(progn (when drgnx-perf--audit (drgnx-perf-audit-end)) (drgnx-perf-complete-end) (drgnx-perf-end) t)"))
         (when (plist-get spec :teardown) (ignore-errors (drgnx-perf-run--call sess (plist-get spec :teardown))))))))
 
 (defun drgnx-perf-run--budgets ()
@@ -1455,9 +1470,10 @@ to the eln cache while it runs, and the wall clock pays for it).")
 (defun drgnx-perf-ab--one (sess spec)
   "One repeat of the input workload SPEC in SESS: (:samples (ms per command…) :run RESULT)."
   (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
-  (drgnx-perf-run--call sess "(progn (drgnx-perf-begin) t)")
+  (drgnx-perf-run--call sess (drgnx-perf-run--begin-form spec))
   (drgnx-ui-measure sess (plist-get spec :actions))
   (let* ((run (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
+                      (drgnx-perf-run--extras sess spec)
                       (and (plist-get spec :measure) (drgnx-perf-run--call sess (plist-get spec :measure) 120))))
          (samples (append (drgnx-perf-run--call sess "(vconcat drgnx-perf--latencies)") nil)))
     (when (and (plist-get spec :check) (not (eq t (drgnx-perf-run--call sess (plist-get spec :check)))))
@@ -1545,7 +1561,11 @@ judged, not-comparable, error, not-judged."
                                          :p95-verdict (drgnx-perf-ab-verdict a b (plist-get r :rounds) :stat 'p95 :threshold 1.0)
                                          :probe-verdict (drgnx-perf-ab-probe-verdict
                                                          (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b))
-                                                         '(:compose :draw-ms :p95))))
+                                                         '(:compose :draw-ms :p95))
+                                         :metric-verdicts (drgnx-perf-ab-metric-verdicts
+                                                           (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b)))
+                                         :digest-verdict (drgnx-perf-ab-digest-verdict
+                                                          (cl-mapcar (lambda (x y) (list :a x :b y)) (reverse runs-a) (reverse runs-b)))))
                               (list :budget-fails
                                     (drgnx-perf-ab--budget-fails
                                      name sb-stats (drgnx-perf-run--budgets) (drgnx-perf-run--medians runs-b)
@@ -1584,8 +1604,13 @@ judged, not-comparable, error, not-judged."
 
 (defun drgnx-perf-ab--extra-lines (e)
   "The p95 verdict and, when the runs carry it, the probe verdict of the judged entry E, each on a line of its own."
-  (let ((p95 (plist-get e :p95-verdict)) (probe (plist-get e :probe-verdict)))
+  (let ((p95 (plist-get e :p95-verdict)) (probe (plist-get e :probe-verdict))
+        (digest (plist-get e :digest-verdict)))
     (concat (and p95 (concat "\n" (drgnx-perf-ab--verdict-line "p95" p95)))
+            (mapconcat (lambda (m) (concat "\n" (drgnx-perf-ab--verdict-line (drgnx-perf--path-name (car m)) (cdr m))))
+                       (plist-get e :metric-verdicts) "")
+            (and digest (not (eq (plist-get digest :verdict) 'not-comparable))
+                 (format "\n%-13s digest %s" "" (if (plist-get digest :why) "regressed (digest)" "same")))
             (and probe (not (eq (plist-get probe :verdict) 'not-comparable))
                  (concat "\n" (drgnx-perf-ab--verdict-line "probe compose draw-ms p95" probe))))))
 
@@ -1644,13 +1669,21 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
                                         :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
                                         :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
                                         :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
+                                        :digest_verdict (and (plist-get e :digest-verdict) (symbol-name (plist-get (plist-get e :digest-verdict) :verdict)))
+                                        :metric_verdicts (mapcan (lambda (m) (list (intern (concat ":" (drgnx-perf--path-name (car m))))
+                                                                                   (symbol-name (plist-get (cdr m) :verdict))))
+                                                                 (plist-get e :metric-verdicts))
                                         :a (plist-get e :a) :b (plist-get e :b)
                                         :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why)))))
                         entries))))
       (let* ((verdicts (append (mapcar (lambda (e) (plist-get (plist-get e :verdict) :verdict)) entries)
                                ;; --ab-env also judges the p95 and the probe verdicts; --ab only prints the p95 one
                                (and env (mapcar (lambda (e) (plist-get (plist-get e :p95-verdict) :verdict)) entries))
-                               (and env (mapcar (lambda (e) (plist-get (plist-get e :probe-verdict) :verdict)) entries))))
+                               (and env (mapcar (lambda (e) (plist-get (plist-get e :probe-verdict) :verdict)) entries))
+                               ;; items 2-4 of §17.6 (metrics, completion, digest): judged with --ab-env, printed by --ab
+                               (and env (seq-mapcat (lambda (e) (mapcar (lambda (m) (plist-get (cdr m) :verdict)) (plist-get e :metric-verdicts)))
+                                                    entries))
+                               (and env (mapcar (lambda (e) (plist-get (plist-get e :digest-verdict) :verdict)) entries))))
              (fails (append (seq-mapcat (lambda (e) (plist-get e :budget-fails)) entries)
                             (seq-filter (lambda (e) (eq (plist-get e :status) 'error)) entries))))
         (dolist (f (seq-filter #'stringp fails)) (princ (format "FAIL %s\n" f)))

@@ -341,6 +341,13 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     # size; a laptop sets 4g or less); the results name this host, not the container's id
     if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi
     args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
+    # DRGNX_PERF_CPUS=2|4: the machine shape of the workers' A/B (review M14), the cores the run may use (as `drgnx-perf-cpuset-args')
+    case "${DRGNX_PERF_CPUS:-}" in
+      "") ;;
+      2) args+=(--cpuset-cpus 0-1) ;;
+      4) args+=(--cpuset-cpus 0-3) ;;
+      *) echo "drgnx: DRGNX_PERF_CPUS must be 2 or 4, not ${DRGNX_PERF_CPUS}" >&2; return 2 ;;
+    esac
     mount="$here:/src:ro"
     if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   elif [ "$tier" = tty ]; then
@@ -373,7 +380,8 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size and scales
   local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_PERF_RESULTS
-                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_UITEST_SETTLE_SCALE
+                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_PERF_WORKERS DRGNX_PERF_LANDED
+                DRGNX_PERF_WATCHDOG DRGNX_UITEST_SETTLE_SCALE
                 DRGNX_UI_SIZE DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
