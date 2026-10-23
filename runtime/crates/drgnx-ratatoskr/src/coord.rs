@@ -76,23 +76,14 @@ pub struct Writer {
 }
 
 impl Writer {
-    /// F in one transaction.  A file that was not ready is looked at again first (the tick's open, on a blocking
-    /// thread), then F runs once more: a work.db the Lisp side just made is written at once, not at the next tick.
+    /// F in one transaction.  A file that was not ready is looked at again first (norn's store does, for the tools
+    /// too): a work.db the Lisp side just made is written at once, not at the next tick.
     async fn write<R, F>(&self, f: F) -> Result<R, CoordError>
     where
         R: Send + 'static,
-        F: Fn(&Tx) -> Result<R, CoordError> + Send + Sync + 'static,
+        F: FnOnce(&Tx) -> Result<R, CoordError> + Send + 'static,
     {
-        let f = Arc::new(f);
-        let once = f.clone();
-        let r = match self.db.write(move |tx| (*once)(tx)).await {
-            Err(CoordError::NotReady { .. }) => {
-                let db = self.db.clone();
-                let _ = tokio::task::spawn_blocking(move || db.tick()).await;
-                self.db.write(move |tx| (*f)(tx)).await
-            }
-            r => r,
-        };
+        let r = self.db.write(f).await;
         if r.is_ok() {
             self.signals.wrote();
         }
