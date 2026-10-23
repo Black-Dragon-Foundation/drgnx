@@ -162,7 +162,10 @@ Whatever the configuration says:
 - binary files, files over 1 MiB, files whose path contains a newline, symbolic links, submodules, and files in a directory whose real path is outside the
   project (a directory replaced by a symbolic link to elsewhere);
 - files that `.gitignore` excludes (the index lists the project's tracked files and the untracked ones that git does
-  not ignore).
+  not ignore);
+- your personal notes: any file whose real path is under `~/org` (except `~/org/board.org`) or on your own deny
+  list, even one you opened to the store. A project whose root is inside `~/org` is refused outright ("the search
+  index never reads ~/org (personal notes)"). See [Personal notes](security.md#personal-notes).
 
 ### `.drgnx/search.eld`
 

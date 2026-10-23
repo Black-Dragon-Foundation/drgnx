@@ -441,6 +441,27 @@ pub fn paths_of(source: &Source, id: &str, data: &Value) -> Vec<PathBuf> {
     paths
 }
 
+/// Door 2 for `graph/import`: whether an imported record (its source string, id and data) may come in. An unknown
+/// source form may not.
+pub fn may_import(deny: &DenyList, source: Option<&str>, id: &str, data: &Value) -> bool {
+    record_passes(deny, source, id, data)
+}
+
+/// Door 5 for `graph/export`: whether a stored entity may leave the store. It is checked again at each export,
+/// because the list may have grown since the entity came in (a new entry in the user's deny file).
+pub fn may_export(deny: &DenyList, source: Option<&str>, id: &str, data: &Value) -> bool {
+    record_passes(deny, source, id, data)
+}
+
+/// A record passes when its source parses (no source: `Recorded`) and no path it carries is denied.
+fn record_passes(deny: &DenyList, source: Option<&str>, id: &str, data: &Value) -> bool {
+    let source = match source {
+        None => Some(Source::Recorded),
+        Some(s) => Source::parse(s),
+    };
+    source.is_some_and(|s| !matches!(deny.check_record(&s, id, data), Verdict::Denied { .. }))
+}
+
 /// The id kinds whose id is `KIND:PATH`, and those whose id is `KIND:PATH#SUFFIX`.
 const WHOLE_PATH_IDS: &[&str] = &["spec", "plan", "file"];
 const SUFFIXED_PATH_IDS: &[&str] = &["task", "step", "ruling", "todo"];

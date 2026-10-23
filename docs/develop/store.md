@@ -355,7 +355,18 @@ one exception is exactly `HOME/org/board.org` (`Verdict::Board`; `board.org.bak`
   `recorded`); anything else is `None`, and the door denies the record ("unknown source form").
 - **Project roots** (door 3): `check_root` refuses a root inside a denied path, and for a root that contains denied
   paths (`HOME` itself) lists them (`Contains`): `~/org`, the user's file and folder entries, and the names a glob
-  matches at that moment.
+  matches at that moment. The Lisp code indexer's door is `drgnx-search--files-1` (`core/drgnx-search-chunk.el`), the
+  one place every indexed path passes: a root `drgnx-search-denied-p` denies (`drgnx-deny-path-p` with the opt-ins
+  ignored) is refused with `drgnx-search-personal-notes-refusal` before its `.drgnx/search.eld` is read, and every
+  listed file it denies is dropped before anything reads it.
+- **Import and export** (doors 2 and 5): `may_import` and `may_export` are the hub's filters for `graph/import` and
+  `graph/export` (`check_record` over the record's source, id and `data`; an unreadable source string is denied).
+  Export asks again at each run, so a path the user denied after it came in does not leave.
+- **The canary** (Task 19): `norn/tests/canary.rs` drives the Rust-only doors (crafted `graph/put-parsed` payloads,
+  the 6 → 7 migration of `test/fixtures/work-db-6-canary.sql`, a tampered import, export after a new deny entry) and
+  `test/conformance/privacy/personal-notes-canary.jsonl` the whole path through the Lisp scan and indexer; random
+  bytes planted in fixture notes must reach no store, WAL, export, provider request or log, and no file under
+  `HOME/org` may change. The entity embedder's door (Task 12b) joins them there.
 
 ## The opt-in (Task 9b)
 

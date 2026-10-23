@@ -158,6 +158,17 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
   files the rules deny, and drops a plan's `**Spec:**` that names one, even through a link. The hub checks again
   (defence in depth). The code indexer asks the same check with the opt-ins ignored: a file you opened for the store
   is not opened for the code index.
+- **The code search index never reads `~/org`.** `drgnx search index` refuses a project whose root is inside
+  `~/org` (or reaches it through a link) with "the search index never reads ~/org (personal notes)", before it
+  reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose
+  real path is under `~/org` is left out, the board excepted; nothing of it is read, sent to an embedding provider
+  or stored.
+- **Every other way in is checked too.** Importing an export (`graph/import`) drops a record that names a denied
+  path or has a source form it cannot read; a store from before schema 7 loses such rows when it is upgraded
+  (its pre-upgrade backup keeps them, and `drgnx doctor` lists that backup); and an export (`graph/export`) checks
+  every record again, so a path you add to your deny list never leaves in a later export. A test plants random
+  bytes in fixture notes and checks that none of them reaches the store, its write-ahead log, the code index, an
+  export, the embedding provider or the hub's log; the hub never writes a file under `~/org`.
 
 ### Opening a personal file to the store
 
