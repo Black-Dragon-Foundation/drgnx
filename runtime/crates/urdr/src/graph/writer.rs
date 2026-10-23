@@ -45,11 +45,15 @@ impl Default for WriterOpts {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OpenOutcome {
-    Ready { schema: u32 },
+    Ready {
+        schema: u32,
+    },
     /// Re-tried at each [`WriterHandle::tick`]; writes answer [`WriteError::NotReady`] with the text.
     NotReady(String),
     /// A newer schema: writes answer [`WriteError::ReadOnly`].
-    ReadOnly { schema: u32 },
+    ReadOnly {
+        schema: u32,
+    },
     /// Never re-tried until the process restarts; writes answer [`WriteError::NotReady`] with the reason.
     Failed(String),
 }
@@ -71,7 +75,9 @@ pub enum WriteError {
     /// The batch's `COMMIT` failed: nothing of it was written; a retry may succeed.
     Retryable(String),
     /// The file is a newer schema: readable, never written.
-    ReadOnly { schema: u32 },
+    ReadOnly {
+        schema: u32,
+    },
     /// The store is not open (the rule's text), or its opening failed for good (the reason).
     NotReady(String),
     /// The writer thread is gone.
@@ -86,7 +92,10 @@ impl fmt::Display for WriteError {
             WriteError::Conflict(v) => write!(f, "conflict: {v}"),
             WriteError::Retryable(text) => write!(f, "the write was not committed ({text}); retry"),
             WriteError::ReadOnly { schema } => {
-                write!(f, "the store is schema {schema}, newer than this drgnx: read-only")
+                write!(
+                    f,
+                    "the store is schema {schema}, newer than this drgnx: read-only"
+                )
             }
             WriteError::Closed => f.write_str("the store is closed"),
             WriteError::Sql(text) => write!(f, "sql: {text}"),
