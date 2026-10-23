@@ -22,6 +22,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-file)
+(require 'drgnx-notice)                 ; what a command did is a `store' notice, echoed
 
 (declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 
@@ -138,8 +139,9 @@ it did not answer (it applies the files at its next tick or start)."
   (unless (fboundp 'drgnx-hub-call-sync) (require 'drgnx-hub-client))
   (condition-case err
       (drgnx-hub-call-sync "graph/privacy" (append (list :reload t) more) drgnx-store-privacy-timeout)
-    (error (message "drgnx: saved; the hub did not apply it now (%s): it does when it next runs"
-                    (error-message-string err))
+    (error (drgnx-notify 'store 'warn (format "Saved; the hub did not apply it now (%s): it does when it next runs"
+                                              (error-message-string err))
+                         :echo t)
            nil)))
 
 (defun drgnx-store-privacy--report (what answer)
@@ -147,13 +149,16 @@ it did not answer (it applies the files at its next tick or start)."
   (let ((excised (or (plist-get answer :excised) 0))
         (ignored (length (plist-get answer :ignored)))
         (exports (append (plist-get answer :exports_holding) nil)))
-    (message "drgnx: %s%s%s%s" what
+    (drgnx-notify
+     'store 'info
+     (format "%s%s%s%s" what
              (if (> excised 0) (format "; %d entr%s excised from the store" excised (if (= excised 1) "y" "ies")) "")
              (if (> ignored 0) (format "; %d entr%s of your files ignored (`drgnx doctor' says why)" ignored
                                        (if (= ignored 1) "y" "ies"))
                "")
              (if exports (format "; your exports still hold its text (yours to delete): %s" (string-join exports ", "))
-               ""))))
+               ""))
+     :echo t)))
 
 (defun drgnx-store-privacy--offer-delete (answer)
   "When the hub's ANSWER lists backups that still hold what was excised, ask once and have the hub delete them.
@@ -164,11 +169,16 @@ They cannot be found again later (what they hold is gone from the store), so a n
         (let ((gone (append (plist-get (drgnx-store-privacy--reload (list :delete_copies (vconcat held)))
                                        :backups_removed)
                             nil)))
-          (message "drgnx: %d of %d cop%s deleted%s" (length gone) (length held) (if (= (length held) 1) "y" "ies")
-                   (let ((left (seq-difference held gone)))
-                     (if left (format "; still there (delete them yourself): %s" (string-join left ", ")) ""))))
-      (message "drgnx: kept, and they still hold its text; delete them yourself to remove it there too: %s"
-               (string-join held ", ")))))
+          (drgnx-notify 'store 'info
+                        (format "%d of %d cop%s deleted%s" (length gone) (length held) (if (= (length held) 1) "y" "ies")
+                                (let ((left (seq-difference held gone)))
+                                  (if left (format "; still there (delete them yourself): %s" (string-join left ", "))
+                                    "")))
+                        :echo t))
+      (drgnx-notify 'store 'info
+                    (format "Kept, and they still hold its text; delete them yourself to remove it there too: %s"
+                            (string-join held ", "))
+                    :echo t))))
 
 ;;;; Opening one file
 

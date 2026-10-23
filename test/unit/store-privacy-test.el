@@ -122,7 +122,11 @@ In BODY, `org' is the resolved org folder and `config' the config dir."
       (cl-letf (((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (error "The drgnx hub did not answer"))))
         (drgnx-store-allow-personal-file reading))
       (should (equal (alist-get 'paths (drgnx-store-privacy-test--json drgnx-store-privacy-allow-file))
-                     (list reading))))))
+                     (list reading)))
+      ;; said as a `store' notice, echoed (never a bare message: lint-echo-test.el)
+      (should (cl-some (lambda (n) (and (eq (plist-get n :severity) 'warn) (plist-get n :echo)
+                                        (string-match-p "did not apply it now" (plist-get n :text))))
+                       (drgnx-notices :source 'store))))))
 
 (ert-deftest drgnx-store-privacy/revoke-deletes-held-backups-only-when-confirmed ()
   (drgnx-store-privacy-test--with

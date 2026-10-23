@@ -414,8 +414,8 @@ job's repository, for Open."
    ((assoc (plist-get card :kind) drgnx-cockpit-cards--store-choices)
     (drgnx-cockpit-cards--hub)
     (drgnx-hub-call "cards/settle" (list :card (plist-get card :id) :choice action)
-                    (lambda (_r err)
-                      (when err (message "drgnx: %s" err))
+                    (lambda (_r err)      ; the hub's answer, after the command: a notice
+                      (when err (drgnx-notify 'hub 'warn (format "Settling the card: %s" err) :echo t))
                       (drgnx-cockpit-cards--changed))))
    ((equal action "open") (drgnx-cockpit-cards--open-tree job repo))
    ;; the merge gate's card: the edits of the task's agent, where its files are accepted

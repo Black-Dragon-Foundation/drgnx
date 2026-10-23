@@ -207,7 +207,14 @@ their hooks and timers."
       (cl-letf (((symbol-function 'drgnx-coord-card-settle) (lambda (&rest _) t)))
         (button-activate (drgnx-cockpit-cards-test--button 'cards "Reject")))
       (should (equal (assoc "cards/settle" drgnx-cockpit-cards-test--calls)
-                     '("cards/settle" :card 22 :choice "reject"))))))
+                     '("cards/settle" :card 22 :choice "reject")))
+      ;; the hub's refusal is a `hub' notice, echoed (never a bare message: lint-echo-test.el)
+      (cl-letf (((symbol-function 'drgnx-hub-call)
+                 (lambda (_method _params &optional cb) (funcall cb nil "the backend cannot settle a close card"))))
+        (button-activate (drgnx-cockpit-cards-test--button 'cards "Accept")))
+      (should (cl-some (lambda (n) (and (plist-get n :echo)
+                                        (string-search "the backend cannot settle a close card" (plist-get n :text))))
+                       (drgnx-notices :source 'hub :severity 'warn))))))
 
 (ert-deftest drgnx-cockpit-cards/a-part-redraws-only-when-what-it-shows-changed ()
   (drgnx-cockpit-cards-test--with

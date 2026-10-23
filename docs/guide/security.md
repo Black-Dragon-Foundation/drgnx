@@ -193,7 +193,8 @@ Use the commands rather than editing the files by hand (palette, Preferences):
   deny list; whatever came in from it is excised at once. **Stop Keeping a Path Out…**
   (`drgnx-store-undeny-personal-path`) takes one of your entries back (nothing stored changes); the built-in list
   cannot be shortened.
-- None of them reads the file's content, and they run only when you call them.
+- None of them reads the file's content, and they run only when you call them. What each did (and a hub that did
+  not apply it at once) is a Store notice, shown once in the echo area and kept in the Notices list.
 - **Any change counts, not only the commands'.** Any program running as you can edit these files (an agent too:
   the same Unix user is no boundary). The hub looks at both files every two seconds and when it starts, applies any
   change at once (a file closed while the hub was down is excised at its next start; no backup is ever deleted
