@@ -379,7 +379,8 @@ pub fn accept_close(
     Ok(answer)
 }
 
-/// The op's `event` (kind `task`; `event.task` is the entity id, so excise blanks it with the task).
+/// The op's `event` (kind `task`; `event.task` is the entity id, so excise blanks it with the task), through the one
+/// event writer.
 fn task_event(
     tx: &mut Tx<'_>,
     caller: &Caller,
@@ -387,19 +388,23 @@ fn task_event(
     id: &str,
     data: &Value,
 ) -> Result<(), WriteError> {
-    use crate::write::event::{SUMMARY_MAX, data_text};
-    let summary = runstav::text::one_line(summary, SUMMARY_MAX, false);
-    tx.sql().execute(
-        "insert into event (at, agent, task, kind, summary, data, tx) values (?1, ?2, ?3, 'task', ?4, ?5, ?6)",
-        (
-            tx.at(),
-            &caller.actor,
-            id,
-            summary,
-            data_text(data),
-            tx.id(),
-        ),
-    )?;
+    use crate::store::CoordError;
+    use crate::write::event::{self, Event, EventKind, SUMMARY_MAX};
+    let e = Event {
+        at: tx.at(),
+        agent: Some(caller.actor.clone()),
+        job: None,
+        task: Some(id.to_string()),
+        kind: EventKind::Task,
+        summary: runstav::text::one_line(summary, SUMMARY_MAX, false),
+        data: Some(data.clone()),
+        turn: false,
+    };
+    event::event(tx, e).map_err(|e| match e {
+        CoordError::Refused(t) => WriteError::Refused(t),
+        CoordError::Sql(t) => WriteError::Sql(t),
+        other => WriteError::Sql(other.to_string()),
+    })?;
     Ok(())
 }
 

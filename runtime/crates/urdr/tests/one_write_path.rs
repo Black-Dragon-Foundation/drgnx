@@ -37,6 +37,11 @@ fn is_ident(c: char) -> bool {
 
 /// The write statements in TEXT (lowercased, whitespace collapsed) that name one of the nine tables.
 fn hits(text: &str) -> Vec<String> {
+    hits_of(text, &TABLES)
+}
+
+/// The write statements in TEXT (lowercased, whitespace collapsed) that name one of TABLES.
+fn hits_of(text: &str, tables: &[&str]) -> Vec<String> {
     let text = text
         .to_lowercase()
         .split_whitespace()
@@ -58,7 +63,7 @@ fn hits(text: &str) -> Vec<String> {
             }
             let rest = &text[at + verb.len()..];
             let word: String = rest.chars().take_while(|c| is_ident(*c)).collect();
-            if TABLES.contains(&word.as_str()) {
+            if tables.contains(&word.as_str()) {
                 found.push(format!("{verb}{word}"));
             }
         }
@@ -97,6 +102,43 @@ fn no_other_code_writes_graph_tables() {
     assert!(
         bad.is_empty(),
         "graph tables written outside urdr/src/graph:\n{}",
+        bad.join("\n")
+    );
+}
+
+/// The code before a file's first `#[cfg(test)]` (its unit tests sit at the end).
+fn non_test_code(text: &str) -> &str {
+    let mark = ["#[cfg", "(test)]"].concat();
+    text.find(&mark).map_or(text, |at| &text[..at])
+}
+
+#[test]
+fn only_the_event_writer_inserts_events() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let writer = crates.join("norn/src/write/event.rs");
+    let writer = writer.canonicalize().unwrap_or(writer);
+    let mut files = Vec::new();
+    rust_files(&crates, &mut files);
+    let mut bad = Vec::new();
+    for file in files {
+        let canon = file.canonicalize().unwrap_or(file.clone());
+        let in_tests = canon.components().any(|c| c.as_os_str() == "tests")
+            || canon.file_name().is_some_and(|n| n == "tests.rs");
+        if canon == writer || in_tests {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for h in hits_of(non_test_code(&text), &["event"]) {
+            if h.starts_with("insert") || h.starts_with("replace") {
+                bad.push(format!("{}: {h}", file.display()));
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "events inserted outside norn::write::event::event:\n{}",
         bad.join("\n")
     );
 }

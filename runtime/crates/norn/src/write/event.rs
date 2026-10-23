@@ -30,10 +30,12 @@ pub enum EventKind {
     Revert,
     Comment,
     Job,
+    /// A tracker operation (`tracker::run`): written by the hub only, never through `events/add`.
+    Task,
 }
 
 impl EventKind {
-    pub const ALL: [EventKind; 17] = [
+    pub const ALL: [EventKind; 18] = [
         EventKind::Start,
         EventKind::Stop,
         EventKind::Claim,
@@ -51,6 +53,7 @@ impl EventKind {
         EventKind::Revert,
         EventKind::Comment,
         EventKind::Job,
+        EventKind::Task,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -72,6 +75,7 @@ impl EventKind {
             EventKind::Revert => "revert",
             EventKind::Comment => "comment",
             EventKind::Job => "job",
+            EventKind::Task => "task",
         }
     }
 
@@ -291,6 +295,6 @@ mod tests {
             .collect();
         let rust: Vec<&str> = EventKind::ALL.iter().map(|k| k.as_str()).collect();
         assert_eq!(rust, lisp);
-        assert_eq!(rust.len(), 17);
+        assert_eq!(rust.len(), 18);
     }
 }

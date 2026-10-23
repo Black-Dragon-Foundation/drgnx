@@ -308,13 +308,14 @@ never called."
 
 (drgnx-schema-deftype
  'drgnx-records-event-data
- '(plist (:agent string) (:answers natnum) (:base string) (:branch string) (:by string) (:card natnum) (:choice string)
-         (:command string) (:cwd string) (:direct boolean) (:failed natnum) (:hash string) (:head string) (:into string)
-         (:kind string) (:line natnum) (:message natnum) (:more natnum) (:n integer) (:option string) (:passed natnum)
-         (:path string) (:paths (list-of string)) (:permission drgnx-records-rpc-id) (:question natnum) (:rate number)
-         (:requested boolean) (:root string) (:size natnum) (:state string) (:status string) (:to string)
+ '(plist (:accepted boolean) (:agent string) (:answers natnum) (:base string) (:branch string) (:by string) (:card natnum)
+         (:choice string) (:command string) (:cwd string) (:direct boolean) (:failed natnum) (:hash string) (:head string)
+         (:id string) (:into string) (:kind string) (:line natnum) (:message natnum) (:more natnum) (:n integer)
+         (:op string) (:option string) (:parts (list-of string)) (:passed natnum) (:path string) (:paths (list-of string))
+         (:permission drgnx-records-rpc-id) (:proposed natnum) (:question natnum) (:rate number) (:requested boolean)
+         (:root string) (:size natnum) (:state string) (:status string) (:to string)
          (:truncated boolean "Set with :size when the data was too long to keep") (:turn boolean)
-         (:verdict (enum pass fail)) (:version integer))
+         (:ver integer) (:verdict (enum pass fail)) (:version integer))
  "The `data' of an event, one plist for every kind's keys (what each kind carries is in docs/develop/coordination.md).")
 
 (drgnx-schema-deftype

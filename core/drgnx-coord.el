@@ -106,8 +106,8 @@ is an error: nothing was read at a version that does not exist."
 
 (defconst drgnx-coord-event-kinds
   '("start" "stop" "claim" "release" "status" "decision" "edit" "test" "question" "answer" "review" "message" "card"
-    "accept" "revert" "comment" "job")
-  "What an event can be.")
+    "accept" "revert" "comment" "job" "task")
+  "What an event can be.  `task' is the hub's tracker operations (schema 7).")
 
 (defconst drgnx-coord--summary-max 200 "The longest event summary, in characters.")
 

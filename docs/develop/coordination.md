@@ -181,8 +181,10 @@ Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 
   `[excised TX]`, the data `{"excised": TX}`.
 - **Events and meta.** `write::event` is `drgnx-coord--event`: the summary is one line of at most 200 characters
   (`runstav::text::one_line`), data over 4096 characters is stored as `{"truncated": true, "size": N}`, `turn` is 1
-  for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 17 of `drgnx-coord-event-kinds` (a test
-  reads the Lisp list). `write::meta` keeps `log-version`, `seen:AGENT` and `held:AGENT`.
+  for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 18 of `drgnx-coord-event-kinds` (a test
+  reads the Lisp list). `task` is the tracker's own (one per operation, written by `tracker::run`, never through
+  `events/add`); every `event` row goes through `write::event::event` (`urdr/tests/one_write_path.rs` checks it).
+  `write::meta` keeps `log-version`, `seen:AGENT` and `held:AGENT`.
 - **Messages, cards, review marks and agents.** `write::messages` (`send`, `mark`, `message_prompt`, `notice`),
   `write::cards`, `write::review` and `write::agents` are the Lisp writers of the same names, rule for rule: `send`
   is held by the log version (an answer with the versions, never a write; a version from the future is an error),
