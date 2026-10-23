@@ -370,9 +370,45 @@ A `Refusal { status, kind, message }` answers with the Lisp's body, `{"type":"er
   characters removed, plus the provider's auth header with the key (`x-api-key` for `XApiKey`, else Bearer; none for
   a keyless provider). The client's own token never goes upstream.
 
+**Forwarding** (`engine::Gateway`, built with the registry, the provider table and `Keys` behind `RwLock`s, a
+`Ledger`, an event channel and one `upstream::Upstream`):
+1. admission (above); a refusal answers at once with `Connection: close`, then reads and drops up to 64 KiB of the
+   unread body for at most 2 s, so the client is not reset while it still sends (A-25). A client waiting for
+   `100 Continue` is not invited to send;
+2. an agent whose job has a budget: `Ledger::spent(job) >= budget` is a `GatewayEvent::Budget` and 429
+   `budget_exceeded` "the job's budget (N USD) is spent";
+3. the body, at most 32 MiB (chunked or not; over is 413);
+4. an agent's chain, step by step. A step is skipped, with its reason, when its provider is unknown ("not
+   configured"), cannot speak the Messages API ("the gateway cannot carry it") or has no key ("no key", plus
+   `GatewayEvent::NeedKeys`, at most once a minute per provider). Otherwise the body is rewritten, sent, and the head
+   awaited: no head ("no answer (…)"), or 401, 402, 408, 409, 429 or 5xx while another step remains ("HTTP N"), moves
+   on. Each move emits `GatewayEvent::Fallback` when a step remains. The first other head **starts** the answer
+   (the chain's literal last step passes its provider's refusal through), and nothing falls back after that. No step
+   left: 502 `api_error` "no provider answered: P: WHY; …";
+5. the editor's route goes to its one provider with the body as it came: no budget, no rewrite, no fallback. A
+   keyed provider without its key is `NeedKeys` and 503 "no key for P in the drgnx hub"; no head is 502;
+6. a started answer: the provider's status, `Content-Type` (default `application/json`) and `Retry-After`, then each
+   chunk as it comes, through the usage scanner. When it ends, or the client hangs up (which drops the upstream body
+   and so its connection), one spend row is recorded through `Ledger::record` (`job` none and agent `editor` on the
+   editor's route; status 0 when the client left before the head), then `GatewayEvent::Request`, then `Budget` if the
+   job's total reached its budget. A guard's `Drop` writes the row, so it is written once whichever way the request
+   ends, and a skipped or abandoned step writes none.
+
+A key is read per attempt and goes only into the upstream request's sensitive header; logs name providers, never keys
+or tokens.
+
+**Listeners** (`listen`): `serve_tcp(gw, listener, port)` for the loopback listener and `serve_unix(gw, listener,
+ListenerId::Session(SID))` for a session's socket; the caller binds them. hyper's HTTP/1.1 server with keep-alive
+(the token is checked on every request), a 30 s header-read timeout and a 64 KiB head (longer is 431). At most 64
+connections on the TCP listener and 8 on a session's socket; one more is accepted, closed at once and logged.
+
 `cargo test -p bifrost` runs `admit::tests` (each refusal and its order, a token of another listener, both path
 classes, the proptest `admit_never_panics` over random targets and headers), `rewrite::tests` (the Lisp's
-`gateway-test.el` and `gateway-openrouter-test.el` cases by name) and `keys::tests`.
+`gateway-test.el` and `gateway-openrouter-test.el` cases by name), `keys::tests` and `tests/engine.rs`: a client over
+TCP or a session socket, the gateway on its listener and `ratatoskr-mock llm` as the provider (fallback, the literal
+last step, streaming first chunk first, spend once, the budget, a hang-up, need-keys, keep-alive, the drained
+refusal, the connection cap, the editor's pass-through). It finds the mock at `RATATOSKR_MOCK`, else beside its own
+binary, so build it first: `cargo build -p domr --bin ratatoskr-mock` (a workspace `cargo test` builds it anyway).
 
 ## The conformance harness
 
