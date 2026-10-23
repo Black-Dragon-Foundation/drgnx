@@ -995,6 +995,10 @@ when a step fails."
            (cl-loop for (k x) on v by #'cddr
                     do (setq out (nconc out (list k (if (eq k :loaded) (if x t :false) (drgnx-perf-run--json-ready x))))))
            out))
+        ;; a plain list (the A/B's `:order' of sides, its `:rounds') is an array, its symbols strings: `json-serialize'
+        ;; takes a list for an object and refuses a symbol that is not a keyword
+        ((consp v) (vconcat (mapcar #'drgnx-perf-run--json-ready v)))
+        ((and (symbolp v) (not (keywordp v)) (not (eq v t))) (symbol-name v))
         (t v)))
 
 (defun drgnx-perf-run--write-results (file results)
