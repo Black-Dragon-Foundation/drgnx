@@ -27,6 +27,14 @@
   (or auth-source-netrc-cache
       (let (found) (maphash (lambda (k _) (when (eq (car-safe k) 'auth-source) (setq found t))) password-data) found)))
 
+(defun drgnx-ai-keys-test--a-hand-over-read-keeps-nothing ()
+  "Read the keys a hand-over would send (`drgnx-hub--held-keys', once), then check that this Emacs kept none of them:
+not in `drgnx-ai--keys', not in auth-source's netrc cache, no entry at all in `password-data' (review M3)."
+  (drgnx-hub--held-keys)
+  (should (zerop (hash-table-count drgnx-ai--keys)))
+  (should-not auth-source-netrc-cache)
+  (should (zerop (hash-table-count password-data))))
+
 (ert-deftest drgnx-ai/the-editor-holds-no-key-after-the-handover ()
   (drgnx-ai-gateway-test--with nil
     (let* ((canary "sk-or-canary-23c")
@@ -45,6 +53,7 @@
             ;; nowhere in this Emacs: its key table, auth-source's cache (a later hand-over reads a quiet store again,
             ;; keeping nothing: review M3)
             (should-not (drgnx-ai-keys-test--auth-source-cached-p))
+            (drgnx-ai-keys-test--a-hand-over-read-keeps-nothing)
             ;; gptel's backend for OpenRouter carries the editor token
             (let ((spec (drgnx-ai-gptel-spec 'openrouter "openrouter/auto")))
               (should (equal (funcall (plist-get (cddr spec) :key)) (car drgnx-hub--editor)))
@@ -69,7 +78,8 @@
           (should (drgnx-ai-usable-p 'b 'chat t))                ; found: the check read the store
           (should (zerop (hash-table-count drgnx-ai--keys)))
           (should-not auth-source-netrc-cache)
-          (should-not (drgnx-ai-keys-test--auth-source-cached-p)))))))
+          (should-not (drgnx-ai-keys-test--auth-source-cached-p))
+          (drgnx-ai-keys-test--a-hand-over-read-keeps-nothing))))))
 
 (ert-deftest drgnx-ai/the-environment-is-left-as-it-was ()
   ;; a key the user put in this Emacs's environment goes to the hub and stays where the user put it
@@ -95,6 +105,7 @@
       (should (memq 'a (drgnx-ai-load-keys)))
       (drgnx-test-wait (lambda () (zerop (hash-table-count drgnx-ai--keys))) :secs 20 :what "the hub took the key")
       (should-not (drgnx-ai-keys-test--auth-source-cached-p))
+      (drgnx-ai-keys-test--a-hand-over-read-keeps-nothing)
       (setq drgnx-ai-gateway-test--sent nil)
       (should (equal (car (drgnx-ai-gateway-test--ask 'chat '(:messages [(:role "user" :content "x")]))) "hi"))
       (drgnx-ai-gateway-test--through root "/v1/chat/completions")
