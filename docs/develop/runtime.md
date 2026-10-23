@@ -665,6 +665,8 @@ budgets: this is a recorded baseline, not a regression gate.
 | `hello-round-trip` | `ping` and its answer on a proven connection | 100 |
 | `a-1-mib-request-line` | an `agents/send` line of about 1 MiB read, re-encoded, forwarded to the fake backend and answered | 20 |
 | `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
+| `mcp-tool-call` | `tools/call read_inbox` over a session socket (initialized, `hello` called once before) | 100 |
+| `coord-write` | `events/add` through the main socket, answered with the new id | 100 |
 
 ```
 cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
@@ -717,9 +719,14 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `sbpl_quote` | text through `sbpl::quote`; a success must read back through `sbpl::sexp` as one string equal to the input |
 | `bwrap_version` | text as `bwrap --version` output through `parse_version` and `version_at_floor` |
 | `inner_spec` | bytes decoded as the helper's `InnerSpec` (`deny_unknown_fields`); a success must re-encode and decode to the same value |
+| `mcp_message` | bytes as the lines of one MCP connection through `mimir::serve` with the 16 `norn` tools over a schema-6 `work.db` (a file from the oracle's fixture, shared by all inputs), as given and after a legacy `initialize` handshake; every answer line must be JSON |
+| `jsonrpc_parse` | a line through `jsonrpc::parse` and mimir's `lenient_id`: an error is `-32700` (only for non-JSON) or `-32600`; a parsed request or result has the id `lenient_id` reads |
+| `text_one_line` | text (and a length limit and the `header` flag from the first two bytes) through `text::one_line`, `coord_line` and `cut`: no `CONTROL` character (`one_line`: no newline, tab or CR either), never over the limit |
 
-The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1) and the unit tables
-(gleipnir's targets). A run adds files to the
+The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
+`jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send) and the unit tables (gleipnir's targets). The
+bridge's `classify`, `id_in_prefix` and `read_bounded` are private to `mimir::bridge`, so they are not targets; the
+bridge's lines are covered by `jsonrpc_parse` and `mcp_message`. A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.
 
 Local run (keep the toolchain and the crate cache out of `~`: point `RUSTUP_HOME` and `CARGO_HOME` at a scratch

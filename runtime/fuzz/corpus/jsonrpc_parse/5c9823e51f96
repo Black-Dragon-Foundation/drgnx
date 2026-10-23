@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"report_test","arguments":{"command":"before","passed":1,"failed":0}}}

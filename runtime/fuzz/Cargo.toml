@@ -18,6 +18,10 @@ serde_json = "1"
 runstav = { path = "../crates/runstav" }
 drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
+mimir = { path = "../crates/mimir" }
+norn = { path = "../crates/norn" }
+urdr = { path = "../crates/urdr" }
+tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
 
 [workspace]
 
@@ -73,6 +77,27 @@ bench = false
 [[bin]]
 name = "inner_spec"
 path = "fuzz_targets/inner_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_message"
+path = "fuzz_targets/mcp_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonrpc_parse"
+path = "fuzz_targets/jsonrpc_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_one_line"
+path = "fuzz_targets/text_one_line.rs"
 test = false
 doc = false
 bench = false
