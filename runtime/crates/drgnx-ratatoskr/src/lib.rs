@@ -19,7 +19,10 @@
 //!   the `coord/notify` coalescer and the coordination tools' hub.
 //! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
 //!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
-//! - [`peer`]: the process behind a connection: its parent and start time, for an outside agent's identity.
+//! - [`peer`]: the process behind a connection: its parent and start time, for an outside agent's identity; the
+//!   process listening on a socket, `stop`'s only target.
+//! - [`gateway`]: the gateway in the hub: registrations (hashes only) in `runtime.db`, keys in memory, the provider
+//!   table, spend from `work.db`, the engine's events.
 //! - [`bridge`]: `mcp-bridge`, an agent's stdio MCP server copied to a session's socket or, for an outside agent, to
 //!   the main socket as `service`; it redials after a hub restart.
 //! - [`log`]: tracing to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` and warnings to stderr.
@@ -41,6 +44,7 @@ pub mod dispatch;
 pub mod doctor;
 pub mod forward;
 pub mod front;
+pub mod gateway;
 pub mod hello;
 pub mod idle;
 pub mod lock;

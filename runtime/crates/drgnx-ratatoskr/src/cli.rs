@@ -144,6 +144,10 @@ pub struct ServeArgs {
     pub idle_tick_ms: Option<u64>,
     /// `--agent-socket SID[:JOB]` (test-hooks only, and only with `--foreground`): the hello task serves them.
     pub agent_sockets: Vec<AgentSocket>,
+    /// `--gateway-port N` (test-hooks only): the gateway's loopback port, instead of the kept or a free one.
+    pub gateway_port: Option<u16>,
+    /// `--test-ignore-shutdown` (test-hooks only): `shutdown` is answered and ignored, so `stop` reaches its signal.
+    pub ignore_shutdown: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -199,6 +203,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                         let v = p.value().map_err(e)?.string().map_err(e)?;
                         a.agent_sockets.push(agent_socket(&v)?);
                     }
+                    #[cfg(feature = "test-hooks")]
+                    Long("gateway-port") => {
+                        let port: u16 = p.value().map_err(e)?.parse().map_err(e)?;
+                        if port == 0 {
+                            return Err("--gateway-port takes a port above 0".into());
+                        }
+                        a.gateway_port = Some(port);
+                    }
+                    #[cfg(feature = "test-hooks")]
+                    Long("test-ignore-shutdown") => a.ignore_shutdown = true,
                     other => return Err(other.unexpected().to_string()),
                 }
             }
@@ -871,6 +885,8 @@ mod tests {
     #[test]
     fn agent_socket_is_unknown_without_test_hooks() {
         assert!(p(&["serve", "--foreground", "--agent-socket", "s1"]).is_err());
+        assert!(p(&["serve", "--gateway-port", "4100"]).is_err());
+        assert!(p(&["serve", "--test-ignore-shutdown"]).is_err());
     }
 
     #[cfg(feature = "test-hooks")]
@@ -908,6 +924,15 @@ mod tests {
             }))
         );
         assert!(p(&["serve", "--idle-tick-ms", "0"]).is_err());
+        assert_eq!(
+            p(&["serve", "--gateway-port", "4100", "--test-ignore-shutdown"]),
+            Ok(Command::Serve(ServeArgs {
+                gateway_port: Some(4100),
+                ignore_shutdown: true,
+                ..ServeArgs::default()
+            }))
+        );
+        assert!(p(&["serve", "--gateway-port", "0"]).is_err());
         assert!(
             p(&["serve", "--agent-socket", "s1"]).is_err(),
             "without --foreground"

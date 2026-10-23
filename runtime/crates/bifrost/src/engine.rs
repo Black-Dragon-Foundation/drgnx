@@ -28,6 +28,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard};
 use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
@@ -127,6 +128,9 @@ pub struct Gateway {
     upstream: Upstream,
     /// Provider id → when [`GatewayEvent::NeedKeys`] last named it.
     told: Mutex<HashMap<String, Instant>>,
+    /// Request body bytes taken, and provider body bytes passed on, since start ([`Gateway::traffic`]).
+    bytes_in: AtomicU64,
+    bytes_out: Arc<AtomicU64>,
 }
 
 /// What one step came to.
@@ -154,7 +158,18 @@ impl Gateway {
             events,
             upstream,
             told: Mutex::new(HashMap::new()),
+            bytes_in: AtomicU64::new(0),
+            bytes_out: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// The bytes taken from clients' request bodies and passed on from providers' bodies since start (the hub's
+    /// `status`).
+    pub fn traffic(&self) -> (u64, u64) {
+        (
+            self.bytes_in.load(Ordering::Relaxed),
+            self.bytes_out.load(Ordering::Relaxed),
+        )
     }
 
     /// Answer one request that came in on listener `on` (`port`: the loopback listener's, for its `Host` check).
@@ -196,7 +211,12 @@ impl Gateway {
         }
 
         let body = match Limited::new(incoming, MAX_BODY as usize).collect().await {
-            Ok(collected) => collected.to_bytes(),
+            Ok(collected) => {
+                let body = collected.to_bytes();
+                self.bytes_in
+                    .fetch_add(body.len() as u64, Ordering::Relaxed);
+                body
+            }
             Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
                 return answer(
                     &Refusal::new(
@@ -314,7 +334,7 @@ impl Gateway {
                     return Attempt::Next(format!("HTTP {status}"));
                 }
                 spend.status = status;
-                Attempt::Answer(relay(response, spend))
+                Attempt::Answer(relay(response, spend, self.bytes_out.clone()))
             }
         }
     }
@@ -377,7 +397,7 @@ impl Gateway {
             }
             Ok(response) => {
                 spend.status = response.status().as_u16();
-                relay(response, spend)
+                relay(response, spend, self.bytes_out.clone())
             }
         }
     }
@@ -546,12 +566,13 @@ impl Body for Drain {
 }
 
 /// A started answer: the provider's status, `Content-Type` (default `application/json`) and `Retry-After`, then its
-/// body chunk by chunk through the scanner.
-fn relay(response: Response<Incoming>, spend: Spend) -> Response<ReplyBody> {
+/// body chunk by chunk through the scanner; `out` counts the bytes passed on.
+fn relay(response: Response<Incoming>, spend: Spend, out: Arc<AtomicU64>) -> Response<ReplyBody> {
     let (head, upstream) = response.into_parts();
     let body = Relay {
         upstream,
         spend: Some(spend),
+        out,
     };
     let mut out = Response::new(body.boxed_unsync());
     *out.status_mut() = head.status;
@@ -572,6 +593,7 @@ fn relay(response: Response<Incoming>, spend: Spend) -> Response<ReplyBody> {
 struct Relay {
     upstream: Incoming,
     spend: Option<Spend>,
+    out: Arc<AtomicU64>,
 }
 
 impl Body for Relay {
@@ -588,6 +610,7 @@ impl Body for Relay {
                 Some(Ok(frame)) => {
                     // trailers are not passed on
                     if let Ok(data) = frame.into_data() {
+                        this.out.fetch_add(data.len() as u64, Ordering::Relaxed);
                         if let Some(spend) = &mut this.spend {
                             spend.scanner.feed(&data);
                         }

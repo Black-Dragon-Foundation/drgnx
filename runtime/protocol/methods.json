@@ -400,7 +400,7 @@
         "type": "object"
       },
       "doc": "a job's spend reached its budget",
-      "from": "backend",
+      "from": "front",
       "name": "budget"
     },
     {
@@ -619,8 +619,29 @@
         "type": "object"
       },
       "doc": "a request or a task moved to the next provider or profile",
-      "from": "backend",
+      "from": "front",
       "name": "fallback"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Providers whose key the hub does not hold, though a registration needs it: an editor hands its keys over.",
+        "properties": {
+          "providers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "title": "NeedKeys",
+        "type": "object"
+      },
+      "doc": "a registration needs keys the hub does not hold (to user connections)",
+      "from": "front",
+      "name": "gateway/need-keys"
     },
     {
       "data": {
@@ -787,7 +808,7 @@
         "type": "object"
       },
       "doc": "the gateway forwarded a request: its tokens and cost",
-      "from": "backend",
+      "from": "front",
       "name": "request"
     }
   ],
@@ -1848,6 +1869,186 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the gateway's provider table (no keys), replaced; a keyed provider over clear text is warned about",
+      "home": "front",
+      "name": "config/providers",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "ProviderAuth": {
+            "description": "How a provider takes its key; `none` is a keyless (local) provider.",
+            "enum": [
+              "bearer",
+              "x-api-key",
+              "none"
+            ],
+            "type": "string"
+          },
+          "ProviderCap": {
+            "enum": [
+              "chat",
+              "fim",
+              "embed"
+            ],
+            "type": "string"
+          },
+          "ProviderConfig": {
+            "description": "One provider of the table the editor hands over (no key: keys come by `gateway/keys`).",
+            "properties": {
+              "auth": {
+                "$ref": "#/$defs/ProviderAuth"
+              },
+              "base": {
+                "$ref": "#/$defs/ProviderUrl"
+              },
+              "caps": {
+                "items": {
+                  "$ref": "#/$defs/ProviderCap"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "id": {
+                "$ref": "#/$defs/Id"
+              },
+              "kind": {
+                "$ref": "#/$defs/ProviderKind"
+              },
+              "messages": {
+                "description": "It speaks Anthropic's Messages API, so an agent's chain may use it.",
+                "type": "boolean"
+              },
+              "price": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ProviderPrice"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "base",
+              "auth",
+              "messages",
+              "caps"
+            ],
+            "type": "object"
+          },
+          "ProviderKind": {
+            "description": "A provider's API family: it decides the paths an editor token reaches (`/p/PROVIDER/…`).",
+            "enum": [
+              "openai",
+              "ollama",
+              "llamacpp",
+              "tei",
+              "anthropic"
+            ],
+            "type": "string"
+          },
+          "ProviderPrice": {
+            "description": "A provider's price, US dollars per million tokens.",
+            "properties": {
+              "input": {
+                "$ref": "#/$defs/Usd"
+              },
+              "output": {
+                "$ref": "#/$defs/Usd"
+              }
+            },
+            "required": [
+              "input",
+              "output"
+            ],
+            "type": "object"
+          },
+          "ProviderUrl": {
+            "description": "a provider's base URL: https, or http for any host (clear text off loopback)",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "providers": {
+            "description": "The whole table: it replaces the one before.",
+            "items": {
+              "$ref": "#/$defs/ProviderConfig"
+            },
+            "maxItems": 64,
+            "type": "array"
+          }
+        },
+        "required": [
+          "providers"
+        ],
+        "title": "ProvidersParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ProviderWarning": {
+            "additionalProperties": false,
+            "description": "A warning about one provider (a keyed one whose key travels in clear text).",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`config/providers`' answer: how many providers the table now has, and the warnings.",
+        "properties": {
+          "applied": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ProviderWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "applied"
+        ],
+        "title": "ProvidersApplied",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -3247,8 +3448,8 @@
       "classes": [
         "user"
       ],
-      "doc": "provider keys to the gateway's memory (never a file)",
-      "home": "backend",
+      "doc": "provider keys to the hub's memory (never a file, never the backend)",
+      "home": "front",
       "name": "gateway/keys",
       "params": {
         "$defs": {
@@ -3295,8 +3496,8 @@
       "classes": [
         "user"
       ],
-      "doc": "an agent's token and the gateway's URL; its keys go to the gateway's memory",
-      "home": "backend",
+      "doc": "an agent's token and where it is good (the URL, or a session's socket); its keys go to the hub's memory",
+      "home": "front",
       "name": "gateway/register",
       "params": {
         "$defs": {
@@ -3321,7 +3522,7 @@
           },
           "OpenrouterRestrictions": {
             "additionalProperties": false,
-            "description": "OpenRouter restrictions (agents.eld's `:openrouter`): an unknown one is refused.",
+            "description": "OpenRouter restrictions (agents.eld's `:openrouter`): an unknown one is refused, and so is a slug that is not one\n(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`, the Lisp's strict rule; the front checks it at registration).",
             "properties": {
               "data-collection": {
                 "anyOf": [
@@ -3376,6 +3577,12 @@
             },
             "type": "object"
           },
+          "SessionId": {
+            "description": "a session's id: ASCII letters, digits, - and _, 1 to 64",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
           "TaskRef": {
             "description": "a task: no control characters, 1 to 512 characters",
             "maxLength": 512,
@@ -3410,10 +3617,11 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "USD for the whole job; absent: the job's `data.budget` in work.db."
           },
           "chain": {
-            "description": "The providers to try in turn: `[[provider, model-or-null]…]`, at most 16.",
+            "description": "The providers to try in turn: `[[provider, model-or-null]…]`, at most 16.  At least one must be usable now (a\nprovider of the table that speaks Messages and whose key the hub holds), or the registration is refused.",
             "items": {
               "items": {
                 "maxLength": 128,
@@ -3459,13 +3667,24 @@
             ]
           },
           "owner": {
-            "description": "The pid of the Emacs whose agent it is: its registrations go when it does.",
+            "description": "The pid of the Emacs whose agent it is: its registrations go when it does (absent: the caller's pid).",
             "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
               "null"
             ]
+          },
+          "sid": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SessionId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A live session (`mcp/session`): the token is issued for its own `gateway.sock`, and good only there."
           },
           "task": {
             "anyOf": [
@@ -3487,32 +3706,86 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "A registration's token and where it is good: the loopback listener's `url`, or a session's `socket`.",
         "properties": {
           "openrouter": {
             "description": "The restrictions kept; absent when none."
+          },
+          "socket": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "token": {
             "type": "string"
           },
           "url": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "token",
-          "url"
+          "token"
         ],
         "title": "Registration",
         "type": "object"
       },
-      "writes": true
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: every registration of the job gets the budget (drgnx-gateway-set-budget)",
+      "home": "front",
+      "name": "gateway/set-budget",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "budget": {
+            "$ref": "#/$defs/Usd"
+          },
+          "job": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "job",
+          "budget"
+        ],
+        "title": "SetBudgetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
         "user"
       ],
       "doc": "the token no longer forwards",
-      "home": "backend",
+      "home": "front",
       "name": "gateway/unregister",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3533,7 +3806,7 @@
         "title": "boolean",
         "type": "boolean"
       },
-      "writes": true
+      "writes": false
     },
     {
       "classes": [
@@ -6134,7 +6407,7 @@
         "service"
       ],
       "doc": "what a job's, task's or agent's requests came to (an agent: its own job's)",
-      "home": "backend",
+      "home": "front",
       "name": "spend",
       "params": {
         "$defs": {
@@ -6199,7 +6472,7 @@
         "description": "What the requests came to.",
         "properties": {
           "cost": {
-            "description": "US dollars.",
+            "description": "US dollars: a JSON number, which a whole amount may spell `2.0` (R-T18-2).",
             "format": "double",
             "type": "number"
           },
@@ -6236,7 +6509,7 @@
         "agent",
         "service"
       ],
-      "doc": "the hub's state: versions, refusals, read-only, the backend",
+      "doc": "the hub's state: versions, refusals, read-only, the backend, the gateway",
       "home": "front",
       "name": "status",
       "params": {
@@ -6277,6 +6550,80 @@
             ],
             "type": "string"
           },
+          "GatewayStatus": {
+            "additionalProperties": false,
+            "description": "The gateway the front serves: its loopback port (none until it listens), the registrations held, and what it\ncarried since the hub started (requests answered, those that failed, fallbacks, request and answer bytes); the\nprovider table's size, the ids whose key the hub holds (never a key) and the clear-text warnings.",
+            "properties": {
+              "bytes_in": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "bytes_out": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "errors": {
+                "description": "Requests whose provider answered 4xx or 5xx, or none at all.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fallbacks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "keys_held": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "port": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "providers": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "registrations": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "requests": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "warnings": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ProviderWarning"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "registrations",
+              "requests",
+              "errors",
+              "fallbacks",
+              "bytes_in",
+              "bytes_out",
+              "providers"
+            ],
+            "type": "object"
+          },
           "McpStatus": {
             "additionalProperties": false,
             "description": "The coordination tools the front serves: the sessions' sockets, and the outside bridges connected now.",
@@ -6295,6 +6642,23 @@
             "required": [
               "sessions",
               "outside"
+            ],
+            "type": "object"
+          },
+          "ProviderWarning": {
+            "additionalProperties": false,
+            "description": "A warning about one provider (a keyed one whose key travels in clear text).",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "text"
             ],
             "type": "object"
           },
@@ -6392,7 +6756,19 @@
               "null"
             ]
           },
+          "gateway": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GatewayStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The gateway the front serves (none from a Lisp hub)."
+          },
           "gateway_port": {
+            "description": "A Lisp hub's gateway port (Ratatoskr says `gateway.port`).",
             "format": "uint64",
             "minimum": 0,
             "type": [
@@ -6466,6 +6842,7 @@
             ]
           },
           "registrations": {
+            "description": "A Lisp hub's registrations (Ratatoskr says `gateway.registrations`).",
             "format": "uint64",
             "minimum": 0,
             "type": [

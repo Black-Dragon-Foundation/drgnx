@@ -518,7 +518,10 @@ pub async fn notify_backend(front: Arc<Front>) {
     let signals = front.writer.signals.clone();
     loop {
         signals.notify.notified().await;
-        front.forward().notify_backend("coord/notify").await;
+        front
+            .forward()
+            .notify_backend("coord/notify", json!({}))
+            .await;
         tokio::time::sleep(PACE).await;
     }
 }

@@ -1,7 +1,7 @@
 //! Forwarding to the Lisp backend (design 8.2, review I4): what the front does not serve goes on as `{id, method,
 //! params, caller}`, the params re-encoded from their typed decode (never the client's line) and `caller` the class
-//! (and an agent socket's session and job) the front established.  Provider keys are exposed only while that line is
-//! serialised, and the line is wiped once written.
+//! (and an agent socket's session and job) the front established.  Provider keys never go on: `gateway/keys` and
+//! `gateway/register` are the front's ([`crate::gateway`]); the line is still wiped once written.
 //!
 //! - A line over 1 MiB (the Lisp hub's `drgnx-hub--max-line`) is `invalid-params` and never sent: an over-long line
 //!   would make the backend drop the front's whole connection.
@@ -117,8 +117,9 @@ impl Forward for ToBackend {
     fn notify_backend<'a>(
         &'a self,
         method: &'static str,
+        params: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(self.0.notify(method))
+        Box::pin(self.0.notify(method, params))
     }
 }
 

@@ -276,9 +276,12 @@ pub const SESSION_HUB_SOCKET: &str = "hub.sock";
 /// The coordination tools' socket in a session dir (`mcp/session`): whoever connects to it is that session's agent.
 pub const SESSION_MCP_SOCKET: &str = "mcp.sock";
 
+/// The gateway's socket in a session dir (`gateway/register` with `sid`): a token issued for it is good only there.
+pub const SESSION_GATEWAY_SOCKET: &str = "gateway.sock";
+
 /// The longest socket name a session dir holds (`hub.sock`, `mcp.sock`, `search.sock`, `gateway.sock`): it sizes the
 /// fallback.
-const SESSION_LONGEST_SOCKET: &str = "gateway.sock";
+const SESSION_LONGEST_SOCKET: &str = SESSION_GATEWAY_SOCKET;
 
 /// Where session dirs are made, for the hub SOCKET names: `<socket dir>/s` and `<tmp>/drgnx-hub-UID/s` (the
 /// fallback).  Gleipnir's run parents: a sandbox is given one direct child of these.

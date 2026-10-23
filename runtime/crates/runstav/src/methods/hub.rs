@@ -1,6 +1,7 @@
 //! The hub's own methods: `hello`, `ping`, `status`, the subscription, the event log, `env/set`, ending and
 //! restarting.
 
+use super::gateway::ProviderWarning;
 use super::{Empty, method};
 use crate::registry::{Class, Method};
 use crate::types::{AbsPath, Bounded, EnvName, Hex64, Nonce, null_as_empty};
@@ -163,10 +164,37 @@ pub struct HubStatus {
     pub job_agents: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<Backend>,
+    /// The gateway the front serves (none from a Lisp hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<GatewayStatus>,
+    /// A Lisp hub's gateway port (Ratatoskr says `gateway.port`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_port: Option<u64>,
+    /// A Lisp hub's registrations (Ratatoskr says `gateway.registrations`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registrations: Option<u64>,
+}
+
+/// The gateway the front serves: its loopback port (none until it listens), the registrations held, and what it
+/// carried since the hub started (requests answered, those that failed, fallbacks, request and answer bytes); the
+/// provider table's size, the ids whose key the hub holds (never a key) and the clear-text warnings.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u64>,
+    pub registrations: u64,
+    pub requests: u64,
+    /// Requests whose provider answered 4xx or 5xx, or none at all.
+    pub errors: u64,
+    pub fallbacks: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub providers: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub keys_held: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub warnings: Vec<ProviderWarning>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -272,7 +300,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "status", Status(Empty) -> HubStatus,
             classes: [User, Agent, Service], writes: false, home: Front,
-            doc: "the hub's state: versions, refusals, read-only, the backend",
+            doc: "the hub's state: versions, refusals, read-only, the backend, the gateway",
         ),
         method!(
             "restart", Restart(Empty) -> bool,

@@ -14,6 +14,9 @@
 //!   owners are bound again (a bridge redials the same path) and the others dropped with their directories.
 //! - **Closing:** the socket, the connections, the directory (unless the session's agent `hub.sock` is still in it,
 //!   which 13b's stop removes) and the row.  A stop unbinds the sockets and keeps the rows.
+//! - **The gateway's socket** (Task 22): `gateway/register` with a session's `sid` binds `gateway.sock` in its
+//!   directory (0600, once per session; [`Sessions::gateway_socket`]); it closes with the session, its tokens with it
+//!   ([`crate::gateway`]).
 //! - **Outside agents:** `mcp/attach` on the main socket ([`outside`]): `ext:KIND:PID-HASH` from the bridge's parent
 //!   process ([`crate::peer`]); the connection then carries MCP ([`Sessions::serve_outside`]).
 
@@ -91,8 +94,10 @@ struct Live {
     row: Row,
     dir: PathBuf,
     path: PathBuf,
-    /// Ends its accept loop and its connections.
+    /// Ends its accept loop and its connections (and the gateway socket's).
     cancel: CancellationToken,
+    /// Its `gateway.sock`, once a registration asked for it.
+    gateway: Option<PathBuf>,
 }
 
 /// The front's MCP hosting.
@@ -148,7 +153,7 @@ fn now() -> f64 {
 }
 
 /// PID's start time while it runs (a zombie has ended), else `None`.
-fn owner_start(pid: i32) -> Option<u64> {
+pub fn owner_start(pid: i32) -> Option<u64> {
     if pid <= 0 || !draugr::alive(pid) || peer::zombie(pid) {
         return None;
     }
@@ -451,8 +456,40 @@ impl Sessions {
                 dir,
                 path,
                 cancel,
+                gateway: None,
             },
         );
+    }
+
+    /// Whether session SID's socket is bound now.
+    pub fn is_live(&self, sid: &str) -> bool {
+        self.live.lock().expect("sessions").contains_key(sid)
+    }
+
+    /// Session SID's `gateway.sock`: bound (0600) and handed to SERVE with a token that ends with the session, the
+    /// first time; its path every time.  No such session is `invalid-params` (path `sid`).
+    pub fn gateway_socket(
+        &self,
+        sid: &str,
+        serve: impl FnOnce(UnixListener, CancellationToken),
+    ) -> Result<PathBuf, Error> {
+        let mut live = self.live.lock().expect("sessions");
+        let Some(l) = live.get_mut(sid) else {
+            return Err(invalid(
+                "sid",
+                format!("no session {sid} in this hub: mcp/session opens one"),
+            ));
+        };
+        if let Some(path) = &l.gateway {
+            return Ok(path.clone());
+        }
+        let path = l.dir.join(paths::SESSION_GATEWAY_SOCKET);
+        let listener = bind_socket(&path)
+            .map_err(|e| internal(format!("cannot bind {}: {e}", path.display())))?;
+        serve(listener, l.cancel.child_token());
+        tracing::info!(sid, "the gateway on {}", path.display());
+        l.gateway = Some(path.clone());
+        Ok(path)
     }
 
     /// `mcp/session-close`: false when there is no such session.
@@ -470,6 +507,9 @@ impl Sessions {
             return false;
         };
         remove_socket(&live.path);
+        if let Some(g) = &live.gateway {
+            remove_socket(g);
+        }
         remove_dir(&live.dir);
         delete(&store.db, sid).await;
         tracing::info!(
@@ -565,6 +605,9 @@ impl Sessions {
         for live in self.live.lock().expect("sessions").values() {
             live.cancel.cancel();
             remove_socket(&live.path);
+            if let Some(g) = &live.gateway {
+                remove_socket(g);
+            }
         }
     }
 

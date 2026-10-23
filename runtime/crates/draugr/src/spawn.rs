@@ -45,6 +45,33 @@ pub struct PassFd {
     pub target: i32,
 }
 
+/// The files no child may be given as a [`PassFd`] (the hub's listening sockets: call 14's invariant), by device and
+/// inode; [`never_pass`] adds one.  Checked in debug builds.
+static NEVER_PASS: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+/// The device and inode of FD's file.
+#[allow(clippy::useless_conversion, clippy::unnecessary_cast)]
+fn file_id(fd: RawFd) -> Option<(u64, u64)> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    // SAFETY: fstat writes one `stat` into a buffer of that size
+    if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: fstat succeeded, so it filled the buffer
+    let st = unsafe { st.assume_init() };
+    Some((st.st_dev as u64, st.st_ino as u64))
+}
+
+/// FD (a hub's listening socket) is never passed to a child: a spawn that tries panics in debug builds.
+pub fn never_pass(fd: &impl AsRawFd) {
+    if let Some(id) = file_id(fd.as_raw_fd()) {
+        NEVER_PASS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(id);
+    }
+}
+
 /// Bytes of stderr kept: enough for [`STDERR_TAIL_CHARS`] characters of up to four bytes each.
 const TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4;
 /// After the exit, how long [`Child::wait`] lets the stderr reader catch up (a grandchild may hold stderr open).
@@ -120,6 +147,15 @@ fn spawner() -> io::Result<mpsc::Sender<Job>> {
 }
 
 fn start(spec: Spec) -> io::Result<Child> {
+    if cfg!(debug_assertions) {
+        let never = NEVER_PASS.lock().unwrap_or_else(|e| e.into_inner());
+        debug_assert!(
+            spec.pass_fds
+                .iter()
+                .all(|p| file_id(p.fd.as_raw_fd()).is_none_or(|id| !never.contains(&id))),
+            "a hub's listening socket was passed to a child"
+        );
+    }
     let moved = move_above_targets(&spec.pass_fds)?;
     let mut cmd = Command::new(&spec.program);
     cmd.args(&spec.args)
@@ -388,6 +424,20 @@ mod tests {
             fd: Arc::clone(fd),
             target,
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    #[should_panic(expected = "a hub's listening socket was passed to a child")]
+    async fn a_hubs_listening_socket_is_never_passed() {
+        // kept open for the test binary's life, so its inode is never another file's
+        let (sock, _) = std::os::unix::net::UnixStream::pair().unwrap();
+        never_pass(&sock);
+        let fd = Arc::new(OwnedFd::from(sock.try_clone().unwrap()));
+        std::mem::forget(sock);
+        let mut spec = sh("exit 0", true);
+        spec.pass_fds.push(pass(&fd, 3));
+        let _ = spawn(spec).await;
     }
 
     #[tokio::test]

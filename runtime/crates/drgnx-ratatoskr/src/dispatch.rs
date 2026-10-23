@@ -280,13 +280,10 @@ pub struct Caller {
 /// What a forwarded call answers.
 pub type Answer<'a> = Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>>;
 
-/// What `status` says of the backend: its state and pid, and the gateway's port and registrations from the
-/// backend's own `status` (left out when it does not answer).
+/// What `status` says of the backend: its state and pid (the gateway's numbers are the front's own).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BackendInfo {
     pub backend: Option<Backend>,
-    pub gateway_port: Option<u64>,
-    pub registrations: Option<u64>,
 }
 
 /// The methods the front does not serve itself go here (the Lisp backend: [`crate::forward`]).  PARAMS are the
@@ -304,12 +301,13 @@ pub trait Forward: Send + Sync {
         None
     }
 
-    /// METHOD sent to the backend as a notification (no id, never awaited): dropped when no backend runs.
+    /// METHOD with PARAMS sent to the backend as a notification (no id, never awaited): dropped when no backend runs.
     fn notify_backend<'a>(
         &'a self,
         method: &'static str,
+        params: Value,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        let _ = method;
+        let _ = (method, params);
         Box::pin(async {})
     }
 }

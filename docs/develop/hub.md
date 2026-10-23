@@ -101,15 +101,24 @@ socket path would resolve differently under systemd or launchd than in the edito
 in a command line. `systemd-run` and `launchctl` are the root-owned programs at fixed paths, never found through
 `PATH`.
 
+### Stopping a hub
+
 `ratatoskr stop [--timeout SECS]` (default 15: the hub stops its backend first) signals nothing unless the lock is
 really held:
 
 - **Ratatoskr's lock** (a file): `flock(LOCK_EX|LOCK_NB)` is tried first. If it succeeds nobody holds the lock (a stale
   file naming a live, reused pid, say): it prints `not running` and exits 0 without a signal. If it fails the hub is
   asked to `shutdown` as a user client, and `stop` waits for the lock to be released and prints `stopped Ratatoskr (pid
-  N)`. Only when it is not released is the pid in the lock file sent SIGTERM, and only if that pid's start time is
-  still the one recorded in the file and its executable (`/proc/PID/exe`; macOS `proc_pidpath`) resolves to this
-  ratatoskr's own path (else it prints why and exits 1).
+  N)`. Only when it is not released does it signal, and then only **the process listening on the hub's socket**,
+  never one a lock's text or a command line names (`peer.rs`, `lock::signal_target`): it connects to the socket
+  through the checked directory and asks the system who accepted. On Linux that is a pidfd (`SO_PEERPIDFD`, else
+  `pidfd_open` of the `SO_PEERCRED` pid), so the SIGTERM (`pidfd_send_signal`) reaches that process even if its pid is
+  reused meanwhile; on macOS `LOCAL_PEERPID` and `kill`. The listener's uid must be the user's, its pid the one the lock
+  names and its start time the recorded one; else `stop` prints "the hub did not stop and WHY; signal it yourself: pid
+  N" and exits 1 having signalled nothing. Then it waits again and prints `stopped Ratatoskr (pid N, by SIGTERM)`. A
+  process that forges its `argv[0]` (or a lock rewritten to name it) is never signalled. Nothing here reads
+  `/proc/PID/exe` or `/proc/PID/cmdline`: the hub is not dumpable (below), so those are not readable without
+  `CAP_SYS_PTRACE` anyway. Other systems (Android included, where no hub runs) refuse to signal.
 - **Before any of it**, the socket's directory must pass the client check below (a real directory of the user's,
   not a link, no access for others), and the lock and the cap are read through that checked directory, without
   following a link, only when they are the user's. Else `stop`, `ensure` and `status` print the refusal (`… belongs to
@@ -120,9 +129,19 @@ really held:
   when it is alive and its command line names `drgnx-hub-main`; else it prints `the lock names pid N, which is not a
   drgnx hub: remove LOCKDIR` and exits 1.
 
+**The hub is not dumpable** (`server::harden`, before it binds or reads a key): `PR_SET_DUMPABLE 0` on Linux and
+Android, `PT_DENY_ATTACH` on macOS. Keys live in its memory (next sections), and this keeps another process of the
+user's (an agent outside a sandbox, a debugger it starts) from reading that memory with `ptrace` or
+`/proc/PID/mem`, and keeps the hub from writing a core file. It does not stop root or a process with
+`CAP_SYS_PTRACE`. Its children start dumpable again (an exec resets it); the hub's listening sockets are never passed
+to one (close-on-exec, and `draugr::spawn` checks in debug builds that none of them is among a child's descriptors).
+
+### Status, doctor and restart
+
 `ratatoskr status [--json]` is `status` as a user client (with `"running": true` added with `--json`); with no hub it
 prints `{"running": false}` and exits 1. `ratatoskr doctor --json` prints `{binary: {path, commit, test_hooks},
-running: {commit, pid}?, socket_dir: {path, mode, ok}, sqlite, job_agents}`. `ratatoskr restart` calls `restart`.
+running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings}?, socket_dir: {path, mode,
+ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key). `ratatoskr restart` calls `restart`.
 
 **`restart`** (user class) answers `true`, then the hub stops as for `shutdown` (its backend first; in phase 1 there
 are no turns to cancel) and exits **75**. Under `--supervisor self`, where nothing would start it again, it releases
@@ -344,9 +363,12 @@ drgnx_version, schema, read_only?, store, runtime, refusals, job_agents: "unsand
 with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
 last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since` (0), at most `limit` (200, at most
 1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
-says `backend: {state: running|starting|missing|failed, pid?}`, and `gateway_port` and `registrations` from the
-backend's own `status` (1 s; left out when it does not answer). Every other method goes to the Lisp backend (next
-section).
+says `backend: {state: running|starting|missing|failed, pid?}` and `gateway: {port?, registrations, requests,
+errors, fallbacks, bytes_in, bytes_out, providers, keys_held, warnings}`, the front's own gateway
+([Registrations](#registrations)): `providers` is how many the table has, `keys_held` the providers whose key the hub
+holds (never a key), `errors` the requests answered with no status or one of 400 and up. The front also serves the
+gateway's methods, `gateway/{register,unregister,keys,set-budget}`, `config/providers` and `spend`. Every other method
+goes to the Lisp backend (next section).
 
 ## Ratatoskr and the Lisp backend
 
@@ -397,10 +419,10 @@ serves, is logged as a warning.
 **Forwarding.** The front sends `{id, method, params, caller: {class, sid?, job?}}`: the params re-encoded from their
 typed decode (a key the method does not know was dropped and listed in the client's `ignored`; a duplicate key was
 refused), never the client's line, and the caller as the front established it. The backend never trusts a class from
-anywhere else (the v0 backend ignores `caller`). Provider keys are never logged and never serialised except into that
-line to the backend, and that line is wiped once written. They are not wiped from memory otherwise: on their way in
-they pass through the request line, its parsed JSON and a plain string before the secret type holds them (review
-M12), so this is no claim of zeroisation.
+anywhere else (the v0 backend ignores `caller`). Provider keys never go to the backend (the gateway's methods are the
+front's: [Keys](#keys)), are never logged and never serialised. They are not wiped from memory: on their way in they
+pass through the request line, its parsed JSON and a plain string before the secret type holds them (review M12), so
+this is no claim of zeroisation.
 - A line over 1 MiB (the Lisp hub's `drgnx-hub--max-line`) is `invalid-params` "the request is too large for the Lisp
   backend" and never sent: the backend would drop the front's whole connection.
 - At most 64 calls per client connection are in flight; past that the front reads no more of that connection until
@@ -413,11 +435,14 @@ M12), so this is no claim of zeroisation.
 - By class (`shape.rs`): `agents/list` for a `service` connection is `{sessions: [{id, name, job, task}]}`, for an
   `agent` the same for its own job's sessions (and its own); an agent's `spend` reads its own job (`job` defaults to
   it, another is `not-allowed`). `gateway/keys` and `gateway/register`'s keys come from user connections only (the
-  class check).
+  class check). `spend` itself is the front's now: summed from work.db's `spend` rows (`norn::read::spend`), all zero
+  while there is no work.db.
 
 **Events.** The front subscribes to the backend once per backend start and relays its events to the front's
-subscribers. Eight of the nine kinds main broadcasts are relayed (`agent`, `agent-entries`, `lease-released`,
-`fallback`, `card`, `job`, `budget`, `request`), each decoded against its registry type first; an event of another
+subscribers. Six kinds main broadcasts are relayed (`agent`, `agent-entries`, `lease-released`, `fallback` with its
+`job` — the job runner's —, `card`, `job`); the gateway's `request`, `budget` and a `fallback` without a `job` are the
+front's own since the gateway runs in it, so a backend's are dropped and logged ("the gateway's events are the
+front's"). Each is decoded against its registry type first; an event of another
 name, or one whose data does not decode, is dropped and logged ("dropped a backend event", its name and the path).
 The backend's `events` is dropped before the relay (logged once per backend start): the front broadcasts the event
 log itself ([Events](#events)). Behind the front the backend sends none: `drgnx-hub-main` with a serve socket never
@@ -688,6 +713,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes | backend |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes | backend |
 | `cards/settle` | user | `{card: natnum, choice: string}` | `{settled: boolean}` | yes | front |
+| `config/providers` | user | `{providers: [{auth: "bearer" \| "x-api-key" \| "none", base: ProviderUrl, caps: ["chat" \| "fim" \| "embed"], id: Id, kind: "openai" \| "ollama" \| "llamacpp" \| "tei" \| "anthropic", messages: boolean, price?: {input: Usd, output: Usd}}]}` | `{applied: natnum, warnings?: [ProviderWarning]}` | no | front |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes | front |
 | `coord/card-create` | user | `{data?: JsonObject, job?: Id, kind?: string, task?: TaskRef, title?: Text}` | `{id: natnum}` | yes | front |
 | `coord/card-set` | user | `{data?: JsonObject, id: natnum, state?: Status, title?: Text}` | `boolean` | yes | front |
@@ -702,9 +728,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | backend |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes | front |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no | front |
-| `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | backend |
-| `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, task?: TaskRef}` | `{openrouter?: any, token: string, url: string}` | yes | backend |
-| `gateway/unregister` | user | `{token: string}` | `boolean` | yes | backend |
+| `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | front |
+| `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no | front |
+| `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no | front |
+| `gateway/unregister` | user | `{token: string}` | `boolean` | no | front |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | backend |
@@ -728,7 +755,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `restart` | user | `{}` | `boolean` | no | front |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes | front |
 | `shutdown` | user | `{}` | `boolean` | no | front |
-| `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | backend |
+| `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | front |
 | `status` | user, agent, service | `{}` | `HubStatus` | no | front |
 | `subscribe` | user | `{}` | `boolean` | no | front |
 <!-- hub-methods:end -->
@@ -748,13 +775,13 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
+| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/providers`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
 | service | `mcp/attach` (an outside agent's bridge: [Sessions and their sockets](#sessions-and-their-sockets)) |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
 classes see of the shared methods: `agents/list` gives a `service` the `{id, name, job, task}` of every session and an
 `agent` the same of its own job's; `spend` of an `agent` is its own job's. The methods that write work.db (`writes`,
-refused with `schema` while the hub is read-only) are `gateway/register`, `gateway/unregister`,
+refused with `schema` while the hub is read-only) are
 `agents/{start,send,stop,kill,permission,do}`, every `job/…` but `job/status`, and the front's writes (the editor's
 five and the seam's ten `coord/…`, all but `coord/notify`).
 
@@ -784,7 +811,7 @@ type's schema carries the same `pattern` and `maxLength`.
 | `StringOrNumber` | a string of at most 4096, or a number (`job/card`'s `arg`) |
 | `Status` | a job's, task's or card's state: `^[a-z][a-z-]*$`, at most 32 |
 | `JsonObject` | a JSON object of at most 64 KiB (65536 bytes as JSON): a stored `data` |
-| `ProviderKeys` | an object `Id` → key, at most 32 keys of at most 4096 each; kept secret (no `Debug`), serialised only when the params go on to the backend |
+| `ProviderKeys` | an object `Id` → key, at most 32 keys of at most 4096 each; kept secret (no `Debug`), never serialised: it goes to the gateway's memory |
 | `Bounded<T, MAX>` | a string or list of at most MAX: every bound of the contract (`env/set`'s list: 16, a value 32768; a chain: 16 steps of `[provider, model-or-null]`; a profile: 128) |
 
 `env/set`'s value for `PATH`, `MANPATH` and `INFOPATH` must be a `:`-separated list of absolute directories (no
@@ -802,11 +829,12 @@ result is (`event(NAME).check`):
 | `agent-entries` | sessions | `{id, seq, entries: [[index, Entry]]}` |
 | `events` | the event log (the front's writer: [Events](#events)) | `{since, last, events: [{id, at, agent, job, task, kind, summary, data?}]}` |
 | `lease-released` | the hub's housekeeping | `{task, agent, job}` |
-| `fallback` | the gateway, jobs | `{agent, from, to, why}`, from a job with `job` and `task` too |
+| `fallback` | the gateway (the front), jobs (the backend) | `{agent, from, to, why}`, from a job with `job` and `task` too |
 | `card` | jobs | `{id, job, task, kind, title}` |
 | `job` | jobs | `{id}`: its status, tasks or open cards changed |
 | `budget` | the gateway | `{job, spent, budget}` |
 | `request` | the gateway | `{job, task, agent, provider, model, status, input, output, cost}` |
+| `gateway/need-keys` | the gateway | `{providers: [Id]}`: a request needed these providers' keys, which the hub does not hold (at most once a minute each; a subscriber that connects later gets the pending ones after its `subscribe` answer) |
 | `challenge` | the front, on accept | `{nonce}` |
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
 
@@ -937,58 +965,71 @@ Test hooks: `--bridge-backoff-ms N` and `--bridge-give-up-ms N` shorten the timi
 
 ## Registrations
 
-`gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps
-`<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key —
-written by `drgnx-hub--write-private` = `drgnx-file-write` with `:private t` (a temporary file beside it, synced to
-disk — the directory is not synced, which Emacs cannot do — and renamed over it, so a hub or a machine that dies
-mid-write leaves the old one whole; an old file loses its group and other bits; content over 1 MiB or not plain data is
-refused and the file untouched), and
-reads it back with `drgnx-file-read` when it starts (a file it cannot read is copied aside as
-`registrations.eld.bak-…` and logged in one line: those agents register again). Both files and the port file are
-read and written by the hub only; the hub's pid file (`drgnx-hub--take-lock`) is its own lock protocol and stays
-outside the layer. It also keeps the gateway's port (`<state>/hub/port`, written with `drgnx-file-write-text`) and binds it again, so agents
-keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
-session's token is unregistered when its agent exits or is killed. Tokens have no expiry; instead a registration
-names its `owner`, the pid of the Emacs that registered it (`drgnx-agents--gateway` sends its own: the agent is its
-child, and a hub's own sessions are the hub's), and the hub drops those whose owner is gone (`drgnx-hub--alive-p`: a
-zombie counts as gone) when it starts and on each tick (2 s) — a crashed editor never unregisters its agents' tokens.
-A registration without an owner (kept before owners were) or with one that is not a pid stays until it is unregistered. A pid the system has given to a new process since
-keeps its registrations until that one ends too. The last key handed over for a provider wins: two editors with different keys for it (separate billing) swap
-the hub's on each reconnect. Keys sent in `keys` live in the hub's
-memory only (`drgnx-gateway-set-key`, and `drgnx-ai--keys` for the agents it starts), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
-hands the hub the keys its Emacs already holds, asking no one (`drgnx-hub--held-keys`: a provider's environment
-variable, else a key loaded this session), with `gateway/keys` after the hub answers, and `drgnx-hub-connect` does so again with each new subscription: a
-restarted hub has no key a command gave its predecessor (a `.gpg` one) until an editor connects again — the Agents
-module's idle timer looks every 30 s — and its requests until then fail over or answer "no key". The hub never looks a key up where that may ask
-(a `.gpg` file, the Keychain, a keyring): an agent it starts (`agents/start`, a job's, a resumed one) uses the keys
-editors handed over, its environment or quiet auth-source files (`drgnx-ai-key` without INTERACTIVE), and with none for
-any provider of its chain it does not start: "No key for openrouter in the drgnx hub: an editor hands its keys over
-when it connects (or run drgnx hub start where the key is set)".
+The gateway runs in Ratatoskr (`runtime/crates/drgnx-ratatoskr/src/gateway.rs`, forwarding by
+[`bifrost`](runtime.md#bifrost-the-gateway)): the front serves `gateway/register`, `gateway/unregister`,
+`gateway/keys`, `gateway/set-budget`, `config/providers` and `spend` itself, and none of them reaches the Lisp backend.
+
+`gateway/register {chain, job?, task?, agent?, budget?, openrouter?, keys?, owner?, sid?}` returns `{token, url?,
+socket?, openrouter?}`: a token of 64 hex digits (32 random bytes) and, without `sid`, the loopback URL
+`http://127.0.0.1:PORT`; with `sid`, the session's `gateway.sock` (`SDIR/gateway.sock`, 0600, bound once per session
+and served until the session closes) instead, for an agent in a sandbox without the host's loopback.
+
+- **The chain is judged first.** A step whose provider is not in the table ("not configured"), does not speak
+  Messages ("the gateway cannot carry it") or has no key ("no key") cannot be used; with none usable the registration
+  is refused, `invalid-params` at `chain` with every step's reason ("no step of the chain can be used: nowhere: not
+  configured; embedder: the gateway cannot carry it"), or, when every step only lacks its key, "No key for P in the
+  drgnx hub: an editor hands its keys over when it connects". Nothing is kept.
+- **Only the hash is kept.** The registration lives in memory (what `bifrost` admits by) and in `runtime.db`'s
+  `registration` table (`<state>/hub/runtime.db`, 0600; migration 3), keyed by the SHA-256 of its token: the token is
+  answered once and is in no file, log or table. The row is written before the answer, so a token always has its
+  row. `gateway/unregister {token}` removes both (true).
+- **Owners.** A registration's owner is `owner` when given (a live pid, else `invalid-params` at `owner`), else the
+  caller's pid as the system reports it (the peer's credentials), with that process's start time. At start and on
+  each tick (1 s) the hub prunes a registration whose owner is gone or whose pid now names another process (another
+  start time), and one bound to a session that closed (M9b1-10). One without an owner stays until it is
+  unregistered. The Lisp backend registers its agents with the editor's pid as `owner`: without it, the backend would
+  own them and its restart would prune them.
+- **Across a restart** the rows are read back (a row that does not read is dropped and logged), owners checked again,
+  the sessions' sockets bound again, and the gateway's port too: `runtime.db`'s `kv.gateway_port` is tried first,
+  else a free one (logged), and the one used is kept.
+- **Budget.** A registration's `budget` (USD), else its job's `data.budget` in work.db. `gateway/set-budget {job,
+  budget}` sets it for every registration of the job, in memory and in `runtime.db` (the editor's `job resume
+  --budget`).
+
+**The provider table** is the editor's: `config/providers {providers: [{id, kind, base, auth, messages, caps,
+price?}]}` (at most 64; `kind` one of `openai ollama llamacpp tei anthropic`, `auth` one of `bearer x-api-key none`)
+replaces it whole and answers `{applied, warnings}`. `base` follows the URL rule (`runstav::url::provider_base`):
+`https`, or `http` for any host, never a user, password, fragment or control character; a bad one is
+`invalid-params` at `providers[N].base` and nothing changes. A keyed provider over `http` off loopback is applied
+with a warning, "ID's key travels in clear text over http://HOST; use https" (the user's answer 4): in the answer, in
+`status`'s and the doctor's `gateway.warnings`, and in the hub log once per provider per start. A keyless one there
+has none. The last good table is kept in `runtime.db`'s `kv` (it holds no key) and applied again at start.
 
 ## Forwarding
 
-The token is checked as soon as the request's head is whole (`drgnx-http-parse-head`): one that is not a registration
-gets 401 at once, before the body (up to 32 MB) is waited for; a good token's body is kept as a list of pieces and
-joined when its last piece came.
+`bifrost` admits and forwards ([runtime.md](runtime.md#bifrost-the-gateway) has its rules): an agent's request on
+127.0.0.1 (`Host` must be `127.0.0.1:PORT` or `localhost:PORT`) or on its session's socket shows its token as
+`Authorization: Bearer` or `x-api-key`; only Anthropic Messages paths are forwarded (`/v1/messages`,
+`/v1/messages/count_tokens`, `/v1/models[/ID]`), to the steps of its chain in turn, the provider's key added and the
+agent's token never passed on. `status.gateway` counts requests, errors, fallbacks and the bytes each way.
 
-Only Anthropic Messages paths are forwarded — `/v1/messages`, `/v1/messages/count_tokens`, `/v1/models[/ID]`, with
-a query, never `..` — and the URL built must keep the provider's host: a path cannot send the key elsewhere (404
-otherwise). A provider can be carried when it has `:messages t` (it serves Anthropic's Messages API at its URL without `/v1`
-plus the agent's path): the `openrouter`, `ollama` and `anthropic` presets. Its key goes as `Authorization: Bearer`,
-or `x-api-key` with `:auth x-api-key`. The request's `content-type`, `accept`, `anthropic-version` and
-`anthropic-beta` headers pass, with control characters (CR, NUL, …) stripped from names and values: curl's config would turn a CR into a header break; the body's top-level `model` is replaced when the chain step names one. The body goes to curl as a file
-(`<state>/hub/bodies/`, 0700, each 0600, deleted when the request ends): curl takes no config line over about 10 MB.
-Any error on the way answers the agent 500 `api_error` and closes the connection; one before curl starts (no curl, a
-file that cannot be written) moves to the next provider. Nothing goes
-to the agent until the upstream's head is whole: 1xx heads are skipped; 401, 402, 408, 409, 429, 5xx, or curl ending
-first, try the next step (a `fallback` event) — except at the last step, whose own refusal is the answer: its status, its
-`Retry-After` and its body pass through. Once the head went out there is no fallback: the rest streams through
-(`Connection: close`, no length) and the connection closes when curl ends. An agent that hangs up kills its curl.
+Spend: each request's usage (the answer's `cost` when given, else the provider's `price`, USD per million tokens) is a
+`spend` row in `work.db` (`norn::write::spend`), recorded before its `request` event. The budget is checked before
+forwarding: a job whose spend reached its budget gets 429 `budget_exceeded` and a `budget` event, and the request
+whose spend reaches the budget sends that event as soon as its row is written. The front sends each `budget` to its
+subscribers and to the Lisp backend as a notification, `budget {job, spent, budget}` (fire and forget), so the job
+pauses without waiting for the next request. `spend {job?, task?, agent?}` sums the rows (an agent: its own job's).
 
-Spend: `drgnx-http-usage-scanner` follows the answer — SSE `message_start`/`message_delta` usage, or one JSON body's
-`usage` (Anthropic or OpenAI names, `cost` when given); Anthropic's cache tokens count as what they cost — written
-1.25×, read 0.1× an input token; without a cost, a provider's `:price (IN . OUT)` (USD per
-million tokens) prices it. One `spend` row per request in `work.db` (schema 2). The budget is checked before
-forwarding: a job whose spend reached its budget gets 429 `budget_exceeded` and a `budget` event; the request whose
-spend reaches the budget sends that event as soon as its spend is recorded, so the job pauses without waiting for the
-next request.
+## Keys
+
+Provider keys reach the hub from a user connection only: `gateway/keys {keys: {PROVIDER: KEY}}` (an editor hands its
+keys over with each subscription, `drgnx hub start` too) and a registration's `keys`. They are held in Ratatoskr's
+memory only (`bifrost::keys::Keys`): never in `runtime.db`, a file, a log, an environment, a command line or the Lisp
+backend; the last key handed over for a provider wins. `status` and the doctor name the providers whose key is held
+(`keys_held`), never a key. A restarted hub holds no key until an editor connects again; meanwhile a request that
+needs one fails over or answers "no key", and the `gateway/need-keys {providers}` event (also sent to each new
+subscriber for the providers kept registrations need) tells the editor to hand them over. The hub is not dumpable
+([Stopping a hub](#stopping-a-hub)), so another process of the user's cannot read them from its memory.
+
+The Lisp hub (v0, before Ratatoskr) still has its own gateway, `core/drgnx-gateway.el`: registrations in
+`<state>/hub/registrations.eld` (hashes only), the port in `<state>/hub/port`, keys in its memory, curl per request.

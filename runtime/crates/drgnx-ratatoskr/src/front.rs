@@ -1,6 +1,7 @@
 //! The front: what every connection shares, and the methods it serves itself (`Home::Front`) — `hello`, `ping`,
-//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`] and
-//! the MCP hosting of [`crate::sessions`] (`mcp/*`).  Every other method goes to [`Forward`].
+//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`], the
+//! MCP hosting of [`crate::sessions`] (`mcp/*`) and the gateway of [`crate::gateway`] (`gateway/*`,
+//! `config/providers`, `spend`).  Every other method goes to [`Forward`].
 //!
 //! [`Front::line`] is one line of one connection: [`dispatch::prelude_as`] (the connection is the backend's when its
 //! peer pid is the backend's), the refusal noted, the handler, the answer queued.  [`Front::start_line`] is the same
@@ -11,6 +12,7 @@ use crate::Exit;
 use crate::conn::Outbox;
 use crate::coord::{self, Signals, ToolHub, Writer};
 use crate::dispatch::{self, Call, Caller, ErrorAnswerOrDrop, Forward, Refusals};
+use crate::gateway::Gate;
 use crate::hello::{self, Session};
 use crate::sessions::{self, Sessions};
 use crate::store::WorkDb;
@@ -68,6 +70,10 @@ pub struct Front {
     pub tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]>,
     /// The tools on the sessions' sockets and for outside bridges ([`crate::sessions`]).
     pub mcp: Sessions,
+    /// The gateway ([`crate::gateway`]).
+    pub gate: Gate,
+    /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
+    pub ignore_shutdown: AtomicBool,
     forward: Arc<dyn Forward>,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
@@ -98,6 +104,7 @@ impl Front {
         });
         let uid = rustix::process::geteuid().as_raw();
         let tools = Arc::new(norn::tools::Coord::new(coord_db.clone(), hub));
+        let gate = Gate::new(coord_db.clone());
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         Front {
             cap,
@@ -111,6 +118,8 @@ impl Front {
                 signals,
             },
             mcp: Sessions::new(uid, tools.clone(), tool_list.clone()),
+            gate,
+            ignore_shutdown: AtomicBool::new(false),
             tools,
             tool_list,
             forward,
@@ -187,20 +196,9 @@ impl Front {
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
     /// so a newer event never reaches one subscriber before an older one.
     pub fn broadcast(&self, event: &str, data: Value) {
-        let text = serde_json::to_string(&Event {
-            event: event.into(),
-            data,
-        })
-        .expect("an event serializes");
-        if text.len() > MAX_HUB_LINE {
-            tracing::warn!(
-                event,
-                bytes = text.len(),
-                "an event over 16 MiB was not sent"
-            );
+        let Some(line) = event_line(event, data) else {
             return;
-        }
-        let line: Arc<str> = format!("{text}\n").into();
+        };
         self.subscribers
             .lock()
             .expect("subscribers")
@@ -237,18 +235,16 @@ impl Front {
             refusals: Some(self.refusals.lock().expect("refusals").status()),
             job_agents: Some(JOB_AGENTS.into()),
             backend: None,
+            gateway: Some(self.gate.status()),
             gateway_port: None,
             registrations: None,
         }
     }
 
-    /// `status`: the front's keys, and the backend's state with what its own `status` says of the gateway.
+    /// `status`: the front's keys (the gateway's among them), and the backend's state.
     pub async fn status_with_backend(&self) -> HubStatus {
         let mut st = self.status();
-        let b = self.forward.status().await;
-        st.backend = b.backend;
-        st.gateway_port = b.gateway_port;
-        st.registrations = b.registrations;
+        st.backend = self.forward.status().await.backend;
         st
     }
 
@@ -347,6 +343,8 @@ impl Front {
         caller.backend = backend;
         let mut stop = false;
         let mut restart = false;
+        // a new subscriber hears which keys kept registrations need, after its answer
+        let mut need_keys = None;
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
@@ -361,10 +359,11 @@ impl Front {
                     .lock()
                     .expect("subscribers")
                     .insert(s.conn, out.clone());
+                need_keys = self.gate.pending_need_keys();
                 Ok(json!(true))
             }
             Params::Shutdown(_) => {
-                stop = true;
+                stop = !self.ignore_shutdown.load(Ordering::Relaxed);
                 Ok(json!(true))
             }
             Params::Restart(_) => {
@@ -392,6 +391,22 @@ impl Front {
                 s.attach = Some(who);
                 json!(AttachAnswer { identity })
             }),
+            // the gateway's: keys and registrations never reach the backend
+            Params::Spend(p) => self.gate.spend(&caller, p).await.map(|r| json!(r)),
+            Params::GatewayRegister(p) => self
+                .gate
+                .register(p, s.peer_pid, &self.mcp)
+                .await
+                .map(|r| json!(r)),
+            Params::GatewayUnregister(p) => {
+                self.gate.unregister(&p.token.0).await.map(|b| json!(b))
+            }
+            Params::GatewayKeys(p) => {
+                self.gate.take_keys(p.keys);
+                Ok(json!(true))
+            }
+            Params::GatewaySetBudget(p) => self.gate.set_budget(p).await.map(|b| json!(b)),
+            Params::ConfigProviders(p) => self.gate.config_providers(p).await.map(|r| json!(r)),
             other => match coord::serve(&self.writer, &caller, other).await {
                 Ok(result) => result,
                 Err(params) => {
@@ -413,6 +428,9 @@ impl Front {
         if let Some(id) = id {
             out.push(answer_line(s.conn, id, result, ignored));
         }
+        if let Some(line) = need_keys.and_then(|data| event_line("gateway/need-keys", data)) {
+            out.push(line);
+        }
         if stop || restart {
             // the answer first, then the stop
             out.flushed(SHUTDOWN_FLUSH).await;
@@ -424,6 +442,24 @@ impl Front {
         }
         None
     }
+}
+
+/// EVENT with DATA as the line a subscriber gets; none (logged) over 16 MiB.
+fn event_line(event: &str, data: Value) -> Option<Arc<str>> {
+    let text = serde_json::to_string(&Event {
+        event: event.into(),
+        data,
+    })
+    .expect("an event serializes");
+    if text.len() > MAX_HUB_LINE {
+        tracing::warn!(
+            event,
+            bytes = text.len(),
+            "an event over 16 MiB was not sent"
+        );
+        return None;
+    }
+    Some(format!("{text}\n").into())
 }
 
 /// Seconds since the epoch.
@@ -660,8 +696,6 @@ mod tests {
                         state: runstav::methods::hub::BackendState::Running,
                         pid: Some(42),
                     }),
-                    gateway_port: Some(7),
-                    registrations: Some(2),
                 }
             })
         }
@@ -731,19 +765,22 @@ mod tests {
         let f = gated(dir.path(), Arc::new(Semaphore::new(0)));
         let v = serde_json::to_value(f.status_with_backend().await).unwrap();
         assert_eq!(v["backend"], json!({"state": "running", "pid": 42}));
+        // the gateway's numbers are the front's own, counted since start; the Lisp hub's keys are gone
         assert_eq!(
-            (v["gateway_port"].clone(), v["registrations"].clone()),
-            (json!(7), json!(2))
+            v["gateway"],
+            json!({"registrations": 0, "requests": 0, "errors": 0, "fallbacks": 0, "bytes_in": 0,
+                   "bytes_out": 0, "providers": 0, "keys_held": [], "warnings": []})
+        );
+        assert!(
+            v.get("gateway_port").is_none() && v.get("registrations").is_none(),
+            "{v}"
         );
         let m = registry::find("status").unwrap();
         assert_eq!((m.check_result)(&v).unwrap(), v);
         // without a backend there is nothing to say of it
         let f = front(dir.path());
         let v = serde_json::to_value(f.status_with_backend().await).unwrap();
-        assert!(
-            v.get("backend").is_none() && v.get("gateway_port").is_none(),
-            "{v}"
-        );
+        assert!(v.get("backend").is_none(), "{v}");
     }
 
     /// A backend whose pid is 4242, counting the calls forwarded to it.

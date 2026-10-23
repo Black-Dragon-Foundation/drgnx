@@ -140,7 +140,10 @@ why. Details in [agents.md](agents.md#jobs-and-your-claude-settings).
 - **Budget:** what goes through the gateway is counted (a subscription agent's traffic is not). When the job's spend
   reaches its budget the job **pauses** as soon as the request that reaches it ends (the gateway also refuses
   any further request) — its agents stop, no task starts — and a card says what was spent. `drgnx job resume ID --budget MORE` goes on
-  where it stopped.
+  where it stopped. The gateway runs inside the drgnx hub: it writes each request's cost to the work database as
+  the request ends and tells the job runner the moment the budget is reached (requests already under way still
+  finish). A request costs what the provider says it cost, else its tokens at the provider's price; a provider with
+  neither is counted as free.
 - **A provider at its limit** (429, rate limit, overloaded, quota): the task moves to the next profile on its role's
   route, in a new session in the same worktree, told what the agent before it committed and said last. With no
   profile left it is a card. A reviewer at its limit starts again on the next profile of the `review` route (a card

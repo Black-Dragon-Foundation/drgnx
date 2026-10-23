@@ -3,6 +3,9 @@
 //! - `proc` (1): the processes the hub started, reaped when a crashed hub left them.
 //! - `msession` (2): the sessions whose `mcp.sock` the hub minted ([`crate::sessions`]), bound again at the next start
 //!   while their owner lives.
+//! - `registration` and `kv` (3): the gateway's registrations, by the SHA-256 of their token (never the token), pruned
+//!   with their owner; and `gateway_port` and `providers` (the last good provider table, which holds no key)
+//!   ([`crate::gateway`]).
 //!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
@@ -21,6 +24,13 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
         2,
         "create table msession(sid text primary key, agent text not null, job text, task text, cwd text, \
          owner integer not null, owner_start integer not null, at real not null);",
+    ),
+    (
+        3,
+        "create table registration(hash text primary key, class text not null default 'agent', listener text not null, \
+         job text, task text, agent text, chain text not null, budget real, openrouter text, owner integer, \
+         owner_start integer, at real not null); \
+         create table kv(key text primary key, value text not null);",
     ),
 ];
 
@@ -94,13 +104,13 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("2"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("3"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        // the proc and msession tables are there
-        for table in ["proc", "msession"] {
+        // the proc, msession, registration and kv tables are there
+        for table in ["proc", "msession", "registration", "kv"] {
             fresh
                 .query_row(&format!("select count(*) from {table}"), [], |r| {
                     r.get::<_, i64>(0)
