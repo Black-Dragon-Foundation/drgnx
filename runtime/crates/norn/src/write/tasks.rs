@@ -295,10 +295,7 @@ mod tests {
             claim(&c, "j#2", "a", None, 10.0).unwrap(),
             ClaimResult::NotReady(vec!["j#1".into()])
         );
-        assert_eq!(
-            claim(&c, "j#1", "a", None, 10.0).unwrap(),
-            ClaimResult::Ok
-        );
+        assert_eq!(claim(&c, "j#1", "a", None, 10.0).unwrap(), ClaimResult::Ok);
         assert_eq!(
             claim(&c, "j#1", "b", None, 11.0).unwrap(),
             ClaimResult::Taken("a".into())

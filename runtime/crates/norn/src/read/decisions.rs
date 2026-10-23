@@ -47,11 +47,7 @@ macro_rules! from_row {
 
 /// Decisions recorded, or whose status changed, after version V (newest first); JOB's only, when given
 /// (`drgnx-coord-decisions-since`).
-pub fn decisions_since(
-    conn: &Tx,
-    v: u64,
-    job: Option<&str>,
-) -> Result<Vec<Decision>, CoordError> {
+pub fn decisions_since(conn: &Tx, v: u64, job: Option<&str>) -> Result<Vec<Decision>, CoordError> {
     let sql = format!(
         "select {COLS} from decision where ver > ?1{} order by n desc",
         if job.is_some() { " and job = ?2" } else { "" }

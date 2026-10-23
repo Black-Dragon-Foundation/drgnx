@@ -92,11 +92,11 @@ pub fn decide(tx: &Tx, d: Decide, now: f64) -> Result<DecideResult, CoordError> 
         _ => false,
     };
     let replaced: Option<(Option<String>, Option<String>)> = match d.replaces {
-        Some(n) => opt(tx.query_row(
-            "select author, task from decision where n = ?1",
-            [n],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ))?,
+        Some(n) => opt(
+            tx.query_row("select author, task from decision where n = ?1", [n], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            }),
+        )?,
         None => None,
     };
     let own_replace = d.replaces.is_none()

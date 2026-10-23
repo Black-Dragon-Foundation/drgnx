@@ -89,7 +89,11 @@ fn merge(client: Vec<(String, Json)>, r: &Restrictions) -> Result<Vec<(String, J
             None => mine.to_vec(),
             Some(theirs) => {
                 let theirs = client_slugs(theirs, "only")?;
-                let common: Vec<String> = mine.iter().filter(|s| theirs.contains(s)).cloned().collect();
+                let common: Vec<String> = mine
+                    .iter()
+                    .filter(|s| theirs.contains(s))
+                    .cloned()
+                    .collect();
                 if common.is_empty() {
                     return Err(bad(format!(
                         "no provider in common between the request's provider.only and drgnx's OpenRouter \
@@ -272,7 +276,11 @@ impl Serialize for Json {
 /// scheme, host and port.
 pub fn upstream_uri(base: &Uri, path_and_query: &str) -> Result<Uri, String> {
     let prefix = base_path(base)?;
-    join(base, prefix.strip_suffix("/v1").unwrap_or(prefix), path_and_query)
+    join(
+        base,
+        prefix.strip_suffix("/v1").unwrap_or(prefix),
+        path_and_query,
+    )
 }
 
 /// An editor's upstream URL: the provider's base without a trailing `/`, plus REST and its query, with **no** `/v1`
@@ -331,7 +339,8 @@ pub fn headers(parts: &Parts, provider: &Provider, key: Option<&SecretString>) -
         Auth::None => None,
     };
     if let (Some((name, prefix)), Some(key)) = (auth, key) {
-        let mut value = Zeroizing::new(Vec::with_capacity(prefix.len() + key.expose_secret().len()));
+        let mut value =
+            Zeroizing::new(Vec::with_capacity(prefix.len() + key.expose_secret().len()));
         value.extend_from_slice(prefix.as_bytes());
         value.extend(key.expose_secret().bytes().filter(|b| keep(*b)));
         if let Ok(mut value) = HeaderValue::from_bytes(&value) {
@@ -370,14 +379,29 @@ mod tests {
         Restrictions::new(vec![], vec![], false, true).unwrap()
     }
 
-    fn rewrite(text: &str, model: Option<&str>, r: Option<&Restrictions>) -> Result<String, Refusal> {
-        body(Bytes::from(text.to_owned()), model, r, "/v1/messages", "openrouter")
-            .map(|b| String::from_utf8(b.to_vec()).unwrap())
+    fn rewrite(
+        text: &str,
+        model: Option<&str>,
+        r: Option<&Restrictions>,
+    ) -> Result<String, Refusal> {
+        body(
+            Bytes::from(text.to_owned()),
+            model,
+            r,
+            "/v1/messages",
+            "openrouter",
+        )
+        .map(|b| String::from_utf8(b.to_vec()).unwrap())
     }
 
     /// The `"provider"` object sent for a client's `provider` (JSON text) under `r`.
     fn provider_object(client: &str, r: &Restrictions) -> serde_json::Value {
-        let sent = rewrite(&format!(r#"{{"model":"x","provider":{client}}}"#), None, Some(r)).unwrap();
+        let sent = rewrite(
+            &format!(r#"{{"model":"x","provider":{client}}}"#),
+            None,
+            Some(r),
+        )
+        .unwrap();
         serde_json::from_str::<serde_json::Value>(&sent).unwrap()["provider"].clone()
     }
 
@@ -393,18 +417,32 @@ mod tests {
         }
     }
 
-    fn uri(base: &str, f: fn(&Uri, &str) -> Result<Uri, String>, tail: &str) -> Result<String, String> {
+    fn uri(
+        base: &str,
+        f: fn(&Uri, &str) -> Result<Uri, String>,
+        tail: &str,
+    ) -> Result<String, String> {
         f(&base.parse().unwrap(), tail).map(|u| u.to_string())
     }
 
     #[test]
     fn model_replaced() {
-        assert_eq!(rewrite(r#"{"model":"x","a":1}"#, Some("m1"), None).unwrap(), r#"{"model":"m1","a":1}"#);
-        assert_eq!(rewrite(r#"{"a":1}"#, Some("m1"), None).unwrap(), r#"{"a":1,"model":"m1"}"#);
+        assert_eq!(
+            rewrite(r#"{"model":"x","a":1}"#, Some("m1"), None).unwrap(),
+            r#"{"model":"m1","a":1}"#
+        );
+        assert_eq!(
+            rewrite(r#"{"a":1}"#, Some("m1"), None).unwrap(),
+            r#"{"a":1,"model":"m1"}"#
+        );
         // the key order of every object stays, and a key sent twice is written once, where it first stood
         assert_eq!(
-            rewrite(r#"{"z":{"b":1,"a":[2,{"d":null,"c":true}]},"model":"x","model":"y","y":1.5}"#, Some("m1"), None)
-                .unwrap(),
+            rewrite(
+                r#"{"z":{"b":1,"a":[2,{"d":null,"c":true}]},"model":"x","model":"y","y":1.5}"#,
+                Some("m1"),
+                None
+            )
+            .unwrap(),
             r#"{"z":{"b":1,"a":[2,{"d":null,"c":true}]},"model":"m1","y":1.5}"#
         );
         // a body that is not an object, without restrictions, goes as it came
@@ -420,9 +458,22 @@ mod tests {
         // restrictions that restrict nothing, another provider, another path: untouched
         let nothing = Restrictions::default();
         assert_eq!(rewrite(text, None, Some(&nothing)).unwrap(), text);
-        let other = body(Bytes::from(text), None, Some(&full()), "/v1/messages", "anthropic").unwrap();
+        let other = body(
+            Bytes::from(text),
+            None,
+            Some(&full()),
+            "/v1/messages",
+            "anthropic",
+        )
+        .unwrap();
         assert_eq!(other, Bytes::from(text));
-        let count = body(Bytes::from(text), None, Some(&full()), "/v1/messages/count_tokens", "openrouter");
+        let count = body(
+            Bytes::from(text),
+            None,
+            Some(&full()),
+            "/v1/messages/count_tokens",
+            "openrouter",
+        );
         assert_eq!(count.unwrap(), Bytes::from(text));
         // an empty body is a body with nothing to rewrite
         assert_eq!(rewrite("", Some("m1"), Some(&full())).unwrap(), "");
@@ -435,16 +486,25 @@ mod tests {
             r#"{"model":"m1","max_tokens":5,"provider":{"only":["anthropic","google-vertex"],"ignore":["azure"],"data_collection":"deny","zdr":true}}"#
         );
         // the request's model stays when the step names none
-        assert_eq!(rewrite(r#"{"model":"x"}"#, None, Some(&zdr())).unwrap(), r#"{"model":"x","provider":{"zdr":true}}"#);
+        assert_eq!(
+            rewrite(r#"{"model":"x"}"#, None, Some(&zdr())).unwrap(),
+            r#"{"model":"x","provider":{"zdr":true}}"#
+        );
         // an empty object is a body: the restrictions are added to it; a null provider is none
-        assert_eq!(rewrite("{}", None, Some(&zdr())).unwrap(), r#"{"provider":{"zdr":true}}"#);
+        assert_eq!(
+            rewrite("{}", None, Some(&zdr())).unwrap(),
+            r#"{"provider":{"zdr":true}}"#
+        );
         assert_eq!(
             rewrite(r#"{"provider":null,"a":1}"#, None, Some(&zdr())).unwrap(),
             r#"{"provider":{"zdr":true},"a":1}"#
         );
         // allow is OpenRouter's default and is not sent
         let allow = Restrictions::new(vec!["a".into()], vec![], false, false).unwrap();
-        assert_eq!(rewrite("{}", None, Some(&allow)).unwrap(), r#"{"provider":{"only":["a"]}}"#);
+        assert_eq!(
+            rewrite("{}", None, Some(&allow)).unwrap(),
+            r#"{"provider":{"only":["a"]}}"#
+        );
     }
 
     #[test]
@@ -460,15 +520,24 @@ mod tests {
             provider_object(r#"{"order":["openai"]}"#, &mine)["only"],
             serde_json::json!(["anthropic", "google-vertex"])
         );
-        assert_eq!(provider_object(r#"{"only":["openai"]}"#, &zdr())["only"], serde_json::json!(["openai"]));
+        assert_eq!(
+            provider_object(r#"{"only":["openai"]}"#, &zdr())["only"],
+            serde_json::json!(["openai"])
+        );
         // ignore: the union
         assert_eq!(
             provider_object(r#"{"ignore":["openai","azure"]}"#, &mine)["ignore"],
             serde_json::json!(["openai", "azure"])
         );
         // data_collection: deny wins, from either side
-        assert_eq!(provider_object(r#"{"data_collection":"allow"}"#, &mine)["data_collection"], "deny");
-        assert_eq!(provider_object(r#"{"data_collection":"deny"}"#, &zdr())["data_collection"], "deny");
+        assert_eq!(
+            provider_object(r#"{"data_collection":"allow"}"#, &mine)["data_collection"],
+            "deny"
+        );
+        assert_eq!(
+            provider_object(r#"{"data_collection":"deny"}"#, &zdr())["data_collection"],
+            "deny"
+        );
         // zdr: either asks for it
         assert_eq!(provider_object(r#"{"zdr":false}"#, &mine)["zdr"], true);
         assert_eq!(provider_object(r#"{"zdr":true}"#, &only_a)["zdr"], true);
@@ -498,7 +567,12 @@ mod tests {
     #[test]
     fn no_common_only_is_400_and_nothing_is_sent() {
         let anthropic = Restrictions::new(vec!["anthropic".into()], vec![], false, false).unwrap();
-        let e = rewrite(r#"{"model":"x","provider":{"only":["openai"]}}"#, None, Some(&anthropic)).unwrap_err();
+        let e = rewrite(
+            r#"{"model":"x","provider":{"only":["openai"]}}"#,
+            None,
+            Some(&anthropic),
+        )
+        .unwrap_err();
         assert_eq!((e.status, e.kind), (400, "invalid_request_error"));
         assert_eq!(
             e.message,
@@ -506,38 +580,75 @@ mod tests {
         );
         // a client's only that is not a list of slugs is no list to intersect
         for only in ["null", "\"openai\"", "[1]"] {
-            let e = rewrite(&format!(r#"{{"provider":{{"only":{only}}}}}"#), None, Some(&anthropic)).unwrap_err();
+            let e = rewrite(
+                &format!(r#"{{"provider":{{"only":{only}}}}}"#),
+                None,
+                Some(&anthropic),
+            )
+            .unwrap_err();
             assert_eq!(e.message, "provider.only must be a list of provider slugs");
         }
         let e = rewrite(r#"{"provider":{"ignore":"x"}}"#, None, Some(&full())).unwrap_err();
-        assert_eq!(e.message, "provider.ignore must be a list of provider slugs");
+        assert_eq!(
+            e.message,
+            "provider.ignore must be a list of provider slugs"
+        );
     }
 
     #[test]
     fn an_unreadable_body_with_restrictions_is_refused() {
         let r = full();
-        for text in ["this is not json", "[1,2]", "\"x\"", "{\"a\":", "{\"a\":1} x"] {
+        for text in [
+            "this is not json",
+            "[1,2]",
+            "\"x\"",
+            "{\"a\":",
+            "{\"a\":1} x",
+        ] {
             let e = rewrite(text, Some("m1"), Some(&r)).unwrap_err();
             assert_eq!((e.status, e.kind), (400, "invalid_request_error"), "{text}");
         }
         let e = rewrite(r#"{"model":"x","provider":"anthropic"}"#, None, Some(&r)).unwrap_err();
         assert_eq!(e.message, "provider must be an object");
-        let bad_utf8 = body(Bytes::from_static(b"{\"a\":\"\xff\"}"), None, Some(&r), "/v1/messages", "openrouter");
+        let bad_utf8 = body(
+            Bytes::from_static(b"{\"a\":\"\xff\"}"),
+            None,
+            Some(&r),
+            "/v1/messages",
+            "openrouter",
+        );
         assert_eq!(bad_utf8.unwrap_err().status, 400);
         // no restrictions, nothing to fail closed on: the bytes go as they were
-        assert_eq!(rewrite("this is not json", None, None).unwrap(), "this is not json");
+        assert_eq!(
+            rewrite("this is not json", None, None).unwrap(),
+            "this is not json"
+        );
     }
 
     #[test]
     fn only_v1_messages_gets_the_provider_object() {
         let r = full();
         let on = |path: &str| {
-            let b = body(Bytes::from_static(br#"{"model":"x","messages":[]}"#), Some("m1"), Some(&r), path, "openrouter");
+            let b = body(
+                Bytes::from_static(br#"{"model":"x","messages":[]}"#),
+                Some("m1"),
+                Some(&r),
+                path,
+                "openrouter",
+            );
             String::from_utf8(b.unwrap().to_vec()).unwrap()
         };
-        for path in ["/v1/messages/count_tokens", "/v1/models", "/v1/models/x", "/v1/messagesx"] {
+        for path in [
+            "/v1/messages/count_tokens",
+            "/v1/models",
+            "/v1/models/x",
+            "/v1/messagesx",
+        ] {
             let sent = on(path);
-            assert!(!sent.contains("provider") && !sent.contains("zdr"), "{path}: {sent}");
+            assert!(
+                !sent.contains("provider") && !sent.contains("zdr"),
+                "{path}: {sent}"
+            );
             assert!(sent.contains(r#""model":"m1""#), "{path}");
         }
         for path in ["/v1/messages", "/v1/messages?beta=true"] {
@@ -587,17 +698,34 @@ mod tests {
             assert_eq!(e, "the request would leave openrouter.ai", "{tail}");
         }
         // a path that only looks like a host stays on the provider's
-        let u: Uri = upstream_uri(&base.parse().unwrap(), "//attacker.example/v1/messages").unwrap();
+        let u: Uri =
+            upstream_uri(&base.parse().unwrap(), "//attacker.example/v1/messages").unwrap();
         assert_eq!(u.host(), Some("openrouter.ai"));
         // the base without its trailing /v1 (or /v1/), plus the request's path and query
-        assert_eq!(uri(base, upstream_uri, "/v1/messages").unwrap(), "https://openrouter.ai/api/v1/messages");
         assert_eq!(
-            uri("https://openrouter.ai/api/v1/", upstream_uri, "/v1/messages?beta=true").unwrap(),
+            uri(base, upstream_uri, "/v1/messages").unwrap(),
+            "https://openrouter.ai/api/v1/messages"
+        );
+        assert_eq!(
+            uri(
+                "https://openrouter.ai/api/v1/",
+                upstream_uri,
+                "/v1/messages?beta=true"
+            )
+            .unwrap(),
             "https://openrouter.ai/api/v1/messages?beta=true"
         );
-        assert_eq!(uri("https://api.anthropic.com", upstream_uri, "/v1/messages").unwrap(), "https://api.anthropic.com/v1/messages");
         assert_eq!(
-            uri("http://127.0.0.1:11434", upstream_uri, "/v1/messages/count_tokens").unwrap(),
+            uri("https://api.anthropic.com", upstream_uri, "/v1/messages").unwrap(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            uri(
+                "http://127.0.0.1:11434",
+                upstream_uri,
+                "/v1/messages/count_tokens"
+            )
+            .unwrap(),
             "http://127.0.0.1:11434/v1/messages/count_tokens"
         );
         assert!(uri("https://h.example/x?y=1", upstream_uri, "/v1/messages").is_err());
@@ -626,7 +754,12 @@ mod tests {
     #[test]
     fn provider_uri_keeps_v1() {
         assert_eq!(
-            uri("https://openrouter.ai/api/v1", provider_uri, "/chat/completions?x=1").unwrap(),
+            uri(
+                "https://openrouter.ai/api/v1",
+                provider_uri,
+                "/chat/completions?x=1"
+            )
+            .unwrap(),
             "https://openrouter.ai/api/v1/chat/completions?x=1"
         );
         assert_eq!(
@@ -634,19 +767,37 @@ mod tests {
             "https://openrouter.ai/api/v1/embeddings"
         );
         assert_eq!(
-            uri("http://127.0.0.1:8080", provider_uri, "/v1/chat/completions").unwrap(),
+            uri(
+                "http://127.0.0.1:8080",
+                provider_uri,
+                "/v1/chat/completions"
+            )
+            .unwrap(),
             "http://127.0.0.1:8080/v1/chat/completions"
         );
-        assert_eq!(uri("http://192.168.1.5:11434/", provider_uri, "/api/chat").unwrap(), "http://192.168.1.5:11434/api/chat");
+        assert_eq!(
+            uri("http://192.168.1.5:11434/", provider_uri, "/api/chat").unwrap(),
+            "http://192.168.1.5:11434/api/chat"
+        );
     }
 
     #[test]
     fn provider_uri_never_leaves_the_host() {
-        for tail in ["@attacker.example/embed", ".attacker.example/embed", "attacker.example", ":9/embed", ""] {
+        for tail in [
+            "@attacker.example/embed",
+            ".attacker.example/embed",
+            "attacker.example",
+            ":9/embed",
+            "",
+        ] {
             let e = uri("http://127.0.0.1:8081", provider_uri, tail).unwrap_err();
             assert_eq!(e, "the request would leave 127.0.0.1", "{tail}");
         }
-        let u = provider_uri(&"https://openrouter.ai/api/v1".parse().unwrap(), "//attacker.example/x").unwrap();
+        let u = provider_uri(
+            &"https://openrouter.ai/api/v1".parse().unwrap(),
+            "//attacker.example/x",
+        )
+        .unwrap();
         assert_eq!(u.host(), Some("openrouter.ai"));
     }
 }

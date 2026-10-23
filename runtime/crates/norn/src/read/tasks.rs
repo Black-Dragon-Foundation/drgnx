@@ -97,11 +97,11 @@ pub fn task(conn: &Tx, task: &str) -> Result<Option<Task>, CoordError> {
 
 /// TASK's job (`drgnx-coord--task-job`).
 pub fn task_job(conn: &Tx, task: &str) -> Result<Option<String>, CoordError> {
-    Ok(opt(conn.query_row(
-        "select job from jtask where id = ?1",
-        [task],
-        |r| r.get::<_, Option<String>>(0),
-    ))?
+    Ok(opt(
+        conn.query_row("select job from jtask where id = ?1", [task], |r| {
+            r.get::<_, Option<String>>(0)
+        }),
+    )?
     .flatten())
 }
 

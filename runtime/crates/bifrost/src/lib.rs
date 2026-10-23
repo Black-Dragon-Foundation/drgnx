@@ -208,10 +208,23 @@ mod tests {
 
     #[test]
     fn restrictions_take_slugs_only() {
-        assert!(Restrictions::new(vec!["anthropic".into(), "google-vertex".into()], vec![], true, false).is_ok());
-        assert!(Restrictions::new(vec!["a/b.c_d".into()], vec!["azure".into()], false, true).is_ok());
+        assert!(
+            Restrictions::new(
+                vec!["anthropic".into(), "google-vertex".into()],
+                vec![],
+                true,
+                false
+            )
+            .is_ok()
+        );
+        assert!(
+            Restrictions::new(vec!["a/b.c_d".into()], vec!["azure".into()], false, true).is_ok()
+        );
         for bad in ["", "-x", "a b", "a\"b", "é", ".x"] {
-            assert!(Restrictions::new(vec![], vec![bad.into()], false, false).is_err(), "{bad:?}");
+            assert!(
+                Restrictions::new(vec![], vec![bad.into()], false, false).is_err(),
+                "{bad:?}"
+            );
         }
         assert!(Restrictions::default().is_empty());
     }

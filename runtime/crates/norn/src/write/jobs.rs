@@ -75,11 +75,8 @@ pub fn job_set(
     now: f64,
 ) -> Result<(), CoordError> {
     if let Some(status) = status {
-        let old: Option<Option<String>> = opt(tx.query_row(
-            "select status from job where id = ?1",
-            [id],
-            |r| r.get(0),
-        ))?;
+        let old: Option<Option<String>> =
+            opt(tx.query_row("select status from job where id = ?1", [id], |r| r.get(0)))?;
         tx.execute("update job set status = ?1 where id = ?2", (status, id))?;
         if let Some(old) = old.flatten()
             && old != status

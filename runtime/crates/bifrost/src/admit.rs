@@ -127,7 +127,9 @@ pub fn head(
             .to_str()
             .ok()
             .and_then(|l| l.parse::<u64>().ok())
-            .ok_or_else(|| Refusal::new(400, "invalid_request_error", "the request cannot be taken"))?;
+            .ok_or_else(|| {
+                Refusal::new(400, "invalid_request_error", "the request cannot be taken")
+            })?;
         if length > MAX_BODY {
             return Err(Refusal::new(
                 413,
@@ -218,7 +220,10 @@ fn editor_route(target: &str, providers: &BTreeMap<String, Provider>) -> Result<
     }
     let after = target.strip_prefix("/p/").ok_or_else(refuse)?;
     let path = after.split_once('?').map_or(after, |(p, _)| p);
-    let (id, rest) = path.find('/').map(|i| path.split_at(i)).ok_or_else(refuse)?;
+    let (id, rest) = path
+        .find('/')
+        .map(|i| path.split_at(i))
+        .ok_or_else(refuse)?;
     let provider = providers
         .get(id)
         .ok_or_else(|| Refusal::new(404, "not_found_error", "no such provider in the drgnx hub"))?;
@@ -271,8 +276,14 @@ mod tests {
 
     fn registry() -> Mem {
         Mem(BTreeMap::from([
-            (token_hash(AGENT.as_bytes()), agent(ListenerId::Loopback, "a1")),
-            (token_hash(OTHER.as_bytes()), agent(ListenerId::Loopback, "a2")),
+            (
+                token_hash(AGENT.as_bytes()),
+                agent(ListenerId::Loopback, "a1"),
+            ),
+            (
+                token_hash(OTHER.as_bytes()),
+                agent(ListenerId::Loopback, "a2"),
+            ),
             (
                 token_hash(SESSION.as_bytes()),
                 agent(ListenerId::Session("s1".into()), "a3"),
@@ -298,11 +309,21 @@ mod tests {
 
     fn providers() -> BTreeMap<String, Provider> {
         BTreeMap::from([
-            provider("openrouter", Kind::Openai, "https://openrouter.ai/api/v1", Auth::Bearer),
+            provider(
+                "openrouter",
+                Kind::Openai,
+                "https://openrouter.ai/api/v1",
+                Auth::Bearer,
+            ),
             provider("ollama", Kind::Ollama, "http://127.0.0.1:11434", Auth::None),
             provider("llama", Kind::Llamacpp, "http://127.0.0.1:8080", Auth::None),
             provider("tei", Kind::Tei, "http://127.0.0.1:8081", Auth::None),
-            provider("anthropic", Kind::Anthropic, "https://api.anthropic.com", Auth::XApiKey),
+            provider(
+                "anthropic",
+                Kind::Anthropic,
+                "https://api.anthropic.com",
+                Auth::XApiKey,
+            ),
         ])
     }
 
@@ -341,7 +362,10 @@ mod tests {
                 br#"{"type":"error","error":{"type":"authentication_error","message":"not a drgnx gateway token"}}"#
             )
         );
-        let unknown = parts("/v1/messages", &[("authorization", "Bearer not-registered")]);
+        let unknown = parts(
+            "/v1/messages",
+            &[("authorization", "Bearer not-registered")],
+        );
         assert_eq!(status(admit(&unknown, &ListenerId::Loopback)), 401);
         let empty = parts("/v1/messages", &[("x-api-key", "")]);
         assert_eq!(status(admit(&empty, &ListenerId::Loopback)), 401);
@@ -352,7 +376,10 @@ mod tests {
         // the head says 5 MB follow and the token is wrong: refused from the head alone
         let p = parts(
             "/v1/messages",
-            &[("authorization", "Bearer nope"), ("content-length", "5000000")],
+            &[
+                ("authorization", "Bearer nope"),
+                ("content-length", "5000000"),
+            ],
         );
         assert_eq!(status(admit(&p, &ListenerId::Loopback)), 401);
         // even past the cap: the token is checked first
@@ -380,11 +407,17 @@ mod tests {
         let session = parts("/v1/messages", &[("authorization", &bearer(SESSION))]);
         assert_eq!(status(admit(&session, &ListenerId::Loopback)), 401);
         assert_eq!(status(admit(&session, &s2)), 401);
-        assert_eq!(admit(&session, &s1).unwrap().registration.agent.as_deref(), Some("a3"));
+        assert_eq!(
+            admit(&session, &s1).unwrap().registration.agent.as_deref(),
+            Some("a3")
+        );
         let loopback = parts("/v1/messages", &[("authorization", &bearer(AGENT))]);
         assert_eq!(status(admit(&loopback, &s1)), 401);
         // the editor's token is a loopback token
-        let editor = parts("/p/openrouter/chat/completions", &[("authorization", &bearer(EDITOR))]);
+        let editor = parts(
+            "/p/openrouter/chat/completions",
+            &[("authorization", &bearer(EDITOR))],
+        );
         assert_eq!(status(admit(&editor, &s1)), 401);
         assert_eq!(status(admit(&editor, &ListenerId::Loopback)), 200);
     }
@@ -432,12 +465,26 @@ mod tests {
             "http://attacker.example/v1/messages",
             "*",
         ] {
-            let e = admit(&parts(bad, &[("authorization", &token)]), &ListenerId::Loopback).unwrap_err();
+            let e = admit(
+                &parts(bad, &[("authorization", &token)]),
+                &ListenerId::Loopback,
+            )
+            .unwrap_err();
             assert_eq!((e.status, e.kind), (404, "not_found_error"), "{bad:?}");
-            assert_eq!(e.message, "the gateway forwards Anthropic's Messages API only");
+            assert_eq!(
+                e.message,
+                "the gateway forwards Anthropic's Messages API only"
+            );
         }
-        for good in ["/v1/messages", "/v1/messages?beta=true", "/v1/messages/count_tokens"] {
-            let a = admit(&parts(good, &[("authorization", &token)]), &ListenerId::Loopback);
+        for good in [
+            "/v1/messages",
+            "/v1/messages?beta=true",
+            "/v1/messages/count_tokens",
+        ] {
+            let a = admit(
+                &parts(good, &[("authorization", &token)]),
+                &ListenerId::Loopback,
+            );
             assert_eq!(a.unwrap().route, Route::Chain, "{good:?}");
         }
     }
@@ -473,15 +520,20 @@ mod tests {
             format!("localhost:{PORT}"),
             format!("LocalHost:{PORT}"),
         ] {
-            assert!(admit(&with_host(&[good.as_str()]), &ListenerId::Loopback).is_ok(), "{good}");
+            assert!(
+                admit(&with_host(&[good.as_str()]), &ListenerId::Loopback).is_ok(),
+                "{good}"
+            );
         }
         // the Host comes before the token
         let mut p = parts("/v1/messages", &[]);
-        p.headers.insert(HOST, HeaderValue::from_static("attacker.example"));
+        p.headers
+            .insert(HOST, HeaderValue::from_static("attacker.example"));
         assert_eq!(status(admit(&p, &ListenerId::Loopback)), 400);
         // a session socket has no DNS name to rebind: any Host
         let mut p = parts("/v1/messages", &[("authorization", &bearer(SESSION))]);
-        p.headers.insert(HOST, HeaderValue::from_static("attacker.example"));
+        p.headers
+            .insert(HOST, HeaderValue::from_static("attacker.example"));
         assert!(admit(&p, &ListenerId::Session("s1".into())).is_ok());
     }
 
@@ -491,14 +543,23 @@ mod tests {
         let over = (MAX_BODY + 1).to_string();
         let at = MAX_BODY.to_string();
         let e = admit(
-            &parts("/v1/messages", &[("authorization", &token), ("content-length", &over)]),
+            &parts(
+                "/v1/messages",
+                &[("authorization", &token), ("content-length", &over)],
+            ),
             &ListenerId::Loopback,
         )
         .unwrap_err();
         assert_eq!((e.status, e.kind), (413, "invalid_request_error"));
-        let at = parts("/v1/messages", &[("authorization", &token), ("content-length", &at)]);
+        let at = parts(
+            "/v1/messages",
+            &[("authorization", &token), ("content-length", &at)],
+        );
         assert!(admit(&at, &ListenerId::Loopback).is_ok());
-        let junk = parts("/v1/messages", &[("authorization", &token), ("content-length", "12x")]);
+        let junk = parts(
+            "/v1/messages",
+            &[("authorization", &token), ("content-length", "12x")],
+        );
         assert_eq!(status(admit(&junk, &ListenerId::Loopback)), 400);
     }
 
@@ -510,35 +571,67 @@ mod tests {
                 .and_then(|a| a.registration.agent)
         };
         let a = bearer(AGENT);
-        assert_eq!(who(&[("authorization", &a), ("x-api-key", OTHER)]).as_deref(), Some("a1"));
+        assert_eq!(
+            who(&[("authorization", &a), ("x-api-key", OTHER)]).as_deref(),
+            Some("a1")
+        );
         assert_eq!(who(&[("x-api-key", OTHER)]).as_deref(), Some("a2"));
-        assert_eq!(who(&[("authorization", &format!("Bearer   {AGENT}"))]).as_deref(), Some("a1"));
+        assert_eq!(
+            who(&[("authorization", &format!("Bearer   {AGENT}"))]).as_deref(),
+            Some("a1")
+        );
         // "Bearer" as written: anything else is no Bearer token, and x-api-key is read
         let lower = format!("bearer {AGENT}");
-        assert_eq!(who(&[("authorization", &lower), ("x-api-key", OTHER)]).as_deref(), Some("a2"));
+        assert_eq!(
+            who(&[("authorization", &lower), ("x-api-key", OTHER)]).as_deref(),
+            Some("a2")
+        );
         assert_eq!(who(&[("authorization", &lower)]), None);
-        assert_eq!(who(&[("authorization", "Basic eDp5"), ("x-api-key", OTHER)]).as_deref(), Some("a2"));
+        assert_eq!(
+            who(&[("authorization", "Basic eDp5"), ("x-api-key", OTHER)]).as_deref(),
+            Some("a2")
+        );
         // a Bearer that is no registration is refused, not passed over for x-api-key
-        assert_eq!(who(&[("authorization", "Bearer nope"), ("x-api-key", OTHER)]), None);
+        assert_eq!(
+            who(&[("authorization", "Bearer nope"), ("x-api-key", OTHER)]),
+            None
+        );
     }
 
     #[test]
     fn an_editor_token_reaches_only_its_paths() {
         let token = bearer(EDITOR);
-        let route = |path: &str| admit(&parts(path, &[("authorization", &token)]), &ListenerId::Loopback);
+        let route = |path: &str| {
+            admit(
+                &parts(path, &[("authorization", &token)]),
+                &ListenerId::Loopback,
+            )
+        };
         let to = |id: &str, rest: &str| Route::Provider {
             id: id.into(),
             rest: rest.into(),
         };
         for (path, id, rest) in [
-            ("/p/openrouter/chat/completions", "openrouter", "/chat/completions"),
+            (
+                "/p/openrouter/chat/completions",
+                "openrouter",
+                "/chat/completions",
+            ),
             ("/p/openrouter/completions", "openrouter", "/completions"),
-            ("/p/openrouter/embeddings?x=1", "openrouter", "/embeddings?x=1"),
+            (
+                "/p/openrouter/embeddings?x=1",
+                "openrouter",
+                "/embeddings?x=1",
+            ),
             ("/p/ollama/api/chat", "ollama", "/api/chat"),
             ("/p/ollama/api/generate", "ollama", "/api/generate"),
             ("/p/ollama/api/embed", "ollama", "/api/embed"),
             ("/p/llama/infill", "llama", "/infill"),
-            ("/p/llama/v1/chat/completions", "llama", "/v1/chat/completions"),
+            (
+                "/p/llama/v1/chat/completions",
+                "llama",
+                "/v1/chat/completions",
+            ),
             ("/p/llama/v1/embeddings", "llama", "/v1/embeddings"),
             ("/p/tei/embed", "tei", "/embed"),
         ] {
@@ -573,12 +666,19 @@ mod tests {
             "/p/anthropic/v1/messages",
             "/p/openrouter/v1/messages",
         ] {
-            let e = admit(&parts(path, &[("authorization", &token)]), &ListenerId::Loopback).unwrap_err();
+            let e = admit(
+                &parts(path, &[("authorization", &token)]),
+                &ListenerId::Loopback,
+            )
+            .unwrap_err();
             assert_eq!(e.status, 404, "{path}");
         }
         // a session token neither
         let e = admit(
-            &parts("/p/openrouter/chat/completions", &[("authorization", &bearer(SESSION))]),
+            &parts(
+                "/p/openrouter/chat/completions",
+                &[("authorization", &bearer(SESSION))],
+            ),
             &ListenerId::Session("s1".into()),
         )
         .unwrap_err();
@@ -598,7 +698,11 @@ mod tests {
             "/p/anthropic/v1/messages",
             "/p/anthropic/chat/completions",
         ] {
-            let e = admit(&parts(path, &[("authorization", &token)]), &ListenerId::Loopback).unwrap_err();
+            let e = admit(
+                &parts(path, &[("authorization", &token)]),
+                &ListenerId::Loopback,
+            )
+            .unwrap_err();
             assert_eq!((e.status, e.kind), (404, "not_found_error"), "{path}");
         }
     }
@@ -607,7 +711,11 @@ mod tests {
     fn an_unknown_provider_is_404() {
         let token = bearer(EDITOR);
         for path in ["/p/nope/chat/completions", "/p/OpenRouter/chat/completions"] {
-            let e = admit(&parts(path, &[("authorization", &token)]), &ListenerId::Loopback).unwrap_err();
+            let e = admit(
+                &parts(path, &[("authorization", &token)]),
+                &ListenerId::Loopback,
+            )
+            .unwrap_err();
             assert_eq!((e.status, e.kind), (404, "not_found_error"), "{path}");
             assert_eq!(e.message, "no such provider in the drgnx hub");
         }

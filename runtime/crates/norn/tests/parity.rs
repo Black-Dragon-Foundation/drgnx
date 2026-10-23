@@ -132,7 +132,9 @@ fn claim_json(r: ClaimResult) -> Value {
         ClaimResult::Ok => json!({"ok": true}),
         ClaimResult::Held(h) => held_json(&h),
         ClaimResult::Taken(a) => json!({"taken": a}),
-        ClaimResult::NotReady(d) => json!({"not-ready": list_or_null(d.into_iter().map(Value::from).collect())}),
+        ClaimResult::NotReady(d) => {
+            json!({"not-ready": list_or_null(d.into_iter().map(Value::from).collect())})
+        }
         ClaimResult::Error(m) => json!({"error": m}),
     }
 }
@@ -260,13 +262,10 @@ fn call_jobs(
             DecideResult::Error(m) => json!({"error": m}),
         }),
         "drgnx-coord-events-prune" => prune::events_prune(conn, now_of(clock)).map(|n| json!(n)),
-        "drgnx-coord--events-cap" => {
-            prune::events_cap_to(conn, args["max_rows"].as_i64().unwrap())
-                .map(|n| n.map_or(Value::Null, |n| json!(n)))
-        }
-        "drgnx-coord-events-prune-daily" => {
-            prune::prune_daily_tx(conn, now_of(clock)).map(|ran| if ran { json!(true) } else { Value::Null })
-        }
+        "drgnx-coord--events-cap" => prune::events_cap_to(conn, args["max_rows"].as_i64().unwrap())
+            .map(|n| n.map_or(Value::Null, |n| json!(n))),
+        "drgnx-coord-events-prune-daily" => prune::prune_daily_tx(conn, now_of(clock))
+            .map(|ran| if ran { json!(true) } else { Value::Null }),
         other => panic!("no Rust writer for {other}"),
     })
 }
