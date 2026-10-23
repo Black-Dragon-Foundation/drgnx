@@ -1456,10 +1456,9 @@ mod tests {
         let g = &h.front.gate;
         // the rows the engine records, through the ledger
         let ledger = WorkLedger(h.coord.clone());
-        for (job, agent, input, output, cost) in [
-            ("j1", "agent-1", 10, 2, 0.5),
-            ("j2", "agent-2", 7, 1, 0.25),
-        ] {
+        for (job, agent, input, output, cost) in
+            [("j1", "agent-1", 10, 2, 0.5), ("j2", "agent-2", 7, 1, 0.25)]
+        {
             ledger
                 .record(SpendRow {
                     job: Some(job.into()),

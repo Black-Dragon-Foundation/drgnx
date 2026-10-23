@@ -1049,7 +1049,10 @@ fn an_edge_whose_own_source_is_denied_is_not_migrated() {
     assert_eq!((report.denied_nodes, report.denied_edges), (0, 1));
     assert_eq!(report.links["derives->denied"], 1);
     assert_eq!(
-        rows(&c, "select src, dst, source from edge where kind = 'derives'"),
+        rows(
+            &c,
+            "select src, dst, source from edge where kind = 'derives'"
+        ),
         vec![vec![
             json!(format!("plan:{h}/w/p.md")),
             json!(format!("spec:{h}/w/t.md")),

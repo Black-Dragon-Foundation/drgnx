@@ -501,7 +501,10 @@ async fn rust_doors_never_store_the_canary() {
         ("org/other.md", &fx.other),
         ("docs/private.txt", &ran.kept_out),
     ] {
-        assert!(!sent.contains(c.as_str()), "door 4 sent the canary of {name}");
+        assert!(
+            !sent.contains(c.as_str()),
+            "door 4 sent the canary of {name}"
+        );
     }
     assert!(sent.contains("a recorded note") && sent.contains("a plain imported note"));
 }
