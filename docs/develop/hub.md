@@ -1068,7 +1068,10 @@ port file — and holds no key:
   newer key for the provider replaced it meanwhile) and calls `auth-source-forget-all-cached`. `drgnx-hub--transmit` sends
   `gateway/keys` only on a proven connection, so a key goes only to a hub that proved itself. The environment is
   left as it is (`drgnx doctor`'s `ai-env-keys` names the variables set). An Emacs that serves the standalone Lisp hub
-  skips the drop: there `drgnx-ai--keys` is the hub's own table. AI: Load Keys (`drgnx-ai-load-keys`) reads the keys
+  skips the drop: there `drgnx-ai--keys` is the hub's own table. Only AI: Load Keys keeps a key it reads
+  (`drgnx-ai-key`'s KEEP) until the hand-over takes it; every other read, and above all a usability check
+  (`drgnx-ai-key-held-p`, `drgnx-ai-usable-p`: AI: Choose, onboarding), keeps nothing — not in `drgnx-ai--keys`, and
+  auth-source's netrc file cache is bound for that read alone. AI: Load Keys (`drgnx-ai-load-keys`) reads the keys
   as a command and calls `drgnx-hub-hand-over-keys`: sent at once to a proven subscription, else the hub is started
   and connected and the hand-over that follows takes them. Keyed providers and agent profiles have no direct route
   (`drgnx-ai-route`, `drgnx-ai-agent-env`): without a hub a request skips the provider and an agent fails closed.
