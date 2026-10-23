@@ -220,20 +220,22 @@ no provider key; the mock got the hub's key and never the editor's token."
         (should (equal (cdr first) "one"))
         (should (>= (- (car second) (car first)) 0.5))))))
 
-(ert-deftest drgnx-ai-gateway/the-indexer-gets-a-url-and-no-key ()
+(ert-deftest drgnx-ai-gateway/the-indexer-gets-no-url-and-no-key ()
+  ;; no key, no token, and (review m4) no address either: the job's token brings the gateway's current one
   (drgnx-ai-gateway-test--with nil
     (let ((env (drgnx-search-index--job-env)))
-      (should (member (concat "DRGNX_AI_GATEWAY_URL=" (cdr drgnx-hub--editor)) env))
+      (should-not (seq-find (lambda (e) (string-search (cdr drgnx-hub--editor) e)) env))
       (should-not (seq-find (lambda (e) (string-match-p "_API_KEY=\\|\\`[AB]_KEY=" e)) env))
       (should-not (string-search drgnx-ai-gateway-test--key (prin1-to-string env)))
       (should-not (string-search (car drgnx-hub--editor) (prin1-to-string env))))))
 
 (ert-deftest drgnx-ai-gateway/the-indexer-asks-for-a-token-of-its-own ()
-  ;; a batch Emacs as the job is: the gateway's address in the environment, no key, no token; it ensures the hub and
-  ;; takes a token of its own, and the hub's key reaches the mock for it
+  ;; a batch Emacs as the job is: no key, no token; it ensures the hub and takes a token of its own, and the hub's key
+  ;; reaches the mock for it.  Review m4: a stale gateway address in its environment (a port the hub left after a
+  ;; restart, which anyone may now hold) is never used — the address is the one that came with the token
   (drgnx-ai-gateway-test--with '((:path "/v1/embeddings" :body "{\"data\":[{\"index\":0,\"embedding\":[3,4]}]}"))
     (let* ((core (file-name-directory (locate-library "drgnx-ai-client")))
-           (process-environment (append (list (concat "DRGNX_AI_GATEWAY_URL=" (cdr drgnx-hub--editor)) "A_KEY")
+           (process-environment (append (list "DRGNX_AI_GATEWAY_URL=http://127.0.0.1:9" "A_KEY")
                                         process-environment))
            (out (with-temp-buffer
                   (list (call-process (expand-file-name invocation-name invocation-directory) nil t nil

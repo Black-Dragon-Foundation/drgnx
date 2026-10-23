@@ -351,7 +351,9 @@ there is no token yet."
   (let* ((why nil)
          (tok (condition-case e (drgnx-hub-editor-token (drgnx-ai--waits-p interactive waits))
                 (error (setq why (error-message-string e)) nil))))
-    (if tok (cons (or (let ((u (getenv "DRGNX_AI_GATEWAY_URL"))) (and u (not (string-empty-p u)) u)) (cdr tok)) (car tok))
+    ;; the address is the one that came with the token, over the proven socket: never one from the environment, which
+    ;; may name a port the hub left after a restart (and another process took)
+    (if tok (cons (cdr tok) (car tok))
       ;; waited and failed: the hub's reason; else it is on its way
       (if (and why (drgnx-ai--waits-p interactive waits)) (signal 'drgnx-ai-gateway-unavailable (list why))
         (signal 'drgnx-ai-gateway-unavailable nil)))))

@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-ai)
 (require 'drgnx-ai-probe)
+(require 'drgnx-hub-client)             ; its variables are let-bound below
 (require 'drgnx-file)
 (require 'drgnx-jobs)
 (require 'auth-source)
@@ -247,6 +248,13 @@ LOG/security.calls."
     (should-not (plist-member (drgnx-hub--held-keys) :openrouter))
     (puthash 'openrouter "sk-or-test-123" drgnx-ai--keys)
     (should (equal (plist-get (drgnx-hub--held-keys) :openrouter) "sk-or-test-123"))))
+
+(ert-deftest drgnx-ai/the-gateway-url-comes-with-the-token ()
+  ;; review m4: the token and the address the hub gave over the proven socket go together; an address in the
+  ;; environment (a port the hub left after a restart, which another process may hold) never gets the token
+  (let ((drgnx-hub--editor '("tok-m4" . "http://127.0.0.1:4711"))
+        (process-environment (cons "DRGNX_AI_GATEWAY_URL=http://127.0.0.1:9" process-environment)))
+    (should (equal (drgnx-ai-gateway-credentials) '("http://127.0.0.1:4711" . "tok-m4")))))
 
 (ert-deftest drgnx-ai/a-batch-emacs-never-searches-the-keychain-even-when-asked ()
   (drgnx-ai-test--with root
