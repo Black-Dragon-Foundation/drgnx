@@ -1,0 +1,22 @@
+{"scenario": "gateway/no-proxy-is-respected", "requires": ["v1", "fake-backend"], "doc": "Task 24: with HTTP_PROXY set and NO_PROXY=localhost, a provider at localhost is dialled directly (the proxy's log never names it) while a provider at 127.0.0.1 goes through the proxy; both answer."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "spawn", "capture": "proxy", "argv": ["$MOCK", "proxy", "--log", "$ROOT/proxy.log"], "capture_stdout": {"regex": "MOCK-PROXY-PORT (\\d+)", "name": "pport"}}
+{"do": "start", "hub": "h", "env": {"HTTP_PROXY": "http://127.0.0.1:$pport", "HTTPS_PROXY": "http://127.0.0.1:$pport", "NO_PROXY": "localhost"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "direct", "kind": "anthropic", "base": "http://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}, {"id": "proxied", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["direct", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok_direct"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["proxied", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$capture:tok_proxied"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "g1", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok_direct", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g1", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok_proxied", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g2", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/proxy.log", "contains": "{\"connect\":\"127.0.0.1:$port\"}"}
+{"do": "file", "path": "$ROOT/proxy.log", "lacks": "localhost"}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 2, "at_most": 2}

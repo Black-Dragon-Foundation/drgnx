@@ -1,0 +1,17 @@
+{"scenario": "gateway/a-bad-token-is-refused-before-the-body", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: a request that announces a 20 MiB body (Content-Length 20971520) with a token the gateway does not know is answered 401 within 1 s, though no body byte is ever sent: admission runs on the head alone. The provider saw nothing of it (a good request after it is the mock's only logged request)."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "bad", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer not-a-token", "content-type": "application/json", "Content-Length": "20971520"}, "read": "head", "within_ms": 1000}
+{"do": "expect_http", "conn": "bad", "status": 401, "within_ms": 1000}
+{"do": "http", "conn": "good", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "good", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1}

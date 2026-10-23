@@ -1,0 +1,19 @@
+{"scenario": "gateway/editor-embed-through-the-gateway", "requires": ["v1", "fake-backend"], "doc": "Task 24, editor row: /p/mock/embeddings reaches the provider's /embeddings; one spend row with no job and the agent `editor`."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-openai.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "openai", "base": "http://127.0.0.1:$port", "auth": "none", "messages": false, "caps": ["chat", "fim", "embed"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "http", "conn": "e", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/embeddings", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"input\":[\"a\",\"b\"]}"}
+{"do": "expect_http", "conn": "e", "status": 200, "body_json": {"id": "emb-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"path\":\"/embeddings\""}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"agent": "editor", "job": null, "provider": "mock", "status": 200}}}
+{"do": "sql_expect", "sql": "select provider, agent, job is null from spend", "rows": [["mock", "editor", 1]]}

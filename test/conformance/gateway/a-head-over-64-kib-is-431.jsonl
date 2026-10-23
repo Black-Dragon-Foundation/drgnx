@@ -1,0 +1,19 @@
+{"scenario": "gateway/a-head-over-64-kib-is-431", "requires": ["v1", "fake-backend"], "doc": "Task 24: a request head longer than 64 KiB (a 70,000-byte header value) is answered 431 and never reaches the provider, though the token is valid; a normal request after it is served."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/pad.json", "json": {"pad": {"$repeat": "a", "times": 70000}}}
+{"do": "capture_file", "path": "$ROOT/pad.json", "capture": "pad", "json_path": "pad"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "big", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json", "X-Pad": "$pad"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "big", "status": 431}
+{"do": "http", "conn": "good", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "good", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1}

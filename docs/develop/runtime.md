@@ -681,6 +681,40 @@ runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/
 CI runs this on Linux and macOS and keeps the files as artifacts ([ci.md](ci.md)). Numbers are for a release build on a
 quiet machine.
 
+### The gateway rows
+
+`test/conformance/gateway/*.jsonl` drive the real gateway (`ratatoskr`'s front, [bifrost](#bifrost-the-gateway)) with
+`ratatoskr-mock llm` as the only mock, standing in for the provider (and `ratatoskr-mock proxy` for the proxy). A row
+starts the mock with `spawn` and `capture_stdout`, hands the hub the provider table (`config/providers`) and, where the
+provider takes a key, a canary (`gateway/keys`), takes a token (`gateway/register`, or `gateway/editor-token` for the
+editor), and acts as the agent or the editor with `http`. The mock's JSONL log is what reached the provider; the
+mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows are `v1`; run them with one glob per
+`domr` run: `--only 'gateway/*'`.
+
+- **The gate rows** (phase 3, design §12): `fallback-on-429-before-the-head`, `budget-pauses-a-lisp-job`
+  (`lisp-backend`: a git repo made with `run`, `fixtures/plan-budget.md`, `job/propose` and `job/approve`, a job
+  registration with a budget that one priced request passes; a `card` event of kind `budget`, `job/status` `paused`,
+  then 429 `budget_exceeded`), `streaming-first-chunk-first`, `a-bad-token-is-refused-before-the-body` (a 20 MiB
+  `Content-Length`, no body sent, 401 within 1 s), `proxy-from-the-environment`.
+- **Chain and budget:** `no-proxy-is-respected`, `the-last-step-passes-its-refusal-through`, `every-step-failing-says-why`,
+  `no-fallback-once-started`, `budget-refuses-at-equal`, `openrouter-restrictions-reach-the-body`,
+  `a-hang-up-stops-the-upstream`, `request-events-and-spend-rows`.
+- **Admission and sizes:** `host-check-on-loopback`, `a-session-token-is-refused-on-tcp`,
+  `the-session-socket-serves-its-token` (`http` over `unix:`), `a-head-over-64-kib-is-431` (the 70,000-byte header comes
+  from a `write_file` with `$repeat` and a `capture_file`), `a-body-over-32-mib-is-413`,
+  `count-tokens-and-models-paths-pass`.
+- **Keys:** `keys-are-never-on-disk-or-in-the-backend` (`file_grep` over the hub's roots, the mock's log kept apart),
+  `the-agent-never-sees-the-key`, `need-keys-after-a-restart`.
+- **The editor's token:** `editor-chat-through-the-gateway` (the body byte for byte, the hub's key upstream),
+  `editor-fim-through-the-gateway`, `editor-embed-through-the-gateway`, `editor-stream-through-the-gateway`,
+  `an-editor-token-is-refused-on-the-messages-path`, `an-agent-token-is-refused-on-the-editor-paths`,
+  `editor-requests-carry-no-restrictions`, `an-openrouter-base-keeps-its-v1`.
+- **Not rows yet:** the TLS rows (`tls-with-the-system-store`, and `proxy-from-the-environment` and
+  `no-proxy-is-respected` over `https`) need a certificate authority and a server key at run time; the repo's leak scan
+  refuses a committed private key, and the test image has no `openssl`. The proxy rows use a plain-HTTP provider: the
+  connector tunnels through `HTTP_PROXY` for any scheme, so they prove the same environment rules. A kill -9 between a
+  registration's row write and its answer is declined (phase 6's `op` rows are the target).
+
 ## Building and installing Ratatoskr
 
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
