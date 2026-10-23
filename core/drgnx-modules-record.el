@@ -17,6 +17,11 @@
 (defvar drgnx-modules--report)
 (defvar drgnx-dir)
 (declare-function drgnx-modules--record "drgnx-modules")
+(declare-function drgnx-settings-claim "drgnx-settings-resolve" (var module kind datum))
+(declare-function drgnx-settings-unclaim "drgnx-settings-resolve" (var module kind datum))
+(declare-function drgnx-settings-resolve-apply "drgnx-settings-resolve" (var))
+(declare-function drgnx-settings-resolve--theme-p "drgnx-settings-resolve" (var))
+(declare-function drgnx-settings-resolve--note "drgnx-settings-resolve" (var))
 
 (defvar drgnx-modules--current nil
   "The module whose setup is running now (dynamically bound), else nil.")
@@ -127,16 +132,29 @@ Each runs under `condition-case' with `inhibit-interaction' t, after the run's t
 
 (defun drgnx-modules--add-to-list (orig var element &optional append compare)
   "Around `add-to-list' while a setup runs: an element newly in a list's global value is recorded.
-Not the minor mode lists (Emacs 31's `define-minor-mode' adds to them so): modes are compared after the setup."
+Not the minor mode lists (Emacs 31's `define-minor-mode' adds to them so): modes are compared after the setup.
+The element is also the module's claim (`drgnx-settings-claim'); when settings.el has an entry for VAR, the claim is
+resolved with it at once, and the undo resolves again instead of removing the element itself."
   (let ((new (and (drgnx-modules--net-records-p) (symbolp var) (not (memq var '(global-minor-modes local-minor-modes)))
-                  (not (drgnx-modules--list-has var element compare)))))
+                  (not (drgnx-modules--list-has var element compare))))
+        (module drgnx-modules--current)
+        (claims (fboundp 'drgnx-settings-claim)))   ; the resolver is loaded with the helpers
     (prog1 (funcall orig var element append compare)
       (when (and new (drgnx-modules--list-has var element compare))
+        (when claims
+          (drgnx-settings-claim var module 'element element)
+          (drgnx-settings-resolve--note var)
+          (when (drgnx-settings-resolve--theme-p var) (drgnx-settings-resolve-apply var)))
         (drgnx-modules-push-undo (drgnx-modules--label "list %s %s" var element)
                                  (lambda ()
-                                   (when-let* ((cell (drgnx-modules--list-has var element compare)))
-                                     (let ((l (default-value var)))   ; a copy without that one element
-                                       (set-default var (append (take (- (length l) (length cell)) l) (cdr cell)))))))))))
+                                   (unless (and claims (drgnx-settings-resolve--theme-p var))
+                                     (when-let* ((cell (drgnx-modules--list-has var element compare)))
+                                       (let ((l (default-value var)))   ; a copy without that one element
+                                         (set-default var (append (take (- (length l) (length cell)) l) (cdr cell))))))
+                                   (when claims
+                                     (drgnx-settings-unclaim var module 'element element)
+                                     (drgnx-settings-resolve-apply var)
+                                     (drgnx-settings-resolve--note var))))))))
 
 (defun drgnx-modules--snapshot ()
   "Timers, global minor modes and features now, to compare with later (`drgnx-modules--new')."

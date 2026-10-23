@@ -311,6 +311,49 @@ for a theme that is not in the list, and a forced disable would reset a later `s
 Tests: `drgnx-settings-apply/*` (`test/unit/settings-apply-test.el`) and the rows C1, C2, C3, C5, C7, C7b, C13, C14,
 C16, C17, C18, C22 (`drgnx-settings-compat/*`, `test/unit/settings-compat-global-test.el`, each in a child Emacs).
 
+## Module claims and the resolver
+
+`core/drgnx-settings-resolve.el` makes a module's choices claims (layer G1) and resolves them with the entry of
+`settings.el` (G2) inside theme `drgnx`; only the result goes through the applier rule (design §4.2, row C26). So
+modules stop overriding Customize, `use-package :custom` and your Lisp.
+
+- **Claims.** `(drgnx-settings-claim VAR MODULE KIND DATUM)` and `(drgnx-settings-unclaim VAR MODULE KIND DATUM)`
+  record and drop one; KIND is `value` (`drgnx-module-set`, DATUM the value), `key` (`drgnx-module-alist-put`, DATUM
+  `(KEY . VALUE)`) or `element` (an `add-to-list` the recorder sees in a setup, DATUM the element).
+  `(drgnx-settings-claims VAR)` lists them oldest first; `(drgnx-settings-claim-modules VAR)` names the modules.
+  Claims are made only inside a setup (a module's own code); outside one the helpers just make the change.
+- **`(drgnx-settings-resolve VAR)` → `(VALUE . REPLACED)`**, pure. The merge is the entry's own `:merge`, else the
+  setting's (`drgnx-setting-meta`): `replace` (G2's value; REPLACED is `((MODULE DATUM…)…)`), `alist` (G2's entries,
+  then the modules' keys G2 does not have, the newest claim of a key winning), `append` (the modules' elements, then
+  G2's), `lower-only` (the lower of the newest value claim and G2 when both are numbers). With no G2 entry, VALUE is
+  G1: the newest value claim, or the value under the claims, with the key and element claims put in.
+- **`(drgnx-settings-resolve-apply VAR)`** pushes the result with `drgnx-settings-push` (inside
+  `drgnx-modules--quietly`, so the recorder's net records nothing of it): `applied`, `stored`, `dropped` (nothing in
+  drgnx holds VAR: drgnx's theme entry goes, and the value goes back to the layer below while it is still drgnx's, or
+  to its value before the first claim for a variable with no standard value, void again if it was), or nil when VAR
+  does not go through the theme.
+- **Which route.** Through the theme: an option (a standard value, or void) with a value claim or a `settings.el`
+  entry, and any variable the theme already holds. Directly, as before (each helper's own undo, "Two modules, one
+  target" in core.md): a key or element claim with no `settings.el` entry, and anything on a bound plain `defvar`
+  (the applier stores those, never applies them). A void variable a value claim applies is also set at once, as
+  `drgnx-module-set` always did; its `defcustom` keeps the value.
+- **Direct changes, then an entry.** When a `settings.el` entry arrives after modules changed VAR directly (a live
+  change), the value they left (`drgnx-settings-resolve--last`) becomes drgnx's theme entry first, while no other
+  theme holds VAR and the value is still theirs, so the push decides as the winner. `drgnx-settings-apply-global`
+  pushes each entry's value through `drgnx-settings-resolve-entry`, which merges the claims in.
+- **Undo.** `drgnx-module-set`'s and the theme route's undo unclaim and resolve again: another module's claim takes
+  over, or the value drops. A key or element put in directly is removed only while it is still in the value (as
+  before); once a `settings.el` entry holds VAR, the undo resolves instead.
+- **Settings: Keep Module Entries…** (`drgnx-settings-keep-module-entries VAR`, registry id
+  `settings-keep-module-entries`): offers the variables whose entry replaces modules' entries, writes `:merge alist` on
+  that entry (`drgnx-settings-file-put`) and applies it at once.
+- Provenance names the modules: the G1 layer's `:source` is "module lang/eglot" (`:modules` lists them), also for a
+  value the modules set directly (no theme entry), while it is still theirs.
+
+Tests: `drgnx-settings-resolve/*` (`test/unit/settings-resolve-test.el`), row C26
+(`test/unit/settings-compat-modules-test.el`, in a child Emacs), and the helpers' own (`drgnx-module-set/*`,
+`drgnx-module-helpers/*`, `test/unit/modules-helpers-test.el`).
+
 ## Provenance
 
 `core/drgnx-settings-prov.el` records who set a variable and explains Emacs's value (design §4.5). Provenance

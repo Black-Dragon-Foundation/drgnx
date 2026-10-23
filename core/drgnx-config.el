@@ -869,10 +869,12 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
   "Take settings.el's values for packages and Emacs out of Emacs now; drgnx's own stay." t)
 (autoload 'drgnx-settings-turn-on-package-settings "drgnx-settings-apply"
   "Apply settings.el's values for packages and Emacs again now." t)
+(autoload 'drgnx-settings-keep-module-entries "drgnx-settings-resolve"
+  "Keep the modules' entries of a variable beside your value in settings.el (`:merge alist')." t)
 
 (defun drgnx-config-register-commands ()
-  "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File and Turn Off / Turn On Package
-Settings, in the registry."
+  "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File, Turn Off / Turn On Package
+Settings and Keep Module Entries…, in the registry."
   (drgnx-command-define 'config-open :category "Preferences" :title "Open Config File…" :command #'drgnx-config-open
                         :doc "Open one of drgnx's config files, at its mistake when it has one")
   (drgnx-command-define 'config-reset :category "Preferences" :title "Reset Config File…" :command #'drgnx-config-reset
@@ -887,7 +889,10 @@ Settings, in the registry."
                         :doc "Take settings.el's values for packages and Emacs out now (your Lisp's stay); drgnx's own stay")
   (drgnx-command-define 'settings-package-on :category "Settings" :title "Turn On Package Settings"
                         :command #'drgnx-settings-turn-on-package-settings
-                        :doc "Apply settings.el's values for packages and Emacs again now, where your Lisp does not set them"))
+                        :doc "Apply settings.el's values for packages and Emacs again now, where your Lisp does not set them")
+  (drgnx-command-define 'settings-keep-module-entries :category "Settings" :title "Keep Module Entries…"
+                        :command #'drgnx-settings-keep-module-entries
+                        :doc "Keep the modules' entries of an alist beside your value in Settings (merge per key)"))
 
 (provide 'drgnx-config)
 ;;; drgnx-config.el ends here

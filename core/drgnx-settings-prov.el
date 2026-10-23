@@ -19,6 +19,9 @@
 (require 'drgnx-settings-file)
 (require 'drgnx-lisp-index)
 
+(declare-function drgnx-settings-claim-modules "drgnx-settings-resolve" (var))
+(declare-function drgnx-settings-resolve--direct-value "drgnx-settings-resolve" (var))
+
 (defvar drgnx-settings-explain-functions nil
   "Functions that give the buffer layers of a variable (language overrides, workspace files …).
 Each is called with (VAR BUFFER) and returns a list of layer plists: `:layer' (`L1', `W1', `W2' or another
@@ -110,9 +113,15 @@ theme), not from the form being loaded."
   (let ((drgnx-settings-prov--recalc variable))
     (funcall fn variable)))
 
+(defun drgnx-settings-prov--theme-values (var)
+  "VAR's `theme-value' with each entry's expression evaluated: ((THEME VALUE)…).  A theme holds an expression
+\(`custom-quote' makes a list `(quote …)'); one that does not evaluate stays as it is."
+  (mapcar (lambda (e) (list (car e) (condition-case nil (eval (cadr e) t) (error (cadr e)))))
+          (get var 'theme-value)))
+
 (defun drgnx-settings-prov--theme-value (var theme)
   "The value THEME holds for VAR in its `theme-value', as (VALUE), or nil."
-  (when-let* ((e (assq theme (get var 'theme-value)))) (list (cadr e))))
+  (when-let* ((e (assq theme (drgnx-settings-prov--theme-values var)))) (list (cadr e))))
 
 (defun drgnx-settings-prov--record (var value where)
   "The record of a write of VALUE to VAR (buffer WHERE for a buffer-local write), or nil to ignore it."
@@ -284,8 +293,15 @@ writes count; an alias is resolved."
           :file file :line nil :certain t
           :source (if file (format "default (package %s)" (file-name-base file)) "default"))))
 
+(defun drgnx-settings-prov--module-layer (var value)
+  "G1: VALUE as the drgnx modules' that claim VAR (`drgnx-settings-claim-modules'), named in `:source'."
+  (let ((modules (and (fboundp 'drgnx-settings-claim-modules) (drgnx-settings-claim-modules var))))
+    (list :layer 'G1 :kind 'module :value value :modules modules :certain t
+          :source (if modules (format "module %s" (mapconcat #'symbol-name modules ", ")) "a drgnx module"))))
+
 (defun drgnx-settings-prov--settings-layer (var)
-  "G1 or G2: VAR's value in theme `drgnx', with its settings.el entry when there is one; or nil."
+  "G1 or G2: VAR's value in theme `drgnx', with its settings.el entry when there is one; the value drgnx's modules
+set directly (no theme value); or nil."
   (let* ((tv (drgnx-settings-prov--theme-value var 'drgnx))
          (doc (drgnx-settings-prov--settings-doc))
          (entry (and doc (cl-find-if (lambda (e) (and (eq (drgnx-settings-entry-var e) var)
@@ -296,7 +312,10 @@ writes count; an alias is resolved."
              (list :layer 'G2 :kind 'settings :value (if tv (car tv) (drgnx-settings-entry-value entry))
                    :file file :line line :certain t
                    :source (format "Settings (%s)" (drgnx-settings-prov--at file line)))))
-          (tv (list :layer 'G1 :kind 'module :value (car tv) :certain t :source "a drgnx module")))))
+          (tv (drgnx-settings-prov--module-layer var (car tv)))
+          ((fboundp 'drgnx-settings-resolve--direct-value)
+           (when-let* ((d (drgnx-settings-resolve--direct-value var)))
+             (drgnx-settings-prov--module-layer var (car d)))))))
 
 (defun drgnx-settings-prov--theme-layer (var theme value)
   "The layer of THEME's VALUE for VAR (not theme `drgnx')."
@@ -342,7 +361,7 @@ writes count; an alias is resolved."
                                          (format "default (package %s)" (file-name-base file)))
                        d)))
       ('drgnx (or (drgnx-settings-prov--settings-layer var)
-                  (list :layer 'G1 :kind 'module :value (plist-get r :value) :certain t :source "a drgnx module")))
+                  (drgnx-settings-prov--module-layer var (plist-get r :value))))
       ;; A theme enabled or disabled while your Lisp loads: the theme that now holds the value, else the default.
       ('theme (pcase (plist-get r :theme)
                 ('nil (drgnx-settings-prov--default-layer var))
@@ -354,16 +373,16 @@ writes count; an alias is resolved."
 (defun drgnx-settings-prov--global (var value records)
   "The global layers of VAR (lowest first) and the one that explains VALUE: (WINNER . LAYERS).
 RECORDS are VAR's resolved global writes, newest first."
-  (let* ((top (car (get var 'theme-value)))
+  (let* ((tvs (drgnx-settings-prov--theme-values var))
+         (top (car tvs))
          (g0 (drgnx-settings-prov--default-layer var))
          (g12 (drgnx-settings-prov--settings-layer var))
          (themes (mapcar (lambda (e) (drgnx-settings-prov--theme-layer var (car e) (cadr e)))
-                         (reverse (cl-remove-if (lambda (e) (eq (car e) 'drgnx)) (get var 'theme-value)))))
+                         (reverse (cl-remove-if (lambda (e) (eq (car e) 'drgnx)) tvs))))
          (r (car records))
          (rl (and r (drgnx-settings-prov--record-layer var r)))
          (top-layer (and top (if (eq (car top) 'drgnx)
-                                 (or g12 (list :layer 'G1 :kind 'module :value (cadr top) :certain t
-                                               :source "a drgnx module"))
+                                 (or g12 (drgnx-settings-prov--module-layer var (cadr top)))
                                (drgnx-settings-prov--theme-layer var (car top) (cadr top)))))
          (winner
           (cond
@@ -382,6 +401,8 @@ RECORDS are VAR's resolved global writes, newest first."
                        rl))
               (_ rl)))
            ((and top (equal (cadr top) value)) top-layer)
+           ;; a value drgnx's modules set directly (an alist key, a plain variable): no theme entry to find it by
+           ((and g12 (not top) (eq (plist-get g12 :layer) 'G1) (equal (plist-get g12 :value) value)) g12)
            ((equal (plist-get g0 :value) value) g0)
            (t (let ((cands (drgnx-settings-prov--setters var (drgnx-settings-prov--user-files))))
                 (list :layer nil :kind 'unknown :value value :certain nil

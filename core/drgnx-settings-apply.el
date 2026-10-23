@@ -23,6 +23,7 @@
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+(declare-function drgnx-settings-resolve-entry "drgnx-settings-resolve" (var entry))
 
 ;; Emacs's own (custom.el, preloaded) and provenance's: bound dynamically here.
 (defvar custom--inhibit-theme-enable)
@@ -224,7 +225,10 @@ applied; one problem says why) or `failed' (its push signalled)."
                 (push-entry (entry)
                   (let ((var (drgnx-settings-entry-var entry)))
                     (condition-case err
-                        (let ((r (drgnx-settings-apply--push-timed var (drgnx-settings-entry-value entry))))
+                        (let ((r (drgnx-settings-apply--push-timed
+                                  var (if (fboundp 'drgnx-settings-resolve-entry)   ; modules' claims merged in (Task 9)
+                                          (drgnx-settings-resolve-entry var entry)
+                                        (drgnx-settings-entry-value entry)))))
                           (push (cons var entry) pushed)
                           r)
                       (error (problem entry (format "%s was not applied: %s" var (error-message-string err)))
