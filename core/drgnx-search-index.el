@@ -24,6 +24,8 @@
 (require 'drgnx-jobs)
 (require 'drgnx-gc)
 
+(defvar drgnx-hub--editor)              ; drgnx-hub-client.el: (TOKEN . URL) once the hub gave this Emacs its editor token
+
 (defconst drgnx-search-index-default-batch 32
   "Chunks per embedding request: TEI's default max-client-batch-size (a 413 halves it for the rest of the run).")
 
@@ -323,7 +325,7 @@ Reads each job's job.eld and looks for its exit file; only a job of ROOT without
             (if kept (ignore-errors (delete-directory jdir t)) (setq kept t))))))))
 
 ;; The job is a fresh process: it gets the editor's state directories (so it writes the index and lock the
-;; editor reads) and the keys of the embed chain (resolved here, where a key may live in auth-source).
+;; editor reads) and the gateway's address; it never gets a key (it asks the hub for its own token).
 
 (defun drgnx-search-index--dir-env ()
   "\"NAME=value\"… of the XDG and DRGNX_*_DIR variables set here: where a batch drgnx finds the user's files."
@@ -331,17 +333,14 @@ Reads each job's job.eld and looks for its exit file; only a job of ROOT without
            when (string-match-p "\\`\\(XDG_\\(STATE\\|CONFIG\\|CACHE\\|DATA\\)_HOME\\|DRGNX_[A-Z0-9_]*_DIR\\)=." e)
            collect e))
 
-(defun drgnx-search-index--job-env (root)
-  "\"NAME=value\"… for the indexing job of the project at ROOT: the XDG and DRGNX_*_DIR variables set here, and for
-each provider in ROOT's `embed' role (its .drgnx/ai.eld counts, not the current buffer's) with a key, its key
-variable.  Resolved without prompting.  The values travel in the environment only."
+(defun drgnx-search-index--job-env (_root)
+  "\"NAME=value\"… for the indexing job of the project at _ROOT: the XDG and DRGNX_*_DIR variables set here, and the
+gateway's address (`DRGNX_AI_GATEWAY_URL') when this Emacs has it.  No key and no token: the job ensures the hub and
+asks it for an editor token of its own (`drgnx-ai-gateway-credentials'), so the token is pruned with the job, not with
+the editor; the embed role is the project's, resolved by the job from its working directory."
   (append
    (drgnx-search-index--dir-env)
-   (let ((default-directory (file-name-as-directory (expand-file-name root))))
-     (cl-loop for (id . _) in (drgnx-ai-role 'embed)
-              for name = (plist-get (drgnx-ai-provider id) :key-env)
-              for key = (and name (drgnx-ai-key id nil))
-              when key collect (concat name "=" key)))))
+   (when-let* ((tok (bound-and-true-p drgnx-hub--editor))) (list (concat "DRGNX_AI_GATEWAY_URL=" (cdr tok))))))
 
 (defconst drgnx-search-index--start-grace 30
   "Seconds a job just started may take to hold the lock: a second start in that time waits for it.")

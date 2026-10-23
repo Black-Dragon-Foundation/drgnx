@@ -888,4 +888,32 @@ without the binary."
         (drgnx-hub-disconnect)
         (call-process bin nil nil nil "stop" "--timeout" "10")))))
 
+(ert-deftest drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect ()
+  ;; the hand-over also asks gateway/editor-token and gateway/keys-held; a proven reconnect asks again; keys-changed
+  ;; keeps the list current; a disconnect forgets both
+  (drgnx-hub-client-test--with-fake
+      (:results (list (cons "gateway/editor-token" '(:token "tok-1" :url "http://127.0.0.1:4242"))
+                      (cons "gateway/keys-held" '(:providers ["openrouter"]))))
+    (let ((drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (hook-ran 0) (drgnx-hub-editor-token-hook nil)
+          (process-environment (drgnx-hub-client-test--no-keys-env)))
+      (add-hook 'drgnx-hub-editor-token-hook (lambda () (cl-incf hook-ran)))
+      (should (eq (drgnx-hub-keys-held) :unknown))
+      (drgnx-hub-connect)
+      (drgnx-hub-client-test--wait (lambda () drgnx-hub--editor) "the editor token")
+      (should (equal (drgnx-hub-editor-token) '("tok-1" . "http://127.0.0.1:4242")))
+      (drgnx-hub-client-test--wait (lambda () (listp (drgnx-hub-keys-held))) "the held keys")
+      (should (equal (drgnx-hub-keys-held) '("openrouter")))
+      (should (>= hook-ran 1))
+      (drgnx-fake-hub-event hub "gateway/keys-changed" '(:providers ["openrouter" "anthropic"]))
+      (drgnx-hub-client-test--wait (lambda () (equal (drgnx-hub-keys-held) '("openrouter" "anthropic"))) "keys-changed")
+      ;; the connection goes and comes back: both are asked again
+      (let ((asked (length (drgnx-hub-client-test--sent hub "gateway/editor-token"))))
+        (drgnx-hub-disconnect)
+        (should (null drgnx-hub--editor))
+        (should (eq (drgnx-hub-keys-held) :unknown))
+        (drgnx-hub-connect)
+        (drgnx-hub-client-test--wait (lambda () (> (length (drgnx-hub-client-test--sent hub "gateway/editor-token")) asked))
+                                     "the token asked again")
+        (drgnx-hub-client-test--wait (lambda () drgnx-hub--editor) "the token again")))))
+
 ;;; hub-client-test.el ends here

@@ -218,6 +218,26 @@ hears which provider answered, or every reason none did — so with OpenRouter u
 never opens auth-source), and whether the GPU has room for the completion model next to what already holds it
 (TEI, say): a 1.5B model at 4 bits needs about 1.6 GB.
 
+## Where requests go
+
+Every request to a provider **with a key** (OpenRouter, Anthropic, … — chat, completion, edits, commit messages,
+embeddings, the search index, gptel) goes to the hub's gateway on this machine, `http://127.0.0.1:PORT/p/PROVIDER/…`,
+with a token of your editor's own (`Authorization: Bearer …`). The hub adds the provider's key and passes the answer
+back, streaming included; the editor's requests carry no key. A provider **without** a key (a local Ollama, llama.cpp,
+TEI) is asked directly, as before. The fallback along a role's list is still the editor's: the gateway passes one
+provider through per request.
+
+- **Commands start the hub.** Edit with AI, Ask, Choose, the commit message, `drgnx onboard`, `drgnx search` and the
+  other terminal commands make sure the hub runs and wait for it (`drgnx hub start` does the same by hand). Ghost text
+  and other background work never wait: with no token yet the request fails with "drgnx hub is starting; try again"
+  (the provider is skipped, the next one in the list is asked) and the hub's start is asked for in the background.
+- **A provider is usable when the hub holds its key** (`drgnx hub status`, the hub's `gateway/keys-held`, kept up to
+  date as keys come and go) or it needs none. A key your environment has is handed to the hub when your editor
+  connects; a key found by a command you run (Keychain, keyring, `.authinfo`) is handed over by that command, once.
+- **The search indexer** is a background job: it is given the gateway's address only, asks the hub for a token of its
+  own, and goes with it when it ends. It never has a key in its environment.
+- **gptel** gets a backend at the gateway (`/p/PROVIDER/chat/completions`) once the hub gave your editor its token.
+
 ## Keys
 
 drgnx reads a key when a feature needs it, from where you already keep it: the provider's environment variable

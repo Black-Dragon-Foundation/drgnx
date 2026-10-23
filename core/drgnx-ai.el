@@ -297,6 +297,73 @@ out would hide the key for hours."
             (when key (puthash id key drgnx-ai--keys))
             key)))))
 
+;;;; The editor's requests go through the hub's gateway (design call 15)
+
+(defvar drgnx-ai-via-gateway t
+  "Non-nil: a request to a provider with a `:key-env' goes to the hub's gateway (`/p/PROVIDER/…') with the editor
+token, and the hub adds the key.  Keyless providers (local runners) always go direct.  Tests that need no hub bind it
+nil.")
+
+(define-error 'drgnx-ai-gateway-unavailable "drgnx hub is starting; try again")
+
+(declare-function drgnx-hub-editor-token "drgnx-hub-client")
+(declare-function drgnx-hub-keys-held "drgnx-hub-client")
+(declare-function drgnx-hub-give-key "drgnx-hub-client")
+
+(defun drgnx-ai--waits-p (interactive &optional waits)
+  "Whether a request may wait for the hub: a command the user ran (INTERACTIVE, or WAITS: a caller that waits for
+the answer anyway), or a batch process, never a daemon path."
+  (and (not inhibit-interaction) (or interactive waits noninteractive) t))
+
+(defun drgnx-ai-gateway-p (id)
+  "Whether requests to provider ID go through the gateway: it has a key and `drgnx-ai-via-gateway' is on."
+  (and drgnx-ai-via-gateway (plist-get (drgnx-ai-provider id) :key-env) t))
+
+(defun drgnx-ai-gateway-credentials (&optional interactive waits)
+  "(URL . TOKEN) for the gateway: the base address and the editor token.  INTERACTIVE as for `drgnx-ai-request'; a
+command or batch process waits for the hub, a daemon path never does.  Signals `drgnx-ai-gateway-unavailable' when
+there is no token yet."
+  (require 'drgnx-hub-client)
+  (let* ((why nil)
+         (tok (condition-case e (drgnx-hub-editor-token (drgnx-ai--waits-p interactive waits))
+                (error (setq why (error-message-string e)) nil))))
+    (if tok (cons (or (let ((u (getenv "DRGNX_AI_GATEWAY_URL"))) (and u (not (string-empty-p u)) u)) (cdr tok)) (car tok))
+      ;; waited and failed: the hub's reason; else it is on its way
+      (if (and why (drgnx-ai--waits-p interactive waits)) (signal 'drgnx-ai-gateway-unavailable (list why))
+        (signal 'drgnx-ai-gateway-unavailable nil)))))
+
+(defun drgnx-ai-key-held-p (id &optional interactive)
+  "Whether the key of provider ID is there to use: the hub holds it (`gateway/keys-held', kept up to date by
+`gateway/keys-changed'), and before the hub has said, one this Emacs finds (`drgnx-ai-key').  For INTERACTIVE a
+key found here that the hub does not hold counts too: the request hands it over."
+  (require 'drgnx-hub-client)
+  (let ((held (drgnx-hub-keys-held)))
+    (if (and (drgnx-ai-gateway-p id) (not (eq held :unknown)))
+        (or (and (member (symbol-name id) held) t)
+            (and interactive (drgnx-ai-key id t) t))
+      (and (drgnx-ai-key id interactive) t))))
+
+(defun drgnx-ai-route (id &optional interactive waits)
+  "Where and how to ask provider ID: (:url BASE :key KEY) — BASE the address `drgnx-ai--endpoint' appends its path to
+\(the gateway's `/p/ID' for a provider with a key, else the provider's own URL), KEY the bearer token (the editor token,
+or nil for a keyless provider) — or nil when the provider needs a key nobody has.  Signals
+`drgnx-ai-gateway-unavailable' when the gateway has no token yet."
+  (let ((p (drgnx-ai-provider id)))
+    (cond ((not (plist-get p :key-env)) (list :url (plist-get p :url)))
+          ((not drgnx-ai-via-gateway)
+           (when-let* ((key (drgnx-ai-key id interactive))) (list :url (plist-get p :url) :key key)))
+          (t
+           ;; the token first: waiting for the hub also brings the list of the keys it holds
+           (let* ((cred (drgnx-ai-gateway-credentials interactive waits))
+                  (held (drgnx-hub-keys-held))
+                  (there (and (listp held) (member (symbol-name id) held))))
+             (when (or there
+                       ;; a key found only here (a store that asks, a command the user ran) goes to the hub, once
+                       (and interactive (let ((key (drgnx-ai-key id t))) (and key (progn (drgnx-hub-give-key id key) t))))
+                       ;; the hub has not said yet: the hand-over carried the keys this Emacs holds
+                       (and (eq held :unknown) (drgnx-ai-key id nil)))
+               (list :url (format "%s/p/%s" (string-remove-suffix "/" (car cred)) id) :key (cdr cred))))))))
+
 (defun drgnx-ai-load-keys ()
   "Read the keys of the providers the roles name, as a command does — the Keychain or the keyring may be asked
 \(`drgnx-ai-key' with INTERACTIVE) — and keep them in memory, for the features that never ask: ghost text, the hub,
@@ -561,7 +628,8 @@ has a mistake, or was written by a newer drgnx, is never replaced: the error (`d
   "How to make provider ID's gptel backend for MODEL: (FUNCTION NAME . ARGS).  A key is a function asked
 when gptel sends, never a stored string."
   (let* ((p (drgnx-ai-provider id))
-         (u (url-generic-parse-url (plist-get p :url)))
+         (gateway (and (drgnx-ai-gateway-p id) (drgnx-ai-gateway-credentials)))   ; signals when the hub has no token yet
+         (u (url-generic-parse-url (if gateway (format "%s/p/%s" (string-remove-suffix "/" (car gateway)) id) (plist-get p :url))))
          (host (if (url-portspec u) (format "%s:%d" (url-host u) (url-portspec u)) (url-host u)))
          (path (string-remove-suffix "/" (or (url-filename u) "")))
          (name (or (plist-get p :name) (symbol-name id))))
@@ -570,7 +638,8 @@ when gptel sends, never a stored string."
       (kind (append (list 'gptel-make-openai name :host host :protocol (url-type u)
                           :endpoint (concat (if (eq kind 'llamacpp) (concat path "/v1") path) "/chat/completions")
                           :models (list (intern model)) :stream t)
-                    (and (plist-get p :key-env) (list :key (lambda () (drgnx-ai-key id t)))))))))
+                    (cond (gateway (list :key (lambda () (cdr (drgnx-ai-gateway-credentials t)))))
+                          ((plist-get p :key-env) (list :key (lambda () (drgnx-ai-key id t))))))))))
 
 (defvar drgnx-ai--gptel-ours nil "The gptel backend drgnx made last.")
 (defvar gptel--openai)
@@ -591,13 +660,14 @@ user set is theirs).  Returns the step, or nil."
 
 (defun drgnx-ai-gptel-configure (usable-p)
   "Point gptel at the first provider of the `chat' role USABLE-P accepts.  Returns it, or nil."
-  (when-let* ((step (seq-find (lambda (s) (funcall usable-p (car s))) (drgnx-ai-role 'chat))))
-    (let ((spec (drgnx-ai-gptel-spec (car step) (cdr step))))
-      ;; `gptel' alone does not load the backend makers (they are autoloads, absent without package.el)
-      (unless (fboundp (car spec)) (require (if (eq (car spec) 'gptel-make-ollama) 'gptel-ollama 'gptel-openai)))
-      (setq gptel-backend (apply (car spec) (cdr spec))
-            gptel-model (intern (cdr step)))
-      step)))
+  (when-let* ((step (seq-find (lambda (s) (funcall usable-p (car s))) (drgnx-ai-role 'chat)))
+              ;; the gateway's address comes with the hub's token: not yet (nil), and gptel is set up when it arrives
+              (spec (condition-case nil (drgnx-ai-gptel-spec (car step) (cdr step)) (drgnx-ai-gateway-unavailable nil))))
+    ;; `gptel' alone does not load the backend makers (they are autoloads, absent without package.el)
+    (unless (fboundp (car spec)) (require (if (eq (car spec) 'gptel-make-ollama) 'gptel-ollama 'gptel-openai)))
+    (setq gptel-backend (apply (car spec) (cdr spec))
+          gptel-model (intern (cdr step)))
+    step))
 
 (provide 'drgnx-ai)
 ;;; drgnx-ai.el ends here

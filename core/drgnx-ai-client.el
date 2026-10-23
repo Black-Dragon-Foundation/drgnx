@@ -16,7 +16,7 @@
 (require 'drgnx-ai)
 
 (cl-defstruct (drgnx-ai-request (:constructor drgnx-ai--make-request) (:copier nil))
-  process cancelled callback chain kind payload timeout fallbacks interactive)
+  process cancelled callback chain kind payload timeout fallbacks interactive waits)
 
 ;;;; curl
 
@@ -135,16 +135,19 @@ prompt or wait.")
 (autoload 'drgnx-ai--refused "drgnx-ai-probe")
 (add-hook 'drgnx-ai-refused-functions #'drgnx-ai--refused)
 
-(cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain interactive)
+(cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain interactive waits)
   "Ask ROLE's providers (or CHAIN's: ((PROVIDER . MODEL)…)), in order, for a KIND answer (`chat': PAYLOAD
 (:messages [(:role :content)…]); `fim': (:prefix :suffix :max-tokens); `embed': (:inputs [STRING…])).  CALLBACK
 gets (TEXT INFO): INFO (:provider :model :fallbacks ((PROVIDER . WHY)…)), and :error when no provider answered
 (TEXT nil).  For `embed' TEXT is the vector of the inputs' vectors (float vectors of length 1; a zero vector stays
 zero), where an answer with other numbers or another count moves on to the next provider.  INTERACTIVE:
 a command the user ran (keys may come from sources that ask, see `drgnx-ai-key').  Returns a handle for
-`drgnx-ai-cancel'."
+`drgnx-ai-cancel'.  Providers with a key are asked through the hub's gateway (`drgnx-ai-route'): WAITS says the
+caller waits for the answer anyway, so the first request may wait for the hub to start (a command or batch process;
+INTERACTIVE and a batch Emacs wait too, a daemon path never does).  Without a token yet a provider is skipped with
+\"drgnx hub is starting; try again\"."
   (let ((h (drgnx-ai--make-request :callback callback :chain (or chain (drgnx-ai-role role)) :kind kind :payload payload
-                                   :timeout timeout :interactive interactive)))
+                                   :timeout timeout :interactive interactive :waits waits)))
     (if (and (eq kind 'embed) (zerop (length (plist-get payload :inputs))))
         ;; nothing to embed: no provider is asked (and no key looked up)
         (run-at-time 0 nil (lambda ()
@@ -163,13 +166,20 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
                                   (mapconcat (lambda (f) (format "%s: %s" (car f) (cdr f))) (reverse (drgnx-ai-request-fallbacks h)) "; ")
                                 "no provider for this")))
       (let* ((id (car step)) (model (cdr step)) (p (drgnx-ai-provider id))
-             (key (and p (plist-get p :key-env) (drgnx-ai-key id (drgnx-ai-request-interactive h))))
+             (cap (and p (memq kind (plist-get p :caps))))
+             (late nil)
+             ;; (:url :key): through the gateway for a provider with a key (the hub adds it), else direct
+             (route (and cap (condition-case e (drgnx-ai-route id (drgnx-ai-request-interactive h) (drgnx-ai-request-waits h))
+                               (drgnx-ai-gateway-unavailable (setq late (error-message-string e)) nil))))
+             (key (plist-get route :key))
              (skip (cond ((null p) "not configured")
-                         ((not (memq kind (plist-get p :caps))) (format "cannot %s" kind))
-                         ((and (plist-get p :key-env) (not key)) "no key"))))
+                         ((not cap) (format "cannot %s" kind))
+                         (late late)
+                         ((null route) "no key"))))
         (if skip
             (progn (push (cons id skip) (drgnx-ai-request-fallbacks h)) (drgnx-ai--next h))
-          (pcase-let ((`(,url . ,body) (drgnx-ai--endpoint p kind model (drgnx-ai-request-payload h))))
+          (pcase-let ((`(,url . ,body) (drgnx-ai--endpoint (plist-put (copy-sequence p) :url (plist-get route :url)) kind model
+                                                           (drgnx-ai-request-payload h))))
             (condition-case e
                 (setf (drgnx-ai-request-process h)
                       (drgnx-ai--curl url
@@ -219,7 +229,7 @@ from a timer, hook or sentinel."
     (let* ((result nil)
            (chain (or chain (drgnx-ai-role 'embed)))
            (h (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info)))
-                                :timeout timeout :chain chain :interactive interactive))
+                                :timeout timeout :chain chain :interactive interactive :waits t))
            (deadline (and timeout (+ (float-time) (* timeout (1+ (length chain)))))))
       (unwind-protect
           (while (and (not result) (or (null deadline) (< (float-time) deadline)))
