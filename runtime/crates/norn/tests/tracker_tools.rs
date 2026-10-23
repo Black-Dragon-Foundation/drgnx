@@ -465,6 +465,56 @@ mod tools {
         assert!(o.text.contains("vectors: behind"));
     }
 
+    /// Review finding 8 (Task 10: "a caller with no project … writes nothing"): `note_add` from a folder that is no
+    /// project is refused, as `create` is, and writes no note (one would be a stub every agent sees).
+    #[tokio::test]
+    async fn note_add_without_a_project_writes_nothing() {
+        let w = World::new().await;
+        let nowhere = w.dir.path().join("nowhere");
+        std::fs::create_dir_all(&nowhere).unwrap();
+        w.coord
+            .projects()
+            .lock()
+            .unwrap()
+            .insert(nowhere.clone(), None);
+        let homeless = w.agent("h1", &nowhere);
+        let stub = w
+            .user_write(|tx| {
+                Ok(entity::create(
+                    tx,
+                    EntityNew {
+                        id: "task:stub".into(),
+                        kind: "task".into(),
+                        project: None,
+                        title: Some("a task of no project".into()),
+                        status: Some("open".into()),
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )?
+                .id)
+            })
+            .await;
+        let txs = w.count("select count(*) from tx");
+        let o = w
+            .call(
+                &homeless,
+                "note_add",
+                json!({"about": stub, "text": "a note of no project"}),
+            )
+            .await;
+        assert!(o.err && o.text.contains("no project"), "{}", o.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'note'"),
+            0
+        );
+        assert_eq!(w.count("select count(*) from tx"), txs, "no tx was written");
+    }
+
     #[tokio::test]
     async fn access_request_never_blocks_and_merges() {
         let w = World::new().await;

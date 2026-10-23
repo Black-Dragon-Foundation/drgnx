@@ -1179,6 +1179,13 @@ async fn note_add(coord: &Coord, who: &Identity, a: NoteAddArgs) -> Result<Answe
         None
     };
     let caller = caller_of(coord, who, true).await?;
+    // a caller without a project writes nothing (Task 10): its note would be a stub every agent sees
+    if caller.project.is_none() {
+        return Err(
+            "you have no project: notes are made in the project (git repository) you work in"
+                .into(),
+        );
+    }
     let mut meta = caller.tx_meta("mcp:note_add");
     meta.req = a.req.clone();
     let writer = coord.db().graph_writer().ok_or("work.db is not open yet")?;
