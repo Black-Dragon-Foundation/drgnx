@@ -1,0 +1,2 @@
+;; refuse: CharName
+?\N{SNOWMAN}

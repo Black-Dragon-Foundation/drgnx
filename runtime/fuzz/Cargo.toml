@@ -18,6 +18,7 @@ serde_json = "1"
 runstav = { path = "../crates/runstav" }
 drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
+huginn = { path = "../crates/huginn" }
 
 [workspace]
 
@@ -73,6 +74,13 @@ bench = false
 [[bin]]
 name = "inner_spec"
 path = "fuzz_targets/inner_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "huginn_read"
+path = "fuzz_targets/huginn_read.rs"
 test = false
 doc = false
 bench = false

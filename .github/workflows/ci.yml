@@ -57,6 +57,16 @@ jobs:
         run: |
           chmod +x "$RUNNER_TEMP/ratatoskr/ratatoskr"
           echo "DRGNX_RATATOSKR_BIN=$RUNNER_TEMP/ratatoskr/ratatoskr" >> "$GITHUB_ENV"
+      # huginn's dump example (runtime.yml's Linux job): drgnx-huginn/differential-fresh-seed reads a fresh seed of random
+      # data with it and with Emacs's reader, and the dumps must agree (it must run, test/no-skip.eld)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: huginn-dump
+          path: ${{ runner.temp }}/huginn-dump
+      - name: DRGNX_HUGINN_DUMP
+        run: |
+          chmod +x "$RUNNER_TEMP/huginn-dump/dump"
+          echo "DRGNX_HUGINN_DUMP=$RUNNER_TEMP/huginn-dump/dump" >> "$GITHUB_ENV"
       - name: Prebuilt image for this Containerfile (else the suite builds it)
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}

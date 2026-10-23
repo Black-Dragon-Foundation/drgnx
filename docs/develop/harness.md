@@ -932,8 +932,9 @@ Every tier gets:
 Also unset: `drgnx-test-env-ambient-variables` (the SSH agent, `GPG_AGENT_INFO`, the caller's `XAUTHORITY`, the system
 `XDG_DATA_DIRS`/`XDG_CONFIG_DIRS`, git's global configuration and ssh command, `EMACSLOADPATH`, the Claude Code
 socket and token) and every other variable of the caller that holds a path under the real HOME (found by a scan; the
-only exceptions are `PATH`, `PWD`, `OLDPWD`, `DRGNX_USER_ELPA` and `DRGNX_RATATOSKR_BIN`, the Ratatoskr the client's
-tests run, which macOS CI builds in the checkout under HOME). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
+only exceptions are `PATH`, `PWD`, `OLDPWD`, `DRGNX_USER_ELPA`, `DRGNX_RATATOSKR_BIN`, the Ratatoskr the client's
+tests run, which macOS CI builds in the checkout under HOME, and `DRGNX_HUGINN_DUMP`, huginn's dump example for the
+differential test). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
 runner also binds `user-emacs-directory` to RUN/emacs, so nothing under `~/.emacs.d` or `~/.config/emacs` is written.
 `DRGNX_USER_ELPA` (the real `~/.config/emacs/elpa`, read-only) is the deliberate exception: tests that load packages
 read it and never write it. `TMPDIR` the runner reads before it fakes anything (its own run directory is made there).

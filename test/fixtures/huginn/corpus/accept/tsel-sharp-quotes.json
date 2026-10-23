@@ -1,0 +1,1 @@
+[["list",[["sym","function"],["sym","bar"]]],["list",[["sym","function"],["list",[["sym","lambda"],["list",[["sym","x"]]],["sym","x"]]]]],["list",[["sym","mapcar"],["list",[["sym","function"],["list",[["sym","lambda"],["list",[["sym","x"]]],["list",[["sym","1+"],["sym","x"]]]]]]],["sym","xs"]]],["list",[["sym","quote"],["list",[["sym","function"],["sym","foo"]]]]]]

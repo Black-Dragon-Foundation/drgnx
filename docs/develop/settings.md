@@ -88,3 +88,38 @@ The file is one form, `(HEAD :version 1 META… ENTRY… SECTION…)`, whose hea
 
 An `Error` carries the byte span of the node that did not fit. Use `serde_path_to_error::deserialize` around
 `Deserializer::new` for the path; `huginn` itself does not depend on it.
+
+## Conformance
+
+The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `runtime/crates/huginn`:
+
+- **The shared case table** (`cases.json`, above): hand-written rows both readers' unit tests read.
+- **The corpus** (`corpus/accept/*.el` with a `.json` dump of what Emacs reads; `corpus/refuse/*.el` whose first line
+  is `;; refuse: KIND`, the `RefusalKind` huginn must name). It holds Emacs's `test/src/lread-tests.el` cases that
+  fall inside the subset, tree-sitter-elisp's `test/corpus/` cases (MIT; `corpus/README.md` has the attribution) and
+  file-shaped cases of our own (the review's R5 and X cases are rows of the shared table). A file is one case: add
+  `x-NAME.el`, run `gen.el` (below) for its `.json`, and commit both. The corpus is data: `bin/drgnx fmt` and the
+  pre-commit hook leave it alone.
+- **Seeded random data** (`random-seeded.eld`, 2000 data from seed 1, and `random-seeded.dump`, one dump per line):
+  `gen.el` generates them in a Nidhogg container. Emacs prints each datum with `prin1`, reads that text back through
+  `drgnx-file--parse` and dumps what it read, so the dump is of the file's text, whatever `prin1` made of it.
+- **A fresh seed on every CI run:** `drgnx-huginn/differential-fresh-seed` takes a seed from the clock, writes 500
+  random data and runs huginn's `dump` example (`DRGNX_HUGINN_DUMP`, built by `runtime.yml`) on them; the dumps must
+  agree line by line. A failure prints the seed. The test skips without the variable and is on the no-skip list, so
+  CI cannot skip it.
+
+Regenerate the committed dumps (batch Nidhogg, in a container, from the checkout):
+
+```
+emacs --batch -L core -l test/fixtures/huginn/gen.el -f huginn-gen-all
+```
+
+`drgnx-huginn/committed-dumps-are-current` fails when a dump no longer matches what Emacs reads, or when Emacs reads
+a refuse file (but for kind `CharName`, the listed `\N{NAME}` divergence). huginn's side is
+`runtime/crates/huginn/tests/{differential,properties}.rs`: `committed_corpus_matches`, `random_seeded_matches`, and
+the property that every node's span, sliced out of the source, reads alone to the same datum. The fuzz target is
+`huginn_read` (docs/develop/runtime.md, "Fuzzing"). The mutation check over the refusal paths is
+`cargo mutants -p huginn --file src/read.rs` (and `src/form.rs`) with no surviving mutant in them.
+
+Floats are compared by value on the Rust side and in `drgnx-huginn/differential-fresh-seed`: any NaN equals any NaN,
+`-0.0` differs from `0.0`.
