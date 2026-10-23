@@ -326,12 +326,11 @@ mod tests {
         std::fs::create_dir_all(&backups).unwrap();
         // 60 days from 2026-09-01 (a Tuesday) to 2026-10-30.
         let mut names = Vec::new();
-        let mut d = days(2026, 9, 1);
-        for _ in 0..60 {
+        let first = days(2026, 9, 1);
+        for d in first..first + 60 {
             // back to civil: find y/m/d by search over month tables
             let (y, m, dd) = civil(d);
             names.push(format!("work-{y:04}{m:02}{dd:02}.db"));
-            d += 1;
         }
         for n in &names {
             std::fs::write(backups.join(n), b"x").unwrap();
