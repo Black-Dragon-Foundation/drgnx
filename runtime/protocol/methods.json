@@ -3546,6 +3546,12 @@
       "name": "hello",
       "params": {
         "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
           "Hex64": {
             "description": "64 lowercase hex digits",
             "maxLength": 64,
@@ -3568,6 +3574,17 @@
               "string",
               "null"
             ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The folder the client started in: an outside agent's bridge sends it, and `mcp/attach` makes it the tools'\nhome."
           },
           "drgnx_version": {
             "maxLength": 64,
@@ -5406,6 +5423,209 @@
     },
     {
       "classes": [
+        "service"
+      ],
+      "doc": "an outside agent's bridge: the connection carries MCP after the answer, as ext:KIND:PID-HASH from the peer process",
+      "home": "front",
+      "name": "mcp/attach",
+      "params": {
+        "$defs": {
+          "AgentKind": {
+            "description": "an agent kind: lowercase letters, digits, _ and - (a letter or digit first), at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/AgentKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "AttachParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`mcp/attach`'s answer: the identity the connection's tools act as; MCP lines follow it.",
+        "properties": {
+          "identity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "identity"
+        ],
+        "title": "AttachAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db and closed with its owner",
+      "home": "front",
+      "name": "mcp/session",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "SessionId": {
+            "description": "a session's id: ASCII letters, digits, - and _, 1 to 64",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/AgentName",
+            "description": "The agent's id: what every tool on the socket acts as."
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The folder the agent works in (the tools' `home`)."
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "description": "The pid of the process the session belongs to: the session is closed when it is gone.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sid": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SessionId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The session's directory when it has one already (its agent `hub.sock`); else the hub mints the id."
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent",
+          "owner"
+        ],
+        "title": "SessionParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`mcp/session`'s answer: the session's id and the socket to connect to.",
+        "properties": {
+          "sid": {
+            "type": "string"
+          },
+          "socket": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sid",
+          "socket"
+        ],
+        "title": "SessionAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session's mcp.sock and its directory gone (false: no such session)",
+      "home": "front",
+      "name": "mcp/session-close",
+      "params": {
+        "$defs": {
+          "SessionId": {
+            "description": "a session's id: ASCII letters, digits, - and _, 1 to 64",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "sid": {
+            "$ref": "#/$defs/SessionId"
+          }
+        },
+        "required": [
+          "sid"
+        ],
+        "title": "SessionCloseParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
         "user"
       ],
       "doc": "a message moved on to delivered, read or acted, never back (drgnx-coord-mark)",
@@ -6057,6 +6277,27 @@
             ],
             "type": "string"
           },
+          "McpStatus": {
+            "additionalProperties": false,
+            "description": "The coordination tools the front serves: the sessions' sockets, and the outside bridges connected now.",
+            "properties": {
+              "outside": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sessions": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sessions",
+              "outside"
+            ],
+            "type": "object"
+          },
           "Refusals": {
             "additionalProperties": false,
             "description": "The refusals the hub counted, and the last ones (method, code, class, path; never params).",
@@ -6164,6 +6405,17 @@
               "string",
               "null"
             ]
+          },
+          "mcp": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The front's MCP hosting (none from a Lisp hub)."
           },
           "pid": {
             "format": "uint64",
