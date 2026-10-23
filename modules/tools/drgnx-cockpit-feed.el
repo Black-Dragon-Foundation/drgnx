@@ -861,7 +861,8 @@ it answers; DONE runs only when the message was sent)."
 (defun drgnx-cockpit-answer (question text)
   "Answer QUESTION (an open question of `drgnx-cockpit-feed--questions') with TEXT, never interrupting anyone; an
 `answer' event (by \"user\", data (:question ID)) then closes it.  How it goes, by what asked:
-- an ask card: settled with TEXT by the hub's `cards/settle' (which writes the answer; a card settled already is said) — `card';
+- an ask card: settled with TEXT by the hub's `cards/settle' (which writes the answer; a card settled already is
+  said) — `card';
 - a job's agent's message: the hub's `job/reply' (a message the hub delivers when the agent is free) — `job';
 - an outside agent: a message to it in the store (it reads its inbox) — `message';
 - a native session: queued in it, never cancelling its turn (`drgnx-cockpit-feed--queue') — `session' or `message';

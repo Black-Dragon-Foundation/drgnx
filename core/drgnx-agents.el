@@ -872,7 +872,7 @@ session for its bridge closes (`drgnx-hub-mcp-session-close')."
     (setf (drgnx-agent-session-mcp-sid s) nil (drgnx-agent-session-mcp-socket s) nil)
     (drgnx-hub-mcp-session-close sid)))
 
-(defun drgnx-agents--coordination-p (s)
+(defun drgnx-agents--coordination-p (_s)
   "Does S's agent get the coordination tools of a hub session?  A sandboxed one too: the hub's bridge behind its own
 mcp.sock attaches to that session (`drgnx-sandbox-mcp--spec')."
   (and drgnx-agents-coordination (memq 'coordination (drgnx-agents-mcp-names))))

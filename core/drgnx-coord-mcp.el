@@ -28,6 +28,7 @@
 (declare-function drgnx-work--status-rows "drgnx-work")
 (declare-function drgnx-work--json-row "drgnx-work")
 (declare-function drgnx-hub--untrusted "drgnx-hub-client")
+(declare-function drgnx-hub-client-binary "drgnx-hub-client")
 (defvar drgnx-hub-client-proves)
 
 ;;;; Who this server speaks for
