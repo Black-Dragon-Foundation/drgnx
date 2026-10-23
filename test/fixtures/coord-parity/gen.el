@@ -18,6 +18,10 @@
 (require 'drgnx-coord)
 (require 'drgnx-coord-mcp)
 
+;; The oracle runs the Lisp writers themselves: this Emacs writes its temporary work.db (an editor's `refuse' would
+;; refuse every write; core/drgnx-coord.el).
+(setq drgnx-coord-writer 'local)
+
 (defvar drgnx-parity--dir (file-name-directory (or load-file-name buffer-file-name)))
 
 (defun drgnx-parity--expand (v)
