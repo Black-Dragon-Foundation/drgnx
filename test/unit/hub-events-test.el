@@ -292,7 +292,10 @@
       (unwind-protect
           (cl-letf (((symbol-function 'drgnx-hub--connect-socket) (lambda (f) (setq filter f) conn))
                     ((symbol-function 'drgnx-hub--send) #'ignore)
-                    ((symbol-function 'drgnx-hub--send-keys) #'ignore))
+                    ((symbol-function 'drgnx-hub--send-keys) #'ignore)
+                    ;; its `graph/settings' call would open the client connection through the same stub (and take
+                    ;; `filter'); drgnx-hub-client/the-close-option-is-sent-on-connect-and-change covers it
+                    ((symbol-function 'drgnx-hub-send-settings) #'ignore))
             (drgnx-hub-connect)
             (funcall filter conn "{\"event\":\"x\",\"data\":{\"a\":1}}\n{\"event\":\"y\",\"data\":{}}\n")
             (should (equal heard '(("y") ("x" :a 1))))         ; both lines, past the failing function

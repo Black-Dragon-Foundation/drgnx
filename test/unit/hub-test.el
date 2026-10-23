@@ -129,7 +129,8 @@ to OR-LOG, OPENROUTER_API_KEY unset."
   ;; one subscription while the hub has not answered — but not forever: a subscribe left unanswered (a stopped hub)
   ;; past the deadline is given up, and the next connect tries again (the editor is not told the hub went away).
   ;; It counts accepted connections: it relies on this Emacs holding no keys (the macro's), else each connect's
-  ;; `drgnx-hub--send-keys' would open one more
+  ;; `drgnx-hub--send-keys' would open one more; for the same reason connect's `graph/settings' (the client
+  ;; connection) is left out (drgnx-hub-client/the-close-option-is-sent-on-connect-and-change covers it)
   (drgnx-hub-test--with
     (should-not (drgnx-hub--held-keys))
     (drgnx-hub--private-dir (file-name-directory (drgnx-hub-socket)))
@@ -137,18 +138,19 @@ to OR-LOG, OPENROUTER_API_KEY unset."
            (drgnx-hub-disconnect-functions (list (lambda () (cl-incf gone))))
            (server (make-network-process :name "mute-hub" :family 'local :server t :service (drgnx-hub-socket) :noquery t
                                          :filter #'ignore :log (lambda (&rest _) (cl-incf accepted)))))
-      (unwind-protect
-          (let ((drgnx-hub-subscribe-deadline 0.3))
-            (drgnx-hub-connect)
-            (should (drgnx-hub-test--wait (lambda () (= accepted 1)) 2))
-            (drgnx-hub-connect)                                   ; before the deadline: still the one
-            (drgnx-test-pause 0.1)
-            (should (= accepted 1))
-            (drgnx-test-pause 0.4)
-            (drgnx-hub-connect)                                   ; past it: a new one
-            (should (drgnx-hub-test--wait (lambda () (= accepted 2)) 2))
-            (should (= gone 0)))
-        (delete-process server)))))
+      (cl-letf (((symbol-function 'drgnx-hub-send-settings) #'ignore))
+        (unwind-protect
+            (let ((drgnx-hub-subscribe-deadline 0.3))
+              (drgnx-hub-connect)
+              (should (drgnx-hub-test--wait (lambda () (= accepted 1)) 2))
+              (drgnx-hub-connect)                                   ; before the deadline: still the one
+              (drgnx-test-pause 0.1)
+              (should (= accepted 1))
+              (drgnx-test-pause 0.4)
+              (drgnx-hub-connect)                                   ; past it: a new one
+              (should (drgnx-hub-test--wait (lambda () (= accepted 2)) 2))
+              (should (= gone 0)))
+          (delete-process server))))))
 
 (ert-deftest drgnx-hub/a-subscriber-that-stops-reading-is-dropped ()
   ;; a blocked write runs timers and filters meanwhile: each new event would write to the same stuck subscriber one
