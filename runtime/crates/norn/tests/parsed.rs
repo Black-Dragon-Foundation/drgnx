@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use norn::deny::DenyList;
 use norn::parsed::{self, DENIED, PutAnswer, PutParsed, Record};
-use norn::project::ProjectCache;
+use norn::project::{ProjectCache, ProjectRef};
 use norn::store::CoordDb;
 use serde_json::{Value, json};
 use urdr::Connection;
@@ -645,4 +645,133 @@ fn orphan_commits_and_unnamed_specs_are_retired() {
             "{id}"
         );
     }
+}
+
+/// DIR as a project of its own (a made-up root commit, no git): the cache `put_with` and `record` are given.
+fn projects_for(dir: &Path) -> ProjectCache {
+    let sha = "0123456789abcdef0123456789abcdef01234567".to_string();
+    let mut cache = ProjectCache::default();
+    cache.insert(
+        dir.to_path_buf(),
+        Some(ProjectRef {
+            id: format!("project:{}", &sha[28..]),
+            root: dir.to_path_buf(),
+            slug: "plans".into(),
+            root_commit: Some(sha.clone()),
+            roots: vec![sha],
+        }),
+    );
+    cache
+}
+
+/// One `graph/record` of commit aaaa1111 with SUBJECT and DATE on task 1 of plan P, its repository P's folder.
+fn record_once(
+    c: &mut Connection,
+    deny: &DenyList,
+    projects: &mut ProjectCache,
+    p: &str,
+    subject: &str,
+    date: f64,
+) -> Vec<String> {
+    let req: Record = serde_json::from_value(json!({
+        "task": format!("task:{p}#1"),
+        "repo": Path::new(p).parent().unwrap().display().to_string(),
+        "commits": [{"sha": "aaaa1111", "date": date, "subject": subject, "seq": -1}]
+    }))
+    .unwrap();
+    let mut tx = Tx::for_test(
+        c,
+        TxMeta::new("backend", Class::System, "proto:graph/record"),
+        guard(),
+    );
+    let a = parsed::record(&mut tx, deny, projects, req).unwrap();
+    tx.commit_for_test().unwrap();
+    a.ids
+}
+
+/// An entity the scan sends again takes what it is now: its project (resolved meanwhile), status and data, beside
+/// its title (Task 19's report-shape mutants of `apply_want`).
+#[test]
+fn a_re_put_brings_project_status_and_data_up_to_date() {
+    let f = fx();
+    let mut c = db();
+    let p = &f.plan;
+    let dir = Path::new(p).parent().unwrap();
+    let task = format!("task:{p}#1");
+    put(&mut c, &f.deny, json!({"sources": [plan_source(p)]}));
+    let t = entity::by_id(&c, &task).unwrap().unwrap();
+    assert_eq!(
+        (t.project, t.status.as_deref(), t.data["line"].clone()),
+        (None, Some("open"), json!(2))
+    );
+    let mut src = plan_source(p);
+    src["entities"][1]["status"] = json!("done");
+    src["entities"][1]["data"]["line"] = json!(4);
+    let req: PutParsed = serde_json::from_value(json!({"sources": [src]})).unwrap();
+    let mut projects = projects_for(dir);
+    let mut tx = Tx::for_test(&mut c, scan(), guard());
+    let a = parsed::put_with(&mut tx, &f.deny, &mut projects, req).unwrap();
+    tx.commit_for_test().unwrap();
+    // all three take the project; the task its status and line too
+    assert_eq!((a.changed, a.retired, a.refused.len()), (3, 0, 0), "{a:?}");
+    let n = projects.project_n(dir).expect("registered");
+    let t = entity::by_id(&c, &task).unwrap().unwrap();
+    assert_eq!(
+        (
+            t.project,
+            t.status.as_deref(),
+            t.data["line"].clone(),
+            t.title.as_deref(),
+            t.ver
+        ),
+        (Some(n), Some("done"), json!(4), Some("one"), 2)
+    );
+    let plan = entity::by_id(&c, &format!("plan:{p}")).unwrap().unwrap();
+    assert_eq!(
+        (plan.project, plan.status.as_deref()),
+        (Some(n), Some("open"))
+    );
+}
+
+/// A commit recorded again takes its project (resolved meanwhile), its subject and its data as they are now (Task
+/// 19's report-shape mutants of `record`).
+#[test]
+fn a_recorded_commit_again_takes_its_project_subject_and_data() {
+    let f = fx();
+    let mut c = db();
+    let p = &f.plan;
+    let dir = Path::new(p).parent().unwrap();
+    put(&mut c, &f.deny, json!({"sources": [plan_source(p)]}));
+    let ids = record_once(
+        &mut c,
+        &f.deny,
+        &mut ProjectCache::default(),
+        p,
+        "first",
+        1.0,
+    );
+    assert_eq!(ids, ["commit:aaaa1111"]);
+    let first = entity::by_id(&c, "commit:aaaa1111").unwrap().unwrap();
+    assert_eq!(
+        (
+            first.project,
+            first.title.as_deref(),
+            first.data["date"].clone()
+        ),
+        (None, Some("first"), json!(1.0))
+    );
+    let mut projects = projects_for(dir);
+    let ids = record_once(&mut c, &f.deny, &mut projects, p, "first, amended", 2.0);
+    assert_eq!(ids, ["commit:aaaa1111"]);
+    let n = projects.project_n(dir).expect("registered");
+    let again = entity::by_id(&c, "commit:aaaa1111").unwrap().unwrap();
+    assert_eq!(
+        (
+            again.project,
+            again.title.as_deref(),
+            again.data["date"].clone(),
+            again.ver
+        ),
+        (Some(n), Some("first, amended"), json!(2.0), 2)
+    );
 }
