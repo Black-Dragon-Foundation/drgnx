@@ -488,6 +488,17 @@ pub fn retire(tx: &mut Tx<'_>, n: i64) -> Result<(), WriteError> {
     Ok(())
 }
 
+/// Bring the retired entity N back as it is (a new version, `retired_tx` cleared): what a re-derived record does when
+/// its source holds it again (norn's `parsed`). False, and nothing written, when N is not retired.
+pub fn unretire(tx: &mut Tx<'_>, n: i64) -> Result<bool, WriteError> {
+    let cur = by_n(tx.sql(), n)?.ok_or_else(|| WriteError::Refused(format!("no entity {n}")))?;
+    if cur.retired_tx.is_none() {
+        guard::check(tx.guard(), tx.meta(), &cur.kind)?;
+        return Ok(false);
+    }
+    set_version(tx, &cur, &Snap::of(&cur), Some(None))
+}
+
 /// The fields a version carries and a restoring write sets (no `kind`, no lease: `entity_hist` keeps neither).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Snap {
@@ -667,6 +678,29 @@ mod tests {
             title: Some(Some(t.into())),
             ..Changes::default()
         }
+    }
+
+    #[test]
+    fn unretire_brings_a_retired_entity_back_once() {
+        let mut conn = db();
+        let mut t = tx(&mut conn, "scan:/r", Class::System);
+        let e = create(&mut t, new_task("task:a")).unwrap();
+        assert!(!unretire(&mut t, e.n).unwrap());
+        retire(&mut t, e.n).unwrap();
+        assert!(unretire(&mut t, e.n).unwrap());
+        let back = by_n(t.sql(), e.n).unwrap().unwrap();
+        assert_eq!((back.retired_tx, back.ver), (None, 3));
+        assert_eq!(back.title.as_deref(), Some("first title"));
+        let hist: i64 = t
+            .sql()
+            .query_row(
+                "select count(*) from entity_hist where n = ?1",
+                [e.n],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hist, 2);
+        assert!(!unretire(&mut t, e.n).unwrap());
     }
 
     #[test]

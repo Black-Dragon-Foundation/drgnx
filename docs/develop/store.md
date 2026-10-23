@@ -498,4 +498,40 @@ transactions and the time. Never a path of the user's content, a title or a body
 
 ## Parsed entities (Task 15a)
 
+The tracker scan reads plans, specs, ledgers and git; what it finds reaches the graph through two front methods
+(`norn/src/parsed.rs`, `drgnx-ratatoskr/src/graph.rs`; class `user`, hub.md's table). Each is one request of the
+graph writer, with the deny-list in force at the call.
+
+**`graph/put-parsed`** `{root?, sources?, gone?, updates?, collected?}` → `{changed, retired, refused}`:
+
+- **A source is typed:** `{kind: "file"|"spec"|"commit"|"branch", path?}`. Its entities are stored with origin
+  `parsed` and the source text schema 6 used (the path, `spec PATH`, `commit`, `branch`), so migrated rows and new
+  ones are one set. A `file` or `spec` source is whole: an entity or `parsed` link of it that is not sent again is
+  retired. `commit` and `branch` sources only add.
+- **Door 1 (§5.6):** every path a source carries is checked against the deny-list: the source's path, each
+  entity's id (`check_record`), `data.path`, `data.repo`, `data.worktree`, `data.parent` and both ends of every link.
+  One denied path refuses the whole source with `personal notes are never stored`, a text that names no path, and
+  nothing of it is written. A source whose shape is wrong (a kind the source kind cannot hold, an id or `data.path`
+  that is not the source's path, a link kind `kinds::LINKS` refuses) is refused the same way with its reason; the
+  other sources of the request are stored.
+- **Unchanged is untouched:** an entity whose kind, title, status and data are what is stored gets no new version
+  (the same scan twice writes nothing). One that changed gets one version; a retired one sent again comes back
+  (`entity::unretire`). `data.parent` becomes a `parent_of` link; `on-branch` becomes `on_branch`; `ledger-of`
+  becomes `relates` `{"was": "ledger-of"}`.
+- **`updates`** are derived statuses: `{id, status?, data_patch?}`, status `open` or `done`, a patch of the scan's
+  flags only (`gone`, `stale`, `range-stale`, `merged`, `branch`, `worktree`, `repo`). An update of an entity sent
+  in the same request is folded into it; any other must name a live `parsed` entity. Other fields are refused.
+- **`gone`** retires a source's entities and links and forgets its file time (a gone file also its `spec` source).
+- **Cleanups**, as the Lisp scan did: commits no live link reaches are retired, and so is a spec no live plan
+  `derives` from (unless it sits under a `specs` folder). Entities sent in the request are exempt: a plan, its spec
+  and its ledger's commits go in one request.
+- **`collected`** keys (`job <id>`) are set to `collected` in `kv` (read through the `meta` view).
+- **File times** go to `parsed_file` (the `file` view). **Projects** of new entities are resolved (git) before the
+  write, on a blocking thread, and registered in it. The tx is `scan:<root>`, class `system`, tool `scan`.
+
+**`graph/record`** `{task, repo, commits: [{sha, date, subject, seq?}], collected?}` → `{ids}` records a job's
+commits against its task (§9 step 3): each a `commit:<sha>` entity and an `implements` link (origin `recorded`). The
+tx is the caller's, keyed by `collected`: the same record again answers the first answer and writes nothing; a key
+already collected by a put writes nothing either. A denied repository or task is refused with the door-1 text.
+
 ## The one-writer gate (Task 18)

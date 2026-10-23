@@ -1,0 +1,15 @@
+{"scenario": "graph/record-twice-is-one", "requires": ["v1", "fake-backend"], "doc": "graph/record (Urdr Task 15a; storage §9 step 3): a job's commits recorded against its task, keyed by the job's collected key; the same record again answers the first answer and writes nothing: one tx, the commits once, the implements links once, the key collected."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/work/docs/plans/p.md", "text": "# P\n### Task 1: one\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "graph/put-parsed", "params": {"root": "$ROOT/work", "sources": [{"source": {"kind": "file", "path": "$ROOT/work/docs/plans/p.md"}, "mtime": 1.0, "entities": [{"id": "plan:$ROOT/work/docs/plans/p.md", "kind": "plan", "title": "P", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 1}}, {"id": "task:$ROOT/work/docs/plans/p.md#1", "kind": "task", "title": "one", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 2, "parent": "plan:$ROOT/work/docs/plans/p.md", "ord": 1}}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"changed": 2, "retired": 0, "refused": []}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/record", "params": {"task": "task:$ROOT/work/docs/plans/p.md#1", "repo": "$ROOT/work", "collected": "job j1", "commits": [{"sha": "aaaa111", "date": 100.0, "subject": "first"}, {"sha": "bbbb222", "date": 200.0, "subject": "second"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"ids": ["commit:aaaa111", "commit:bbbb222"]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/record", "params": {"task": "task:$ROOT/work/docs/plans/p.md#1", "repo": "$ROOT/work", "collected": "job j1", "commits": [{"sha": "aaaa111", "date": 100.0, "subject": "first"}, {"sha": "bbbb222", "date": 200.0, "subject": "second"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"ids": ["commit:aaaa111", "commit:bbbb222"]}}}
+{"do": "sql_expect", "sql": "select id, ver from entity where kind = 'commit' order by id", "rows": [["commit:aaaa111", 1], ["commit:bbbb222", 1]]}
+{"do": "sql_expect", "sql": "select count(*) from link where kind = 'implements' and origin = 'recorded' and tx_to = 4611686018427387904", "rows": [[2]]}
+{"do": "sql_expect", "sql": "select count(*) from tx where req = 'job j1'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select value from meta where key = 'job j1'", "rows": [["collected"]]}

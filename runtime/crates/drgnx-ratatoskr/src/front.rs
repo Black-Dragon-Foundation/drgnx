@@ -1,5 +1,6 @@
 //! The front: what every connection shares, and the methods it serves itself (`Home::Front`) — `hello`, `ping`,
-//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`], the
+//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`] and
+//! [`crate::graph`] (`graph/put-parsed`, `graph/record`), the
 //! MCP hosting of [`crate::sessions`] (`mcp/*`) and the gateway of [`crate::gateway`] (`gateway/*`,
 //! `config/providers`, `spend`).  Every other method goes to [`Forward`].
 //!
@@ -475,6 +476,13 @@ impl Front {
             }
             Params::GatewaySetBudget(p) => self.gate.set_budget(p).await.map(|b| json!(b)),
             Params::ConfigProviders(p) => self.gate.config_providers(p).await.map(|r| json!(r)),
+            // the graph store's: the tracker scan's door
+            Params::GraphPutParsed(p) => {
+                crate::graph::put_parsed(&self.writer, &self.tools, p).await
+            }
+            Params::GraphRecord(p) => {
+                crate::graph::record(&self.writer, &self.tools, &caller, p).await
+            }
             other => match coord::serve(&self.writer, &caller, other).await {
                 Ok(result) => result,
                 Err(params) => {
