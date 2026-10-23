@@ -196,7 +196,8 @@ chords.  Empty when TABLE is clean."
     (nreverse out)))
 
 (defun drgnx-tty-fallback-problems (table &optional overrides)
-  "The `drgnx-keys-tty-fallback' entries TABLE could not apply, as lines (`drgnx-tty-fallback-notify' makes them notices).
+  "The `drgnx-keys-tty-fallback' entries TABLE could not apply, as lines (`drgnx-tty-fallback-notify' makes them
+notices).
 With OVERRIDES (the :tty-fallback value TABLE was made with), also each entry that is not (CHORD . KEY) or names a
 chord the profile needs no fallback for (one a plain terminal sends, or no key of the profile)."
   (append

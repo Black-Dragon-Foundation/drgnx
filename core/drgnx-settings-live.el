@@ -8,7 +8,8 @@
 ;;   frame focus and from `drgnx-settings-live-check' (the Settings page calls it before it draws), so a hand edit,
 ;;   another process's write, a rename over the file or a pull applies at once.
 ;; - `drgnx-settings-live-sync' re-applies a changed file through `drgnx-settings-apply-global' (idempotent), lets
-;;   go of what the file no longer names (`drgnx-settings-let-go'), and runs `drgnx-settings-changed-functions'.  Nothing prompts or signals.
+;;   go of what the file no longer names (`drgnx-settings-let-go'), and runs `drgnx-settings-changed-functions'.
+;;   Nothing prompts or signals.
 ;; - A change to an own setting's variable (from any layer) queues its `:apply'; the queue runs on an idle tick through
 ;;   `drgnx-timer' (key `settings-apply'), never inside the watcher.  `drgnx-settings-apply-pass' runs the `:apply'
 ;;   of every own setting whose value changed while Emacs started (a `setq' in config.el included).
@@ -130,9 +131,9 @@ Never signals, never prompts."
 (defun drgnx-settings-live-sync (file)
   "Read FILE again and apply what changed; the changes, a list of (SCOPE VAR OLD NEW).
 For settings.el: `drgnx-settings-apply-global' pushes every entry (idempotent), variables the file no longer names
-are let go (`drgnx-settings-let-go': modules' claims on them stay), new ones are watched for provenance, and `drgnx-settings-changed-functions' runs with FILE and the
-changes.  For a workspace file: `drgnx-settings-workspace-sync' re-hacks its roots' open buffers when it changed, and
-the hook runs the same way.  Another file only has its stamp recorded.  Nothing prompts; a failure is one notice
+are let go (`drgnx-settings-let-go': modules' claims on them stay), new ones are watched for provenance, and
+`drgnx-settings-changed-functions' runs with FILE and the changes.  For a workspace file:
+`drgnx-settings-workspace-sync' re-hacks its roots' open buffers when it changed, and the hook runs the same way.  Another file only has its stamp recorded.  Nothing prompts; a failure is one notice
 and nil."
   (condition-case err
       (let ((inhibit-interaction t))

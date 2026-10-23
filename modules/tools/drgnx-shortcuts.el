@@ -461,7 +461,8 @@ has several), or gives them to a command without keys; `add' adds them to its ke
        (drgnx-shortcuts--toggle 'changed))
 
 (defun drgnx-shortcuts-set-tty-fallback ()
-  "Choose the Alt+Shift key a terminal that cannot send this command's key sends instead (`drgnx-keys-tty-fallback' in settings.el)."
+  "Choose the Alt+Shift key a terminal that cannot send this command's key sends instead.
+It goes into `drgnx-keys-tty-fallback' in settings.el."
   (interactive)
   (let* ((row (drgnx-shortcuts--row (drgnx-shortcuts--id-at-point)))
          (chords (seq-uniq (mapcan (lambda (k) (unless (drgnx-shortcuts-terminal-p (car k)) (drgnx-tty-fallback-chords (list (car k)))))
