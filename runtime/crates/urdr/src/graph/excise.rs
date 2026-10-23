@@ -42,6 +42,14 @@ pub struct Excised {
 pub trait Blanker: Send + Sync {
     /// Blank what this blanker keeps of EXCISED, in the excise's tx; the rows changed.
     fn blank(&self, tx: &mut Tx<'_>, excised: &Excised) -> Result<u64, WriteError>;
+
+    /// The txs that wrote a row of this blanker's about one of ENTITIES (an event or a notice for it), read before
+    /// [`Blanker::blank`]: their `tx.answer` and `tx.note` are blanked too, as a keyed answer may quote what the row
+    /// was about. None by default.
+    fn txs_about(&self, tx: &Tx<'_>, entities: &[i64]) -> Result<Vec<i64>, WriteError> {
+        let _ = (tx, entities);
+        Ok(Vec::new())
+    }
 }
 
 /// What an excise did. `needles` (the values removed) stay in memory for [`holding`]: never serialized.
@@ -78,8 +86,10 @@ pub fn marker(tx: i64) -> String {
 /// An entity target blanks the named fields in its current row and in every `entity_hist` version; a tx target
 /// blanks, in every version of every entity, the fields whose `field_tx` names that tx (default: all of
 /// [`FIELDS`]). Then, in the same tx: the FTS rows are put again and the index optimized, the vectors are deleted,
-/// `tx.answer` and `tx.note` of every tx that wrote a blanked version (for an entity target, every version) and of
-/// the target tx become the marker, every blanker runs, and `excise_log` gets the target, the fields and the reason.
+/// `tx.answer` and `tx.note` of every tx that wrote a blanked version (for an entity target, every version), of
+/// the target tx and of every tx that names the target (its answer or note holds a blanked value; for an entity
+/// target also a tx that linked or unlinked it, or wrote a blanker's row about it: [`Blanker::txs_about`]) become
+/// the marker, every blanker runs, and `excise_log` gets the target, the fields and the reason.
 /// An agent or outside agent is refused here as well as at the method.
 pub async fn excise(
     writer: &WriterHandle,
@@ -257,6 +267,34 @@ fn blank_version(
     Ok(())
 }
 
+/// The txs that added or retired a link at entity N.
+fn link_txs(conn: &Connection, n: i64) -> rusqlite::Result<Vec<i64>> {
+    // plain lookups per end, not `src = ?1 or dst = ?1` (norn's privacy: SQLite's planner and that OR)
+    let mut st = conn.prepare(
+        "select tx_from from link where src = ?1 union select tx_from from link where dst = ?1 \
+         union select tx_to from link where src = ?1 and tx_to <> ?2 \
+         union select tx_to from link where dst = ?1 and tx_to <> ?2",
+    )?;
+    st.query_map(params![n, super::schema::SENTINEL], |r| r.get(0))?
+        .collect()
+}
+
+/// The txs whose answer or note holds one of NEEDLES (a scan of `tx`; excise is rare).
+fn txs_quoting(conn: &Connection, needles: &BTreeSet<Vec<u8>>) -> rusqlite::Result<Vec<i64>> {
+    let mut st =
+        conn.prepare("select id from tx where instr(answer, ?1) > 0 or instr(note, ?1) > 0")?;
+    let mut out = Vec::new();
+    for needle in needles {
+        let Ok(text) = std::str::from_utf8(needle) else {
+            continue;
+        };
+        for id in st.query_map([text], |r| r.get(0))? {
+            out.push(id?);
+        }
+    }
+    Ok(out)
+}
+
 /// The excise's body, inside its tx.
 fn run(
     tx: &mut Tx<'_>,
@@ -345,8 +383,22 @@ fn run(
     if !entities.is_empty() {
         fts_optimize(tx)?;
     }
+    // Every other tx whose answer or note names the target (a keyed write that wrote no version of it, call 3): it
+    // quotes a blanked value, it linked or unlinked an excised entity, or a blanker holds an event or a notice of
+    // it about one.
+    let mut named = BTreeSet::new();
+    if only_tx.is_none() {
+        for &n in &entities {
+            named.extend(link_txs(tx.sql(), n)?);
+        }
+        for b in blankers {
+            named.extend(b.txs_about(tx, &entities)?);
+        }
+    }
+    named.extend(txs_quoting(tx.sql(), &needles)?);
+    named.remove(&id);
     let mut txs_blanked = 0u64;
-    for &t in &txs {
+    for &t in txs.union(&named) {
         let note: Option<String> = tx
             .sql()
             .query_row("select note from tx where id = ?1", [t], |r| r.get(0))
@@ -1126,6 +1178,76 @@ mod tests {
             .query_row("select count(*) from entity", [], |r| r.get(0))
             .unwrap();
         assert_eq!(entities, 1, "the repeat ran nothing");
+        stop(w).await;
+    }
+
+    /// A keyed write that wrote no version of the target still loses its answer when the answer quotes the target's
+    /// text, or the write linked the target: its replay names nothing of it (call 3).
+    #[tokio::test]
+    async fn an_answer_that_names_the_target_is_blanked() {
+        let dir = tempfile::tempdir().unwrap();
+        let (w, h, path) = spawn(&dir);
+        let c = canary();
+        let title = format!("t {c}");
+        let (a, _) = create(&h, agent(), task("task:a", &title, "b", json!({}))).await;
+        let (b, _) = create(&h, agent(), task("task:b", "b title here", "b", json!({}))).await;
+        // Writes a version of task:b only, and answers task:a's title.
+        let quote = move || {
+            move |tx: &mut Tx<'_>| -> Result<Option<String>, WriteError> {
+                entity::update(tx, b, None, body("b2".into()))?;
+                Ok(tx
+                    .sql()
+                    .query_row("select title from entity where n = ?1", [a], |r| r.get(0))?)
+            }
+        };
+        let first = h.write(keyed("agent:s1", "q-1"), quote()).await.unwrap();
+        assert_eq!(first.value.as_deref(), Some(title.as_str()));
+        // Links task:a, and answers nothing of its text.
+        let link = move || {
+            move |tx: &mut Tx<'_>| -> Result<String, WriteError> {
+                crate::graph::link::add(tx, a, "blocks", b, None, Origin::Recorded, None)?;
+                Ok("linked".into())
+            }
+        };
+        h.write(keyed("agent:s1", "l-1"), link()).await.unwrap();
+        let mut plain = agent();
+        plain.note = Some("an unrelated note".into());
+        let other = change(&h, plain, b, body("b3".into())).await;
+        let report = excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
+        let excised = WriteError::Refused("this answer was excised; read the entity".into());
+        let again = h
+            .write(keyed("agent:s1", "q-1"), quote())
+            .await
+            .unwrap_err();
+        assert_eq!(again, excised);
+        let again = h.write(keyed("agent:s1", "l-1"), link()).await.unwrap_err();
+        assert_eq!(again, excised);
+        let c2 = ro(&path);
+        let left: i64 = c2
+            .query_row(
+                "select count(*) from tx where instr(coalesce(answer, '') || coalesce(note, ''), ?1) > 0",
+                [&c],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "no tx row keeps the target's text");
+        let note: String = c2
+            .query_row("select note from tx where id = ?1", [other], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            note, "an unrelated note",
+            "a tx that names nothing of it stays"
+        );
+        assert_eq!(report.entities, 1);
         stop(w).await;
     }
 

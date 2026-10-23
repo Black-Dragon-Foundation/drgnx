@@ -7,6 +7,31 @@ use crate::store::CoordDb;
 
 const CANARY: &str = "CANARY-9b-reading-4k2q";
 
+/// The test seam where [`apply`] reads what the list denies: a test learns that the revoke got there.
+pub(super) mod hooks {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use tokio::sync::oneshot;
+
+    static ARMED: Mutex<Vec<(PathBuf, oneshot::Sender<()>)>> = Mutex::new(Vec::new());
+
+    /// The next [`super::apply`] on the store at DB says so when it reads.
+    pub(super) fn arm(db: &Path) -> oneshot::Receiver<()> {
+        let (tell, told) = oneshot::channel();
+        ARMED.lock().unwrap().push((db.to_path_buf(), tell));
+        told
+    }
+
+    pub(in crate::privacy) fn reads(db: &Path) {
+        let mut armed = ARMED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = armed.iter().position(|(p, _)| p == db) {
+            let (_, tell) = armed.remove(i);
+            let _ = tell.send(());
+        }
+    }
+}
+
 struct Fx {
     dir: tempfile::TempDir,
     home: PathBuf,
@@ -414,6 +439,50 @@ async fn an_added_deny_entry_excises_what_came_in() {
     let r = apply(&f.writer, f.list()).await.unwrap();
     assert_eq!(r.removed, [f.reading()]);
     assert_eq!(r.excised, 1);
+    f.no_canary();
+}
+
+/// The revoke race (call 8), the store's half: a scan's put that is in the writer, with the list it read before the
+/// revoke, while the revoke reads what to excise. The revoke reads inside the writer, after that put, so it excises
+/// what the put brought in. The interleaving is held by channels, never by a wait.
+#[tokio::test]
+async fn a_put_in_the_writer_during_a_revoke_is_excised() {
+    let f = fx().await;
+    f.allow(&[&f.reading()]);
+    apply(&f.writer, f.list()).await.unwrap();
+    let r = f.reading().to_string_lossy().into_owned();
+    let req: PutParsed = serde_json::from_value(json!({"sources": [
+        {"source": {"kind": "spec", "path": r}, "mtime": 1.0,
+         "entities": [{"id": format!("spec:{r}"), "kind": "spec", "title": CANARY, "data": {"path": r, "line": 1}}]}
+    ]}))
+    .unwrap();
+    // the put holds the writer, its spec written and not yet committed
+    let (held, in_writer) = tokio::sync::oneshot::channel::<()>();
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let (writer, before) = (f.writer.clone(), f.list());
+    let put = tokio::spawn(async move {
+        writer
+            .write(TxMeta::new("scan:/w", Class::System, "scan"), move |tx| {
+                let a = parsed::put(tx, &before, req)?;
+                let _ = held.send(());
+                let _ = wait.recv();
+                Ok(a)
+            })
+            .await
+    });
+    in_writer.await.unwrap();
+    // the revoke reaches its read while the put is still in the writer
+    f.allow(&[]);
+    let read = hooks::arm(f.writer.path());
+    let (writer, after) = (f.writer.clone(), f.list());
+    let revoke = tokio::spawn(async move { apply(&writer, after).await });
+    read.await.unwrap();
+    go.send(()).unwrap();
+    let put = put.await.unwrap().unwrap();
+    assert!(put.value.refused.is_empty(), "{:?}", put.value.refused);
+    let r = revoke.await.unwrap().unwrap();
+    assert_eq!(r.removed, [f.reading()]);
+    assert_eq!(r.excised, 1, "the spec the put brought in is excised");
     f.no_canary();
 }
 

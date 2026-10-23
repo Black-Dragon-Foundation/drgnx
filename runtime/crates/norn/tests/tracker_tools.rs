@@ -626,6 +626,58 @@ mod tools {
         );
     }
 
+    /// Excise leaves no trace in a replay: a keyed `task_write` that wrote no version of the target (a link with it
+    /// as the source, a label no-op) answers the marker on a repeat, never its title, even one too short to search
+    /// for (call 3).
+    #[tokio::test]
+    async fn a_replay_after_excise_names_nothing_of_the_target() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let x = id_of(&create(&w, &a, "Xsecret-71fc2e9d").await);
+        let z = id_of(&create(&w, &a, "Zq9").await);
+        let y = id_of(&create(&w, &a, "the other one").await);
+        let link = json!({"op": "link", "src": x, "kind": "blocks", "dst": y, "req": "l-1"});
+        let label = json!({"op": "label", "id": z, "remove": ["none"], "req": "b-1"});
+        let first = w.call(&a, "task_write", link.clone()).await;
+        assert!(first.structured.to_string().contains("Xsecret-71fc2e9d"));
+        let first = w.call(&a, "task_write", label.clone()).await;
+        assert!(first.structured.to_string().contains("Zq9"));
+        let writer = w.db.graph_writer().unwrap().clone();
+        for id in [&x, &z] {
+            urdr::graph::excise::excise(
+                &writer,
+                TxMeta::new("user", Class::User, "test"),
+                urdr::graph::excise::Target::Entity(id.clone()),
+                None,
+                "r".into(),
+                norn::write::blankers(),
+            )
+            .await
+            .unwrap();
+        }
+        for args in [link, label] {
+            let again = w.call(&a, "task_write", args).await;
+            assert!(
+                again.err && again.text.contains("excised"),
+                "{}",
+                again.text
+            );
+            assert!(
+                !again.text.contains("Xsecret") && !again.text.contains("Zq9"),
+                "{}",
+                again.text
+            );
+        }
+        assert_eq!(
+            w.count(
+                "select count(*) from tx where instr(coalesce(answer, '') || coalesce(note, ''), 'Xsecret') > 0 \
+                 or instr(coalesce(answer, '') || coalesce(note, ''), 'Zq9') > 0"
+            ),
+            0
+        );
+    }
+
     #[tokio::test]
     async fn hello_brief_keeps_the_first_item() {
         let w = World::new().await;

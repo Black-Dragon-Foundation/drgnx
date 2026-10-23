@@ -33,20 +33,65 @@ fn writer_error(e: CoordError) -> WriteError {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CoordBlanker;
 
+/// The ids of the entities NS (an `n` with no entity is left out).
+fn ids_of(tx: &Tx<'_>, ns: &[i64]) -> Result<Vec<String>, WriteError> {
+    let mut ids: Vec<String> = Vec::new();
+    for n in ns {
+        let id: Option<String> = tx
+            .sql()
+            .query_row("select id from entity where n = ?1", [n], |r| r.get(0))
+            .map(Some)
+            .or_else(|e| match e {
+                urdr::SqliteError::QueryReturnedNoRows => Ok(None),
+                e => Err(e),
+            })?;
+        ids.extend(id);
+    }
+    Ok(ids)
+}
+
 impl Blanker for CoordBlanker {
-    fn blank(&self, tx: &mut Tx<'_>, ex: &Excised) -> Result<u64, WriteError> {
-        let mut ids: Vec<String> = Vec::new();
-        for n in &ex.entities {
-            let id: Option<String> = tx
-                .sql()
-                .query_row("select id from entity where n = ?1", [n], |r| r.get(0))
-                .map(Some)
-                .or_else(|e| match e {
-                    urdr::SqliteError::QueryReturnedNoRows => Ok(None),
-                    e => Err(e),
-                })?;
-            ids.extend(id);
+    /// The txs of the `event`, `message` and `card` rows [`CoordBlanker::blank`] blanks as about ENTITIES.
+    fn txs_about(&self, tx: &Tx<'_>, entities: &[i64]) -> Result<Vec<i64>, WriteError> {
+        let mut out = Vec::new();
+        for id in ids_of(tx, entities)? {
+            let short = id.strip_prefix("task:").unwrap_or(&id).to_string();
+            for (sql, key) in [
+                (
+                    "select tx from event where task = ?1 and tx is not null",
+                    &id,
+                ),
+                (
+                    "select tx from event where task = ?1 and tx is not null",
+                    &short,
+                ),
+                (
+                    "select tx from card where json_extract(data, '$.task') = ?1 and tx is not null",
+                    &id,
+                ),
+            ] {
+                let mut st = tx.sql().prepare(sql)?;
+                for t in st.query_map([key], |r| r.get(0))? {
+                    out.push(t?);
+                }
+            }
         }
+        for n in entities {
+            for sql in [
+                "select tx from message where entity = ?1 and tx is not null",
+                "select tx from card where entity = ?1 and tx is not null",
+            ] {
+                let mut st = tx.sql().prepare(sql)?;
+                for t in st.query_map([n], |r| r.get(0))? {
+                    out.push(t?);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn blank(&self, tx: &mut Tx<'_>, ex: &Excised) -> Result<u64, WriteError> {
+        let ids = ids_of(tx, &ex.entities)?;
         // `[excised 12]` → `{"excised":12}`, as the entity's own `data` is blanked
         let num: String = ex.marker.chars().filter(char::is_ascii_digit).collect();
         let mark = format!(

@@ -10,8 +10,10 @@
 //! 2. one `BEGIN IMMEDIATE` for everything below, the schema read again under it;
 //! 3. the graph tables; `node`, `edge`, `jtask`, `jdep`, `decision` renamed `old_*`; `file` → `parsed_file`, `meta` →
 //!    `kv` behind the read-only views `file` and `meta`;
-//!    (3a) door 2: every row read again under the lock and put through the [`DenyList`]; a denied node, an edge with a
-//!    denied end or path, and a denied `parsed_file` row are not kept (only their counts are);
+//!    (3a) door 2: every row read again under the lock and put through the [`DenyList`], every path it carries as
+//!    door 1 reads them (a node's source, id, path, `data.repo` and `data.worktree`; a job task's data; a decision's
+//!    `paths` and task); a denied node, job task or decision, an edge with a denied end or path, and a denied
+//!    `parsed_file` row are not kept (only their counts are: job tasks and decisions with the nodes);
 //! 4. the backfill in time order: one imported tx per `(time, actor)`, each entity created at its earliest known time
 //!    and each link in the tx where its later end is made; the projects first;
 //! 5. the `tx` and `entity` columns of the kept tables; the compat views; `kv` `schema = 7`, `compat-read = 6`,
@@ -689,7 +691,18 @@ fn is_denied(v: &Verdict) -> bool {
     matches!(v, Verdict::Denied { .. })
 }
 
-/// Door 2 for a node: its source, its id and its `path` (as `data.path`).
+/// Door 2 for a record's `data`, as door 1 reads it: the paths [`DenyList::check_record`] reads (SOURCE's, the
+/// path-form ID's, `data.path`), and `data.repo` and `data.worktree`.
+fn data_denied(deny: &DenyList, source: &Source, id: &str, data: &Map<String, Value>) -> bool {
+    is_denied(&deny.check_record(source, id, &Value::Object(data.clone())))
+        || ["repo", "worktree"].iter().any(|k| {
+            data.get(*k)
+                .and_then(Value::as_str)
+                .is_some_and(|p| is_denied(&deny.check(Path::new(p))))
+        })
+}
+
+/// Door 2 for a node: its source, its id, its `path` (as `data.path`) and its data's paths.
 fn node_denied(deny: &DenyList, n: &OldNode) -> bool {
     let Some(id) = &n.id else { return false };
     let source = match n.source.as_deref() {
@@ -703,7 +716,39 @@ fn node_denied(deny: &DenyList, n: &OldNode) -> bool {
     if let Some(p) = &n.path {
         data.insert("path".into(), Value::String(p.clone()));
     }
-    is_denied(&deny.check_record(&source, id, &Value::Object(data)))
+    data_denied(deny, &source, id, &data)
+}
+
+/// Door 2 for a job task: its data's paths.
+fn jtask_denied(deny: &DenyList, t: &OldJTask) -> bool {
+    let id = format!("task:{}", t.id.as_deref().unwrap_or(""));
+    data_denied(deny, &Source::Recorded, &id, &object(t.data.as_deref()))
+}
+
+/// The paths a decision's free-text `paths` names: each word (split at white space, `,` and `;`, quotes and
+/// brackets trimmed) that is absolute, or `~/…` under HOME. A relative word names no path that can be checked.
+fn named_paths(home: &Path, text: &str) -> Vec<PathBuf> {
+    text.split(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        .map(|w| w.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | '[' | ']' | '(' | ')')))
+        .filter_map(|w| match w.strip_prefix("~/") {
+            Some(rest) => Some(home.join(rest)),
+            None if w.starts_with('/') => Some(PathBuf::from(w)),
+            None => None,
+        })
+        .collect()
+}
+
+/// Door 2 for a decision: the paths its `paths` names and its task's id.
+fn decision_denied(deny: &DenyList, home: &Path, d: &OldDecision) -> bool {
+    let named = d
+        .paths
+        .as_deref()
+        .map(|t| named_paths(home, t))
+        .unwrap_or_default();
+    named.iter().any(|p| is_denied(&deny.check(p)))
+        || d.task
+            .as_deref()
+            .is_some_and(|t| is_denied(&deny.check_record(&Source::Recorded, t, &json!({}))))
 }
 
 /// The folder whose project an entity of a node belongs to: `data.repo`, else a commit's or branch's own path,
@@ -937,7 +982,7 @@ fn migrate(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> Result<Mig
         ..MigrateReport::default()
     };
     let out = hook(path, "begin").and_then(|()| {
-        fill(conn, path, &deny, &mut cache, &mut report)?;
+        fill(conn, path, &deny, &opts.home, &mut cache, &mut report)?;
         report.ms = started.elapsed().as_secs_f64() * 1000.0;
         report.at = unix_now();
         if report.denied_nodes + report.denied_edges + report.denied_files > 0 {
@@ -979,6 +1024,7 @@ fn fill(
     conn: &mut Connection,
     path: &Path,
     deny: &DenyList,
+    home: &Path,
     cache: &mut ProjectCache,
     report: &mut MigrateReport,
 ) -> Result<(), Stop> {
@@ -1003,6 +1049,24 @@ fn fill(
             report.denied_nodes += 1;
         }
     }
+    // Job tasks and decisions carry paths too; a denied one is counted with the nodes.
+    let (jtasks_in, decisions_in) = (jtasks.len() as u64, decisions.len() as u64);
+    let jtasks: Vec<OldJTask> = jtasks
+        .into_iter()
+        .filter(|t| {
+            let out = jtask_denied(deny, t);
+            report.denied_nodes += u64::from(out);
+            !out
+        })
+        .collect();
+    let decisions: Vec<OldDecision> = decisions
+        .into_iter()
+        .filter(|d| {
+            let out = decision_denied(deny, home, d);
+            report.denied_nodes += u64::from(out);
+            !out
+        })
+        .collect();
     let files: Vec<String> = {
         let mut stmt = conn.prepare("select cast(path as text) from parsed_file")?;
         let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
@@ -1453,12 +1517,9 @@ fn fill(
     let mut tables = BTreeMap::new();
     tables.insert("node".to_string(), (nodes.len() as u64, nodes_out));
     tables.insert("edge".to_string(), (edges.len() as u64, edges_out));
-    tables.insert("jtask".to_string(), (jtasks.len() as u64, jtasks_out));
+    tables.insert("jtask".to_string(), (jtasks_in, jtasks_out));
     tables.insert("jdep".to_string(), (jdeps.len() as u64, jdeps_out));
-    tables.insert(
-        "decision".to_string(),
-        (decisions.len() as u64, decisions_out),
-    );
+    tables.insert("decision".to_string(), (decisions_in, decisions_out));
     tables.insert(
         "file".to_string(),
         (files_in, files_in - report.denied_files),

@@ -287,9 +287,16 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
   from their files. With `with_activity`: `inferred` entities and `session` entities, `touched` links and
   `link_stat.jsonl`.
 - **`allow`** (door 5 for export, door 2 for import) is asked for every entity; a refused one leaves no line, no
-  history, and no link to it.
+  history, and no link to it. On export it is asked for the entities not exported too (parsed, retired), and the
+  tx log leaves out every tx that wrote a version of a refused entity or a link at one, so its note never leaves.
 - **No half exports.** The files are written into `dir.tmp` and renamed; a failure or panic removes `dir.tmp`, and an
-  earlier export at `dir` stays until the new one replaces it. `<data>/export/` is made 0700.
+  earlier export at `dir` stays until the new one replaces it. The folders an export makes are 0700; an existing
+  parent keeps its mode.
+- **Only an export is replaced.** `dir`, `dir.tmp` and `dir.old` must each be missing or a folder holding only an
+  export's files (`entities.jsonl`, `links.jsonl`, `tx.jsonl`, `history.jsonl`, `link_stat.jsonl`); a file, a link
+  or a folder with anything else (`--out` naming a repository) is refused before a file is written. Backups write a
+  fixed file under `<data>/backup/`, and import and the 6 → 7 copy only read or add, so no other path replaces a
+  folder.
 - **Import** is idempotent by `id` and `ver`: a record present at that version or later is skipped; an older one is
   updated (the old row goes to `entity_hist`); an absent one is created at the record's `ver`. One tx per 500
   records (`actor` and `tool` `import`, class `system`, `imported = 0`: real versions). A different kind under an
@@ -313,7 +320,10 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
      without the tombstoned tokens of every old version (see "Search").
   3. **Vectors.** The `entity_vec` row is deleted; the embedder makes it again.
   4. **`tx` rows.** `answer` and `note`, where set, become the marker for every tx that wrote a version of an excised
-     entity (an entity target), or wrote a blanked version (a tx target), and for the target tx. A repeat of a keyed
+     entity (an entity target), or wrote a blanked version (a tx target), and for the target tx. So do the txs that
+     name the target without versioning it: a tx that wrote a link at an excised entity, the txs of the events,
+     notices and cards a blanker blanks as about it (`Blanker::txs_about`), and every tx whose answer or note holds
+     one of the needles (a keyed `task_write` that echoed the target while versioning another). A repeat of a keyed
      request answers `Refused("this answer was excised; read the entity")`, never the old text.
   5. **Blankers.** Each `Blanker` (norn's: events, messages, cards) gets `Excised { entities, txs, marker }` and
      blanks its copies in the same tx; a blanker's error fails the whole excise.
@@ -331,9 +341,9 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
   `store restore-pre7` moved aside, and every file under `<data>/export/`; `holding(files, needles)`
   is the byte search over them (a file that cannot be read is listed). `redact(path, needles, marker)` rewrites a
   file (a session transcript) without the needles, through a `.tmp` and a rename, keeping its mode.
-- **Limits.** `link.data`, entity ids and `source` are not blanked. A tx that did not write the target but quoted it
-  in its answer or note keeps it; its notices and cards are the blankers'. A tx target finds its versions with a
-  scan of `entity_hist` by `tx_from` (no index; excise is rare).
+- **Limits.** `link.data`, entity ids and `source` are not blanked. A tx that quoted a value shorter than
+  `MIN_NEEDLE` without naming the target otherwise keeps it. A tx target finds its versions with a scan of
+  `entity_hist` by `tx_from`, and the needle search scans every tx's answer and note (no index; excise is rare).
 
 ## The deny-list (Task 9)
 
@@ -396,7 +406,9 @@ the store; `core/drgnx-store-privacy.el` holds the user's commands that write th
   warnings). Only `apply` writes that key (a test reads the sources); the `privacy:` key guard (`privacy::register`,
   called by `grants::register`) refuses every class but the user's.
 - **What the list now denies goes.** Every entity one of whose absolute paths (`deny::paths_of`) the list denies is
-  retired with its current links (one tx), then excised entity by entity (`excise::FIELDS`, reason "personal-file
+  retired with its current links (one tx, which reads the applied state and the denied entities itself, inside the
+  writer: a write queued before it is seen, so nothing it stored with the old list stays; when nothing is denied
+  the tx is rolled back and writes no row), then excised entity by entity (`excise::FIELDS`, reason "personal-file
   opt-in revoked", `write::blankers()`), its source's `parsed_file` row forgotten (so a later opt-in is read
   again), then the applied state and the notice are written (one tx), then `scrub`; the report lists the copies
   that still hold an excised value (`excise::holding`): `backups_holding` (`deletable_copies`: `backup/`,
@@ -535,9 +547,11 @@ looked at again at the next tick; nothing was done.
    never removed.
 2. One `BEGIN IMMEDIATE` transaction holds every step below; a crash or an error rolls all of it back, so the file is
    schema 6 or schema 7, never between (`interrupted_migration_leaves_schema_6` kills a child mid-way).
-3. The schema-6 rows are read again under the lock. **3a, the door:** a node whose source or path the deny-list
-   denies (everything under `~/org` but the board; `Source::parse` failing is denied too), an edge with a denied end
-   or source, and a denied `file` row are not migrated; they are counted.
+3. The schema-6 rows are read again under the lock. **3a, the door:** a node whose source, id, `data.path`,
+   `data.repo` or `data.worktree` the deny-list denies (everything under `~/org` but the board; `Source::parse`
+   failing is denied too), a job task whose data's `path`, `repo` or `worktree` it denies, a decision whose task or `paths` name a
+   denied path (`~/…` and absolute words), an edge with a denied end or source, and a denied `file` row are not
+   migrated; they are counted (`denied_nodes`).
 4. Schema 7's tables (`GRAPH_DDL`); `node`, `edge`, `jtask`, `jdep` and `decision` renamed `old_*`, `file` to
    `parsed_file` and `meta` to `kv`, with read-only views `file` and `meta` over them.
 5. History in time order: one imported transaction (`tx.imported = 1`, tool `import`, class `system` or `agent`,
@@ -582,7 +596,9 @@ transactions and the time. Never a path of the user's content, a title or a body
 
 The tracker scan reads plans, specs, ledgers and git; what it finds reaches the graph through two front methods
 (`norn/src/parsed.rs`, `drgnx-ratatoskr/src/graph.rs`; class `user`, hub.md's table). Each is one request of the
-graph writer, with the deny-list in force at the call.
+graph writer, with the deny-list in force when the writer runs it: the list is read inside the writer's closure,
+after the git resolution, so a revoke or deny entry applied meanwhile (whose `apply` the writer runs first, or
+after) is never undone by a write that checked the older list.
 
 **`graph/put-parsed`** `{root?, sources?, gone?, updates?, collected?}` → `{changed, retired, refused}`:
 

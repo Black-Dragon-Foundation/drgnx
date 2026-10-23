@@ -1,5 +1,6 @@
 //! JSONL export and idempotent import (Task 7; storage §8.2). The caller's ALLOW filters every entity (norn's
-//! deny-list: door 5 for export, door 2 for import).
+//! deny-list: door 5 for export, door 2 for import), and on export the tx log: a tx that wrote a version of an entity
+//! ALLOW refuses, or a link at one, leaves no line.
 //!
 //! An export directory holds `entities.jsonl` and `links.jsonl` (current state: one object per line, sorted by id,
 //! keys in a fixed order, no database-local numbers), `tx.jsonl` (append-only; `since` limits it), and on request
@@ -7,9 +8,10 @@
 //! parsed entities are rebuilt from their files and inferred rows are activity (with `kind = "session"` entities and
 //! `touched` links).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -17,7 +19,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::backup::{private_dir, tmp_of};
+use super::backup::tmp_of;
 use super::entity::{self, COLS, Ent, EntityNew, Origin, from_row};
 use super::guard;
 use super::link;
@@ -215,6 +217,44 @@ fn json_text(text: Option<String>) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// The files an export directory holds.
+const EXPORT_FILES: [&str; 5] = [
+    "entities.jsonl",
+    "links.jsonl",
+    "tx.jsonl",
+    "history.jsonl",
+    "link_stat.jsonl",
+];
+
+/// Whether an export may replace or remove PATH (DIR, `DIR.tmp` or `DIR.old`): when nothing is there, or a folder
+/// (not a link) that holds only an export's files (an earlier export, a crashed one's `.tmp`, an empty folder).
+/// Anything else is refused: an export never deletes what it did not write.
+fn replaceable(path: &Path) -> Result<(), String> {
+    let refuse = |why: String| {
+        Err(format!(
+            "{} {why}: an export replaces only an earlier export; name a new or an empty folder",
+            path.display()
+        ))
+    };
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Ok(m) if !m.is_dir() => return refuse("is not a folder".into()),
+        Ok(_) => {}
+    }
+    let entries = std::fs::read_dir(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", path.display()))?;
+        let name = entry.file_name();
+        let ours = name.to_str().is_some_and(|n| EXPORT_FILES.contains(&n))
+            && entry.file_type().is_ok_and(|t| t.is_file());
+        if !ours {
+            return refuse(format!("holds {}", name.to_string_lossy()));
+        }
+    }
+    Ok(())
+}
+
 fn export_sync(
     conn: &rusqlite::Connection,
     dir: &Path,
@@ -223,12 +263,28 @@ fn export_sync(
 ) -> Result<Report, String> {
     let io = |e: std::io::Error| e.to_string();
     let sql = |e: rusqlite::Error| e.to_string();
-    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
-        private_dir(parent).map_err(io)?;
-    }
     let tmp = tmp_of(dir);
+    let old = {
+        let mut name = dir.file_name().unwrap_or_default().to_os_string();
+        name.push(".old");
+        dir.with_file_name(name)
+    };
+    for path in [dir, &tmp, &old] {
+        replaceable(path)?;
+    }
+    // Only the folders made here are made private: an existing parent keeps its mode.
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(io)?;
+    }
     let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir(&tmp).map_err(io)?;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&tmp)
+        .map_err(io)?;
     let mut scratch = Scratch {
         path: tmp.clone(),
         armed: true,
@@ -250,18 +306,21 @@ fn export_sync(
 
     // Entities, sorted by id; the allowed ones give the ids links and history refer to.
     let mut ids: HashMap<i64, String> = HashMap::new();
+    let mut refused: Vec<i64> = Vec::new();
     let mut ents = Lines::create(&tmp, "entities.jsonl").map_err(io)?;
+    let exported =
+        format!("retired_tx is null and (origin in ('recorded', 'imported'){ent_extra})");
     {
         let mut stmt = read
             .prepare(&format!(
-                "select {COLS} from entity where retired_tx is null \
-                 and (origin in ('recorded', 'imported'){ent_extra}) order by id"
+                "select {COLS} from entity where {exported} order by id"
             ))
             .map_err(sql)?;
         for ent in stmt.query_map([], from_row).map_err(sql)? {
             let ent = ent.map_err(sql)?;
             if !allow(&ent) {
                 report.skipped += 1;
+                refused.push(ent.n);
                 continue;
             }
             ents.put(&EntLine::of(&ent))?;
@@ -269,6 +328,37 @@ fn export_sync(
         }
     }
     report.entities = ents.finish()?;
+    // ALLOW is asked for the entities not exported too (parsed, retired): what it refuses keeps its txs out below.
+    {
+        let mut stmt = read
+            .prepare(&format!("select {COLS} from entity where not ({exported})"))
+            .map_err(sql)?;
+        for ent in stmt.query_map([], from_row).map_err(sql)? {
+            let ent = ent.map_err(sql)?;
+            if !allow(&ent) {
+                refused.push(ent.n);
+            }
+        }
+    }
+    // The txs that wrote a version of a refused entity, or a link at one: their notes may quote it (door 5).
+    let mut hidden: HashSet<i64> = HashSet::new();
+    {
+        let mut stmt = read
+            .prepare(&format!(
+                "select created_tx from entity where n = ?1 union select updated_tx from entity where n = ?1 \
+                 union select retired_tx from entity where n = ?1 and retired_tx is not null \
+                 union select tx_from from entity_hist where n = ?1 \
+                 union select tx_from from link where src = ?1 union select tx_from from link where dst = ?1 \
+                 union select tx_to from link where src = ?1 and tx_to <> {SENTINEL} \
+                 union select tx_to from link where dst = ?1 and tx_to <> {SENTINEL}"
+            ))
+            .map_err(sql)?;
+        for n in &refused {
+            for t in stmt.query_map([n], |r| r.get::<_, i64>(0)).map_err(sql)? {
+                hidden.insert(t.map_err(sql)?);
+            }
+        }
+    }
 
     // Links between exported entities, sorted by (src, kind, dst).
     let mut links: Vec<LinkLine> = Vec::new();
@@ -345,7 +435,11 @@ fn export_sync(
             })
             .map_err(sql)?;
         for row in rows {
-            out.put(&row.map_err(sql)?)?;
+            let row = row.map_err(sql)?;
+            if hidden.contains(&row.id) {
+                continue;
+            }
+            out.put(&row)?;
         }
     }
     report.txs = out.finish()?;
@@ -426,11 +520,6 @@ fn export_sync(
     drop(read);
 
     // Swap the finished directory in; an older export moves aside first and goes after.
-    let old = {
-        let mut name = dir.file_name().unwrap_or_default().to_os_string();
-        name.push(".old");
-        dir.with_file_name(name)
-    };
     let _ = std::fs::remove_dir_all(&old);
     let had = dir.exists();
     if had {
@@ -449,7 +538,8 @@ fn export_sync(
     Ok(report)
 }
 
-/// Export into DIR (through `DIR.tmp`, then renamed; `<data>/export/` made 0700).
+/// Export into DIR (through `DIR.tmp`, then renamed; the folders it makes are 0700). DIR, `DIR.tmp` and `DIR.old`
+/// must each be missing or hold only an export's files: anything else is refused before a file is written.
 pub async fn export(pool: &ReadPool, dir: PathBuf, opts: Opts, allow: Allow) -> Report {
     let target = dir.clone();
     let done = pool
@@ -973,6 +1063,54 @@ mod tests {
         assert_eq!(r.links, 1, "the link to the denied entity is dropped");
     }
 
+    /// Door 5 covers the tx log: a tx that wrote a version of an entity ALLOW refuses leaves no line, so its note
+    /// never leaves the store; the other txs stay.
+    #[tokio::test]
+    async fn allow_filters_the_tx_log() {
+        let d = db();
+        let (a, _, c) = seed(&d).await;
+        // A parsed entity is never exported, but ALLOW is asked for it too.
+        let q = put(&d.h, "spec:q", "spec", "parsed q", Origin::Parsed).await;
+        for (n, note) in [
+            (c, "why: CANARY-door5-tx-note"),
+            (q, "why: CANARY-door5-parsed"),
+            (a, "a note about task a"),
+        ] {
+            let mut noted = meta();
+            noted.note = Some(note.into());
+            d.h.write(noted, move |tx| {
+                entity::update(
+                    tx,
+                    n,
+                    None,
+                    Changes {
+                        body: Some(Some("changed".into())),
+                        ..Changes::default()
+                    },
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+        let deny: Allow = Arc::new(|e| e.id != "note:c" && e.id != "spec:q");
+        let dir = d.root.join("export").join("e");
+        let r = export(&d.pool, dir.clone(), Opts::default(), deny).await;
+        assert_eq!(r.error, None);
+        let txs = lines(&dir, "tx.jsonl");
+        assert!(
+            !txs.iter().any(|l| l.contains("CANARY-door5")),
+            "the denied entity's tx note left the store"
+        );
+        assert!(txs.iter().any(|l| l.contains("a note about task a")));
+        assert_eq!(r.txs, txs.len() as u64);
+        // Unfiltered, every tx is there.
+        let all_dir = d.root.join("export").join("all");
+        let r = export(&d.pool, all_dir.clone(), Opts::default(), all()).await;
+        assert!(lines(&all_dir, "tx.jsonl").len() > txs.len());
+        assert_eq!(r.error, None);
+    }
+
     #[tokio::test]
     async fn a_crash_leaves_no_half_export() {
         let d = db();
@@ -1007,6 +1145,61 @@ mod tests {
         let r = export(&d.pool, fresh.clone(), Opts::default(), boom).await;
         assert!(r.error.is_some());
         assert!(!fresh.exists() && !tmp_of(&fresh).exists());
+    }
+
+    /// `--out` naming a folder of the user's (a repository) costs nothing: refused before anything is written, and
+    /// an existing parent keeps its mode. The same holds for `DIR.tmp` and `DIR.old`.
+    #[tokio::test]
+    async fn an_export_never_replaces_what_it_did_not_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = db();
+        seed(&d).await;
+        let work = d.root.join("work");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repo = work.join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("README.md"), "mine").unwrap();
+        std::fs::write(repo.join("entities.jsonl"), "not an export's alone").unwrap();
+        let r = export(&d.pool, repo.clone(), Opts::default(), all()).await;
+        let e = r.error.expect("refused");
+        assert!(e.contains("replaces only an earlier export"), "{e}");
+        assert_eq!(
+            std::fs::read_to_string(repo.join("README.md")).unwrap(),
+            "mine"
+        );
+        assert!(repo.join("src").is_dir());
+        assert!(!tmp_of(&repo).exists() && !work.join("repo.old").exists());
+        let mode = std::fs::metadata(&work).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "an existing parent keeps its mode");
+        // A file at DIR, and foreign files at DIR.tmp or DIR.old, are refused alike.
+        std::fs::write(work.join("plain"), "mine").unwrap();
+        for (name, side) in [("t", "t.tmp"), ("o", "o.old")] {
+            std::fs::create_dir(work.join(side)).unwrap();
+            std::fs::write(work.join(side).join("keep"), "mine").unwrap();
+            let r = export(&d.pool, work.join(name), Opts::default(), all()).await;
+            assert!(r.error.is_some(), "{side}");
+            assert!(work.join(side).join("keep").exists(), "{side}");
+            assert!(!work.join(name).exists(), "{side}");
+        }
+        let r = export(&d.pool, work.join("plain"), Opts::default(), all()).await;
+        let e = r.error.expect("a file is refused");
+        assert!(e.contains("is not a folder"), "{e}");
+        assert_eq!(std::fs::read_to_string(work.join("plain")).unwrap(), "mine");
+        // An empty folder and an earlier export are replaced; the export's own folder is 0700.
+        let fresh = work.join("fresh");
+        std::fs::create_dir(&fresh).unwrap();
+        for _ in 0..2 {
+            let r = export(&d.pool, fresh.clone(), Opts::default(), all()).await;
+            assert_eq!(r.error, None);
+        }
+        assert_eq!(lines(&fresh, "entities.jsonl").len(), 3);
+        let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        assert_eq!(
+            std::fs::metadata(&work).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
     }
 
     async fn ents_of(d: &Db) -> Vec<(String, String, Option<String>, Value, i64)> {

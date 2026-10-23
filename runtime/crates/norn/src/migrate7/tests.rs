@@ -1061,6 +1061,57 @@ fn an_edge_whose_own_source_is_denied_is_not_migrated() {
     );
 }
 
+/// Door 2 reads every path a schema-6 row carries, as door 1 does: a node's `data.repo` and `data.worktree`, a
+/// decision's `paths` (absolute, or `~/…` under HOME; relative words are no path) and its task's id, a job task's
+/// `data`. What one of them denies is not migrated.
+#[test]
+fn door_2_reads_every_path_a_row_carries() {
+    let fx = empty_fx();
+    fs::create_dir_all(fx.home.join("org")).unwrap();
+    fs::write(fx.home.join("org/notes.org"), "* a note\n").unwrap();
+    let h = fx.home.display().to_string();
+    let c = Connection::open(&fx.db).unwrap();
+    c.execute_batch(DDL6).unwrap();
+    c.execute_batch(&format!(
+        r#"insert into node (id, kind, title, path, line, status, parent, ord, source, data, updated) values
+             ('commit:aaaa1111', 'commit', 'C-repo', null, null, null, null, null, 'commit', '{{"repo": "{h}/org"}}', 1.0),
+             ('branch:b1', 'branch', 'B-tree', null, null, null, null, null, 'branch', '{{"worktree": "{h}/org/wt"}}', 1.0),
+             ('commit:bbbb2222', 'commit', 'C-kept', null, null, null, null, null, 'commit', '{{"repo": "{h}/w"}}', 1.0);
+           insert into decision (kind, subject, task, paths, reason, author, status, replaces, at, ver, job) values
+             ('ruling', 'D-abs', null, '{h}/org/notes.org', 'r', 'user', 'current', null, 1.0, 1, null),
+             ('ruling', 'D-tilde', null, 'src/a.rs, ~/org/notes.org', 'r', 'user', 'current', null, 1.0, 2, null),
+             ('ruling', 'D-task', 'task:{h}/org/plans/x.md#1', null, 'r', 'user', 'current', null, 1.0, 3, null),
+             ('ruling', 'D-semi', null, 'src/a.rs;~/org/notes.org', 'r', 'user', 'current', null, 1.0, 5, null),
+             ('ruling', 'D-comma', null, 'src/a.rs,~/org/notes.org', 'r', 'user', 'current', null, 1.0, 6, null),
+             ('ruling', 'D-kept', null, 'src/a.rs ["{h}/w/b.rs"] ~/w/c.rs', 'r', 'user', 'current', null, 1.0, 4, null);
+           insert into job (id, title, plan, repo, status, created, data) values ('j1', 'J', null, '{h}/w', 'running', 1.0, null);
+           insert into jtask (id, job, n, title, role, status, agent, lease_until, data) values
+             ('j1#1', 'j1', 1, 'T-tree', 'worker', 'ready', null, null, '{{"worktree": "{h}/org/wt"}}'),
+             ('j1#2', 'j1', 2, 'T-path', 'worker', 'ready', null, null, '{{"path": "{h}/org/notes.org"}}'),
+             ('j1#3', 'j1', 3, 'T-kept', 'worker', 'ready', null, null, '{{"worktree": "{h}/w/wt"}}');"#
+    ))
+    .unwrap();
+    drop(c);
+    let mut c = writer_conn(&fx.db);
+    let report = run(&mut c, &fx.db, &fx.opts).unwrap();
+    assert_eq!(
+        rows(
+            &c,
+            "select title from entity where kind in ('commit', 'branch', 'decision', 'task') order by title"
+        ),
+        vec![
+            vec![json!("C-kept")],
+            vec![json!("D-kept")],
+            vec![json!("T-kept")]
+        ]
+    );
+    assert_eq!(
+        report.denied_nodes, 9,
+        "two nodes, five decisions, two job tasks"
+    );
+    assert!(!file_has(&fx.db, b"notes.org"));
+}
+
 #[test]
 fn the_spec_form_is_denied() {
     let (fx, c, report) = migrated();

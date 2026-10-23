@@ -213,7 +213,8 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 - **Every other way in is checked too.** Importing an export (`graph/import`) drops a record that names a denied
   path or has a source form it cannot read; a store from before schema 7 loses such rows when it is upgraded
   (its pre-upgrade backup keeps them, and `drgnx doctor` lists that backup); and an export (`graph/export`) checks
-  every record again, so a path you add to your deny list never leaves in a later export. A test plants random
+  every record again, so a path you add to your deny list never leaves in a later export, nor do the notes of the
+  changes that wrote such a record. A test plants random
   bytes in fixture notes and checks that none of them reaches the store, its write-ahead log, the code index, an
   export, the embedding provider or the hub's log; the hub never writes a file under `~/org`.
 
@@ -285,7 +286,7 @@ The store keeps every version of what is written into it. When a secret or a per
 
 - Excising a task, note or other entry replaces its title, text and data (or the fields you name) with
   `[excised <n>]` in every version it ever had, in the search index, in its embedding, in the stored replies and
-  notes of the changes that wrote it, and in the notices and cards that quoted it. Excising one change does the
+  notes of the changes that wrote it, linked it or quoted it, and in the notices and cards that quoted it. Excising one change does the
   same for what that change wrote. The history still shows that something changed, and who changed it.
 - Then the store file is compacted, so the old bytes leave the file and its write-ahead log. If a drgnx editor still
   has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
