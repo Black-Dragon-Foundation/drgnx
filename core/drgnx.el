@@ -37,6 +37,7 @@
 (require 'drgnx-settings-migrate)
 (require 'drgnx-settings-apply)
 (require 'drgnx-settings-prov)
+(require 'drgnx-settings-mode)            ; language overrides (L1): on change-major-mode-after-body-hook once loaded
 (require 'drgnx-user-lisp)
 (require 'drgnx-settings-live)
 (require 'drgnx-lisp-index)
