@@ -41,7 +41,7 @@ const GIT_ENV: [&str; 6] = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDI
 
 /// git ARGS in DIR, blocking: its whole output, or `None` when git is not the trusted one, fails, or takes over
 /// [`GIT_TIMEOUT`] (it is killed). `draugr::git`'s overrides, no terminal, stdin closed, a minimal environment.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
     use draugr::git::{GitCall, Place, command, git_program};
     let program = git_program().ok()?;
     let (argv, extra) = command(&GitCall {

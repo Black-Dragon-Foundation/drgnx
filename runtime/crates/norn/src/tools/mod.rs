@@ -80,6 +80,8 @@ pub struct Coord {
     rates: Mutex<guard::Rates>,
     clock: Clock,
     graph: Option<GraphStore>,
+    /// The folders tool callers work in, resolved to projects (Task 14: [`tracker::caller_of`]).
+    projects: Mutex<crate::project::ProjectCache>,
 }
 
 /// The graph store the schema-7 tools read and write through (the Urdr plan): set by the hub once its writer is
@@ -109,7 +111,13 @@ impl Coord {
             rates: Mutex::default(),
             clock,
             graph: None,
+            projects: Mutex::default(),
         }
+    }
+
+    /// The folders resolved to projects so far.
+    pub fn projects(&self) -> &Mutex<crate::project::ProjectCache> {
+        &self.projects
     }
 
     /// This `Coord` with the graph store G.

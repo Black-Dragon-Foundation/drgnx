@@ -123,7 +123,7 @@ async fn call_on(coord: &Arc<Coord>, who: &Identity, name: &str, args: Value) ->
     }
     let ctx = (coord.clone(), who.clone());
     match tool.call(&ctx, args).await {
-        ToolResult::Ok { text, .. } => (false, text),
+        ToolResult::Ok { text, .. } | ToolResult::Rich { text, .. } => (false, text),
         ToolResult::Err(text) => (true, text),
     }
 }

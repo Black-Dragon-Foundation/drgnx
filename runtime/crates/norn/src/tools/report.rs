@@ -29,9 +29,15 @@ use crate::write::tasks::set_status;
 
 /// This file's tools.
 pub fn tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
+    tools_for(true)
+}
+
+/// This file's tools for a session with the tracker tools ON or off: `hello` keeps its first text item and adds the
+/// brief (with no tracker tool named and no tasks when off).
+pub fn tools_for(tracker: bool) -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     vec![
         guarded(ListAgents),
-        guarded(Hello),
+        super::tracker::with_brief(guarded(Hello), tracker),
         guarded(ReportEdit),
         guarded(ReportTest),
         guarded(AskUser),

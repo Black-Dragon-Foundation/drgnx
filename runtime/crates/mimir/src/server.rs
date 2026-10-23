@@ -401,6 +401,23 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
                 }
                 Ok(result)
             }
+            Ok(ToolResult::Rich {
+                text,
+                structured,
+                content,
+                meta,
+            }) => {
+                let mut items = vec![json!({"type": "text", "text": text})];
+                items.extend(content);
+                let mut result = json!({ "content": items });
+                if structured_allowed && let Some(s) = structured {
+                    result["structuredContent"] = s;
+                }
+                if let Some(m) = meta {
+                    result["_meta"] = m;
+                }
+                Ok(result)
+            }
             Ok(ToolResult::Err(text)) => Ok(json!({
                 "content": [{"type": "text", "text": text}],
                 "isError": true,
