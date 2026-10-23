@@ -75,6 +75,15 @@ jobs:
           path: runtime/target/debug/ratatoskr
           if-no-files-found: error
           retention-days: 7
+      # huginn's dump example: ci.yml's emacs-31 job runs the editor's differential test (drgnx-huginn/differential-fresh-seed)
+      # against it (DRGNX_HUGINN_DUMP): Emacs's reader and huginn's read a fresh seed of random data and must agree
+      - run: cargo build --locked -p huginn --example dump
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: huginn-dump
+          path: runtime/target/debug/examples/dump
+          if-no-files-found: error
+          retention-days: 7
       # gleipnir's test hooks (landlock_omit, abi_cap) must never be on in a build without --features (review M5).
       # The inverted form: the forward `cargo tree` does not show gleipnir's feature even when it is on (Task 0).
       # `shell: bash` adds pipefail (a failed `cargo tree` fails the step), and the tree must name gleipnir at all, so
@@ -238,9 +247,9 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup target add aarch64-linux-android
-      - run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr
+      - run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
-      - run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -- -D warnings
+      - run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p huginn -- -D warnings
 
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
@@ -264,7 +273,7 @@ jobs:
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
   # a pull request runs none. A crash uploads its input.
   fuzz:
-    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec)
+    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, huginn_read)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -297,7 +306,7 @@ jobs:
         run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
       - name: Run each target
         run: |
-          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec; do
+          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec huginn_read; do
             echo "::group::$target ($FUZZ_SECONDS s)"
             cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS"
             echo "::endgroup::"
@@ -387,4 +396,4 @@ jobs:
       # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
       - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p huginn -- -D warnings

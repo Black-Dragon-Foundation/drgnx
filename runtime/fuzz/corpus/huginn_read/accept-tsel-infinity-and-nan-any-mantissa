@@ -1,0 +1,11 @@
+2.0e+INF
+1.5e+INF
+-2.5e+INF
+1e+INF
+.5e+INF
+1.e+INF
+3.0e+NaN
+-2.0e+NaN
+12.34e+NaN
+1e+NaN
+1.0E+INF

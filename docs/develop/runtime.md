@@ -515,9 +515,11 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `sbpl_quote` | text through `sbpl::quote`; a success must read back through `sbpl::sexp` as one string equal to the input |
 | `bwrap_version` | text as `bwrap --version` output through `parse_version` and `version_at_floor` |
 | `inner_spec` | bytes decoded as the helper's `InnerSpec` (`deny_unknown_fields`); a success must re-encode and decode to the same value |
+| `huginn_read` | bytes through `huginn::read::read_all` under the default limits and under tight ones (512 bytes, depth 6): no panic; a refusal's span inside the input; every node's span inside its parent's, on character boundaries; nesting within the limit; the source of each top-level datum reads alone to the same datum |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1) and the unit tables
-(gleipnir's targets). A run adds files to the
+(gleipnir's targets); for `huginn_read` it is huginn's hand corpus (`test/fixtures/huginn/corpus/`, copied as
+`accept-NAME` and `refuse-NAME`). A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.
 
 Local run (keep the toolchain and the crate cache out of `~`: point `RUSTUP_HOME` and `CARGO_HOME` at a scratch

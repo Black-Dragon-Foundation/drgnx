@@ -1,0 +1,4 @@
+#24r1k
+#2r1010
+#36rZZ
+#xDEADBEEF

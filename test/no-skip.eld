@@ -32,6 +32,7 @@
   "drgnx-hub-client/proves-itself-and-is-user"
   "drgnx-hub-client/restart-now-over-ratatoskr"
   "drgnx-hub-client/the-update-notice-offers-restart-now"
+  "drgnx-huginn/differential-fresh-seed"                ; skips without DRGNX_HUGINN_DUMP, which CI's emacs-31 job sets
   "drgnx-job-cli/propose-then-approve-then-status"
   "drgnx-portable/the-pre-commit-hook-knows-the-new-formats"
   "drgnx-search-config/a-fifo-is-refused"

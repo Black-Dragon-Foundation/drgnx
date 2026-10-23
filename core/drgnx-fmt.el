@@ -20,11 +20,16 @@
 (defconst drgnx-fmt-dirs '("core" "wb" "modules" "harness" "test" "init")
   "Where drgnx's Emacs Lisp lives (relative to `drgnx-dir').")
 
+(defconst drgnx-fmt-data-dirs '("test/fixtures/huginn/corpus/")
+  "Folders of .el files that are data, not code (huginn's corpus: cases the reader reads or refuses), never formatted.")
+
 (defun drgnx-fmt-files ()
-  "Every Emacs Lisp file of drgnx."
-  (seq-mapcat (lambda (d) (let ((dir (expand-file-name d drgnx-dir)))
-                            (and (file-directory-p dir) (directory-files-recursively dir "\\.el\\'"))))
-              drgnx-fmt-dirs))
+  "Every Emacs Lisp file of drgnx, except the data in `drgnx-fmt-data-dirs'."
+  (let ((data (mapcar (lambda (d) (expand-file-name d drgnx-dir)) drgnx-fmt-data-dirs)))
+    (seq-remove (lambda (f) (seq-some (lambda (d) (string-prefix-p d f)) data))
+                (seq-mapcat (lambda (d) (let ((dir (expand-file-name d drgnx-dir)))
+                                          (and (file-directory-p dir) (directory-files-recursively dir "\\.el\\'"))))
+                            drgnx-fmt-dirs))))
 
 ;;;; How macros indent
 

@@ -46,7 +46,7 @@ if git diff --cached --name-only | grep -qE "$secret_files"; then
 fi
 
 # Emacs Lisp is formatted (bin/drgnx fmt): the staged content of every added or changed .el file.
-mapfile -t el < <(git diff --cached --name-only --diff-filter=ACMR -- '*.el')
+mapfile -t el < <(git diff --cached --name-only --diff-filter=ACMR -- '*.el' ':!test/fixtures/huginn/corpus')   # the corpus is data, not code
 if [ "${#el[@]}" -gt 0 ]; then
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
   top="$(git rev-parse --show-toplevel)"

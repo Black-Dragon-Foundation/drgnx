@@ -1,0 +1,1 @@
+[["cons",[["sym","a"]],["sym","b"]],["cons",[["sym","a"],["sym","b"]],["sym","c"]],["vec",[["int","1"],["float","2.5"],["str","s"],["sym","sym"],["list",[["sym","n"]]]]],["vec",[]],["list",[["sym","nil"]]]]
