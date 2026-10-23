@@ -5,8 +5,12 @@
 (require 'seq)
 (require 'drgnx-paths)
 
+(defconst drgnx-lint--not-code (list (expand-file-name "test/fixtures/huginn/corpus/" drgnx-dir))
+  "Folders of .el files that are reader test data, not code (the huginn corpus refuses on purpose).")
+
 (defun drgnx-lint--files (&rest dirs)
-  (seq-mapcat (lambda (d) (directory-files-recursively (expand-file-name d drgnx-dir) "\\.el\\'")) dirs))
+  (seq-remove (lambda (f) (seq-some (lambda (d) (string-prefix-p d f)) drgnx-lint--not-code))
+              (seq-mapcat (lambda (d) (directory-files-recursively (expand-file-name d drgnx-dir) "\\.el\\'")) dirs)))
 
 (defun drgnx-lint--forms (file)
   (with-temp-buffer
