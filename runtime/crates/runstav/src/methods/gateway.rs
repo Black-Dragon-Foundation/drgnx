@@ -3,7 +3,7 @@
 //! `work.db`; nothing of it is forwarded to the Lisp backend.  None writes work.db (the engine's spend rows are its
 //! own), so a read-only hub still registers.
 
-use super::method;
+use super::{Empty, method};
 use crate::registry::Method;
 use crate::types::{AgentName, Bounded, Id, ProviderKeys, SessionId, TaskRef, Usd, null_as_empty};
 use crate::url::{ProviderBase, UrlRefusal, provider_base};
@@ -113,6 +113,23 @@ pub struct UnregisterParams {
 #[derive(Deserialize, Serialize, JsonSchema)]
 pub struct KeysParams {
     pub keys: ProviderKeys,
+}
+
+/// The ids of the providers whose key the hub holds, never a key: `gateway/keys-held`'s answer, and the data of the
+/// event `gateway/keys-changed`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeysHeld {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub providers: Vec<Id>,
+}
+
+/// The editor's token (class `editor`: the `/p/PROVIDER/…` paths only) and the loopback URL it is good on.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditorToken {
+    pub token: String,
+    pub url: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -280,6 +297,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "config/providers", ConfigProviders(ProvidersParams) -> ProvidersApplied,
             classes: [User], writes: false, home: Front,
             doc: "the gateway's provider table (no keys), replaced; a keyed provider over clear text is warned about",
+        ),
+        method!(
+            "gateway/editor-token", GatewayEditorToken(Empty) -> EditorToken,
+            classes: [User], writes: false, home: Front,
+            doc: "the caller's editor token (loopback only, the /p/PROVIDER/… paths; one per owner, kept across a restart)",
+        ),
+        method!(
+            "gateway/keys-held", GatewayKeysHeld(Empty) -> KeysHeld,
+            classes: [User], writes: false, home: Front,
+            doc: "the providers whose key the hub holds (ids only)",
         ),
     ]
 }

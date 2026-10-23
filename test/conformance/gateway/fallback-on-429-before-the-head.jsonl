@@ -1,0 +1,22 @@
+{"scenario": "gateway/fallback-on-429-before-the-head", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: provider A answers 429 and B 200. The agent gets B's answer, a subscriber sees exactly one fallback event (from a to b, why HTTP 429) and the work store has one spend row, B's."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock_a", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages-429.json", "--log", "$ROOT/a.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port_a"}}
+{"do": "spawn", "capture": "mock_b", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/b.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port_b"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port_a", "auth": "none", "messages": true, "caps": ["chat"]}, {"id": "b", "kind": "anthropic", "base": "http://127.0.0.1:$port_b", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null], ["b", null]], "agent": "a1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "c", "json": {"event": "fallback", "data": {"agent": "a1", "from": "a", "to": "b", "why": "HTTP 429"}}}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"agent": "a1", "provider": "b", "status": 200}}}
+{"do": "sql_expect", "sql": "select provider, agent, status, input, output from spend", "rows": [["b", "a1", 200, 10, 2]]}
+{"do": "file", "path": "$ROOT/a.log", "contains": "\"request\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/b.log", "contains": "\"request\"", "count": 1, "at_most": 1}

@@ -98,17 +98,59 @@ shorthands come back, without reopening them.
   held only in its memory: never in a file, its database, its log, an environment or a command line, and never
   passed to the Lisp hub behind it. Agents get a token instead, which works only for them and only on the hub's own
   port or their session's socket; the hub keeps a hash of it, never the token. `ratatoskr doctor` names the providers
-  whose key the hub holds, never a key. A restarted hub has no key until your editor connects again.
+  whose key the hub holds, never a key. A restarted hub has no key until your editor connects again; when it asks
+  for one, the editor reads the provider's environment variable again and never prompts (no Keychain, no `.gpg`
+  file), else it tells you to run AI: Load Keys. The provider list the editor sends the hub (and again when ai.eld
+  changes) holds no key. The Lisp hub behind Ratatoskr registers its agents through Ratatoskr, without keys.
 - **The hub is not dumpable.** Another program running as you (an agent outside a sandbox, a debugger) cannot read
   the hub's memory, and so your keys, with `ptrace` or `/proc/PID/mem`, and the hub writes no core file. This does
-  not stop root, or a program given the `CAP_SYS_PTRACE` capability. `ratatoskr stop` signals only the process that
+  not stop root, or a program given the `CAP_SYS_PTRACE` capability. A hub that cannot protect itself this way (on
+  macOS, one started under a debugger) takes no key at all: `ratatoskr doctor` and `ratatoskr status` print "keys:
+  refused, this hub cannot protect keys" with the reason; restart the hub outside the debugger. `ratatoskr stop` signals only the process that
   is actually listening on the hub's socket, asked of the system (on Linux through a pidfd, which cannot hit a reused
   pid), never a process named by a file or a command line: a program that calls itself `ratatoskr` is never stopped
   by mistake.
 - **Providers over plain http.** A provider's URL is `https`, or `http` for any host. A provider that takes a key
   at an `http` address off this machine (a server on your LAN) still works, but its key travels in clear text: the
-  hub warns you when the provider list is applied, in its log once, and in `ratatoskr doctor`. Use `https` for it.
+  hub warns you when the provider list is applied, in its log once, and in `ratatoskr doctor`, and your editor shows
+  it once per provider each time it starts. Use `https` for it.
   A keyless provider (a local Ollama) gets no warning.
+
+## Where your keys live
+
+The hub holds your provider keys, in its memory only (above). What else gets near them:
+
+- **Agents** get a token, never a key. It reaches only Anthropic's Messages API, along the agent's own provider list,
+  and only on the hub's port or the agent's session socket.
+- **The editor** can take a token of its own for its AI requests (chat, completion, embeddings), so the request
+  carries the token and the hub adds the key. That token reaches only a provider's own paths
+  (`http://127.0.0.1:PORT/p/PROVIDER/…`), one provider per request, and only on the hub's port on this machine:
+  never an agent's session socket, and never the Messages API agents use. One process holds one such token (asking
+  again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
+  your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly. Chat, completion, edits, commit
+  messages, embeddings and gptel all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
+  again on every reconnect and keeps it in memory only. The search indexer job asks for a token of its own, so it goes
+  with the job. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
+  waits.
+- **The editor keeps no key once the hub has one.** AI: Load Keys (and onboarding, the Store key button of Agent
+  Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
+  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, the
+  gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
+  runs, a key AI: Load Keys found waits in memory and goes when the editor connects. Checking whether a provider is
+  usable (AI: Choose, onboarding's checks) reads its key only to see that there is one, and keeps nothing: neither the
+  key nor auth-source's copy of the file. When the hub restarts (an update, `drgnx hub restart`), the editor hands
+  over again the keys it can read without asking: your environment and a plain `~/.authinfo`. A key that lives only in
+  your Keychain, keyring or a `.gpg` file cannot be read without asking, so a notice says "the drgnx hub restarted
+  without your … key: run AI: Load Keys". A provider with a key is never asked directly,
+  and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
+  hub is not running; agents reach providers through it".
+- **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
+  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
+- **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,
+  so the programs your Emacs starts (shells, `compile`) still see them; agents do not (their environment drops every
+  provider key) and use the copy the hub holds. `drgnx doctor` notes such a key ("OPENROUTER_API_KEY is set in this
+  Emacs's environment; children inherit it; agents use the copy the hub holds"). To keep a key out of shells too, keep
+  it in your Keychain or keyring instead and let AI: Load Keys hand it over.
 
 ## Who an agent is
 

@@ -33,10 +33,12 @@ jobs:
       - name: ripgrep and Rust (Homebrew)
         run: brew install ripgrep rust
       # the editor's tests run against Ratatoskr; runtime.yml's macos job tests the runtime itself, so this is the build only.
-      # With the test hooks: some client tests need --idle-tick-ms (a test binary, never installed)
+      # With the test hooks: some client tests need --idle-tick-ms (a test binary, never installed). ratatoskr-mock beside
+      # it: the gateway tests' provider (test/unit/ai-gateway-test.el)
       - name: Ratatoskr (cargo build, for the client's tests)
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr \
+            --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
           echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
       - name: install.sh parses under macOS's bash 3.2
         if: ${{ !cancelled() }}

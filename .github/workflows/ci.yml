@@ -54,10 +54,12 @@ jobs:
           key: cargo-${{ runner.os }}-unit-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
       # the client's tests run against Ratatoskr (DRGNX_RATATOSKR_BIN; those that need it fail rather than skip,
       # test/no-skip.eld), with its test hooks: some need --idle-tick-ms. Built on the runner (glibc older than Fedora
-      # 45's, so it runs in the test container); runtime.yml's linux job tests the runtime itself.
+      # 45's, so it runs in the test container); runtime.yml's linux job tests the runtime itself. ratatoskr-mock beside
+      # it: the gateway tests' provider (test/unit/ai-gateway-test.el).
       - name: Ratatoskr (cargo build, for the client's tests)
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr \
+            --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
           echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
       - name: Prebuilt image for this Containerfile (else the suite builds it)
         if: ${{ !cancelled() }}
@@ -99,9 +101,11 @@ jobs:
             ~/.cargo/registry
             runtime/target
           key: cargo-${{ runner.os }}-unit-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
+      # as emacs-31's: ratatoskr-mock beside it, the gateway tests' provider (they must run here too, test/no-skip.eld)
       - name: Ratatoskr (cargo build, for the client's tests)
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr \
+            --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
           echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
       - name: Prebuilt image for this Containerfile (else the suite builds it)
         if: ${{ !cancelled() }}

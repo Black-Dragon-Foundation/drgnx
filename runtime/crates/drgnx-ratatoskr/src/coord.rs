@@ -195,7 +195,7 @@ pub async fn serve(
     let answer = match params {
         // an access card settles into a grant, a close card into done (crate::graph); the rest as they are
         Params::CardsSettle(p) => {
-            let (card, choice) = (int(p.card), p.choice.into_inner());
+            let (card, choice) = (int(p.card), p.choice.as_str().to_owned());
             return Ok(crate::graph::settle(w, caller, card, choice, now).await);
         }
         Params::MessagesSend(p) => {

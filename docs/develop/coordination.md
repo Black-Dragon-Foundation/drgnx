@@ -129,7 +129,8 @@ Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 
 
 - **One writer, the graph writer.** `norn::store::CoordDb` is a thin wrapper over `urdr::graph::WriterHandle`: every
   `CoordDb::write(meta, f)` is one request of the graph writer (group commit, a savepoint of its own, answered after
-  `COMMIT`; [store.md](store.md#the-writer-task-1)). The writer's opening rule (`norn::migrate7::open_rule`) makes a
+  `COMMIT`; a failed `COMMIT` that left the transaction open is rolled back, so the one writer never stays stuck in
+  it; [store.md](store.md#the-writer-task-1)). The writer's opening rule (`norn::migrate7::open_rule`) makes a
   missing file at schema 7 or migrates a schema-6 one ([store.md](store.md#migration-from-schema-6-task-11)); the
   hub hands its writer to `CoordDb::with_graph`, `CoordDb::spawn` (tests) starts one of its own beside the path.
   Nothing here opens a second write connection.

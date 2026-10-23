@@ -35,6 +35,7 @@
 (declare-function drgnx-agent-session-cwd "drgnx-agents")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
+(declare-function drgnx-ai-agent-keyed-p "drgnx-ai")
 (declare-function drgnx-ai-store-key "drgnx-ai")
 (declare-function drgnx-agents-openrouter-restrictions "drgnx-agents")
 (declare-function drgnx-agents-set-setting "drgnx-agents")
@@ -311,15 +312,22 @@
               (provider (ignore-errors (drgnx-ai-provider (car first)))))
     (and (plist-get provider :key-env) (car first))))
 
+(declare-function drgnx-hub-hand-over-keys "drgnx-hub-client")
+
 (defun drgnx-agent-settings--store-key (id)
-  "Read the key of provider ID (hidden) and keep it in the system's secret store."
+  "Read the key of provider ID (hidden), keep it in the system's secret store and hand it to the hub, which alone
+holds it (`drgnx-hub-hand-over-keys': this Emacs forgets it once the hub took it)."
   (require 'drgnx-ai)
   (let ((key (read-passwd (format "Key for %s (kept in your %s): " (or (plist-get (drgnx-ai-provider id) :name) id)
                                   (if (eq system-type 'darwin) "Keychain" "keyring")))))
     (unwind-protect
         (if (string-empty-p key)
             (message "No key given; nothing was stored")
-          (message "The key is in your %s" (drgnx-ai-store-key id key)))
+          (let* ((store (drgnx-ai-store-key id (copy-sequence key)))
+                 (why (condition-case err (progn (require 'drgnx-hub-client) (drgnx-hub-hand-over-keys) nil)
+                        (error (error-message-string err)))))
+            (message "The key is in your %s%s" store
+                     (if why (format "; the drgnx hub takes it once it runs (%s)" why) ", and handed to the drgnx hub"))))
       (clear-string key))))
 
 (defconst drgnx-agent-settings--openrouter-privacy-url "https://openrouter.ai/settings/privacy"
@@ -339,18 +347,18 @@
        " · "))))
 
 (defun drgnx-agent-settings--via-gateway-p (route)
-  "Does ROUTE's traffic go through drgnx's gateway (Claude Code profiles do, unless the gateway is turned off)?"
-  (and (plist-get route :kind) drgnx-agents-use-gateway (memq (plist-get route :kind) drgnx-ai-gateway-kinds) t))
+  "Does ROUTE's traffic go through drgnx's gateway?  Claude Code profiles do: a keyed one always (only the hub holds
+keys), a keyless one unless the gateway is turned off (`drgnx-agents-use-gateway')."
+  (let ((kind (plist-get route :kind)))
+    (and kind (memq kind drgnx-ai-gateway-kinds) (or drgnx-agents-use-gateway (drgnx-ai-agent-keyed-p kind)) t)))
 
 (defun drgnx-agent-settings--insert-openrouter (route)
-  "Under an OpenRouter ROUTE: the restrictions with a Change button, or why they do not apply to it.  A drgnx agent
-route with the gateway turned off and restrictions set says that its agents do not start, and how to fix it."
+  "Under an OpenRouter ROUTE: the restrictions with a Change button, or why they do not apply to it."
   (let* ((via (drgnx-agent-settings--via-gateway-p route))
-         (off (and (not via) (memq (plist-get route :kind) drgnx-ai-gateway-kinds)))
-         (restrictions (and (or via off)
+         (restrictions (and via
                             (condition-case err (list 'ok (drgnx-agents-openrouter-restrictions))
                               (user-error (list 'unreadable (error-message-string err)))))))
-    (if (not (or via (and off (cadr restrictions))))
+    (if (not via)
         (progn
           (insert (propertize "      This route is direct: the restriction setting applies through drgnx's gateway only; without it, your OpenRouter account settings apply: "
                               'face 'drgnx-agent-settings-dim))
@@ -365,9 +373,6 @@ route with the gateway turned off and restrictions set says that its agents do n
                 (propertize (concat "      OpenRouter restrictions: "
                                     (drgnx-agent-settings--restrictions-text (cadr restrictions)) "  ")
                             'face 'drgnx-agent-settings-dim)))
-      (when (and off (eq (car restrictions) 'ok))
-        (insert (propertize "(the gateway is turned off, so OpenRouter agents do not start: turn it on (drgnx-agents-use-gateway) or remove the restrictions)  "
-                            'face 'drgnx-agent-settings-problem)))
       (drgnx-agent-settings--button "[Change…]" #'drgnx-agent-settings-openrouter
                                     "Which providers OpenRouter may use, and whether they may keep data")
       (insert "\n"))))

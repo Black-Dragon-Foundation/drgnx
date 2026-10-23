@@ -522,8 +522,11 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
-- `llm --script FILE [--log FILE] [--tls CERT KEY] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
-  provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`; TLS with the PEM files, else plain). FILE is a JSON array
+- `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
+  provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`). With `--tls` it makes a certificate authority and a
+  leaf for `localhost` and 127.0.0.1 at start (`rcgen`), writes the CA's certificate (no key) to CA_FILE, prints
+  `MOCK-LLM-CA CA_FILE` before the port line and serves TLS; the keys never leave its memory, so no test key is
+  committed. Without it, plain HTTP. FILE is a JSON array
   of answers `{path, match?, status (200; 0 = never answer), delay_ms, body ("{}"), headers {name: value}, once,
   chunks [[delay_ms, text]…], content_type, no_end}`. The first answer whose `path` is a prefix of the request path and
   whose `match` occurs in the body answers; none: 404 `{}`. `chunks` streams (the head at once, no length, each text
@@ -669,6 +672,8 @@ budgets: this is a recorded baseline, not a regression gate.
 | `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
 | `mcp-tool-call` | `tools/call read_inbox` over a session socket (initialized, `hello` called once before) | 100 |
 | `coord-write` | `events/add` through the main socket, answered with the new id | 100 |
+| `gateway-added-latency` | an agent's `POST /v1/messages` to the mock provider, head read: `direct-first-byte` against the mock, `gateway-first-byte` through the gateway with an agent token (the difference is the gateway's) | 50 each |
+| `gateway-editor-fim-latency` | the editor's FIM-sized request, a 2 KiB `POST /completions` with a 64-token answer: `direct-fim` against the mock, `gateway-fim` as `/p/mock/completions` with the editor token; compare the median and p95 | 100 each |
 | `walk-4-hops` | `graph/neighbors` four hops, out and both ways, on graph B (10^5 entities, about 10^6 links, 6 kinds; seeded into the running hub's store) | 20 each |
 | `group-commit` | eight connections each send an `events/add` and wait for all eight answers (one round, group-committed) | 500 |
 | `as-of-churn` | `graph/neighbors` as of a tx inside 200,000 versions of one link, one hop and two, and the same hop now | 20 each |
@@ -686,6 +691,42 @@ runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/
 
 CI runs this on Linux and macOS and keeps the files as artifacts ([ci.md](ci.md)). Numbers are for a release build on a
 quiet machine.
+
+### The gateway rows
+
+`test/conformance/gateway/*.jsonl` drive the real gateway (`ratatoskr`'s front, [bifrost](#bifrost-the-gateway)) with
+`ratatoskr-mock llm` as the only mock, standing in for the provider (and `ratatoskr-mock proxy` for the proxy). A row
+starts the mock with `spawn` and `capture_stdout`, hands the hub the provider table (`config/providers`) and, where the
+provider takes a key, a canary (`gateway/keys`), takes a token (`gateway/register`, or `gateway/editor-token` for the
+editor), and acts as the agent or the editor with `http`. The mock's JSONL log is what reached the provider; the
+mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows are `v1`; run them with one glob per
+`domr` run: `--only 'gateway/*'`.
+
+- **The gate rows** (phase 3, design §12): `fallback-on-429-before-the-head`, `budget-pauses-a-lisp-job`
+  (`lisp-backend`: a git repo made with `run`, `fixtures/plan-budget.md`, `job/propose` and `job/approve`, a job
+  registration with a budget that one priced request passes; a `card` event of kind `budget`, `job/status` `paused`,
+  then 429 `budget_exceeded`), `streaming-first-chunk-first`, `a-bad-token-is-refused-before-the-body` (a 20 MiB
+  `Content-Length`, no body sent, 401 within 1 s), `proxy-from-the-environment` (`linux`: `HTTPS_PROXY` and
+  `SSL_CERT_FILE` in the hub's environment, an https provider from `ratatoskr-mock llm --tls`, the proxy's `CONNECT`).
+- **TLS:** `tls-with-the-system-store` (`linux`: the platform verifier reads `SSL_CERT_FILE`; a hub without the
+  mock's CA gets 502 and nothing reaches the mock, a hub on the same root with `SSL_CERT_FILE` naming it gets the
+  answer). Each TLS row sets `SSL_CERT_FILE` in its own `start` only, so CI sets nothing.
+- **Chain and budget:** `no-proxy-is-respected`, `the-last-step-passes-its-refusal-through`, `every-step-failing-says-why`,
+  `no-fallback-once-started`, `budget-refuses-at-equal`, `openrouter-restrictions-reach-the-body`,
+  `a-hang-up-stops-the-upstream`, `request-events-and-spend-rows`.
+- **Admission and sizes:** `host-check-on-loopback`, `a-session-token-is-refused-on-tcp`,
+  `the-session-socket-serves-its-token` (`http` over `unix:`), `a-head-over-64-kib-is-431` (the 70,000-byte header comes
+  from a `write_file` with `$repeat` and a `capture_file`), `a-body-over-32-mib-is-413`,
+  `count-tokens-and-models-paths-pass`.
+- **Keys:** `keys-are-never-on-disk-or-in-the-backend` (`file_grep` over the hub's roots, the mock's log kept apart),
+  `the-agent-never-sees-the-key`, `need-keys-after-a-restart`.
+- **The editor's token:** `editor-chat-through-the-gateway` (the body byte for byte, the hub's key upstream),
+  `editor-fim-through-the-gateway`, `editor-embed-through-the-gateway`, `editor-stream-through-the-gateway`,
+  `an-editor-token-is-refused-on-the-messages-path`, `an-agent-token-is-refused-on-the-editor-paths`,
+  `editor-requests-carry-no-restrictions`, `an-openrouter-base-keeps-its-v1`.
+- **Not rows:** `no-proxy-is-respected` keeps a plain-HTTP provider (the connector tunnels through `HTTP_PROXY` for any
+  scheme, so it proves the `NO_PROXY` rule without TLS). A kill -9 between a registration's row write and its answer is
+  declined (phase 6's `op` rows are the target).
 
 ## Building and installing Ratatoskr
 
@@ -736,9 +777,13 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `graph_read_args` | the same for `graph_read` (neighbors, path, history, who_touched) |
 | `trust_fence` | text, author and project (split at NUL) through `trust::fence`: exactly one opening tag at the start and one closing tag at the end, ASCII case ignored |
 | `sqlro_sql` | SQL through `graph/sql`'s runner on a WAL store with a pending WAL: the database file and the WAL stay byte for byte as they were (no write, no checkpoint), and the answer comes within the 50 ms deadline plus 100 ms |
+| `sse_usage` | bytes through `bifrost::usage::Scanner`, whole, byte by byte and in pieces of sizes the first two bytes pick: the same `Usage` every way, no panic |
+| `provider_merge` | a body and OpenRouter restrictions (flags, `only` and `ignore` lines, then the body) through `rewrite::body`: when the restrictions apply, the answer is a JSON object whose `provider` carries all of them; with nothing to apply the bytes stay |
+| `gateway_admit` | a request head (token class, listener, header style from the first byte; target and headers as lines) through `admit::head`: an admission belongs to its listener, takes a path of its class and stays under the body cap; a refusal is a 4xx with a JSON body |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
-`jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send) and the unit tables (gleipnir's targets). The
+`jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
+the gateway's targets, the SSE fixtures (`test/fixtures/sse`) and a few hand-made heads and bodies. The
 bridge's `classify`, `id_in_prefix` and `read_bounded` are private to `mimir::bridge`, so they are not targets; the
 bridge's lines are covered by `jsonrpc_parse` and `mcp_message`. A run adds files to the
 corpus directory, so run on a scratch copy and keep the repository's seeds as they are.

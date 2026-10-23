@@ -1,7 +1,9 @@
 //! ratatoskr-mock: stand-ins for the network, for the conformance rows (docs/develop/runtime.md).  Std only, threads.
 //!
-//! - `llm --script FILE [--log FILE] [--tls CERT KEY] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
-//!   provider on 127.0.0.1 (TLS with the given PEM files, else plain).  A port of `test/fixtures/mock-llm.el`.  The
+//! - `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
+//!   provider on 127.0.0.1.  With `--tls` it makes a certificate authority and a leaf for `localhost` and 127.0.0.1
+//!   at start, writes the CA's certificate (PEM, no key) to CA_FILE, prints `MOCK-LLM-CA CA_FILE` before the port
+//!   line and serves TLS; the keys stay in memory.  Else plain.  A port of `test/fixtures/mock-llm.el`.  The
 //!   script is a JSON array of answers `{path, match?, status, delay_ms, body, headers, once, chunks, content_type,
 //!   no_end}`; the first whose `path` is a prefix of the request path and whose `match` occurs in the body answers,
 //!   else 404 `{}`.  `once` answers once and goes; `status` 0 never answers; `chunks` `[[delay_ms, text]…]` streams
@@ -13,7 +15,7 @@
 //!
 //! `llm` ends when `--parent` is gone.
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -33,7 +35,7 @@ fn main() {
         Some("llm") => llm(&args[1..]),
         Some("proxy") => proxy(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock llm --script FILE [--log FILE] [--tls CERT KEY] [--parent PID] | proxy [--log FILE]",
+            "usage: ratatoskr-mock llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE]",
         ),
     }
 }
@@ -330,13 +332,38 @@ fn serve(mut w: Box<dyn Wire>, shared: &Shared) {
     }
 }
 
-fn tls_config(cert: &str, key: &str) -> Arc<rustls::ServerConfig> {
-    let certs = CertificateDer::pem_file_iter(cert)
-        .unwrap_or_else(|e| die(&format!("cannot read {cert}: {e}")))
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_else(|e| die(&format!("bad certificate in {cert}: {e}")));
-    let key = PrivateKeyDer::from_pem_file(key)
-        .unwrap_or_else(|e| die(&format!("cannot read the key {key}: {e}")));
+/// A CA and a leaf for `localhost` and 127.0.0.1, made now (test keys are made at run time, never committed). The CA's
+/// certificate goes to CA_FILE for the hub's `SSL_CERT_FILE`; neither key leaves this process.
+fn tls_config(ca_file: &str) -> Arc<rustls::ServerConfig> {
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+        KeyPair, KeyUsagePurpose, SanType,
+    };
+    let fail = |e: rcgen::Error| -> ! { die(&format!("cannot make the test certificates: {e}")) };
+    let ca_key = KeyPair::generate().unwrap_or_else(|e| fail(e));
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap_or_else(|e| fail(e));
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    ca.distinguished_name
+        .push(DnType::CommonName, "ratatoskr-mock test CA");
+    let ca_pem = ca.self_signed(&ca_key).unwrap_or_else(|e| fail(e)).pem();
+    let issuer = Issuer::new(ca, ca_key);
+    let leaf_key = KeyPair::generate().unwrap_or_else(|e| fail(e));
+    let mut leaf =
+        CertificateParams::new(vec!["localhost".to_string()]).unwrap_or_else(|e| fail(e));
+    leaf.subject_alt_names
+        .push(SanType::IpAddress(std::net::IpAddr::from([127, 0, 0, 1])));
+    leaf.distinguished_name
+        .push(DnType::CommonName, "localhost");
+    leaf.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let cert = leaf
+        .signed_by(&leaf_key, &issuer)
+        .unwrap_or_else(|e| fail(e));
+    std::fs::write(ca_file, ca_pem)
+        .unwrap_or_else(|e| die(&format!("cannot write the CA to {ca_file}: {e}")));
+    println!("MOCK-LLM-CA {ca_file}");
+    let certs = vec![CertificateDer::from(cert.der().to_vec())];
+    let key = PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into());
     let cfg = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
@@ -356,7 +383,7 @@ fn llm(args: &[String]) {
         .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).map_err(|e| e.to_string()))
         .and_then(|a| a.iter().map(parse_entry).collect())
         .unwrap_or_else(|e| die(&format!("script {script_path}: {e}")));
-    let tls = flag(args, "--tls", 2).map(|t| tls_config(&t[0], &t[1]));
+    let tls = flag(args, "--tls", 1).map(|t| tls_config(&t[0]));
     if let Some(p) = flag(args, "--parent", 1) {
         let pid: i32 = p[0].parse().unwrap_or_else(|_| die("--parent is a pid"));
         std::thread::spawn(move || {

@@ -1,0 +1,1 @@
+[{"path": "/v1/messages", "status": 429, "headers": {"Retry-After": "7"}, "body": "{\"type\": \"error\", \"error\": {\"type\": \"rate_limit_error\", \"message\": \"slow down\"}}"}]

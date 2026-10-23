@@ -1,0 +1,21 @@
+{"scenario": "gateway/host-check-on-loopback", "requires": ["v1", "fake-backend"], "doc": "Task 24: on the loopback listener the Host header must be 127.0.0.1:PORT or localhost:PORT (the DNS-rebinding class): another name or another port is 400 and never reaches the provider, with a valid token; the two good spellings are served."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "h1", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "evil.example.com", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "h1", "status": 400, "body_contains": "127.0.0.1 only"}
+{"do": "http", "conn": "h2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:1", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "h2", "status": 400, "body_contains": "127.0.0.1 only"}
+{"do": "http", "conn": "h3", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "localhost:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "h3", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "http", "conn": "h4", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "h4", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 2, "at_most": 2}

@@ -88,7 +88,7 @@ found it running; a remote one without a key as configured.  INTERACTIVE: for a 
 may come from a source that asks)."
   (let ((p (drgnx-ai-provider id)))
     (and p (or (null cap) (memq cap (plist-get p :caps)))
-         (cond ((plist-get p :key-env) (and (drgnx-ai-key id interactive) t))
+         (cond ((plist-get p :key-env) (drgnx-ai-key-held-p id interactive))   ; the hub's keys (`gateway/keys-held')
                ((drgnx-ai--local-p p) (plist-get (alist-get id drgnx-ai-detected) :up))
                (t t)))))
 
@@ -108,10 +108,12 @@ may come from a source that asks)."
                                :body (list :model model) :timeout 3))
       ('llamacpp (funcall callback t))                 ; /infill is llama-server's own
       ('tei (funcall callback nil))
-      (_ (drgnx-ai--curl (concat (plist-get p :url) "/completions")
-                         (lambda (status _) (funcall callback (and (<= 200 status 299) t)))
-                         :body (list :model model :prompt "a" :suffix "b" :max_tokens 1)
-                         :key (and (plist-get p :key-env) (drgnx-ai-key id)) :timeout 5)))))
+      (_ (let ((route (condition-case nil (drgnx-ai-route id) (drgnx-ai-gateway-unavailable nil))))   ; through the gateway
+           (if (and (plist-get p :key-env) (null route)) (funcall callback nil)
+             (drgnx-ai--curl (concat (plist-get route :url) "/completions")
+                             (lambda (status _) (funcall callback (and (<= 200 status 299) t)))
+                             :body (list :model model :prompt "a" :suffix "b" :max_tokens 1)
+                             :key (plist-get route :key) :timeout 5)))))))
 
 ;;;; The GPU
 

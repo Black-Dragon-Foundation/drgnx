@@ -500,6 +500,11 @@ impl<'de> Deserialize<'de> for ProviderKeys {
                     if chars(&v) > ProviderKeys::MAX_KEY {
                         return Err(de::Error::custom("a key is at most 4096 characters"));
                     }
+                    // An empty key is no key (the Lisp oracle skipped it too): taken, it would replace a good one
+                    // and mark the provider held, and every request would go upstream with an empty Bearer.
+                    if v.is_empty() {
+                        continue;
+                    }
                     if out.insert(k, SecretString::from(v)).is_some() {
                         return Err(de::Error::custom("a provider is named twice"));
                     }
@@ -657,6 +662,17 @@ mod tests {
             serde_json::to_value(&k).unwrap(),
             json!({"openrouter": "sk-canary"})
         );
+    }
+
+    #[test]
+    fn an_empty_provider_key_is_no_key() {
+        // review m1: an empty key never replaces a held one, nor marks its provider held
+        let (k, _) =
+            crate::decode::typed::<ProviderKeys>(&json!({"openrouter": "", "p": "sk-canary"}))
+                .unwrap();
+        assert_eq!(k.providers().map(Id::as_str).collect::<Vec<_>>(), ["p"]);
+        let (k, _) = crate::decode::typed::<ProviderKeys>(&json!({"openrouter": ""})).unwrap();
+        assert_eq!(k.providers().count(), 0);
     }
 
     #[test]

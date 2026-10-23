@@ -190,18 +190,37 @@ own login, which drgnx only launches and never reads.
 The **hub** is Ratatoskr, a background process (kept by your system's service manager, or by itself where there is none:
 it outlives the Emacs that started it, and a later Emacs finds it again). The first agent that needs it starts it, with
 one `ratatoskr ensure`; `drgnx hub start|stop|status [--json]` are `ratatoskr ensure|stop|status` and manage it by hand.
-Where Ratatoskr is not built, drgnx says so: run `drgnx runtime build`. Keys
-reach it over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never through its
-environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
-then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
-takes them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
+Where Ratatoskr is not built, drgnx says so: run `drgnx runtime build`.
+
+**Keys.** They reach the hub over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never
+through its environment), from auth-source files that never ask, or from the command you ran (a key in
+`~/.authinfo.gpg` is read then) — and stay in its memory. With them your Emacs sends the list of your providers (the
+built-in ones and ai.eld's: where each is, what it speaks and does, its price; never a key), and again whenever you
+change ai.eld. A provider in ai.eld that takes a key at an `http://` address off this machine (a server on your LAN)
+works, but its key travels in clear text: drgnx says so once per provider each time Emacs starts; use `https` for it.
+The hub checks an agent's providers when it starts: one with no usable provider (unknown, not speaking the Messages
+API, or without its key) is not started, and says why. Tokens are kept only as hashes, so a restarted hub still takes
+them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
 that started it, except that drgnx sends it your login shell's `PATH` when that changed ([shell.md](shell.md#your-path-in-drgnx):
 at each start, and **Shell: Reload Environment**). So when an agent's program was installed while a hub ran, into a
 directory on your shell's `PATH`, run Shell: Reload Environment: the agents the hub starts from then on find it. When
 it went somewhere your shell's `PATH` does not reach (onboarding's Agents step adds such a directory to the running
 Emacs only), run `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
-With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
+Only the hub holds keys: once it has taken a key, your Emacs forgets its copy (a key you set in the environment stays
+there; [security.md](security.md#where-your-keys-live)). So an agent of a profile with a key (OpenRouter, Anthropic,
+Kimi, DeepSeek) always goes through the gateway, and with no hub to be had it does not start: "the drgnx hub is not
+running; agents reach providers through it". `drgnx-agents-use-gateway` set to nil changes nothing for them; it only
+sends an Ollama agent (no key) to Ollama directly. An Ollama agent with no hub to be had also goes directly and says
+so. An agent the hub starts (a durable session, a job's) always goes through the gateway. The Agents list's **Via**
 column shows which.
+
+### When the hub restarts
+
+A restarted hub holds no key: they live only in its memory. Your Emacs hands them over again as soon as it reconnects,
+and when the hub asks for a key its agents need, Emacs looks for it again where it can without asking anything: the
+provider's environment variable (`OPENROUTER_API_KEY`, …). It never prompts then, and never opens the Keychain or a
+`.gpg` file. When it finds none, a notice says "agents need your PROVIDER key in the drgnx hub: run AI: Load Keys";
+run it (it may ask, since you ran it).
 
 ### When drgnx was updated
 

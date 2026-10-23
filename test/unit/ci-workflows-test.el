@@ -62,9 +62,10 @@
     ;; its own triggers carry no push or pull_request: ci.yml's call is that run (a second one would build everything twice)
     (should-not (string-match-p "^  \\(push\\|pull_request\\):" rt))
     (drgnx-ci-test--has macos "DRGNX_RATATOSKR_BIN=" "brew install ripgrep rust")
-    ;; the client's tests that need --idle-tick-ms are on the no-skip lists: the binary they use has the test hooks
+    ;; the client's tests that need --idle-tick-ms are on the no-skip lists: the binary they use has the test hooks; the
+    ;; gateway tests' provider, ratatoskr-mock, is built beside it
     (dolist (yml (list ci macos))
-      (drgnx-ci-test--has yml "-p drgnx-ratatoskr --features test-hooks"))))
+      (drgnx-ci-test--has yml "-p drgnx-ratatoskr -p domr" "--features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock"))))
 
 ;; CI runs on a ci/* branch before main moves, and one always-run gate per push workflow is what branch protection
 ;; requires: it fails unless every push job succeeded (docs/develop/ci.md, "Gates").

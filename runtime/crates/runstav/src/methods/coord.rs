@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct SettleParams {
     pub card: u64,
-    pub choice: Bounded<String, 256>,
+    pub choice: Text,
 }
 
 /// `cards/settle`'s answer: false when the card was not open (nothing happens twice).
@@ -606,6 +606,19 @@ mod tests {
             let e = (m.decode)(&bad).err().unwrap();
             assert!(e.message.contains("one of register or seen"), "{e:?}");
         }
+    }
+
+    #[test]
+    fn a_long_typed_answer_settles_a_card() {
+        // review M1: an ask card's free answer is a paragraph, not a button's name
+        let m = find("cards/settle").unwrap();
+        let long = "a".repeat(1_000);
+        let (p, _) = (m.decode)(&json!({"card": 7, "choice": long})).unwrap();
+        assert_eq!(p.to_value(), json!({"card": 7, "choice": long}));
+        let e = (m.decode)(&json!({"card": 7, "choice": "a".repeat(65_537)}))
+            .err()
+            .unwrap();
+        assert_eq!(e.path.as_deref(), Some("choice"), "{e:?}");
     }
 
     #[test]

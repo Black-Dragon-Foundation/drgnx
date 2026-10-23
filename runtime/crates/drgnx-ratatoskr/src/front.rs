@@ -20,6 +20,7 @@ use crate::store::WorkDb;
 use crate::version::COMMIT;
 use runstav::line::MAX_HUB_LINE;
 use runstav::methods::Params;
+use runstav::methods::gateway::KeysHeld;
 use runstav::methods::hub::{HubStatus, Runtime, StoreStatus, WriterState};
 use runstav::methods::mcp::AttachAnswer;
 use runstav::proof::Cap;
@@ -250,6 +251,16 @@ impl Front {
             .retain(|_, out| out.push(line.clone()));
     }
 
+    /// `gateway/keys-changed` to the subscribers when the held keys' ids are no longer BEFORE (ids only).  A
+    /// restarted hub holds none: a reconnecting editor asks `gateway/keys-held`, and hears this when its handover
+    /// fills the set again.
+    fn keys_changed(&self, before: &KeysHeld) {
+        let now = self.gate.keys_held();
+        if now != *before {
+            self.broadcast("gateway/keys-changed", json!(now));
+        }
+    }
+
     pub fn status(&self) -> HubStatus {
         let schema = self.schema.load(Ordering::Relaxed);
         HubStatus {
@@ -478,18 +489,25 @@ impl Front {
             }),
             // the gateway's: keys and registrations never reach the backend
             Params::Spend(p) => self.gate.spend(&caller, p).await.map(|r| json!(r)),
-            Params::GatewayRegister(p) => self
-                .gate
-                .register(p, s.peer_pid, &self.mcp)
-                .await
-                .map(|r| json!(r)),
+            Params::GatewayRegister(p) => {
+                let before = self.gate.keys_held();
+                let r = self.gate.register(p, s.peer_pid, &self.mcp).await;
+                self.keys_changed(&before);
+                r.map(|r| json!(r))
+            }
             Params::GatewayUnregister(p) => {
                 self.gate.unregister(&p.token.0).await.map(|b| json!(b))
             }
-            Params::GatewayKeys(p) => {
+            Params::GatewayKeys(p) => self.gate.protects_keys().map(|()| {
+                let before = self.gate.keys_held();
                 self.gate.take_keys(p.keys);
-                Ok(json!(true))
+                self.keys_changed(&before);
+                json!(true)
+            }),
+            Params::GatewayEditorToken(_) => {
+                self.gate.editor_token(s.peer_pid).await.map(|r| json!(r))
             }
+            Params::GatewayKeysHeld(_) => Ok(json!(self.gate.keys_held())),
             Params::GatewaySetBudget(p) => self.gate.set_budget(p).await.map(|b| json!(b)),
             Params::ConfigProviders(p) => self.gate.config_providers(p).await.map(|r| json!(r)),
             // the graph store's (`graph/*`, `tasks/*`), then the coordination writes
@@ -863,11 +881,13 @@ mod tests {
         let f = gated(dir.path(), Arc::new(Semaphore::new(0)));
         let v = serde_json::to_value(f.status_with_backend().await).unwrap();
         assert_eq!(v["backend"], json!({"state": "running", "pid": 42}));
-        // the gateway's numbers are the front's own, counted since start; the Lisp hub's keys are gone
+        // the gateway's numbers are the front's own, counted since start; the Lisp hub's keys are gone; a front no
+        // one hardened (`serve` does, review m2) refuses keys and says so
         assert_eq!(
             v["gateway"],
             json!({"registrations": 0, "requests": 0, "errors": 0, "fallbacks": 0, "bytes_in": 0,
-                   "bytes_out": 0, "providers": 0, "keys_held": [], "warnings": []})
+                   "bytes_out": 0, "providers": 0, "keys_held": [], "warnings": [],
+                   "keys_refused": "the hub was not hardened"})
         );
         assert!(
             v.get("gateway_port").is_none() && v.get("registrations").is_none(),

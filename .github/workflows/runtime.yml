@@ -90,6 +90,17 @@ jobs:
           if grep -q 'gleipnir feature "test-hooks"' "$RUNNER_TEMP/gleipnir-features.txt"; then
             echo "gleipnir's test-hooks are on in a default build" >&2; exit 1
           fi
+      # The gateway speaks HTTP/1.1 over rustls with the ring provider: neither h2 nor aws-lc-sys may be in any
+      # target's graph (all kinds of dependencies). `cargo tree -i` prints nothing and fails when the package is not
+      # in the graph, which is what we want; any output means it is.
+      - name: h2 and aws-lc-sys are not in the tree
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          for crate in h2 aws-lc-sys; do
+            found=$(cargo tree --locked --workspace --target all -e normal,build,dev -i "$crate" 2>/dev/null || true)
+            if [ -n "$found" ]; then echo "$crate is in the dependency tree:" >&2; echo "$found" >&2; exit 1; fi
+          done
       # The escape suite, container tier (docs/develop/gleipnir.md, "Proving it"). As root in this container there are
       # no user namespaces to nest, so the full and reduced rows skip with a listed reason ("inside a container",
       # "Landlock ABI N below 9"); what runs is that the rows parse, the probes reach without a sandbox,
@@ -256,7 +267,7 @@ jobs:
       - run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p drgnx-ratatoskr
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
       - if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -- -D warnings
 
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
@@ -280,7 +291,7 @@ jobs:
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
   # a pull request runs none. A crash uploads its input.
   fuzz:
-    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, mcp_message, jsonrpc_parse, text_one_line, put_parsed, task_write_args, graph_read_args, trust_fence, sqlro_sql)
+    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, mcp_message, jsonrpc_parse, text_one_line, put_parsed, task_write_args, graph_read_args, trust_fence, sqlro_sql, sse_usage, provider_merge, gateway_admit)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -315,7 +326,7 @@ jobs:
       - name: Run each target
         run: |
           failed=""
-          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec mcp_message jsonrpc_parse text_one_line put_parsed task_write_args graph_read_args trust_fence sqlro_sql; do
+          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec mcp_message jsonrpc_parse text_one_line put_parsed task_write_args graph_read_args trust_fence sqlro_sql sse_usage provider_merge gateway_admit; do
             echo "::group::$target ($FUZZ_SECONDS s)"
             cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS" || failed="$failed $target"
             echo "::endgroup::"
@@ -415,4 +426,4 @@ jobs:
       # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
       - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -- -D warnings

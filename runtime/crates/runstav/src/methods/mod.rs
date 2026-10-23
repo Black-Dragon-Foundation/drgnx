@@ -136,6 +136,8 @@ params! {
     GatewayKeys(gateway::KeysParams),
     GatewaySetBudget(gateway::SetBudgetParams),
     ConfigProviders(gateway::ProvidersParams),
+    GatewayEditorToken(Empty),
+    GatewayKeysHeld(Empty),
     AgentsList(Empty),
     AgentsStart(agents::StartParams),
     AgentsGet(agents::ById),

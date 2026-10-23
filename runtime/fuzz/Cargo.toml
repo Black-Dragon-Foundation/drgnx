@@ -19,6 +19,9 @@ runstav = { path = "../crates/runstav" }
 drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
 mimir = { path = "../crates/mimir" }
+# no platform verifier: the targets make no TLS connection, and it is the one optional piece with a system dependency
+bifrost = { path = "../crates/bifrost", default-features = false }
+http = "1"
 norn = { path = "../crates/norn" }
 urdr = { path = "../crates/urdr", features = ["test-hooks"] }
 tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
@@ -133,6 +136,27 @@ bench = false
 [[bin]]
 name = "sqlro_sql"
 path = "fuzz_targets/sqlro_sql.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sse_usage"
+path = "fuzz_targets/sse_usage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "provider_merge"
+path = "fuzz_targets/provider_merge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gateway_admit"
+path = "fuzz_targets/gateway_admit.rs"
 test = false
 doc = false
 bench = false
