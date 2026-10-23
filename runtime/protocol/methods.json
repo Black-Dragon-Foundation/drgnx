@@ -1863,6 +1863,13 @@
       "home": "front",
       "name": "cards/settle",
       "params": {
+        "$defs": {
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "card": {
@@ -1871,8 +1878,7 @@
             "type": "integer"
           },
           "choice": {
-            "maxLength": 256,
-            "type": "string"
+            "$ref": "#/$defs/Text"
           }
         },
         "required": [
