@@ -957,7 +957,8 @@ The commands of modules that need no installed package are in it, the later stag
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
                               code-next-problem code-previous-problem ; M12d: F8 / S-F8
                               quick-help quick-help-close             ; M12f's quick help
-                              close-pane))                            ; M12f's Esc and q in a pane
+                              close-pane                              ; M12f's Esc and q in a pane
+                              settings-lisp-files-open))              ; settings Task 28: RET on the Lisp files page
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

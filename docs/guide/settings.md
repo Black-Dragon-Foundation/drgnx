@@ -250,9 +250,69 @@ private file.
 
 ## History and undo (Task 25)
 
-## Your Lisp files (Task 28)
+## Your Lisp files
 
-## Moving a setting (Task 28)
+**Settings: Lisp Files** (the palette, the Options menu) lists every file of your Lisp in the order Emacs loads it,
+then the files drgnx only reads:
+
+1. the early files of `drgnx-user-lisp-files` (loaded at the end of `early-init.el`);
+2. `custom.el`, what Customize saved;
+3. `config.el`;
+4. the other files of `drgnx-user-lisp-files`;
+5. the files in your config dir that those loaded;
+6. `settings.el` and the workspace settings files read this session, as data: read, never loaded.
+
+Each file says whether it is on (turning a file off takes effect at the next start: code that ran cannot be
+unloaded), whether it loaded, how long that took, and an error with its line. Under it come the settings it sets,
+each with its line and whether it **won** (its value is the one in effect), **lost to** what won, or **?** when drgnx
+cannot be sure (the line is unknown: [Where a value comes from](#where-a-value-comes-from)). A setting inside `when`, `unless`,
+`with-eval-after-load` or a deferred `use-package` says "(conditional)".
+
+**Findings** are things worth knowing, shown and never undone behind your back: the file moves `custom-file` or
+changes `user-emacs-directory`, uses `user-emacs-directory`, or `setq`s a variable that is local to each buffer
+(`fill-column`, `indent-tabs-mode`): that sets only the buffer it ran in, so the default stays; you probably meant
+`setq-default`.
+
+**RET** on any line opens the file at that line; `g` draws the page again. The page is a page of Settings; until the
+Settings page exists it opens on its own.
+
+## Moving a setting
+
+**Settings: Move into Settings…** turns one setting of your Lisp into an entry of `settings.el`. On the Lisp files
+page it takes the setting of the line you are on; elsewhere it asks which. It moves:
+
+- a top-level `(setq VAR VALUE)`, `(setq-default …)`, `(setopt …)` or `(customize-set-variable 'VAR VALUE)`;
+- one pair of a top-level `setq` that sets several;
+- an entry of `custom-set-variables` (custom.el);
+- an entry of a `use-package` form's `:custom`.
+
+It refuses, and says why, when:
+
+- your Lisp sets the variable in more than one place (drgnx would not know which one to take);
+- the line runs only sometimes (inside `when`, `unless`, `with-eval-after-load`, a hook, a deferred `use-package`):
+  moved, it would always apply;
+- the value is computed, such as `(expand-file-name "notes" "~")`: only a value written as it is can move;
+- where the value comes from is not certain (the line is unknown);
+- the value in effect would change: something after your line sets the variable, a value Customize saved would win
+  over the new entry, or a `setq` sets only the buffer it ran in.
+
+Before anything changes you see the diff of both files and the value in effect now and after; nothing is written
+unless you say yes. Then the entry goes into `settings.el`, and your line is replaced by a comment:
+
+```elisp
+;; fill-column: moved to Settings (2026-10-24)
+```
+
+A copy of your file from before is kept beside it (`config.el.bak-DATE`, the newest three), and **Settings: Undo Move**
+puts both files back as they were. Undo refuses when either file changed since the move, and names the copy.
+
+**Settings: Move to My Lisp…** does the opposite: the entry of `settings.el` becomes `(setopt VAR 'VALUE)` at the end
+of `config.el` (with a prefix argument, a file of yours you choose), under a comment line, and the entry goes. It
+refuses when the entry is not the value in effect (moved, your Lisp would change it). The same preview, copy and Undo.
+
+Both commands write your file in one step (a temporary file renamed over it), never while it has unsaved edits in a
+buffer (an open buffer with no edits is reverted), never a file that does not read to its end, and only after
+checking that nothing but the one form, pair or entry differs. Undo remembers this session's last 20 moves.
 
 ## Bringing an existing init.el (Task 29)
 

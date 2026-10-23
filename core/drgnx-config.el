@@ -889,10 +889,21 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
   "Move the old settings files into settings.el now, while it does not exist." t)
 (autoload 'drgnx-settings-migrate-move-away "drgnx-settings-migrate"
   "Move the old settings files settings.el already holds into migrated-DATE/." t)
+(autoload 'drgnx-settings-lisp-files "drgnx-settings-lisp-page"
+  "Your Lisp files in load order, what each sets at which line and whether it won." t)
+(autoload 'drgnx-settings-lisp-page-open "drgnx-settings-lisp-page"
+  "Open the file of the Lisp files page's line at point, at its line." t)
+(autoload 'drgnx-settings-move-into-settings "drgnx-settings-move"
+  "Move a setting's line of your Lisp into settings.el, with a diff first." t)
+(autoload 'drgnx-settings-move-to-lisp "drgnx-settings-move"
+  "Move a setting of settings.el to the end of config.el as a `setopt', with a diff first." t)
+(autoload 'drgnx-settings-move-undo "drgnx-settings-move"
+  "Put both files of the last move back as they were." t)
 
 (defun drgnx-config-register-commands ()
   "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File, Turn Off / Turn On Package
-Settings, Keep Module Entries…, Migration Report, Migrate Old Files and Move Old Files Away, in the registry."
+Settings, Keep Module Entries…, Migration Report, Migrate Old Files, Move Old Files Away, Lisp Files (and its Open at
+Line), Move into Settings…, Move to My Lisp… and Undo Move, in the registry."
   (drgnx-command-define 'config-open :category "Preferences" :title "Open Config File…" :command #'drgnx-config-open
                         :doc "Open one of drgnx's config files, at its mistake when it has one")
   (drgnx-command-define 'config-reset :category "Preferences" :title "Reset Config File…" :command #'drgnx-config-reset
@@ -919,7 +930,24 @@ Settings, Keep Module Entries…, Migration Report, Migrate Old Files and Move O
                         :doc "Move the old files (keys.eld, agents.eld …) into settings.el now, while it does not exist")
   (drgnx-command-define 'settings-move-old-files-away :category "Settings" :title "Move Old Files Away"
                         :command #'drgnx-settings-migrate-move-away
-                        :doc "Move old settings files settings.el already holds into migrated-DATE/ (a copy is kept)"))
+                        :doc "Move old settings files settings.el already holds into migrated-DATE/ (a copy is kept)")
+  (drgnx-command-define 'settings-lisp-files :category "Settings" :title "Lisp Files"
+                        :command #'drgnx-settings-lisp-files :menu '("Options")
+                        :doc "Your Lisp files in load order: what each sets at which line, whether it won, its findings")
+  (drgnx-command-define 'settings-lisp-files-open :category "Settings" :title "Open at Line"
+                        :command #'drgnx-settings-lisp-page-open
+                        :map '(drgnx-settings-lisp-page . drgnx-settings-lisp-page-mode-map)
+                        :when (lambda () (derived-mode-p 'drgnx-settings-lisp-page-mode))
+                        :doc "Open the file of this line of the Lisp files page, at its line")
+  (drgnx-command-define 'settings-move-into :category "Settings" :title "Move into Settings…"
+                        :command #'drgnx-settings-move-into-settings
+                        :doc "Move a setting's line of your Lisp into settings.el: a diff of both files first, one Undo")
+  (drgnx-command-define 'settings-move-to-lisp :category "Settings" :title "Move to My Lisp…"
+                        :command #'drgnx-settings-move-to-lisp
+                        :doc "Move a setting of settings.el to the end of config.el as a setopt: a diff first, one Undo")
+  (drgnx-command-define 'settings-move-undo :category "Settings" :title "Undo Move"
+                        :command #'drgnx-settings-move-undo
+                        :doc "Put both files of the last Move into Settings or Move to My Lisp back as they were"))
 
 (provide 'drgnx-config)
 ;;; drgnx-config.el ends here
