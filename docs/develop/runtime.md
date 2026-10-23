@@ -309,12 +309,22 @@ Ratatoskr gives it a connection.
   runstav's `decode::typed` with unknown keys refused: an `ArgsError { path, message }` is `PATH: unknown key`,
   `PATH: required, missing`, or serde's message at its path (`items[2].name`; `arguments` for the whole). The default
   `check` accepts anything, so a tool with arguments overrides it.
+- **The bridge** (`bridge`, [hub.md](hub.md#the-mcp-bridge)): `run(connector, stdin, stdout, opts) -> BridgeEnd`
+  copies an agent's stdio to a hub socket and outlives the hub. A `Connector` dials (`connect`) and says what comes
+  before MCP (`prelude`: an outside bridge's `hello` and `mcp/attach`); a dial fails with `Dial::Again` (dial again
+  after the backoff) or `Dial::Fatal` (end). `BridgeOpts` holds the timings (0.1 s doubling to 5 s, give up after
+  10 min, a request waits 10 s) and the line limits. `BridgeEnd::code()` is the exit status: 0 when the agent went
+  (`StdinClosed`, `StdoutClosed`), 1 for `GaveUp` and `Fatal`.
 
 `cargo test -p mimir` runs `server::tests` (both eras over an in-memory pipe: the handshake, the stateless rules,
 every error shape, a bad argument that never reaches the tool, a 1 MiB line that ends the connection, a panicking
 tool) and `tests/interop.rs`: rmcp 3.6's client over a Unix socket pair, with `initialize` at each of the four old
 versions, `server/discover` at 2026-07-28 and its automatic probe, lists the tools, calls `echo`, and gets a bad
-argument back as a tool error with its path and an unknown tool as a protocol error.
+argument back as a tool error with its path and an unknown tool as a protocol error. `bridge::tests` run the bridge
+against a real `serve` on a paused clock: the replayed `initialize` whose answer is dropped, a call in flight at the
+drop (a tool error, never resent), a call while away (the tool error after 10 s, or the answer when the hub is back
+first), `tools/list` from the cache, `list_changed` after a reconnect to other tools, the backoff and the give-up,
+stdin's end, and a line over the limit.
 
 ## bifrost: the gateway
 
@@ -626,6 +636,7 @@ Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`)
 | `restart/` | `the-restart-method-exits-75`, `a-self-detached-hub-re-execs`; with `fake-backend` and `test-hooks` (`--idle-tick-ms 200`; the answers of `agents/list` come from a file the row rewrites): `a-changed-binary-sends-the-notice`, `a-busy-backend-delays-it`, `a-missing-or-broken-new-binary-never-restarts` |
 | `reaper/` | `a-recorded-orphan-backend-is-killed-at-start` (`fake-backend`: the hub SIGKILLed, its backend ignoring its parent; the next hub kills it within 4 s), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
 | `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`; with `fake-backend` (a schema-6 work.db): `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`; with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
+| `bridge/` | `ratatoskr mcp-bridge` ([hub.md](hub.md#the-mcp-bridge)), a copy of the hub under test (`install_bin`) run by `spawn_conn`: `outside-refuses-an-untrusted-directory` (the socket's directory at 0755: exit 1, the reason on stderr); with `fake-backend`: `survives-a-hub-restart` and `survives-a-hub-restart-modern` (the gate rows: a TERM, a start on the same root, the next call works; both eras), `an-in-flight-call-is-an-error-never-a-retry` (a call to a STOPped hub, then KILL: the went-away tool error, one event after the restart), `a-call-while-away-waits-then-errors`, `tools-list-from-the-cache-while-away`, `drgnx-agent-in-the-environment-is-ignored`, `outside-is-service-class-and-ext`, `stdin-eof-ends-it`; with `test-hooks` (`--bridge-backoff-ms`, `--bridge-give-up-ms`): `gives-up` |
 
 The forwarding rows run with both helpers:
 

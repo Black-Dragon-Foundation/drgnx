@@ -29,9 +29,9 @@ eitri = { path = "../eitri", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 norn = { path = "../norn", version = "0.1.0" }
 bifrost = { path = "../bifrost", version = "0.1.0" }
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)
 tokio-util.workspace = true
-bytes = "1"               # the read buffer the line codec decodes from (already in the tree through tokio)
+bytes = "1"              # the read buffer the line codec decodes from (already in the tree through tokio)
 serde.workspace = true
 serde_json.workspace = true
 rustix.workspace = true

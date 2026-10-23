@@ -1,0 +1,16 @@
+{"scenario": "bridge/outside-is-service-class-and-ext", "requires": ["v1", "fake-backend"], "doc": "ratatoskr mcp-bridge --outside --kind codex: the bridge finds the main socket from its environment, says hello without a proof (service class: only service may mcp/attach) and attaches; its identity is ext:codex:PID-HASH of its parent (the harness), the hub counts one outside bridge, and a job's tool is a tool error."}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "spawn_conn", "conn": "b", "argv": ["$ROOT/bin/ratatoskr", "mcp-bridge", "--outside", "--kind", "codex", "--cwd", "$HOME"], "env": {"HOME": "$HOME", "XDG_RUNTIME_DIR": "$ROOT/run", "XDG_STATE_HOME": "$ROOT/state", "DRGNX_DATA_DIR": "$ROOT/data", "TMPDIR": "$ROOT/tmp"}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}, "within_ms": 5000}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "method": "notifications/initialized"}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}}
+{"do": "sql_expect", "sql": "select id glob 'ext:codex:[1-9]*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]', kind from agent", "rows": [[1, "codex"]]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"mcp": {"sessions": 0, "outside": 1}}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "claim_task", "arguments": {"task": "j1#1", "seen_version": 0}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "jobs are drgnx's: report your work with report_edit (claim_task is for drgnx's own job agents)"}], "isError": true}}}

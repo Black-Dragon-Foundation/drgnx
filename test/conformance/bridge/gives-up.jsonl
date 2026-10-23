@@ -1,0 +1,14 @@
+{"scenario": "bridge/gives-up", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "A bridge with no hub for its give-up time (10 min; 200 ms here, a test hook) ends with exit 1 and says why on stderr."}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "spawn_conn", "conn": "b", "argv": ["$ROOT/bin/ratatoskr", "mcp-bridge", "--socket", "$sock", "--bridge-backoff-ms", "10", "--bridge-give-up-ms", "200"], "env": {}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "expect_exit", "conn": "b", "code": 1, "within_ms": 3000}
+{"do": "file", "path": "$ROOT/spawn-conn-b.err", "contains": "giving up"}
