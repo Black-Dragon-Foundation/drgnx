@@ -106,13 +106,15 @@ pub fn card_settle(tx: &Tx, id: i64, choice: &str, now: f64) -> Result<bool, Coo
     if n == 0 {
         return Ok(false);
     }
-    let (job, task, kind, title, reference): (
+    // job, task, kind, title, ref
+    type Settled = (
         Option<String>,
         Option<String>,
         Option<String>,
         Option<String>,
         Option<i64>,
-    ) = tx.query_row(
+    );
+    let (job, task, kind, title, reference): Settled = tx.query_row(
         "select job, task, kind, title, ref from card where id = ?1",
         [id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
