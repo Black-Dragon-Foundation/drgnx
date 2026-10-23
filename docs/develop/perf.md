@@ -543,14 +543,14 @@ only after `DRGNX_PERF_LANDED` names its step.
 | `lsp-burst` | three jsonrpc connections to `test/fixtures/lsp-replay.el`, replaying recorded rust-analyzer, clangd and tsserver traffic; each sends completion answers of 0.5, 1 and 3 MB, three rounds | input p95 16, no 16 ms stall, `:lsp :handler_ms :max` 50 (ot4) |
 | `lsp-typing` | the same servers flood 300 recorded diagnostics and progress messages a second | input p95 16, max 50 (ot4) |
 | `ts-open` | 1 and 2 MB files in `c-ts-mode`, `typescript-ts-mode`, `python-ts-mode`, opened one after the other in a second window | `:ts :draw_ms` 16 (first draw), `:ts :colored_ms` 500, no 100 ms stall (ot2) |
-| `ts-paste` | `C-y` of 500 KB into a 1 MB C file (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
+| `ts-paste` | `C-y` of 500 KB into a 1 MB C file, then typing (a p95 needs 100 commands over the repeats; every repeat starts from the file on disk) (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
 | `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file | input p95 16 (ot2) |
 | `compile-flood` | `compile` (comint, a pty) of a generated 200k-line log; the digest is the count and md5 of the log lines that arrived, checked against the file | input p95 16, p99 50, max 50 (ot3) |
 | `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html` | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
 | `explorer-expand` | `big/` of 5,000 files expanded, listing cache cleared (the bench's operation) | `:expand_ms` 80, no 16 ms stall (ot8) |
 | `explorer-git` | the status of a 25k-file repository read in the background | input p95 16, no 16 ms stall (ot5) |
 | `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
-| `autosave-typing` | a 50 MB buffer, `do-auto-save` at the first key | input max 50, `:complete-ms` 1000 (ot8) |
+| `autosave-typing` | a 50 MB buffer, `do-auto-save` at the first key; the digest is the auto-save file's md5 | input max 50, `:complete-ms` 1000 (ot8) |
 
 `agent-stream`, `terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
 endless `seq` loop), so a digest that is equal on and off needs a fixed-length run; that is DEFERRED, not done here.

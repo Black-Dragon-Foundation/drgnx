@@ -168,7 +168,9 @@
 (defvar drgnx-perf-w--ts-modes nil "((SYMBOL . WAS)…): the global modes `drgnx-perf-w-ts-edit-each' turned on.")
 
 (defun drgnx-perf-w-ts-edit-each (&optional paste)
-  "The 1 MB C file shown in the selected window, point mid-file; with PASTE a 500 kB text in the kill ring."
+  "The 1 MB C file shown in the selected window, point mid-file; with PASTE a 500 kB text in the kill ring.
+Every call starts from the file on disk: the buffer an earlier repeat edited (never saved) is killed first."
+  (drgnx-perf-w--kill-visiting (drgnx-perf-w--tmpdir))
   (let ((buf (drgnx-perf-w--ts-visit (drgnx-perf-w--ts-file 'c-ts-mode 1) 'c-ts-mode)))
     (dolist (m '(electric-pair-mode show-paren-mode which-function-mode))
       (unless (assq m drgnx-perf-w--ts-modes) (push (cons m (symbol-value m)) drgnx-perf-w--ts-modes))
@@ -382,9 +384,11 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 
 (defun drgnx-perf-w--count-images (buffer)
   (with-current-buffer buffer
+    ;; every run of text with an image display, the one at `point-min' included
     (let ((n 0) (pos (point-min)))
-      (while (setq pos (next-single-property-change pos 'display))
-        (when (eq (car-safe (get-text-property pos 'display)) 'image) (setq n (1+ n))))
+      (while pos
+        (when (eq (car-safe (get-text-property pos 'display)) 'image) (setq n (1+ n)))
+        (setq pos (next-single-property-change pos 'display)))
       n)))
 
 (defun drgnx-perf-w-image-each ()
@@ -556,6 +560,8 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 (defvar drgnx-perf-w--as-buffer nil)
 (defvar drgnx-perf-w--as-size 0 "The buffer's size when the auto-save started.")
 (defvar drgnx-perf-w--as-file nil)
+(defconst drgnx-perf-w--as-bytes 50000000 "The buffer's size before anything is typed.")
+(defvar drgnx-perf-w--as-point 1 "Where the keys are typed (point, when the buffer was set up).")
 
 (defun drgnx-perf-w-autosave-each ()
   "A 50 MB buffer visiting a file, modified, shown in the selected window."
@@ -565,6 +571,7 @@ The server's own messages wait for `initialized' (the fire function sends it)."
       (setq buffer-file-name file default-directory (file-name-directory file))
       (dotimes (_ 50) (insert chunk))
       (goto-char (point-min)) (forward-line 100)
+      (setq drgnx-perf-w--as-point (point))
       (set-buffer-modified-p t)
       (setq buffer-auto-save-file-name (make-auto-save-file-name))
       (auto-save-mode 1)
@@ -586,9 +593,19 @@ The server's own messages wait for `initialized' (the fire function sends it)."
        (>= (file-attribute-size (file-attributes drgnx-perf-w--as-file)) drgnx-perf-w--as-size)))
 
 (defun drgnx-perf-w-autosave-digest ()
-  "Whether the auto-save file holds as many bytes as the buffer did when the auto-save started."
-  (format "%s" (and (file-exists-p drgnx-perf-w--as-file)
-                    (= (file-attribute-size (file-attributes drgnx-perf-w--as-file)) drgnx-perf-w--as-size))))
+  "The md5 of the auto-save file's bytes, less the characters typed before the auto-save started (how many of the
+keys that was varies; they sit at `drgnx-perf-w--as-point'), and whether the file holds as many bytes as the buffer did
+then.  The same whenever the auto-save wrote the untouched 50 MB intact."
+  (if (not (and drgnx-perf-w--as-file (file-exists-p drgnx-perf-w--as-file)))
+      "missing"
+    (let ((size (file-attribute-size (file-attributes drgnx-perf-w--as-file)))
+          (typed (- drgnx-perf-w--as-size drgnx-perf-w--as-bytes)))
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally drgnx-perf-w--as-file)
+        (when (and (> typed 0) (<= (+ drgnx-perf-w--as-point typed -1) (point-max)))
+          (delete-region drgnx-perf-w--as-point (+ drgnx-perf-w--as-point typed)))
+        (format "%s %d %s" (= size drgnx-perf-w--as-size) (buffer-size) (md5 (current-buffer)))))))
 
 (defun drgnx-perf-w-autosave-teardown ()
   (drgnx-perf-w--disarm)

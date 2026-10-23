@@ -140,6 +140,75 @@ form and a digest, and a setup form that reads."
     ;; the existing workloads are still there, unchanged in kind
     (dolist (n '(agent-stream terminal-output live-view)) (should (assq n ws)))))
 
+;;;; Task 8 fixes: the workloads' own correctness
+
+(defun perf-workers-test--session ()
+  (load (expand-file-name "test/fixtures/workers/perf-session.el" drgnx-dir) nil t))
+
+(ert-deftest drgnx-perf-workers/ts-paste-has-enough-commands-for-p95 ()
+  "ts-paste keeps its input p95 row: the three repeats give the 100 samples a p95 needs."
+  (let* ((acts (plist-get (cdr (assq 'ts-paste (drgnx-perf-run--workloads))) :actions))
+         (n (apply #'+ (mapcar (lambda (a) (if (plist-get a :type) (length (plist-get a :type)) 1)) acts))))
+    (should (>= (* 3 n) 100))))
+
+(ert-deftest drgnx-perf-workers/image-count-includes-first-picture ()
+  "The preview's picture at `point-min' counts (shr starts the first paragraph there)."
+  (perf-workers-test--session)
+  (with-temp-buffer
+    (dotimes (_ 3)
+      (insert (propertize " " 'display (list 'image :type 'png :file "x.png")))
+      (insert "\n"))
+    (should (= (drgnx-perf-w--count-images (current-buffer)) 3))
+    ;; two pictures in a row, no text between
+    (erase-buffer)
+    (insert (propertize " " 'display (list 'image :type 'png :file "a.png")))
+    (insert (propertize " " 'display (list 'image :type 'png :file "b.png")))
+    (should (= (drgnx-perf-w--count-images (current-buffer)) 2))))
+
+(ert-deftest drgnx-perf-workers/ts-edit-each-restarts-from-the-file ()
+  "A repeat does not inherit the buffer the last repeat edited: same size at the start, not modified."
+  (perf-workers-test--session)
+  (unwind-protect
+      ;; the visit without the grammar check: what is under test is which buffer the repeat starts from
+      (cl-letf (((symbol-function 'drgnx-perf-w--ts-visit)
+                 (lambda (file _mode &optional _window)
+                   (let ((buf (find-file-noselect file))) (set-window-buffer (selected-window) buf) buf))))
+        (drgnx-perf-w-ts-setup '(1))
+        (let ((modes-before (list electric-pair-mode show-paren-mode which-function-mode)) base)
+          (drgnx-perf-w-ts-edit-each)
+          (setq base drgnx-perf-w--ts-base)
+          (with-current-buffer (window-buffer) (insert (make-string 5000 ?x)))
+          (should (= (buffer-size (window-buffer)) (+ base 5000)))
+          (drgnx-perf-w-ts-edit-each)
+          (should (= (buffer-size (window-buffer)) base))
+          (should (= drgnx-perf-w--ts-base base))
+          (should-not (buffer-modified-p (window-buffer)))
+          (drgnx-perf-w-ts-edit-teardown)
+          (should (equal modes-before (list electric-pair-mode show-paren-mode which-function-mode)))))
+    (drgnx-perf-w-ts-open-teardown)))
+
+(ert-deftest drgnx-perf-workers/autosave-digest-is-the-files-content ()
+  "autosave-typing's digest hashes the saved file, less what was typed first; it is real, and moves when the file does."
+  (perf-workers-test--session)
+  (let (clean typed)
+    (unwind-protect
+        (progn
+          (drgnx-perf-w-autosave-each)
+          (drgnx-perf-w--autosave-fire)
+          (setq clean (drgnx-perf-w-autosave-digest))
+          (drgnx-perf-w-autosave-teardown)
+          ;; the same, with three keys typed before the auto-save started
+          (drgnx-perf-w-autosave-each)
+          (with-current-buffer drgnx-perf-w--as-buffer (insert "abc"))
+          (drgnx-perf-w--autosave-fire)
+          (setq typed (drgnx-perf-w-autosave-digest))
+          (should (string-match-p "\\`t 50000000 [0-9a-f]\\{32\\}\\'" clean))
+          (should (equal clean typed))
+          ;; a damaged file gives another digest
+          (with-temp-file drgnx-perf-w--as-file (insert "short"))
+          (should-not (equal clean (drgnx-perf-w-autosave-digest))))
+      (drgnx-perf-w-autosave-teardown))))
+
 (defun perf-workers-test--frames (bytes)
   "The payload sizes of the framed messages in the unibyte string BYTES: a reply counts its result text only."
   (let ((pos 0) sizes)

@@ -97,7 +97,8 @@ whatever they found)."
        (ts-paste
         :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-ts-setup '(1))")
         :each "(drgnx-perf-w-ts-edit-each t)"
-        :actions ,(list '(:keys "C-y") (funcall type "x") (funcall type "y") (funcall type "z"))
+        ;; the yank, then typing into the grown buffer: ~90 commands a repeat, so the three repeats give the p95 its 100
+        :actions ,(cons '(:keys "C-y") (seq-take c-typing 3))
         :complete-when "(drgnx-perf-w-ts-paste-done)"
         :digest "(drgnx-perf-w-ts-edit-digest)"
         :check "(drgnx-perf-w-ts-paste-done)"
