@@ -2,9 +2,14 @@
 //! is replayed with the case's clock; the results and the tables must equal `CASE.expect.json`, which
 //! `gen.el` made from the real Lisp functions.  Tasks 5 and 6 add cases (one fixture file each).
 
+use norn::read::messages as rmessages;
 use norn::store::CoordError;
+use norn::write::agents::{self, AgentField, AgentRegister};
+use norn::write::cards::{self, CardSet, NewCard};
 use norn::write::event::{Event, EventKind, event};
+use norn::write::messages::{self, NoticeChange, Send, SendResult};
 use norn::write::meta;
+use norn::write::review;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use urdr::Connection;
@@ -90,7 +95,7 @@ fn call(
             Value::Null
         }
         "drgnx-coord-held" => ok(meta::held(conn, &agent())),
-        other => panic!("no Rust writer for {other}"),
+        other => call_task5(conn, other, args, clock),
     }
 }
 
@@ -141,7 +146,12 @@ fn replay(input: &Value) -> Value {
         .iter()
         .map(|c| call(&conn, c["fn"].as_str().unwrap(), &c["args"], &mut clock))
         .collect();
-    json!({"results": results, "tables": {"event": dump(&conn, "event"), "meta": dump(&conn, "meta")}})
+    let tables: serde_json::Map<String, Value> =
+        ["event", "meta", "message", "card", "review_mark", "agent"]
+            .into_iter()
+            .map(|t| (t.to_string(), dump(&conn, t)))
+            .collect();
+    json!({"results": results, "tables": tables})
 }
 
 #[test]
@@ -176,5 +186,128 @@ fn every_writer_fixture_replays() {
             .unwrap()
             .retain(|k, _| wanted.contains(k));
         assert_eq!(norm(got), norm(expand(expect)), "case {name}");
+    }
+}
+
+/// Task 5's writers: messages, cards, review marks and agents.  The clock is one reading per call (the cases give
+/// every call of a message or card case the same time, so the Lisp's several readings agree).
+fn call_task5(
+    conn: &Connection,
+    fn_name: &str,
+    args: &Value,
+    clock: &mut impl Iterator<Item = f64>,
+) -> Value {
+    let mut now = || clock.next().expect("the clock ran out");
+    let int = |k: &str| args[k].as_i64().unwrap();
+    let data = || args.get("data").filter(|d| !d.is_null()).cloned();
+    match fn_name {
+        "drgnx-coord-send" => {
+            let s = Send {
+                job: text(args, "job"),
+                sender: text(args, "sender"),
+                recipient: text(args, "recipient").unwrap(),
+                text: text(args, "text").unwrap(),
+                seen: args.get("seen").and_then(Value::as_u64),
+                answers: args.get("answers").and_then(Value::as_i64),
+                question: args.get("question") == Some(&json!(true)),
+            };
+            // `changes` is the decision reader's (Task 6); these cases have no decisions
+            match messages::send(conn, s, now()).unwrap() {
+                SendResult::Ok { id, state } => json!({"ok": true, "id": id, "state": state}),
+                SendResult::Held { version, .. } => {
+                    json!({"held": true, "version": version, "changes": []})
+                }
+            }
+        }
+        "drgnx-coord-mark" => {
+            json!(messages::mark(conn, int("id"), args["state"].as_str().unwrap(), now()).unwrap())
+        }
+        "drgnx-coord-message-prompt" => {
+            let id = int("id");
+            let m = rmessages::message(conn, id).unwrap().unwrap();
+            let q = rmessages::message_answers(conn, id).unwrap();
+            json!(messages::message_prompt(&m, q.as_ref()))
+        }
+        "drgnx-coord-notice" => {
+            let changes: Vec<NoticeChange> = args["changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| NoticeChange {
+                    n: d["n"].as_i64().unwrap(),
+                    kind: text(d, "kind").unwrap(),
+                    subject: text(d, "subject").unwrap(),
+                    status: text(d, "status").unwrap(),
+                })
+                .collect();
+            json!(messages::notice(
+                args["v"].as_u64().unwrap(),
+                args["job"].as_str().unwrap(),
+                &changes,
+                args["seen"].as_u64().unwrap()
+            ))
+        }
+        "drgnx-coord-card-create" => {
+            let c = NewCard {
+                job: text(args, "job"),
+                task: text(args, "task"),
+                kind: text(args, "kind"),
+                title: text(args, "title"),
+                data: data(),
+            };
+            json!(cards::card_create(conn, c, now()).unwrap())
+        }
+        "drgnx-coord-card-settle" => json!(
+            cards::card_settle(conn, int("id"), args["choice"].as_str().unwrap(), now()).unwrap()
+        ),
+        "drgnx-coord-card-set" => {
+            let set = CardSet {
+                title: text(args, "title"),
+                data: data(),
+                state: text(args, "state"),
+            };
+            cards::card_set(conn, int("id"), set, now()).unwrap();
+            Value::Null
+        }
+        "drgnx-coord-review-mark" => json!(
+            review::review_mark(
+                conn,
+                args["agent"].as_str().unwrap(),
+                args["path"].as_str().unwrap(),
+                args["state"].as_str().unwrap(),
+                args["hash"].as_str().unwrap(),
+                now(),
+                None
+            )
+            .unwrap()
+        ),
+        "drgnx-coord-agent-register" => {
+            let a = AgentRegister {
+                id: text(args, "id").unwrap(),
+                kind: text(args, "kind"),
+                name: text(args, "name"),
+                cwd: text(args, "cwd"),
+                worktree: text(args, "worktree"),
+                branch: text(args, "branch"),
+                base: text(args, "base"),
+                plan: text(args, "plan"),
+                task: text(args, "task"),
+                pid: args.get("pid").and_then(Value::as_i64),
+                clear: args
+                    .get("clear")
+                    .and_then(Value::as_array)
+                    .map(|c| {
+                        c.iter()
+                            .map(|f| AgentField::parse(f.as_str().unwrap()).unwrap())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            json!(agents::agent_register(conn, a, now()).unwrap())
+        }
+        "drgnx-coord-agent-seen" => {
+            json!(agents::agent_seen(conn, args["id"].as_str().unwrap(), now()).unwrap())
+        }
+        other => panic!("no Rust writer for {other}"),
     }
 }

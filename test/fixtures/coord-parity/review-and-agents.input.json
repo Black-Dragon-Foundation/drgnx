@@ -1,0 +1,13 @@
+{"setup": [],
+ "clock": [1000.0, 1001.0, 1002.0, 1003.0, 1004.0, 1005.0, 1006.0, 1007.0, 1008.0],
+ "tables": ["review_mark", "agent"],
+ "calls": [
+  {"fn": "drgnx-coord-review-mark", "args": {"agent": "a", "path": "src/x.rs", "state": "pending", "hash": "h1"}},
+  {"fn": "drgnx-coord-review-mark", "args": {"agent": "a", "path": "src/x.rs", "state": "accepted", "hash": "h2"}},
+  {"fn": "drgnx-coord-review-mark", "args": {"agent": "b", "path": "src/x.rs", "state": "pending", "hash": "h3"}},
+  {"fn": "drgnx-coord-agent-register", "args": {"id": "a", "kind": "claude", "name": "Alpha", "cwd": "/w", "worktree": "/w/a", "branch": "br", "pid": 42}},
+  {"fn": "drgnx-coord-agent-register", "args": {"id": "a", "task": "j#1", "plan": "p.md", "clear": ["worktree", "pid"]}},
+  {"fn": "drgnx-coord-agent-register", "args": {"id": "ext:codex:1", "kind": "codex"}},
+  {"fn": "drgnx-coord-agent-seen", "args": {"id": "a"}},
+  {"fn": "drgnx-coord-agent-seen", "args": {"id": "nobody"}}
+ ]}

@@ -142,6 +142,15 @@ is deleted. Rules:
   (`runstav::text::one_line`), data over 4096 characters is stored as `{"truncated": true, "size": N}`, `turn` is 1
   for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 17 of `drgnx-coord-event-kinds` (a test
   reads the Lisp list). `write::meta` keeps `log-version`, `seen:AGENT` and `held:AGENT`.
+- **Messages, cards, review marks and agents.** `write::messages` (`send`, `mark`, `message_prompt`, `notice`),
+  `write::cards`, `write::review` and `write::agents` are the Lisp writers of the same names, rule for rule: `send`
+  is held by the log version (an answer with the versions, never a write; a version from the future is an error),
+  holds a message for a full queue (20, never for `user`) or a chatty pair (6 a minute), closes what the other side
+  sent, and writes its `question` or `message` event in the same transaction; `mark` goes forward only and never from
+  `held`; a card is settled once and an `ask` card is a `question` event whose settling is an `answer`; a review
+  mark takes an optional event of its own; `agent_register` keeps what is not given and `clear` nulls named fields.
+  Every writer takes the caller's clock (`now`). The typed readers are in `read::{messages,cards,review,agents}`.
+  `Held` carries the versions only: the caller adds `changes` from the decision reader.
 - **Parity.** `test/fixtures/coord-parity/CASE.input.json` (`setup`, `clock`, `calls`) is run by `gen.el` against the
   real Lisp functions, which writes `CASE.expect.json` (results and tables); `norn/tests/parity.rs` replays each input
   against the Rust writers with the same clock. `test/fixtures/work-db-6.sql` is the schema every Rust test starts

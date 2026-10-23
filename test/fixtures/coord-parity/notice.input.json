@@ -1,0 +1,13 @@
+{"setup": [],
+ "clock": [1000.0],
+ "tables": [],
+ "calls": [
+  {"fn": "drgnx-coord-notice", "args": {"v": 9, "job": "j", "seen": 4, "changes": [
+    {"n": 9, "kind": "build", "subject": "one\ntwo", "status": "current"},
+    {"n": 8, "kind": "wait", "subject": "s", "status": "current"},
+    {"n": 7, "kind": "build", "subject": "s", "status": "replaced"},
+    {"n": 6, "kind": "build", "subject": "s", "status": "current"},
+    {"n": 5, "kind": "build", "subject": "s", "status": "current"},
+    {"n": 4, "kind": "build", "subject": "cut", "status": "current"}]}},
+  {"fn": "drgnx-coord-notice", "args": {"v": 2, "job": "j", "seen": 1, "changes": [{"n": 2, "kind": "wont-build", "subject": "x", "status": "current"}]}}
+ ]}

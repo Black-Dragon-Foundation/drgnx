@@ -1,0 +1,16 @@
+{"setup": [],
+ "clock": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+ "tables": ["card"],
+ "calls": [
+  {"fn": "drgnx-coord-card-create", "args": {"job": "j", "task": "j#1", "kind": "ask", "title": "Ship it?", "data": {"agent": "a"}}},
+  {"fn": "drgnx-coord-card-create", "args": {"job": "j", "kind": "rate", "title": "Slow\ndown", "data": {"rate": 2.5, "files": ["a.rs"], "gate": true}}},
+  {"fn": "drgnx-coord-card-create", "args": {"job": "j", "kind": "merge", "title": "__REP:t:300__"}},
+  {"fn": "drgnx-coord-card-settle", "args": {"id": 1, "choice": "yes"}},
+  {"fn": "drgnx-coord-card-settle", "args": {"id": 1, "choice": "no"}},
+  {"fn": "drgnx-coord-card-settle", "args": {"id": 2, "choice": "later"}},
+  {"fn": "drgnx-coord-card-settle", "args": {"id": 99, "choice": "x"}},
+  {"fn": "drgnx-coord-card-set", "args": {"id": 2, "state": "open"}},
+  {"fn": "drgnx-coord-card-set", "args": {"id": 2, "state": "open", "title": "renamed"}},
+  {"fn": "drgnx-coord-card-set", "args": {"id": 3, "data": {"size": "long"}}},
+  {"fn": "drgnx-coord-card-set", "args": {"id": 3, "state": "dismissed"}}
+ ]}
