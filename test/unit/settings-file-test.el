@@ -136,6 +136,25 @@
     (should (equal (mapcar (lambda (p) (plist-get p :line)) problems) '(4 5 6 7 8 9)))
     (should (string-match-p "unknown section :foo" (plist-get (nth 5 problems) :text)))))
 
+(ert-deftest drgnx-settings-file/a-dotted-tail-reads-as-huginn-reads-it ()
+  ;; As huginn (cases.json "dotted-tails-that-are-lists"): a tail that reads as a list joins it, a quoted one too
+  ;; (`quote' then a bad entry); a section with any other tail is one problem, and the rest stands.
+  (let* ((doc (drgnx-settings-file-parse
+               (drgnx-settings-file-test--form "(a 1)" "(:mode m (b 2) . ((c 3)))" "(:mode n (d 4) . '(e 5))"
+                                               "(:mode o (f 6) . x)" "(g 7)")
+               'drgnx-settings))
+         (problems (drgnx-settings-doc-problems doc)))
+    (should-not (drgnx-settings-doc-failed doc))
+    (should (equal (drgnx-settings-file-test--facts doc)
+                   '((a nil 1 nil) (b ((:mode . m)) 2 nil) (c ((:mode . m)) 3 nil) (d ((:mode . n)) 4 nil)
+                     (e ((:mode . n)) 5 nil) (g nil 7 nil))))
+    (should (equal (mapcar (lambda (p) (list (plist-get p :line) (plist-get p :text))) problems)
+                   '((5 "expected an entry (VARIABLE VALUE)") (6 "expected an entry (VARIABLE VALUE)"))))
+    (let ((e (nth 4 (drgnx-settings-doc-entries doc))))
+      (should (equal (substring (drgnx-settings-doc-text doc) (1- (drgnx-settings-entry-beg e))
+                                (1- (drgnx-settings-entry-end e)))
+                     "(e 5)")))))
+
 (ert-deftest drgnx-settings-file/dir-and-eval-refused-in-the-global-file ()
   (let* ((lines '("(a 1)" "(:dir \"docs/\" (fill-column 72))" "(:eval (message \"hi\"))" "(:mode m (:mode n (x 1)))"))
          (global (drgnx-settings-file-parse (apply #'drgnx-settings-file-test--form lines) 'drgnx-settings))

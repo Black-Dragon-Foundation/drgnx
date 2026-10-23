@@ -109,7 +109,8 @@ whose VALUE is the list of its forms."
 
 (defun drgnx-settings-file--elements (open)
   "The elements of the list whose open paren is at OPEN in the current buffer: ((DATUM BEG END)…) in order.
-A dotted tail that is a list (or nil) joins the list, as `read' reads it; any other dotted tail is an `error'."
+A dotted tail that is a list (or nil) joins the list, as `read' reads it: a quoted tail \\='X or #\\='X too, as
+the two elements `quote' (or `function') and X; any other dotted tail is an `error'."
   (save-excursion
     (goto-char (1+ open))
     (let ((out nil) (depth 0) (read-circle nil) (read-symbol-shorthands nil))
@@ -123,8 +124,15 @@ A dotted tail that is a list (or nil) joins the list, as `read' reads it; any ot
                 ((drgnx-settings-file--dot-p)
                  (forward-char)
                  (forward-comment (buffer-size))
-                 (if (eq (char-after) ?\() (progn (forward-char) (setq depth (1+ depth)))
-                   (when (read (current-buffer)) (error "A dotted list: write it as a plain list"))))
+                 (cond ((eq (char-after) ?\() (forward-char) (setq depth (1+ depth)))
+                       ((looking-at "#?'")
+                        (let ((qbeg (point)))
+                          (goto-char (match-end 0))
+                          (push (list (if (eq (char-after qbeg) ?#) 'function 'quote) qbeg (point)) out)
+                          (forward-comment (buffer-size))
+                          (let ((beg (point)) (x (read (current-buffer))))
+                            (push (list x beg (point)) out))))
+                       ((read (current-buffer)) (error "A dotted list: write it as a plain list"))))
                 (t (let ((beg (point)) (x (read (current-buffer))))
                      (push (list x beg (point)) out))))))
       (nreverse out))))
@@ -150,8 +158,11 @@ A dotted tail that is a list (or nil) joins the list, as `read' reads it; any ot
            (problem (beg end why &rest more)
              (push (append (drgnx-file--problem why beg) (list :beg beg :end end) more) problems))
            (inside (beg scope skip)
-             (dolist (e (nthcdr skip (drgnx-settings-file--elements beg)))
-               (item (car e) (nth 1 e) (nth 2 e) scope)))
+             ;; A section that does not read as a list is one problem; the rest of the file stands.
+             (pcase (condition-case nil (cons 'ok (drgnx-settings-file--elements beg)) (error nil))
+               (`(ok . ,els) (dolist (e (nthcdr skip els)) (item (car e) (nth 1 e) (nth 2 e) scope)))
+               (_ (problem beg (or (ignore-errors (save-excursion (goto-char beg) (forward-sexp) (point))) beg)
+                           "expected an entry (VARIABLE VALUE)"))))
            (item (x beg end scope)
              (cond ((not (and (consp x) (proper-list-p x))) (problem beg end "expected an entry (VARIABLE VALUE)"))
                    ((not (symbolp (car x))) (problem beg end "an entry starts with a variable name"))

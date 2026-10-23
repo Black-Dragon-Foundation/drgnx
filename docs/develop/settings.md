@@ -156,8 +156,8 @@ a buffer holding `text` from its start, and an `(:eval FORM…)` section is an e
   one scope path are problems of their own (`:beg`/`:end` too; a duplicate's names `:var` and `:scope`), and the rest
   stands. One top-level `quote` or `function` on a value is dropped.
 - Positions come from reading the form element by element (`drgnx-settings-file--elements`), after the token check.
-  A dotted tail that is a list joins its list, as `read` reads it; any other dotted tail in a settings list fails
-  the file (huginn would read `(a . 'b)` as `(a quote b)`; no settings file needs it).
+  A dotted tail that is a list joins its list, as `read` reads it, a quoted one too (`(a . 'b)` is `(a quote b)`, as
+  huginn reads it). A section that is not a proper list is one problem, and the rest of the file stands.
 
 `(drgnx-settings-file-state FILE HEAD)` gives `(:doc :last-good :problem)`. `settings.el` is the config file
 `settings` of the new shape `settings` (`drgnx-config-define … :shape 'settings :schema '(settings drgnx-settings)`):
@@ -320,13 +320,16 @@ explains; it never decides what the applier does (that is the winner rule, from 
   BODY…)`. For BODY's extent it binds `load-read-function` to a reader that notes, per `load-file-name` (an alist, so a
   nested `load` never overwrites the outer file's entry), the line and span of the form being read; an `:around`
   advice on `custom-declare-variable` marks a `defcustom`'s own initialisation; an `:around` advice on
-  `do-after-load-evaluation` marks after-load bodies with the form that loaded the package. Both advices are removed
-  when BODY ends. FILE joins your Lisp files.
+  `do-after-load-evaluation` marks after-load bodies with the form that loaded the package; an `:around` advice on
+  `custom-theme-recalc-variable` marks a value that a theme enabled or disabled there gives (a `load-theme` in
+  `config.el` is the theme's, not that line's). The advices are removed when BODY ends. FILE joins your Lisp files.
 - **Watchers** go on the managed variables: those theme `drgnx` holds a value for and those `settings.el` names
   (`drgnx-settings-prov-watch VAR` adds one later). Only `set` counts (`let`, `unlet`, `makunbound` are ignored);
   an alias is resolved with `indirect-variable`. A write is recorded as (design §4.5's table, in this order):
   `drgnx` (inside `drgnx-settings-prov-applying`, which the applier binds, or a `defcustom` taking theme `drgnx`'s
-  value), `definition` (a `defcustom`'s own value, or the first value of a void variable), `session` (after start;
+  value, also one loaded after start), `theme` (a theme recalculation while your Lisp loads; `:theme` is the theme
+  that holds the value, nil for the default), `definition` (a `defcustom`'s own value, or the first value of a void
+  variable), `session` (after start;
   buffer-local writes after start are not recorded), `deferred` (an after-load body), `lisp` (a file of yours: in
   your config dir, loaded with provenance, or listed) or `package` (any other file being loaded). At most
   `drgnx-settings-prov-max-records` per variable. A watcher never signals.

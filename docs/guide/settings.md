@@ -103,7 +103,9 @@ explains the value Emacs has; it never works out a value of its own.
   package loads. drgnx shows it as "your Lisp (config.el:4), deferred, first seen during config.el:8": the body's own
   line, and the form that loaded the package. That `require` is never blamed for the value.
 - **A package's own default.** When a package defines a variable whose value Settings already holds, the value is
-  Settings', not the line that loaded the package.
+  Settings', not the line that loaded the package, also for a package loaded long after start.
+- **A theme.** A theme you enable in `config.el` (`(load-theme 'newcomers-presets t)`) is shown as "theme
+  newcomers-presets", not as that line of `config.el`.
 - **Line unknown.** When the line cannot be confirmed (a compiled file, a `set` through a function, several setters
   in one form), drgnx says "your Lisp (config.el, line unknown)" and lists the lines that could have set it.
   Settings offers no Move or Undo on such a line.

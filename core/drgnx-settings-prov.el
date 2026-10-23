@@ -47,6 +47,7 @@ Keyed by `load-file-name', so a nested `load' never overwrites the outer file's 
 
 (defvar drgnx-settings-prov--tick 0 "Counts the forms read while loading.")
 (defvar drgnx-settings-prov--declaring nil "The variable `custom-declare-variable' initialises now.")
+(defvar drgnx-settings-prov--recalc nil "The variable `custom-theme-recalc-variable' sets now from its themes.")
 (defvar drgnx-settings-prov--deferred nil "Inside an after-load body: (FILE . LINE) of the form that loaded it.")
 
 ;;;; Recording
@@ -103,6 +104,12 @@ listed (design §8.1)."
   (let ((drgnx-settings-prov--declaring symbol))
     (apply fn symbol args)))
 
+(defun drgnx-settings-prov--recalc (fn variable)
+  "Around `custom-theme-recalc-variable' (FN): VARIABLE's value comes from its top theme (enabling or disabling a
+theme), not from the form being loaded."
+  (let ((drgnx-settings-prov--recalc variable))
+    (funcall fn variable)))
+
 (defun drgnx-settings-prov--theme-value (var theme)
   "The value THEME holds for VAR in its `theme-value', as (VALUE), or nil."
   (when-let* ((e (assq theme (get var 'theme-value)))) (list (cadr e))))
@@ -114,7 +121,14 @@ listed (design §8.1)."
    ((eq drgnx-settings-prov--declaring var)
     (list :kind (if (equal (drgnx-settings-prov--theme-value var 'drgnx) (list value)) 'drgnx 'definition)
           :value value :file load-file-name))
-   ((and (null where) (not (default-boundp var))) (list :kind 'definition :value value :file load-file-name))
+   ((and (eq drgnx-settings-prov--recalc var) (null where))
+    (list :kind 'theme :theme (car (car (get var 'theme-value))) :value value))
+   ((and (null where) (not (default-boundp var)))
+    ;; A `defcustom' loaded after start takes theme `drgnx''s value at its initialisation: drgnx's (design §4.5).
+    (list :kind (if (and (get var 'standard-value) (equal (drgnx-settings-prov--theme-value var 'drgnx) (list value)))
+                    'drgnx
+                  'definition)
+          :value value :file load-file-name))
    ((not drgnx-settings-prov--loading) (and (null where) (list :kind 'session :value value)))
    (drgnx-settings-prov--deferred
     (list :kind 'deferred :value value :during drgnx-settings-prov--deferred :where where))
@@ -170,6 +184,7 @@ listed (design §8.1)."
           (when (stringp file) (cl-pushnew (file-truename file) drgnx-settings-prov--user-files :test #'equal))
           (mapc #'drgnx-settings-prov-watch (drgnx-settings-prov--managed))
           (advice-add 'custom-declare-variable :around #'drgnx-settings-prov--declare)
+          (advice-add 'custom-theme-recalc-variable :around #'drgnx-settings-prov--recalc)
           (advice-add 'do-after-load-evaluation :around #'drgnx-settings-prov--after-load))
       (error nil))
     (unwind-protect
@@ -178,6 +193,7 @@ listed (design §8.1)."
               (load-read-function #'drgnx-settings-prov--read))
           (funcall body))
       (advice-remove 'custom-declare-variable #'drgnx-settings-prov--declare)
+      (advice-remove 'custom-theme-recalc-variable #'drgnx-settings-prov--recalc)
       (advice-remove 'do-after-load-evaluation #'drgnx-settings-prov--after-load))))
 
 (defmacro drgnx-settings-prov-with-load (file &rest body)
@@ -234,17 +250,20 @@ marked, and the managed variables are watched (they stay watched after BODY).  N
                               (drgnx-settings-prov--candidates (if in in all)))))
          (when (and deferred (= (length in) 1)) (setq r (plist-put r :file (plist-get (car in) :file))))
          r))
-      (_ (plist-put r :certain (and (or (plist-get r :line) (memq (plist-get r :kind) '(session drgnx definition)))
+      (_ (plist-put r :certain (and (or (plist-get r :line)
+                                        (memq (plist-get r :kind) '(session drgnx definition theme)))
                                     t))))))
 
 (defun drgnx-settings-prov (var)
   "Who set VAR, newest first: a list of plists (:kind :file :line :certain :candidates …).
 `:kind' is `lisp' (your Lisp file), `package' (another file being loaded), `deferred' (an after-load body;
 `:during' is (FILE . LINE) of the form that loaded the package), `session' (changed after start, or outside a
-load), `definition' (a `defvar''s first value or a `defcustom''s own) or `drgnx' (drgnx's applier, or a
-`defcustom' taking the value of theme `drgnx').  `:line' is where the form being loaded starts (a compiled file
-has none); `:certain' is t when the static index confirms one setter there (its line is `:setter-line'),
-else `:candidates' lists the index's setters (:file :line).  Only `set' writes count; an alias is resolved."
+load), `definition' (a `defvar''s first value or a `defcustom''s own), `theme' (a theme enabled or disabled
+while your Lisp loads; `:theme' is the one that holds the value now, nil for the default) or `drgnx' (drgnx's
+applier, or a `defcustom' taking the value of theme `drgnx', also one loaded after start).  `:line' is where the
+form being loaded starts (a compiled file has none); `:certain' is t when the static index confirms one setter
+there (its line is `:setter-line'), else `:candidates' lists the index's setters (:file :line).  Only `set'
+writes count; an alias is resolved."
   (let ((var (indirect-variable var)))
     (mapcar (lambda (r) (drgnx-settings-prov--resolve var r)) (gethash var drgnx-settings-prov--records))))
 
@@ -324,6 +343,11 @@ else `:candidates' lists the index's setters (:file :line).  Only `set' writes c
                        d)))
       ('drgnx (or (drgnx-settings-prov--settings-layer var)
                   (list :layer 'G1 :kind 'module :value (plist-get r :value) :certain t :source "a drgnx module")))
+      ;; A theme enabled or disabled while your Lisp loads: the theme that now holds the value, else the default.
+      ('theme (pcase (plist-get r :theme)
+                ('nil (drgnx-settings-prov--default-layer var))
+                ('drgnx (drgnx-settings-prov--record-layer var (plist-put (copy-sequence r) :kind 'drgnx)))
+                (theme (drgnx-settings-prov--theme-layer var theme (plist-get r :value)))))
       (_ (list :layer 'session :kind 'session :value (plist-get r :value) :certain t
                :source "changed this session")))))
 
@@ -364,7 +388,9 @@ RECORDS are VAR's resolved global writes, newest first."
                       :candidates (drgnx-settings-prov--candidates cands)
                       :source (if cands "set by your Lisp, line unknown" "unknown")))))))
     (cons winner (delq nil (append (list g0 g12) themes
-                                   (and rl (not (memq (plist-get rl :kind) '(default module settings))) (list rl)))))))
+                                   (and rl (not (eq (plist-get r :kind) 'theme)) ; already among THEMES
+                                        (not (memq (plist-get rl :kind) '(default module settings)))
+                                        (list rl)))))))
 
 (defconst drgnx-settings-prov--buffer-rank '((L1 . 1) (buffer . 2) (W1 . 3) (dir-local . 4) (W2 . 5) (file-local . 6))
   "The order of a buffer's layers, lowest first (design §4.1); a layer not named ranks with `buffer'.")
