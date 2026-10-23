@@ -154,6 +154,32 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 - Keep both files `0600`. An opt-in file that others may write is ignored entirely. `drgnx doctor` lists every entry
   it ignored and why.
 
+### Opening a personal file to the store
+
+Use the commands rather than editing the files by hand (palette, Preferences):
+
+- **Open a Personal File to the Store…** (`drgnx-store-allow-personal-file`) asks for one file under `~/org`. A
+  folder, a file outside `~/org`, the board and a file that is always kept out (`notes.org`, the names above, your
+  own deny entries) are refused before anything is asked. It then asks once, naming the file ("Agents in your
+  projects may read what the tracker parses from it"), writes `personal-notes-allow.json` (`0600`, replaced in one
+  step), and asks the hub to apply it now; the next scan reads the file.
+- **Close a Personal File to the Store…** (`drgnx-store-revoke-personal-file`) offers the files you opened. Closing
+  one **excises** what came in from it (every version, the search index, the notices that quoted it; see "Removing
+  something for good"), then compacts the store. If dated backups or older copies of the store still hold its text,
+  it names them and asks once whether to delete them; say yes, or they keep it (they cannot be found again later,
+  since what they hold is gone from the store). Your exports are only listed: they are your files.
+- **Keep a Path Out of the Store…** (`drgnx-store-deny-personal-path`) adds a file, a folder or a glob to your own
+  deny list; whatever came in from it is excised at once. **Stop Keeping a Path Out…**
+  (`drgnx-store-undeny-personal-path`) takes one of your entries back (nothing stored changes); the built-in list
+  cannot be shortened.
+- None of them reads the file's content, and they run only when you call them.
+- **Any change counts, not only the commands'.** Any program running as you can edit these files (an agent too:
+  the same Unix user is no boundary). The hub looks at both files every two seconds and when it starts, applies any
+  change at once (a file closed while the hub was down is excised at its next start; no backup is ever deleted
+  that way, only by the command's question), and tells every drgnx editor:
+  "personal-file opt-ins changed: +1 / −0". An entry it ignored is counted in that notice, and `drgnx doctor` says
+  why. If you did not make the change, close the file again.
+
 ## Grants
 
 An agent reads only its own project in drgnx's store: the project of the folder it was started in (for an agent

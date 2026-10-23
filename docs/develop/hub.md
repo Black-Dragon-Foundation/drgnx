@@ -768,7 +768,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/import` | user | `{dir: AbsPath}` | `PortAnswer` | yes | front |
 | `graph/neighbors` | user | `{as_of?: natnum, depth?: natnum, direction?: "out" \| "in" \| "both", id: string, kinds?: [string]}` | `{hidden: natnum, links?: [any], nodes?: [any], truncated?: string}` | no | front |
 | `graph/path` | user | `{as_of?: natnum, from: string, kinds?: [string], max_depth?: natnum, to: string}` | `{hidden: natnum, links?: [any], nodes?: [any], truncated?: string}` | no | front |
-| `graph/privacy` | user | `{reload: boolean}` | `{added?: [string], backups_holding?: [string], excised: natnum, ignored?: [string], removed?: [string]}` | yes | front |
+| `graph/privacy` | user | `{delete_copies?: [string], reload: boolean}` | `PrivacyAnswer` | yes | front |
 | `graph/proposed` | user | `{accept?: [natnum], reject?: [natnum]}` | `{blocked?: [integer], listed?: boolean, reverted?: Reverted}` | yes | front |
 | `graph/put-parsed` | user | `{collected?: [string], gone?: [{kind: "file" \| "spec" \| "commit" \| "branch", path?: AbsPath}], root?: AbsPath, sources?: [{entities?: [{data?: JsonObject, id: string, kind: string, status?: Status, title?: Text}], links?: [{dst: string, kind: string, origin?: "parsed" \| "inferred", src: string}], mtime?: number, source: {kind: "file" \| "spec" \| "commit" \| "branch", path?: AbsPath}}], updates?: [{data_patch?: JsonObject, id: string, status?: Status}]}` | `{changed: natnum, refused?: [Refusal], retired: natnum}` | yes | front |
 | `graph/record` | user | `{collected?: string, commits: [{date: number, seq?: integer, sha: string, subject: Text}], repo: AbsPath, task: string}` | `{ids?: [string]}` | yes | front |

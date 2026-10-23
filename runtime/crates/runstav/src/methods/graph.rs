@@ -668,9 +668,13 @@ pub struct Settings {
 pub struct PrivacyParams {
     /// Read `personal-notes-allow.json` and `personal-notes-deny.json` again now and apply the change.
     pub reload: bool,
+    /// Delete these copies, as an earlier answer's `backups_holding` named them, after the user confirmed: only the
+    /// backups, `work.db.schema5` and the set-aside `work.db.schema7-*` count; exports are never deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_copies: Option<Bounded<Vec<String>, 1000>>,
 }
 
-/// What applying a change of the opt-ins did (`norn::privacy::PrivacyReport`).
+/// What applying a change of the opt-ins did (`norn::privacy::PrivacyReport`), and the copies deleted.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PrivacyAnswer {
@@ -681,8 +685,14 @@ pub struct PrivacyAnswer {
     #[serde(default, deserialize_with = "null_as_empty")]
     pub ignored: Vec<String>,
     pub excised: u64,
+    /// The backups and set-aside copies that still hold an excised value (`delete_copies` may name them).
     #[serde(default, deserialize_with = "null_as_empty")]
     pub backups_holding: Vec<String>,
+    /// The exports that still hold one: the user's files, listed only.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub exports_holding: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub backups_removed: Vec<String>,
 }
 
 fn invalid(path: &str, message: &str) -> Error {

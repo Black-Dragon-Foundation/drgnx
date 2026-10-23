@@ -342,6 +342,43 @@ one exception is exactly `HOME/org/board.org` (`Verdict::Board`; `board.org.bak`
 
 ## The opt-in (Task 9b)
 
+`norn::privacy` applies the two files of the deny-list (`personal-notes-allow.json`, `personal-notes-deny.json`) to
+the store; `core/drgnx-store-privacy.el` holds the user's commands that write them (call 8; question 5).
+
+- **`apply(writer, deny: Arc<DenyList>) -> PrivacyReport`** compares DENY (just loaded, and already in force in the
+  hub's `SharedDeny`, so no door lets back in what goes) with the **applied state**, `kv` `privacy:applied`
+  (`{opt_ins, denied, ignored}`: the opt-ins that open something, the user's entries as `kind:path`, the
+  warnings). Only `apply` writes that key (a test reads the sources); the `privacy:` key guard (`privacy::register`,
+  called by `grants::register`) refuses every class but the user's.
+- **What the list now denies goes.** Every entity one of whose absolute paths (`deny::paths_of`) the list denies is
+  retired with its current links (one tx), then excised entity by entity (`excise::FIELDS`, reason "personal-file
+  opt-in revoked", `write::blankers()`), its source's `parsed_file` row forgotten (so a later opt-in is read
+  again), then the applied state and the notice are written (one tx), then `scrub`; the report lists the copies
+  that still hold an excised value (`excise::holding`): `backups_holding` (`deletable_copies`: `backup/`,
+  `work.db.schema5`, `work.db.schema7-*`) and `exports_holding`. **`apply` and `tick` never delete a file:** a
+  change of the opt-in file by anything else (an agent too) must not cost a backup. `delete_copies(work_db, wanted)`
+  deletes those of WANTED that are deletable copies, nothing else and never an export; only `graph/privacy
+  {delete_copies}` calls it (not from the backend's connection), which the revoke and deny commands send after
+  asking, with the copies the first answer named. It must be the same command run: once excised, the values are
+  gone, so nothing could find those copies again. This covers a revoked opt-in, a new deny entry
+  and a change made while the hub was down alike. An entity already retired and excised since is skipped; relative
+  paths are not looked at. Added opt-ins need nothing: the next scan reads them. Link `data` is not excised (as for
+  every excise).
+- **The notice** is an `event` row (kind `status`, agent none) in the applied state's tx: "personal-file opt-ins
+  changed: +X / −Y", then "; your deny list: +A / −B", "; N ignored", "; N excised" when non-zero: counts, never a
+  path. `PrivacyReport.notice` carries the text; nothing is written and it is `None` when nothing changed.
+- **`tick(watch, writer, deny, home, config_dir)`**, from the hub's 2 s schema tick: at the first tick, and when
+  either file's `(mtime, size)` moved, it reloads the list into `deny`, then applies. The hub broadcasts a changed
+  report as a `notice` event (`id` `privacy-opt-ins`, severity `warn`) to every editor and wakes `coord/notify`. A
+  failure (a store not ready) is said once and tried again at the next tick.
+- **`graph/privacy {reload, delete_copies?}`** does the same at once for the commands: load, swap, apply, then
+  delete the named copies; the answer is the report plus `backups_removed`.
+- **The commands** (`drgnx-store-{allow,revoke}-personal-file`, `drgnx-store-{deny,undeny}-personal-path`) refuse
+  a folder, a path outside `~/org`, the board and the hard tier (the built-in names, mirrored in Lisp, and the
+  user's entries) before asking; confirm with the resolved path; write the file with `drgnx-file-write-text
+  :private t` (a temp file renamed, `0600`); refuse to overwrite a file with a mistake; then call `graph/privacy`
+  through `drgnx-hub-call-sync` (30 s). A hub that does not answer leaves the file written: the tick applies it.
+
 ## Scope and grants (Task 10)
 
 All in `norn::{scope, grants}`. The caller, its class and its project come from the connection, never from a tool's
@@ -563,8 +600,8 @@ is `not-allowed` even though its class is `user`.
   `not-allowed`, the registry's class check aside); the store's grant guard refuses any other tx too.
 - **`graph/settings {get} | {set: {only_user_closes}}`** → `{only_user_closes}`: `kv` key `setting:only-user-closes`,
   written in a user-class tx (the store's `setting:` guard). **`graph/privacy {reload}`** applies a change of the
-  personal-notes opt-ins (`norn::privacy`, Task 9b; until then it answers that it is not built yet); the hub's tick
-  also checks the opt-in files.
+  personal-notes opt-ins and deny entries at once (`norn::privacy`, "The opt-in" above); the hub's tick also checks
+  both files.
 - **Copies:** `graph/export {project?, out?, since?, history?, …}` (default `<data>/export/`), `graph/import {dir,
   …}` (never a `grant`: grants are made only through `graph/grants`), `graph/backup` (a dated
   `backup/work-YYYYMMDD.db`, rotated), `graph/compact` (Task 17; answers that it is not built yet).

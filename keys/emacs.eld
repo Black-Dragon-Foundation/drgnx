@@ -383,4 +383,8 @@
         (large-file-open-chunks :none "the header line's button; in the palette")
         (large-file-open-whole :none "the header line's button; in the palette")
         (large-file-open-raw :none "the header line's button; in the palette")
+        (store-allow-personal-file :none "rare: in the palette (Preferences)")
+        (store-revoke-personal-file :none "rare: in the palette (Preferences)")
+        (store-deny-personal-path :none "rare: in the palette (Preferences)")
+        (store-undeny-personal-path :none "rare: in the palette (Preferences)")
         (heap-audit :none "Help → Heap Audit")))

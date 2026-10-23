@@ -190,10 +190,12 @@ pub struct Filter {
     pub active: Option<bool>,
 }
 
-/// Put norn's class rules into GUARD: entities of kind `grant` and `kv` keys `setting:*` are the user's.
+/// Put norn's class rules into GUARD: entities of kind `grant` and `kv` keys `setting:*` and `privacy:*` are the
+/// user's.
 pub fn register(guard: &mut Guard) {
     guard::register(guard, "grant", Class::User, GRANTS_ARE_THE_USERS);
     guard::register_key_prefix(guard, SETTING_PREFIX, Class::User, SETTINGS_ARE_THE_USERS);
+    crate::privacy::register(guard);
 }
 
 /// The grants' version: the highest `updated_tx` of a grant row (0 when none).
