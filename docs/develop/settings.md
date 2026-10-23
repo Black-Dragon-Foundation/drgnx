@@ -163,7 +163,31 @@ settings only), and none of the rest.
 
 ## Provenance (Task 11)
 
-## The Lisp index (Task 12)
+## The Lisp index
+
+`core/drgnx-lisp-index.el` is a static read of your Lisp files (`custom.el`, `config.el`, `drgnx-user-lisp-files`):
+which variable each one sets, on which line. It reads the forms with positions and never evaluates them (`read-eval`
+is off; a file that stops reading gives what was found before the problem). Provenance (Task 11) uses it for the lines
+the dynamic record cannot give, and the Lisp files page (Task 28) and Move (Task 29) are built on it.
+
+- `(drgnx-lisp-index-file FILE)` returns `(:setters LIST :findings LIST)`.
+  - A setter is `(:var :kind :line :beg :end :top-level :conditional :const-p :value)`. `:kind` is `setq` (each pair
+    gets its own setter), `setq-default`, `setopt`, `customize-set-variable`, `custom-set-variables` (each entry, on
+    its own line) or `use-package-custom`. `:beg`/`:end` are buffer positions of the pair or entry.
+  - `:top-level` is t for a form at the top of the file, also inside a top-level `progn`. `:conditional` is t under
+    `when`, `unless`, `if`, `cond`, `with-eval-after-load`, an `add-hook` lambda, or a `use-package` `:config` (deferred
+    unless `:demand t`) and anything under `:if`/`:when`/`:unless`/`:requires`. Move refuses a conditional form.
+  - `:const-p` is t when `:value` is the literal value (a number, string, keyword, `nil`, `t`, a vector, `'X`, `#'f`),
+    else `:value` is the form as written.
+  - A finding is `(:kind :line :text)`: `custom-file` and `user-emacs-directory` (the file sets them),
+    `emacs-dir-use` (each use of `user-emacs-directory` or `locate-user-emacs-file`) and `buffer-local-setq` (a
+    top-level `setq` of an automatically buffer-local variable that this Emacs already knows).
+- `(drgnx-lisp-index-setters VAR FILES)` returns the setters of VAR in FILES, each with `:file`, through the cache.
+- The cache is `<cache>/lisp-index/<sha1 of the truename>.eld`, keyed by the file stamp (`drgnx-file-stamp`) and a
+  format version; a changed file is read again. `drgnx-lisp-index-get FILE` answers from it.
+- `drgnx-lisp-index-refresh` brings the cache up to date; `drgnx-lisp-index-schedule` runs it once at idle through
+  `drgnx-timer` (key `lisp-index`), never on the main thread at start. Tests: `drgnx-lisp-index/*`
+  (`test/unit/lisp-index-test.el`).
 
 ## Testing in a child Emacs (Task 5)
 
