@@ -69,17 +69,37 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   "This process's CPU time in ms (`current-cpu-time': (TICKS . HZ))."
   (let ((c (current-cpu-time))) (/ (* 1000.0 (car c)) (cdr c))))
 
+(defvar drgnx-perf--presents nil
+  "Per command, on a Glitnir build: ms from its start to the frame clock's after-paint that sent the next paint to
+the compositor (`wl_surface.commit'), on either side of an A/B.")
+
+(declare-function glitnir--now-ns "nidhogg-glitnir.c")
+(declare-function glitnir--last-paint "nidhogg-glitnir.c")
+
+(defun drgnx-perf--present-ns ()
+  "Glitnir's monotonic ns now (no allocation), or nil on a build without the present time."
+  (and (fboundp 'glitnir--last-paint) (plist-member (glitnir--last-paint) :present-ns) (glitnir--now-ns)))
+
 (defun drgnx-perf--pre ()
   (drgnx-perf--hooks-flush)
-  (setq drgnx-perf--t0 (list (float-time) (drgnx-perf--cpu-ms) (drgnx-perf--alloc-sum))))   ; allocation last
+  (let ((ns (drgnx-perf--present-ns)))
+    (setq drgnx-perf--t0 (list (float-time) (drgnx-perf--cpu-ms) (drgnx-perf--alloc-sum) ns))))   ; allocation last
+
+(defun drgnx-perf--await-present (ns)
+  "Wait (100 ms at most) for the first paint sent to the compositor after NS; push its delay, if it came."
+  (let ((end (+ (float-time) 0.1)) (p 0))
+    (while (and (< (setq p (plist-get (glitnir--last-paint) :present-ns)) ns) (< (float-time) end))
+      (accept-process-output nil 0.001))
+    (when (>= p ns) (push (/ (- p ns) 1e6) drgnx-perf--presents))))
 
 (defun drgnx-perf--finish (t0)
-  "The 0 s timer: the screen shows the command; record its wall, CPU and allocation."
+  "The 0 s timer: the screen shows the command; record its wall, CPU and allocation, then (Glitnir) its present."
   (redisplay)                           ; the screen showing the command is part of its latency
   (let ((alloc (drgnx-perf--alloc-sum)))
     (push (- alloc (nth 2 t0) 7) drgnx-perf--allocs)           ; less the first reading's own 7 conses
     (push (- (drgnx-perf--cpu-ms) (nth 1 t0)) drgnx-perf--cpus)
-    (push (* 1000 (- (float-time) (car t0))) drgnx-perf--latencies)))
+    (push (* 1000 (- (float-time) (car t0))) drgnx-perf--latencies))
+  (when (nth 3 t0) (drgnx-perf--await-present (nth 3 t0))))
 
 (defun drgnx-perf--post ()
   (when drgnx-perf--t0
@@ -109,7 +129,7 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
 compose probe: reset here, read by `drgnx-perf-end' under :compose)."
   (drgnx-perf--glitnir-env)
   (drgnx-perf--compose-stats t)
-  (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil
+  (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil drgnx-perf--presents nil
         drgnx-perf--gc-pauses nil drgnx-perf--gc-last gc-elapsed
         drgnx-perf--start (list gcs-done gc-elapsed (drgnx-perf-rss-kb) (drgnx-perf--rows)))
   (add-hook 'pre-command-hook #'drgnx-perf--pre -100)
@@ -120,8 +140,8 @@ compose probe: reset here, read by `drgnx-perf-end' under :compose)."
   "Stop recording: (:input STATS :alloc STATS :cpu_ms STATS :rows N :gc_count N :gc_ms MS :gc_pause STATS
 :rss_kb KB :rss_start_kb KB).  :input is wall ms, :alloc objects, :cpu_ms CPU ms, per command (pre-command-hook
 to the redisplay after it); :rows the growth of `drgnx-perf-row-counters'.  Allocation, CPU and rows do not move
-with the load on the machine; wall clock does.  :compose is Glitnir's record since `drgnx-perf-begin' (absent
-without Glitnir)."
+with the load on the machine; wall clock does.  :compose is Glitnir's record since `drgnx-perf-begin' and
+:present the commands' key-to-present ms (both absent without Glitnir)."
   (remove-hook 'pre-command-hook #'drgnx-perf--pre)
   (remove-hook 'post-command-hook #'drgnx-perf--post)
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
@@ -135,6 +155,8 @@ without Glitnir)."
            :gc_count (- gcs-done gcs) :gc_ms (drgnx-perf--round (* 1000 (- gc-elapsed elapsed)))
            :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--gc-pauses))
            :rss_kb (drgnx-perf-rss-kb) :rss_start_kb rss)
+     (and drgnx-perf--presents
+          (list :present (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--presents))))
      (and compose (list :compose compose)))))
 
 ;;;; Redisplay and frames

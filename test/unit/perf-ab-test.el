@@ -170,10 +170,26 @@ B's is round 1 (+/-4 ms)."
         (remove-hook 'post-command-hook #'drgnx-perf--post)
         (remove-hook 'post-gc-hook #'drgnx-perf--gc)))))
 
+(ert-deftest drgnx-perf/present-is-the-first-after-paint-after-the-key ()
+  ;; stand-ins for Glitnir's clock and last paint: the command's paint reaches the compositor 4 ms after its start
+  (let ((now 1000000000) (present 999000000))
+    (cl-letf (((symbol-function 'glitnir--now-ns) (lambda () now))
+              ((symbol-function 'glitnir--last-paint) (lambda () (list :commit-ns 0 :paint-ns 0 :present-ns present))))
+      (drgnx-perf-begin)
+      (unwind-protect
+          (progn (run-hooks 'pre-command-hook)
+                 (run-at-time 0.01 nil (lambda () (setq present (+ now 4000000))))
+                 (run-hooks 'post-command-hook)
+                 (sit-for 0.2))
+        (let ((r (drgnx-perf-end)))
+          (should (equal (plist-get (plist-get r :present) :n) 1))
+          (should (equal (plist-get (plist-get r :present) :p50) 4.0)))))))
+
 (ert-deftest drgnx-perf/compose-probe-absent-on-stock ()
   (should-not (fboundp 'glitnir-stats))
   (drgnx-perf-begin)
   (should-not (plist-member (drgnx-perf-end) :compose))
+  (should-not (plist-member (drgnx-perf-end) :present))
   (cl-letf (((symbol-function 'glitnir-stats) (lambda (&rest _) nil)))   ; inactive root: no stats
     (drgnx-perf-begin)
     (should-not (plist-member (drgnx-perf-end) :compose))))

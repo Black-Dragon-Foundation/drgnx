@@ -1347,10 +1347,13 @@ judged, not-comparable, error, not-judged."
 
 (defun drgnx-perf-ab--extra-lines (e)
   "The p95 verdict and, when the runs carry it, the probe verdict of the judged entry E, each on a line of its own."
-  (let ((p95 (plist-get e :p95-verdict)) (probe (plist-get e :probe-verdict)))
+  (let ((p95 (plist-get e :p95-verdict)) (probe (plist-get e :probe-verdict))
+        (pa (plist-get (plist-get e :a-run) :present)) (pb (plist-get (plist-get e :b-run) :present)))
     (concat (and p95 (concat "\n" (drgnx-perf-ab--verdict-line "p95" p95)))
             (and probe (not (eq (plist-get probe :verdict) 'not-comparable))
-                 (concat "\n" (drgnx-perf-ab--verdict-line "probe compose draw-ms p95" probe))))))
+                 (concat "\n" (drgnx-perf-ab--verdict-line "probe compose draw-ms p95" probe)))
+            (and pa pb (format "\n%-13s key to present (ms, REF/tree): p50 %s/%s p90 %s/%s" ""
+                               (plist-get pa :p50) (plist-get pb :p50) (plist-get pa :p90) (plist-get pb :p90))))))
 
 (cl-defun drgnx-perf-ab (ref &key (n 100) env)
   "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'

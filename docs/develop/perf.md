@@ -230,7 +230,16 @@ report prints each side's warm-up p50 next to the measured one.
 **The `compose` probe.** When `glitnir-stats` is bound, `drgnx-perf-begin` resets it and `drgnx-perf-end` stores its
 plist under `:compose` (`(:compose :compose-ms :p95)`, `(:compose :draw-ms :p95)`, `(:compose :painted-px)`,
 `(:compose :count)`, ...), median-reduced over the three runs like every other number. On a build without Glitnir, or
-when the stats are nil (an inactive root), there is no `:compose` row and nothing fails. `DRGNX_PERF_GLITNIR=on|off`
+when the stats are nil (an inactive root), there is no `:compose` row and nothing fails.
+
+**Key to present.** `:input` ends at the redisplay after the command, but the picture reaches the compositor at the
+frame clock's after-paint, which may come later, and when it comes differs between Glitnir on and off. On a build
+whose `glitnir--last-paint` has `:present-ns` (that after-paint's time), each command also records the time from its
+start to the first after-paint that sent a paint, waiting for it (100 ms at most) after the command's own numbers are
+taken; a run stores them as `:present` (stats, as for `:input`), on both sides of an A/B. The A/B prints them as
+`key to present (ms, REF/tree): p50 …/… p90 …/…` under each judged workload: reported, not judged.
+
+`DRGNX_PERF_GLITNIR=on|off`
 sets `glitnir-enable` in the session when recording begins (any other value leaves it alone); `drgnx test --perf`
 passes it on to the session.
 
