@@ -1,0 +1,10 @@
+: OPENROUTER PROCESSING
+
+data: {"choices":[{"delta":{"content":"héllo"}}]}
+
+: OPENROUTER PROCESSING
+
+data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.0042}}
+
+data: [DONE]
+
