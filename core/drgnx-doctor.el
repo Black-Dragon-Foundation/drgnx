@@ -757,6 +757,42 @@ It only informs: nothing runs in the sandbox yet (phase 6), so the check's statu
                      :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory"
                      :check (lambda (f) (drgnx-doctor--ratatoskr-check (plist-get f :ratatoskr))))
 
+;; The work store (work.db, Urdr): the `store' section of `ratatoskr doctor --json' (schema, a failed migration, the
+;; WAL, the backups, the personal-notes opt-in file, the copies a deny-list kept text out of).
+(defun drgnx-doctor--store-check (f)
+  "The `store' check of the fact F (`drgnx-doctor--ratatoskr'): a failed migration fails, any warning warns."
+  (let* ((store (plist-get (plist-get (plist-get f :ratatoskr) :report) :store))
+         (failed (plist-get store :failed))
+         (warnings (append (plist-get store :warnings) nil))
+         (denied (append (plist-get store :denied_in) nil))
+         (age (plist-get store :backup_age_s)))
+    (cond
+     ((null store) (list 'ok "no work.db yet, or no answer from the hub" nil))
+     (failed
+      (list 'fail (format "the move of work.db to schema 7 failed: %s" failed)
+            "`ratatoskr store restore-pre7' (hub stopped) puts the pre-migration copy back; install the previous drgnx"))
+     (warnings
+      (list 'warn (string-join warnings "; ")
+            (if denied
+                (format "remove the copies once you no longer need them: %s" (string-join denied ", "))
+              "see docs/guide/work.md, \"The graph from the command line\"")))
+     (denied
+      (list 'warn (format "the migration kept personal notes out; these copies still hold them: %s" (string-join denied ", "))
+            "remove them once you no longer need them"))
+     (t (list 'ok (format "schema %s%s%s; %d personal-notes opt-in%s"
+                          (or (plist-get store :schema) "?")
+                          (if-let* ((w (plist-get store :wal_bytes)))
+                              (format ", WAL %d KiB" (/ w 1024))
+                            "")
+                          (if age (format ", last backup %d h ago" (/ age 3600)) ", no backup yet")
+                          (or (plist-get (plist-get store :deny_list) :opted_in) 0)
+                          (if (eql (or (plist-get (plist-get store :deny_list) :opted_in) 0) 1) "" "s"))
+              nil)))))
+
+(drgnx-doctor-define 'store :group "Agents"
+                     :doc "The work store (work.db): its schema, WAL size, nightly backups, opt-in file and old copies"
+                     :check (lambda (f) (drgnx-doctor--store-check f)))
+
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
                               (let* ((p (plist-get f :packages))

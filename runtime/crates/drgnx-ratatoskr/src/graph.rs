@@ -45,8 +45,8 @@ use urdr::graph::schema::SENTINEL;
 use urdr::graph::walk::{self, Seen};
 use urdr::graph::writer::Blocker;
 use urdr::graph::{
-    Class as TxClass, Tx, TxMeta, WriteError, WriterHandle, Written, backup, excise, export, hist,
-    link, search, sqlro,
+    Class as TxClass, Tx, TxMeta, WriteError, WriterHandle, Written, backup, compact, excise,
+    export, hist, link, search, sqlro,
 };
 
 /// Where the store's other files are (set by the server once the store is open).
@@ -237,9 +237,8 @@ pub async fn serve(
         Params::GraphExport(p) => export_of(w, tools, p).await,
         Params::GraphImport(p) => import(w, tools, caller, p).await,
         Params::GraphBackup(_) => backup_now(tools).await,
-        Params::GraphCompact(_) => Err(internal(
-            "graph/compact is not built yet (Urdr Task 17 brings compaction)",
-        )),
+        Params::GraphCompact(p) => compact_of(w, tools, caller, p).await,
+        Params::GraphScrub(_) => scrub_of(w, caller).await,
         Params::GraphSettings(p) => settings(w, caller, p).await,
         Params::GraphPrivacy(_) => privacy(tools, dirs).await,
         Params::TasksReady(p) => tasks_ready(w, p).await,
@@ -615,6 +614,64 @@ fn transcripts(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+fn blocker(b: Option<Blocker>) -> Option<String> {
+    b.map(|b| {
+        match b {
+            Blocker::Readers => "readers",
+            Blocker::Writer => "writer",
+        }
+        .to_owned()
+    })
+}
+
+/// `graph/scrub`: `VACUUM` and a TRUNCATE checkpoint as a writer request (what an excise ends with, on its own).
+async fn scrub_of(w: &Writer, caller: &Caller) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed("", "only the user scrubs: the backend's connection never does"));
+    }
+    let writer =
+        w.db.graph_writer()
+            .cloned()
+            .ok_or_else(|| internal("the graph store is not open"))?;
+    let s = excise::scrub(&writer).await.map_err(fail)?;
+    Ok(json!(api::ScrubAnswer {
+        vacuumed: s.vacuumed,
+        wal_truncated: s.wal_truncated,
+        blocked_by: blocker(s.blocked_by),
+    }))
+}
+
+/// `graph/compact`: parsed entities' old versions thinned, retired sessions' stats folded (`dry_run`: counted only).
+async fn compact_of(
+    w: &Writer,
+    tools: &Coord,
+    caller: &Caller,
+    p: api::CompactParams,
+) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed(
+            "",
+            "only the user compacts: the backend's connection never does",
+        ));
+    }
+    let (g, _) = store(tools)?;
+    let dry = p.dry_run == Some(true);
+    let r = if dry {
+        compact::dry_run(&g.pool).await
+    } else {
+        compact::run(&g.writer, &g.pool, coord::tx_meta(caller, "graph/compact")).await
+    }
+    .map_err(fail)?;
+    if !dry && r != compact::Report::default() {
+        w.signals.wrote();
+    }
+    Ok(json!(api::CompactAnswer {
+        versions: r.versions,
+        link_stats: r.link_stats,
+        dry_run: dry,
+    }))
+}
+
 /// `graph/excise`: the excise, the scrub after it, then the copies outside work.db that hold the text (removed or
 /// redacted on request).
 async fn excise_of(
@@ -633,6 +690,8 @@ async fn excise_of(
         w.db.graph_writer()
             .cloned()
             .ok_or_else(|| internal("the graph store is not open"))?;
+    // no nightly copy starts while this runs (it would copy the text just before it is blanked)
+    let _excising = crate::backup_timer::excising();
     let target = match &p.target {
         api::ExciseTarget::Tx(n) => excise::Target::Tx(int(*n)),
         api::ExciseTarget::Entity(id) => excise::Target::Entity(id.to_string()),
@@ -664,13 +723,7 @@ async fn excise_of(
         Ok(s) => {
             a.vacuumed = s.vacuumed;
             a.wal_truncated = s.wal_truncated;
-            a.blocked_by = s.blocked_by.map(|b| {
-                match b {
-                    Blocker::Readers => "readers",
-                    Blocker::Writer => "writer",
-                }
-                .to_owned()
-            });
+            a.blocked_by = blocker(s.blocked_by);
         }
         Err(e) => tracing::warn!("the scrub after an excise failed: {e}"),
     }
@@ -1143,7 +1196,13 @@ async fn import(
 /// `graph/backup`: `<data>/backup/work-YYYYMMDD.db`, then the rotation.
 async fn backup_now(tools: &Coord) -> Result<Value, Error> {
     let (g, _) = store(tools)?;
-    let dir = data_dir(&g).join("backup");
+    Ok(json!(run_backup(&g).await))
+}
+
+/// A checked copy in `<data>/backup/` and the rotation after it, logged and recorded for `status.store` and the
+/// doctor (the nightly timer's body, and `graph/backup`'s).
+pub async fn run_backup(g: &GraphStore) -> api::BackupAnswer {
+    let dir = data_dir(g).join("backup");
     let day: String = crate::log::rfc3339(now() as u64)
         .chars()
         .take(10)
@@ -1158,14 +1217,19 @@ async fn backup_now(tools: &Coord) -> Result<Value, Error> {
     } else {
         Vec::new()
     };
-    Ok(json!(api::BackupAnswer {
+    crate::backup_timer::record(now() as u64, r.ok);
+    match &r.error {
+        None => tracing::info!(bytes = r.bytes, ms = r.ms, "backup {}", r.path.display()),
+        Some(e) => tracing::warn!("backup {} failed: {e}", r.path.display()),
+    }
+    api::BackupAnswer {
         path: show(&r.path),
         ok: r.ok,
         error: r.error,
         bytes: r.bytes,
         ms: r.ms,
         removed: removed.iter().map(|p| show(p)).collect(),
-    }))
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------- settings

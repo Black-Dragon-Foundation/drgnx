@@ -121,6 +121,7 @@ params! {
     GraphImport(graph::ImportParams),
     GraphBackup(Empty),
     GraphCompact(graph::CompactParams),
+    GraphScrub(Empty),
     GraphSettings(graph::SettingsParams),
     GraphPrivacy(graph::PrivacyParams),
     TasksReady(tasks::ReadyParams),

@@ -242,6 +242,23 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
 - **`rotate(dir, Policy { daily: 7, weekly: 4 })`** keeps the newest 7 `work-YYYYMMDD.db` and the newest 4 Sundays,
   and removes the rest. Other names (`work-pre7-*.db`, `.tmp`) are never touched.
 
+### The nightly copy and compaction (Task 17)
+
+- **Schedule.** `drgnx_ratatoskr::backup_timer` (pure `due(now, last_ok, since_attempt)`, the clock injected): a copy
+  is due when the local time is 03:00 or later, no good copy was made today, and the last try is over an hour old (a
+  failure is retried hourly, not every tick). The hub's 2 s schema tick asks it, so a hub that was off at 03:00 copies
+  at its first tick after it is ready. At start the newest `work-*.db` seeds the record, so a restart does not copy
+  twice a day. No copy starts while an excise runs (`backup_timer::excising`) or the writer is not `Ready`.
+- **Record.** `graph::run_backup` (the body of `graph/backup` and of the timer) logs and records the outcome;
+  `status.store.last_backup` (RFC 3339) and `backup_ok` come from it.
+- **`graph::compact`** (`graph/compact`, user only, never from the backend's connection): per batch of 500 parsed
+  entities, one writer request deletes the `entity_hist` versions that a later version of the same UTC day makes
+  redundant (the kept version takes over the dropped one's `tx_from`, so as-of reads find no gap), then batches of
+  500 `link_stat` rows of retired `session` entities that point at a `file` fold into a `<kind>_total` row whose
+  `src` and `dst` are both the file. Other origins and kinds are never read for deletion. A batch with nothing to do
+  writes nothing, not even a `tx`. `dry_run` counts on a pool connection.
+- **`graph/scrub`** is `Maintenance::Scrub` on its own (what an excise ends with).
+
 ## Export and import (Task 7)
 
 `graph::export` writes and reads a directory of JSONL files.
@@ -567,7 +584,11 @@ is `not-allowed` even though its class is `user`.
   also checks the opt-in files.
 - **Copies:** `graph/export {project?, out?, since?, history?, …}` (default `<data>/export/`), `graph/import {dir,
   …}` (never a `grant`: grants are made only through `graph/grants`), `graph/backup` (a dated
-  `backup/work-YYYYMMDD.db`, rotated), `graph/compact` (Task 17; answers that it is not built yet).
+  `backup/work-YYYYMMDD.db`, rotated), `graph/compact {dry_run?}` and `graph/scrub` (Task 17: "The nightly copy and
+  compaction"). `ratatoskr graph …` (`drgnx graph …`) is a client of these methods (`graph_cli.rs`); the doctor's
+  `store` section is `ratatoskr doctor --json`'s: the schema, a failed move, the WAL (a warning above 64 MiB), the last
+  backup's age (above 48 h) and check, the opt-in file's warnings and count, and the pre-migration copies. It does not
+  open the live file: the full-text and integrity checks run on each copy before it is kept.
 - **Tasks for the editor:** `tasks/ready {labels?, limit?, project?}` and `tasks/find {query?, status?, assignee?,
   labels?, project?, cursor?}` → `{tasks: [{id, title, status, priority, assignee, labels, project, ver, lease}],
   cursor?}` (50 at a time); `tasks/write {op, …}` runs one tracker op as the user (`create` needs `project` or

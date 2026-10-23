@@ -886,6 +886,32 @@ what `ratatoskr doctor --json' said)."
              unless (memq k '(:commit :running :socket :hooks :sandbox)) do (setq fact (plist-put fact k v)))
     (drgnx-doctor-test--facts :ratatoskr fact)))
 
+(ert-deftest drgnx-doctor/store-section ()
+  ;; the `store' check reads the `store' section of `ratatoskr doctor --json': ok with the facts, a warning for any of
+  ;; its warnings or for copies that hold personal notes, a failure for a migration that failed
+  (let ((check (lambda (store)
+                 (let* ((fact (plist-get (drgnx-doctor-test--rtsk) :ratatoskr))
+                        (fact (plist-put fact :report (plist-put (plist-get fact :report) :store store))))
+                   (drgnx-doctor-check 'store (list :ratatoskr fact))))))
+    (let ((r (funcall check '(:schema 7 :writer "ready" :wal_bytes 4096 :backup_age_s 7200 :backup_ok t
+                                      :warnings [] :deny_list (:opted_in 2 :warnings []) :denied_in []))))
+      (should (eq (car r) 'ok))
+      (should (string-search "schema 7, WAL 4 KiB, last backup 2 h ago; 2 personal-notes opt-ins" (nth 1 r))))
+    (let ((r (funcall check '(:schema 7 :backup_age_s 200000
+                                      :warnings ["the last backup is 55 hours old (the nightly one runs at 03:00): `drgnx graph backup'"
+                                                 "work.db-wal is 80 MiB (above 64 MiB): close idle editors so it can be checkpointed"]))))
+      (should (eq (car r) 'warn))
+      (should (string-search "55 hours old" (nth 1 r)))
+      (should (string-search "close idle editors" (nth 1 r))))
+    (let ((r (funcall check '(:schema 7 :denied_in ["/d/backup/work-pre7-1.db"]))))
+      (should (eq (car r) 'warn))
+      (should (string-search "work-pre7-1.db" (nth 1 r))))
+    (let ((r (funcall check '(:schema 6 :failed "entities step failed"))))
+      (should (eq (car r) 'fail))
+      (should (string-search "restore-pre7" (nth 2 r))))
+    ;; no section (no hub, no work.db): nothing to say
+    (should (eq (car (funcall check nil)) 'ok))))
+
 (ert-deftest drgnx-doctor/ratatoskr-report-is-read-from-the-binary ()
   ;; the report is exactly the binary's output: no "Process finished" line from a default sentinel (found by the e2e run)
   (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))

@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
-    const FRONT_WRITES: [&str; 26] = [
+    const FRONT_WRITES: [&str; 27] = [
         "cards/settle",
         "messages/send",
         "messages/mark",
@@ -447,6 +447,7 @@ mod tests {
         "graph/proposed",
         "graph/import",
         "graph/compact",
+        "graph/scrub",
         "graph/settings",
         "graph/privacy",
         "tasks/write",

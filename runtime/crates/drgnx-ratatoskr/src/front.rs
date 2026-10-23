@@ -301,6 +301,10 @@ impl Front {
         };
         if let Some(g) = self.tools.graph() {
             st.readers = Some(g.pool.in_use() as u64);
+            if let Some((at, ok)) = crate::backup_timer::last().attempt {
+                st.last_backup = Some(crate::log::rfc3339(at));
+                st.backup_ok = Some(ok);
+            }
         }
         if let Some(w) = self.writer.db.graph_writer() {
             let ws = w.status();
