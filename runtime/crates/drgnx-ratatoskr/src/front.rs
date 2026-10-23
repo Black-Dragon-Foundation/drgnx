@@ -626,7 +626,8 @@ mod tests {
         assert_eq!(v["job_agents"], JOB_AGENTS);
         assert_eq!(
             v["store"],
-            json!({"schema": 0, "writer": "not-ready", "writes": 0})
+            // the store's writer made the file (schema 7) when it was spawned: its WAL is there, empty
+            json!({"schema": 0, "writer": "not-ready", "wal_bytes": 0, "writes": 0})
         );
         assert_eq!(v["mcp"], json!({"sessions": 0, "outside": 0}));
         assert!(v.get("read_only").is_none(), "{v}");

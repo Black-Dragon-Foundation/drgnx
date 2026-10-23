@@ -18,6 +18,8 @@ use serde_json::{Value, json};
 
 use super::{Coord, Ctx, Identity};
 use crate::write::cards::{NewCard, card_create};
+use crate::write::meta::{get_text, put_text};
+use urdr::graph::{Class, TxMeta};
 
 /// The arguments that would name who calls (`drgnx-coord-mcp--identity-args`).
 pub const IDENTITY_ARGS: [&str; 5] = ["agent", "from", "sender", "as", "identity"];
@@ -179,28 +181,19 @@ impl Coord {
     /// (`drgnx-coord-mcp--tell-held`).  Best effort: a failed write tells nobody and fails nothing.
     async fn tell_held(&self, me: &str, job: Option<&str>, now: f64) {
         let (who, job) = (me.to_owned(), job.map(str::to_owned));
+        // the card is the hub's note to the user, not the agent's own write
+        let meta = TxMeta::new("hub", Class::System, "mcp:rate-card");
         let told = self
             .db
-            .write(move |tx| {
+            .write(meta, move |tx| {
                 let key = format!("rate-told:{who}");
-                let stamp: Option<String> = match tx.query_row(
-                    "select value from meta where key = ?1",
-                    [&key],
-                    |r| r.get(0),
-                ) {
-                    Ok(v) => Some(v),
-                    Err(urdr::SqliteError::QueryReturnedNoRows) => None,
-                    Err(e) => return Err(e.into()),
-                };
+                let stamp = get_text(tx.sql(), &key)?;
                 if let Some(last) = stamp.as_deref().map(lisp_number)
                     && now - last < TELL_EVERY
                 {
                     return Ok(Some(last));
                 }
-                tx.execute(
-                    "insert or replace into meta values (?1, ?2)",
-                    (&key, now.to_string()),
-                )?;
+                put_text(tx, &key, &now.to_string())?;
                 card_create(
                     tx,
                     NewCard {

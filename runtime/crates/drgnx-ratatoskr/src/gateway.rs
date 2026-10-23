@@ -146,7 +146,10 @@ impl Ledger for WorkLedger {
             let at = now();
             if let Err(e) = self
                 .0
-                .write(move |tx| norn::write::spend::add_spend(tx, &r, at))
+                .write(
+                    urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "gateway"),
+                    move |tx| norn::write::spend::add_spend(tx.sql(), &r, at),
+                )
                 .await
             {
                 tracing::warn!(provider, "a spend row was not recorded: {e}");

@@ -94,8 +94,8 @@ async fn read_inbox(coord: &Coord, who: &Identity) -> Result<String, String> {
     let now = coord.now();
     let rows = coord
         .db()
-        .write(move |tx| {
-            let rows = inbox(tx, &me, &["queued", "delivered"])?;
+        .write(who.tx_meta("mcp:read_inbox"), move |tx| {
+            let rows = inbox(tx.sql(), &me, &["queued", "delivered"])?;
             for m in &rows {
                 mark(tx, m.id, "read", now)?;
             }
@@ -149,7 +149,7 @@ async fn ack(coord: &Coord, who: &Identity, args: AckArgs) -> Result<String, Str
     let now = coord.now();
     let moved = coord
         .db()
-        .write(move |tx| mark(tx, id, "acted", now))
+        .write(who.tx_meta("mcp:ack"), move |tx| mark(tx, id, "acted", now))
         .await
         .map_err(err)?;
     if moved {
@@ -219,7 +219,9 @@ async fn read_decisions(
     {
         coord
             .db()
-            .write(move |tx| set_seen(tx, &me, v))
+            .write(who.tx_meta("mcp:read_decisions"), move |tx| {
+                set_seen(tx, &me, v)
+            })
             .await
             .map_err(err)?;
     }
@@ -469,7 +471,8 @@ fn counts(tx: &Tx, plan: &str) -> Result<(Pair, Pair, Pair, usize), CoordError> 
 /// One row per plan, sorted by path (`drgnx-work--status-rows`).
 fn status_rows(tx: &Tx) -> Result<Vec<PlanRow>, CoordError> {
     let mut plans: Vec<Node> = {
-        let mut st = tx.prepare(&format!("{NODE_SELECT} where kind = 'plan' order by rowid"))?;
+        // `node` is a view (no rowid): plans with the same path (or none) keep id order
+        let mut st = tx.prepare(&format!("{NODE_SELECT} where kind = 'plan' order by id"))?;
         let rows = st.query_map([], node_row!())?;
         rows.collect::<Result<_, _>>()?
     };

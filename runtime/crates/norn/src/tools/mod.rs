@@ -47,6 +47,17 @@ pub enum Identity {
     None,
 }
 
+impl Identity {
+    /// The `tx` row of a write by this caller through the tool TOOL (`mcp:<name>`): class `agent` for a session
+    /// drgnx runs, `ext` for an outside agent (and for no identity), its session, profile and job.  The project is
+    /// the one the hub resolved for the caller's folder (`Caller::from_identity`'s cache); this default cache has
+    /// none, so a tool that writes into a project passes its own [`crate::scope::Caller`].
+    pub fn tx_meta(&self, tool: &str) -> urdr::graph::TxMeta {
+        crate::scope::Caller::from_identity(self, &crate::project::ProjectCache::default())
+            .tx_meta(tool)
+    }
+}
+
 /// A row of the backend's `agents/list`.
 pub type SessionRow = runstav::methods::agents::Snapshot;
 

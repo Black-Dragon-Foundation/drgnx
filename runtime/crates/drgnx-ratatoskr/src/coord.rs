@@ -16,7 +16,7 @@ use crate::dispatch::{Caller, Forward};
 use crate::front::Front;
 use mimir::BoxFuture;
 use norn::read::decisions::{self as decision_log, Decision as Logged};
-use norn::store::{CoordDb, CoordError, Tx};
+use norn::store::{CoordDb, CoordError, WTx};
 use norn::tools::{Hub, SessionRow};
 use norn::write::{agents, cards, decisions, event, jobs, messages, meta, prune, review, tasks};
 use runstav::methods::Params;
@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
+use urdr::graph::{Class as TxClass, TxMeta};
 
 /// The `events` broadcast's and the backend notification's pace.
 pub const PACE: Duration = Duration::from_millis(250);
@@ -76,19 +77,54 @@ pub struct Writer {
 }
 
 impl Writer {
-    /// F in one transaction.  A file that was not ready is looked at again first (norn's store does, for the tools
-    /// too): a work.db the Lisp side just made is written at once, not at the next tick.
-    async fn write<R, F>(&self, f: F) -> Result<R, CoordError>
+    /// F in one transaction of the graph writer, its `tx` row from CALLER and METHOD (see [`tx_meta`]).  A store that
+    /// was not ready is looked at again first (norn's store does, for the tools too): a work.db the migration just
+    /// finished is written at once, not at the next tick.
+    async fn write<R, F>(
+        &self,
+        caller: &Caller,
+        method: &'static str,
+        f: F,
+    ) -> Result<R, CoordError>
     where
         R: Send + 'static,
-        F: FnOnce(&Tx) -> Result<R, CoordError> + Send + 'static,
+        F: FnOnce(&mut WTx<'_>) -> Result<R, CoordError> + Send + 'static,
     {
-        let r = self.db.write(f).await;
+        let r = self.db.write(tx_meta(caller, method), f).await;
         if r.is_ok() {
             self.signals.wrote();
         }
         r
     }
+}
+
+/// The `tx` row of a front method's write (Urdr Task 12): who it is comes from the connection, never from a param.
+/// - the Lisp backend's connection (`caller.backend`): actor `backend`, class `system`;
+/// - a seam method (`coord/*`) from anyone else: actor `hub`, class `system`;
+/// - the editor's own methods (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's connection:
+///   actor `user`, class `user`;
+/// - an agent socket's session: actor `agent:SID`, class `agent`.
+///
+/// `tool` is `proto:<method>`.
+pub fn tx_meta(caller: &Caller, method: &str) -> TxMeta {
+    let tool = format!("proto:{method}");
+    let mut meta = if caller.backend {
+        TxMeta::new("backend", TxClass::System, tool)
+    } else if method.starts_with("coord/") {
+        TxMeta::new("hub", TxClass::System, tool)
+    } else {
+        match (caller.class, &caller.sid) {
+            (Class::User, _) => TxMeta::new("user", TxClass::User, tool),
+            (Class::Agent, Some(sid)) => {
+                let mut m = TxMeta::new(format!("agent:{sid}"), TxClass::Agent, tool);
+                m.session = Some(sid.clone());
+                m
+            }
+            _ => TxMeta::new("hub", TxClass::System, tool),
+        }
+    };
+    meta.job = caller.job.clone();
+    meta
 }
 
 /// A writer's error as the method answers it.
@@ -159,8 +195,10 @@ pub async fn serve(
     let answer = match params {
         Params::CardsSettle(p) => {
             let (card, choice) = (int(p.card), p.choice.into_inner());
-            w.write(move |tx: &Tx| cards::card_settle(tx, card, &choice, now))
-                .await
+            w.write(caller, "cards/settle", move |tx| {
+                cards::card_settle(tx, card, &choice, now)
+            })
+            .await
                 .map(|settled| json!(api::Settled { settled }))
         }
         Params::MessagesSend(p) => {
@@ -180,7 +218,7 @@ pub async fn serve(
                 answers: p.answers.map(int),
                 question: p.question == Some(true),
             };
-            w.write(move |tx: &Tx| {
+            w.write(caller, "messages/send", move |tx| {
                 Ok(match messages::send(tx, s.clone(), now)? {
                     messages::SendResult::Ok { id, state } => api::SendResult {
                         ok: Some(true),
@@ -192,7 +230,7 @@ pub async fn serve(
                         held: Some(true),
                         version: Some(version),
                         changes: Some(
-                            decision_log::decisions_since(tx, seen, None)?
+                            decision_log::decisions_since(tx.sql(), seen, None)?
                                 .into_iter()
                                 .map(decision)
                                 .collect(),
@@ -206,8 +244,10 @@ pub async fn serve(
         }
         Params::MessagesMark(p) => {
             let (id, state) = (int(p.id), p.state.as_str());
-            w.write(move |tx: &Tx| messages::mark(tx, id, state, now))
-                .await
+            w.write(caller, "messages/mark", move |tx| {
+                messages::mark(tx, id, state, now)
+            })
+            .await
                 .map(|changed| json!(api::Changed { changed }))
         }
         Params::EventsAdd(p) => {
@@ -223,7 +263,10 @@ pub async fn serve(
                 turn: turn(data.as_ref()),
                 data: data.map(Value::Object),
             };
-            match w.write(move |tx: &Tx| event::event(tx, e.clone())).await {
+            match w
+                .write(caller, "events/add", move |tx| event::event(tx, e.clone()))
+                .await
+            {
                 Err(CoordError::Busy) if best_effort => Ok(json!({})),
                 r => r.map(|id| {
                     json!(api::Added {
@@ -249,7 +292,7 @@ pub async fn serve(
                     data: data.map(Value::Object),
                 }
             });
-            w.write(move |tx: &Tx| {
+            w.write(caller, "review/mark", move |tx| {
                 review::review_mark(tx, &agent, &path, state, &hash, now, ev.clone())
             })
             .await
@@ -281,24 +324,30 @@ pub async fn serve(
                     .collect(),
                 data: p.data.map(|d| Value::Object(d.into_inner())),
             };
-            w.write(move |tx: &Tx| jobs::job_create(tx, j.clone(), now))
-                .await
+            w.write(caller, "coord/job-create", move |tx| {
+                jobs::job_create(tx, j.clone(), now)
+            })
+            .await
                 .map(|id| json!(api::JobCreated { id }))
         }
         Params::CoordJobSet(p) => {
             let id = p.id.as_str().to_owned();
             let status = p.status.map(|s| s.as_str().to_owned());
             let data = p.data.map(|d| Value::Object(d.into_inner()));
-            w.write(move |tx: &Tx| jobs::job_set(tx, &id, status.as_deref(), data.as_ref(), now))
-                .await
+            w.write(caller, "coord/job-set", move |tx| {
+                jobs::job_set(tx, &id, status.as_deref(), data.as_ref(), now)
+            })
+            .await
                 .map(|()| json!(true))
         }
         Params::CoordTaskStatus(p) => {
             let task = p.task.as_str().to_owned();
             let status = p.status.as_str().to_owned();
             let agent = p.agent.map(|a| a.as_str().to_owned());
-            w.write(move |tx: &Tx| tasks::force_status(tx, &task, &status, agent.as_deref(), now))
-                .await
+            w.write(caller, "coord/task-status", move |tx| {
+                tasks::force_status(tx, &task, &status, agent.as_deref(), now)
+            })
+            .await
                 .map(|ok| json!(ok))
         }
         Params::CoordLeases(p) => {
@@ -310,7 +359,7 @@ pub async fn serve(
                 .map(|a| a.as_str().to_owned())
                 .collect();
             let stale = p.release_stale == Some(true);
-            w.write(move |tx: &Tx| {
+            w.write(caller, "coord/leases", move |tx| {
                 for agent in &renew {
                     tasks::renew(tx, agent, now)?;
                 }
@@ -346,8 +395,10 @@ pub async fn serve(
                 replaces: p.replaces.map(int),
                 job: p.job.map(|j| j.as_str().to_owned()),
             };
-            w.write(move |tx: &Tx| decisions::decide(tx, d.clone(), now))
-                .await
+            w.write(caller, "coord/decide", move |tx| {
+                decisions::decide(tx, d.clone(), now)
+            })
+            .await
                 .map(|r| {
                     json!(match r {
                         decisions::DecideResult::Ok { n, status, version } => api::Decided {
@@ -391,8 +442,10 @@ pub async fn serve(
                         .filter_map(|f| agents::AgentField::parse(f.as_str()))
                         .collect(),
                 };
-                w.write(move |tx: &Tx| agents::agent_register(tx, r.clone(), now))
-                    .await
+                w.write(caller, "coord/agent", move |tx| {
+                    agents::agent_register(tx, r.clone(), now)
+                })
+                .await
                     .map(|id| {
                         json!(api::AgentResult {
                             id: Some(id),
@@ -403,7 +456,9 @@ pub async fn serve(
             (None, Some(id)) => {
                 let id = id.as_str().to_owned();
                 match w
-                    .write(move |tx: &Tx| agents::agent_seen(tx, &id, now))
+                    .write(caller, "coord/agent", move |tx| {
+                        agents::agent_seen(tx, &id, now)
+                    })
                     .await
                 {
                     // telemetry: a busy file is no error
@@ -429,8 +484,10 @@ pub async fn serve(
                 title: p.title.map(|t| t.as_str().to_owned()),
                 data: p.data.map(|d| Value::Object(d.into_inner())),
             };
-            w.write(move |tx: &Tx| cards::card_create(tx, c.clone(), now))
-                .await
+            w.write(caller, "coord/card-create", move |tx| {
+                cards::card_create(tx, c.clone(), now)
+            })
+            .await
                 .map(|id| {
                     json!(api::CardCreated {
                         id: id.max(0) as u64
@@ -444,21 +501,30 @@ pub async fn serve(
                 data: p.data.map(|d| Value::Object(d.into_inner())),
                 state: p.state.map(|s| s.as_str().to_owned()),
             };
-            w.write(move |tx: &Tx| cards::card_set(tx, id, set.clone(), now))
-                .await
+            w.write(caller, "coord/card-set", move |tx| {
+                cards::card_set(tx, id, set.clone(), now)
+            })
+            .await
                 .map(|()| json!(true))
         }
         Params::CoordHeld(p) => {
             let agent = p.agent.as_str().to_owned();
             // the Lisp's argument counts only as non-nil
             let held = p.held.then_some(0);
-            w.write(move |tx: &Tx| meta::note_held(tx, &agent, held))
-                .await
+            w.write(caller, "coord/held", move |tx| {
+                meta::note_held(tx, &agent, held)
+            })
+            .await
                 .map(|()| json!(true))
         }
         Params::CoordPrune(_) => {
             // the daily prune never fails its caller: the next day's runs
-            let pruned = match w.write(move |tx: &Tx| prune::prune_daily_tx(tx, now)).await {
+            let pruned = match w
+                .write(caller, "coord/prune", move |tx| {
+                    prune::prune_daily_tx(tx, now)
+                })
+                .await
+            {
                 Ok(ran) => ran,
                 Err(e) => {
                     tracing::info!("the daily event prune did not run: {e}");
@@ -595,9 +661,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tx_meta_per_caller_kind() {
+        let user = tx_meta(&caller(false), "cards/settle");
+        assert_eq!(
+            (user.actor.as_str(), user.class, user.tool.as_str()),
+            ("user", TxClass::User, "proto:cards/settle")
+        );
+        // the seam's methods are the hub's, the backend's own connection is the backend
+        let seam = tx_meta(&caller(false), "coord/decide");
+        assert_eq!(
+            (seam.actor.as_str(), seam.class, seam.tool.as_str()),
+            ("hub", TxClass::System, "proto:coord/decide")
+        );
+        let backend = tx_meta(&caller(true), "messages/send");
+        assert_eq!(
+            (backend.actor.as_str(), backend.class),
+            ("backend", TxClass::System)
+        );
+        // an agent socket's session writes as itself, with its job
+        let agent = tx_meta(
+            &Caller {
+                class: Class::Agent,
+                sid: Some("s-1".into()),
+                job: Some("j".into()),
+                conn_id: 2,
+                backend: false,
+            },
+            "events/add",
+        );
+        assert_eq!(
+            (
+                agent.actor.as_str(),
+                agent.class,
+                agent.session.as_deref(),
+                agent.job.as_deref()
+            ),
+            ("agent:s-1", TxClass::Agent, Some("s-1"), Some("j"))
+        );
+    }
+
     #[tokio::test]
     async fn not_ready_is_internal_with_its_text() {
         let dir = tempfile::tempdir().unwrap();
+        // a schema-5 file: the opening rule's text, as an internal error
+        let file = dir.path().join("work.db");
+        urdr::Connection::open(&file)
+            .unwrap()
+            .execute_batch(
+                "create table meta (key text primary key, value text); insert into meta values ('schema', '5');",
+            )
+            .unwrap();
         let w = writer(dir.path());
         let e = call(
             &w,
@@ -611,7 +725,7 @@ mod tests {
             (e.code, e.message.as_str()),
             (
                 ErrorCode::Internal,
-                "work.db is not ready (schema 0); the Lisp side makes it"
+                "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
             )
         );
         assert_eq!(w.signals.writes(), 0);
@@ -626,11 +740,17 @@ mod tests {
                 .await
                 .is_err()
         );
-        // once the Lisp side made it, the next write goes through (no tick needed)
-        urdr::Connection::open(dir.path().join("work.db"))
+        // once a schema-6 file is there (made, say, by an older drgnx), the next write migrates it and goes through
+        // (no tick needed)
+        let next = dir.path().join("next.db");
+        urdr::Connection::open(&next)
             .unwrap()
             .execute_batch(DDL)
             .unwrap();
+        for ext in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(dir.path().join(format!("work.db{ext}")));
+        }
+        std::fs::rename(&next, &file).unwrap();
         let card = call(
             &w,
             true,

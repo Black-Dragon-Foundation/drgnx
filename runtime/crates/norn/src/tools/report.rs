@@ -72,8 +72,13 @@ async fn agent_row(coord: &Coord, me: &str) -> Result<Option<Agent>, CoordError>
 }
 
 /// ME is alive: its row is stamped (`drgnx-coord-agent-seen`; a busy store is no error).
-async fn seen(coord: &Coord, me: &str) -> Result<(), String> {
-    agent_seen_best_effort(coord.db(), me.to_owned(), coord.now())
+async fn seen(coord: &Coord, who: &Identity, me: &str) -> Result<(), String> {
+    agent_seen_best_effort(
+        coord.db(),
+        who.tx_meta("mcp:agent-seen"),
+        me.to_owned(),
+        coord.now(),
+    )
         .await
         .map(drop)
         .map_err(err)
@@ -472,7 +477,7 @@ async fn hello(coord: &Coord, who: &Identity, args: HelloArgs) -> Result<String,
         return Ok(held);
     }
     if let Some(row) = job_row(coord, who, me).await {
-        seen(coord, me).await?;
+        seen(coord, who, me).await?;
         return Ok(json_text(&HelloAnswer {
             agent: me,
             version: version(coord).await?,
@@ -587,12 +592,12 @@ async fn hello_register(
     let now = coord.now();
     let version = coord
         .db()
-        .write(move |tx| {
+        .write(who.tx_meta("mcp:hello"), move |tx| {
             agent_register(tx, reg, now)?;
             if let Some(e) = start_event {
                 event(tx, e)?;
             }
-            meta::version(tx)
+            meta::version(tx.sql())
         })
         .await
         .map_err(err)?;
@@ -747,8 +752,10 @@ async fn report_edit(
         data: Some(edit_data(&root, kept, n - kept.len())),
         turn: false,
     };
-    let id = event_add_best_effort(coord.db(), e).await.map_err(err)?;
-    seen(coord, me).await?;
+    let id = event_add_best_effort(coord.db(), who.tx_meta("mcp:report_edit"), e)
+        .await
+        .map_err(err)?;
+    seen(coord, who, me).await?;
     coord.hub().notify();
     Ok(match id {
         Some(event) => json_text(&EditAnswer {
@@ -836,8 +843,10 @@ async fn report_test(
         data: Some(data),
         turn: false,
     };
-    let id = event_add_best_effort(coord.db(), e).await.map_err(err)?;
-    seen(coord, me).await?;
+    let id = event_add_best_effort(coord.db(), who.tx_meta("mcp:report_test"), e)
+        .await
+        .map_err(err)?;
+    seen(coord, who, me).await?;
     coord.hub().notify();
     Ok(match id {
         Some(event) => json_text(&TestAnswer { ok: true, event }),
@@ -957,10 +966,10 @@ async fn ask_user(coord: &Coord, who: &Identity, args: AskUserArgs) -> Result<St
     let (me_, now) = (me.to_owned(), coord.now());
     let sent = coord
         .db()
-        .write(move |tx| {
+        .write(who.tx_meta("mcp:ask_user"), move |tx| {
             let sent = send(tx, message, now)?;
             if let Some(task) = waits
-                && let Some(row) = task_row(tx, &task)?
+                && let Some(row) = task_row(tx.sql(), &task)?
                 && row.agent.as_deref() == Some(me_.as_str())
                 && matches!(row.status.as_deref(), Some("claimed" | "running"))
             {

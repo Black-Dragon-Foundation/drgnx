@@ -211,6 +211,15 @@ pub fn run(
     })
 }
 
+/// A fresh schema-7 database on CONN (an empty one), as the opening of a missing file leaves it: the writers' unit
+/// tests run on it.
+#[cfg(test)]
+pub(crate) fn make_fresh(conn: &mut Connection) -> Result<(), String> {
+    create(conn).map_err(|s| match s {
+        Stop::Busy(t) | Stop::Failed(t) => t,
+    })
+}
+
 /// `ratatoskr store migrate-check`: migrate the copy DB in place, its pre-migration backup in `opts.backup_dir`.
 pub fn check_copy(db: &Path, opts: &MigrateOpts) -> Result<MigrateReport, String> {
     if !db.is_file() {

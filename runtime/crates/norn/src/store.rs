@@ -1,36 +1,44 @@
-//! The writer's thread and its one read-write connection (docs/develop/coordination.md, "The writer").
+//! The coordination store over the graph writer (docs/develop/coordination.md, "The writer").
 //!
-//! [`CoordDb`] opens `work.db` only when `meta.schema` is exactly the schema it expects.  The hub's
-//! ([`CoordDb::with_graph`]) expects schema 7, which the graph writer makes or migrates to at start
-//! ([`crate::migrate7`]); [`CoordDb::spawn`] expects [`SCHEMA`] 6, the file the Lisp side made, for the p2–p3 tests
-//! until Urdr's Task 12 moves the writers onto the graph writer.  Every statement runs on `urdr`'s store thread, never
-//! on the caller's.  The hub's 2 s schema tick calls [`CoordDb::tick`], which opens the file when it is not open and
-//! opens it again when the file at the path is another file than the one opened (a removed and re-made `work.db`).
-//! A read or write that finds the file not open runs the tick's open once itself first (the graph writer's tick
-//! first), so a work.db made or migrated between two ticks is used at once.
+//! [`CoordDb`] is a thin wrapper over [`urdr::graph::WriterHandle`]: every write is one request of the graph writer,
+//! so it runs on the writer thread in its own savepoint after its `tx` row (the author comes from the caller's
+//! [`TxMeta`], never from an argument), and is answered after `COMMIT`.  The writer's opening rule
+//! ([`crate::migrate7::open_rule`]) makes a missing `work.db` at schema 7 or migrates a schema-6 one; while it has
+//! not, a write answers the rule's text ([`CoordError::NotReady`]).  The hub hands its writer to
+//! [`CoordDb::with_graph`]; [`CoordDb::spawn`] starts one of its own on a path (tests).
+//!
+//! Reads run on a read-only connection of their own ([`CoordDb::read`]); the hub's 2 s schema tick calls
+//! [`CoordDb::tick`], which opens it when it is not open and opens it again when the file at the path is another file
+//! than the one opened (a removed and re-made `work.db`).  A read or write that finds the store not open runs the
+//! writer's tick (and the read connection's open) once itself first, so a work.db made or migrated between two ticks
+//! is used at once.
 
 use std::fmt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use urdr::graph::{OpenOutcome, WriterHandle};
+use urdr::graph::{OpenOutcome, Writer, WriterHandle, WriterOpts};
+use urdr::graph::{TxMeta, WriteError};
 use urdr::{Handle, Mode, Store, StoreSpec};
 
-/// The schema [`CoordDb::spawn`] opens (the Lisp side's file).
-pub const SCHEMA: u32 = 6;
+/// The schema the store writes (schema 7).
+pub const SCHEMA: u32 = crate::migrate7::SCHEMA;
 
-/// What a write closure sees: the connection, already inside `BEGIN IMMEDIATE` (committed on `Ok`, rolled back on
-/// `Err`).
+/// What a read closure sees: the connection (read-only).
 pub type Tx = urdr::Connection;
+
+/// What a write closure sees: the writer's transaction, inside its request's savepoint (committed on `Ok`, rolled
+/// back on `Err`).  Its SQL runs through [`urdr::graph::Tx::sql`].
+pub use urdr::graph::Tx as WTx;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoordError {
     /// The store is not open, with the text that says why: the graph writer's opening rule's text (a busy file, a
-    /// schema below 6, a failed migration's reason), or for [`CoordDb::spawn`] a file missing or below schema 6.
+    /// schema below 6, a failed migration's reason).
     NotReady(String),
     /// The file is a newer schema than this writer knows: readable, never written.
     ReadOnly { schema: u32 },
-    /// Another writer held the database past the busy timeout.
+    /// Another writer held the database past the busy timeout, or a batch's `COMMIT` failed (retry).
     Busy,
     /// The request is refused (a writer's own rule), with its text.
     Refused(String),
@@ -73,23 +81,52 @@ impl From<urdr::SqliteError> for CoordError {
     }
 }
 
-/// How the file at the path is held.
-enum Held {
-    /// Not open: the file is missing (0) or at this schema.
-    Closed { schema: u32 },
-    /// Read-write, at the expected schema.
-    Writable,
-    /// A newer schema, opened read-only.
-    Newer { schema: u32 },
+impl From<WriteError> for CoordError {
+    fn from(e: WriteError) -> Self {
+        match e {
+            WriteError::Refused(text) => CoordError::Refused(text),
+            WriteError::Conflict(v) => CoordError::Refused(format!("conflict: {v}")),
+            WriteError::Retryable(_) => CoordError::Busy,
+            WriteError::ReadOnly { schema } => CoordError::ReadOnly { schema },
+            WriteError::NotReady(text) => CoordError::NotReady(text),
+            WriteError::Closed => CoordError::Sql("the store is closed".into()),
+            WriteError::Sql(text) => CoordError::Sql(text),
+        }
+    }
 }
 
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+/// The read connection.
 struct Open {
-    held: Held,
-    /// `(dev, inode)` of the file when it was opened.
+    /// `(dev, inode)` of the file when it was opened; `None` while not open.
     id: Option<(u64, u64)>,
     /// Owns the thread; dropping it stops the thread and closes the connection.
     _store: Option<Store>,
     handle: Option<Handle>,
+}
+
+fn open(path: &Path) -> Open {
+    let id = file_id(path);
+    let ro = StoreSpec {
+        path: path.to_path_buf(),
+        mode: Mode::ReadOnly,
+        migrations: &[],
+    };
+    match Store::spawn(ro) {
+        Ok((store, handle)) => Open {
+            id,
+            _store: Some(store),
+            handle: Some(handle),
+        },
+        Err(_) => Open {
+            id: None,
+            _store: None,
+            handle: None,
+        },
+    }
 }
 
 /// The coordination store: cheap to clone.
@@ -97,180 +134,169 @@ struct Open {
 pub struct CoordDb {
     path: Arc<PathBuf>,
     state: Arc<Mutex<Open>>,
-    /// The schema opened read-write.
-    expect: u32,
-    /// The hub's graph writer, which makes or migrates the file (its rule's answer is the not-ready text).
-    graph: Option<WriterHandle>,
-}
-
-/// The not-ready text of a file at SCHEMA (0: missing).
-fn not_ready(schema: u32) -> CoordError {
-    CoordError::NotReady(format!(
-        "work.db is not ready (schema {schema}); the Lisp side makes it"
-    ))
-}
-
-fn file_id(path: &Path) -> Option<(u64, u64)> {
-    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
-}
-
-fn open(path: &Path, expect: u32) -> Open {
-    let id = file_id(path);
-    let closed = |schema| Open {
-        held: Held::Closed { schema },
-        id: None,
-        _store: None,
-        handle: None,
-    };
-    let rw = StoreSpec {
-        path: path.to_path_buf(),
-        mode: Mode::ReadWriteExisting {
-            expect_schema: expect,
-            synchronous_full: false,
-        },
-        migrations: &[],
-    };
-    match Store::spawn(rw) {
-        Ok((store, handle)) => Open {
-            held: Held::Writable,
-            id,
-            _store: Some(store),
-            handle: Some(handle),
-        },
-        Err(urdr::Error::Schema { found }) if found > expect => {
-            let ro = StoreSpec {
-                path: path.to_path_buf(),
-                mode: Mode::ReadOnly,
-                migrations: &[],
-            };
-            match Store::spawn(ro) {
-                Ok((store, handle)) => Open {
-                    held: Held::Newer { schema: found },
-                    id,
-                    _store: Some(store),
-                    handle: Some(handle),
-                },
-                Err(_) => closed(found),
-            }
-        }
-        Err(urdr::Error::Schema { found }) => closed(found),
-        Err(urdr::Error::Missing) => closed(0),
-        Err(e) => {
-            tracing::warn!("work.db: cannot open for writing: {e}");
-            closed(0)
-        }
-    }
+    /// The graph writer: it makes or migrates the file (its rule's answer is the not-ready text) and runs every write.
+    graph: WriterHandle,
+    /// The writer [`CoordDb::spawn`] started (its thread stops with the last clone).
+    _owner: Option<Arc<Writer>>,
 }
 
 impl CoordDb {
-    /// A store on `path` at [`SCHEMA`] 6, the file the Lisp side made (the p2–p3 tests; the hub uses
-    /// [`with_graph`](Self::with_graph)); it tries to open once now (a short, blocking look), then at each
-    /// [`tick`](Self::tick).
+    /// A store with a graph writer of its own on `path` (the hub uses [`with_graph`](Self::with_graph)): the file is
+    /// made at schema 7, or migrated from 6 (its backup, deny-list and config beside it), by the writer's opening
+    /// rule, which has run when the first request is served.  For tests.
     pub fn spawn(path: impl Into<PathBuf>) -> CoordDb {
         let path = path.into();
-        let state = open(&path, SCHEMA);
-        CoordDb {
-            path: Arc::new(path),
-            state: Arc::new(Mutex::new(state)),
-            expect: SCHEMA,
-            graph: None,
-        }
+        let dir = path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let opts = crate::migrate7::MigrateOpts {
+            backup_dir: dir.join("backup"),
+            home: dir.join("home"),
+            config_dir: dir.join("config"),
+        };
+        let mut guard = urdr::graph::guard::Guard::default();
+        crate::grants::register(&mut guard);
+        let (writer, handle) = Writer::spawn(
+            &path,
+            WriterOpts {
+                guard: Arc::new(guard),
+                synchronous_full: false,
+                ..WriterOpts::default()
+            },
+            crate::migrate7::open_rule(opts),
+        )
+        .expect("the writer thread starts");
+        let mut db = CoordDb::with_graph(handle);
+        db._owner = Some(Arc::new(writer));
+        db
     }
 
-    /// The hub's store on the graph writer's file, at schema 7: the writer's opening rule makes or migrates it
-    /// ([`crate::migrate7::open_rule`]); while it has not, a write answers the rule's text. Opens once now (blocking).
+    /// The hub's store on the graph writer's file: writes go through WRITER; reads through a connection of this
+    /// store.  Opens the read connection once now (blocking).
     pub fn with_graph(writer: WriterHandle) -> CoordDb {
         let path = writer.path().to_path_buf();
-        let expect = crate::migrate7::SCHEMA;
-        let state = open(&path, expect);
+        let state = open(&path);
         CoordDb {
             path: Arc::new(path),
             state: Arc::new(Mutex::new(state)),
-            expect,
-            graph: Some(writer),
+            graph: writer,
+            _owner: None,
         }
     }
 
-    /// The graph writer [`with_graph`](Self::with_graph) was given.
+    /// The graph writer.
     pub fn graph_writer(&self) -> Option<&WriterHandle> {
-        self.graph.as_ref()
+        Some(&self.graph)
     }
 
-    /// The hub's schema tick: open when not open; open again when the file at the path changed (dev, inode).  Blocking
-    /// for the length of an open: call it from a blocking context (the graph writer's own tick first).
+    /// The hub's schema tick: open the read connection when not open; open it again when the file at the path
+    /// changed (dev, inode).  Blocking for the length of an open: call it from a blocking context (the graph writer's
+    /// own tick first).
     pub fn tick(&self) {
         let mut st = self.state.lock().unwrap();
         let now = file_id(&self.path);
-        let keep = match st.held {
-            Held::Closed { .. } => false,
-            _ => st.id == now && now.is_some(),
-        };
+        let keep = st.id.is_some() && st.id == now;
         if !keep {
-            *st = open(&self.path, self.expect);
+            *st = open(&self.path);
         }
     }
 
-    /// Why the file is not open: the graph writer's rule says (a migration that failed or waits, a newer file), else
-    /// the schema found.
-    fn closed(&self, schema: u32) -> CoordError {
-        match self.graph.as_ref().and_then(|w| w.status().last_open) {
+    /// Why the store is not open: the writer's rule says (a migration that failed or waits).
+    fn closed(&self) -> CoordError {
+        match self.graph.status().last_open {
             Some(OpenOutcome::NotReady(text) | OpenOutcome::Failed(text)) => {
                 CoordError::NotReady(text)
             }
             Some(OpenOutcome::ReadOnly { schema }) => CoordError::ReadOnly { schema },
-            Some(OpenOutcome::Ready { .. }) | None if self.graph.is_some() => {
-                CoordError::NotReady(format!("work.db is not open yet (schema {schema})"))
+            Some(OpenOutcome::Ready { .. }) | None => {
+                CoordError::NotReady("work.db is not open yet".into())
             }
-            _ => not_ready(schema),
         }
     }
 
-    fn handle(&self, for_write: bool) -> Result<Handle, CoordError> {
-        let st = self.state.lock().unwrap();
-        match (&st.held, &st.handle) {
-            (Held::Closed { schema }, _) => Err(self.closed(*schema)),
-            (Held::Newer { schema }, _) if for_write => {
-                Err(CoordError::ReadOnly { schema: *schema })
-            }
-            (_, Some(h)) => Ok(h.clone()),
-            _ => Err(self.closed(0)),
+    /// Whether the writer has opened the file (or found it newer: readable).
+    fn open_for(&self, for_write: bool) -> bool {
+        let s = self.graph.status();
+        match s.last_open {
+            Some(OpenOutcome::Ready { .. }) => s.open,
+            Some(OpenOutcome::ReadOnly { .. }) => !for_write,
+            _ => false,
         }
     }
 
-    /// [`handle`](Self::handle), but a file that is not open is looked at once more first (the graph writer's tick,
-    /// then the tick's open, on a blocking thread): a work.db made or migrated since the last tick is used at once,
-    /// not at the next tick.  Every write and read goes through here, the front's methods and the coordination tools
-    /// alike.
-    async fn ready(&self, for_write: bool) -> Result<Handle, CoordError> {
-        match self.handle(for_write) {
-            Err(CoordError::NotReady(_)) => {
-                if let Some(w) = &self.graph {
-                    w.tick().await;
-                }
-                let db = self.clone();
-                let _ = tokio::task::spawn_blocking(move || db.tick()).await;
-                self.handle(for_write)
-            }
-            r => r,
+    /// The store is open for FOR_WRITE, else the writer's tick (its opening rule again) and a look once more: a
+    /// work.db made or migrated since the last tick is used at once, not at the next tick.  Every write and read goes
+    /// through here, the front's methods and the coordination tools alike.
+    async fn gate(&self, for_write: bool) -> Result<(), CoordError> {
+        if !self.open_for(for_write) {
+            self.graph.tick().await;
         }
+        if self.open_for(for_write) {
+            return Ok(());
+        }
+        if for_write
+            && let Some(OpenOutcome::ReadOnly { schema }) = self.graph.status().last_open
+        {
+            return Err(CoordError::ReadOnly { schema });
+        }
+        Err(self.closed())
     }
 
-    /// Run `f` on the store thread inside one `BEGIN IMMEDIATE` transaction: committed on `Ok`, rolled back on `Err`.
+    async fn reader(&self) -> Result<Handle, CoordError> {
+        self.gate(false).await?;
+        let got = self.state.lock().unwrap().handle.clone();
+        if let Some(h) = got {
+            return Ok(h);
+        }
+        let db = self.clone();
+        let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+        let got = self.state.lock().unwrap().handle.clone();
+        got.ok_or_else(|| CoordError::NotReady("work.db is not open yet".into()))
+    }
+
+    /// Run `f` in one request of the graph writer: its `tx` row first (from META), then `f` in its own savepoint,
+    /// committed on `Ok` and rolled back on `Err`, answered after `COMMIT`.  A request with `meta.req` set whose key
+    /// was answered before runs nothing and answers `Refused` ("already done"): a caller that replays a stored answer
+    /// uses [`graph_writer`](Self::graph_writer) directly.
     pub async fn write<R: Send + 'static>(
         &self,
-        f: impl FnOnce(&Tx) -> Result<R, CoordError> + Send + 'static,
+        meta: TxMeta,
+        f: impl FnOnce(&mut WTx<'_>) -> Result<R, CoordError> + Send + 'static,
     ) -> Result<R, CoordError> {
-        let handle = self.ready(true).await?;
-        run(f, true, handle).await
+        self.gate(true).await?;
+        let slot: Arc<Mutex<Option<Result<R, CoordError>>>> = Arc::new(Mutex::new(None));
+        let theirs = slot.clone();
+        let out = self
+            .graph
+            .write(meta, move |tx| match f(tx) {
+                Ok(v) => {
+                    *theirs.lock().unwrap() = Some(Ok(v));
+                    Ok(())
+                }
+                Err(e) => {
+                    let text = e.to_string();
+                    *theirs.lock().unwrap() = Some(Err(e));
+                    Err(WriteError::Refused(text))
+                }
+            })
+            .await;
+        let theirs = slot.lock().unwrap().take();
+        match (out, theirs) {
+            (_, Some(r)) => r,
+            (Ok(_), None) => Err(CoordError::Refused(
+                "this request was already done (its key was answered before)".into(),
+            )),
+            (Err(e), None) => Err(e.into()),
+        }
     }
 
-    /// Run `f` on the store thread, outside a transaction.
+    /// Run `f` on the read connection's thread, outside a transaction.
     pub async fn read<R: Send + 'static>(
         &self,
         f: impl FnOnce(&Tx) -> Result<R, CoordError> + Send + 'static,
     ) -> Result<R, CoordError> {
-        let handle = self.ready(false).await?;
-        run(f, false, handle).await
+        let handle = self.reader().await?;
+        run(f, handle).await
     }
 }
 
@@ -278,7 +304,6 @@ impl CoordDb {
 /// slot.
 async fn run<R: Send + 'static>(
     f: impl FnOnce(&Tx) -> Result<R, CoordError> + Send + 'static,
-    write: bool,
     handle: Handle,
 ) -> Result<R, CoordError> {
     let slot: Arc<Mutex<Option<CoordError>>> = Arc::new(Mutex::new(None));
@@ -289,12 +314,7 @@ async fn run<R: Send + 'static>(
             urdr::Error::Aborted
         })
     };
-    let out = if write {
-        handle.write(job).await
-    } else {
-        handle.read(job).await
-    };
-    match out {
+    match handle.read(job).await {
         Ok(v) => Ok(v),
         Err(urdr::Error::Aborted) => Err(slot
             .lock()
@@ -308,6 +328,7 @@ async fn run<R: Send + 'static>(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use urdr::graph::Class;
 
     /// The schema-6 DDL as the Lisp migration makes it (`test/fixtures/work-db-6.sql`).
     pub(crate) const DDL: &str = include_str!("../../../../test/fixtures/work-db-6.sql");
@@ -321,6 +342,25 @@ pub(crate) mod tests {
             [schema.to_string()],
         )
         .unwrap();
+    }
+
+    /// A fresh in-memory schema-7 database for a writer's unit tests (`tx_of` makes the transaction).
+    pub(crate) fn db7() -> urdr::Connection {
+        let mut c = urdr::Connection::open_in_memory().unwrap();
+        crate::migrate7::make_fresh(&mut c).unwrap();
+        c
+    }
+
+    /// The author of the unit tests' writes.
+    pub(crate) fn hub_meta() -> TxMeta {
+        TxMeta::new("hub", Class::System, "test")
+    }
+
+    /// A transaction on C (it holds schema 7): dropping it without `commit_for_test` rolls its writes back.
+    pub(crate) fn tx_of(c: &mut urdr::Connection) -> WTx<'_> {
+        let mut guard = urdr::graph::guard::Guard::default();
+        crate::grants::register(&mut guard);
+        WTx::for_test(c, hub_meta(), Arc::new(guard))
     }
 
     /// The jobs task ids of the file, through schema 7's `jtask` view.
@@ -364,12 +404,18 @@ pub(crate) mod tests {
         handle.tick().await;
         let db = CoordDb::with_graph(handle.clone());
         assert_eq!(jtasks(&db).await, ["j#1"]);
-        db.write(|c| Ok(c.execute("insert into event (at, kind) values (1.0, 'x')", [])?))
-            .await
-            .unwrap();
-        // A schema-6 write on schema 7 fails (the view refuses it, until Task 12's writers).
+        db.write(hub_meta(), |tx| {
+            Ok(tx
+                .sql()
+                .execute("insert into event (at, kind) values (1.0, 'x')", [])?)
+        })
+        .await
+        .unwrap();
+        // A schema-6 write on schema 7 fails: `meta` is a read-only view.
         assert!(
-            db.write(|c| Ok(c.execute("insert into meta values ('a', '1')", [])?))
+            db.write(hub_meta(), |tx| Ok(tx
+                .sql()
+                .execute("insert into meta values ('a', '1')", [])?))
                 .await
                 .is_err()
         );
@@ -393,7 +439,7 @@ pub(crate) mod tests {
         replace(&next);
         handle.tick().await;
         db.tick();
-        let e = db.write(|_| Ok(())).await.unwrap_err();
+        let e = db.write(hub_meta(), |_| Ok(())).await.unwrap_err();
         assert_eq!(
             e.to_string(),
             "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
@@ -404,7 +450,7 @@ pub(crate) mod tests {
         handle.tick().await;
         db.tick();
         assert_eq!(
-            db.write(|_| Ok(())).await.unwrap_err(),
+            db.write(hub_meta(), |_| Ok(())).await.unwrap_err(),
             CoordError::ReadOnly { schema: 8 }
         );
         db.read(|c| Ok(c.query_row("select count(*) from meta", [], |r| r.get::<_, i64>(0))?))
@@ -416,33 +462,47 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_still_opens_only_schema_6() {
+    async fn spawn_makes_a_missing_file_schema_7_and_moves_a_6() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("work.db");
         let db = CoordDb::spawn(&file);
-        // Missing: not ready, and nothing is created.
-        assert_eq!(db.write(|_| Ok(())).await.unwrap_err(), not_ready(0));
-        assert!(!file.exists());
-        make(&file, 6);
-        db.tick();
-        db.write(|c| Ok(c.execute("insert into meta values ('a', '1')", [])?))
+        db.write(hub_meta(), |tx| {
+            Ok(tx
+                .sql()
+                .execute("insert into event (at, kind) values (1.0, 'x')", [])?)
+        })
+        .await
+        .unwrap();
+        assert!(file.exists());
+        let kv: String = db
+            .read(|c| Ok(c.query_row("select value from kv where key = 'schema'", [], |r| r.get(0))?))
             .await
             .unwrap();
+        assert_eq!(kv, "7");
+        let other = dir.path().join("other").join("work.db");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        make(&other, 6);
+        let db = CoordDb::spawn(&other);
+        assert_eq!(jtasks(&db).await.len(), 0);
+        db.write(hub_meta(), |_| Ok(())).await.unwrap();
     }
 
     #[tokio::test]
-    async fn writes_never_run_on_the_callers_thread() {
+    async fn writes_never_run_on_the_callers_thread_and_carry_their_author() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("work.db");
-        make(&file, 6);
         let db = CoordDb::spawn(&file);
         let me = std::thread::current().id();
-        let there = db.write(|_| Ok(std::thread::current().id())).await.unwrap();
+        let there = db
+            .write(hub_meta(), |_| Ok(std::thread::current().id()))
+            .await
+            .unwrap();
         assert_ne!(there, me);
         // A refusal rolls back and comes out as itself.
         let e = db
-            .write(|c| {
-                c.execute("insert into meta values ('z', '1')", [])?;
+            .write(hub_meta(), |tx| {
+                tx.sql()
+                    .execute("insert into kv values ('z', '1')", [])?;
                 Err::<(), _>(CoordError::Refused("no".into()))
             })
             .await
@@ -451,7 +511,7 @@ pub(crate) mod tests {
         let n: i64 = db
             .read(|c| {
                 Ok(
-                    c.query_row("select count(*) from meta where key = 'z'", [], |r| {
+                    c.query_row("select count(*) from kv where key = 'z'", [], |r| {
                         r.get(0)
                     })?,
                 )
@@ -459,5 +519,29 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0);
+        // The tx row of a write holds its author.
+        let mut meta = TxMeta::new("agent:s-1", Class::Agent, "mcp:report_edit");
+        meta.session = Some("s-1".into());
+        db.write(meta, |tx| {
+            Ok(tx
+                .sql()
+                .execute("insert into event (at, kind, tx) values (1.0, 'x', ?1)", [tx.id()])?)
+        })
+        .await
+        .unwrap();
+        let (actor, class, tool, session): (String, String, String, Option<String>) = db
+            .read(|c| {
+                Ok(c.query_row(
+                    "select actor, class, tool, session from tx where id = (select tx from event)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (actor.as_str(), class.as_str(), tool.as_str(), session.as_deref()),
+            ("agent:s-1", "agent", "mcp:report_edit", Some("s-1"))
+        );
     }
 }

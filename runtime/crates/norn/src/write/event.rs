@@ -1,8 +1,9 @@
 //! The event writer (Task 4): `drgnx-coord--event` and `drgnx-coord-event-add[-best-effort]`, exactly
 //! (`core/drgnx-coord.el`).
 
-use crate::store::{CoordDb, CoordError, Tx};
+use crate::store::{CoordDb, CoordError, WTx};
 use runstav::text;
+use urdr::graph::TxMeta;
 
 /// The longest event summary, in characters (`drgnx-coord--summary-max`).
 pub const SUMMARY_MAX: usize = 200;
@@ -105,11 +106,13 @@ pub(crate) fn data_text(data: &serde_json::Value) -> String {
     }
 }
 
-/// Insert one event inside the caller's transaction: its id (`drgnx-coord--event`).  Public so the parity test replays it.
-pub fn event(tx: &Tx, e: Event) -> Result<i64, CoordError> {
+/// Insert one event inside the caller's transaction: its id (`drgnx-coord--event`).  The row carries the tx that
+/// wrote it.  Public so the parity test replays it.
+pub fn event(tx: &mut WTx<'_>, e: Event) -> Result<i64, CoordError> {
     let turn = matches!(e.kind, EventKind::Start | EventKind::Stop) && e.turn;
-    tx.execute(
-        "insert into event (at, agent, job, task, kind, summary, data, turn) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    let by = tx.id();
+    tx.sql().execute(
+        "insert into event (at, agent, job, task, kind, summary, data, turn, tx) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         (
             e.at,
             e.agent,
@@ -119,20 +122,54 @@ pub fn event(tx: &Tx, e: Event) -> Result<i64, CoordError> {
             text::coord_line(&e.summary, SUMMARY_MAX),
             e.data.as_ref().map(data_text),
             turn.then_some(1),
+            by,
         ),
     )?;
-    Ok(tx.last_insert_rowid())
+    Ok(tx.sql().last_insert_rowid())
 }
 
-/// `drgnx-coord-event-add`: one event in a transaction of its own.  A busy database is `Busy` (after the timeout).
-pub async fn event_add(db: &CoordDb, e: Event) -> Result<i64, CoordError> {
-    db.write(move |tx| event(tx, e)).await
+/// Blank the events an excise reached: the text of those written in an excised tx, or about an excised task
+/// (`event.task` is the entity's id, or a job task's id without its `task:` prefix).  The summary becomes the marker,
+/// `data` (when there was any) `{"excised": TX}`.  How many.
+pub(crate) fn blank_events(
+    tx: &mut WTx<'_>,
+    ex: &urdr::graph::excise::Excised,
+    ids: &[String],
+    mark: &str,
+) -> Result<u64, CoordError> {
+    let mut n = 0;
+    for t in &ex.txs {
+        n += tx.sql().execute(
+            "update event set summary = ?1, data = case when data is null then null else ?2 end \
+             where tx = ?3 and (summary <> ?1 or (data is not null and data <> ?2))",
+            (&ex.marker, mark, t),
+        )?;
+    }
+    for id in ids {
+        let short = id.strip_prefix("task:").unwrap_or(id);
+        n += tx.sql().execute(
+            "update event set summary = ?1, data = case when data is null then null else ?2 end \
+             where (task = ?3 or task = ?4) and (summary <> ?1 or (data is not null and data <> ?2))",
+            (&ex.marker, mark, id, short),
+        )?;
+    }
+    Ok(n as u64)
+}
+
+/// `drgnx-coord-event-add`: one event in a transaction of its own (by META's author).  A busy database is `Busy`
+/// (after the timeout).
+pub async fn event_add(db: &CoordDb, meta: TxMeta, e: Event) -> Result<i64, CoordError> {
+    db.write(meta, move |tx| event(tx, e)).await
 }
 
 /// `drgnx-coord-event-add-best-effort`: `None`, not an error, when the database stays busy; for telemetry that must
 /// never fail the work it describes.  Any other error still comes out.
-pub async fn event_add_best_effort(db: &CoordDb, e: Event) -> Result<Option<i64>, CoordError> {
-    match event_add(db, e).await {
+pub async fn event_add_best_effort(
+    db: &CoordDb,
+    meta: TxMeta,
+    e: Event,
+) -> Result<Option<i64>, CoordError> {
+    match event_add(db, meta, e).await {
         Ok(id) => Ok(Some(id)),
         Err(CoordError::Busy) => Ok(None),
         Err(e) => Err(e),
@@ -142,13 +179,7 @@ pub async fn event_add_best_effort(db: &CoordDb, e: Event) -> Result<Option<i64>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::tests::DDL;
-
-    fn db() -> urdr::Connection {
-        let c = urdr::Connection::open_in_memory().unwrap();
-        c.execute_batch(DDL).unwrap();
-        c
-    }
+    use crate::store::tests::{db7, tx_of};
 
     fn ev(kind: EventKind, summary: &str, data: Option<serde_json::Value>) -> Event {
         Event {
@@ -165,10 +196,12 @@ mod tests {
 
     #[test]
     fn summary_is_one_line_of_200() {
-        let c = db();
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
         let long = format!("a\nb\u{202e}c{}", "x".repeat(300));
-        let id = event(&c, ev(EventKind::Edit, &long, None)).unwrap();
-        let s: String = c
+        let id = event(&mut tx, ev(EventKind::Edit, &long, None)).unwrap();
+        let s: String = tx
+            .sql()
             .query_row("select summary from event where id = ?1", [id], |r| {
                 r.get(0)
             })
@@ -180,21 +213,24 @@ mod tests {
 
     #[test]
     fn data_over_4096_is_truncated() {
-        let c = db();
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
         let big = serde_json::json!({"text": "y".repeat(5000)});
         let size = big.to_string().chars().count();
-        let id = event(&c, ev(EventKind::Edit, "s", Some(big))).unwrap();
-        let d: String = c
+        let id = event(&mut tx, ev(EventKind::Edit, "s", Some(big))).unwrap();
+        let d: String = tx
+            .sql()
             .query_row("select data from event where id = ?1", [id], |r| r.get(0))
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&d).unwrap();
         assert_eq!(v, serde_json::json!({"truncated": true, "size": size}));
         let id = event(
-            &c,
+            &mut tx,
             ev(EventKind::Edit, "s", Some(serde_json::json!({"k": 1}))),
         )
         .unwrap();
-        let d: String = c
+        let d: String = tx
+            .sql()
             .query_row("select data from event where id = ?1", [id], |r| r.get(0))
             .unwrap();
         assert_eq!(d, r#"{"k":1}"#);
@@ -202,22 +238,36 @@ mod tests {
 
     #[test]
     fn turn_is_one_for_start_and_stop_only() {
-        let c = db();
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
         let mut e = ev(
             EventKind::Start,
             "s",
             Some(serde_json::json!({"turn": true})),
         );
         e.turn = true;
-        let a = event(&c, e.clone()).unwrap();
+        let a = event(&mut tx, e.clone()).unwrap();
         e.kind = EventKind::Edit;
-        let b = event(&c, e).unwrap();
+        let b = event(&mut tx, e).unwrap();
         let turn = |id: i64| -> Option<i64> {
-            c.query_row("select turn from event where id = ?1", [id], |r| r.get(0))
+            tx.sql()
+                .query_row("select turn from event where id = ?1", [id], |r| r.get(0))
                 .unwrap()
         };
         assert_eq!(turn(a), Some(1));
         assert_eq!(turn(b), None);
+    }
+
+    #[test]
+    fn an_event_carries_the_tx_that_wrote_it() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let id = event(&mut tx, ev(EventKind::Edit, "s", None)).unwrap();
+        let by: i64 = tx
+            .sql()
+            .query_row("select tx from event where id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(by, tx.id());
     }
 
     #[test]

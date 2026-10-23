@@ -106,7 +106,7 @@ impl World {
             "select (select count(*) from event) + (select count(*) from message) + (select count(*) from card)
                   + (select count(*) from decision)
                   + (select count(*) from agent where seen > 1.0)
-                  + (select count(*) from meta where key not in ('schema', 'compat-read', 'migrate-6-dropped'))",
+                  + (select count(*) from meta where key not in ('schema', 'compat-read', 'migrate-6-dropped', 'migrate-7'))",
         )
     }
 }
@@ -612,7 +612,9 @@ fn norm(v: Value) -> Value {
     }
 }
 
-/// One table as the oracle dumps it: rows in rowid order (`meta` by key), `data` parsed.
+/// One table as the oracle dumps it (on schema 7 through the compat views and the kept tables): rows in rowid order
+/// (`meta` by key, `decision` by number, the other views by their first columns), `data` parsed.  The kept tables'
+/// new `tx` and `entity` columns are left out, and so are the keys the schema bump and the migration add to `meta`.
 fn dump(conn: &Connection, table: &str) -> Value {
     let cols: Vec<String> = {
         let mut st = conn
@@ -621,10 +623,16 @@ fn dump(conn: &Connection, table: &str) -> Value {
         st.query_map([table], |r| r.get(0))
             .unwrap()
             .map(Result::unwrap)
+            .filter(|c: &String| !["tx", "entity"].contains(&c.as_str()))
             .collect()
     };
     let pairs: Vec<String> = cols.iter().map(|c| format!("'{c}', \"{c}\"")).collect();
-    let order = if table == "meta" { "key" } else { "rowid" };
+    let order = match table {
+        "meta" => "key",
+        "decision" => "n",
+        "jtask" | "jdep" | "node" | "edge" => "1, 2",
+        _ => "rowid",
+    };
     let sql = format!(
         "select coalesce(json_group_array(json_object({})), '[]') from (select * from {table} order by {order})",
         pairs.join(", ")
@@ -635,6 +643,175 @@ fn dump(conn: &Connection, table: &str) -> Value {
         if let Some(Value::String(d)) = row.get("data").cloned() {
             row["data"] = serde_json::from_str(&d).unwrap();
         }
+    }
+    rows
+}
+
+/// A scan's nodes and edges as the oracle's setup inserts them (`insert into node ...`, `insert into edge ...`).  The
+/// migration would not carry them (the toy sources `f1` are an unknown form, the paths are relative, and an edge may
+/// end at a node that is not there), and the scan's own door is Task 15a/16: the replay makes them as entities, the
+/// way `graph/put-parsed` will.
+struct Scanned {
+    nodes: Vec<[Option<String>; 10]>,
+    edges: Vec<[Option<String>; 5]>,
+}
+
+impl Scanned {
+    /// The rows the statements insert, read back from a scratch schema-6 database.
+    fn of(statements: &[&str]) -> Scanned {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+            .unwrap();
+        for sql in statements {
+            c.execute_batch(sql).unwrap();
+        }
+        let nodes = {
+            let mut st = c
+                .prepare(
+                    "select id, kind, title, path, cast(line as text), status, parent, cast(ord as text), source, data \
+                     from node order by rowid",
+                )
+                .unwrap();
+            st.query_map([], |r| {
+                let mut row: [Option<String>; 10] = Default::default();
+                for (i, v) in row.iter_mut().enumerate() {
+                    *v = r.get(i)?;
+                }
+                Ok(row)
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        };
+        let edges = {
+            let mut st = c
+                .prepare("select src, dst, kind, origin, source from edge order by rowid")
+                .unwrap();
+            st.query_map([], |r| {
+                let mut row: [Option<String>; 5] = Default::default();
+                for (i, v) in row.iter_mut().enumerate() {
+                    *v = r.get(i)?;
+                }
+                Ok(row)
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        };
+        Scanned { nodes, edges }
+    }
+}
+
+impl World {
+    /// Put SCANNED into the store as parsed entities.  A scan's task ids are absolute paths (`task:/…`, call 6: the
+    /// `node` view lists no other), so the toy `task:a#1` becomes `task:/a#1`, and as a parent too; an edge to a node
+    /// that is not there gets a stub entity (schema 7 has no dangling ends); a link the kinds do not allow is a
+    /// `relates` with `data.was`, as the migration makes it.
+    async fn put_scanned(&self, scanned: Scanned) {
+        use norn::kinds::link_allowed;
+        use urdr::graph::entity::{self, EntityNew, Origin};
+        use urdr::graph::{Class, TxMeta, link};
+        let abs = |id: &str| match id.strip_prefix("task:") {
+            Some(rest) if !rest.starts_with('/') => format!("task:/{rest}"),
+            _ => id.to_owned(),
+        };
+        self.db
+            .write(TxMeta::new("scan", Class::System, "scan"), move |tx| {
+                let mut ids: std::collections::HashMap<String, (i64, String)> = Default::default();
+                for [id, kind, title, path, line, status, parent, ord, source, data] in scanned.nodes {
+                    let (id, kind) = (abs(&id.unwrap()), kind.unwrap());
+                    let mut d = data
+                        .and_then(|d| serde_json::from_str::<Value>(&d).ok())
+                        .and_then(|d| d.as_object().cloned())
+                        .unwrap_or_default();
+                    if let Some(p) = path {
+                        d.insert("path".into(), json!(p));
+                    }
+                    if let Some(l) = line {
+                        d.insert("line".into(), json!(l.parse::<i64>().unwrap()));
+                    }
+                    if let Some(p) = parent {
+                        d.insert("parent".into(), json!(abs(&p)));
+                    }
+                    if let Some(o) = ord {
+                        d.insert("ord".into(), json!(o.parse::<i64>().unwrap()));
+                    }
+                    let recorded = source.as_deref() == Some("recorded");
+                    let made = entity::create(
+                        tx,
+                        EntityNew {
+                            id: id.clone(),
+                            kind: kind.clone(),
+                            project: None,
+                            title,
+                            status,
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: Value::Object(d),
+                            origin: if recorded { Origin::Recorded } else { Origin::Parsed },
+                            source,
+                        },
+                    )?;
+                    ids.insert(id, (made.n, kind));
+                }
+                for [src, dst, kind, origin, source] in scanned.edges {
+                    let mut end = |tx: &mut norn::store::WTx<'_>, id: String| {
+                        if let Some(found) = ids.get(&id) {
+                            return Ok::<_, norn::store::CoordError>(found.clone());
+                        }
+                        let kind = id.split(':').next().unwrap().to_owned();
+                        let made = entity::create(
+                            tx,
+                            EntityNew {
+                                id: id.clone(),
+                                kind: kind.clone(),
+                                project: None,
+                                title: None,
+                                status: None,
+                                body: None,
+                                priority: None,
+                                assignee: None,
+                                data: json!({}),
+                                origin: Origin::Inferred,
+                                source: None,
+                            },
+                        )?;
+                        ids.insert(id, (made.n, kind.clone()));
+                        Ok((made.n, kind))
+                    };
+                    let (s, sk) = end(tx, abs(&src.unwrap()))?;
+                    let (d, dk) = end(tx, abs(&dst.unwrap()))?;
+                    let old = kind.unwrap();
+                    let (kind, data) = if link_allowed(&old, &sk, &dk) {
+                        (old, None)
+                    } else {
+                        ("relates".to_owned(), Some(json!({ "was": old })))
+                    };
+                    let origin = origin
+                        .as_deref()
+                        .and_then(Origin::parse)
+                        .unwrap_or(Origin::Imported);
+                    link::add(tx, s, &kind, d, data, origin, source.as_deref())?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+/// What the comparison looks at: the writers' `meta` keys only (the schema-6 file, its migration and the bump keep
+/// their own), and the view tables in a fixed order (their rows have no rowid to be in).
+fn tidy(table: &str, mut rows: Value) -> Value {
+    let list = rows.as_array_mut().unwrap();
+    match table {
+        "meta" => list.retain(|r| {
+            !["schema", "compat-read", "migrate-6-dropped", "migrate-7"]
+                .contains(&r["key"].as_str().unwrap_or(""))
+        }),
+        "jtask" | "jdep" => list.sort_by_key(|r| r.to_string()),
+        _ => {}
     }
     rows
 }
@@ -705,7 +882,14 @@ async fn every_tool_fixture_replays() {
             .iter()
             .map(|s| s.as_str().unwrap())
             .collect();
+        // the scan's rows are not the migration's to carry (see `Scanned`): the rest of the setup is
+        let (scan, setup): (Vec<&str>, Vec<&str>) = setup.into_iter().partition(|s| {
+            s.starts_with("insert into node ") || s.starts_with("insert into edge ")
+        });
         let w = World::new(&setup);
+        if !scan.is_empty() {
+            w.put_scanned(Scanned::of(&scan)).await;
+        }
         let calls = input["calls"].as_array().unwrap();
         let wanted = expect["results"].as_array().unwrap();
         assert_eq!(calls.len(), wanted.len(), "case {name}");
@@ -726,8 +910,8 @@ async fn every_tool_fixture_replays() {
         let conn = w.conn();
         for (table, rows) in expect["tables"].as_object().unwrap() {
             assert_eq!(
-                norm(dump(&conn, table)),
-                norm(rows.clone()),
+                norm(tidy(table, dump(&conn, table))),
+                norm(tidy(table, rows.clone())),
                 "case {name}, table {table}"
             );
         }
@@ -808,7 +992,7 @@ async fn read_decisions_sets_seen_only_when_it_changed() {
     assert!(!error, "{text}");
     let rowid = |agent: &str| {
         w.text(&format!(
-            "select cast(rowid as text) from meta where key = 'seen:{agent}'"
+            "select cast(rowid as text) from kv where key = 'seen:{agent}'"
         ))
     };
     assert_eq!(rowid("s-2"), None);
@@ -820,7 +1004,7 @@ async fn read_decisions_sets_seen_only_when_it_changed() {
     );
     // a row that would take the next rowid: a second `insert or replace` of seen:s-2 would move it
     w.conn()
-        .execute("insert into meta values ('zz', '1')", [])
+        .execute("insert into kv values ('zz', '1')", [])
         .unwrap();
     assert!(!w.call(&other, "read_decisions", json!({})).await.0);
     assert_eq!(
@@ -874,25 +1058,37 @@ async fn a_held_write_is_counted_and_a_good_one_clears_it() {
     );
 }
 
-/// A hub that started before work.db existed: the first tool call after the Lisp side made it is answered, with no
-/// schema tick between (the store looks at the file once more itself).
+/// A hub that started on a file it cannot open yet (a schema 5): the first tool call after a schema-6 file replaced it
+/// is answered, with no schema tick between (the store asks the writer to look at the file once more itself, and the
+/// opening rule migrates it).
 #[tokio::test]
 async fn a_work_db_made_after_the_start_is_used_by_the_next_tool_call() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("work.db");
+    Connection::open(&file)
+        .unwrap()
+        .execute_batch(
+            "create table meta (key text primary key, value text); insert into meta values ('schema', '5');",
+        )
+        .unwrap();
     let db = CoordDb::spawn(&file);
     let hub = Arc::new(CountingHub::default());
     let coord = Arc::new(Coord::new(db, hub));
     let who = session("s-1", None, dir.path());
     let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
     assert!(
-        error && text.contains("work.db is not ready (schema 0)"),
+        error && text.contains("work.db is schema 5; open it once with drgnx 6 first"),
         "{text}"
     );
-    Connection::open(&file)
+    let next = dir.path().join("next.db");
+    Connection::open(&next)
         .unwrap()
         .execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
         .unwrap();
+    for ext in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(dir.path().join(format!("work.db{ext}")));
+    }
+    std::fs::rename(&next, &file).unwrap();
     let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
     assert!(!error, "{text}");
     let events: i64 = Connection::open(&file)

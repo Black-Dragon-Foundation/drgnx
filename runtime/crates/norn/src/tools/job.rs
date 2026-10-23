@@ -14,7 +14,7 @@ use super::guard::{CoordTool, guarded, text_cut};
 use super::{Coord, Ctx, Identity};
 use crate::read::decisions::{Decision, decisions_since};
 use crate::read::tasks::tasks;
-use crate::store::{CoordError, Tx};
+use crate::store::{CoordError, WTx};
 use crate::write::decisions::{Decide, DecideResult, decide};
 use crate::write::messages::{Send as SendMessage, SendResult, send};
 use crate::write::meta::note_held;
@@ -197,24 +197,24 @@ async fn send_message(coord: &Coord, who: &Identity, args: SendArgs) -> Result<S
         answers: None,
         question: false,
     };
-    send_text(coord, &me, message, (cut > 0).then_some(cut)).await
+    send_text(coord, who, message, (cut > 0).then_some(cut)).await
 }
 
 /// The write of a message and its answer text; CUT is how many characters the text lost.
 async fn send_text(
     coord: &Coord,
-    me: &str,
+    who: &Identity,
     message: SendMessage,
     cut: Option<usize>,
 ) -> Result<String, String> {
-    let (me, now) = (me.to_owned(), coord.now());
+    let (me, now) = (who.me()?.to_owned(), coord.now());
     let (sent, changes) = coord
         .db()
-        .write(move |tx| {
+        .write(who.tx_meta("mcp:send_message"), move |tx| {
             let sent = send(tx, message, now)?;
             let (held, changes) = match &sent {
                 SendResult::Held { version, seen } => {
-                    (Some(*version), decisions_since(tx, *seen, None)?)
+                    (Some(*version), decisions_since(tx.sql(), *seen, None)?)
                 }
                 SendResult::Ok { .. } => (None, Vec::new()),
             };
@@ -302,7 +302,7 @@ async fn record_decision(
     let now = coord.now();
     let result = coord
         .db()
-        .write(move |tx| {
+        .write(who.tx_meta("mcp:record_decision"), move |tx| {
             let r = decide(tx, d, now)?;
             let held = match &r {
                 DecideResult::Held(h) => Some(h.version),
@@ -349,13 +349,14 @@ fn claim_text(r: &ClaimResult) -> String {
 /// A task write by ME: F's answer, the held count noted, the hub told.
 async fn task_write(
     coord: &Coord,
-    me: &str,
-    f: impl FnOnce(&Tx, f64) -> Result<ClaimResult, CoordError> + Send + 'static,
+    who: &Identity,
+    tool: &str,
+    f: impl FnOnce(&mut WTx<'_>, f64) -> Result<ClaimResult, CoordError> + Send + 'static,
 ) -> Result<String, String> {
-    let (me, now) = (me.to_owned(), coord.now());
+    let (me, now) = (who.me()?.to_owned(), coord.now());
     let result = coord
         .db()
-        .write(move |tx| {
+        .write(who.tx_meta(tool), move |tx| {
             let r = f(tx, now)?;
             let held = match &r {
                 ClaimResult::Held(h) => Some(h.version),
@@ -399,7 +400,7 @@ async fn claim_task(coord: &Coord, who: &Identity, args: ClaimArgs) -> Result<St
     who.not_outside("claim_task")?;
     let me = who.me()?.to_owned();
     let (task, seen, agent) = (args.task, args.seen_version, me.clone());
-    task_write(coord, &me, move |tx, now| {
+    task_write(coord, who, "mcp:claim_task", move |tx, now| {
         claim(tx, &task, &agent, Some(seen), now)
     })
     .await
@@ -461,7 +462,7 @@ async fn set_task_status(
 ) -> Result<String, String> {
     let me = who.me()?.to_owned();
     let agent = me.clone();
-    task_write(coord, &me, move |tx, now| {
+    task_write(coord, who, "mcp:update_task", move |tx, now| {
         set_status(tx, &task, &agent, &status, Some(seen), now)
     })
     .await
@@ -539,5 +540,5 @@ async fn escalate(coord: &Coord, who: &Identity, args: EscalateArgs) -> Result<S
         answers: None,
         question: false,
     };
-    send_text(coord, &me, message, None).await
+    send_text(coord, who, message, None).await
 }

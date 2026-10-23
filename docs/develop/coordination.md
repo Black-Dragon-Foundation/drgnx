@@ -124,25 +124,61 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
 
 ## The writer (`runtime/crates/norn`, `runtime/crates/urdr`)
 
-Ratatoskr writes the coordination tables through `norn`; the Lisp in `core/drgnx-coord.el` stays the oracle until it
-is deleted. Rules:
+Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 12); the Lisp in
+`core/drgnx-coord.el` stays the oracle until it is deleted. Rules:
 
-- **The expected schema only.** `urdr`'s `Mode::ReadWriteExisting { expect_schema, synchronous_full }` opens an
-  existing file read-write. It never creates a file, never migrates and leaves the journal mode alone; `busy_timeout`
-  is 5 s. A missing file is `Error::Missing`, a `meta.schema` other than the expected one is `Error::Schema { found }`,
-  with nothing written. The hub's `CoordDb::with_graph` expects schema 7: the graph writer beside it makes the file
-  or migrates a schema-6 one first ([store.md](store.md#migration-from-schema-6-task-11)), and `CoordDb` follows
-  the writer's answer. `CoordDb::spawn` (without a graph writer) still expects schema 6.
-- **One thread.** `norn::store::CoordDb` owns the connection on `urdr`'s store thread, so no statement runs on an async
-  worker. `write` runs its closure inside `BEGIN IMMEDIATE` (committed on `Ok`, rolled back on `Err`); `read` runs
-  outside a transaction. The closure gets `&Tx` (the connection, already in the transaction).
-- **Not ready.** While the graph writer is not ready (a file below schema 6, a migration that failed) a write is
-  `NotReady` with the opening rule's text; without a graph writer, below schema 6 (or missing) it is "work.db is not
-  ready (schema N); the Lisp side makes it". A newer schema is opened read-only; a write is `ReadOnly { schema }`.
-- **Follows the file.** The hub's 2 s schema tick calls `CoordDb::tick`: it opens when not open, and opens again when
-  the file's `(dev, inode)` changed (a removed and re-made `work.db`, R-T14-2). A read or write that finds the file
-  not open runs that open once itself first (on a blocking thread), so a `work.db` made after the hub started is used
-  by the next call, the front's methods and the coordination tools alike, not 2 s later.
+- **One writer, the graph writer.** `norn::store::CoordDb` is a thin wrapper over `urdr::graph::WriterHandle`: every
+  `CoordDb::write(meta, f)` is one request of the graph writer (group commit, a savepoint of its own, answered after
+  `COMMIT`; [store.md](store.md#the-writer-task-1)). The writer's opening rule (`norn::migrate7::open_rule`) makes a
+  missing file at schema 7 or migrates a schema-6 one ([store.md](store.md#migration-from-schema-6-task-11)); the
+  hub hands its writer to `CoordDb::with_graph`, `CoordDb::spawn` (tests) starts one of its own beside the path.
+  Nothing here opens a second write connection.
+- **Every write has an author.** The writer inserts the request's `tx` row first, from the `TxMeta` the caller gives
+  `write`; the author is never an argument:
+  - a coordination tool: the session's identity (`Identity::tx_meta`): class `agent` (a session drgnx runs) or `ext`
+    (an outside agent), actor `agent:SID` / `ext:KIND:PID-HASH`, its session, profile and job, tool `mcp:<name>`;
+  - an editor method (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's connection: actor
+    `user`, class `user`, tool `proto:<method>`; a seam method (`coord/*`) actor `hub`, and anything the Lisp
+    backend's connection writes actor `backend`, both class `system` (`drgnx-ratatoskr/src/coord.rs`, `tx_meta`);
+  - the gateway's `spend` rows and the rate card of a held report: actor `hub`, class `system`.
+
+  The rows of the kept tables a write made (`event`, `message`, `card`, `review_mark`, `agent`, `job`; `spend` from
+  Task 12b) carry that tx in their `tx` column (a later update of the row moves it), so excise blanks the right ones
+  (see "Excise" below).
+- **Writers take the transaction.** Each `norn::write::*` writer takes `&mut WTx` (`urdr::graph::Tx`), runs its SQL
+  through `tx.sql()` and the entity and link primitives with `&mut tx`; readers take the read connection (`&Tx`,
+  a plain `Connection`) and read the kept tables and the compat views. `CoordDb::read` runs on a read-only connection
+  of its own, outside any transaction.
+- **Hub keys are `kv`.** `write::meta` (`log-version`, `seen:AGENT`, `held:AGENT`, `rate-told:AGENT`,
+  `event-pruned`) reads and writes the `kv` table, through the class guard (`setting:` keys are the user's); `meta`
+  is the read-only view the Lisp readers see.
+- **Decisions are entities.** `decide` writes an entity of kind `decision` (`id decision:N`, `title` the subject,
+  `status`, `body` the reason, `data {n, kind, task?, paths?, author, at, ver, job?}`), `N` one past the highest
+  number so far, a `supersedes` link to the decision it `replaces` (when that number exists; else the number stays in
+  `data.replaces`), and bumps the `log-version` counter in the same transaction (call 4: `seen:*` keys keep working).
+  A replacing current decision marks the old one `replaced` (a new version) and gives it the new `ver`. Rates and
+  the HELD rules are unchanged. The readers read the `decision` view.
+- **Job tasks are entities.** `job_create` makes `task:JOB#N` (`data {job, n, role}`, status `ready` or `pending`)
+  and a `blocks` link from each dependency to the task that waits on it (a dependency the job does not have is left
+  out). `claim` sets status `claimed`, assignee and `lease_holder` to the agent, `lease_until` and **bumps
+  `lease_epoch`** (a renewal by the holder is a claim again: the epoch moves); `force_status`, `set_status`,
+  `heartbeat`, `renew` and `release_stale` update the entity (a version in `entity_hist`, `field_tx` naming the tx);
+  a released task keeps its epoch and has no holder. The readers read the `jtask` and `jdep` views. A job task's
+  `project` is the tx's project (none from the front's methods or the tools yet: Task 13/14 give the tracker's
+  tools theirs).
+- **Not ready.** While the graph writer is not ready (a file below schema 6, a migration that failed or waits) a
+  write is `NotReady` with the opening rule's text, and a read too; a newer schema is readable and a write is
+  `ReadOnly { schema }`.
+- **Follows the file.** The hub's 2 s schema tick calls the writer's `tick` and `CoordDb::tick`: the writer runs its
+  rule again while not ready and opens a replaced file (R-T14-2); the read connection opens when not open and again
+  when the file's `(dev, inode)` changed. A read or write that finds the store not open asks the writer to look once
+  itself first, so a `work.db` made or migrated after the hub started is used by the next call, the front's methods
+  and the coordination tools alike, not 2 s later.
+- **Excise.** `write::CoordBlanker` (`write::blankers()`, added to every `urdr::graph::excise::excise` call) blanks
+  the copies the kept tables hold: an `event`'s summary and data written by an excised tx or about an excised task
+  (`event.task`); a `message`'s text by `message.tx` (a coalesced notice is found by whichever tx last updated it) or
+  `message.entity`; a `card`'s title and data by `card.tx`, `card.entity` or `data.task`. The marker is the excise's
+  `[excised TX]`, the data `{"excised": TX}`.
 - **Events and meta.** `write::event` is `drgnx-coord--event`: the summary is one line of at most 200 characters
   (`runstav::text::one_line`), data over 4096 characters is stored as `{"truncated": true, "size": N}`, `turn` is 1
   for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 17 of `drgnx-coord-event-kinds` (a test
@@ -166,9 +202,12 @@ is deleted. Rules:
 - **Parity.** `test/fixtures/coord-parity/CASE.input.json` (`setup`, `clock`, `calls`, optionally `tables`, the tables
   to compare besides `event` and `meta`) is run by `gen.el` against the real Lisp functions, which writes
   `CASE.expect.json` (results and tables); `norn/tests/parity.rs` replays each input against the Rust writers with the
-  same clock. A call with `"now": T` sees T at every `float-time`; a refused call is `{"signal": MESSAGE}`. `test/fixtures/work-db-6.sql` is the schema every Rust test starts
-  from. Run `gen.el` by hand in the build container (its header has the commands); the fixtures stay when the Lisp is
-  deleted.
+  same clock, on a schema-7 database: a schema-6 file made from `test/fixtures/work-db-6.sql` and the case's `setup`,
+  opened by the graph writer's opening rule, every call one write of it, the tables compared **through the compat views
+  and the kept tables** (the new `tx` and `entity` columns and the migration's `meta` keys left out;
+  `every_write_has_one_tx_row` looks at the first). A call with `"now": T` sees T at every `float-time`; a refused call
+  is `{"signal": MESSAGE}`. `test/fixtures/work-db-6.sql` is the schema every Rust test starts from. Run `gen.el` by
+  hand in the build container (its header has the commands); the fixtures stay when the Lisp is deleted.
 
 ### Who writes what
 

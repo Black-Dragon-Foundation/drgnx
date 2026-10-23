@@ -4,7 +4,7 @@
 
 use super::event::{Event, EventKind, event};
 use crate::read::messages::Message;
-use crate::store::{CoordError, Tx};
+use crate::store::{CoordError, Tx, WTx};
 use runstav::text;
 use serde_json::json;
 
@@ -57,17 +57,17 @@ pub(crate) fn held_by_version(
 
 /// `drgnx-coord-send`: one transaction (the caller's).  Held by the log version, or stored (`queued`, or `held` when
 /// the recipient's queue is full or the pair talks too much), closing what the other side sent, with its event.
-pub fn send(tx: &Tx, s: Send, now: f64) -> Result<SendResult, CoordError> {
-    if let Some((version, seen)) = held_by_version(tx, s.seen)? {
+pub fn send(tx: &mut WTx<'_>, s: Send, now: f64) -> Result<SendResult, CoordError> {
+    if let Some((version, seen)) = held_by_version(tx.sql(), s.seen)? {
         return Ok(SendResult::Held { version, seen });
     }
-    let waiting: i64 = tx.query_row(
+    let waiting: i64 = tx.sql().query_row(
         "select count(*) from message where recipient = ?1 and state = 'queued'",
         [&s.recipient],
         |r| r.get(0),
     )?;
     let sender_or_user = s.sender.clone().unwrap_or_else(|| "user".into());
-    let recent: i64 = tx.query_row(
+    let recent: i64 = tx.sql().query_row(
         "select count(*) from message where coalesce(sender, 'user') = ?1 and recipient = ?2 and at > ?3",
         (&sender_or_user, &s.recipient, now - 60.0),
         |r| r.get(0),
@@ -81,15 +81,16 @@ pub fn send(tx: &Tx, s: Send, now: f64) -> Result<SendResult, CoordError> {
     };
     let state = if reason.is_some() { "held" } else { "queued" };
     let answers = s.answers.filter(|a| *a >= 0);
-    tx.execute(
-        "insert into message (job, sender, recipient, text, state, reason, at, answers) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        (&s.job, &s.sender, &s.recipient, &s.text, state, reason, now, answers),
+    let by = tx.id();
+    tx.sql().execute(
+        "insert into message (job, sender, recipient, text, state, reason, at, answers, tx) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        (&s.job, &s.sender, &s.recipient, &s.text, state, reason, now, answers, by),
     )?;
-    let id = tx.last_insert_rowid();
+    let id = tx.sql().last_insert_rowid();
     // a reply: what the other side sent this sender is acted on
-    tx.execute(
-        "update message set state = 'acted', acted = ?1 where sender = ?2 and coalesce(recipient, 'user') = ?3 and state in ('delivered', 'read')",
-        (now, &s.recipient, &sender_or_user),
+    tx.sql().execute(
+        "update message set state = 'acted', acted = ?1, tx = ?4 where sender = ?2 and coalesce(recipient, 'user') = ?3 and state in ('delivered', 'read')",
+        (now, &s.recipient, &sender_or_user, by),
     )?;
     let to_user = s.recipient == "user";
     let is_question = to_user
@@ -129,13 +130,13 @@ pub fn send(tx: &Tx, s: Send, now: f64) -> Result<SendResult, CoordError> {
 
 /// `drgnx-coord-mark`: move message `id` on to `state` (delivered, read or acted), stamping when; never back, never a
 /// held one.  Whether it moved.
-pub fn mark(tx: &Tx, id: i64, state: &str, now: f64) -> Result<bool, CoordError> {
+pub fn mark(tx: &mut WTx<'_>, id: i64, state: &str, now: f64) -> Result<bool, CoordError> {
     let col = match state {
         "delivered" | "read" | "acted" => state,
         _ => return Err(CoordError::Refused(format!("Not a message state: {state}"))),
     };
     let cur: Option<String> =
-        match tx.query_row("select state from message where id = ?1", [id], |r| {
+        match tx.sql().query_row("select state from message where id = ?1", [id], |r| {
             r.get(0)
         }) {
             Ok(s) => s,
@@ -148,14 +149,37 @@ pub fn mark(tx: &Tx, id: i64, state: &str, now: f64) -> Result<bool, CoordError>
     let to = STATES.iter().position(|s| *s == state);
     match (pos, to) {
         (Some(p), Some(t)) if t > p => {
-            tx.execute(
-                &format!("update message set state = ?1, {col} = ?2 where id = ?3"),
-                (state, now, id),
+            let by = tx.id();
+            tx.sql().execute(
+                &format!("update message set state = ?1, {col} = ?2, tx = ?4 where id = ?3"),
+                (state, now, id, by),
             )?;
             Ok(true)
         }
         _ => Ok(false),
     }
+}
+
+/// Blank the text of the messages an excise reached: those written (or last updated: a coalesced notice) by an
+/// excised tx, or about an excised entity (`message.entity`, an entity `n`).  How many.
+pub(crate) fn blank_messages(
+    tx: &mut WTx<'_>,
+    ex: &urdr::graph::excise::Excised,
+) -> Result<u64, CoordError> {
+    let mut n = 0;
+    for t in &ex.txs {
+        n += tx.sql().execute(
+            "update message set text = ?1 where tx = ?2 and text is not ?1",
+            (&ex.marker, t),
+        )?;
+    }
+    for e in &ex.entities {
+        n += tx.sql().execute(
+            "update message set text = ?1 where entity = ?2 and text is not ?1",
+            (&ex.marker, e),
+        )?;
+    }
+    Ok(n as u64)
 }
 
 /// `drgnx-coord--quote`: every line quoted, so what another agent wrote never reads as a line from drgnx.
@@ -257,13 +281,7 @@ pub fn notice(v: u64, job: &str, changes: &[NoticeChange], seen: u64) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::tests::DDL;
-
-    fn db() -> urdr::Connection {
-        let c = urdr::Connection::open_in_memory().unwrap();
-        c.execute_batch(DDL).unwrap();
-        c
-    }
+    use crate::store::tests::{db7, tx_of};
 
     fn msg(from: &str, to: &str, text: &str) -> Send {
         Send {
@@ -276,23 +294,26 @@ mod tests {
 
     #[test]
     fn a_seen_from_the_future_is_an_error_and_a_stale_one_holds() {
-        let c = db();
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
         let mut s = msg("a", "b", "x");
         s.seen = Some(3);
         assert!(matches!(
-            send(&c, s.clone(), 1.0),
+            send(&mut tx, s.clone(), 1.0),
             Err(CoordError::Refused(_))
         ));
-        c.execute("insert into meta values ('log-version', '5')", [])
+        tx.sql()
+            .execute("insert into kv values ('log-version', '5')", [])
             .unwrap();
         assert_eq!(
-            send(&c, s, 1.0).unwrap(),
+            send(&mut tx, s, 1.0).unwrap(),
             SendResult::Held {
                 version: 5,
                 seen: 3
             }
         );
-        let n: i64 = c
+        let n: i64 = tx
+            .sql()
             .query_row("select count(*) from message", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
@@ -300,16 +321,18 @@ mod tests {
 
     #[test]
     fn mark_goes_forward_only_and_never_from_held() {
-        let c = db();
-        let SendResult::Ok { id, .. } = send(&c, msg("a", "b", "x"), 1.0).unwrap() else {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let SendResult::Ok { id, .. } = send(&mut tx, msg("a", "b", "x"), 1.0).unwrap() else {
             panic!("held")
         };
-        assert!(mark(&c, id, "read", 2.0).unwrap());
-        assert!(!mark(&c, id, "delivered", 3.0).unwrap());
-        assert!(mark(&c, id, "queued", 3.0).is_err());
-        c.execute("update message set state = 'held' where id = ?1", [id])
+        assert!(mark(&mut tx, id, "read", 2.0).unwrap());
+        assert!(!mark(&mut tx, id, "delivered", 3.0).unwrap());
+        assert!(mark(&mut tx, id, "queued", 3.0).is_err());
+        tx.sql()
+            .execute("update message set state = 'held' where id = ?1", [id])
             .unwrap();
-        assert!(!mark(&c, id, "acted", 4.0).unwrap());
+        assert!(!mark(&mut tx, id, "acted", 4.0).unwrap());
     }
 
     #[test]
