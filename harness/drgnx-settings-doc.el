@@ -21,7 +21,11 @@
     ;; one entry per line, appended below by each port
     (require drgnx-agents)                ; Task 15: drgnx-agents-*
     (require drgnx-ai)                    ; Task 15: drgnx-ai-providers, drgnx-ai-roles
-    )
+    (require drgnx-keys)
+    (require drgnx-modules)
+    (require drgnx-session)
+    (require drgnx-look)
+    (require drgnx-large-files))
   "What declares the settings of the reference: entries `(require FEATURE)'.")
 
 (defun drgnx-settings-doc-load ()

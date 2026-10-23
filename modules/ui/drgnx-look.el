@@ -16,6 +16,13 @@
 
 ;;;; Theme
 
+(drgnx-defsetting drgnx-look-theme nil
+  "The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change
+switches the theme at once while the module runs."
+  :type '(choice (const :tag "Emacs's own" nil) symbol) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-look--settings-apply
+  :schema '(or null symbol))
+
 (defun drgnx-look--saved-theme () (plist-get (drgnx-modules-read-state) :theme))
 
 (defvar drgnx-look--taken nil
@@ -40,10 +47,20 @@ else enabled since stays)."
         (if (custom-theme-p theme) (enable-theme theme) (load-theme theme t))))
     (setq drgnx-look--taken nil)))
 
+(defun drgnx-look--settings-apply ()
+  "The `:apply' of `drgnx-look-theme': switch to it, while the module runs and the theme is installed.  A theme
+that does not load is said, and the colours stay."
+  (when (and drgnx-look-theme (drgnx-module-running-p 'ui/look)
+             (not (equal custom-enabled-themes (list drgnx-look-theme)))
+             (memq drgnx-look-theme (custom-available-themes)))
+    (condition-case e (drgnx-look--load drgnx-look-theme)
+      (error (message "drgnx: the colour theme %s does not load (%s); Color Theme picks another"
+                      drgnx-look-theme (error-message-string e))))))
+
 (defun drgnx-look-load-theme (theme)
-  "Make THEME the only theme and remember it.  A modules.eld with a mistake refuses (`drgnx-config-refused') before the
-theme changes."
-  (drgnx-config-ensure-writable 'modules)
+  "Make THEME the only theme and remember it (`drgnx-look-theme', in settings.el).  A settings.el with a mistake
+refuses (`drgnx-settings-refused') before the theme changes."
+  (drgnx-settings-area-ensure-writable)
   (drgnx-look--load theme)
   (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
 

@@ -6,6 +6,7 @@
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 (require 'drgnx-registry)
 (require 'drgnx-notice)
 (require 'drgnx-agents)
@@ -23,9 +24,9 @@
 
 (defun drgnx-settings-migrate-test--large-files ()
   "Define large-files.eld as its module's setup does."
-  (unless (fboundp 'drgnx-large-files--define-config)
+  (unless (fboundp 'drgnx-large-files--define-user-config)
     (load (expand-file-name "modules/editor/drgnx-large-files" drgnx-dir) nil t))
-  (drgnx-large-files--define-config))
+  (drgnx-large-files--define-user-config))
 
 (defmacro drgnx-settings-migrate-test--with (&rest body)
   "BODY under `drgnx-test-with-config', large-files.eld defined, every area in the shim, its caches empty, `custom-file' in the temp
@@ -34,15 +35,17 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
   `(drgnx-test-with-config
      (let ((custom-file (expand-file-name "custom.el" (drgnx-user-dir)))
            (inhibit-interaction t)
-           ;; agents and ai left the shim's areas (Task 15); the shim still answers for them here
-           (drgnx-settings-shim-areas drgnx-settings-migrate-names)
+           ;; the shim is tested with all six areas, though Tasks 15 and 16 take theirs out of the real list
+           (drgnx-settings-shim-areas '(agents ai keys modules large-files session))
+           (drgnx-settings-apply--entries nil)          ; settings.el is not applied in this process
            (drgnx-settings-migrate--shim-cache nil)
            (drgnx-settings-migrate--values-cache nil)
            (drgnx-settings-migrate-test--notices nil))
        (cl-letf (((symbol-function 'drgnx-notify)
                   (lambda (&rest args) (push args drgnx-settings-migrate-test--notices) nil)))
          (drgnx-settings-migrate-test--large-files)
-         ,@body))))
+         (drgnx-test-areas-reset)
+         (unwind-protect (progn ,@body) (drgnx-test-areas-reset))))))
 
 (defun drgnx-settings-migrate-test--file (name)
   "Old config file NAME's path."

@@ -48,8 +48,10 @@ started by an apply (the after-apply functions are off)."
        (delete-directory dir t))))
 
 (defun drgnx-keys-claims-evil-test--user (plist)
-  "Write PLIST as keys.eld of the temp configuration."
-  (write-region (format "%S\n" plist) nil (drgnx-keys-file) nil 'silent))
+  "Write PLIST (the old keys.eld's) as the keys settings of the temp configuration."
+  (load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
+  (make-directory (drgnx-user-dir) t)
+  (drgnx-test-areas-put-old 'keys (format "%S" plist)))
 
 (defun drgnx-keys-claims-evil-test--resolve (layers &rest args)
   (apply #'drgnx-keys-resolve :commands (drgnx-commands-all) :layers layers

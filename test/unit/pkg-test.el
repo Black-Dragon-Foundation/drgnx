@@ -5,6 +5,7 @@
 (require 'drgnx-file)
 (require 'drgnx-paths)
 (require 'drgnx-pkg)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 
 (defun drgnx-pkg-test--package (dir name version &optional requires body)
   "Write the single-file package NAME-VERSION.el into archive DIR; return its archive-contents entry."
@@ -40,14 +41,25 @@
           (package-alist nil) (package-archive-contents nil) (package-activated-list nil)
           (package--initialized nil) (package-user-dir (expand-file-name "unused-elpa" ,root))
           (package-quickstart nil) (package-quickstart-file (expand-file-name "other-emacs/package-quickstart.el" ,root))
+          (drgnx-settings-apply--entries nil)
           (load-path load-path) (features features))
      (make-directory (concat ,root "config") t)
+     (drgnx-test-areas-reset)
      (unwind-protect (progn ,@body)
+       (drgnx-test-areas-reset)
        (delete-directory ,root t))))
 
 (defun drgnx-pkg-test--write (file data)
   (make-directory (file-name-directory file) t)
   (with-temp-file file (prin1 data (current-buffer))))
+
+(defun drgnx-pkg-test--modules (plist)
+  "The module choices PLIST (the keys of the old modules.eld) in settings.el, nothing applied."
+  (drgnx-test-areas-put-old 'modules (prin1-to-string plist)))
+
+(defun drgnx-pkg-test--disabled-in (config-dir)
+  "The disabled modules settings.el in CONFIG-DIR holds."
+  (drgnx-test-areas-file-value (expand-file-name "settings.el" config-dir) 'drgnx-modules-disabled))
 
 (defun drgnx-pkg-test--want (root &rest names)
   "packages.eld in ROOT's config asking for NAMES; no modules (an empty modules dir)."
@@ -83,7 +95,7 @@
       ;; read, never run: the files would error if evaluated
       (write-region "(error \"never run\")\n(drgnx-module-define 'x/a :stage 'idle :packages '(pa pb) :setup #'ignore)\n(drgnx-module-define 'x/b :packages '(pz))\n(drgnx-module-define 'x/c :doc \"no packages\")\n"
                     nil (concat mods "drgnx-x.el") nil 'silent)
-      (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1 :disabled (x/b)))
+      (drgnx-pkg-test--modules '(:disabled (x/b)))
       (drgnx-pkg-test--write (concat root "config/packages.eld") '(:packages (pc pa)))
       (drgnx-pkg-test--write (concat root "state/drgnx/packages-wanted.eld") '(pw))
       (should (equal (drgnx-pkg-manifest (concat root "mods")) '(pa pb pc pw))))))
@@ -317,15 +329,16 @@
       (make-directory mods t)
       (dotimes (i 6)
         (write-region (format "(drgnx-module-define 'x/m%d :doc \"m\")\n" i) nil (format "%sdrgnx-m%d.el" mods i) nil 'silent))
-      (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1 :disabled (x/m0) :theme tango))
+      (drgnx-pkg-test--modules '(:disabled (x/m0) :theme tango))
       (let* ((runs 0)
              (fails-with (lambda (culprit)
                            (lambda (config-dir)
                              (setq runs (1+ runs))
-                             (let ((m (with-temp-buffer (insert-file-contents (expand-file-name "modules.eld" config-dir))
-                                                        (read (current-buffer)))))
-                               (should (eq (plist-get m :theme) 'tango))       ; the rest of the file is kept
-                               (not (memq culprit (plist-get m :disabled))))))))
+                             ;; the rest of the file is kept
+                             (should (eq (drgnx-test-areas-file-value (expand-file-name "settings.el" config-dir)
+                                                                      'drgnx-look-theme)
+                                         'tango))
+                             (not (memq culprit (drgnx-pkg-test--disabled-in config-dir)))))))
         (should (eq (drgnx-pkg-bisect (funcall fails-with 'x/m4) :modules-dir (concat root "mods")) 'x/m4))
         (should (<= runs 6))                                           ; halving, not one by one
         (should (eq (drgnx-pkg-bisect (lambda (_) t) :modules-dir (concat root "mods")) :not-a-module))
@@ -334,8 +347,9 @@
                                       :modules-dir (concat root "mods"))
                     :package-settings))
         (should-error (drgnx-pkg-bisect (lambda (_) nil) :modules-dir (concat root "mods")) :type 'drgnx-pkg-error)
-        ;; the user's modules.eld is untouched
-        (should (equal (drgnx-pkg--read-file (concat root "config/modules.eld")) '(:version 1 :disabled (x/m0) :theme tango)))))))
+        ;; the user's settings.el is untouched
+        (should (equal (drgnx-pkg-test--disabled-in (concat root "config")) '(x/m0)))
+        (should (eq (drgnx-test-areas-file-value (concat root "config/settings.el") 'drgnx-look-theme) 'tango))))))
 
 (ert-deftest drgnx-pkg/the-service-unit-is-written-never-installed ()
   (drgnx-pkg-test--with root
@@ -670,23 +684,21 @@
         (should (file-exists-p file))))))
 
 (ert-deftest drgnx-pkg/bisect-covers-external-modules ()
-  ;; M5-11: an external module (modules.eld :external) can be the culprit too.
+  ;; M5-11: an external module (`drgnx-modules-external') can be the culprit too.
   (drgnx-pkg-test--with root
     (make-directory (concat root "mods/x/") t)
     (dotimes (i 3)
       (write-region (format "(drgnx-module-define 'x/m%d :doc \"m\")\n" i) nil (format "%smods/x/drgnx-m%d.el" root i) nil 'silent))
-    (drgnx-pkg-test--write (concat root "config/modules.eld")
-                           '(:version 1 :disabled (external/off)
-                                      :external ((:name "gry" :path "/nowhere" :features (gry)) (:name "off" :path "/nowhere"))))
+    (drgnx-pkg-test--modules '(:disabled (external/off)
+                                         :external ((:name "gry" :path "/nowhere" :features (gry)) (:name "off" :path "/nowhere"))))
     (let ((fails (lambda (culprit)
                    (lambda (config-dir)
-                     (not (memq culprit (plist-get (drgnx-pkg--read-file (expand-file-name "modules.eld" config-dir)) :disabled)))))))
+                     (not (memq culprit (drgnx-pkg-test--disabled-in config-dir)))))))
       (should (eq (drgnx-pkg-bisect (funcall fails 'external/gry) :modules-dir (concat root "mods")) 'external/gry))
       (should (eq (drgnx-pkg-bisect (funcall fails 'x/m1) :modules-dir (concat root "mods")) 'x/m1))
       ;; an external module already off is no candidate: it stays off in every round
       (should (eq (drgnx-pkg-bisect (lambda (config-dir)
-                                      (should (memq 'external/off (plist-get (drgnx-pkg--read-file (expand-file-name "modules.eld" config-dir))
-                                                                             :disabled)))
+                                      (should (memq 'external/off (drgnx-pkg-test--disabled-in config-dir)))
                                       t)
                                     :modules-dir (concat root "mods"))
                   :not-a-module)))))
@@ -929,7 +941,7 @@ Returns the server process; its port is (process-contact SERVER :service)."
       (make-directory mods t)
       (write-region "(drgnx-module-define 'extra/a :packages '(fa))\n(drgnx-module-define 'extra/b :packages '(fb))\n"
                     nil (concat mods "drgnx-x.el") nil 'silent)
-      (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1 :disabled (extra/b)))
+      (drgnx-pkg-test--modules '(:disabled (extra/b)))
       (drgnx-pkg-test--write (concat root "config/packages.eld") '(:packages (pz)))
       (should-error (drgnx-pkg-ship-lock (concat root "mods")) :type 'drgnx-pkg-error)   ; no lock yet
       (drgnx-pkg-sync :modules-dir (concat root "mods") :archives `(("fx" . ,arch)))       ; extra/b is off: no fb
@@ -937,8 +949,7 @@ Returns the server process; its port is (process-contact SERVER :service)."
         (should (string-match-p "\\bfb\\b" (cadr err)))
         (should (string-match-p "full-ai" (cadr err))))
       (should-not (file-exists-p (drgnx-pkg-shipped-lock-file)))
-      (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1))
-      (drgnx-config-reread 'modules)
+      (drgnx-pkg-test--modules '())
       (drgnx-pkg-sync :modules-dir (concat root "mods") :archives `(("fx" . ,arch)))
       (drgnx-pkg-ship-lock (concat root "mods"))
       (let ((shipped (plist-get (drgnx-pkg--read-file (drgnx-pkg-shipped-lock-file)) :packages)))

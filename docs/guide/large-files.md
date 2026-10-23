@@ -89,21 +89,28 @@ Emacs's `so-long` everywhere: such a buffer opens in `so-long-mode`, with the sa
 
 ## The settings
 
-`~/.config/drgnx/large-files.eld` ([reference](../reference/config.md#large-filesel)), sizes in MiB, fractions
-allowed:
+Three settings in `settings.el` ([Settings](settings.md); [reference](../reference/settings.md)), sizes in MiB,
+fractions allowed. They were `large-files.eld` before the unified settings; the first start after the update moves them.
 
 ```elisp
-(:version 1 :ask-above 50 :chunks-above 500 :chunk-size 1)
+(drgnx-settings
+ :version 1
+ (drgnx-large-files-ask-above 50)
+ (drgnx-large-files-chunks-above 500)
+ (drgnx-large-files-chunk-size 1))
 ```
 
-- `:ask-above`: above this size a file opens in chunks, lean or raw. `nil` turns the feature off: files open as
-  Emacs opens them.
-- `:chunks-above`: above this size the question's default is chunks; below it, lean.
-- `:chunk-size`: how much of the file one chunk holds.
+- `drgnx-large-files-ask-above`: above this size a file opens in chunks, lean or raw. `nil` turns the feature off:
+  files open as Emacs opens them.
+- `drgnx-large-files-chunks-above`: above this size the question's default is chunks; below it, lean.
+- `drgnx-large-files-chunk-size`: how much of the file one chunk holds.
 
-A project can carry `.drgnx/large-files.eld` with `:ask-above` and `:chunks-above`. It can **only lower** your sizes:
-a higher value, `nil` or a `:chunk-size` there is ignored, so a repository cannot make drgnx load a huge file whole.
-With your `:ask-above` nil, the project file is not read.
+They are read each time a file opens, so a change applies to the next file (the warning threshold follows
+`drgnx-large-files-ask-above` at once).
+
+A project can carry `.drgnx/large-files.eld` with `:ask-above` and `:chunks-above` (the project file stays a file of
+its own). It can **only lower** your sizes: a higher value, `nil` or a `:chunk-size` there is ignored, so a repository
+cannot make drgnx load a huge file whole. With your `drgnx-large-files-ask-above` nil, the project file is not read.
 
 ## GUI and terminal
 

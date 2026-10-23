@@ -15,9 +15,14 @@
 
 (defconst drgnx-modal-choose-test--vim '((vim app editing window)))
 
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
+
+;; keys.eld and modules.eld are settings now: "keys.eld" is the keys settings, "modules.eld" the module settings.
+(defun drgnx-modal-choose-test--write (name text)
+  (drgnx-test-areas-put-old (intern (string-remove-suffix ".eld" name)) text))
+
 (defun drgnx-modal-choose-test--read (name)
-  (let ((file (expand-file-name name (drgnx-user-dir))))
-    (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+  (drgnx-test-areas-old-plist (intern (string-remove-suffix ".eld" name))))
 
 (defmacro drgnx-modal-choose-isolated--with (keys modules on-path &rest body)
   "BODY in a temp configuration with KEYS as keys.eld and MODULES as modules.eld (strings, nil: none), the core
@@ -43,8 +48,8 @@ Skipped without evil otherwise."
             (mode-line-saved (default-value 'mode-line-format)))
        (make-directory (concat dir "config") t)
        (make-directory (concat dir "home") t)
-       (when ,keys (write-region ,keys nil (concat dir "config/keys.eld") nil 'silent))
-       (when ,modules (write-region ,modules nil (concat dir "config/modules.eld") nil 'silent))
+       (when ,keys (drgnx-modal-choose-test--write "keys.eld" ,keys))          ; as settings.el's entries
+       (when ,modules (drgnx-modal-choose-test--write "modules.eld" ,modules))
        (unwind-protect
            (progn
              (drgnx--core-commands)

@@ -26,7 +26,7 @@
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-lisp-index-file "drgnx-lisp-index" (file))
-(declare-function drgnx-large-files--define-config "drgnx-large-files" ())
+(declare-function drgnx-large-files--define-user-config "drgnx-large-files" ())
 
 (defconst drgnx-settings-migrate-names '(agents ai keys modules large-files session)
   "The config files that fold into settings.el (design §5.4), in the order the migration reads them.
@@ -139,10 +139,10 @@ feature.  One that fails to load is a message: its file then stays."
       (unless (drgnx-config-defined-p name)
         (condition-case err
             (if (eq name 'large-files)
-                (let ((before (cl-remove-if #'drgnx-config-defined-p '(large-files large-files-project))))
-                  (unless (fboundp 'drgnx-large-files--define-config)
+                (let ((before (cl-remove-if #'drgnx-config-defined-p '(large-files))))
+                  (unless (fboundp 'drgnx-large-files--define-user-config)
                     (load (expand-file-name "modules/editor/drgnx-large-files" drgnx-dir) nil t))
-                  (drgnx-large-files--define-config)
+                  (drgnx-large-files--define-user-config)
                   (setq temp (append before temp)))
               (require (alist-get name drgnx-settings-migrate--features)))
           (error (drgnx-settings-migrate--warn (format "%s.eld could not be read now: %s"

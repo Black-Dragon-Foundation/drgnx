@@ -483,7 +483,7 @@ Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
 to `drgnx-settings-doc-sources`). After declaring or changing one, regenerate it and commit it with the change:
 
 ```sh
-emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -l drgnx-settings-doc \
+emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -L modules/ui -l drgnx-settings-doc \
   --eval '(drgnx-settings-doc-regenerate "docs/reference/settings.md")'
 ```
 

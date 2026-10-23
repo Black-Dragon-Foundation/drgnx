@@ -427,11 +427,11 @@ A symbolic link is stamped by its target, as `drgnx-file-stamp' does."
       (let ((cell (assoc key value))) (if cell (cdr cell) (cdr (assoc key (plist-get def :default)))))
     (let ((m (plist-member value key))) (if m (cadr m) (plist-get (plist-get def :default) key)))))
 
-(defvar drgnx-settings-shim-areas '(keys modules large-files session)
+(defvar drgnx-settings-shim-areas nil
   "The old config files whose values moved into settings.el and that `drgnx-config-get' still answers, from the
 settings (the shim, `drgnx-settings-migrate-shim'; docs/develop/settings.md, \"The migration and the shim\").  An
 area leaves this list when its callers read the settings themselves (unified-settings Tasks 15 and 16; agents and ai
-left with Task 15).")
+left with Task 15, keys, modules, large-files and session with Task 16).")
 
 (declare-function drgnx-settings-migrate-shim "drgnx-settings-migrate" (name state))
 

@@ -30,12 +30,14 @@
 (require 'drgnx-ui-kit)                 ; `drgnx-ui-ascii-frame-p', for the status bar segment
 (require 'drgnx-registry)
 (require 'drgnx-config)
+(require 'drgnx-setting)
 (require 'drgnx-memo)
 (require 'drgnx-guard)
 (require 'drgnx-large-file)
 (require 'drgnx-session)                ; `drgnx-session-before-open-functions': the server's opens never ask
 (require 'so-long)
 
+(defvar drgnx-settings-changed-functions)
 (defvar treesit-max-buffer-size)
 (defvar eglot--managed-mode)
 (declare-function eglot--managed-mode "eglot")
@@ -62,8 +64,24 @@ session only; capped at 256 files, the least recently used evicted.")
   "MIB MiB in bytes, rounded."
   (round (* mib drgnx-large-files--mib)))
 
-(defun drgnx-large-files--define-config ()
-  "Define large-files.eld and the project's .drgnx/large-files.eld.  The setup calls this; teardown undefines them."
+(drgnx-defsetting drgnx-large-files-ask-above 50
+  "Above this size (MiB) a file opens in chunks, lean or raw (a command asks once); nil: never.  Read when a file opens."
+  :type '(choice (const :tag "Never" nil) number) :group 'drgnx :scope 'global :merge 'lower-only
+  :schema '(or null (pred drgnx-large-files--mib-p "a size in MiB above 0")))
+
+(drgnx-defsetting drgnx-large-files-chunks-above 500
+  "Above this size (MiB) the question's default is chunks, else lean.  Read when a file opens."
+  :type 'number :group 'drgnx :scope 'global :merge 'lower-only
+  :schema '(pred drgnx-large-files--mib-p "a size in MiB above 0"))
+
+(drgnx-defsetting drgnx-large-files-chunk-size 1
+  "How much of the file (MiB) a chunk holds.  Read when a file opens."
+  :type 'number :group 'drgnx :scope 'global
+  :schema '(pred drgnx-large-files--mib-p "a size in MiB above 0"))
+
+(defun drgnx-large-files--define-user-config ()
+  "Define large-files.eld, the old file.  Only `drgnx-settings-migrate-maybe' needs it: it reads the file once to move
+its values into settings.el.  Nothing reads it any more."
   (drgnx-config-define
    'large-files
    :file "large-files.eld" :shape 'plist :version 1 :reload 'mtime :last-good t
@@ -74,7 +92,10 @@ session only; capped at 256 files, the least recently used evicted.")
                    (:chunk-size (pred drgnx-large-files--mib-p "a size in MiB above 0")
                                 "How much of the file (MiB) a chunk holds"))
    :default '(:version 1 :ask-above 50 :chunks-above 500 :chunk-size 1)
-   :doc "When a file is large: the size that asks (or opens in chunks, lean or raw), the size above which chunks is the default, and a chunk's size.")
+   :doc "When a file is large (moved into settings.el): the size that asks, the size above which chunks is the default, and a chunk's size."))
+
+(defun drgnx-large-files--define-config ()
+  "Define the project's .drgnx/large-files.eld.  The setup calls this; teardown undefines it."
   (drgnx-config-define
    'large-files-project
    :dir 'project :file "large-files.eld" :shape 'plist :version 1 :reload 'mtime
@@ -94,13 +115,10 @@ session only; capped at 256 files, the least recently used evicted.")
 
 (defun drgnx-large-files-thresholds (file)
   "FILE's thresholds in bytes: (:ask-above BYTES-or-nil :chunks-above BYTES :chunk-size BYTES).
-The user's large-files.eld, each size lowered by the project's .drgnx/large-files.eld when the project's is a
-number below it.  With the user's `:ask-above' nil the project file is not read.  One `drgnx-config-get' of each
-file (each is one stat)."
-  (let* ((user (drgnx-config-get 'large-files))
-         (default (plist-get (drgnx-config-definition 'large-files) :default))
-         ;; a key left out of the file: the default's
-         (get (lambda (key) (plist-get (if (plist-member user key) user default) key)))
+Your sizes (the settings `drgnx-large-files-ask-above', `-chunks-above' and `-chunk-size'), each lowered by the
+project's .drgnx/large-files.eld when the project's is a number below it.  With your `:ask-above' nil the project file
+is not read.  One `drgnx-config-get' of the project file (one stat)."
+  (let* ((get (lambda (key) (symbol-value (intern (format "drgnx-large-files-%s" (substring (symbol-name key) 1))))))
          (ask (funcall get :ask-above))
          (chunks (funcall get :chunks-above)))
     (when-let* ((root (and ask (drgnx-large-files--project-root file))))
@@ -115,7 +133,7 @@ file (each is one stat)."
 
 (defun drgnx-large-files--sync-threshold ()
   "Set `large-file-warning-threshold' to the user's `:ask-above' in bytes (nil when it is nil), when it differs."
-  (let* ((ask (drgnx-config-get 'large-files :ask-above))
+  (let* ((ask drgnx-large-files-ask-above)
          (bytes (and ask (drgnx-large-files--bytes ask))))
     (unless (equal large-file-warning-threshold bytes)
       (drgnx-module-set 'large-file-warning-threshold bytes))))
@@ -519,8 +537,8 @@ Chunk buffers stay, without the header.  The status bar's segment and its place 
                               (drgnx-large-files--sync-threshold)
                               ;; the listener sets the threshold as this module, so each change is undone at teardown
                               (let ((sync (drgnx-modules-with-owner (drgnx-large-files--sync-threshold))))
-                                (drgnx-module-hook 'drgnx-config-changed-functions config-changed (name)
-                                  (when (eq name 'large-files) (funcall sync))))
+                                (drgnx-module-hook 'drgnx-settings-changed-functions config-changed (_file changes)
+                                  (when (assq 'drgnx-large-files-ask-above (mapcar #'cdr changes)) (funcall sync))))
                               ;; the door, and the server's requests, which are automatic
                               (drgnx-module-advice #'find-file-noselect :around open
                                                    (orig filename &optional nowarn rawfile wildcards)

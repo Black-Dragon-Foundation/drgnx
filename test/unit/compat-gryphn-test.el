@@ -2,16 +2,17 @@
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-compat-gryphn)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ext-test--with (dir &rest body)
   "BODY with a fresh registry and module report, a user config dir, and DIR for external code."
   (declare (indent 1))
-  `(let* ((,dir (make-temp-file "drgnx-ext" t)) (cfg (make-temp-file "drgnx-cfg" t))
-          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
-          (drgnx-modules--table nil) (drgnx-modules--report nil)
-          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-          (drgnx-keys-profiles (copy-tree drgnx-keys-profiles)) (load-path load-path))
-     (unwind-protect (progn ,@body) (delete-directory ,dir t) (delete-directory cfg t))))
+  `(drgnx-test-with-areas
+     (let* ((,dir (make-temp-file "drgnx-ext" t))
+            (drgnx-modules--table nil) (drgnx-modules--report nil)
+            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+            (drgnx-keys-profiles (copy-tree drgnx-keys-profiles)) (load-path load-path))
+       (unwind-protect (progn ,@body) (delete-directory ,dir t)))))
 
 (ert-deftest drgnx-compat/gryphn-commands-land-in-the-registry ()
   (drgnx-ext-test--with dir

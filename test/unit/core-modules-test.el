@@ -1,5 +1,7 @@
 ;;; core-modules-test.el --- batch tests: the module system -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 (require 'drgnx-modules)
 
 (defmacro drgnx-test--fresh-modules (&rest body)
@@ -56,12 +58,13 @@
 ;;;; M4: the full module system
 
 (defmacro drgnx-modules-test--with-config (&rest body)
-  "BODY with an empty user config dir and state dir (never the user's)."
-  `(let* ((cfg (make-temp-file "drgnx-cfg" t)) (st (make-temp-file "drgnx-st" t))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" cfg) (concat "XDG_STATE_HOME=" st))
-                                       process-environment))
-          (drgnx-modules--table nil) (drgnx-modules--report nil))
-     (unwind-protect (progn ,@body) (delete-directory cfg t) (delete-directory st t))))
+  "BODY with an empty user config dir and state dir (never the user's), settings.el not applied in this process."
+  `(drgnx-test-with-areas
+     (let* ((cfg (drgnx-user-dir)) (st (drgnx-state-dir))
+            (drgnx-modules--table nil) (drgnx-modules--report nil))
+       (make-directory cfg t)
+       (make-directory st t)
+       ,@body)))
 
 (defun drgnx-modules-test--status (name) (plist-get (alist-get name (drgnx-modules-report)) :status))
 
@@ -102,16 +105,25 @@
    (should (drgnx-module-flag-p 'ui/popups '+childframe))
    (should-not (drgnx-module-flag-p 'ui/popups '+other))))
 
-(ert-deftest drgnx-modules/old-and-broken-state-files ()
+(ert-deftest drgnx-modules/the-choices-are-in-settings-el-and-the-old-file-is-not-read ()
   (drgnx-modules-test--with-config
-   ;; Version 0 was a bare list of disabled modules: migrated.
-   (with-temp-file (expand-file-name "modules.eld" (drgnx-user-dir)) (prin1 '(lang/python ui/zen) (current-buffer)))
+   (drgnx-test-areas-put-entries '((drgnx-modules-disabled . (lang/python ui/zen))))
    (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(lang/python ui/zen)))
-   (should (eql (plist-get (drgnx-modules-read-state) :version) 2))
-   ;; Unreadable: defaults, a message, no error.
-   (with-temp-file (expand-file-name "modules.eld" (drgnx-user-dir)) (insert "(:version 1 :disabled (oops"))
-   (drgnx-config-reread 'modules)
-   (should (equal (plist-get (drgnx-modules-read-state) :disabled) nil))))
+   ;; Unreadable: defaults, no error.
+   (drgnx-test-areas-put "(drgnx-settings :version 1 (drgnx-modules-disabled (oops")
+   (should (equal (plist-get (drgnx-modules-read-state) :disabled) nil))
+   ;; modules.eld is the migration's: nothing else reads it
+   (with-temp-file (expand-file-name "modules.eld" (drgnx-user-dir)) (prin1 '(:version 2 :disabled (ui/look)) (current-buffer)))
+   (drgnx-test-areas-put-entries nil)
+   (should-not (drgnx-module-disabled-p 'ui/look))))
+
+(ert-deftest drgnx-modules/a-config-el-setq-of-a-module-setting-is-read ()
+  ;; applied settings are the variables: a `setq' in config.el is as good as an entry
+  (drgnx-modules-test--with-config
+   (let ((drgnx-settings-apply--entries '((drgnx-modules-disabled . entry)))
+         (drgnx-modules-disabled '(a/b)))
+     (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(a/b)))
+     (should (drgnx-module-disabled-p 'a/b)))))
 
 (ert-deftest drgnx-modules/preferences-toggle-a-module ()
   (drgnx-modules-test--with-config
@@ -138,33 +150,31 @@
 ;;;; M4 review fixes
 
 (ert-deftest drgnx-modules/a-hand-edited-mistake-never-stops-startup-and-is-never-written-over ()
-  ;; I1: a typo in modules.eld never stops startup: the defaults apply, one problem says where, the file is kept.
+  ;; I1: a typo in settings.el never stops startup: the defaults apply, the file is kept.
   (drgnx-modules-test--with-config
-   (let* ((file (expand-file-name "modules.eld" (drgnx-user-dir)))
-          (text "(:version 1 :disabled lang/eglot :flags oops :external (gryphn (:name x)))\n"))
-     (with-temp-file file (insert text))
+   (let* ((file (drgnx-config-file 'settings))
+          (text "(drgnx-settings :version 1 (drgnx-modules-disabled lang/eglot) (drgnx-modules-flags oops) (drgnx-modules-external (gryphn (:name x))))\n"))
+     (drgnx-test-areas-put text)
      (let ((st (drgnx-modules-read-state)))
        (should-not (plist-get st :disabled))
-       (should-not (plist-get st :external)))
-     (should (drgnx-config-problem 'modules))
+       (should-not (plist-get st :flags)))
      (drgnx-module-define 'test/ok :doc "ok" :setup #'ignore)
      (drgnx-modules-run 'startup)
      (should (eq (drgnx-modules-test--status 'test/ok) 'ok))
      (should-not (drgnx-module-flag-p 'x '+y))
      (drgnx-modules-load-external)
-     (should-error (drgnx-modules-toggle 'test/ok) :type 'drgnx-config-refused)
+     (should-error (drgnx-modules-toggle 'test/ok) :type 'user-error)
      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) text)))))
 
 (ert-deftest drgnx-modules/an-unreadable-file-is-never-replaced-by-a-toggle ()
-  ;; I2: the user's unreadable (or newer) modules.eld is never replaced: the toggle refuses, no backup is needed.
+  ;; I2: the user's unreadable (or newer) settings.el is never replaced: the toggle refuses.
   (drgnx-modules-test--with-config
-   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir)))
-         (text "(:version 1 :external ((:name kept :path \"/x\" :features (a)))   ; typo: no closing paren"))
-     (with-temp-file file (insert text))
+   (let ((file (drgnx-config-file 'settings))
+         (text "(drgnx-settings :version 1 (drgnx-modules-external ((:name kept :path \"/x\" :features (a)))   ; typo: no closing paren"))
+     (drgnx-test-areas-put text)
      (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
-     (should-error (drgnx-modules-toggle 'test/a) :type 'drgnx-config-refused)
-     (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) text))
-     (should-not (directory-files (drgnx-user-dir) nil "\\`modules\\.eld\\.bak")))))
+     (should-error (drgnx-modules-toggle 'test/a) :type 'drgnx-settings-refused)
+     (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) text)))))
 
 (ert-deftest drgnx-modules/the-list-shows-external-and-broken-modules ()
   ;; I3: what the report knows — external features, files that failed to load — is in the list too.
@@ -287,10 +297,10 @@
        (delete-directory dir t) (delete-directory lib t)))))
 
 (ert-deftest drgnx-modules/an-invalid-external-entry-is-listed-and-kept ()
-  ;; M4-5: an external entry without :path is listed as failed, and writing modules.eld keeps it.
+  ;; M4-5: an external entry without :path is listed as failed, and writing settings.el keeps it.
   (drgnx-modules-test--with-config
-   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
-     (with-temp-file file (prin1 '(:version 1 :external ((:name nopath :features (a)))) (current-buffer)))
+   (progn
+     (drgnx-test-areas-put-entries '((drgnx-modules-external . ((:name nopath :features (a))))))
      (drgnx-modules-load-external)
      (let ((r (alist-get 'external/nopath (drgnx-modules-report))))
        (should (eq (plist-get r :status) 'failed))
@@ -316,53 +326,54 @@
      (should (string-search "/nonexistent/drgnx" (buffer-string)))
      (should-not (string-search "external module" (buffer-string))))))
 
-;;;; modules.eld is format 2
+;;;; The choices in settings.el
 
-(defun drgnx-modules-test--read-file (file)
-  (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
-
-(ert-deftest drgnx-modules/a-v1-file-reads-and-is-written-as-v2 ()
+(ert-deftest drgnx-modules/the-four-choices-read-and-a-toggle-writes-only-the-disabled-list ()
   (drgnx-modules-test--with-config
-   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
-     (should (eql drgnx-modules-state-version 2))
-     (with-temp-file file (prin1 '(:version 1 :disabled (ui/zen) :enabled (editor/evil) :flags ((ui/popups +childframe))) (current-buffer)))
-     (let ((st (drgnx-modules-read-state)))       ; format 1 needs no change
-       (should (equal (plist-get st :disabled) '(ui/zen)))
-       (should (equal (plist-get st :enabled) '(editor/evil)))
-       (should (equal (plist-get st :flags) '((ui/popups +childframe)))))
-     (drgnx-modules-toggle 'test/a)               ; the first write after a migration: v2, the old file kept aside
-     (should (eql (plist-get (drgnx-modules-test--read-file file) :version) 2))
-     (should (equal (plist-get (drgnx-modules-test--read-file file) :disabled) '(ui/zen test/a)))
-     (should (= (length (directory-files (drgnx-user-dir) nil "\\`modules\\.eld\\.bak")) 1)))))
+   (drgnx-test-areas-put-entries '((drgnx-modules-disabled . (ui/zen)) (drgnx-modules-enabled . (editor/evil))
+                                   (drgnx-modules-flags . ((ui/popups +childframe)))))
+   (let ((st (drgnx-modules-read-state)))
+     (should (equal (plist-get st :disabled) '(ui/zen)))
+     (should (equal (plist-get st :enabled) '(editor/evil)))
+     (should (equal (plist-get st :flags) '((ui/popups +childframe)))))
+   (drgnx-modules-toggle 'test/a)
+   (should (equal (cdar (drgnx-settings-area-fresh '(drgnx-modules-disabled))) '(ui/zen test/a)))
+   (should (equal (cdar (drgnx-settings-area-fresh '(drgnx-modules-enabled))) '(editor/evil)))
+   (should (equal (cdar (drgnx-settings-area-fresh '(drgnx-modules-flags))) '((ui/popups +childframe))))))
 
-(ert-deftest drgnx-modules/a-format-0-bare-list-still-reads ()
+(ert-deftest drgnx-modules/a-newer-settings-el-is-applied-read-only ()
   (drgnx-modules-test--with-config
-   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
-     (with-temp-file file (prin1 '(lang/python) (current-buffer)))
-     (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(lang/python))))))
-
-(ert-deftest drgnx-modules/a-v3-file-is-applied-read-only ()
-  (drgnx-modules-test--with-config
-   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
-     (with-temp-file file (prin1 '(:version 3 :disabled (ui/zen) :enabled (editor/evil)) (current-buffer)))
-     (let ((st (drgnx-modules-read-state)))       ; it fits the schema: applied as it is
-       (should (equal (plist-get st :disabled) '(ui/zen)))
-       (should (equal (plist-get st :enabled) '(editor/evil))))
+   (let ((text "(drgnx-settings :version 3 (drgnx-modules-disabled (ui/zen)))\n"))
+     (drgnx-test-areas-put text)
      (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
-     (should-error (drgnx-modules-toggle 'test/a) :type 'drgnx-config-refused)
-     (should (eql (plist-get (drgnx-modules-test--read-file file) :version) 3))
-     (should-not (directory-files (drgnx-user-dir) nil "\\`modules\\.eld\\.bak")))))
+     (should-error (drgnx-modules-toggle 'test/a) :type 'drgnx-settings-refused)
+     (should (equal (drgnx-test-areas-text) text)))))
 
 (ert-deftest drgnx-modules/enabled-survives-a-turn-off ()
   (drgnx-modules-test--with-config
-   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
-     (with-temp-file file (prin1 '(:version 1 :enabled (editor/evil)) (current-buffer)))
-     (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
-     (drgnx-modules-toggle 'test/a)
-     (let ((written (drgnx-modules-test--read-file file)))
-       (should (eql (plist-get written :version) 2))
-       (should (equal (plist-get written :enabled) '(editor/evil)))
-       (should (equal (plist-get written :disabled) '(test/a)))))))
+   (drgnx-test-areas-put-entries '((drgnx-modules-enabled . (editor/evil))))
+   (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
+   (drgnx-modules-toggle 'test/a)
+   (should (equal (cdar (drgnx-settings-area-fresh '(drgnx-modules-enabled))) '(editor/evil)))
+   (should (equal (cdar (drgnx-settings-area-fresh '(drgnx-modules-disabled))) '(test/a)))))
+
+(ert-deftest drgnx-modules/the-apply-stops-and-starts-modules ()
+  ;; the `:apply' of the module settings stops a running module whose setting now says off, and starts it again
+  (drgnx-modules-test--with-config
+   (let ((stopped 0) (started 0) (drgnx-modules-after-teardown-functions nil))
+     (drgnx-module-define 'test/a :doc "a" :setup (lambda () (cl-incf started)) :teardown (lambda () (cl-incf stopped)))
+     (drgnx-modules-run 'startup)
+     (should (drgnx-module-running-p 'test/a))
+     (let ((drgnx-modules-disabled '(test/a)) (drgnx-settings-apply--entries '((x . y))))
+       (drgnx-modules--settings-apply)
+       (should-not (drgnx-module-running-p 'test/a))
+       (should (= stopped 1))
+       (drgnx-modules--settings-apply)                   ; idempotent
+       (should (= stopped 1)))
+     (let ((drgnx-modules-disabled nil) (drgnx-settings-apply--entries '((x . y))))
+       (drgnx-modules--settings-apply)
+       (should (drgnx-module-running-p 'test/a))
+       (should (= started 2))))))
 
 ;;;; Notices (a failed module shows at once)
 

@@ -57,8 +57,8 @@
   (cl-incf drgnx-evil-test--count))
 
 (defmacro drgnx-evil-test--config (layers enabled &rest body)
-  "BODY in a temp configuration whose keys.eld has LAYERS, with the module loaded (not run) and, when
-ENABLED, chosen in modules.eld.  Tables, the engine registry and the mode line are put back after; evil is
+  "BODY in a temp configuration whose settings.el has LAYERS, with the module loaded (not run) and, when
+ENABLED, chosen in it.  Tables, the engine registry and the mode line are put back after; evil is
 stopped.  Evil's packages are not on `load-path' here."
   (declare (indent 2))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-evil" t)))
@@ -76,9 +76,9 @@ stopped.  Evil's packages are not on `load-path' here."
           (mode-line-saved (default-value 'mode-line-format)))
      (make-directory (concat root "config") t)
      (make-directory (concat root "home") t)
-     (write-region (format "%S\n" (list :layers ,layers)) nil (concat root "config/keys.eld") nil 'silent)
-     (when ,enabled
-       (write-region "(:version 1 :enabled (editor/evil))\n" nil (concat root "config/modules.eld") nil 'silent))
+     (write-region (format "(drgnx-settings :version 1%s (drgnx-keys-layers %S))\n"
+                           (if ,enabled " (drgnx-modules-enabled (editor/evil))" "") ,layers)
+                   nil (concat root "config/settings.el") nil 'silent)
      (unwind-protect
          (progn (load drgnx-evil-test--module nil t t)
                 ,@body)

@@ -1,7 +1,7 @@
 # Keyboard Shortcuts editor
 
 **Preferences: Keyboard Shortcuts** (module `tools/shortcuts`) lists every drgnx command with its keys, as VS
-Code's Keyboard Shortcuts page does, and changes them in your `keys.eld` ([keys.md](keys.md)). Keys: `C-k C-s`
+Code's Keyboard Shortcuts page does, and changes them in your `settings.el` ([keys.md](keys.md)). Keys: `C-k C-s`
 (VS Code), `SPC h s` (Vim); with Emacs keys it is in the palette and the Options menu. The key sheet (Help:
 Keyboard Shortcuts, `C-k C-r` / `C-h C-k` / `SPC ?`) is the read-only overview.
 
@@ -13,7 +13,7 @@ One line per command:
 |---|---|
 | Command | its category and title, as in the palette |
 | Keys | its keys; `†` marks a key a terminal cannot send (see below) |
-| Source | the profile the key comes from (VS Code, Emacs, Vim), `keys.eld` when you changed it, or `package` for a key Emacs or a package bound to the command itself |
+| Source | the profile the key comes from (VS Code, Emacs, Vim), `settings.el` when you changed it, or `package` for a key Emacs or a package bound to the command itself |
 | Where | `global`, or the view or mode the key works in (the keymap it is bound in); with Vim keys `normal, visual, motion state and panels` (the `SPC` leader keys), `panels`, or the state (`normal state`, `motion state`, `insert state` …) |
 
 A `!` at the start of a line marks a key conflict; hover over it to see with which command and where. A conflict is
@@ -22,13 +22,13 @@ only one within the same place: the same key in two views is not.
 A profile's key over one of Emacs' own keys is not a conflict: the profile chose it (VS Code's `C-k` chords take
 `C-k`, `kill-line`, as a prefix). Hover over the Where column to see what it is over ("Over Emacs' kill-line
 (C-k)"); the key sheet and the doctor list these too. Neither is a chord of yours under such a prefix (`C-k C-9`
-in VS Code keys: the profile already made `C-k` one). Your `keys.eld` taking one of Emacs' keys the profile left
+in VS Code keys: the profile already made `C-k` one). Your own keys taking one of Emacs' keys the profile left
 alone (a chord under `C-a`), a key another active layer
 claims (the Emacs layer's keys in "Emacs editing + VS Code app keys", Vim's keys) and two drgnx commands on one
 key are conflicts.
 
 The first line shows the key profile in use, with **[Switch Profile…]**: VS Code, Emacs or Vim keys, or a
-combination. It applies at once and is kept in `keys.eld` (as Keyboard Profile… does).
+combination. It applies at once and is kept in `settings.el` (as Keyboard Profile… does).
 
 **Suggestion:** a command you ran 10 times or more from the palette in the last seven days, and that has no key,
 gets a line at the top: "You ran … N times from the palette this week; give it a key?", with a button that records
@@ -44,7 +44,7 @@ one. The palette's counts stay on this machine (`command-usage.eld` in drgnx's s
 | `k` | Record Keys (Filter): press a key or a chord; the page shows the commands on it, or on keys that start with it. Again: off |
 | `c` | Show Conflicts only (again: all) |
 | `n` | Show Commands Without a Key only |
-| `m` | Show Changed by Me only (the commands your `keys.eld` changes) |
+| `m` | Show Changed by Me only (the commands your settings change) |
 | `u` | Undo Last Change |
 | `r` | Reset Keybinding: the command gets its profile's keys again |
 | `R` | Reset All Keybindings, after a confirmation |
@@ -62,7 +62,7 @@ After `RET` (or `a`), press the keys:
 - `C-g` or `ESC` cancels, as the first or the second key; nothing is written.
 
 In a terminal, Meta keys can't be recorded (a terminal sends `M-x` as `ESC x`, and `ESC` cancels): use a graphical
-frame, or write the key in `keys.eld`.
+frame, or write the key in `settings.el`.
 
 A key in the global keymap that starts with a character typed as is (a letter, a capital letter, `RET`, `TAB`) is
 refused: it would stop you typing that character. Use a modifier, or a chord that starts with one. `C-x`, `C-c`,
@@ -88,27 +88,29 @@ character other than a letter, `@ [ \ ] ^ _ ? ` or space (`C-.`, `C-1`, `C-/`). 
 
 Hover the mark, or look at it in a terminal window: the text names what to press there, "here: Alt+Shift+F" or
 "here: F6 p" (see [Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6)); where the terminal has no
-fallback it says so. The page's keys stay the profile's own, as written in `keys.eld`.
+fallback it says so. The page's keys stay the profile's own, as written in the profile.
 
 **Set the Terminal Fallback** (`t`) on a marked row picks another Alt+Shift key for the chord, such as `M-Z`, and
-writes `(:tty-fallback (("C-S-p" . "M-Z")))` into `keys.eld` (`drgnx-keys-edit-set-tty-fallback`; comments stay, Undo
+writes `(drgnx-keys-tty-fallback (("C-S-p" . "M-Z")))` into `settings.el` (`drgnx-keys-edit-set-tty-fallback`; comments stay, Undo
 takes it back). A key that cannot be used is refused with the reason: reserved, one of Emacs's, in your profile, kept by the
 terminal, or the fallback of another chord.
 
 ## Undo and reset
 
-Every change is written to `keys.eld` at once, keeping your comments, `:layers` and the other entries, and the keys
-apply without a restart. `u` takes back the last change, also after a restart; a Replace (the key taken from another
-command and given to this one) is one change. If `keys.eld` was changed since (by you, another session, or
-Keyboard Profile…), Undo says so and changes nothing. A `keys.eld` that does not read is shown at the top of the
-page and never written.
+Every change is written to `settings.el` at once (the entries `drgnx-keys-bind`, `drgnx-keys-unbind` and
+`drgnx-keys-tty-fallback`), keeping your comments, `drgnx-keys-layers` and the other entries, and the keys apply
+without a restart. `u` takes back the last change, also after a restart; a Replace (the key taken from another
+command and given to this one) is one change. If those settings were changed since (by you, another session, or
+Keyboard Profile…), Undo says so and changes nothing. A `settings.el` that does not read is shown at the top of the
+page and never written. A comment written inside the `drgnx-keys-bind` list is lost when the editor rewrites the list;
+put it above the entry.
 
-`r` removes the command's entry from `keys.eld`, so it has its profile's keys again. `R` does that for every command
-(`:layers` and your comments stay); Undo brings them back.
+`r` removes the command's entry from `drgnx-keys-bind` and `drgnx-keys-unbind`, so it has its profile's keys again.
+`R` does that for every command (`drgnx-keys-layers` and your comments stay); Undo brings them back.
 
 ## How it works
 
 `modules/tools/drgnx-shortcuts.el` reads the last key resolution (`drgnx-keys-last`: bindings, conflicts, layers),
-the registry and `keys.eld`, and writes only through `core/drgnx-keys-edit.el`. Tests:
+the registry and the keys settings, and writes only through `core/drgnx-keys-edit.el`. Tests:
 `test/unit/mod-shortcuts-test.el`.
 The GUI test `test/ui/editor-m11c1-test.el` records a chord on a graphical frame, with screenshots.

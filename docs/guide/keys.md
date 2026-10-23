@@ -36,8 +36,8 @@ loaded, so there is never a session with Vim keys and no Vim editing:
   No changes nothing. A sync or start that fails, or `C-g` during the sync, keeps your keys and turns the module back
   off; a failure says why, with the log. In `drgnx safe` (no modules run) the keys stay as they are.
 - Called from code instead of as a command (`emacsclient -e`, a daemon, `drgnx onboard --non-interactive`) when
-  evil is not installed, nothing is asked: `editor/evil` is turned on and the stack is written to `keys.eld` as
-  `:pending-layers`, your keys stay as they are, and the message says "Vim needs drgnx sync". After `drgnx sync`
+  evil is not installed, nothing is asked: `editor/evil` is turned on and the stack is written to `settings.el` as
+  `drgnx-keys-pending-layers`, your keys stay as they are, and the message says "Vim needs drgnx sync". After `drgnx sync`
   the next start switches to it (and takes `:pending-layers` out). With evil installed it switches at once.
 - A Vim stack in `keys.eld` without evil (uninstalled, say) still starts: the palette keeps `C-S-p` and `F1`, Leader
   Menu `M-SPC`; `SPC` types a space, and `editor/evil` waits for its packages (Preferences: Modules).
@@ -114,7 +114,7 @@ later (Meow is the candidate):
 - **Third-party modes** (Magit and its commit messages, Dired, xref, compilation, Help, Info, vundo, Eglot, Ediff)
   get Vim keys from [evil-collection](https://github.com/emacs-evil/evil-collection), each when the mode's library
   loads, not before, so starting Vim editing stays cheap. The list is `drgnx-evil-collection-modes`; drgnx's own modes are never in it.
-  `:flags ((editor/evil no-collection))` in `modules.eld` leaves them all out (they keep their own keys).
+  `(drgnx-modules-flags ((editor/evil no-collection)))` in `settings.el` leaves them all out (they keep their own keys).
 - **Insert-state keys.** In the pure Vim stack insert state has Vim's keys: `C-w` deletes a word, `C-r` pastes a
   register, `C-v` quotes, `C-a`, `C-e`, `C-y`, `C-t`, `C-d`, `C-n`, `C-p`, `C-o` … When another profile's layer is
   mixed in (VS Code's app and window keys with Vim's editing, say) those keys stay Emacs' own, so the other
@@ -408,7 +408,7 @@ characters: @ # { [ on German, French, … keyboards)", offering your saved answ
 answered). **Types characters:** the left Option types characters too, for ordinary keys, and
 stays Meta for the arrows and other function keys and the mouse — Option+← / → still move by word
 (`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **Meta:** the left Option is Meta, as above.
-The answer is saved in `keys.eld` as `:mac-option characters` or `:mac-option meta` (edit it there too); without
+The answer is saved in `settings.el` as `(drgnx-keys-mac-option characters)` or `(drgnx-keys-mac-option meta)` (edit it there too); without
 interaction (`drgnx onboard --non-interactive`) nothing changes. Switching to the Emacs or Vim profile puts back what
 was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both handled.)
 
@@ -505,17 +505,25 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 
 With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works in one state with it (`g d (normal state)`); the Leader Menu on `M-SPC` over Emacs' `cycle-spacing` is listed with the conflicts; which-key labels the leader keys and their prefixes (`SPC f` is `+File`); `drgnx doctor` (`modal`) warns when the engine is missing.
 
-## keys.eld
+## Your keys in settings.el
 
-`~/.config/drgnx/keys.eld` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)) is one plist:
+Your keys are settings in `settings.el` ([Settings](settings.md); `~/.config/drgnx/settings.el` in your config folder:
+[where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)). Before the unified settings they were
+`keys.eld`; the first start after the update moves them ([Moving from the old files](settings.md#moving-from-the-old-files)).
 
 ```elisp
-(:layers ((emacs editing) (vscode app window))     ; the stack; omit for the default (VS Code)
- :bind ((palette "C-c p")                           ; command id → one or more keys
-        (line-numbers "C-c l" "<f9>")
-        (open-file "C-c f" :map (org . org-mode-map))) ; a key in a mode's keymap (bound once org loads)
- :unbind (keys-sheet))                              ; no key for these
+(drgnx-settings
+ :version 1
+ (drgnx-keys-layers ((emacs editing) (vscode app window)))     ; the stack; omit for the default (VS Code)
+ (drgnx-keys-bind ((palette "C-c p")                           ; command id → one or more keys
+                   (line-numbers "C-c l" "<f9>")
+                   (open-file "C-c f" :map (org . org-mode-map)))) ; a key in a mode's keymap (bound once org loads)
+ (drgnx-keys-unbind (keys-sheet)))                             ; no key for these
 ```
+
+The six settings are `drgnx-keys-layers`, `drgnx-keys-pending-layers`, `drgnx-keys-bind`, `drgnx-keys-unbind`,
+`drgnx-keys-mac-option` and `drgnx-keys-tty-fallback`. They are global, no workspace file may set them, and an agent
+may not change them. Below, "`keys.eld`" in older sections means these entries.
 
 - Command ids are the registry ids (the palette shows the commands; `drgnx-commands-all` lists them).
 - `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded. In a Vim or
@@ -534,38 +542,34 @@ With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works
   `eval-print-last-sexp`, ielm's and term's; to keep a mode's `C-j`, write ``(toggle-panel "C-`" "M-j")`` in
   `keys.eld`. It applies only when the profile also owns the editing keys: with "Emacs editing + VS Code app keys"
   or Vim editing, `C-j` stays the editing layer's in modes and Toggle Panel has it only where Emacs' global key was.
-- A mistake never breaks startup. `keys.eld` is read and written through drgnx's config layer, which never applies
-  a file in part: a file that does not read, or whose `:layers`, `:bind` entries, `:unbind` or `:mac-option` are not
-  in the shape above (one bad `:bind` entry is enough), is not applied at all. The last good copy of `keys.eld`
-  (kept per machine in the state folder) is applied instead, or the default stack if there never was one, and the
-  problem, with its line, is on the key sheet and in the doctor. An unknown command or an invalid key is a smaller
-  problem, listed the same way, and everything else in the file still applies.
-- `keys.eld` is read when drgnx starts and each time keys are applied (a profile switch, the editor), not
-  while you type in it. Change it by hand in Preferences: Open Config File… and save, and the file is read again
-  and the keys apply at once (the mistake notice clears too). Saved some other way, it applies at the next profile
-  switch, editor change or start.
-- Keyboard Profile… rewrites only `:layers` and keeps the rest of the file (a new `keys.eld` also gets `:version 1`).
-  It, the editor and Onboarding refuse a `keys.eld` with a mistake, naming the line, and change nothing.
+- A mistake never breaks startup. A value that is not in the shape above (one bad `drgnx-keys-bind` entry is enough)
+  is not used: the default (the VS Code stack, no entries) applies for that setting, and the Settings page and the
+  doctor say which entry and line. An unknown command or an invalid key is a smaller problem, listed on the key sheet,
+  and everything else still applies. A `settings.el` that does not read is handled as every settings file is
+  ([Settings](settings.md)).
+- A change in `settings.el`, by hand or by another session, applies at once: the keys are bound again on the next idle
+  moment, and a stack chosen earlier in this session no longer wins over `drgnx-keys-layers`.
+- Keyboard Profile… writes only `drgnx-keys-layers` and keeps the rest of the file. It, the editor and Onboarding
+  refuse a `settings.el` with a mistake (or an entry of these settings that does not fit), naming the line, and change
+  nothing.
 - The Keyboard Shortcuts editor writes through `drgnx-keys-edit` (`core/drgnx-keys-edit.el`): `drgnx-keys-edit-bind`,
-  `-add`, `-replace`, `-unbind`, `-reset`, `-reset-all` and `-undo`. Each changes one entry of `:bind` or `:unbind` and
-  keeps your comments, `:layers` and the other entries as they are; an entry keeps its `:mac` keys and `:none` reason
-  (on a Mac, edits go to the `:mac` keys of an entry that has them). A symlinked `keys.eld` stays a symlink, and the
-  file keeps its permissions; it is written as UTF-8. A `keys.eld` that does not read is reported and never written, and
-  so is one whose `:bind` or `:unbind` is not a plain list written out (`:bind ((palette "C-c p"))`, not
-  `:bind '((palette "C-c p"))`): the error says to fix it by hand and nothing is changed. A missing file is created
-  with a header comment. Taking the last
-  key away puts the command in `:unbind`.
-- Undo goes one step back, also after a restart: `keys.eld.undo` holds the text before and after the last change made
-  by the editor. If `keys.eld` has been changed since (by you, another session, or Keyboard Profile…), undo refuses and
-  writes nothing. The editor writes the whole file under a lock and only if it is still the file it read: a change
-  made by hand or by another session while an edit was being made is refused ("keys.eld changed since you opened
-  it"), never overwritten. The keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one
-  step (the editor's Replace: the key taken from other commands and given to this one).
+  `-add`, `-replace`, `-unbind`, `-reset`, `-reset-all` and `-undo`. Each changes one entry of `drgnx-keys-bind` or
+  `drgnx-keys-unbind` and keeps the rest of `settings.el` as it is: your comments above entries, the other entries and
+  the layout. A comment written inside the `drgnx-keys-bind` list itself goes when the editor rewrites that list
+  (put it above the entry). An entry keeps its `:mac` keys and `:none` reason (on a Mac, edits go to the `:mac` keys
+  of an entry that has them). A `settings.el` that does not read is reported and never written. Taking the last key
+  away puts the command in `drgnx-keys-unbind`.
+- Undo goes one step back, also after a restart: `keys-edit.undo` in the state folder holds the values the last change
+  made by the editor replaced. If one of those settings has been changed since (by you, another session, or Keyboard
+  Profile…), undo refuses and writes nothing; a setting that had no entry gets none again. The editor reads and writes
+  `settings.el` under its lock, so a change made meanwhile by hand or by another session is kept, never overwritten. The
+  keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one step (the editor's
+  Replace: the key taken from other commands and given to this one).
 
 In a terminal that cannot send `C-S-` chords and the like (GNOME Terminal, Ptyxis, Terminal.app), each chord of the
 profile is typed as Alt+Shift with the key where that is free (`C-S-f` as Alt+Shift+F), or as F6 then the key
 (`C-S-p` as F6 p), always: see [Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6). `:tty-fallback` in
-`keys.eld` gives a chord another Alt key, `(:tty-fallback (("C-S-p" . "M-Z")))`, if that key is free.
+`drgnx-keys-tty-fallback` gives a chord another Alt key, `(drgnx-keys-tty-fallback (("C-S-p" . "M-Z")))`, if that key is free.
 
 In such a terminal every surface shows a key the way that terminal can send it: the command palette shows
 `F6 p` for the palette itself and `M-F` (Alt+Shift+F) for Search in Project, the "next time" tips say the same, the

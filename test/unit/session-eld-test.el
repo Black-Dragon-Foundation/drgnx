@@ -1,93 +1,65 @@
-;;; session-eld-test.el --- batch tests: session.eld through the config layer -*- lexical-binding: t -*-
-;; Every test runs under `drgnx-test-with-config' (temp config and state folders), so nothing reaches ~.
+;;; session-eld-test.el --- batch tests: the keep-running choice, a setting -*- lexical-binding: t -*-
+;; Every test runs under `drgnx-test-with-areas' (temp config and state folders), so nothing reaches ~.
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
-(load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 (require 'drgnx-session)
 
-(defun drgnx-session-eld-test--text () (drgnx-test-config-text 'session))
+(defun drgnx-session-eld-test--text () (drgnx-test-areas-text))
 
-(ert-deftest drgnx-session-eld/load-sets-the-choice-only-when-the-file-has-the-key ()
-  (drgnx-test-with-config
-    (let ((drgnx-keep-running t))
-      ;; no file: left alone
-      (drgnx-session-load)
-      (should drgnx-keep-running)
-      ;; a file without the key: left alone, in either state
-      (drgnx-test-config-put 'session "(:other 1)\n")
-      (drgnx-config-reread 'session)
-      (setq drgnx-keep-running nil)
-      (drgnx-session-load)
-      (should-not drgnx-keep-running)
-      (setq drgnx-keep-running t)
-      (drgnx-session-load)
-      (should drgnx-keep-running)
-      ;; a file with the key: applied, nil included
-      (drgnx-test-config-put 'session "(:keep-running nil)\n")
-      (drgnx-config-reread 'session)
-      (drgnx-session-load)
-      (should-not drgnx-keep-running))))
+(ert-deftest drgnx-session-eld/the-setting-is-read-when-a-window-closes ()
+  (let ((meta (drgnx-setting-meta 'drgnx-session-keep-running)))
+    (should (eq (plist-get meta :scope) 'global))
+    (should (eq (plist-get meta :workspace) 'never))
+    (should-not (plist-get meta :apply)))              ; read on use: nothing to apply
+  (should (eq (indirect-variable 'drgnx-keep-running) 'drgnx-session-keep-running))
+  (should (eq (default-value 'drgnx-session-keep-running) t)))
 
-(ert-deftest drgnx-session-eld/a-mistake-uses-the-last-good-choice ()
-  (drgnx-test-with-config
+(ert-deftest drgnx-session-eld/a-process-that-has-not-applied-settings-el-reads-the-choice ()
+  (drgnx-test-with-areas
+    (should (eq (cdar (drgnx-settings-area-values '(drgnx-session-keep-running))) t))
+    (drgnx-test-areas-put-entries '((drgnx-session-keep-running . nil)))
+    (should-not (cdar (drgnx-settings-area-values '(drgnx-session-keep-running))))
+    (drgnx-test-areas-put-entries '((drgnx-session-keep-running . "yes please")))     ; refused by its type: the default
+    (should (eq (cdar (drgnx-settings-area-values '(drgnx-session-keep-running))) t))))
+
+(ert-deftest drgnx-session-eld/a-mistake-in-the-file-refuses-every-writer ()
+  (drgnx-test-with-areas
     (let ((drgnx-keep-running t)
-          (broken ";; half typed\n(:keep-running nil\n"))
-      (drgnx-test-config-put 'session "(:keep-running nil)\n")
-      (drgnx-session-load)
-      (should-not drgnx-keep-running)
-      ;; the user breaks the file: the choice made before stays
-      (drgnx-test-config-put 'session broken)
-      (drgnx-config-reread 'session)
-      (should (drgnx-config-problem 'session))
-      (setq drgnx-keep-running t)
-      (drgnx-session-load)
-      (should-not drgnx-keep-running)
-      ;; and no writer replaces the file
-      (should-error (drgnx-session-set-keep-running t) :type 'drgnx-config-refused)
-      (should (equal (drgnx-session-eld-test--text) broken)))))
-
-(ert-deftest drgnx-session-eld/a-mistake-with-no-good-copy-leaves-the-choice-alone ()
-  (drgnx-test-with-config
-    (let ((drgnx-keep-running nil)
-          (wrong "(:keep-running \"yes please\")\n"))
-      (drgnx-test-config-put 'session wrong)
-      (drgnx-session-load)
-      (should-not drgnx-keep-running)
-      (should (drgnx-config-problem 'session))
-      (should-error (drgnx-session-set-keep-running t) :type 'drgnx-config-refused)
-      (should (equal (drgnx-session-eld-test--text) wrong)))))
+          (broken ";; half typed\n(drgnx-settings :version 1 (drgnx-session-keep-running nil)\n"))
+      (drgnx-test-areas-put broken)
+      (should-error (drgnx-session-set-keep-running t) :type 'drgnx-settings-refused)
+      (should (equal (drgnx-session-eld-test--text) broken))
+      (should drgnx-keep-running))))
 
 (ert-deftest drgnx-session-eld/set-keeps-comments ()
-  (drgnx-test-with-config
+  (drgnx-test-with-areas
     (let ((drgnx-keep-running t))
-      (drgnx-test-config-put 'session ";; my session\n(:future (1 2) ; an unknown key\n :keep-running t) ; end\n")
+      (drgnx-test-areas-put ";; my settings\n(drgnx-settings\n :version 1\n ;; the session\n (drgnx-session-keep-running t) ; end\n (drgnx-look-theme tango))\n")
       (should-not (drgnx-session-set-keep-running nil))
       (should-not drgnx-keep-running)
       (let ((text (drgnx-session-eld-test--text)))
-        (should (string-prefix-p ";; my session\n(:future (1 2) ; an unknown key\n :keep-running " text))
-        (should (string-suffix-p ") ; end\n" text))
-        (should (string-search ":keep-running nil" text)))
+        (should (string-prefix-p ";; my settings\n(drgnx-settings\n :version 1\n ;; the session\n (drgnx-session-keep-running nil)" text))
+        (should (string-search "; end" text))
+        (should (string-search "(drgnx-look-theme tango)" text)))
       (should (eq (drgnx-session-set-keep-running t) t))
-      (should (string-search ":keep-running t" (drgnx-session-eld-test--text)))
-      (should (string-search "; an unknown key" (drgnx-session-eld-test--text))))))
+      (should (string-search "(drgnx-session-keep-running t)" (drgnx-session-eld-test--text))))))
 
 (ert-deftest drgnx-session-eld/a-new-file-holds-the-choice ()
-  (drgnx-test-with-config
+  (drgnx-test-with-areas
     (let ((drgnx-keep-running t))
-      (should-not (file-exists-p (drgnx-session-file)))
+      (should-not (file-exists-p (drgnx-config-file 'settings)))
       (drgnx-session-set-keep-running nil)
-      (let ((data (read (drgnx-session-eld-test--text))))
-        (should (plist-member data :keep-running))
-        (should-not (plist-get data :keep-running)))
-      (should (equal (drgnx-session-file) (drgnx-config-file 'session))))))
+      (should (string-search "(drgnx-session-keep-running nil)" (drgnx-session-eld-test--text)))
+      (should-not drgnx-keep-running))))
 
-(ert-deftest drgnx-session-eld/set-reaches-the-config-layer ()
-  (drgnx-test-with-config
+(ert-deftest drgnx-session-eld/set-reaches-the-settings-writer ()
+  (drgnx-test-with-areas
     (let ((drgnx-keep-running t) (seen nil))
-      (cl-letf (((symbol-function 'drgnx-config-set) (lambda (&rest args) (setq seen args) nil)))
+      (cl-letf (((symbol-function 'drgnx-settings-area-set) (lambda (&rest args) (setq seen args) nil)))
         (drgnx-session-set-keep-running nil))
-      (should (equal seen '(session :keep-running nil))))))
+      (should (equal seen '(((drgnx-session-keep-running))))))))
 
 (provide 'session-eld-test)
 ;;; session-eld-test.el ends here

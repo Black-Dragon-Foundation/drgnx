@@ -152,13 +152,13 @@
     (unwind-protect
         (progn
           (drgnx-tty-session--write-keys dir 'emacs)
-          (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" dir))
+          (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "settings.el" dir))
                                            (read (current-buffer)))
-                         '(:layers ((emacs app editing window)))))
+                         '(drgnx-settings :version 1 (drgnx-keys-layers ((emacs app editing window))))))
           (drgnx-tty-session--write-keys dir "vim")
-          (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" dir))
+          (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "settings.el" dir))
                                            (read (current-buffer)))
-                         '(:layers ((vim app editing window)))))
+                         '(drgnx-settings :version 1 (drgnx-keys-layers ((vim app editing window))))))
           (should-error (drgnx-tty-session--write-keys dir 'nano)))
       (delete-directory dir t))))
 

@@ -136,20 +136,40 @@
     (should (equal (drgnx-large-files-thresholds (expand-file-name "a.log" drgnx-test-config-root))
                    (list :ask-above (* 50 1048576) :chunks-above (* 500 1048576) :chunk-size 1048576)))))
 
+(defmacro drgnx-large-files-test--sizes (ask chunks size &rest body)
+  "BODY with the settings `drgnx-large-files-ask-above', `-chunks-above' and `-chunk-size' (MiB) bound to ASK, CHUNKS, SIZE."
+  (declare (indent 3) (debug t))
+  `(let ((drgnx-large-files-ask-above ,ask) (drgnx-large-files-chunks-above ,chunks) (drgnx-large-files-chunk-size ,size))
+     ,@body))
+
+(ert-deftest drgnx-large-files/the-sizes-are-settings-read-on-use ()
+  (dolist (var '(drgnx-large-files-ask-above drgnx-large-files-chunks-above drgnx-large-files-chunk-size))
+    (let ((meta (drgnx-setting-meta var)))
+      (should (eq (plist-get meta :scope) 'global))
+      (should (eq (plist-get meta :workspace) 'data))   ; a project may lower them (Task 17); never raise is its merge
+      (should-not (plist-get meta :apply))))
+  (should (equal (list drgnx-large-files-ask-above drgnx-large-files-chunks-above drgnx-large-files-chunk-size)
+                 '(50 500 1)))
+  (should-not (drgnx-setting-check 'drgnx-large-files-ask-above nil))
+  (should-not (drgnx-setting-check 'drgnx-large-files-ask-above 0.25))
+  (should (drgnx-setting-check 'drgnx-large-files-ask-above 0))
+  (should (drgnx-setting-check 'drgnx-large-files-chunks-above nil))
+  (should (drgnx-setting-check 'drgnx-large-files-chunk-size "1")))
+
 (ert-deftest drgnx-large-files/a-project-only-lowers ()
   (drgnx-large-files-test--with
-    (drgnx-test-config-put 'large-files "(:version 1 :ask-above 0.25 :chunks-above 1 :chunk-size 0.03125)")
-    ;; lower: applied
-    (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 0.015625 :chunks-above 0.0625)")))
-      (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
-                     '(:ask-above 16384 :chunks-above 65536 :chunk-size 32768))))
-    ;; higher: ignored, one key at a time
-    (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 5000 :chunks-above 0.5)")))
-      (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
-                     '(:ask-above 262144 :chunks-above 524288 :chunk-size 32768))))
-    ;; outside a project: the user's
-    (should (equal (drgnx-large-files-thresholds (expand-file-name "elsewhere.log" temporary-file-directory))
-                   '(:ask-above 262144 :chunks-above 1048576 :chunk-size 32768)))))
+    (drgnx-large-files-test--sizes 0.25 1 0.03125
+      ;; lower: applied
+      (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 0.015625 :chunks-above 0.0625)")))
+        (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
+                       '(:ask-above 16384 :chunks-above 65536 :chunk-size 32768))))
+      ;; higher: ignored, one key at a time
+      (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 5000 :chunks-above 0.5)")))
+        (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
+                       '(:ask-above 262144 :chunks-above 524288 :chunk-size 32768))))
+      ;; outside a project: the user's
+      (should (equal (drgnx-large-files-thresholds (expand-file-name "elsewhere.log" temporary-file-directory))
+                     '(:ask-above 262144 :chunks-above 1048576 :chunk-size 32768))))))
 
 (ert-deftest drgnx-large-files/a-project-nil-is-ignored ()
   (drgnx-large-files-test--with
@@ -160,12 +180,12 @@
 
 (ert-deftest drgnx-large-files/a-user-nil-ignores-the-project ()
   (drgnx-large-files-test--with
-    (drgnx-test-config-put 'large-files "(:version 1 :ask-above nil)")
-    (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 0.015625)")))
-      (cl-letf (((symbol-function 'locate-dominating-file)
-                 (lambda (&rest _) (error "The project file was looked for"))))
-        (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
-                       (list :ask-above nil :chunks-above (* 500 1048576) :chunk-size 1048576)))))))
+    (drgnx-large-files-test--sizes nil 500 1
+      (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 0.015625)")))
+        (cl-letf (((symbol-function 'locate-dominating-file)
+                   (lambda (&rest _) (error "The project file was looked for"))))
+          (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
+                         (list :ask-above nil :chunks-above (* 500 1048576) :chunk-size 1048576))))))))
 
 (ert-deftest drgnx-large-files/a-project-chunk-size-is-ignored ()
   (drgnx-large-files-test--with
@@ -191,30 +211,35 @@
                  1))
       (should (<= said 1)))))
 
-(ert-deftest drgnx-large-files/the-threshold-follows-the-file ()
+(ert-deftest drgnx-large-files/the-threshold-follows-the-setting ()
+  ;; settings.el changed (the live sync runs `drgnx-settings-changed-functions' with the changes): the threshold follows
   (let ((before large-file-warning-threshold))
     (drgnx-large-files-test--with
       (should (= large-file-warning-threshold (* 50 1048576)))
-      (drgnx-test-config-put 'large-files "(:version 1 :ask-above 1)")
-      (drgnx-config-get 'large-files)
-      (should (= large-file-warning-threshold 1048576))
-      (drgnx-test-config-put 'large-files "(:version 1 :ask-above nil)")
-      (drgnx-config-get 'large-files)
-      (should (null large-file-warning-threshold)))
+      (let ((drgnx-large-files-ask-above 1))
+        (run-hook-with-args 'drgnx-settings-changed-functions "settings.el" '((nil drgnx-large-files-ask-above 50 1)))
+        (should (= large-file-warning-threshold 1048576)))
+      (let ((drgnx-large-files-ask-above nil))
+        (run-hook-with-args 'drgnx-settings-changed-functions "settings.el" '((nil drgnx-large-files-ask-above 1 nil)))
+        (should (null large-file-warning-threshold)))
+      ;; a change of another setting leaves it alone
+      (let ((drgnx-large-files-ask-above 7))
+        (run-hook-with-args 'drgnx-settings-changed-functions "settings.el" '((nil drgnx-large-files-chunk-size 1 2)))
+        (should (null large-file-warning-threshold))))
     (should (equal large-file-warning-threshold before))))
 
-(ert-deftest drgnx-large-files/thresholds-read-each-config-once ()
-  ;; one `drgnx-config-get' of large-files.eld, and one of the project's when there is one
+(ert-deftest drgnx-large-files/thresholds-read-the-project-file-once ()
+  ;; your sizes are variables; one `drgnx-config-get' of the project's file when there is one, none otherwise
   (drgnx-large-files-test--with
     (let ((root (drgnx-large-files-test--project "(:version 1 :ask-above 0.015625)")) (n 0))
       (cl-letf* ((orig (symbol-function 'drgnx-config-get))
                  ((symbol-function 'drgnx-config-get) (lambda (&rest args) (cl-incf n) (apply orig args))))
         (should (equal (drgnx-large-files-thresholds (expand-file-name "sub/big.log" root))
                        (list :ask-above 16384 :chunks-above (* 500 1048576) :chunk-size 1048576)))
-        (should (= n 2))
+        (should (= n 1))
         (setq n 0)
         (drgnx-large-files-thresholds (expand-file-name "elsewhere.log" temporary-file-directory))
-        (should (= n 1))))))
+        (should (= n 0))))))
 
 (ert-deftest drgnx-large-files/automatic-paths-take-only-safe-local-variables ()
   ;; every value of `enable-local-variables' that would query becomes :safe; nil, :all and :safe stay
@@ -269,15 +294,15 @@
           (kill-buffer b))))))
 
 (defmacro drgnx-large-files-test--door (&rest body)
-  "BODY with the module set up, the test sizes in large-files.eld and `drgnx-large-files-test--dir' a fresh folder.
+  "BODY with the module set up, the test sizes in the settings and `drgnx-large-files-test--dir' a fresh folder.
 The buffers visiting its files are killed after."
   (declare (indent 0) (debug t))
   `(drgnx-large-files-test--with
-     (drgnx-test-config-put 'large-files "(:version 1 :ask-above 0.015625 :chunks-above 0.0625 :chunk-size 0.03125)")
-     (let ((drgnx-large-files-test--dir (file-name-as-directory (make-temp-file "drgnx-lf-door" t))))
-       (unwind-protect (progn ,@body)
-         (drgnx-large-files-test--kill drgnx-large-files-test--dir)
-         (delete-directory drgnx-large-files-test--dir t)))))
+     (drgnx-large-files-test--sizes 0.015625 0.0625 0.03125
+       (let ((drgnx-large-files-test--dir (file-name-as-directory (make-temp-file "drgnx-lf-door" t))))
+         (unwind-protect (progn ,@body)
+           (drgnx-large-files-test--kill drgnx-large-files-test--dir)
+           (delete-directory drgnx-large-files-test--dir t))))))
 
 (defun drgnx-large-files-test--file (name bytes &optional one-line)
   "Write file NAME in the test folder: BYTES bytes of 64-byte lines (one line when ONE-LINE); return its name."
@@ -580,7 +605,7 @@ sent the client."
     (let* ((f (drgnx-large-files-test--file "big.log" 32768))
            (buf (find-file-noselect f)))          ; automatic: raw
       (should (eq (buffer-local-value 'drgnx-large-file buf) 'raw))
-      (drgnx-test-config-put 'large-files "(:version 1 :ask-above 1)")
+      (setq drgnx-large-files-ask-above 1)            ; the door's `let' of the sizes ends with the test
       (should (= (plist-get (drgnx-large-files-thresholds f) :ask-above) 1048576))
       (drgnx-large-files-test--never-asks
         (let ((this-command 'find-file))
@@ -1048,7 +1073,7 @@ sent the client."
         (so-long-before (default-value 'so-long-minor-modes)))
     (dotimes (_ 2)
       (drgnx-large-files-test--with
-        (should (drgnx-config-defined-p 'large-files))
+        (should-not (drgnx-config-defined-p 'large-files))        ; the old file is defined for the migration only
         (should (drgnx-config-defined-p 'large-files-project))
         (drgnx-large-files-remember "/ssh:h.invalid:/big" 'raw)
         (should (eq (drgnx-large-files-remembered "/ssh:h.invalid:/big") 'raw))
