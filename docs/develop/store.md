@@ -293,7 +293,8 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
   (`wal_truncated: false`, `blocked_by: "readers"`, after the 5 s busy timeout); `scrub` can be run again once
   the readers are gone.
 - **Outside the file.** `kept_copies(work_db)` lists every regular file under `<data>/backup/` (dated copies,
-  `work-pre7-*.db`), the Lisp's `work.db.schema5` and every file under `<data>/export/`; `holding(files, needles)`
+  `work-pre7-*.db`), the Lisp's `work.db.schema5`, the `work.db.schema7-*` files (and their `-wal`, `-shm`) that
+  `store restore-pre7` moved aside, and every file under `<data>/export/`; `holding(files, needles)`
   is the byte search over them (a file that cannot be read is listed). `redact(path, needles, marker)` rewrites a
   file (a session transcript) without the needles, through a `.tmp` and a rename, keeping its mode.
 - **Limits.** `link.data`, entity ids and `source` are not blanked. A tx that did not write the target but quoted it

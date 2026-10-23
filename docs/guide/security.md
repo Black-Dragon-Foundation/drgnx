@@ -195,7 +195,8 @@ The store keeps every version of what is written into it. When a secret or a per
   has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
   after closing it.
 - **Copies outside the store** are listed, not changed silently: the dated backups and the pre-upgrade copies
-  (`backup/work-pre7-*.db`, `work.db.schema5`) that still hold the text, which you can have deleted; exports, which are
+  (`backup/work-pre7-*.db`, `work.db.schema5`, and the `work.db.schema7-*` files a rollback set aside) that still
+  hold the text, which you can have deleted; exports, which are
   made again; and session transcripts holding the text, which can be rewritten without it.
 - A value shorter than 12 characters is not searched for in those copies, since it would match unrelated text.
 

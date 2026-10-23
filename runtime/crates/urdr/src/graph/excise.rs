@@ -386,7 +386,8 @@ fn run(
 }
 
 /// The files outside WORK_DB that may keep copies of its content, sorted: every regular file under `<data>/backup/`
-/// (the dated copies, `work-pre7-*.db`), the Lisp's never-replaced `work.db.schema5` beside WORK_DB, and every regular
+/// (the dated copies, `work-pre7-*.db`), the Lisp's never-replaced `work.db.schema5` beside WORK_DB, the schema-7 files
+/// `ratatoskr store restore-pre7` moved aside (`work.db.schema7-*`, with their `-wal` and `-shm`), and every regular
 /// file under `<data>/export/` (`<data>` is WORK_DB's directory). Links are not followed.
 pub fn kept_copies(work_db: &Path) -> Vec<PathBuf> {
     fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -411,6 +412,19 @@ pub fn kept_copies(work_db: &Path) -> Vec<PathBuf> {
     let schema5 = PathBuf::from(schema5);
     if fs::symlink_metadata(&schema5).is_ok_and(|m| m.is_file()) {
         out.push(schema5);
+    }
+    if let (Some(name), Ok(rd)) = (work_db.file_name(), fs::read_dir(data)) {
+        let mut prefix = name.to_owned();
+        prefix.push(".schema7-");
+        let prefix = prefix.as_encoded_bytes();
+        let mut aside: Vec<PathBuf> = rd
+            .flatten()
+            .filter(|e| e.file_name().as_encoded_bytes().starts_with(prefix))
+            .filter(|e| fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_file()))
+            .map(|e| e.path())
+            .collect();
+        aside.sort();
+        out.extend(aside);
     }
     files_under(&data.join("export"), &mut out);
     out
@@ -1041,6 +1055,9 @@ mod tests {
         fs::write(backup.join("work-pre7-1761000000.db"), format!("x{title}x")).unwrap();
         fs::write(backup.join("work-20261021.db"), b"nothing here").unwrap();
         fs::write(data.join("work.db.schema5"), title.as_bytes()).unwrap();
+        // What `restore-pre7` moved aside: a schema-7 file and its WAL.
+        fs::write(data.join("work.db.schema7-1761000100"), b"no text").unwrap();
+        fs::write(data.join("work.db.schema7-1761000100-wal"), title.as_bytes()).unwrap();
         let escaped = serde_json::to_string(&title).unwrap();
         fs::write(export.join("entities.jsonl"), format!("{{\"title\":{escaped}}}\n")).unwrap();
         fs::write(export.join("links.jsonl"), b"").unwrap();
@@ -1052,6 +1069,8 @@ mod tests {
                 backup.join("work-20261021.db"),
                 backup.join("work-pre7-1761000000.db"),
                 data.join("work.db.schema5"),
+                data.join("work.db.schema7-1761000100"),
+                data.join("work.db.schema7-1761000100-wal"),
                 export.join("entities.jsonl"),
                 export.join("links.jsonl"),
             ]
@@ -1064,6 +1083,7 @@ mod tests {
                 backup.join("work-20261020.db"),
                 backup.join("work-pre7-1761000000.db"),
                 data.join("work.db.schema5"),
+                data.join("work.db.schema7-1761000100-wal"),
                 export.join("entities.jsonl"),
             ]
         );
