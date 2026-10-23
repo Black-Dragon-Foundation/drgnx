@@ -15,9 +15,12 @@
 
 ;; The unit suite sets up coordination data itself: its Emacs writes work.db's coordination tables (the editor's
 ;; default, `refuse', is for real editors; core/drgnx-coord.el).  Set before or after drgnx-coord.el loads alike.  A
-;; test of an editor's writes binds `refuse' itself.
+;; test of an editor's writes binds `refuse' itself.  In gate mode (DRGNX_WORK_DB_GATE=1, test/support/work-db-gate.el)
+;; the default stays `refuse': a test that writes binds `local' itself (`drgnx-work-db-writer-deftest', the fixture), or
+;; fails there.
 (defvar drgnx-coord-writer)
-(setq drgnx-coord-writer 'local)
+(unless (equal (getenv "DRGNX_WORK_DB_GATE") "1")
+  (setq drgnx-coord-writer 'local))
 
 (defun drgnx-run-ert-drain-events ()
   "Handle the events queued for a command loop batch Emacs does not have (file-notify events from a test's
@@ -245,6 +248,26 @@ as skipped (CI's shared runners)."
     (mapcar (lambda (tt) (list :name (symbol-name (ert-test-name tt)) :reason "wall clock: not run in CI"))
             (ert-select-tests `(and ,(or selector t) (tag :timing)) t))))
 
+;; The one-writer gate (test/support/work-db-gate.el): with DRGNX_WORK_DB_GATE=1 opening work.db read-write signals,
+;; and the tests tagged `:work-db-writer' (the `local' writer mode: Rust-bound Lisp) are left out and listed as skipped.
+
+(defun drgnx-run-ert--gate-p ()
+  "Whether DRGNX_WORK_DB_GATE=1: the run is in gate mode."
+  (equal (drgnx-run-ert--env "DRGNX_WORK_DB_GATE") "1"))
+
+(defun drgnx-run-ert--gate-enable ()
+  "In gate mode, load test/support/work-db-gate.el and advise `sqlite-open' (every Emacs of the run does)."
+  (when (drgnx-run-ert--gate-p)
+    (load (expand-file-name "../test/support/work-db-gate" (file-name-directory drgnx-run-ert--self)) nil t)
+    (funcall 'drgnx-work-db-gate-enable)))
+
+(defun drgnx-run-ert--gate-skipped (selector)
+  "The tests tagged `:work-db-writer' that SELECTOR (the raw selector, nil for every test) picks, as skipped entries
+\(:name :reason), in gate mode; else nil.  They are loaded, not run."
+  (when (and (drgnx-run-ert--gate-p) (not drgnx-run-ert--order-in))
+    (mapcar (lambda (tt) (list :name (symbol-name (ert-test-name tt)) :reason "one-writer gate: a test of the local writer mode"))
+            (ert-select-tests `(and ,(or selector t) (tag :work-db-writer)) t))))
+
 (defun drgnx-run-ert--no-skip-file ()
   "The must-run list: DRGNX_TEST_NO_SKIP (a file), else test/no-skip.eld of this checkout."
   (let ((given (drgnx-run-ert--env "DRGNX_TEST_NO_SKIP")))
@@ -316,7 +339,8 @@ names the run would run, in that order, to FILE and runs none."
          (selector (let* ((sel (if s (car (read-from-string s)) t))
                           ;; `:frozen': tests of Lisp a plan replaces, not run unless DRGNX_TEST_FROZEN=1
                           (sel (if (equal (drgnx-run-ert--env "DRGNX_TEST_FROZEN") "1") sel `(and ,sel (not (tag :frozen))))))
-                     (if (drgnx-run-ert--no-timing-p) `(and ,sel (not (tag :timing))) sel)))
+                     (let ((sel (if (drgnx-run-ert--gate-p) `(and ,sel (not (tag :work-db-writer))) sel)))
+                       (if (drgnx-run-ert--no-timing-p) `(and ,sel (not (tag :timing))) sel))))
          (seed (drgnx-run-ert--shuffle-seed))
          (in drgnx-run-ert--order-in)
          (out drgnx-run-ert--order-out))
@@ -409,7 +433,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
     ;; a test the must-run list names that skipped: a full run only (a per-file Emacs leaves it to its parent)
     (when (and (null selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
       (setq load-failures (append load-failures (drgnx-run-ert--no-skip-failures skipped))))
-    (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector)))
+    (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector) (drgnx-run-ert--gate-skipped selector)))
     (unless drgnx-run-ert--file-child (drgnx-run-ert--say-skipped skipped))
     (setq failures (append load-failures (nreverse failures)))
     (when (and seed failures (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)) ; again, where the failures are
@@ -988,6 +1012,7 @@ exit 0 or 1."
   ;; Absolute paths before HOME changes: "~/…" would then mean the temp home.
   (setq default-directory (expand-file-name default-directory)
         load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
+  (drgnx-run-ert--gate-enable)
   (let* ((args (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
          (dir (if (and (= (length args) 1) (file-directory-p (car args))) (car args) args))
          ;; each test file in an Emacs of its own, unless DRGNX_TEST_ONE_PROCESS=1 (`bin/drgnx test --one-process')

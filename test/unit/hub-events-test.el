@@ -2,6 +2,7 @@
 ;; The hub is served in this Emacs (test/fixtures/job-fixture.el: a git repo, the mock ACP agent on every route).
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)  ; the subscriber of the test events
 
@@ -30,7 +31,7 @@
     (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
     s))
 
-(ert-deftest drgnx-hub-events/a-native-turn-is-start-edit-stop ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/a-native-turn-is-start-edit-stop ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let* ((s (drgnx-hub-events-test--session repo)) (id (drgnx-agent-session-id s))
            (file (expand-file-name "README" repo)) (head (drgnx-job-run-test--git repo "rev-parse" "HEAD")))
@@ -61,7 +62,7 @@
       (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (e) (not (plist-get (plist-get e :data) :turn)))
                                                              (drgnx-hub-events-test--of id "stop"))))))))
 
-(ert-deftest drgnx-hub-events/a-tool-call-that-wrote-files-is-an-edit ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/a-tool-call-that-wrote-files-is-an-edit ()
   ;; an agent that writes files itself reports a completed edit tool call with diffs: one event per call, without the
   ;; paths a write request of the same turn recorded already
   (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
@@ -95,7 +96,7 @@
       (drgnx-hub--session-events s)
       (should (equal (drgnx-hub-events-test--kinds "s-t") '("start" "start" "edit" "edit" "edit" "stop"))))))
 
-(ert-deftest drgnx-hub-events/a-permission-is-a-question-until-answered ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/a-permission-is-a-question-until-answered ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let* ((s (drgnx-hub-events-test--session repo)) (id (drgnx-agent-session-id s)))
       (drgnx-agents-send s "permission")
@@ -128,7 +129,7 @@
       (drgnx-agents-kill s)
       (should (drgnx-job-run-test--wait (lambda () (null (drgnx-coord-open-questions id)))))
       (should (string-search "dropped" (plist-get (car (last (drgnx-coord-events :kinds '("answer")))) :summary))))))
-(ert-deftest drgnx-hub-events/review-verdicts-are-events ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/review-verdicts-are-events ()
   :tags '(:frozen)
   (drgnx-hub-events-test--with "# One\n\n### Task 1: first\n"
     (let ((id (drgnx-job-propose plan)))
@@ -158,7 +159,7 @@
         (should (string-search "rename foo to bar" (plist-get review :summary))))
       (drgnx-job-stop id))))
 
-(ert-deftest drgnx-hub-events/broadcast-is-batched ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/broadcast-is-batched ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let ((before (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
           (drgnx-hub-events-interval 1.0))               ; wide: a loaded machine's 50 adds still fit in one window
@@ -180,7 +181,7 @@
           ;; data comes as a JSON object (Records 2), never as text
           (should (equal (plist-get (car (last (plist-get d :events))) :data) '(:passed 49 :failed 0))))))))
 
-(ert-deftest drgnx-hub-events/test-events-reach-the-status-bar ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/test-events-reach-the-status-bar ()
   ;; the status bar subscribes (`drgnx-statusbar-mode' adds this function); the hub client knows nothing of it
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let ((noted nil))
@@ -194,13 +195,13 @@
         (remove-hook 'drgnx-hub-event-functions #'drgnx-statusbar--hub-tests))
       (should (equal noted '((12 1 "ext:t:1")))))))
 
-(ert-deftest drgnx-hub/no-status-bar-call ()
+(drgnx-work-db-writer-deftest drgnx-hub/no-status-bar-call ()
   (dolist (f '("core/drgnx-hub.el" "core/drgnx-hub-client.el"))
     (with-temp-buffer
       (insert-file-contents (expand-file-name f drgnx-dir))
       (should-not (search-forward "drgnx-statusbar" nil t)))))
 
-(ert-deftest drgnx-hub-events/events-since-catches-up ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/events-since-catches-up ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let ((before (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0)))
       (dotimes (i 5) (drgnx-coord-event-add :agent "a" :kind "decision" :summary (format "d%d" i)))
@@ -211,7 +212,7 @@
         (let ((rest (drgnx-hub-call-sync "events/since" (list :since (plist-get r :last)))))
           (should (equal (mapcar (lambda (e) (plist-get e :summary)) (plist-get rest :events)) '("d3" "d4"))))))))
 
-(ert-deftest drgnx-hub-events/head-is-read-from-the-repository-files ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/head-is-read-from-the-repository-files ()
   (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
     (let ((head (drgnx-job-run-test--git repo "rev-parse" "HEAD")) (wt (concat root "wt/")))
       (should (equal (drgnx-job-git-head (concat repo "docs/plans/")) head))   ; from a folder inside
@@ -224,14 +225,14 @@
       (should-not (drgnx-job-git-head root))
       (should-not (drgnx-job-git-head "/ssh:somehost:/x/")))))
 
-(ert-deftest drgnx-hub-events/housekeeping-prunes-events-daily ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/housekeeping-prunes-events-daily ()
   (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
     (let ((pruned 0))
       (cl-letf (((symbol-function 'drgnx-coord-events-prune-daily) (lambda () (cl-incf pruned) nil)))
         (drgnx-hub--housekeeping))
       (should (= pruned 1)))))
 
-(ert-deftest drgnx-hub-events/two-broadcasts-are-an-interval-apart ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/two-broadcasts-are-an-interval-apart ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let ((drgnx-hub-events-interval 0.3) (at nil))
       (push (lambda (e _d) (when (equal e "events") (push (float-time) at))) drgnx-hub-event-functions)
@@ -243,7 +244,7 @@
       (should (drgnx-job-run-test--wait (lambda () (cdr at)) 3))
       (should (>= (- (car at) (cadr at)) 0.25)))))
 
-(ert-deftest drgnx-hub-events/stopping-the-hub-drops-its-event-state-and-timer ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/stopping-the-hub-drops-its-event-state-and-timer ()
   (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
     (let ((s (drgnx-agents--make :id "s-x" :name "x" :cwd repo :status 'busy)))
       (drgnx-hub--session-events s)
@@ -253,7 +254,7 @@
       (should (zerop (hash-table-count drgnx-hub--event-state)))
       (should-not (drgnx-timer-active-p 'hub-events)))))
 
-(ert-deftest drgnx-hub-events/a-job-agent-s-allowed-write-is-an-edit ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/a-job-agent-s-allowed-write-is-an-edit ()
   (drgnx-job-run-test--with "# P\n\n### Task 1: one\n"
     (let* ((tree (file-name-as-directory (concat repo "tree")))
            (s (drgnx-agents--make :id "s-j" :name "j" :cwd tree :status 'busy :job "jz" :task "jz#1"))
@@ -265,7 +266,7 @@
         (should (equal (plist-get e :task) "jz#1"))
         (should (equal (plist-get (plist-get e :data) :paths) (list path)))))))
 
-(ert-deftest drgnx-hub-events/events-since-caps-its-limit-and-reads-a-bad-since-as-0 ()
+(drgnx-work-db-writer-deftest drgnx-hub-events/events-since-caps-its-limit-and-reads-a-bad-since-as-0 ()
   (drgnx-hub-events-test--with "# P\n\n### Task 1: one\n"
     (let ((db (drgnx-work-db)))
       (sqlite-transaction db)
@@ -280,7 +281,7 @@
 
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
-(ert-deftest drgnx-hub/events-dispatch-through-the-guard ()
+(drgnx-work-db-writer-deftest drgnx-hub/events-dispatch-through-the-guard ()
   ;; An event or disconnect function that fails or asks is recorded by the guard; the next one still runs.
   (drgnx-notice-test-with-model
     (let* ((filter nil) (heard nil) (was drgnx-guard-mode)

@@ -1,0 +1,1 @@
+select count(*) from entity a, entity b, entity c

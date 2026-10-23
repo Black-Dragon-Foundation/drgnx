@@ -15,13 +15,23 @@
 (require 'drgnx-work-db)
 (require 'drgnx-hub-client)
 
+(defvar drgnx-coord-writer)
+(defvar drgnx-work-db-gate-hub-standin nil
+  "Non-nil while the fixture, the hub's stand-in, opens work.db for writing: the one-writer gate lets that through.")
+
+(defun drgnx-work-fixture--db ()
+  "The read-write handle, as the hub's stand-in: in the `local' writer mode, past the one-writer gate
+\(test/support/work-db-gate.el).  Only the fixture's own writes use it; product code never does."
+  (let ((drgnx-coord-writer 'local) (drgnx-work-db-gate-hub-standin t))
+    (drgnx-work-db)))
+
 (defconst drgnx-work-fixture--columns '(:kind :title :path :line :status :parent :ord :source))
 
 (defun drgnx-work-fixture-put-node (id &rest props)
   "Insert or replace node ID with PROPS (:kind :title :path :line :status :parent :ord :source and
 any other keys, kept in its data)."
   (let ((data (cl-loop for (k v) on props by #'cddr unless (memq k drgnx-work-fixture--columns) append (list k v))))
-    (sqlite-execute (drgnx-work-db)
+    (sqlite-execute (drgnx-work-fixture--db)
                     "insert or replace into node values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     (list id (and (plist-get props :kind) (symbol-name (plist-get props :kind)))
                           (plist-get props :title) (plist-get props :path) (plist-get props :line)
@@ -37,21 +47,21 @@ any other keys, kept in its data)."
 
 (defun drgnx-work-fixture-put-edge (src dst kind origin &optional source)
   "The KIND edge SRC → DST, from ORIGIN (`parsed', `inferred', `recorded'): a recorded edge stays recorded."
-  (sqlite-execute (drgnx-work-db) "insert into edge values (?, ?, ?, ?, ?) on conflict (src, dst, kind)
+  (sqlite-execute (drgnx-work-fixture--db) "insert into edge values (?, ?, ?, ?, ?) on conflict (src, dst, kind)
                                    do update set origin = excluded.origin, source = excluded.source where edge.origin <> 'recorded'"
                   (list src dst (symbol-name kind) (symbol-name origin) (or source (symbol-name origin)))))
 
 (defun drgnx-work-fixture-forget-source (source)
   "Forget every node and edge SOURCE gave."
-  (sqlite-execute (drgnx-work-db) "delete from node where source = ?" (list source))
-  (sqlite-execute (drgnx-work-db) "delete from edge where source = ?" (list source)))
+  (sqlite-execute (drgnx-work-fixture--db) "delete from node where source = ?" (list source))
+  (sqlite-execute (drgnx-work-fixture--db) "delete from edge where source = ?" (list source)))
 
 (defun drgnx-work-fixture-forget-orphan-commits ()
   "Forget the commits no edge links any more."
-  (sqlite-execute (drgnx-work-db) "delete from node where kind = 'commit' and id not in (select src from edge)"))
+  (sqlite-execute (drgnx-work-fixture--db) "delete from node where kind = 'commit' and id not in (select src from edge)"))
 
-(defun drgnx-work-fixture-set-file (path mtime) (sqlite-execute (drgnx-work-db) "insert or replace into file values (?, ?)" (list path mtime)))
-(defun drgnx-work-fixture-drop-file (path) (sqlite-execute (drgnx-work-db) "delete from file where path = ?" (list path)))
+(defun drgnx-work-fixture-set-file (path mtime) (sqlite-execute (drgnx-work-fixture--db) "insert or replace into file values (?, ?)" (list path mtime)))
+(defun drgnx-work-fixture-drop-file (path) (sqlite-execute (drgnx-work-fixture--db) "delete from file where path = ?" (list path)))
 
 ;;;; The hub's side, as far as the rows go
 
@@ -91,12 +101,12 @@ any other keys, kept in its data)."
         (apply #'drgnx-work-fixture-update-node (plist-get u :id) props)
         (cl-incf changed)))
     (dolist (k (drgnx-work-fixture--list (plist-get params :collected)))
-      (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, 'collected')" (list k)))
+      (sqlite-execute (drgnx-work-fixture--db) "insert or replace into meta values (?, 'collected')" (list k)))
     ;; the cleanups: a commit no link names, a spec nothing derives from outside a specs/ folder (but what was sent)
     (drgnx-work-fixture-forget-orphan-commits)
-    (dolist (s (sqlite-select (drgnx-work-db) "select id, path from node where kind = 'spec'"))
+    (dolist (s (sqlite-select (drgnx-work-fixture--db) "select id, path from node where kind = 'spec'"))
       (unless (or (member (car s) sent) (string-match-p "/specs/" (cadr s))
-                  (sqlite-select (drgnx-work-db) "select 1 from edge where dst = ? and kind = 'derives'" (list (car s))))
+                  (sqlite-select (drgnx-work-fixture--db) "select 1 from edge where dst = ? and kind = 'derives'" (list (car s))))
         (drgnx-work-fixture-forget-source (concat "spec " (cadr s)))
         (drgnx-work-fixture-drop-file (cadr s))))
     (list :changed changed :retired 0 :refused [])))
@@ -111,7 +121,7 @@ any other keys, kept in its data)."
         (drgnx-work-fixture-put-edge id task 'implements 'recorded "recorded")
         (push id ids)))
     (when (plist-get params :collected)
-      (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, 'collected')" (list (plist-get params :collected))))
+      (sqlite-execute (drgnx-work-fixture--db) "insert or replace into meta values (?, 'collected')" (list (plist-get params :collected))))
     (list :ids (vconcat (nreverse ids)))))
 
 (defvar drgnx-work-fixture-calls nil "The hub calls made under `drgnx-work-fixture-with-hub', newest first: (METHOD . PARAMS).")

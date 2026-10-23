@@ -1,0 +1,8 @@
+{"scenario": "perf/find", "requires": ["v1", "perf"], "doc": "tasks/find on 10^5 task entities (titles and bodies in the full-text index) seeded into a running hub's schema-7 store: a word 1,000 entities hold (the first page of 50 of 1,000 ranked hits) and a word one entity holds, 20 samples each (--perf records every sample, no budget)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do":"sqlite","path":"$DATA/work.db","sql":["insert into entity (n, id, kind, title, status, origin, ver, created_tx, updated_tx) with recursive c(i) as (select 1 union all select i + 1 from c where i < 100000) select i, 'task:p' || i, 'task', 'task t' || i || ' alpha' || (i % 100), 'open', 'recorded', 1, 1, 1 from c","insert into entity_fts (rowid, title, body) with recursive c(i) as (select 1 union all select i + 1 from c where i < 100000) select i, 'task t' || i || ' alpha' || (i % 100), 'body text number' || i from c"]}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/find", "params": {"query": "t5"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"tasks": "$any"}}, "within_ms": 10000}
+{"do": "measure", "name": "find-1000-hits", "repeat": 20, "steps": [{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/find", "params": {"query": "alpha7"}}}, {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"tasks": "$any"}}, "within_ms": 10000}]}
+{"do": "measure", "name": "find-1-hit", "repeat": 20, "steps": [{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/find", "params": {"query": "t77777"}}}, {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tasks": "$any"}}, "within_ms": 10000}]}

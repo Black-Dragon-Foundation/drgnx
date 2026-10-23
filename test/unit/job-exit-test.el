@@ -6,6 +6,8 @@
 ;; job's parts.
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
@@ -47,7 +49,7 @@ MIDWAY (a function of the id) is called once the job is running, its tasks not d
     (should (equal (drgnx-job-run-test--git repo "rev-parse" "main") main))               ; nothing reached main
     id))
 
-(ert-deftest drgnx-job-exit/four-tasks-three-agents ()
+(drgnx-work-db-writer-deftest drgnx-job-exit/four-tasks-three-agents ()
   :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-exit-test--four
     (drgnx-job-exit-test--run plan repo)))
@@ -82,7 +84,7 @@ An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS'
 (defun drgnx-job-exit-test--release (canaries)
   (dolist (c canaries) (when (process-live-p (cdr c)) (delete-process (cdr c)))))
 
-(ert-deftest drgnx-job-exit/a-process-reading-a-credential-file-is-seen ()
+(drgnx-work-db-writer-deftest drgnx-job-exit/a-process-reading-a-credential-file-is-seen ()
   ;; the guard of the next test works for any process, not only this Emacs
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let ((canaries (drgnx-job-exit-test--canaries (concat root "home/"))))
@@ -94,7 +96,7 @@ An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS'
             (should (drgnx-job-exit-test--unread-p (cadr canaries))))
         (drgnx-job-exit-test--release canaries)))))
 
-(ert-deftest drgnx-job-exit/no-credential-file-is-opened ()
+(drgnx-work-db-writer-deftest drgnx-job-exit/no-credential-file-is-opened ()
   :tags '(:frozen)
   ;; the subscription CLIs' logins under a fake HOME: drgnx — this Emacs, the hub here and every process it starts —
   ;; never touches them.  This Emacs: a file name handler on the file names (wherever they are); the others: FIFOs.
@@ -120,7 +122,7 @@ An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS'
             (should (seq-every-p #'drgnx-job-exit-test--unread-p canaries)))
         (drgnx-job-exit-test--release canaries)))))
 
-(ert-deftest drgnx-job-exit/closing-the-window-leaves-agents-running ()
+(drgnx-work-db-writer-deftest drgnx-job-exit/closing-the-window-leaves-agents-running ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (s nil))
       (drgnx-job-approve id)
@@ -137,7 +139,7 @@ An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS'
       (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
       (delete-other-windows))))
 
-(ert-deftest drgnx-job-exit/a-clash-in-the-middle-of-a-job ()
+(drgnx-work-db-writer-deftest drgnx-job-exit/a-clash-in-the-middle-of-a-job ()
   :tags '(:frozen)
   ;; two agents decide opposite things while the job runs: one card, a reviewer on it; the job goes on to its end and
   ;; the reviewer ends with it

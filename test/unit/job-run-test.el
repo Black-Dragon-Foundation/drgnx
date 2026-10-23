@@ -2,6 +2,8 @@
 ;; The hub is served in this Emacs; the agents are the mock (test/fixtures/mock-acp.el): a task prompt makes it
 ;; commit and call complete_task through its coordination tools.
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'drgnx-hub)
 (require 'drgnx-job)
 
@@ -9,7 +11,7 @@
 
 (defconst drgnx-job-run-test--two "# Two\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n\n### Task 3: three\n**Depends:** Task 1, Task 2\n")
 
-(ert-deftest drgnx-job/nothing-starts-before-approval ()
+(drgnx-work-db-writer-deftest drgnx-job/nothing-starts-before-approval ()
   (drgnx-job-run-test--with drgnx-job-run-test--two
     (let ((id (drgnx-job-propose plan)))
       (drgnx-job-step id)
@@ -25,13 +27,13 @@
       (should (equal (drgnx-job-run-test--git repo "rev-parse" "--abbrev-ref" "HEAD") "main"))     ; main untouched
       (should (equal (drgnx-job-run-test--status id 3) "pending")))))
 
-(ert-deftest drgnx-job/with-automatic-start-on-it-starts-by-itself ()
+(drgnx-work-db-writer-deftest drgnx-job/with-automatic-start-on-it-starts-by-itself ()
   (drgnx-job-run-test--with drgnx-job-run-test--two
     (let* ((drgnx-job-auto-start t) (id (drgnx-job-propose plan)))
       (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
       (should (drgnx-job-run-test--wait (lambda () (drgnx-job-run-test--sessions id)))))))
 
-(ert-deftest drgnx-job/auto-start-makes-no-proposal-card ()
+(drgnx-work-db-writer-deftest drgnx-job/auto-start-makes-no-proposal-card ()
   ;; nobody is asked to approve what starts at once: no card, no message
   (drgnx-job-run-test--with drgnx-job-run-test--two
     (let* ((drgnx-job-auto-start t) (drgnx-job-max-agents 0) (id (drgnx-job-propose plan)))
@@ -39,7 +41,7 @@
       (should-not (drgnx-coord-cards id))
       (should-not (seq-find (lambda (m) (string-prefix-p "[proposal]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
 
-(ert-deftest drgnx-job/a-finished-task-goes-to-review-not-done ()
+(drgnx-work-db-writer-deftest drgnx-job/a-finished-task-goes-to-review-not-done ()
   :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-run-test--two
     (let ((drgnx-job-review nil) (id (drgnx-job-propose plan)))   ; no reviewer: it waits in review
@@ -49,7 +51,7 @@
       (should (string-search (format "work for %s#1" id)
                              (drgnx-job-run-test--git repo "log" "--format=%s" (format "job/%s-1" id)))))))
 
-(ert-deftest drgnx-job/a-slow-worktree-add-does-not-block-the-hub ()
+(drgnx-work-db-writer-deftest drgnx-job/a-slow-worktree-add-does-not-block-the-hub ()
   ;; `git worktree add' runs the post-checkout hook, however slow: the step goes on, the task says "starting"
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let ((id (drgnx-job-propose plan)) (hook (concat repo ".git/hooks/post-checkout")))
@@ -64,7 +66,7 @@
       (should (file-directory-p (drgnx-job--task-tree id 1)))
       (should (member (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) '("claimed" "running" "in-review"))))))
 
-(ert-deftest drgnx-job/a-task-whose-worktree-cannot-be-made-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/a-task-whose-worktree-cannot-be-made-is-a-card ()
   ;; its branch is checked out somewhere else: neither way of making the worktree works
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let ((id (drgnx-job-propose plan)))
@@ -74,7 +76,7 @@
       (should (string-search "worktree" (plist-get (car (drgnx-coord-cards id "open")) :title)))
       (should-not (drgnx-job-run-test--sessions id)))))
 
-(ert-deftest drgnx-job/a-worktree-add-that-never-ends-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/a-worktree-add-that-never-ends-is-a-card ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let ((id (drgnx-job-propose plan)) (hook (concat repo ".git/hooks/post-checkout")) (drgnx-job-git-timeout 0.5))
       (write-region "#!/bin/sh\ncase \"$PWD\" in *-1) echo 'checking out' >&2; sleep 20;; esac\n" nil hook nil 'silent)
@@ -85,7 +87,7 @@
       (should (string-search "did not finish" (plist-get (car (drgnx-coord-cards id "open")) :title)))
       (should-not (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "starting")))))
 
-(ert-deftest drgnx-job/stopping-a-job-ends-its-git-processes ()
+(drgnx-work-db-writer-deftest drgnx-job/stopping-a-job-ends-its-git-processes ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let ((id (drgnx-job-propose plan)) (hook (concat repo ".git/hooks/post-checkout")))
       (write-region "#!/bin/sh\ncase \"$PWD\" in *-1) sleep 20;; esac\n" nil hook nil 'silent)
@@ -98,7 +100,7 @@
         (should (drgnx-job-run-test--wait (lambda () (not (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "starting"))) 5))
         (should-not (drgnx-coord-cards id "open"))))))
 
-(ert-deftest drgnx-job/at-most-max-agents-at-once ()
+(drgnx-work-db-writer-deftest drgnx-job/at-most-max-agents-at-once ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# Four\n\n### Task 1: a\n\n### Task 2: b\n\n### Task 3: c\n\n### Task 4: d\n"
     (let ((drgnx-job-max-agents 2) (id (drgnx-job-propose plan)) (most 0))
@@ -109,7 +111,7 @@
       (should (seq-every-p (lambda (n) (member (drgnx-job-run-test--status id n) '("in-review" "done" "needs-input"))) '(1 2 3 4)))
       (should (= most 2)))))
 
-(ert-deftest drgnx-job/an-agent-that-dies-gives-its-task-back ()
+(drgnx-work-db-writer-deftest drgnx-job/an-agent-that-dies-gives-its-task-back ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: crash-once then work\n"
     (let ((id (drgnx-job-propose plan)))
@@ -122,7 +124,7 @@
                  2))
       (should (file-exists-p (format "%s.claude/worktrees/%s-1/.mock-crashed" repo id))))))
 
-(ert-deftest drgnx-job/a-git-process-has-its-deadline-in-the-timer-layer ()
+(drgnx-work-db-writer-deftest drgnx-job/a-git-process-has-its-deadline-in-the-timer-layer ()
   ;; The deadline is a one-shot keyed by the process and owned by it; the sentinel ends it with the process.
   ;; git waits for a line on a FIFO: a git that has ended already has no deadline (its owner is gone)
   (let* ((dir (make-temp-file "drgnx-git-timer" t)) (done nil)

@@ -669,6 +669,13 @@ budgets: this is a recorded baseline, not a regression gate.
 | `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
 | `mcp-tool-call` | `tools/call read_inbox` over a session socket (initialized, `hello` called once before) | 100 |
 | `coord-write` | `events/add` through the main socket, answered with the new id | 100 |
+| `walk-4-hops` | `graph/neighbors` four hops, out and both ways, on graph B (10^5 entities, about 10^6 links, 6 kinds; seeded into the running hub's store) | 20 each |
+| `group-commit` | eight connections each send an `events/add` and wait for all eight answers (one round, group-committed) | 500 |
+| `as-of-churn` | `graph/neighbors` as of a tx inside 200,000 versions of one link, one hop and two, and the same hop now | 20 each |
+| `find` | `tasks/find` on 10^5 tasks: a word 1,000 hold, and a word one holds | 20 each |
+
+The writer-level group-commit number, with `secure_delete` on and off, is `urdr`'s ignored bench
+(`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
 
 ```
 cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
@@ -724,6 +731,11 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `mcp_message` | bytes as the lines of one MCP connection through `mimir::serve` with the 16 `norn` tools over a schema-6 `work.db` (a file from the oracle's fixture, shared by all inputs), as given and after a legacy `initialize` handshake; every answer line must be JSON |
 | `jsonrpc_parse` | a line through `jsonrpc::parse` and mimir's `lenient_id`: an error is `-32700` (only for non-JSON) or `-32600`; a parsed request or result has the id `lenient_id` reads |
 | `text_one_line` | text (and a length limit and the `header` flag from the first two bytes) through `text::one_line`, `coord_line` and `cut`: no `CONTROL` character (`one_line`: no newline, tab or CR either), never over the limit |
+| `put_parsed` | bytes as `graph/put-parsed` params: the registry's decode, then `parsed::dirs` and `put` on an in-memory schema 7 in a tx that is dropped; nothing may panic |
+| `task_write_args` | JSON (`@T` is a seeded task's id) as `task_write`'s arguments over a schema-7 store: check, typed decode and run of every op; a refusal is an answer |
+| `graph_read_args` | the same for `graph_read` (neighbors, path, history, who_touched) |
+| `trust_fence` | text, author and project (split at NUL) through `trust::fence`: exactly one opening tag at the start and one closing tag at the end, ASCII case ignored |
+| `sqlro_sql` | SQL through `graph/sql`'s runner on a WAL store with a pending WAL: the database file and the WAL stay byte for byte as they were (no write, no checkpoint), and the answer comes within the 50 ms deadline plus 100 ms |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send) and the unit tables (gleipnir's targets). The

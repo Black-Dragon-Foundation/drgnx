@@ -1,6 +1,8 @@
 ;;; job-mcp-policy-test.el --- batch tests: MCP tools of a job's agent, a provider's limit in an error's data -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 
 (defun drgnx-job-mcp-test--tool (name &optional server source title)
@@ -10,13 +12,13 @@ when given) and as the title (TITLE instead, when given)."
         :_meta (list :claudeCode (append (and name (list :toolName name))
                                          (and server (list :mcpServer (list :name server :source source)))))))
 
-(ert-deftest drgnx-job-mcp/drgnx-s-own-server-is-allowed ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/drgnx-s-own-server-is-allowed ()
   (let ((tree temporary-file-directory))
     (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--tool "mcp__drgnx__read_inbox" "drgnx" "dynamic") tree) 'allow))
     ;; a CLI before `mcpServer': the name only, in the title
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__drgnx__send_message") tree) 'allow))))
 
-(ert-deftest drgnx-job-mcp/a-user-s-server-asks ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-user-s-server-asks ()
   (let ((tree temporary-file-directory))
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__docs__search") tree) 'ask))
     (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--tool "mcp__docs__search" "docs" "user") tree) 'ask))
@@ -34,13 +36,13 @@ when given) and as the title (TITLE instead, when given)."
     (should (eq (drgnx-job-policy "implement" '(:kind "other") tree) 'ask))
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "Unknown Tool") tree) 'ask))))
 
-(ert-deftest drgnx-job-mcp/other-calls-that-are-not-mcp-stay-allowed ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/other-calls-that-are-not-mcp-stay-allowed ()
   (let ((tree temporary-file-directory))
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "Load skill: tdd" :_meta (:claudeCode (:toolName "Skill"))) tree) 'allow))
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "Load skill") tree) 'allow))
     (should (eq (drgnx-job-policy "implement" '(:kind "think" :title "Update TODOs") tree) 'allow))))
 
-(ert-deftest drgnx-job-mcp/the-agent-s-own-word-is-no-approval ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/the-agent-s-own-word-is-no-approval ()
   ;; what the agent controls (its tool input, a title that differs from the tool's name) never makes a user's server drgnx's
   (let ((tree temporary-file-directory))
     (should (eq (drgnx-job-policy "implement" (append (drgnx-job-mcp-test--tool "mcp__docs__search" nil nil "mcp__drgnx__read_inbox")
@@ -67,7 +69,7 @@ when given) and as the title (TITLE instead, when given)."
 
 (defun drgnx-job-mcp-test--said (s text) (string-search text (format "%S" (drgnx-agent-session-entries s))))
 
-(ert-deftest drgnx-job-mcp/a-user-s-tool-waits-for-the-card ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-user-s-tool-waits-for-the-card ()
   (drgnx-job-mcp-test--running
     (drgnx-agents-send s "permission other :: mcp__drgnx__read_inbox")
     (should (drgnx-job-run-test--wait (lambda () (drgnx-job-mcp-test--said s "permission: allow"))))
@@ -81,7 +83,7 @@ when given) and as the title (TITLE instead, when given)."
                                                                    (drgnx-agent-session-entries s))))))
     (should (equal (drgnx-job-run-test--status id 1) "running"))))
 
-(ert-deftest drgnx-job-mcp/a-denial-blocks-the-tool ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-denial-blocks-the-tool ()
   (drgnx-job-mcp-test--running
     (drgnx-agents-send s "permission other :: mcp__mail__send")
     (should (drgnx-job-run-test--wait (lambda () (drgnx-job-mcp-test--open id))))
@@ -91,7 +93,7 @@ when given) and as the title (TITLE instead, when given)."
     (should-not (drgnx-agent-session-permissions s))
     (should-not (drgnx-job-mcp-test--open id))))
 
-(ert-deftest drgnx-job-mcp/an-agent-cannot-approve-its-own-request ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/an-agent-cannot-approve-its-own-request ()
   (drgnx-job-mcp-test--running
     (drgnx-agents-send s "permission other :: mcp__mail__send")
     (should (drgnx-job-run-test--wait (lambda () (drgnx-job-mcp-test--open id))))
@@ -111,7 +113,7 @@ when given) and as the title (TITLE instead, when given)."
       (drgnx-job-card-act cid "allow")
       (should (drgnx-job-run-test--wait (lambda () (drgnx-job-mcp-test--said s "permission: allow")))))))
 
-(ert-deftest drgnx-job-mcp/a-request-with-the-agent-s-word-in-it-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-request-with-the-agent-s-word-in-it-is-a-card ()
   (drgnx-job-run-test--with drgnx-job-mcp-test--one
     (let* ((id (drgnx-job-propose plan))
            (s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd repo :task (concat id "#1") :job id)))
@@ -122,7 +124,7 @@ when given) and as the title (TITLE instead, when given)."
                                       7))
       (should (drgnx-job-mcp-test--open id)))))
 
-(ert-deftest drgnx-job-mcp/drgnx-s-search-server-is-drgnx-s-own ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/drgnx-s-search-server-is-drgnx-s-own ()
   (let ((tree temporary-file-directory))
     ;; the adapter drgnx installs: the tool's name as the title, no `_meta'
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__drgnx-search__search") tree) 'allow))
@@ -134,7 +136,7 @@ when given) and as the title (TITLE instead, when given)."
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__drgnx-search-x__search") tree) 'ask))
     (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__drgnx-searcher__search") tree) 'ask))))
 
-(ert-deftest drgnx-job-mcp/a-kind-that-is-not-a-string-asks ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-kind-that-is-not-a-string-asks ()
   (let ((tree temporary-file-directory))
     (should (eq (drgnx-job-policy "implement" '(:kind 5 :title "Read a.txt") tree) 'ask))
     (should (eq (drgnx-job-policy "implement" '(:kind :false :title "Read a.txt") tree) 'ask))
@@ -151,7 +153,7 @@ when given) and as the title (TITLE instead, when given)."
 (defun drgnx-job-mcp-test--edit (path &optional kind)
   (list :kind (or kind "edit") :title (format "Edit %s" path) :locations (list (list :path path))))
 
-(ert-deftest drgnx-job-mcp/an-edit-of-the-agents-configuration-asks ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/an-edit-of-the-agents-configuration-asks ()
   (drgnx-job-mcp-test--tree
     (make-directory (concat tree "src") t)
     (dolist (p '(".claude/settings.local.json" ".claude/settings.json" ".claude/agents/a.md" ".claude" ".mcp.json"
@@ -170,7 +172,7 @@ when given) and as the title (TITLE instead, when given)."
     ;; reading it is no change
     (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree ".claude/settings.json") "read") tree) 'allow))))
 
-(ert-deftest drgnx-job-mcp/a-path-with-a-double-slash-root-asks ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-path-with-a-double-slash-root-asks ()
   ;; `//' before an absolute path: the same file, but `file-relative-name' takes it for another root
   (drgnx-job-mcp-test--tree
     (dolist (p (list (concat "/" tree ".claude/settings.local.json") (concat "//" tree ".mcp.json")))
@@ -178,7 +180,7 @@ when given) and as the title (TITLE instead, when given)."
     ;; whatever cannot be placed inside the tree is taken for the agents' configuration
     (should (drgnx-job--agent-config-p "/" tree))))
 
-(ert-deftest drgnx-job-mcp/a-claude-directory-at-any-depth-asks ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-claude-directory-at-any-depth-asks ()
   ;; the CLI loads nested skill directories
   (drgnx-job-mcp-test--tree
     (dolist (p '("src/.claude/skills/x/SKILL.md" "src/.claude" "a/b/.claude/settings.json" "src/.CLAUDE/agents/a.md"))
@@ -190,7 +192,7 @@ when given) and as the title (TITLE instead, when given)."
                    "mkdir -p .claude/worktrees/j-1/x" "cp x src/.claude/worktrees/j-1/a" "cd /r/.claude/worktrees/j-2 && make"))
       (should (eq (drgnx-job-policy "implement" (list :kind "execute" :title cmd) tree) 'ask)))))
 
-(ert-deftest drgnx-job-mcp/a-symlink-to-the-agents-configuration-asks ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-symlink-to-the-agents-configuration-asks ()
   (drgnx-job-mcp-test--tree
     (make-directory (concat tree ".claude") t)
     (make-symbolic-link (concat tree ".claude") (concat tree "conf"))
@@ -199,7 +201,7 @@ when given) and as the title (TITLE instead, when given)."
     (dolist (p '("conf/settings.local.json" "servers.json" "notes.txt"))
       (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree p)) tree) 'ask)))))
 
-(ert-deftest drgnx-job-mcp/a-command-writing-the-agents-configuration-asks ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-command-writing-the-agents-configuration-asks ()
   (let ((tree "/r/.claude/worktrees/j-1/"))
     (dolist (cmd '("echo '{\"permissions\":{\"defaultMode\":\"bypassPermissions\"}}' > .claude/settings.local.json"
                    "mkdir -p .claude && cp x .claude/" "cp servers.json .mcp.json" "tee sub/.mcp.json < x"
@@ -214,7 +216,7 @@ when given) and as the title (TITLE instead, when given)."
     (dolist (cmd '("make test" "cd /r/.claude/worktrees/j-1 && make test" "git -C /r/.claude/worktrees/j-1 status"))
       (should (eq (drgnx-job-policy "implement" (list :kind "execute" :title cmd) tree) 'allow)))))
 
-(ert-deftest drgnx-job-mcp/a-direct-write-of-the-agents-configuration-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-direct-write-of-the-agents-configuration-is-a-card ()
   (drgnx-job-run-test--with drgnx-job-mcp-test--one
     (let* ((id (drgnx-job-propose plan)) (tree (file-name-as-directory (file-truename repo)))
            (s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd tree :task (concat id "#1") :job id)))
@@ -229,7 +231,7 @@ when given) and as the title (TITLE instead, when given)."
 
 ;;;; M9b3-13: a provider's limit in the error's data
 
-(ert-deftest drgnx-job-mcp/a-provider-limit-in-the-error-s-data ()
+(drgnx-work-db-writer-deftest drgnx-job-mcp/a-provider-limit-in-the-error-s-data ()
   (let ((s (drgnx-agents--make :id "s-d" :status 'idle)))
     (should (drgnx-job--provider-limit-p s '(:code -32603 :message "Internal error" :data (:message "429 Too Many Requests"))))
     (should (drgnx-job--provider-limit-p s '(:code -32603 :message "Internal error" :data "overloaded_error")))

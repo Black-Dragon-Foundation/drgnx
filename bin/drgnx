@@ -357,7 +357,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   fi
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount

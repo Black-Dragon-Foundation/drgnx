@@ -1,6 +1,8 @@
 ;;; job-gate-test.el --- batch tests: a permission request of an agent behind the decision log is the gate -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 
 (defmacro drgnx-job-gate-test--with (&rest body)
@@ -19,7 +21,7 @@ on since S read it."
 (defun drgnx-job-gate-test--said (s text)
   (drgnx-job-run-test--wait (lambda () (string-search text (format "%S" (drgnx-agent-session-entries s)))) 10))
 
-(ert-deftest drgnx-job-gate/a-behind-agent-is-refused-and-told ()
+(drgnx-work-db-writer-deftest drgnx-job-gate/a-behind-agent-is-refused-and-told ()
   (drgnx-job-gate-test--with
     (drgnx-agents-send s "permission execute :: make test")                     ; routine, but it is behind
     (should (drgnx-job-gate-test--said s "permission: reject"))
@@ -27,14 +29,14 @@ on since S read it."
                                        (string-search "refused" (format "%s" (plist-get e :text)))))
                       (drgnx-agent-session-entries s)))))
 
-(ert-deftest drgnx-job-gate/caught-up-agents-are-not-gated ()
+(drgnx-work-db-writer-deftest drgnx-job-gate/caught-up-agents-are-not-gated ()
   (drgnx-job-gate-test--with
     (drgnx-coord-set-seen (drgnx-agent-session-id s) (drgnx-coord-version))
     (drgnx-agents-send s "permission execute :: make test")
     (should (drgnx-job-gate-test--said s "permission: allow"))
     (should-not (seq-find (lambda (e) (plist-get e :steer)) (drgnx-agent-session-entries s)))))
 
-(ert-deftest drgnx-job-gate/the-snapshot-says-enforced ()
+(drgnx-work-db-writer-deftest drgnx-job-gate/the-snapshot-says-enforced ()
   (drgnx-job-gate-test--with
     (should (eq (plist-get (drgnx-hub--snapshot s) :enforced) t))               ; it can be steered: the gate holds
     (let ((plain (drgnx-agents-start "mock" repo)))                             ; no job: nothing to enforce
@@ -42,7 +44,7 @@ on since S read it."
       (should-not (plist-get (drgnx-hub--snapshot plain) :enforced)))))
 
 
-(ert-deftest drgnx-job-gate/reading-the-log-is-never-gated ()
+(drgnx-work-db-writer-deftest drgnx-job-gate/reading-the-log-is-never-gated ()
   ;; Claude Code asks permission for MCP tools: the call that catches up (read_decisions) must go through
   (drgnx-job-gate-test--with
     (drgnx-agents-send s "permission other :: mcp__drgnx__read_decisions")

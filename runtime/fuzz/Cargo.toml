@@ -20,7 +20,7 @@ drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
 mimir = { path = "../crates/mimir" }
 norn = { path = "../crates/norn" }
-urdr = { path = "../crates/urdr" }
+urdr = { path = "../crates/urdr", features = ["test-hooks"] }
 tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
 
 [workspace]
@@ -98,6 +98,41 @@ bench = false
 [[bin]]
 name = "text_one_line"
 path = "fuzz_targets/text_one_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "put_parsed"
+path = "fuzz_targets/put_parsed.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "task_write_args"
+path = "fuzz_targets/task_write_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graph_read_args"
+path = "fuzz_targets/graph_read_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trust_fence"
+path = "fuzz_targets/trust_fence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sqlro_sql"
+path = "fuzz_targets/sqlro_sql.rs"
 test = false
 doc = false
 bench = false

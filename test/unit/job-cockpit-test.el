@@ -1,6 +1,8 @@
 ;;; job-cockpit-test.el --- batch tests: the Work cockpit writes back to jobs (reassign, block, order, Start as Job); the merge gate -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 (require 'drgnx-cockpit-model)
 
@@ -18,7 +20,7 @@
 (defun drgnx-job-cockpit-test--summary-task (id n)
   (seq-find (lambda (task) (= (plist-get task :n) n)) (plist-get (drgnx-job-summary id) :tasks)))
 
-(ert-deftest drgnx-job-cockpit/reassign-blocks-and-order ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/reassign-blocks-and-order ()
   (drgnx-job-run-test--with drgnx-job-cockpit-test--three
     (let* ((drgnx-agents-profiles (append drgnx-agents-profiles (list (cons "mock2" (cdr (assoc "mock" drgnx-agents-profiles))))))
            (drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (t1 (concat id "#1")) (t2 (concat id "#2")) (t3 (concat id "#3")))
@@ -79,7 +81,7 @@
       (should-error (drgnx-job-cockpit-test--call "job/block" :task t2 :reason "x"))
       (should-error (drgnx-job-cockpit-test--call "job/order" :task t2 :delta 1)))))
 
-(ert-deftest drgnx-job-cockpit/start-as-job-proposes-one-task-and-its-needs ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/start-as-job-proposes-one-task-and-its-needs ()
   (drgnx-job-run-test--with drgnx-job-cockpit-test--five
     (let* ((s (drgnx-job-cockpit-test--call "job/start-task" :plan plan :n 4))
            (id (plist-get s :id)))
@@ -100,7 +102,7 @@
         (should-error (drgnx-job-cockpit-test--call "job/start-task" :plan plan :n 4.0))
         (should (= (length (drgnx-coord-jobs)) jobs))))))
 
-(ert-deftest drgnx-job-cockpit/plan-files-are-never-written ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/plan-files-are-never-written ()
   (drgnx-job-run-test--with drgnx-job-cockpit-test--five
     (set-file-times plan (time-subtract (current-time) 100))       ; an mtime a write would move
     (let* ((drgnx-agents-profiles (append drgnx-agents-profiles (list (cons "mock2" (cdr (assoc "mock" drgnx-agents-profiles))))))
@@ -120,7 +122,7 @@
       (should (equal (file-attribute-modification-time (file-attributes plan)) mtime))
       (should (equal (drgnx-job-run-test--git repo "status" "--porcelain" "--" "docs") "")))))
 
-(ert-deftest drgnx-job-cockpit/gate-review-merges-as-today ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/gate-review-merges-as-today ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan :gate "review") :id)))
@@ -144,7 +146,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
 (defun drgnx-job-cockpit-test--gate-card (id)
   (seq-find (lambda (c) (plist-get (plist-get c :data) :gate)) (drgnx-coord-cards id "open")))
 
-(ert-deftest drgnx-job-cockpit/gate-review-and-accept-waits-for-every-file ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/gate-review-and-accept-waits-for-every-file ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((drgnx-job-merge-gate 'review+accept)         ; the proposer's option goes with the job
@@ -197,7 +199,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
       (should-not (drgnx-job-cockpit-test--gate-card id))
       (should (string-search (format "Merge %s#1" id) (drgnx-job-run-test--git repo "log" "--format=%s" (concat "job/" id)))))))
 
-(ert-deftest drgnx-job-cockpit/gate-counts-every-agent-of-the-task ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/gate-counts-every-agent-of-the-task ()
   ;; a second agent of the task (back to an agent, a fall-back, a reassign) is registered with the task's first base:
   ;; the gate counts every agent's commits; a file the edits cannot show counts and is never accepted
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
@@ -235,7 +237,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
         (should (equal (plist-get (drgnx-coord-card cid) :state) "open"))
         (should-not (equal (drgnx-job-run-test--status id 1) "done"))))))
 
-(ert-deftest drgnx-job-cockpit/gate-needs-the-task-branch ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/gate-needs-the-task-branch ()
   :tags '(:frozen)
   ;; the gate looks at the worktree, the merge takes the branch job/ID-N: while they differ (an agent committed on the
   ;; branch, then checked out something else) nothing merges; a look leaves the card's data alone
@@ -262,7 +264,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
       (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "done")) 20))
       (should-not (string-search "decoy" (drgnx-job-run-test--git repo "log" "--format=%s" (concat "job/" id)))))))
 
-(ert-deftest drgnx-job-cockpit/a-pass-merges-only-the-task-branch ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/a-pass-merges-only-the-task-branch ()
   ;; with the gate `review' too: a pass for a worktree that is not at its branch's tip is a card, not a merge
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan :gate 'review)) (tid (concat id "#1")) (tree nil))
@@ -282,7 +284,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
         (should (string-search "not at the tip of its branch" (plist-get card :title))))
       (should (equal (drgnx-job-run-test--status id 1) "needs-input")))))
 
-(ert-deftest drgnx-job-cockpit/gate-merge-as-it-is-stays-the-user-s ()
+(drgnx-work-db-writer-deftest drgnx-job-cockpit/gate-merge-as-it-is-stays-the-user-s ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan :gate "review+accept") :id)))
