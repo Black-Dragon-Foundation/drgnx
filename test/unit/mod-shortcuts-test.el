@@ -4,6 +4,7 @@
 (require 'drgnx-keys-edit)
 (load (expand-file-name "modules/tools/drgnx-shortcuts" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-shortcuts-test-mode-map (make-sparse-keymap) "A view's keymap for the tests.")
 
@@ -40,7 +41,9 @@ the usage counts go there, never the user's), no usage counted, and every bindin
           (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (drgnx-keys-presets '(("Alpha" . ((alpha app editing window))) ("Beta" . ((beta app editing window)))))
           (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
+          (drgnx-settings-apply--entries nil)
           (drgnx-shortcuts-chord-wait 0.05))
+     (drgnx-test-areas-reset)
      (unwind-protect
          (cl-letf* ((read-key (symbol-function 'read-key))
                     ;; a read with no key queued fails at once (batch would wait on stdin)
@@ -57,6 +60,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
            (drgnx-keys-use '((alpha app editing window)))
            ,@body)
        (drgnx-keys--restore)
+       (drgnx-test-areas-reset)
        (keymap-unset global-map "C-c 9" t)
        (when (get-buffer "*drgnx keyboard shortcuts*") (kill-buffer "*drgnx keyboard shortcuts*"))
        (drgnx-timer-cancel 'surfaces-usage)
@@ -208,7 +212,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
         (drgnx-shortcuts-test--answering ?k
           (drgnx-shortcuts-change)
           (should-not asked))))
-    (should-not (file-exists-p (drgnx-keys-file)))
+    (should-not (file-exists-p (drgnx-config-file 'settings)))
     (should-not (drgnx-shortcuts-test--keys 'sc-d))
     ;; a key that is a prefix of another command's key in the same place is flagged: cancel leaves all as it was
     (drgnx-shortcuts-test--answering ?c
@@ -216,7 +220,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
       (should (string-search "C-c e C-x" (car asked)))
       (should (string-search "Epsilon" (car asked)))
       (should (string-search "prefix" (car asked))))
-    (should-not (file-exists-p (drgnx-keys-file)))
+    (should-not (file-exists-p (drgnx-config-file 'settings)))
     ;; Keep both: bound, and the prefix conflict is listed on both rows
     (drgnx-shortcuts-test--answering ?k
       (let ((unread-command-events (list ?\C-c ?e))) (drgnx-shortcuts-change)))
@@ -260,7 +264,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (drgnx-shortcuts-undo)
     (should (equal (drgnx-shortcuts-test--keys 'sc-a) '("C-c a")))
     (should-not (drgnx-shortcuts-test--keys 'sc-d))
-    (should-not (file-exists-p (drgnx-keys-file)))
+    (should-not (drgnx-settings-area-has-entry-p 'drgnx-keys-bind))
     (drgnx-shortcuts-test--goto 'sc-d)
     (drgnx-shortcuts-test--answering ?r
       (let ((unread-command-events (list ?\C-c ?a))) (drgnx-shortcuts-change)))
@@ -431,7 +435,7 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     ;; an empty answer changes nothing
     (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "")))
       (should-error (drgnx-shortcuts-switch-profile) :type 'user-error))
-    (should-not (file-exists-p (drgnx-keys-file)))
+    (should-not (file-exists-p (drgnx-config-file 'settings)))
     (with-current-buffer "*drgnx keyboard shortcuts*"
       (goto-char (point-min))
       (should (looking-at-p ".*Alpha"))
@@ -488,10 +492,10 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     (drgnx-shortcuts-test--goto 'sc-d)
     (let ((unread-command-events (list ?\C-c ?\C-d))) (drgnx-shortcuts-change))
     (should (drgnx-shortcuts-test--keys 'sc-d))
-    ;; u: back as it was (there was no keys.eld)
+    ;; u: back as it was (there was no entry for the bound keys)
     (drgnx-shortcuts-undo)
     (should-not (drgnx-shortcuts-test--keys 'sc-d))
-    (should-not (file-exists-p (drgnx-keys-file)))
+    (should-not (drgnx-settings-area-has-entry-p 'drgnx-keys-bind))
     (should-not (keymap-lookup global-map "C-c C-d"))
     (should-error (drgnx-shortcuts-undo) :type 'user-error)
     ;; r: one command back to its profile key

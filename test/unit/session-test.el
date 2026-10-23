@@ -20,6 +20,7 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
   `(let* ((dir (make-temp-file "drgnx-session-test" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
           (drgnx-keep-running ,(plist-get spec :keep-running))
+          (drgnx-settings-apply--entries nil)
           (killed nil) (deleted nil) (saved 0) (asked 0) (events nil))
      (unwind-protect
          (cl-letf (((symbol-function 'daemonp) (lambda () ,(plist-get spec :daemon)))
@@ -35,6 +36,7 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
                     (lambda (prompt) (cl-incf asked) (push prompt events) ,(plist-get spec :confirm))))
            (ignore killed deleted saved asked events)
            ,@body)
+       (drgnx-settings-teardown 'drgnx-session-keep-running)     ; the choice a test saved is not drgnx's value any more
        (delete-directory dir t))))
 
 (ert-deftest drgnx-session/quit-mode-closing-the-last-window-quits ()
@@ -165,25 +167,12 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
   (drgnx-session-test--with (:keep-running t)
     (drgnx-session-set-keep-running nil)
     (should-not drgnx-keep-running)
-    (let ((data (with-temp-buffer (insert-file-contents (expand-file-name "session.eld" dir)) (read (current-buffer)))))
-      (should (plist-member data :keep-running))
-      (should-not (plist-get data :keep-running)))
-    (setq drgnx-keep-running t)
-    (drgnx-session-load)                      ; what the next start does
-    (should-not drgnx-keep-running)
+    (should (string-search "(drgnx-session-keep-running nil)"
+                           (with-temp-buffer (insert-file-contents (expand-file-name "settings.el" dir)) (buffer-string))))
     (drgnx-session-set-keep-running t)
-    (setq drgnx-keep-running nil)
-    (drgnx-session-load)
     (should (eq drgnx-keep-running t))
-    ;; no file, or a broken one: the default stays
-    (delete-file (expand-file-name "session.eld" dir))
-    (drgnx-config-reread 'session)            ; the config layer reads session.eld once per start
-    (drgnx-session-load)
-    (should (eq drgnx-keep-running t))
-    (write-region "(:keep-running" nil (expand-file-name "session.eld" dir))
-    (drgnx-config-reread 'session)
-    (drgnx-session-load)
-    (should (eq drgnx-keep-running t))))
+    (should (string-search "(drgnx-session-keep-running t)"
+                           (with-temp-buffer (insert-file-contents (expand-file-name "settings.el" dir)) (buffer-string))))))
 
 (ert-deftest drgnx-session/the-preference-toggles-and-says-so ()
   (drgnx-session-test--with (:keep-running t)

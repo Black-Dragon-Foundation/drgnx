@@ -23,6 +23,7 @@
 (require 'drgnx-config)
 (require 'drgnx-face-state)
 (require 'drgnx-modules)
+(require 'drgnx-settings-file)
 (require 'drgnx-pkg-activate)
 
 (defvar native-comp-eln-load-path)
@@ -1124,12 +1125,13 @@ comes back.  One lock held throughout.  Returns (:ok :generation :restored :smok
 
 (cl-defun drgnx-pkg-bisect (fails &key modules-dir)
   "Find the module that makes FAILS true: FAILS is called with a configuration directory (a copy of
-the user's, whose modules.eld turns some modules off) and returns non-nil when the problem shows.
+the user's, whose settings.el turns some modules off: its `drgnx-modules-disabled') and returns non-nil when the
+problem shows.
 Halves the enabled modules each round.  Returns the module; `:package-settings' when the problem shows with
 every module off but goes once settings.el's entries for packages and Emacs are off too (FAILS called with
 DRGNX_PACKAGE_SETTINGS=off in `process-environment'); else `:not-a-module'.  The user's own files are never changed."
   (let* ((user (drgnx-user-dir))
-         (state (or (drgnx-pkg--read-file (expand-file-name "modules.eld" user)) (list :version 1)))
+         (state (drgnx-modules-read-state))
          (off (plist-get state :disabled))
          (candidates (seq-remove (lambda (m) (memq m off))
                                  (append (mapcar #'car (seq-remove   ; off until chosen and not chosen: not running, not a suspect
@@ -1137,16 +1139,16 @@ DRGNX_PACKAGE_SETTINGS=off in `process-environment'); else `:not-a-module'.  The
                                                                          (not (memq (car m) (plist-get state :enabled)))))
                                                         (drgnx-pkg--module-specs
                                                          (or modules-dir (expand-file-name "modules" drgnx-dir)))))
-                                         ;; external modules (modules.eld :external): turned off as external/NAME
+                                         ;; external modules (`drgnx-modules-external'): turned off as external/NAME
                                          (mapcar (lambda (e) (intern (format "external/%s" (plist-get e :name))))
                                                  (plist-get state :external)))))
          (tmp (make-temp-file "drgnx-bisect" t)))
     (cl-flet ((try (on)
                 (delete-directory tmp t)
                 (if (file-directory-p user) (copy-directory user tmp nil t t) (make-directory tmp t))
-                (drgnx-file-write (expand-file-name "modules.eld" tmp)
-                                  (plist-put (copy-sequence state) :disabled (append off (seq-difference candidates on)))
-                                  :header ";; drgnx bisect" :pretty t)
+                ;; the copy's settings.el, with the modules off: only that entry changes, the rest of the file stays
+                (drgnx-settings-file-put (expand-file-name "settings.el" tmp) 'drgnx-settings nil 'drgnx-modules-disabled
+                                         (append off (seq-difference candidates on)))
                 (funcall fails tmp)))
       (unwind-protect
           (progn

@@ -52,7 +52,8 @@
             (drgnx-modal-panels-test--calls nil))
        (make-directory (concat dir "config") t)
        (make-directory (concat dir "home") t)
-       (write-region "(:version 1 :enabled (editor/evil))\n" nil (concat dir "config/modules.eld") nil 'silent)
+       (write-region "(drgnx-settings :version 1 (drgnx-modules-enabled (editor/evil)))\n" nil
+                     (concat dir "config/settings.el") nil 'silent)
        (unwind-protect
            (progn
              (drgnx--core-commands)

@@ -35,14 +35,14 @@ Modules. Packages that were not activated and modules that did not start at all 
 `RET` (Turn On / Off) on a row in Preferences: Modules takes effect in the running Emacs; no restart.
 
 - **Off** undoes what the module's setup did (its hooks, advice, timers, keys, menus, options, faces), the status
-  becomes `off`, and the choice is written to `modules.eld` so the module stays off at the next start. The About
+  becomes `off`, and the choice is written to `settings.el` so the module stays off at the next start. The About
   column then adds "code stays loaded until restart": the module's Lisp is still in memory (Emacs cannot unload
   it), it just does nothing.
 - **Dependents.** When running modules need the one you turn off (`:requires`, directly or through another), drgnx
   asks once: "Also turn off X, Y?". Yes turns the dependents off first, then the module; no changes nothing. Only
-  the module you chose is written to `modules.eld`; its dependents come back with it by turning each on (they say
+  the module you chose is written to `settings.el`; its dependents come back with it by turning each on (they say
   `off` here until you do) and wait for it at the next start.
-- **On** writes `modules.eld` and, when the module's stage has already passed, runs its setup now. If its packages
+- **On** writes `settings.el` and, when the module's stage has already passed, runs its setup now. If its packages
   are not installed or the modules it needs are not running, it waits and says so in the Status column
   (`needs …`); if its stage has not come yet (`idle`, `first-file`, …) it runs when it does. Its keys and menu
   entries come back with it, whatever its stage.
@@ -66,31 +66,35 @@ and is reported as waiting for it — Emacs never installs anything on its own; 
 gets the same treatment: a `use-package … :ensure t`, `:vc` or `package-install` in an external module installs
 nothing — the package is recorded and the module reported as waiting for it.
 
-## modules.eld
+## Your module choices in settings.el
 
-Your choices live in `~/.config/drgnx/modules.eld` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)):
+Your choices are settings in `~/.config/drgnx/settings.el` (in your config folder: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)).
+They were `modules.eld` before the unified settings; the first start after the update moves them
+([Moving from the old files](settings.md#moving-from-the-old-files)).
 
 ```elisp
-(:version 2
- :disabled (ui/zen lang/python)          ; modules that do not run
- :enabled (editor/evil)                  ; modules that are off until chosen, and were (below)
- :flags ((ui/popups +childframe)))       ; module flags
+(drgnx-settings
+ :version 1
+ (drgnx-modules-disabled (ui/zen lang/python))        ; modules that do not run
+ (drgnx-modules-enabled (editor/evil))                ; modules that are off until chosen, and were (below)
+ (drgnx-modules-flags ((ui/popups +childframe)))      ; module flags
+ (drgnx-modules-external ((:name x :path "~/x" :features (x-feature))))
+ (drgnx-look-theme modus-vivendi))                    ; the colour theme Color Theme picked (ui/look)
 ```
 
-`:enabled` is absent until a module that is off until chosen is turned on, and is kept as it is when drgnx writes
-the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme
-picked (ui/look writes it). modules.eld is format 2. An older format (the first, a bare list of disabled modules, or
-format 1) is read as it is and written as format 2 the next time drgnx changes the file, after a backup
-(`modules.eld.bak-<time>`). A file from a newer drgnx is used when it fits what this drgnx knows, but is never changed.
-A file with a mistake (it does not read, or a field is not what drgnx expects, say `:disabled` that is not a list of
-modules) is not used: the last copy that read well applies, or the defaults, and one notice says where the mistake is
-(Preferences: Open Config File… opens it there) — never an error at start. While it has a mistake drgnx does not
-write it: turning a module on or off, onboarding and Color Theme say why and change nothing, so what you typed is
-never lost. Your comments and keys of your own stay as they are when drgnx changes the file; two Emacs changing it
-at once both keep their change.
+`drgnx-modules-enabled` has no entry until a module that is off until chosen is turned on. All five are global: no
+workspace file may set them (an external module runs code from a folder) and an agent may not change them. A change
+applies at once: a module you add to `drgnx-modules-disabled` (by hand, in `config.el` with `setq`, or in this page)
+is turned off with its teardown, and taking it out turns it on again when its stage has come; `drgnx-look-theme`
+switches the theme. A `restart` module and the external modules wait for the next start.
+A value that is not what drgnx expects (say `drgnx-modules-disabled` that is not a list of modules) is not used: the
+default applies and the Settings page says where the mistake is — never an error at start. While `settings.el` has a
+mistake drgnx does not write it: turning a module on or off, onboarding and Color Theme say why and change nothing, so
+what you typed is never lost. Your comments and entries of your own stay as they are when drgnx changes the file; two
+Emacs changing it at once both keep their change.
 
 The Next start column of Preferences: Modules shows what the file says now, so a change made in another Emacs shows
-at once; a module you turn off or on here takes effect at the next start. The file is listed in the generated [config reference](../reference/config.md).
+at once.
 
 ## Modules that are off until chosen
 
@@ -122,17 +126,18 @@ through Customize: ui/look loads it after custom.el.
 
 ## External modules (gryphn)
 
-Code that lives elsewhere loads as an **external module**, listed in modules.eld:
+Code that lives elsewhere loads as an **external module**, listed in `drgnx-modules-external` (settings.el):
 
 ```elisp
-(:version 1
- :external ((:name gryphn :path "~/src/gryphn/emacs"
-             :features (gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-agents gryphn-search gryphn-llm))))
+(drgnx-settings
+ :version 1
+ (drgnx-modules-external ((:name gryphn :path "~/src/gryphn/emacs"
+                           :features (gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-agents gryphn-search gryphn-llm)))))
 ```
 
 At idle each feature is loaded and reported as module `external/<name>/<feature>` (Preferences: Modules); a missing
 directory or a feature that fails to load is reported, never fatal; an entry without `:name`, `:path` or `:features`
-is listed as failed (and kept in the file as you wrote it); `external/<name>` in `:disabled` (or `RET` on its
+is listed as failed (and kept in the file as you wrote it); `external/<name>` in `drgnx-modules-disabled` (or `RET` on its
 row) keeps it from loading. gryphn's files load unchanged: drgnx provides
 `gryphn-command-define` and `gryphn-surfaces-define-context` on its own registry and surfaces
 (`core/drgnx-compat-gryphn.el`), so the board, runs, agents and search commands appear in the palette and menus and
@@ -192,7 +197,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `core/basics` | startup | quiet defaults (no bell, no dialogs, y/n, background compiler warnings only in the log), Open File, Save, Save As, New Untitled, Reopen Closed Tab, New Window, Close Window, Cancel / Close Popup (Escape), line numbers, trusted folders and their guards (Trust This Folder, the "restricted" mark; [security.md](security.md)). Turned off, it stops at the next start (`restart`) |
 | `core/workbench` | startup | the workbench: docks, panel, popups, chrome, groups, several windows, moving a window to another monitor, the layout across restarts (each window back on its monitor) ([workbench.md](workbench.md)). Turned off, it stops at the next start (`restart`) |
 | `editor/editing` | startup | Fold / Unfold, Change Case (camelCase, snake_case, kebab-case, cycle — a single word says it has nothing to cycle), Expand / Shrink Selection (tree-sitter nodes when the buffer has a parser), Go to Line, Move Line Up / Down (the line or the selected lines), Select Line (again for the next), Select All, Duplicate Line, Delete Line, New Line Below / Above, Redo, Toggle Comment, Back / Forward, VS Code's cursor moves and deletes (Line Start — the first non-blank, then the start — / End, File Start / End, Word Left / Right, Delete Word Left, Delete to Line Start; Cmd+←, Option+←, Cmd+⌫ on a Mac, [keys.md](keys.md#on-a-mac)) |
-| `ui/look` | startup | Color Theme (remembered in modules.eld; a saved theme that does not load is said in `*Messages*`, and Color Theme picks another), Zen Mode (only the text; again to give the sidebar and panel back), Zoom In / Out / Reset (every window; then `+`, `-` or `0`); turned off, it gives zen mode back and the theme enabled before it |
+| `ui/look` | startup | Color Theme (remembered in `drgnx-look-theme`; a saved theme that does not load is said in `*Messages*`, and Color Theme picks another), Zen Mode (only the text; again to give the sidebar and panel back), Zoom In / Out / Reset (every window; then `+`, `-` or `0`); turned off, it gives zen mode back and the theme enabled before it |
 | `ui/face` | startup | the frame and the buffers: no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, ASCII glyphs on non-UTF-8 terminals; the status bar (segments you reorder, drop or add to), the top line (project, branch, the three keys that open everything), a dark title bar that follows the theme, quick help beside the symbol, a × and Esc/q on every help pane, popup and side pane, the start page in an empty editor; Toggle Menu Bar, Open the Menu (F10 as text while the bar is hidden), Look and Layout Settings ([face.md](face.md)); turned off, the menu bar, scroll bars, title bar, dividers, line spacing and wrap, frame title and the tab bar go back to what they were, line numbers it turned on go off, and the status bar, top line, quick help and start page go |
 | `lang/eglot` | startup | a language server (eglot) for code files whose server is installed — never a question; it stops when the project's last buffer closes; tree-sitter modes where the grammar is installed; Go to Definition, Find References, Rename Symbol, Show Hover (in the panel), Quick Fix, Problems (in the panel), Format Document (re-indents without a server); turned off, it stops the running language servers (without waiting, and including any you started by hand), puts the tree-sitter remaps and its eglot / xref options back (an option you set in config.el stays), and leaves files already open in their tree-sitter mode |
 | `lang/grammars` | startup | tree-sitter grammars on request: a file whose grammar is missing says so once (never asks); Install Language Support builds them in the background, then open files switch to their tree-sitter modes (also when the module is turned on while files are open); turned off, the remaps and file modes go (a buffer already in a tree-sitter mode keeps it) ([editing.md](editing.md)) |
@@ -204,7 +209,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `editor/sticky` | startup | sticky scroll: the function, class or block you are in, when its start has scrolled off, after the breadcrumb (tree-sitter or indentation; drgnx's own); Toggle Sticky Scroll ([editing.md](editing.md)) |
 | `editor/clipboard` | startup | clipboard managers: line and word kills stay in the kill ring, everything else reaches the system clipboard, a clipboard owner that does not answer is given up on after 1.5 s (X11 and Wayland), selecting text stops filling the history when Klipper, CopyQ or GPaste syncs it ([editing.md](editing.md#the-system-clipboard)); turning it off takes its wrappers off the kill and paste functions and gives the clipboard read wait and `select-active-regions` back |
 | `editor/evil` | startup | Vim editing (evil), off until you choose a Vim key stack: normal / insert / visual states in editors, panels and forms in Emacs state, shells and commit messages in insert state, the state in the mode line and the cursor shape per state; evil-collection's keys for Magit, Dired and other third-party modes (flag `no-collection` leaves them out); multiple cursors in Emacs state; Toggle Modal Editing (`SPC u m`) turns it off and on for the session ([keys.md](keys.md#vim-keys)); turning it off stops Vim editing at once and gives evil's options their old values (evil itself stays loaded until restart) |
-| `editor/large-files` | startup | large files: a file above `:ask-above` (50 MiB, in `large-files.eld`; a project's `.drgnx/large-files.eld` can only lower it) opens lean (whole, without font-lock, line numbers, undo, tree-sitter or the language server), raw or in chunks. A file you open yourself asks once per session; `drgnx open`, restored windows and timers never ask. The header line and the status bar show the size and the mode; Large File: Open in Chunks, Open Whole (lean) and Open Raw switch it. Long lines turn on so-long ([large-files.md](large-files.md), [config reference](../reference/config.md#large-filesel)) |
+| `editor/large-files` | startup | large files: a file above `:ask-above` (50 MiB, `drgnx-large-files-ask-above`; a project's `.drgnx/large-files.eld` can only lower it) opens lean (whole, without font-lock, line numbers, undo, tree-sitter or the language server), raw or in chunks. A file you open yourself asks once per session; `drgnx open`, restored windows and timers never ask. The header line and the status bar show the size and the mode; Large File: Open in Chunks, Open Whole (lean) and Open Raw switch it. Long lines turn on so-long ([large-files.md](large-files.md), [config reference](../reference/config.md#large-filesel)) |
 | `editor/large-files-chunks` | startup | chunks for large files (vlf): a large file that opens in chunks shows `:chunk-size` (1 MiB) of it at a time; Large File: Next Chunk, Previous Chunk, Go to Line (a line of the whole file) and Search (the whole file). Undo stays on in a chunk. Without it (vlf not installed), large files open raw |
 | `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)); turned off, its file modes and markdown-mode options go (an option you set in config.el stays) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |

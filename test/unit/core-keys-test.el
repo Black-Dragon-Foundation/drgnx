@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-keys-test--profiles
   (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))
@@ -150,18 +151,16 @@ The modules are set up by `drgnx-test-with-modules' and torn down after BODY, wh
 keys); every binding is undone after."
   `(drgnx-keys-test--with-core-commands
     (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
-      (let* ((dir (make-temp-file "drgnx-keys" t))
-             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
-                                          process-environment))
-             (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
-             (drgnx-keys-problems nil) (drgnx-keys-last nil))
-        (unwind-protect (progn ,@body)
-          (drgnx-keys--restore)
-          (delete-directory dir t))))))
+      (drgnx-test-with-areas
+        (let* ((drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+               (drgnx-keys-problems nil) (drgnx-keys-last nil))
+          (unwind-protect (progn ,@body)
+            (drgnx-keys--restore)))))))
 
 (defun drgnx-keys-test--write-user (form)
+  "settings.el holds the entries the old keys.eld plist FORM maps to; nothing is applied (as in a batch command)."
   (make-directory (drgnx-user-dir) t)
-  (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (prin1 form (current-buffer))))
+  (drgnx-test-areas-put-old 'keys (prin1-to-string form)))
 
 (ert-deftest drgnx-keys/switching-rebinds-and-restores-emacs ()
   (let ((before (copy-keymap global-map)))
@@ -233,12 +232,11 @@ keys); every binding is undone after."
        (drgnx-palette))
      (should (string-search "C-c p" annotation)))))
 
-(ert-deftest drgnx-keys/a-broken-keys-eld-is-a-problem-not-an-error ()
+(ert-deftest drgnx-keys/a-broken-settings-el-is-not-an-error ()
+  ;; the default stack applies; the applier (not the keys) says what is wrong with the file
   (drgnx-keys-test--live
-   (make-directory (drgnx-user-dir) t)
-   (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (insert "(:bind ((palette \"C-c p\")"))
-   (drgnx-keys-apply)
-   (should (seq-find (lambda (p) (string-search "keys.eld" p)) (plist-get drgnx-keys-last :problems)))
+   (drgnx-test-areas-put "(drgnx-settings :version 1 (drgnx-keys-bind ((palette \"C-c p\")")
+   (should (drgnx-keys-apply))
    (should (eq (keymap-lookup global-map "C-o") #'find-file))))
 
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
@@ -246,8 +244,7 @@ keys); every binding is undone after."
 (ert-deftest drgnx-notice-core/keys-problems-are-warn-conditions ()
   (drgnx-notice-test-with-model
     (drgnx-keys-test--live
-     (make-directory (drgnx-user-dir) t)
-     (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (insert "(:bind ((palette \"C-c p\")"))
+     (drgnx-keys-test--write-user '(:bind ((nope "C-c n"))))
      (drgnx-keys-apply)
      (let ((problems (plist-get drgnx-keys-last :problems))
            (ns (drgnx-notices :source 'keys)))
@@ -263,11 +260,10 @@ keys); every binding is undone after."
 (ert-deftest drgnx-notice-core/a-second-apply-replaces-them ()
   (drgnx-notice-test-with-model
     (drgnx-keys-test--live
-     (make-directory (drgnx-user-dir) t)
-     (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (insert "(:bind ((palette \"C-c p\")"))
+     (drgnx-keys-test--write-user '(:bind ((nope "C-c n"))))
      (drgnx-keys-apply)
      (should (drgnx-notices :source 'keys))
-     (delete-file (expand-file-name "keys.eld" (drgnx-user-dir)))
+     (delete-file (drgnx-config-file 'settings))
      (drgnx-keys-apply)
      (should-not (plist-get drgnx-keys-last :problems))
      (should-not (drgnx-notices :source 'keys)))))
@@ -278,8 +274,7 @@ keys); every binding is undone after."
    (drgnx-keys-apply)
    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Emacs editing + VS Code app keys")))
      (call-interactively #'drgnx-keys-choose-profile))
-   (let ((saved (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir)))
-                                  (read (current-buffer)))))
+   (let ((saved (drgnx-test-areas-old-plist 'keys)))
      (should (equal (plist-get saved :layers) '((emacs editing) (vscode app window))))
      (should (equal (plist-get saved :bind) '((line-numbers "C-c l")))))
    (should (equal (plist-get drgnx-keys-last :layers) '((emacs editing) (vscode app window))))
@@ -303,7 +298,7 @@ keys); every binding is undone after."
            (should (plist-member report :modal)))
          (let ((n (seq-find (lambda (n) (string-search "nope" (plist-get n :text))) (drgnx-notices :source 'keys))))
            (should n)
-           (should (string-search "keys.eld" (plist-get n :fix)))))
+           (should (string-search "settings.el" (plist-get n :fix)))))
       (delete-directory state t))))
 
 (ert-deftest drgnx-keys/conflicts-on-the-sheet-and-in-the-report-file ()
@@ -329,19 +324,17 @@ keys); every binding is undone after."
 
 ;;;; Review fixes
 
-(ert-deftest drgnx-keys/no-keys-eld-mistake-breaks-apply ()
-  ;; Startup (drgnx-init → drgnx-keys-apply) must survive any keys.eld; each mistake is a problem.
-  (dolist (form '((:bind (palette "C-c p")) (:layers foo) (:layers ((vscode . app))) (:bind foo)
-                  (:bind ((palette . "C-c p"))) (:bind ((palette "C-c p" :map "org-mode-map")))
+(ert-deftest drgnx-keys/no-settings-mistake-breaks-apply ()
+  ;; Startup (drgnx-init → drgnx-keys-apply) must survive any value of the keys settings: one the setting refuses is
+  ;; not used (the applier says so), and the default stack applies.
+  (dolist (form '((:bind (palette "C-c p")) (:layers foo) (:bind foo)
+                  (:bind ((palette "C-c p" :map "org-mode-map")))
                   (:bind ((palette "C-c p" :map 5))) (:unbind palette) (:layers ((vscode apps))) (:layers ((vscode)))
                   (:bind ((palette C-c))) (:bind ((palette))) (:bind ((palette "C-c p" :map (org-mode-map))))
                   (:bind ((palette "C-c p" :mac 7)))))
     (drgnx-keys-test--live
      (drgnx-keys-test--write-user form)
      (should (equal (list form :ok) (list form (and (drgnx-keys-apply) :ok))))
-     (should (equal (list form t) (list form (and (seq-find (lambda (p) (string-search "keys.eld" p))
-                                                            (plist-get drgnx-keys-last :problems))
-                                                  t))))
      ;; The default stack still applies.
      (should (equal (list form #'find-file) (list form (keymap-lookup global-map "C-o" nil t)))))))
 
@@ -436,26 +429,26 @@ keys); every binding is undone after."
    (should-not (seq-find (lambda (c) (and (equal (plist-get c :key) "C-h C-k") (eq (plist-get c :kind) 'claim)))
                          (plist-get drgnx-keys-last :conflicts)))))
 
-(ert-deftest drgnx-keys/an-empty-keys-eld-is-fine ()
+(ert-deftest drgnx-keys/an-empty-settings-el-is-fine ()
   (drgnx-keys-test--live
-   (make-directory (drgnx-user-dir) t)
-   (with-temp-file (drgnx-keys-file) (insert ";; my keys, later\n"))
+   (drgnx-test-areas-put ";; my settings, later\n(drgnx-settings :version 1)\n")
    (drgnx-keys-apply)
    (should (null (plist-get drgnx-keys-last :problems)))
    (drgnx-keys-choose-profile "Emacs")
-   (should (string-search ";; my keys, later" (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (buffer-string))))
+   (should (string-search ";; my settings, later" (drgnx-test-areas-text)))
    (should (equal (plist-get (drgnx-keys-read-user) :layers) '((emacs app editing window))))))
 
 (ert-deftest drgnx-keys/keyboard-profile-keeps-comments ()
   (drgnx-keys-test--live
-   (make-directory (drgnx-user-dir) t)
-   (with-temp-file (drgnx-keys-file)
-     (insert ";; my keys\n(:layers ((vscode app editing window)) ; was VS Code\n :bind ((palette \"C-c p\")) ; palette on C-c p\n)\n"))
+   (drgnx-test-areas-put
+    ";; my keys\n(drgnx-settings\n :version 1\n ;; palette on C-c p\n (drgnx-keys-bind ((palette \"C-c p\")))\n (drgnx-keys-layers ((vscode app editing window)))) ; was VS Code\n")
    (drgnx-keys-choose-profile "Emacs")
-   (let ((text (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (buffer-string))))
+   (let ((text (drgnx-test-areas-text)))
      (should (string-search ";; my keys" text))
-     (should (string-search "; palette on C-c p" text)))
-   (should (equal (drgnx-keys-read-user) '(:layers ((emacs app editing window)) :bind ((palette "C-c p")))))))
+     (should (string-search ";; palette on C-c p" text)))
+   (let ((user (drgnx-keys-read-user)))
+     (should (equal (plist-get user :layers) '((emacs app editing window))))
+     (should (equal (plist-get user :bind) '((palette "C-c p")))))))
 
 (ert-deftest drgnx-keys/a-commands-own-keymap-beats-the-profiles ()
   ;; Mode-local commands (the Explorer's) stay in their mode's keymap in the Vim profile too.

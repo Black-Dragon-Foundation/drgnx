@@ -21,7 +21,7 @@
 (defvar drgnx-evil-ex-test--calls nil "What the recorded commands ran, newest first.")
 
 (defvar drgnx-evil-ex-test--modules "(:version 1 :enabled (editor/evil))\n"
-  "The modules.eld of the temp configuration.")
+  "The module choices of the temp configuration, written as the old modules.eld plist (they become settings.el's entries).")
 
 (defmacro drgnx-evil-ex-test--with (&rest body)
   "BODY with evil running in the Vim stack, all startup modules run, in a temp configuration and state dir.
@@ -44,7 +44,8 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
             (drgnx-evil-ex-test--calls nil))
        (make-directory (concat dir "config") t)
        (make-directory (concat dir "home") t)
-       (write-region drgnx-evil-ex-test--modules nil (concat dir "config/modules.eld") nil 'silent)
+       (load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
+       (drgnx-test-areas-put-old 'modules drgnx-evil-ex-test--modules)       ; as settings.el's entries
        (unwind-protect
            (progn
              (drgnx--core-commands)

@@ -66,7 +66,7 @@ What the face remembers between runs: the title bar's variant, its GTK theme (re
 
 Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
 
-Your key bindings: the profile stack, entries that win over it, keys taken away.
+Your key bindings: the profile stack, entries that win over it, keys taken away (moved into settings.el).
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
@@ -76,18 +76,6 @@ Your key bindings: the profile stack, entries that win over it, keys taken away.
 | `:unbind` | list of symbol | no | Command ids that get no key |
 | `:mac-option` | characters or meta | no | What the left Option key does on a Mac with VS Code's keys |
 | `:tty-fallback` | any | no | Chord → another Alt key for it, in a legacy terminal: (("C-S-p" . "M-Z")) |
-
-## large-files.eld
-
-Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
-
-When a file is large: the size that asks (or opens in chunks, lean or raw), the size above which chunks is the default, and a chunk's size.
-
-| Key | Type | Required | What |
-| --- | --- | --- | --- |
-| `:ask-above` | null or a size in MiB above 0 | no | Above this size (MiB) a file opens in chunks, lean or raw (a command asks once); nil: never |
-| `:chunks-above` | a size in MiB above 0 | no | Above this size (MiB) the question's default is chunks, else lean |
-| `:chunk-size` | a size in MiB above 0 | no | How much of the file (MiB) a chunk holds |
 
 ## large-files.eld
 
@@ -133,7 +121,7 @@ Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, 
 
 Folder: config. Format: 2. Read: at start. On a mistake: its last good copy, else the defaults.
 
-Which modules run, their flags, external modules.
+Which modules run, their flags, external modules (moved into settings.el).
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
@@ -201,9 +189,15 @@ Narrows what a project's semantic search indexes: only these globs, not these, o
 
 Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
 
-Whether drgnx keeps running when its last window closes (read at every start).
+Whether drgnx keeps running when its last window closes (moved into settings.el).
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
 | `:keep-running` | boolean | no | Keep drgnx running when its last window closes |
+
+## settings.el
+
+Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+Your settings, one entry per variable: written by the Settings page and by you, read as data
 

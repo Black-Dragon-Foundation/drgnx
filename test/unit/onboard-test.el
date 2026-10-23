@@ -9,6 +9,7 @@
 (require 'drgnx-config-doc)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-onboard-test--with (root &rest body)
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
@@ -21,9 +22,13 @@
                                        process-environment))
           ;; the board path itself — never through `org-directory' (not special unless org is loaded)
           (drgnx-projects-board-file (concat ,root "org/board.org"))
-          (drgnx-projects-gryphn-file (concat ,root "gryphn/projects.tsv")))
+          (drgnx-projects-gryphn-file (concat ,root "gryphn/projects.tsv"))
+          (drgnx-settings-apply--entries nil))
      (make-directory (concat ,root "config") t)
-     (unwind-protect (progn ,@body) (delete-directory ,root t))))
+     (drgnx-test-areas-reset)
+     (unwind-protect (progn ,@body)
+       (drgnx-test-areas-reset)
+       (delete-directory ,root t))))
 
 (defun drgnx-onboard-test--repo (dir &rest files)
   "A git repo at DIR with FILES: (NAME . TEXT)…"
@@ -53,9 +58,9 @@ unset around its use, or it wins."
 (defun drgnx-onboard-test--read (file) (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
 
 (defun drgnx-onboard-test--keep-running-is (value)
-  "Non-nil when session.eld holds :keep-running VALUE (the config layer adds :version to a new file)."
-  (let ((data (drgnx-onboard-test--read (drgnx-session-file))))
-    (and (plist-member data :keep-running) (eq (plist-get data :keep-running) value))))
+  "Non-nil when settings.el holds `drgnx-session-keep-running' VALUE."
+  (and (drgnx-settings-area-has-entry-p 'drgnx-session-keep-running)
+       (eq (cdar (drgnx-settings-area-fresh '(drgnx-session-keep-running))) value)))
 
 ;;;; Task 1: steps, progress, runner
 
@@ -167,8 +172,7 @@ unset around its use, or it wins."
     (let ((r (drgnx-onboard-run :only '(look-and-keys) :non-interactive t
                                 :options '(:preset ide :keys "Emacs" :theme modus-vivendi))))
       (should (eq (cadr (car r)) 'ok))
-      (should (string-match-p "(emacs app editing window)"
-                              (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir))) (buffer-string))))
+      (should (string-match-p "(drgnx-keys-layers ((emacs app editing window)))" (drgnx-test-areas-text)))
       (should (eq (plist-get (drgnx-modules-read-state) :theme) 'modus-vivendi))
       (should (memq 'extra/llm (plist-get (drgnx-modules-read-state) :disabled))))))
 
@@ -497,11 +501,10 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   ;; I2: with no option given, the current keys and modules stay.
   (drgnx-onboard-test--with root
     (drgnx-onboard-run :only '(look-and-keys) :non-interactive t :options '(:preset minimal :keys "Emacs"))
-    (let ((keys (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir))) (buffer-string)))
+    (let ((keys (drgnx-test-areas-text))
           (mods (drgnx-modules-read-state)))
       (should (eq (cadr (car (drgnx-onboard-run :only '(look-and-keys) :non-interactive t))) 'ok))
-      (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir))) (buffer-string)) keys))
-      (drgnx-config-reread 'modules)
+      (should (equal (drgnx-test-areas-text) keys))
       (should (equal (drgnx-modules-read-state) mods)))))
 
 (ert-deftest drgnx-projects/imported-projects-stay-in-the-sessions-project-list ()
@@ -1129,35 +1132,34 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should-not (string-search "Finish" (cdr r))))))))
 
 (ert-deftest drgnx-onboard/chat-step-turns-chat-on-whatever-the-file-says-now ()
-  ;; This Emacs applied a modules.eld with extra/llm off; the file has it on since (a hand edit, another process).
+  ;; This Emacs applied a settings.el with extra/llm off; the file has it on since (a hand edit, another process).
   ;; "Turn on Chat? y" must leave it on: a toggle would read the file and turn it off.
   (drgnx-onboard-test--with root
     (let ((drgnx-onboard--restart-needed nil))
       (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-      (write-region "(:disabled nil)\n" nil (expand-file-name "modules.eld" (drgnx-user-dir)) nil 'silent)
+      (drgnx-test-areas-put-entries '((drgnx-modules-disabled)))
       (should (drgnx-module-disabled-p 'extra/llm))                       ; the applied copy still has it off
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                 ((symbol-function 'drgnx-onboard--installed-p) (lambda (_) t)))
         (drgnx-onboard--chat-module '(:interactive t)))
-      (should-not (drgnx-modules--disabled-in (plist-get (drgnx-config-read 'modules) :data) 'extra/llm)))))
+      (should-not (drgnx-modules--disabled-in
+                   (drgnx-modules--state-of (drgnx-settings-area-fresh (mapcar #'cdr drgnx-modules--settings)))
+                   'extra/llm)))))
 
 (ert-deftest drgnx-onboard/look-step-stops-at-a-keys-mistake-before-any-change ()
-  ;; keys.eld has a mistake: the Look step refuses before the preset, the engine or the live keys change, in batch and
+  ;; settings.el has a mistake: the Look step refuses before the preset, the engine or the live keys change, in batch and
   ;; in a session (where the live keys used to switch before the save refused).
   (drgnx-onboard-test--with root
-    (let* ((file (expand-file-name "keys.eld" (drgnx-user-dir)))
-           (bad "(:layers 5)\n")
-           (modules (expand-file-name "modules.eld" (drgnx-user-dir))))
-      (write-region bad nil file nil 'silent)
+    (let ((bad "(drgnx-settings :version 1 (drgnx-keys-layers 5))\n"))
+      (drgnx-test-areas-put bad)
       (should-error (drgnx-onboard--look-step '(:interactive nil :options (:keys "Emacs" :preset minimal)))
-                    :type 'drgnx-config-refused)
+                    :type 'user-error)
       (let ((noninteractive nil))
         (cl-letf (((symbol-function 'drgnx-keys-use) (lambda (&rest _) (ert-fail "the live keys switched")))
                   ((symbol-function 'drgnx-modal-prepare) (lambda (&rest _) (ert-fail "the engine step ran"))))
           (should-error (drgnx-onboard--look-step '(:interactive nil :options (:keys "Vim" :preset minimal)))
-                        :type 'drgnx-config-refused)))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) bad))
-      (should-not (file-exists-p modules)))))
+                        :type 'user-error)))
+      (should (equal (drgnx-test-areas-text) bad)))))
 
 ;; M12a-74: the restart asks its save questions first, detaches the waiter only after they are answered, then quits.
 (ert-deftest drgnx-onboard/restart-detaches-after-the-questions ()

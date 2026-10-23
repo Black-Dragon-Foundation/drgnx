@@ -2,6 +2,7 @@
 ;; Everything in temp dirs: a temp configuration and state dir, a temp modules dir; never the user's.
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 (require 'drgnx-modules)
 (require 'drgnx-pkg)
 
@@ -16,6 +17,7 @@
                                              (concat "XDG_STATE_HOME=" ,root "state"))
                                        process-environment))
           (drgnx-modules--table nil) (drgnx-modules--report nil)
+          (drgnx-settings-apply--entries nil)
           (drgnx-modules-default-off-test--ran nil))
      (make-directory (concat ,root "config") t)
      (make-directory (concat ,root "mods/test") t)
@@ -23,7 +25,9 @@
                    nil (concat ,root "mods/test/drgnx-off.el") nil 'silent)
      (write-region "(drgnx-module-define 'test/on :packages '(pkg-on) :setup #'ignore)\n"
                    nil (concat ,root "mods/test/drgnx-on.el") nil 'silent)
+     (drgnx-test-areas-reset)
      (unwind-protect (progn ,@body)
+       (drgnx-test-areas-reset)
        (delete-directory ,root t))))
 
 (defun drgnx-modules-default-off-test--define ()
@@ -136,10 +140,7 @@
 (defun drgnx-modules-default-off-test--bisect-candidates (root)
   (let (seen)
     (drgnx-pkg-bisect (lambda (cfg)
-                        (push (plist-get (with-temp-buffer
-                                           (insert-file-contents (expand-file-name "modules.eld" cfg))
-                                           (read (current-buffer)))
-                                         :disabled)
+                        (push (drgnx-test-areas-file-value (expand-file-name "settings.el" cfg) 'drgnx-modules-disabled)
                               seen)
                         t)
                       :modules-dir (concat root "mods"))
@@ -152,24 +153,20 @@
     (drgnx-modules-set-enabled 'test/off t)
     (should (equal (drgnx-modules-default-off-test--bisect-candidates root) '(test/off test/on)))))
 
-(ert-deftest drgnx-modules-default-off/an-old-modules-eld-reads ()
+(ert-deftest drgnx-modules-default-off/the-enabled-list-reads-and-a-write-leaves-it-absent ()
   (drgnx-modules-default-off-test--with root
-    (write-region "(:version 1 :disabled (a/b) :theme tango)\n" nil (concat root "config/modules.eld") nil 'silent)
-    (let ((s (drgnx-modules-read-state)))
-      (should (equal (plist-get s :disabled) '(a/b)))
-      (should-not (plist-member s :enabled))
-      (drgnx-modules-toggle 'c/d)                            ; a write: :enabled stays absent
-      (drgnx-config-reread 'modules)
-      (should-not (plist-member (drgnx-modules-read-state) :enabled))
-      (should-not (string-match-p ":enabled" (with-temp-buffer (insert-file-contents (concat root "config/modules.eld"))
-                                                               (buffer-string)))))
-    ;; :enabled reads, validates like :disabled, and is written back unchanged
-    (write-region "(:version 1 :enabled (test/off))\n" nil (concat root "config/modules.eld") nil 'silent)
-    (drgnx-config-reread 'modules)
+    (drgnx-test-areas-put-entries '((drgnx-modules-disabled . (a/b))))
+    (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(a/b)))
+    (should-not (plist-get (drgnx-modules-read-state) :enabled))
+    (drgnx-modules-toggle 'c/d)                            ; a write: no :enabled entry is made
+    (should-not (drgnx-settings-area-has-entry-p 'drgnx-modules-enabled))
+    ;; the enabled list reads, validates like the disabled one, and is written back unchanged
+    (drgnx-test-areas-reset)                               ; a new process: nothing applied yet
+    (setq drgnx-settings-apply--entries nil)
+    (drgnx-test-areas-put-entries '((drgnx-modules-enabled . (test/off))))
     (should (equal (plist-get (drgnx-modules-read-state) :enabled) '(test/off)))
-    (write-region "(:version 1 :enabled (\"oops\"))\n" nil (concat root "config/modules.eld") nil 'silent)
-    (drgnx-config-reread 'modules)
-    (should-not (plist-member (drgnx-modules-read-state) :enabled))))
+    (drgnx-test-areas-put-entries '((drgnx-modules-enabled . ("oops"))))
+    (should-not (plist-get (drgnx-modules-read-state) :enabled))))
 
 (provide 'modules-default-off-test)
 ;;; modules-default-off-test.el ends here

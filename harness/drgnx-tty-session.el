@@ -190,13 +190,14 @@ ends after $DRGNX_TTY_MAX_RUNTIME seconds (default 1800) even if no one stops it
 (defconst drgnx-tty-session-key-profiles '(vscode emacs vim) "Profiles `:keys' selects.")
 
 (defun drgnx-tty-session--write-keys (dir profile)
-  "Write DIR/keys.eld selecting key PROFILE (a symbol or string of `drgnx-tty-session-key-profiles')."
+  "Write DIR/settings.el selecting key PROFILE (a symbol or string of `drgnx-tty-session-key-profiles')."
   (let ((p (if (stringp profile) (intern profile) profile)))
     (unless (memq p drgnx-tty-session-key-profiles)
       (drgnx-ui--fail "key profile %S: one of %s" profile drgnx-tty-session-key-profiles))
     (make-directory dir t)
-    (drgnx-ui--write (expand-file-name "keys.eld" dir)
-                     (format "%S\n" (list :layers (list (list p 'app 'editing 'window)))))))
+    (drgnx-ui--write (expand-file-name "settings.el" dir)
+                     (format "(drgnx-settings\n :version 1\n (drgnx-keys-layers %S))\n"
+                             (list (list p 'app 'editing 'window))))))
 
 (defun drgnx-tty-session--dismiss-start-page (run)
   "Write RUN's state/drgnx/face.eld as \"Don't show this again\" leaves it.  An empty editor would show the start

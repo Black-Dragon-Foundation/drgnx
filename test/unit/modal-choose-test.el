@@ -17,17 +17,22 @@
 (defconst drgnx-modal-choose-test--vim '((vim app editing window)))
 (defconst drgnx-modal-choose-test--vscode '((vscode app editing window)))
 
-(defun drgnx-modal-choose-test--file (name) (expand-file-name name (drgnx-user-dir)))
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
+
+;; keys.eld and modules.eld are settings now: these helpers keep the tests' words ("keys.eld" is the keys settings,
+;; "modules.eld" the module settings) and read and write settings.el.
+(defun drgnx-modal-choose-test--area (name) (intern (string-remove-suffix ".eld" name)))
 
 (defun drgnx-modal-choose-test--write (name text)
-  (with-temp-file (drgnx-modal-choose-test--file name) (insert text)))
-
-(defun drgnx-modal-choose-test--text (name)
-  (and (file-exists-p (drgnx-modal-choose-test--file name))
-       (with-temp-buffer (insert-file-contents (drgnx-modal-choose-test--file name)) (buffer-string))))
+  (drgnx-test-areas-put-old (drgnx-modal-choose-test--area name) text))
 
 (defun drgnx-modal-choose-test--read (name)
-  (and (file-exists-p (drgnx-modal-choose-test--file name)) (car (read-from-string (drgnx-modal-choose-test--text name)))))
+  "The settings of NAME that have an entry, as the plist they held."
+  (drgnx-test-areas-old-plist (drgnx-modal-choose-test--area name)))
+
+(defun drgnx-modal-choose-test--text (name)
+  "A text that changes when the settings of NAME do; nil when none has an entry."
+  (let ((p (drgnx-modal-choose-test--read name))) (and p (prin1-to-string p))))
 
 (defmacro drgnx-modal-choose-test--with (&rest body)
   "BODY in a temp configuration: keys.eld with the VS Code stack and a comment, no modules.eld, the core commands
@@ -43,15 +48,18 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
             (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
             (drgnx-modules--state nil) (drgnx-modal-engines nil) (drgnx-modal-running nil)
             (drgnx-keys--applied nil) (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
-            (drgnx-keys--session-layers nil) (drgnx-onboard--restart-needed nil))
+            (drgnx-keys--session-layers nil) (drgnx-onboard--restart-needed nil)
+            (drgnx-settings-apply--entries nil))
        (make-directory (concat dir "config") t)
        (make-directory (concat dir "home") t)
-       (drgnx-modal-choose-test--write "keys.eld" ";; my keys\n(:layers ((vscode app editing window)))\n")
+       (drgnx-test-areas-reset)
+       (drgnx-test-areas-put ";; my keys\n(drgnx-settings\n :version 1\n (drgnx-keys-layers ((vscode app editing window))))\n")
        (unwind-protect
            (progn (drgnx--core-commands)
                   (drgnx-keys-apply)
                   ,@body)
          (drgnx-keys--restore)
+         (drgnx-test-areas-reset)
          (delete-directory dir t)))))
 
 (defmacro drgnx-modal-choose-test--no-prompts (&rest body)
@@ -89,7 +97,7 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
   (drgnx-modal-choose-test--with
     (drgnx-modal-choose-test--write "modules.eld" "(:disabled 5)\n")
     (let ((keys (drgnx-modal-choose-test--text "keys.eld")) (modules (drgnx-modal-choose-test--text "modules.eld")))
-      (should-error (drgnx-modal-prepare drgnx-modal-choose-test--vim nil) :type 'drgnx-config-refused)
+      (should-error (drgnx-modal-prepare drgnx-modal-choose-test--vim nil) :type 'user-error)
       (should (equal (drgnx-modal-choose-test--text "keys.eld") keys))
       (should (equal (drgnx-modal-choose-test--text "modules.eld") modules)))))
 
@@ -117,7 +125,7 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
     (let ((user (drgnx-modal-choose-test--read "keys.eld")))
       (should-not (plist-member user :pending-layers))
       (should (equal (plist-get user :layers) drgnx-modal-choose-test--vscode)))
-    (should (string-prefix-p ";; my keys\n" (drgnx-modal-choose-test--text "keys.eld")))))
+    (should (string-prefix-p ";; my keys\n" (drgnx-test-areas-text)))))
 
 (ert-deftest drgnx-modal-choose/stopping-the-sync-turns-the-module-back-off ()
   ;; C-g during drgnx sync (a quit out of the job): the keys stay, editor/evil is off again, nothing waits.

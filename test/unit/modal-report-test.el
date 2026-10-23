@@ -6,6 +6,7 @@
 (require 'drgnx-keys-modal)
 (require 'drgnx-doctor)
 (load (expand-file-name "modules/tools/drgnx-shortcuts" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 (defvar which-key-replacement-alist)
 
 (defmacro drgnx-modal-report-test--live (&rest body)
@@ -23,9 +24,10 @@ no registered modal engine; every binding is undone after."
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                          process-environment))
             (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
-            (drgnx-keys-problems nil) (drgnx-keys-last nil))
+            (drgnx-keys-problems nil) (drgnx-keys-last nil) (drgnx-settings-apply--entries nil))
        (unwind-protect (progn ,@body)
          (drgnx-keys--restore)
+         (drgnx-test-areas-reset)
          (delete-directory dir t)))))
 
 (defconst drgnx-modal-report-test--vim '((vim app editing window)))
@@ -138,11 +140,11 @@ no registered modal engine; every binding is undone after."
     (should-not (plist-get (drgnx-modal-report-test--report) :leader-menu-key))))
 
 (ert-deftest drgnx-modal-report/report-reads-pending-layers-as-data ()
-  ;; Task 11 keeps `:pending-layers' in keys.eld (no apply happens on its non-interactive path).
+  ;; Task 11 keeps the pending layers in settings.el (no apply happens on its non-interactive path).
   (drgnx-modal-report-test--live
     (make-directory (drgnx-user-dir) t)
-    (with-temp-file (drgnx-keys-file)
-      (prin1 '(:layers ((vscode app editing window)) :pending-layers ((vim app editing window))) (current-buffer)))
+    (drgnx-test-areas-put-old
+     'keys (prin1-to-string '(:layers ((vscode app editing window)) :pending-layers ((vim app editing window)))))
     (drgnx-keys-use drgnx-modal-report-test--vscode)
     (should (equal (plist-get (plist-get (drgnx-modal-report-test--report) :modal) :pending) '((vim app editing window))))
     (should (eq (car (drgnx-doctor-check 'modal (drgnx-modal-report-test--facts :keys-report (drgnx-modal-report-test--report))))

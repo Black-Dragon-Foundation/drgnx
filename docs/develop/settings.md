@@ -511,3 +511,39 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   whose plist settings.el already gives: `drgnx-settings-migrate-leftovers`).
 - **Doctor:** the `settings-migrated` check (fact `:settings-leftovers`) warns "already migrated" and names
   Move Old Files Away; it has no row while nothing is left over.
+
+## Keys, modules, large files and session (Task 16)
+
+The four areas read settings and have left `drgnx-settings-shim-areas`. Their old config definitions (`keys`,
+`modules`, `session`, and `large-files` by `drgnx-large-files--define-user-config`) stay for one reason: the migration
+reads those files once. Nothing else reads them.
+
+- **Declarations** (all `:scope global`, `:workspace never` except the large-file sizes, `:agents never` for keys,
+  modules and theme): `drgnx-keys-{layers,pending-layers,bind,unbind,mac-option,tty-fallback}` (`:apply` re-binds the
+  keys; `-layers` also drops the session's stack), `drgnx-modules-{disabled,enabled,flags,external}` (`:apply` is
+  `drgnx-modules--settings-apply`), `drgnx-look-theme` (`ui/look`; `:apply` loads the theme while the module runs),
+  `drgnx-large-files-{ask-above,chunks-above,chunk-size}` (`:merge lower-only`, read on use) and
+  `drgnx-session-keep-running` (read on use; `drgnx-keep-running` is an alias). `docs/reference/settings.md` lists them.
+- **`core/drgnx-settings-area.el`** is the one writer the four share. `(drgnx-settings-area-update VARS FN &optional
+  ALWAYS)` is a read-modify-write of settings.el under its lock (`drgnx-settings-file--write`): FN gets the current
+  `((VAR . VALUE)…)` and returns the values wanted; only differing ones are written (an entry replaced in place, a new
+  one at its sorted place), comments and other entries untouched, and `drgnx-settings-apply-global` runs after (owned
+  settings only in a process that applied nothing yet). `-set` is the same for known values; `-unset` removes an
+  entry and lets go of the value through `drgnx-settings-resolve-apply`, never `drgnx-settings-teardown`, so module
+  claims on the variable stay. `-ensure-writable` refuses a file that does not read (and, with VARS, an entry a
+  setting refuses). `(drgnx-settings-area-values VARS)` reads the values in this process; in a batch command that has
+  applied nothing (`drgnx sync`, `drgnx onboard`) a variable at its standard value takes settings.el's entry (cached
+  by the file's stamp; an entry the setting's schema refuses is ignored, as the applier would).
+- **Modules.** `drgnx-modules-read-state` and `-update-state` keep their plist API (`:disabled :enabled :flags
+  :external [:theme]`) over the settings, so the Modules page, Onboarding, the modal chooser and the package code did not
+  change. `-update-state` is atomic across processes. `drgnx-modules--settings-apply` tears down a running module that
+  is now disabled (with the modules that need it, deepest first; `restart` modules wait) and starts a module that is
+  chosen again once its stage has passed; it is idempotent, so the writers that already stopped or started a module
+  cost nothing. `drgnx-pkg-bisect` writes `drgnx-modules-disabled` into the copy's settings.el.
+- **Keys.** `drgnx-keys-read-user` builds the old plist from the six settings; `drgnx-keys--save-key` writes one.
+  `drgnx-keys-edit` works on a copy of the three lists the editor writes, inside one `drgnx-settings-area-update`; its
+  undo record is `<state>/keys-edit.undo` (`:old` per setting: `(VALUE)` or `:absent`, `:new` the values written).
+  A comment inside a rewritten list is lost (the settings writer replaces a value whole).
+- **Tests.** `test/fixtures/areas-fixture.el` (`drgnx-test-with-areas`, `drgnx-test-areas-put*`,
+  `drgnx-test-areas-reset`) gives a temp config with settings.el unapplied and puts the area settings back; a test that
+  saves through the writers must use it or `drgnx-test-with-modules`, which does.

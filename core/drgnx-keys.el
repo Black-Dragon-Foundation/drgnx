@@ -20,6 +20,8 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-config)
+(require 'drgnx-setting)
+(require 'drgnx-settings-area)
 (require 'drgnx-keys-modal)
 
 (defvar drgnx-keys-profiles nil
@@ -85,7 +87,9 @@ cannot be read (never an error or a prompt)."
                                                            (apply #'append (mapcar #'cdr layers)))
                  (mapconcat #'symbol-name drgnx-command-scopes " ")))))
 
-;;;; keys.eld, on the config layer
+;;;; keys.eld, the old file
+;; Your keys are settings now (`drgnx-keys-layers' … below; settings.el).  keys.eld is still defined here for one
+;; reason: `drgnx-settings-migrate-maybe' reads it once to move its values into settings.el.
 
 (defun drgnx-keys--layers-ok-p (layers)
   "Non-nil when LAYERS is a key stack; else a `user-error' saying why, which the schema's problem shows."
@@ -118,7 +122,7 @@ cannot be read (never an error or a prompt)."
                                (:tty-fallback any "Chord → another Alt key for it, in a legacy terminal: ((\"C-S-p\" . \"M-Z\"))"))
                      :default '(:layers nil)
                      :header drgnx-keys--header
-                     :doc "Your key bindings: the profile stack, entries that win over it, keys taken away.")
+                     :doc "Your key bindings: the profile stack, entries that win over it, keys taken away (moved into settings.el).")
 
 (defun drgnx-keys-load-profiles (dir)
   "Profiles from DIR/*.eld, as an alist PROFILE → plist, in file-name order."
@@ -447,9 +451,46 @@ panel keys it beats are dropped."
 
 ;;;; Applying
 
-(defcustom drgnx-keys-layers '((vscode app editing window))
-  "The key-profile stack when keys.eld names none: (PROFILE SCOPE…), later layers win."
-  :type '(repeat (cons symbol (repeat symbol))) :group 'drgnx)
+(drgnx-defsetting drgnx-keys-layers '((vscode app editing window))
+  "The key-profile stack: (PROFILE SCOPE…), later layers win.  Settings: Keyboard Profile sets it."
+  :type '(repeat (cons symbol (repeat symbol))) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-keys--layers-settings-apply
+  :schema '(pred drgnx-keys--layers-ok-p "a profile stack such as ((emacs editing) (vscode app window))"))
+
+(drgnx-defsetting drgnx-keys-pending-layers nil
+  "A stack waiting for its modal engine to be installed (drgnx sync); nil when none waits."
+  :type '(repeat (cons symbol (repeat symbol))) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-keys--settings-apply
+  :schema '(or null (pred drgnx-keys--layers-ok-p "a profile stack such as ((vim app editing window))")))
+
+(drgnx-defsetting drgnx-keys-bind nil
+  "Command id -> keys, entries (ID KEY… [:map MAP]) that win over every layer.  Keyboard Shortcuts writes them."
+  :type '(repeat sexp) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-keys--settings-apply
+  :schema '(list-of (pred drgnx-keys--bind-entry-p "(ID KEY… [:map MAP])")))
+
+(drgnx-defsetting drgnx-keys-unbind nil
+  "Command ids that get no key, whatever the layers say."
+  :type '(repeat symbol) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-keys--settings-apply
+  :schema '(list-of symbol))
+
+(drgnx-defsetting drgnx-keys-mac-option nil
+  "What the left Option key does on a Mac with VS Code's keys: `characters' (it types @ # { [) or `meta'; nil: Meta."
+  :type '(choice (const :tag "Meta" nil) (const characters) (const meta)) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-keys--settings-apply
+  :schema '(or null (pred drgnx-keys--mac-option-p "characters or meta")))
+
+(drgnx-defsetting drgnx-keys-tty-fallback nil
+  "Chord -> another Alt key for it, in a legacy terminal: ((\"C-S-p\" . \"M-Z\"))."
+  :type '(alist :key-type string :value-type string) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-keys--settings-apply
+  :schema 'any)
+
+(defconst drgnx-keys--settings
+  '((:layers . drgnx-keys-layers) (:pending-layers . drgnx-keys-pending-layers) (:bind . drgnx-keys-bind)
+    (:unbind . drgnx-keys-unbind) (:mac-option . drgnx-keys-mac-option) (:tty-fallback . drgnx-keys-tty-fallback))
+  "keys.eld's keys and the settings that hold them now.")
 
 (defconst drgnx-keys-presets
   '(("VS Code" . ((vscode app editing window)))
@@ -477,34 +518,29 @@ adds `drgnx-modal-sync-engine' so a runtime switch starts and stops the engine. 
   (unless drgnx-keys-profiles
     (setq drgnx-keys-profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))))
 
-(defun drgnx-keys--config-changed (name)
-  "A listener on `drgnx-config-changed-functions': keys.eld, saved by hand (Open Config File…), applies at once.
-The file is the authority then, so a stack chosen earlier in this session no longer wins over its `:layers'.
-Not for drgnx's own writes: they apply what they write."
-  (when (and (eq name 'keys) drgnx-config-user-save drgnx-keys-last)
-    (setq drgnx-keys--session-layers nil)
+(defun drgnx-keys--settings-apply ()
+  "The `:apply' of the keys settings: bind the keys again (and refresh the menus), once keys were applied here.
+Runs on an idle tick after settings.el, a `setq' or the Keyboard Shortcuts editor changed one of them."
+  (when drgnx-keys-last
     (drgnx-keys-apply)
     (when (fboundp 'drgnx-surfaces-refresh) (drgnx-surfaces-refresh))))
 
-(add-hook 'drgnx-config-changed-functions #'drgnx-keys--config-changed)
+(defun drgnx-keys--layers-settings-apply ()
+  "The `:apply' of `drgnx-keys-layers': the settings are the authority, so a stack chosen earlier in this session no
+longer wins over them; then as `drgnx-keys--settings-apply'."
+  (setq drgnx-keys--session-layers nil)
+  (drgnx-keys--settings-apply))
 
-(defun drgnx-keys-unload-function ()
-  "Remove the keys.eld listener (`unload-feature'); nil, so the feature unloads as usual."
-  (remove-hook 'drgnx-config-changed-functions #'drgnx-keys--config-changed)
-  nil)
-
-(defun drgnx-keys-file () (expand-file-name "keys.eld" (drgnx-user-dir)))
+(defun drgnx-keys--layers ()
+  "The stack `drgnx-keys-layers' holds; nil (no stack) gives its standard value."
+  (or drgnx-keys-layers (eval (car (get 'drgnx-keys-layers 'standard-value)) t)))
 
 (defun drgnx-keys-read-user ()
-  "The user's keys.eld plist (:layers :bind :unbind …) as applied (`drgnx-config-get'): the file, else its last good
-copy when the file has a mistake, else the default stack; never an error.  A file is never applied in part.  The
-mistake's text goes on `drgnx-keys-problems'.  The file is read at the first call and again by `drgnx-keys-apply'."
-  (let ((value (drgnx-config-get 'keys)))
-    (when-let* ((p (drgnx-config-problem 'keys)))
-      (cl-pushnew (format "%s: %s (line %d) — not applied: its last good copy (else the default stack) is used"
-                          (abbreviate-file-name (plist-get p :file)) (plist-get p :text) (plist-get p :line))
-                  drgnx-keys-problems :test #'equal))
-    value))
+  "The user's keys as a plist (:layers :pending-layers :bind :unbind :mac-option :tty-fallback), from the settings
+\(`drgnx-keys--settings'): their values now, whatever set them (settings.el, a `setq' in config.el), and settings.el's
+in a batch command that has not applied it (`drgnx-settings-area-values'); never an error."
+  (let ((values (drgnx-settings-area-values (mapcar #'cdr drgnx-keys--settings))))
+    (cl-loop for (key . var) in drgnx-keys--settings append (list key (cdr (assq var values))))))
 
 (define-obsolete-function-alias 'drgnx-keys-platform #'drgnx-platform "drgnx M12a")
 
@@ -652,7 +688,7 @@ Keys problems are `warn', so they never echo.  Never signals."
           (let ((text (format "%s" p)))
             (drgnx-notify 'keys 'warn text :id text :life 'condition
                           :fix (format "fix %s (docs/guide/keys.md)"
-                                       (abbreviate-file-name (expand-file-name "keys.eld" (drgnx-user-dir))))))))
+                                       (abbreviate-file-name (drgnx-config-file 'settings)))))))
     (error (message "drgnx: key problems not recorded as notices: %s" (error-message-string err)))))
 
 (defun drgnx-keys-apply ()
@@ -661,13 +697,12 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
   (setq drgnx-keys-problems nil)
   (condition-case err
       (progn
-        (drgnx-config-reread 'keys)                     ; keys.eld is read at start and at each apply
         (drgnx-keys--ensure-profiles)
         ;; Restore first: resolution then sees Emacs' own bindings, not drgnx's previous ones.
         (drgnx-keys--restore)
         (cl-incf drgnx-keys--generation)
         (let* ((user (drgnx-keys-read-user))
-               (layers (or drgnx-keys--session-layers (plist-get user :layers) drgnx-keys-layers))
+               (layers (or drgnx-keys--session-layers (plist-get user :layers) (drgnx-keys--layers)))
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
                                       :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
                                       :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m)))
@@ -836,9 +871,10 @@ French, … layouts; Option+← / → still move by word) or `meta' — in keys.
   (when drgnx-keys-last (drgnx-keys-apply)))
 
 (defun drgnx-keys--save-key (key data)
-  "Write DATA as KEY's value into keys.eld: only that value changes; comments, layout and the other keys stay.
-A keys.eld with a mistake is refused (`drgnx-config-refused'), not written."
-  (drgnx-config-set 'keys key data))
+  "Write DATA as the value of KEY (:layers, :bind, … `drgnx-keys--settings') into settings.el: only that entry
+changes; comments, layout and the other entries stay, and the value applies at once.  A settings.el with a mistake is
+refused (`drgnx-settings-refused'), not written."
+  (drgnx-settings-area-set (list (cons (or (alist-get key drgnx-keys--settings) (error "No keys setting %s" key)) data))))
 
 (declare-function drgnx-modal-prepare "drgnx-modal-choose")
 (declare-function drgnx-modal-wait-text "drgnx-modal-choose")
@@ -851,11 +887,11 @@ sync and the next start.  Until then the current stack stays and the message say
   (interactive (list (completing-read "Keyboard profile: " drgnx-keys-presets nil t nil nil
                                       ;; RET at once: the current profile (else the default), never none
                                       (or (car (rassoc (plist-get drgnx-keys-last :layers) drgnx-keys-presets))
-                                          (car (rassoc drgnx-keys-layers drgnx-keys-presets))))
+                                          (car (rassoc (drgnx-keys--layers) drgnx-keys-presets))))
                      t))
   (unless (assoc name drgnx-keys-presets)
     (user-error "No keyboard profile %S (profiles: %s)" name (mapconcat #'car drgnx-keys-presets ", ")))
-  (drgnx-config-ensure-writable 'keys)                  ; a keys.eld with a mistake: refused before anything changes
+  (drgnx-settings-area-ensure-writable)                 ; a settings.el with a mistake: refused before anything changes
   (require 'drgnx-modal-choose)
   (let* ((layers (cdr (assoc name drgnx-keys-presets)))
          (ready (drgnx-modal-prepare layers interactive)))

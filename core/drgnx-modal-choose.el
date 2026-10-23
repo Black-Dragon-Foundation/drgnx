@@ -100,9 +100,9 @@ directory (what drgnx sync installed, loadable after `drgnx-pkg-activate')."
   (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :pending-layers)))
 
 (defun drgnx-modal--forget-pending ()
-  "Take `:pending-layers' and its value out of keys.eld; the rest of the file stays as it is."
-  (when (plist-member (plist-get (drgnx-config-read 'keys) :data) :pending-layers)   ; a fresh read: no lock when none
-    (drgnx-config-unset 'keys :pending-layers)
+  "Take `drgnx-keys-pending-layers' out of settings.el; the rest of the file stays as it is."
+  (when (drgnx-settings-area-has-entry-p 'drgnx-keys-pending-layers)   ; a fresh read: no lock when none
+    (drgnx-settings-area-unset 'drgnx-keys-pending-layers)
     (drgnx-modal--write-report)))   ; the key report no longer says a stack waits
 
 (defun drgnx-modal--write-report ()
@@ -172,7 +172,7 @@ Switch to LAYERS only on `ready', `started' or `installed'.  Those also set the 
            ((not (drgnx-modal--can-ask-p interactive))
             ;; keys.eld first: a failure there (an unreadable file) leaves the module as it was; a modules.eld that
             ;; refuses a write is found before keys.eld changes
-            (drgnx-config-ensure-writable 'modules)
+            (drgnx-settings-area-ensure-writable (mapcar #'cdr drgnx-modules--settings))
             (drgnx-keys--save-key :pending-layers layers)
             (drgnx-modal-set-module layers)
             (drgnx-modal--write-report)

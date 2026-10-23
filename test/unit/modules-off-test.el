@@ -1,6 +1,8 @@
 ;;; modules-off-test.el --- batch tests: Turn Off and Turn On in Preferences, now -*- lexical-binding: t -*-
 (require 'ert)
 (require 'cl-lib)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
 (require 'drgnx-modules)
 
 (defvar drgnx-modules-off-test--log nil "What the fake setups and undos did, newest first.")
@@ -9,18 +11,14 @@
 (defmacro drgnx-modules-off-test--with (&rest body)
   "BODY with a fresh module table, report, state, cleanup stacks and an empty config dir; any prompt is recorded
 and answered yes."
-  `(let* ((cfg (make-temp-file "drgnx-cfg" t)) (st (make-temp-file "drgnx-st" t))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" cfg) (concat "XDG_STATE_HOME=" st))
-                                       process-environment))
-          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
-          (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
-          (drgnx-modules-after-teardown-functions nil) (drgnx-modules-after-stage-functions nil)
-          (drgnx-modules-off-test--log nil) (drgnx-modules-off-test--prompts nil))
-     (unwind-protect
-         (cl-letf (((symbol-function 'y-or-n-p)
-                    (lambda (p) (push p drgnx-modules-off-test--prompts) t)))
-           ,@body)
-       (delete-directory cfg t) (delete-directory st t))))
+  `(drgnx-test-with-areas
+     (let* ((drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
+            (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
+            (drgnx-modules-after-teardown-functions nil) (drgnx-modules-after-stage-functions nil)
+            (drgnx-modules-off-test--log nil) (drgnx-modules-off-test--prompts nil))
+       (cl-letf (((symbol-function 'y-or-n-p)
+                  (lambda (p) (push p drgnx-modules-off-test--prompts) t)))
+         ,@body))))
 
 (defun drgnx-modules-off-test--define (name &rest args)
   "Define module NAME whose setup logs `NAME+' and pushes an undo that logs `NAME-'."

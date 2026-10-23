@@ -219,15 +219,18 @@ binding are taken off afterwards."
     (should (equal (tty-fallback-test--row table "C-S-p") '(:alt "M-Z" :prefix "<f6> p")))
     (should (equal (tty-fallback-test--row table "C-S-z") '(:alt nil :prefix "<f6> z")))
     (should-not (drgnx-tty-fallback-problems table)))
-  ;; read from keys.eld
+  ;; read from the setting (`drgnx-keys-tty-fallback', settings.el's entry in a process that has not applied it)
   (let* ((dir (make-temp-file "drgnx-cfg" t))
          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
          (drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code")))
          (drgnx-keys--defaults tty-fallback-test--defaults)
+         (drgnx-settings-apply--entries nil)           ; a process that has not applied settings.el
+         (drgnx-keys-tty-fallback nil)
          (drgnx-tty-fallback--cache nil))
     (unwind-protect
         (progn
-          (with-temp-file (expand-file-name "keys.eld" dir) (insert "(:tty-fallback ((\"C-S-p\" . \"M-Z\")))\n"))
+          (with-temp-file (expand-file-name "settings.el" dir)
+            (insert "(drgnx-settings\n :version 1\n (drgnx-keys-tty-fallback ((\"C-S-p\" . \"M-Z\"))))\n"))
           (should (equal (plist-get (tty-fallback-test--row (drgnx-tty-fallback-active-table) "C-S-p") :alt) "M-Z")))
       (delete-directory dir t))))
 

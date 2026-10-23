@@ -26,6 +26,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-modules-fingerprint)
+(load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)   ; the settings of the folded-in areas, set back
 
 (defvar drgnx-test-modules--files nil
   "Alist module NAME → the shipped file that defines it, scanned once from modules/.")
@@ -272,7 +273,9 @@ buffers excepted."
          (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
          (drgnx-module--claims (make-hash-table :test 'equal))
          (drgnx-module--releasers (make-hash-table :test 'equal))
+         (drgnx-settings-apply--entries nil)       ; settings.el is not applied in this process
          (snap nil))
+    (drgnx-test-areas-reset)
     (unwind-protect
         (drgnx-test-modules--hiding (eq (plist-get opts :packages) 'hidden)
           (let* ((named (drgnx-test-modules--load modules))
@@ -310,6 +313,7 @@ buffers excepted."
       (when snap
         (drgnx-test-modules--restore snap)
         (drgnx-notice-clear 'modules))       ; the notices its modules' records posted (failed, off) go with them
+      (drgnx-test-areas-reset)               ; what the body saved through the settings writers goes
       (delete-directory cfg t))))
 
 (defmacro drgnx-test-with-modules (modules &rest body)

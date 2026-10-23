@@ -52,7 +52,8 @@ is a mock LLM (found running) answering `drgnx-modal-ai-test--answer'."
             (mock nil))
        (make-directory (concat dir "config") t)
        (make-directory (concat dir "home") t)
-       (write-region "(:version 1 :enabled (editor/evil))\n" nil (concat dir "config/modules.eld") nil 'silent)
+       (write-region "(drgnx-settings :version 1 (drgnx-modules-enabled (editor/evil)))\n" nil
+                     (concat dir "config/settings.el") nil 'silent)
        (with-temp-file script
          (prin1 `((:path "/api/generate" :body ,(json-encode (list :response drgnx-modal-ai-test--answer)))) (current-buffer)))
        (unwind-protect

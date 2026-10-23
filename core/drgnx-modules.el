@@ -7,9 +7,9 @@
 ;; runs in a stage — `startup', `idle' (once Emacs is idle), `first-frame', `first-file',
 ;; `first-input' — under its own error guard, timed.  It may require other modules, need packages
 ;; (it waits, reported, until they are installed: Emacs never installs anything by itself), have
-;; flags, doctor checks and settings.  The user's choices live in modules.eld in the user dir
-;; (`drgnx-user-dir'): disabled modules, enabled ones (those that are off until chosen), flags,
-;; external modules; older formats are migrated, an unreadable file is reported and ignored.
+;; flags, doctor checks and settings.  The user's choices are settings in settings.el
+;; (`drgnx-modules-disabled', `-enabled', `-flags', `-external'): disabled modules, enabled ones (those that are off
+;; until chosen), flags, external modules; a change turns modules off and on at once.
 ;; Preferences: Modules lists every module with its status and turns modules on and off.  See
 ;; docs/guide/modules.md.
 
@@ -20,6 +20,8 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-config)
+(require 'drgnx-setting)
+(require 'drgnx-settings-area)
 (require 'drgnx-hooks)
 (require 'drgnx-ui-kit)
 (require 'drgnx-pkg-activate)
@@ -55,7 +57,41 @@ turned it off) or `off' (it stays off, with its packages, until chosen: modules.
       (setq drgnx-modules--table (append drgnx-modules--table (list (cons name entry))))))
   name)
 
-;;;; modules.eld
+;;;; The choices: settings
+
+(drgnx-defsetting drgnx-modules-disabled nil
+  "Modules you turned off.  Preferences: Modules writes this; a change turns the module off or on at once."
+  :type '(repeat symbol) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-modules--settings-apply
+  :schema '(list-of symbol))
+
+(drgnx-defsetting drgnx-modules-enabled nil
+  "Modules that are off until chosen, chosen on."
+  :type '(repeat symbol) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-modules--settings-apply
+  :schema '(list-of symbol))
+
+(drgnx-defsetting drgnx-modules-flags nil
+  "Module flags: ((MODULE FLAG…)…)."
+  :type '(alist :key-type symbol :value-type (repeat symbol)) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-modules--settings-apply
+  :schema '(alist symbol (list-of symbol)))
+
+(drgnx-defsetting drgnx-modules-external nil
+  "External modules, each (:name NAME :path DIR :features (FEATURE…)); each is checked when it loads.
+They run code from DIR, so no workspace may set this and no agent may change it."
+  :type '(repeat sexp) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never :apply #'drgnx-modules--settings-apply
+  :schema '(list-of any))
+
+(defconst drgnx-modules--settings
+  '((:disabled . drgnx-modules-disabled) (:enabled . drgnx-modules-enabled) (:flags . drgnx-modules-flags)
+    (:external . drgnx-modules-external) (:theme . drgnx-look-theme))
+  "modules.eld's keys and the settings that hold them now (`:theme' is the colour theme, `ui/look').")
+
+;;;; modules.eld, the old file
+
+;; Still defined for one reason: `drgnx-settings-migrate-maybe' reads it once to move its values into settings.el.
 
 (defun drgnx-modules--from-v0 (data)
   "Format 0 of modules.eld, a bare list of the disabled modules → format 1's plist."
@@ -71,23 +107,44 @@ turned it off) or `off' (it stays off, with its packages, until chosen: modules.
                                      (:theme symbol "The colour theme onboarding chose"))
                      :default '(:disabled nil) :reload 'start :last-good t
                      :header ";; drgnx modules: what you turned off or on, module flags, external modules (docs/guide/modules.md).\n"
-                     :doc "Which modules run, their flags, external modules.")
+                     :doc "Which modules run, their flags, external modules (moved into settings.el).")
 
 (defun drgnx-modules--external-ok-p (e)
   (and (consp e) (keywordp (car e)) (symbolp (plist-get e :name))
        (stringp (plist-get e :path)) (listp (plist-get e :features))))
 
+(defun drgnx-modules--state-of (values)
+  "The state plist (:disabled :enabled :flags :external, and :theme when it is set) of VALUES, an alist (VAR . VALUE)
+over `drgnx-modules--settings'."
+  (cl-loop for (key . var) in drgnx-modules--settings
+           for v = (cdr (assq var values))
+           when (or v (not (eq key :theme))) append (list key v)))
+
 (defun drgnx-modules-read-state ()
-  "The user's modules.eld as this Emacs applied it at its start (or after its own write): a plist, the default when
-the file is absent or has a mistake; never an error at start.  Do not change it: it is shared."
-  (drgnx-config-get 'modules))
+  "What the user chose, as this process has it: a plist (:disabled :enabled :flags :external [:theme]) of the settings
+`drgnx-modules-disabled' … (settings.el's entries once applied; in a batch command that has not applied it, the
+file's: `drgnx-settings-area-values').  Never an error.  Do not change it."
+  (drgnx-modules--state-of (drgnx-settings-area-values (mapcar #'cdr drgnx-modules--settings))))
 
 (defun drgnx-modules-update-state (fn)
-  "Change modules.eld: (FN STATE) under the file's lock, on a fresh read (STATE is nil when the file is absent), so a
-change another Emacs just made is kept.  FN returns the new plist and may not move the keys the file has; only the keys
-it changed are written (comments and other keys stay).  Signals `drgnx-config-refused' for a file with a mistake or one
-a newer drgnx wrote, and leaves it as it was.  Returns the new state."
-  (drgnx-config-update 'modules fn))
+  "Change the module choices in settings.el: (FN STATE) under the file's lock, on a fresh read of the file
+\(`drgnx-settings-area-update'), so a change another Emacs just made is kept.  FN returns the new plist; only the
+settings whose value changed are written
+\(comments and other entries stay), and they apply at once (turning a module off or on, switching the theme).
+Signals `drgnx-settings-refused' for a file with a mistake or one a newer drgnx wrote, and leaves it as it was.
+Returns the new state."
+  (let ((new nil))
+    (drgnx-settings-area-update
+     (mapcar #'cdr drgnx-modules--settings)
+     (lambda (current)                 ; under the file's lock, on a fresh read: a change another Emacs made is kept
+       (pcase-dolist (`(,var . ,value) current)       ; a value the setting refuses is not rewritten: fix it first
+         (when-let* ((problem (and (get var 'standard-value) (drgnx-setting-check var value))))
+           (user-error "%s does not fit (%s) — fix it first (it was not changed)" var (cdr problem))))
+       (setq new (funcall fn (drgnx-modules--state-of current)))
+       ;; a key FN leaves out is not changed
+       (cl-loop for (key . var) in drgnx-modules--settings
+                when (plist-member new key) collect (cons var (plist-get new key)))))
+    new))
 
 (defun drgnx-modules--put-list (state key items)
   "A copy of the plist STATE with KEY's list ITEMS; an empty list does not add a key the file has not."
@@ -349,10 +406,11 @@ never stops Emacs — nothing is installed (the module waits for the package, as
           (t (format "%s: %s" (plist-get ext :path) (mapconcat #'symbol-name (plist-get ext :features) " "))))))
 
 (defun drgnx-modules--next-state ()
-  "The modules.eld the next start will read: the file as it is now, else (it is absent or has a mistake) what this
-Emacs applied."
-  (let ((r (drgnx-config-read 'modules)))
-    (if (memq (plist-get r :status) '(ok migrated newer absent)) (plist-get r :data) (drgnx-modules-read-state))))
+  "The choices the next start will read: settings.el as it is now, else (it has a mistake) what this Emacs applied."
+  (condition-case nil
+      (progn (drgnx-settings-area-ensure-writable)
+             (drgnx-modules--state-of (drgnx-settings-area-fresh (mapcar #'cdr drgnx-modules--settings))))
+    (drgnx-settings-refused (drgnx-modules-read-state))))
 
 (defun drgnx-modules--entries ()
   (let ((next (drgnx-modules--next-state)))
@@ -444,6 +502,34 @@ Keys and menus follow the registry afterwards, whatever the stage (`drgnx-module
         (run-hooks 'drgnx-modules-after-teardown-functions))))
   (drgnx-modules--refresh-list)
   nil)
+
+(defun drgnx-modules--stop (module)
+  "Tear MODULE down now with the running modules that need it, deepest first.  Nothing is written and nothing asked.
+A module that stays running until restart (`:teardown \\='restart', or needed by a running one that is) is left."
+  (let ((deps (drgnx-modules--dependents module)))
+    (unless (or (drgnx-modules--restart-p module) (seq-some #'drgnx-modules--restart-p deps))
+      (dolist (m (append deps (list module)))
+        (when (drgnx-modules--ok-p m) (drgnx-module-teardown m))))))
+
+(defun drgnx-modules--settings-apply ()
+  "The `:apply' of the module settings: make what runs match the choices.
+A running module that `drgnx-module-disabled-p' now says is off is torn down (with the modules that need it); one that
+was turned off and is chosen again runs its setup, when its stage has passed.  The registry follows (keys, menus).  A
+module that stays running until restart, and the external modules, wait for the next start.  Idempotent, so the
+writers that already stopped or started a module cost nothing; never prompts."
+  (let ((changed nil))
+    (dolist (m drgnx-modules--table)
+      (when (and (drgnx-modules--ok-p (car m)) (drgnx-module-disabled-p (car m)))
+        (drgnx-modules--stop (car m))
+        (setq changed t)))
+    (dolist (m drgnx-modules--table)
+      (let ((r (alist-get (car m) drgnx-modules--report)))
+        (when (and r (memq (plist-get r :status) '(disabled off)) (not (drgnx-module-disabled-p (car m))))
+          (when (drgnx-modules--run-one (car m) (cdr m) (plist-get (cdr m) :stage))
+            (setq changed t)))))
+    (when changed
+      (run-hooks 'drgnx-modules-after-teardown-functions)
+      (drgnx-modules--refresh-list))))
 
 (defun drgnx-modules--say-problems (modules)
   "Say what went wrong while MODULES were turned off or on (their notices keep it too)."

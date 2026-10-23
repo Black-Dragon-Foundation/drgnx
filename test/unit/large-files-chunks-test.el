@@ -35,15 +35,16 @@
 
 (defmacro drgnx-large-files-chunks-test--with (&rest body)
   "BODY with vlf found, editor/large-files and editor/large-files-chunks set up (strictly), the test sizes in
-large-files.eld and `drgnx-large-files-chunks-test--dir' a fresh folder whose buffers are killed after."
+the settings (`drgnx-large-files-ask-above' …) and `drgnx-large-files-chunks-test--dir' a fresh folder whose buffers are
+killed after."
   (declare (indent 0) (debug t))
   `(progn
      (skip-unless drgnx-large-files-chunks-test--vlf)
      (drgnx-test-with-config
        (drgnx-test-with-modules '(editor/large-files editor/large-files-chunks) :strict t
-                                (drgnx-test-config-put
-                                 'large-files "(:version 1 :ask-above 0.015625 :chunks-above 0.0625 :chunk-size 0.03125)")
-                                (let ((drgnx-large-files-chunks-test--dir
+                                (let ((drgnx-large-files-ask-above 0.015625) (drgnx-large-files-chunks-above 0.0625)
+                                      (drgnx-large-files-chunk-size 0.03125)
+                                      (drgnx-large-files-chunks-test--dir
                                        (file-name-as-directory (make-temp-file "drgnx-lf-chunks" t))))
                                   (unwind-protect (progn ,@body)
                                     (drgnx-large-files-chunks-test--kill)

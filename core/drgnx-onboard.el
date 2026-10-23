@@ -218,10 +218,8 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 (declare-function drgnx-keys-use "drgnx-keys")
 (declare-function drgnx-look-load-theme "drgnx-look")
 
-(defvar drgnx-keys-file)
 (defvar drgnx-keys-layers)
-(declare-function drgnx-keys-file "drgnx-keys")
-(declare-function drgnx-config-read "drgnx-config")
+(defvar drgnx-keys--settings)
 (declare-function drgnx-keys-read-user "drgnx-keys")
 (declare-function drgnx-keys-set-mac-option "drgnx-keys")
 (declare-function drgnx-keys--save-key "drgnx-keys")
@@ -230,8 +228,8 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 (declare-function drgnx-modal-wait-text "drgnx-modal-choose")
 
 (defun drgnx-onboard--current-keys ()
-  "The name of the key preset keys.eld uses now, or nil."
-  (car (rassoc (plist-get (plist-get (drgnx-config-read 'keys) :data) :layers) drgnx-keys-presets)))
+  "The name of the key preset `drgnx-keys-layers' holds now (settings.el's, the default stack when it names none), or nil."
+  (car (rassoc (plist-get (drgnx-keys-read-user) :layers) drgnx-keys-presets)))
 
 (defun drgnx-onboard--current-preset ()
   "The preset the extra/ modules match now (none off — a fresh install too — is full-ai), or nil: a mix of your own."
@@ -291,12 +289,12 @@ current choice as the default) — with no option and no question, the current c
                                  "types characters")
                           'characters 'meta)))
          (modal nil))
-    ;; a modules.eld with a mistake (or a newer one) refuses every write to it: say so before anything changes
-    (when (or (and preset (not (eq preset cur-preset))) theme (and keys (not (equal keys cur-keys))))
-      (drgnx-config-ensure-writable 'modules))
-    ;; the same for keys.eld: a mistake in it stops the step before the preset, the engine or the live keys change
-    (when (or (and layers (or (not (equal keys cur-keys)) pending)) option)
-      (drgnx-config-ensure-writable 'keys))
+    ;; a settings.el with a mistake (or a newer one) refuses every write to it: say so before the preset, the engine,
+    ;; the theme or the live keys change
+    (when (or (and preset (not (eq preset cur-preset))) theme (and keys (not (equal keys cur-keys)))
+              (and layers (or (not (equal keys cur-keys)) pending)) option)
+      (drgnx-settings-area-ensure-writable (append (mapcar #'cdr drgnx-modules--settings)
+                                                   (mapcar #'cdr drgnx-keys--settings))))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     ;; A Vim stack switches only once its engine is loaded: asked to install it when interactive, else it waits
     (when (and layers (or (not (equal keys cur-keys)) pending))
@@ -1347,8 +1345,7 @@ started and asked ACP initialize.  Without interaction nothing is installed: the
 keep running.  Saved (session.eld); returns the sentence for the step's result."
   (let ((keep (if (plist-get ctx :interactive)
                   (y-or-n-p drgnx-onboard-keep-running-question)
-                (drgnx-session-load)
-                drgnx-keep-running)))
+                (cdar (drgnx-settings-area-values '(drgnx-session-keep-running))))))
     (drgnx-session-set-keep-running keep)
     (format "%s when its last window closes (change it: Preferences: Keep drgnx Running in the Background)"
             (if keep "drgnx keeps running in the background" "drgnx quits"))))

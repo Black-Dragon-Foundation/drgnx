@@ -223,6 +223,30 @@ values. One that differs stays.
 - Until each part of drgnx reads its settings directly, code that asks for the old files' values gets them from
   `settings.el`. Safe mode reads your keys from there too.
 
+## Keys, modules, large files and the session (Task 16)
+
+These four read and write their settings directly now:
+
+| Old file | Settings | Applies |
+|---|---|---|
+| `keys.eld` | `drgnx-keys-layers`, `-pending-layers`, `-bind`, `-unbind`, `-mac-option`, `-tty-fallback` | at once: the keys are bound again |
+| `modules.eld` | `drgnx-modules-disabled`, `-enabled`, `-flags`, `-external`; `drgnx-look-theme` (from `:theme`) | at once: a module is turned off with its teardown or on again; the theme switches |
+| `large-files.eld` | `drgnx-large-files-ask-above`, `-chunks-above`, `-chunk-size` | read when a file opens |
+| `session.eld` | `drgnx-session-keep-running` (also named `drgnx-keep-running`) | read when a window closes |
+
+- The Keyboard Shortcuts editor, Keyboard Profile…, Preferences: Modules, Color Theme, Keep drgnx Running and
+  Onboarding write `settings.el` through the settings writer: only the entry that changes, your comments and the rest
+  of the file stay. They refuse a `settings.el` that does not read, or an entry of these settings that does not fit,
+  and change nothing.
+- A `setq` of one of them in `config.el` counts too: at the end of the start drgnx applies it (a module you put in
+  `drgnx-modules-disabled` there is turned off).
+- These settings are global. A workspace file may not set the keys, the modules or the theme (they run code or change
+  what drgnx does everywhere), and an agent may not change them. A project's `.drgnx/large-files.eld` still lowers the
+  two large-file sizes.
+- An old file that stayed because it had a mistake is **not read any more** for these four: fix it, then
+  **Settings: Migrate Old Files** (while `settings.el` does not exist), or set the values in `settings.el`.
+- Safe mode applies your keys from `settings.el` (drgnx's own entries), as before.
+
 ## Safe mode and Turn Off Package Settings
 
 drgnx's own settings (keys, agents, the sandbox, trust, the modules you turned off) always apply. The rest of
