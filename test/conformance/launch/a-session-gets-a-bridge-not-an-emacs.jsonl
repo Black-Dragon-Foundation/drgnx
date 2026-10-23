@@ -1,7 +1,7 @@
 {"scenario": "launch/a-session-gets-a-bridge-not-an-emacs", "requires": ["v1", "lisp-backend"], "doc": "Task 14: an agent the Lisp backend starts is given Ratatoskr's mcp-bridge on a socket the hub minted, not a batch Emacs: the mock ACP agent logs the mcpServers of its session/new, whose drgnx entry runs the ratatoskr binary with mcp-bridge --socket PATH and an empty env, no argv names emacs, status.mcp.sessions is 1, and stopping the agent closes the session within 3 s. agents.eld pins :mcp to (coordination): the Lisp search server stays a batch Emacs until phase 8."}
+{"do": "start", "hub": "h"}
 {"do": "install_bin", "to": "$DATA/bin/ratatoskr"}
 {"do": "write_file", "path": "$CONFIG/agents.eld", "text": "(:mcp (coordination) :profiles ((\"mock-acp\" :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\") :env (\"MOCK_ACP_LOG=$ROOT/acp.log\"))))\n"}
-{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-acp", "cwd": "$HOME"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent"}}, "within_ms": 30000}

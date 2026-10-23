@@ -470,7 +470,14 @@ the environment says: a bridge to the hub's server).  The verdict is the effect,
               (alist-get sid mock--meta nil nil #'equal) (mock--line-meta))
         (when-let* ((log (getenv "MOCK_ACP_LOG")))      ; what the session was given: the launch rows read it
           (write-region (concat "mcpServers "
-                                (json-serialize (or (plist-get params :mcpServers) []) :null-object :null :false-object :false)
+                                ;; the line read again with its arrays kept (`mock--handle' made them lists)
+                                (json-serialize (or (plist-get (plist-get (json-parse-string
+                                                                           mock--line :object-type 'plist :array-type 'array
+                                                                           :null-object :null :false-object :false)
+                                                                          :params)
+                                                               :mcpServers)
+                                                    [])
+                                                :null-object :null :false-object :false)
                                 "\n")
                         nil log 'append 'silent))
         (mock--respond id (list :sessionId sid))
