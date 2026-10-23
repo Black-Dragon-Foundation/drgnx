@@ -513,13 +513,23 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
     keeps working until Tasks 15 and 16 move it.
   - With no entry for the area, the old state's value is used: a file that stayed is read as before.
   - Results are cached per area on `eq` of the settings form and the old value.
-  - Taking an area out of `drgnx-settings-shim-areas` is how Tasks 15 and 16 retire it. A file that stayed (or one an
-    old writer made after the move) then has to move first.
+  - Taking an area out of `drgnx-settings-shim-areas` is how Tasks 15 and 16 retired it; the list is empty now.
+- **A file that stayed** (a mistake, unknown keys, a value that is not data, or a copy that came back changed) is no
+  longer read once its area left the shim. It never stops applying silently (the design's §14.2 "still read by the
+  shim" no longer holds once §14.9 removed the shims): `drgnx-settings-migrate-stayed` gives `((FILE WHY)…)` for the
+  old files of retired areas whose plist settings.el does not give, and `drgnx-settings-migrate-maybe` posts one
+  notice condition (source `config`, id `settings-stayed`, command Migrate Old Files) at every start while there are
+  any, and clears it when there are none.
 - **Commands** (registry ids in `drgnx-config-register-commands`): `settings-migration-report`,
-  `settings-migrate-old-files` (refuses while `settings.el` exists) and `settings-move-old-files-away` (only files
-  whose plist settings.el already gives: `drgnx-settings-migrate-leftovers`).
-- **Doctor:** the `settings-migrated` check (fact `:settings-leftovers`) warns "already migrated" and names
-  Move Old Files Away; it has no row while nothing is left over.
+  `settings-migrate-old-files` and `settings-move-old-files-away` (only files whose plist settings.el already gives:
+  `drgnx-settings-migrate-leftovers`). While `settings.el` exists, Migrate Old Files folds in the stayed files that now
+  read cleanly (`--fold-stayed`): their entries are written with `drgnx-settings-area-set` for the settings
+  `settings.el` has no entry for (an entry there is never changed), then Move Old Files Away moves the files
+  `settings.el` now holds. With nothing to fold it refuses (a `user-error`). Comments of the old file do not move on
+  this path.
+- **Doctor:** the `settings-migrated` check (facts `:settings-leftovers`, `:settings-stayed`) warns "no longer read"
+  naming each stayed file and why, else "already migrated" naming Move Old Files Away; it has no row while neither
+  holds.
 
 ## Agents, AI and the shipped defaults (Task 15)
 

@@ -300,6 +300,49 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
     (should (equal (drgnx-config-get 'keys) '(:unbind (keys-sheet))))
     (should (null (drgnx-config-get 'keys :layers)))))
 
+(defun drgnx-settings-migrate-test--stayed-notice ()
+  "The last `settings-stayed' notice recorded, or nil."
+  (cl-find 'settings-stayed drgnx-settings-migrate-test--notices :key (lambda (n) (plist-get (nthcdr 3 n) :id))))
+
+(ert-deftest drgnx-settings-migrate/a-stayed-file-is-never-silent-and-folds-in-once-fixed ()
+  ;; With the areas out of the shim (Tasks 15, 16) a file that stayed is no longer read: a notice at every start and
+  ;; the doctor name it, and Migrate Old Files adds its values to settings.el once it reads cleanly.
+  (drgnx-settings-migrate-test--with
+    (let ((drgnx-settings-shim-areas nil)
+          (session (drgnx-settings-migrate-test--file 'session)))
+      (drgnx-settings-migrate-test--put 'keys)
+      (drgnx-settings-migrate-test--write session "(:version 1 :keep-running t :later 1)\n")
+      (should (eq (plist-get (drgnx-settings-migrate-maybe) :status) 'migrated))
+      (let ((stayed (drgnx-settings-migrate-stayed)))
+        (should (equal (mapcar #'car stayed) (list session)))
+        (should (string-match-p "\\`keys this drgnx does not know: :later" (cadr (car stayed))))
+        (let ((n (drgnx-settings-migrate-test--stayed-notice)))
+          (should (equal (list (nth 0 n) (nth 1 n)) '(config warn)))
+          (should (string-search "session.eld" (nth 2 n)))
+          (should (eq (plist-get (nthcdr 3 n) :command) 'settings-migrate-old-files)))
+        (let ((row (drgnx-doctor--settings-leftovers-check nil stayed)))
+          (should (eq (car row) 'warn))
+          (should (string-search "no longer read: session.eld (keys this drgnx does not know" (cadr row)))))
+      ;; the next start says it again
+      (setq drgnx-settings-migrate-test--notices nil)
+      (should-not (drgnx-settings-migrate-maybe))
+      (should (drgnx-settings-migrate-test--stayed-notice))
+      ;; still wrong: nothing to fold
+      (should-error (drgnx-settings-migrate-old-files) :type 'user-error)
+      (should (file-exists-p session))
+      ;; fixed: its value goes into settings.el and it moves away
+      (drgnx-settings-migrate-test--write session "(:version 1 :keep-running t)\n")
+      (let ((r (drgnx-settings-migrate-old-files)))
+        (should (eq (plist-get r :status) 'folded))
+        (should (equal (plist-get r :added) '(drgnx-session-keep-running)))
+        (should (equal (plist-get r :files) (list session))))
+      (should-not (file-exists-p session))
+      (should (equal (drgnx-settings-entry-value
+                      (cl-find 'drgnx-session-keep-running (drgnx-settings-doc-entries (drgnx-settings-migrate-test--doc))
+                               :key #'drgnx-settings-entry-var))
+                     t))
+      (should-not (drgnx-settings-migrate-stayed)))))
+
 (ert-deftest drgnx-settings-migrate/safe-mode-reads-keys-after-migration ()
   (drgnx-settings-migrate-test--with
     (drgnx-settings-migrate-test--put 'keys)

@@ -190,7 +190,7 @@ is not loaded yet gets a plain buffer-local value.
 - **The runtime.** The settings are marked as the ones the hub reads. Until the hub reads `settings.el` itself, the
   hub's Lisp half applies your entries when it starts.
 - **An old file that stayed.** An `agents.eld` or `ai.eld` the migration left because it had a mistake is no longer
-  read. The Migration Report lists it; write its entries into `settings.el` (or fix the file and move it away).
+  read; a notice and the doctor say so (see [Moving from the old files](#moving-from-the-old-files)).
 
 ## Workspace settings
 
@@ -282,13 +282,17 @@ This happens only while `settings.el` does not exist. A start after a crash betw
 values. One that differs stays.
 
 - **A file with a mistake is not moved.** Nor is one with keys this drgnx does not know, or one a newer drgnx wrote.
-  It stays where it is and drgnx still reads it as before; the report says why it stayed.
+  It stays where it is, and the report says why. drgnx no longer reads it (its settings live in `settings.el` now),
+  so you are told: a notice at every start and the doctor's `settings-migrated` line name the file and why, until it
+  is fixed and folded in.
 - **`keys.eld`'s `:layers nil`** means "drgnx's default stack", so it gets no entry.
 - **Settings: Migration Report** shows each old key and its setting at its line in `settings.el`, what stayed and
   why, and the `custom.el` entries Settings could hold (Tidy moves those). The report is kept in
   `<state>/settings-migration.eld`.
-- **Settings: Migrate Old Files** runs the move now, for example after you fixed a file that stayed. It runs only
-  while `settings.el` does not exist.
+- **Settings: Migrate Old Files** runs the move now while `settings.el` does not exist. Once it exists, it takes a
+  file that stayed and that you fixed: its values go into `settings.el` for the settings that have no entry there yet
+  (an entry you have is never changed), and the file moves away when `settings.el` holds all of them. Comments in the
+  old file stay in the moved copy.
 - **Two machines.** Move on one machine first: commit and push your config dir before you start drgnx on another
   machine, and pull there first ([second-machine.md](second-machine.md#moving-to-settingsel-on-two-machines)).
 - **Untouched:** `config.el`, `custom.el`, `projects.eld`, `layouts.eld`, `packages.eld`, the lock and the state
@@ -316,8 +320,8 @@ These four read and write their settings directly now:
 - These settings are global. A workspace file may not set the keys, the modules or the theme (they run code or change
   what drgnx does everywhere), and an agent may not change them. A project's `.drgnx/large-files.eld` still lowers the
   two large-file sizes.
-- An old file that stayed because it had a mistake is **not read any more** for these four: fix it, then
-  **Settings: Migrate Old Files** (while `settings.el` does not exist), or set the values in `settings.el`.
+- An old file that stayed because it had a mistake is **not read any more** for these four (a notice and the doctor
+  name it): fix it, then **Settings: Migrate Old Files**, or set the values in `settings.el`.
 - Safe mode applies your keys from `settings.el` (drgnx's own entries), as before.
 
 ## Safe mode and Turn Off Package Settings

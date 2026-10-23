@@ -10,9 +10,11 @@
 ;;   settings.el is written once, read back and compared with the old files' values.  Any difference removes it again
 ;;   and moves nothing.  Then each old file is copied to <state>/backups/migrated-DATE/ and moved to
 ;;   <config>/migrated-DATE/, and the report goes to <state>/settings-migration.eld.  A file with a mistake (or keys
-;;   this drgnx does not know, or a newer format) stays where it is and is still read.
+;;   this drgnx does not know, or a newer format) stays where it is.
 ;; - The shim: while an area is in `drgnx-settings-shim-areas', `drgnx-config-get' of its old name gives the plist
-;;   the settings hold (`drgnx-settings-migrate-shim').  Tasks 15 and 16 take the areas out.
+;;   the settings hold (`drgnx-settings-migrate-shim').  Tasks 15 and 16 took every area out, so a file that stayed is
+;;   no longer read: `drgnx-settings-migrate-stayed' names it, in a notice condition at every start and in the doctor's
+;;   check, and Migrate Old Files adds its values to settings.el once it reads cleanly.
 ;; - Settings: Migration Report, Migrate Old Files and Move Old Files Away; the doctor's `settings-migrated' check.
 ;; Nothing here prompts; the start-up call never signals.
 
@@ -27,6 +29,9 @@
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-lisp-index-file "drgnx-lisp-index" (file))
 (declare-function drgnx-large-files--define-user-config "drgnx-large-files" ())
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+(declare-function drgnx-settings-area-has-entry-p "drgnx-settings-area" (var))
+(declare-function drgnx-settings-area-set "drgnx-settings-area" (changes))
 
 (defconst drgnx-settings-migrate-names '(agents ai keys modules large-files session)
   "The config files that fold into settings.el (design §5.4), in the order the migration reads them.
@@ -418,12 +423,13 @@ nil when there was nothing to do.  Never signals and never prompts: a failure is
 is still read."
   (condition-case err
       (let ((inhibit-interaction t))
-        (unless (drgnx-settings-migrate--settings-there-p)
-          (when-let* ((report (drgnx-settings-migrate--run)))
-            (when (memq (plist-get report :status) '(migrated differs))
-              (drgnx-settings-migrate--save-report report)
-              (drgnx-settings-migrate--say report))
-            report)))
+        (prog1 (unless (drgnx-settings-migrate--settings-there-p)
+                 (when-let* ((report (drgnx-settings-migrate--run)))
+                   (when (memq (plist-get report :status) '(migrated differs))
+                     (drgnx-settings-migrate--save-report report)
+                     (drgnx-settings-migrate--say report))
+                   report))
+          (drgnx-settings-migrate--say-stayed)))     ; an old file nothing reads any more is never silent
     (error (drgnx-settings-migrate--warn (format "the old settings files were not moved into settings.el: %s"
                                                  (error-message-string err)))
            nil)))
@@ -452,12 +458,12 @@ is still read."
            (dolist (f left) (insert (format "  %s\n" (funcall shown f))))))
         ('differs
          (insert (format "Your old settings files were NOT moved: settings.el, read back, did not hold the same values \
-\(%s).\nsettings.el was removed again and nothing moved; drgnx reads the old files as before. Settings: Migrate Old \
-Files tries again.\n" (plist-get report :why))))
+\(%s).\nsettings.el was removed again and nothing moved. drgnx does not read the old files any more, so their values \
+do not apply until they move: Settings: Migrate Old Files tries again.\n" (plist-get report :why))))
         (_ (insert "Nothing moved.\n")))
       (when-let* ((stayed (plist-get report :stayed)))
-        (insert "\nWhat stayed, and why (each is still read where it is; fix it, then Settings: Migrate Old Files while \
-settings.el does not exist, or set its values in Settings):\n")
+        (insert "\nWhat stayed, and why (it is no longer read: fix it, then Settings: Migrate Old Files adds its values \
+to settings.el; or set its values in Settings):\n")
         (pcase-dolist (`(,file ,why) stayed)
           (insert (format "  %s: %s\n" (funcall shown file) why))))
       (when-let* ((custom (plist-get report :custom)))
@@ -489,22 +495,32 @@ custom.el entries Tidy could move (design §14)."
 
 (defun drgnx-settings-migrate-old-files ()
   "Settings: Migrate Old Files: move agents.eld, ai.eld, keys.eld, modules.eld, large-files.eld and session.eld into
-settings.el now, as the first start does.  Only while settings.el does not exist."
+settings.el now, as the first start does, while settings.el does not exist.  Once it exists, an old file that stayed
+and now reads cleanly gets its values added for the settings settings.el has no entry for, and moves away when
+settings.el holds them all (`drgnx-settings-migrate--fold-stayed'): then (:status folded :added VARS :files MOVED)."
   (interactive)
-  (when (drgnx-settings-migrate--settings-there-p)
-    (user-error "Settings: settings.el exists, so the old files are not moved again (Settings: Move Old Files Away)"))
-  (let ((report (let ((inhibit-interaction t)) (drgnx-settings-migrate--run))))
-    (if (null report) (message "Settings: there are no old settings files to move")
-      (when (memq (plist-get report :status) '(migrated differs))
-        (drgnx-settings-migrate--save-report report)
-        (drgnx-settings-migrate--say report)
-        (when (called-interactively-p 'any) (call-interactively #'drgnx-settings-migration-report)))
-      (pcase (plist-get report :status)
-        ('nothing (message "Settings: nothing moved: %s"
-                           (mapconcat (lambda (s) (format "%s (%s)" (file-name-nondirectory (car s)) (cadr s)))
-                                      (plist-get report :stayed) "; ")))
-        ('exists (message "Settings: settings.el appeared meanwhile; nothing moved"))))
-    report))
+  (if (drgnx-settings-migrate--settings-there-p)
+      (pcase-let ((`(,added . ,moved) (drgnx-settings-migrate--fold-stayed)))
+        (unless (or added moved)
+          (user-error "Settings: settings.el exists, and no old file that stayed reads cleanly now (Settings: \
+Migration Report says why)"))
+        (drgnx-settings-migrate--say-stayed)
+        (message "Settings: %d setting%s added to settings.el; %d old file%s moved away"
+                 (length added) (if (= (length added) 1) "" "s") (length moved) (if (= (length moved) 1) "" "s"))
+        (list :status 'folded :added added :files moved))
+    (let ((report (let ((inhibit-interaction t)) (drgnx-settings-migrate--run))))
+      (if (null report) (message "Settings: there are no old settings files to move")
+        (when (memq (plist-get report :status) '(migrated differs))
+          (drgnx-settings-migrate--save-report report)
+          (drgnx-settings-migrate--say report)
+          (drgnx-settings-migrate--say-stayed)
+          (when (called-interactively-p 'any) (call-interactively #'drgnx-settings-migration-report)))
+        (pcase (plist-get report :status)
+          ('nothing (message "Settings: nothing moved: %s"
+                             (mapconcat (lambda (s) (format "%s (%s)" (file-name-nondirectory (car s)) (cadr s)))
+                                        (plist-get report :stayed) "; ")))
+          ('exists (message "Settings: settings.el appeared meanwhile; nothing moved"))))
+      report)))
 
 (defun drgnx-settings-migrate-leftovers ()
   "The old settings files still in the config dir whose values settings.el holds already (a crash between the
@@ -520,6 +536,69 @@ write and the move, or a copy that came back): their paths.  nil while settings.
                                (equal (drgnx-settings-migrate--plist name (plist-get old :data))
                                       (drgnx-settings-migrate--assemble name values)))
                      collect (plist-get old :file))))))))
+
+;;;; Old files that stayed
+
+(defun drgnx-settings-migrate--retired-present ()
+  "The old config files there whose area left the shim (`drgnx-settings-shim-areas'): nothing reads them any more."
+  (cl-remove-if (lambda (n) (memq n drgnx-settings-shim-areas)) (drgnx-settings-migrate--present)))
+
+(defun drgnx-settings-migrate-stayed ()
+  "The old settings files that are no longer read and whose values settings.el does not hold, of the areas out of the
+shim: a file the migration left (a mistake, unknown keys, a value that is not data), one that came back changed, or,
+while settings.el is absent (a migration that found a difference), every one.  ((FILE WHY)…).  nil when settings.el
+does not read."
+  (when-let* ((present (drgnx-settings-migrate--retired-present)))
+    (let* ((there (drgnx-settings-migrate--settings-there-p))
+           (doc (and there (drgnx-settings-file-read (drgnx-config-file 'settings) 'drgnx-settings))))
+      (unless (and doc (drgnx-settings-doc-failed doc))
+        (let ((values (and doc (drgnx-settings-migrate--doc-values doc))))
+          (drgnx-settings-migrate--with-defs present
+            (cl-loop for name in present
+                     for old = (drgnx-settings-migrate--old name)
+                     for conv = (and old (not (plist-get old :why)) (drgnx-settings-migrate--convert old))
+                     for why = (and old (or (plist-get old :why) (plist-get conv :why)
+                                            (and (not there) "it was not moved into settings.el (Migration Report)")
+                                            (and (not (equal (drgnx-settings-migrate--plist name (plist-get old :data))
+                                                             (drgnx-settings-migrate--assemble name values)))
+                                                 "settings.el holds other values for some of its keys")))
+                     when why collect (list (plist-get old :file) why))))))))
+
+(defun drgnx-settings-migrate--say-stayed ()
+  "One notice condition naming the old files that are no longer read (`drgnx-settings-migrate-stayed'); none: it
+goes.  Never signals."
+  (condition-case err
+      (let ((stayed (drgnx-settings-migrate-stayed)))
+        (if (null stayed)
+            (when (featurep 'drgnx-notice) (drgnx-notice-clear 'config 'settings-stayed))
+          (require 'drgnx-notice)
+          (drgnx-notify 'config 'warn
+                        (format "%s no longer read: settings.el holds these settings now"
+                                (mapconcat (lambda (s) (file-name-nondirectory (car s))) stayed ", "))
+                        :id 'settings-stayed :life 'condition :command 'settings-migrate-old-files
+                        :detail (mapconcat (lambda (s) (format "%s: %s" (abbreviate-file-name (car s)) (cadr s)))
+                                           stayed "\n")
+                        :fix "Fix the file (Open Config File), then Settings: Migrate Old Files adds its values to \
+settings.el and moves it away")))
+    (error (drgnx-settings-migrate--warn (format "the old files that stayed were not checked: %s"
+                                                 (error-message-string err))))))
+
+(defun drgnx-settings-migrate--fold-stayed ()
+  "Add the values of each old file that stayed and now reads cleanly to settings.el, for the settings it has no
+entry for, then move away the old files settings.el then holds (`drgnx-settings-migrate-move-away').  (ADDED .
+MOVED): the variables written and the files moved.  An entry settings.el has already is never changed: a file whose
+value differs from it stays, and is still named."
+  (require 'drgnx-settings-area)
+  (let ((present (drgnx-settings-migrate--retired-present)) (changes nil))
+    (drgnx-settings-migrate--with-defs present
+      (dolist (name present)
+        (let* ((old (drgnx-settings-migrate--old name))
+               (conv (and old (not (plist-get old :why)) (drgnx-settings-migrate--convert old))))
+          (dolist (e (and conv (not (plist-get conv :why)) (plist-get conv :entries)))
+            (unless (drgnx-settings-area-has-entry-p (car e))
+              (push (cons (car e) (nth 1 e)) changes))))))
+    (cons (and changes (drgnx-settings-area-set (nreverse changes)))
+          (drgnx-settings-migrate-move-away))))
 
 (defun drgnx-settings-migrate-move-away ()
   "Settings: Move Old Files Away: the old settings files settings.el already holds (`drgnx-settings-migrate-leftovers')
