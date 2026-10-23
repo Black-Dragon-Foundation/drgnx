@@ -184,6 +184,16 @@ theme), not from the form being loaded."
           (when (and (symbolp v) (not (keywordp v))) (push v vars)))))
     (delete-dups vars)))
 
+(defun drgnx-settings-prov--index-vars ()
+  "The variables the static index finds your Lisp files set, so a variable set only there is watched too and its
+line is recorded (Move into Settings needs it)."
+  (let (vars)
+    (dolist (f (drgnx-settings-prov--user-files))
+      (dolist (s (plist-get (ignore-errors (drgnx-lisp-index-get f)) :setters))
+        (let ((v (plist-get s :var)))
+          (when (and v (symbolp v) (not (keywordp v)) (not (eq v t))) (push v vars)))))
+    (delete-dups vars)))
+
 (defun drgnx-settings-prov--call-with-load (file body)
   "Run BODY (a function) that loads FILE, recording who sets which variable (`drgnx-settings-prov-with-load')."
   (if drgnx-settings-prov--loading
@@ -192,6 +202,7 @@ theme), not from the form being loaded."
         (progn
           (when (stringp file) (cl-pushnew (file-truename file) drgnx-settings-prov--user-files :test #'equal))
           (mapc #'drgnx-settings-prov-watch (drgnx-settings-prov--managed))
+          (dolist (v (ignore-errors (drgnx-settings-prov--index-vars))) (ignore-errors (drgnx-settings-prov-watch v)))
           (advice-add 'custom-declare-variable :around #'drgnx-settings-prov--declare)
           (advice-add 'custom-theme-recalc-variable :around #'drgnx-settings-prov--recalc)
           (advice-add 'do-after-load-evaluation :around #'drgnx-settings-prov--after-load))

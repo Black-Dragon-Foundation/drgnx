@@ -405,7 +405,7 @@ explains; it never decides what the applier does (that is the winner rule, from 
 `core/drgnx-lisp-index.el` is a static read of your Lisp files (`custom.el`, `config.el`, `drgnx-user-lisp-files`):
 which variable each one sets, on which line. It reads the forms with positions and never evaluates them (`read-eval`
 is off; a file that stops reading gives what was found before the problem). Provenance (Task 11) uses it for the lines
-the dynamic record cannot give, and the Lisp files page (Task 28) and Move (Task 29) are built on it.
+the dynamic record cannot give, and the Lisp files page and Move (Task 28) are built on it.
 
 - `(drgnx-lisp-index-file FILE)` returns `(:setters LIST :findings LIST)`.
   - A setter is `(:var :kind :line :beg :end :top-level :conditional :const-p :value)`. `:kind` is `setq` (each pair
@@ -426,6 +426,71 @@ the dynamic record cannot give, and the Lisp files page (Task 28) and Move (Task
   `drgnx-timer` (key `lisp-index`), never on the main thread at start. `drgnx-init` calls it last, after the live
   watches, and not in safe mode. Tests: `drgnx-lisp-index/*`
   (`test/unit/lisp-index-test.el`).
+
+## The Lisp files page and Move (Task 28)
+
+`core/drgnx-settings-lisp-page.el` and `core/drgnx-settings-move.el`, autoloaded from `core/drgnx-config.el` (they work
+in safe mode and with every module off).
+
+- **The page.** `(drgnx-settings-lisp-page-rows)` gives the rows as data, in load order (early files, custom.el,
+  config.el, `drgnx-user-lisp-files`, files in the config dir those loaded from `load-history`, then settings.el and
+  `drgnx-settings-workspace-files`): `(:file :role :exists :on :early :loaded :seconds :error :parent :settings
+  :findings)`. A setting's `:won` is `won` when `drgnx-settings-explain` is certain and names that file and line,
+  `lost` when it is certain of another source, else `unknown`. `drgnx-settings-lisp-files` draws them (special mode,
+  drawn on the user's action); `drgnx-settings-lisp-page-open` follows the `drgnx-settings-lisp-page-at` property
+  `(FILE . LINE)` of a line; a setting's line also has `drgnx-settings-lisp-page-var`.
+- **Load times and errors.** The loader of your Lisp calls `(drgnx-settings-lisp-page-note-load FILE :seconds S
+  :error MESSAGE :parent FILE)` inside `drgnx-settings-prov-with-load`, where an error's line is the form provenance
+  saw being read. Until a loader calls it the page shows loaded or not (`load-history`) without times.
+- **Move.** `(drgnx-settings-move-plan VAR &optional DIRECTION FILE)` decides everything and writes nothing: a refusal
+  `(:refused REASON :why TEXT)` or a plan holding both files' texts now and after, VAR's settings.el entry before and
+  after, and the value in effect before and after. The checks, in order: the static index finds exactly one setter in
+  your Lisp (`drgnx-settings-prov--user-files`); it is top-level and unconditional (a `use-package :custom` entry
+  need only be unconditional); its value is a constant settings.el can hold; the value in effect is that value, and
+  `drgnx-settings-move--after-into` predicts the same at the next start (a theme over `drgnx` still wins: Customize's
+  saved value, a colour theme; the modules' claims merge as the resolver merges them); provenance is certain of that
+  file and line. The edit of your file is checked by reading both texts as data: one top-level form differs (or is
+  gone), and every other setter stays.
+- **Apply and undo.** `drgnx-settings-move-apply PLAN` takes the Lisp file's drgnx lock, refuses when either file
+  changed since the plan, keeps a backup (`drgnx-file-backup`), writes the entry with the settings writer and then your
+  file with `drgnx-file-write-text` (the entry goes back when that fails), then `drgnx-settings-live-sync`. Move to My
+  Lisp then sets the value with its `setopt` when letting go of the entry changed it. The plan is the undo record
+  (`drgnx-settings-move--undo`, this session's last 20); `drgnx-settings-move-undo` refuses unless your file is
+  exactly what the move wrote and the entry is what it set.
+- Tests: `drgnx-settings-move/*` (`test/unit/settings-move-test.el`), `drgnx-settings-lisp-page/*`
+  (`test/unit/settings-lisp-page-test.el`), each in a child Emacs. Mutation: with the comparison of the value after
+  the move taken out of `drgnx-settings-move--check-value`, `refuses-a-value-change` goes red.
+
+## Your Lisp files: the loader (Task 29)
+
+`core/drgnx-user-lisp.el` (loaded by path from `init/early-init.el`, which is why it requires `drgnx-setting` and
+`drgnx-paths` from its own folder). `drgnx-user-lisp-files` is a `drgnx-defsetting` (`:scope global :workspace never
+:agents never`); its `:apply` is `drgnx-user-lisp--settings-apply`.
+
+- **Loader.** `drgnx-user-lisp-load-all` (after config.el) and the `:apply` both run `drgnx-user-lisp--catch-up`: every
+  listed file that is on, exists and has not loaded this session (this loader's list, or `load-history`) loads, in
+  order, inside `drgnx-settings-prov--call-with-load` (so provenance records its lines) with `user-emacs-directory`
+  bound to `:emacs-dir` for that file only. It then calls `drgnx-settings-lisp-page-note-load` with the seconds and the
+  error, and a failure is a notice (`user-lisp:NAME`). So turning a file on loads it now, and the end-of-init `:apply`
+  pass finds nothing left. Off does nothing until the next start. Safe mode loads none.
+- **Early files.** `drgnx-user-lisp-load-early` reads settings.el as data (and only when the text contains `:early`),
+  loads the `:early t` files that are on without provenance or notices (neither exists yet) and keeps what happened in
+  `drgnx-user-lisp--early-notes`, which `load-all` hands to the page and the notices.
+- **config.el, custom.el.** `drgnx--load-user-config` asks `drgnx-user-lisp-on-p` first: a row for the file with
+  `:on nil` skips it. Its note-load call is the integration's (US-LISP-PAGE-LOADS-1 for those two files).
+- **Add Lisp File.** `drgnx-user-lisp-add-plan FILE` (nothing changes: findings from the static index plus a change
+  to `package-enable-at-startup`, the count of `user-emacs-directory` uses, the early-init.el beside it,
+  `drgnx-user-lisp-bootstraps`), `drgnx-user-lisp-add FILE &key early-init emacs-dir` (writes the setting with
+  `drgnx-settings-area-update`, loads now), and the interactive `drgnx-user-lisp-add-file`. The doctor check
+  `user-lisp-bootstrap` is `info`.
+- **Bisect.** `drgnx-pkg-bisect` adds `drgnx-user-lisp-bisect-files` (listed files that are on, config.el, custom.el)
+  to its candidates; in each copy `drgnx-user-lisp-bisect-put` writes `:on nil` for those out of the round. The result
+  is a module symbol or a file name (a string).
+- **Unwatched setters (US-MOVE-UNWATCHED-1).** `drgnx-settings-prov--call-with-load` also watches the variables the
+  static index finds set in your Lisp files (`drgnx-settings-prov--index-vars`), so a variable only config.el sets has
+  its line recorded and Move into Settings is not refused for "line unknown".
+- Tests: `drgnx-user-lisp/*` (`test/unit/user-lisp-test.el`) and row C15 in
+  `test/unit/settings-compat-lisp-files-test.el`, in child Emacsen.
 
 ## Testing in a child Emacs (Task 5)
 

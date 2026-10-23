@@ -1674,7 +1674,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                empty config dir), keys, sync, onboard, desktop, shell, doctor; asks before
                                keys, desktop and shell (--yes: never the rc line or the desktop entry)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
-       drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
+       drgnx bisect [-- CMD…]  find the module or Lisp file that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR | --refresh]
                                the systemd user unit (printed, or written to DIR; never installed);
                                --refresh points an installed unit at the Emacs drgnx uses
