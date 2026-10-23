@@ -713,6 +713,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes | backend |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes | backend |
 | `cards/settle` | user | `{card: natnum, choice: string}` | `{settled: boolean}` | yes | front |
+| `config/providers` | user | `{providers: [{auth: "bearer" \| "x-api-key" \| "none", base: ProviderUrl, caps: ["chat" \| "fim" \| "embed"], id: Id, kind: "openai" \| "ollama" \| "llamacpp" \| "tei" \| "anthropic", messages: boolean, price?: {input: Usd, output: Usd}}]}` | `{applied: natnum, warnings?: [ProviderWarning]}` | no | front |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes | front |
 | `coord/card-create` | user | `{data?: JsonObject, job?: Id, kind?: string, task?: TaskRef, title?: Text}` | `{id: natnum}` | yes | front |
 | `coord/card-set` | user | `{data?: JsonObject, id: natnum, state?: Status, title?: Text}` | `boolean` | yes | front |
@@ -727,9 +728,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | backend |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes | front |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no | front |
-| `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | backend |
-| `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, task?: TaskRef}` | `{openrouter?: any, token: string, url: string}` | yes | backend |
-| `gateway/unregister` | user | `{token: string}` | `boolean` | yes | backend |
+| `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | front |
+| `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no | front |
+| `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no | front |
+| `gateway/unregister` | user | `{token: string}` | `boolean` | no | front |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | backend |
@@ -753,7 +755,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `restart` | user | `{}` | `boolean` | no | front |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes | front |
 | `shutdown` | user | `{}` | `boolean` | no | front |
-| `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | backend |
+| `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | front |
 | `status` | user, agent, service | `{}` | `HubStatus` | no | front |
 | `subscribe` | user | `{}` | `boolean` | no | front |
 <!-- hub-methods:end -->
