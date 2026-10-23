@@ -448,7 +448,9 @@ the test runner's state, `~` or your drgnx (`test/settings-child.el`; its own te
 `(drgnx-settings-mode-entries MODE)` -> `((VAR . VALUE)…)`) and `drgnx-settings--apply-mode-overrides` sets them from
 `change-major-mode-after-body-hook`, the mode's parents first. A variable's `:set` is called with `buffer-local` as the
 third argument only when it is loaded and its `func-arity` accepts three; otherwise `setq-local`. Never `setopt-local`,
-never a `load`. Each entry runs under `condition-case`: one message per variable per session. The file registers
+never a `load`. Each entry runs under `condition-case`: one message per variable per session. While
+`drgnx-settings-own-only-p` holds (safe mode, Turn Off Package Settings, `DRGNX_PACKAGE_SETTINGS=off`; the applier
+uses the same predicate), only own settings' overrides apply. The file registers
 itself on the hook and on `drgnx-settings-explain-functions` (layer `L1`) when loaded; `core/drgnx.el` requires it
 with the other settings files, so the overrides apply from the first buffer on (rows C12 and C21 check it with only
 `drgnx` loaded).

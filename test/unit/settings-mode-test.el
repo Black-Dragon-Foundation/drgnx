@@ -130,5 +130,23 @@
       (should (= fill-column 33))
       (should (= drgnx-t10-var 3)))))
 
+(ert-deftest drgnx-settings-mode/own-only-in-safe-mode-and-with-package-settings-off ()
+  ;; US-LANG-SAFE-MODE-1: safe mode and Turn Off Package Settings apply only drgnx's own settings' overrides
+  (drgnx-t10-with drgnx-t10-text
+    (let ((drgnx-setting--names (cons 'drgnx-t10-var drgnx-setting--names)))   ; drgnx-t10-var plays an own setting
+      (let ((process-environment (cons "DRGNX_SAFE=1" process-environment)))
+        (with-temp-buffer
+          (drgnx-t10-mode)
+          (should (= drgnx-t10-var 7))
+          (should (= fill-column (default-value 'fill-column)))))
+      (let ((drgnx-settings-package-settings-off t))
+        (with-temp-buffer
+          (drgnx-t10-mode)
+          (should (= drgnx-t10-var 7))
+          (should (= fill-column (default-value 'fill-column)))))
+      (with-temp-buffer                 ; turned on again: every override
+        (drgnx-t10-mode)
+        (should (= fill-column 33))))))
+
 (provide 'settings-mode-test)
 ;;; settings-mode-test.el ends here

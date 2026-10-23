@@ -36,6 +36,13 @@
   "Non-nil while Settings: Turn Off Package Settings holds (this session): only drgnx's own entries of settings.el
 apply.  The environment variable DRGNX_PACKAGE_SETTINGS=off (drgnx bisect's step) has the same effect.")
 
+(defun drgnx-settings-own-only-p ()
+  "Non-nil while only drgnx's own entries of settings.el apply (design §4.2): safe mode (DRGNX_SAFE), Settings: Turn
+Off Package Settings (`drgnx-settings-package-settings-off') or DRGNX_PACKAGE_SETTINGS=off.  The global entries and
+the language overrides both follow it."
+  (or (and (getenv "DRGNX_SAFE") t) drgnx-settings-package-settings-off
+      (equal (getenv "DRGNX_PACKAGE_SETTINGS") "off")))
+
 (defvar drgnx-settings-apply-problems nil
   "The problems of the last apply of settings.el, in file order: plists (:file :line :column :text), with :var for
 an entry that did not apply as written.  A failed file is the config layer's notice, not one of these.")
@@ -275,14 +282,13 @@ Called at start after the packages are activated and before custom.el loads, so 
 and your Lisp come later and win.  Each entry is checked (`drgnx-setting-check'); one that fails falls back alone,
 by its `:on-error': `strict' to its default, else to the value this session last applied for it, else to its
 value in settings.el's last good copy, with one problem naming its line.  When the file does not read, every
-setting falls back the same way.  Each value goes through `drgnx-settings-push'.  While package settings are off
-\(`drgnx-settings-package-settings-off', or DRGNX_PACKAGE_SETTINGS=off), only drgnx's own entries apply.
+setting falls back the same way.  Each value goes through `drgnx-settings-push'.  In safe mode and while package
+settings are off (`drgnx-settings-own-only-p'), only drgnx's own entries apply.
 Returns an alist (VAR . RESULT) (see `drgnx-settings-apply--run'), or nil when the apply failed as a whole (one
 message).  Never signals and never prompts: the start-up call sites have no `condition-case' of their own."
   (condition-case err
       (let ((inhibit-interaction t))
-        (drgnx-settings-apply--run (or owned-only drgnx-settings-package-settings-off
-                                       (equal (getenv "DRGNX_PACKAGE_SETTINGS") "off"))))
+        (drgnx-settings-apply--run (or owned-only (drgnx-settings-own-only-p))))
     (error (condition-case nil
                (drgnx-settings--say (list (list :file "settings.el" :text (format "settings.el was not applied: %s"
                                                                                   (error-message-string err)))))

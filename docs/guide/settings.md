@@ -332,6 +332,8 @@ drgnx's own settings (keys, agents, the sandbox, trust, the modules you turned o
   value stays. **Settings: Turn On Package Settings** applies them again now, by the same rule as a change in Settings:
   where your Lisp or Customize set a variable since, their value stays. Both act at once; nothing restarts. Off lasts
   until you turn it on, or until the next start.
+- **Per-language values** follow the same rule: in safe mode and while package settings are off, a buffer opened gets
+  only drgnx's own settings from its `(:mode …)` sections. A buffer already open keeps what it got.
 - **`drgnx bisect`**: when a problem still shows with every module off, it tries once more with package settings off
   and tells you when `settings.el`'s values are the cause.
 - Loading `settings.el` by mistake (`emacs -Q -l settings.el`) changes nothing: it stops at its first word,

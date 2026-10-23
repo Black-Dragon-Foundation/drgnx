@@ -13,6 +13,8 @@
 (require 'drgnx-config)
 (require 'drgnx-file)
 (require 'drgnx-settings-file)
+(require 'drgnx-setting)
+(require 'drgnx-settings-apply)
 
 (defvar drgnx-settings-explain-functions)
 
@@ -70,13 +72,17 @@ arguments, else `setq-local'.  Never `setopt-local'; nothing is loaded."
       (message "%s" text))))
 
 (defun drgnx-settings-mode--apply-mode-overrides ()
-  "Set the current buffer's language overrides.  Run on `change-major-mode-after-body-hook'; never signals."
+  "Set the current buffer's language overrides.  Run on `change-major-mode-after-body-hook'; never signals.
+In safe mode and while package settings are off (`drgnx-settings-own-only-p'), only drgnx's own settings' overrides
+apply; a buffer opened before Turn Off keeps the values it got."
   (condition-case err
-      (dolist (mode (drgnx-settings-mode--modes))
-        (dolist (item (cdr (assq mode (drgnx-settings-mode--table))))
-          (condition-case err
-              (drgnx-settings-mode--set (car item) (copy-tree (cadr item)))
-            (error (drgnx-settings-mode--problem (car item) err)))))
+      (let ((own-only (drgnx-settings-own-only-p)))
+        (dolist (mode (drgnx-settings-mode--modes))
+          (dolist (item (cdr (assq mode (drgnx-settings-mode--table))))
+            (when (or (not own-only) (drgnx-setting-own-p (car item)))
+              (condition-case err
+                  (drgnx-settings-mode--set (car item) (copy-tree (cadr item)))
+                (error (drgnx-settings-mode--problem (car item) err)))))))
     (error (drgnx-settings-mode--problem 'settings.el err))))
 
 (defalias 'drgnx-settings--apply-mode-overrides #'drgnx-settings-mode--apply-mode-overrides)
