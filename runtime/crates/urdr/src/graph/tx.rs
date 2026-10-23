@@ -1,10 +1,9 @@
 //! The transaction a write runs in: its `tx` row's metadata and the savepoint it writes through (Task 1; storage
 //! §5.2 `tx`, §7).
-#![allow(unused_variables, unused_imports, dead_code)] // Task 0's skeleton: Task 1 removes this line.
 
 use std::sync::Arc;
 
-use rusqlite::{Connection, Savepoint};
+use rusqlite::{Connection, Savepoint, params};
 use serde::{Deserialize, Serialize};
 
 use super::guard::Guard;
@@ -134,12 +133,136 @@ impl<'a> Tx<'a> {
     /// Dropping it without a commit rolls the savepoint back, as the writer does on an error.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn for_test(conn: &'a mut Connection, meta: TxMeta, guard: Arc<Guard>) -> Tx<'a> {
-        todo!("Task 1")
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        Tx::begin(conn, meta, at, guard)
+            .expect("Tx::for_test: the savepoint and the tx row (does CONN hold GRAPH_DDL?)")
     }
 
     /// Release the savepoint (tests built on [`Tx::for_test`] keep what they wrote).
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn commit_for_test(self) -> rusqlite::Result<()> {
-        todo!("Task 1")
+        self.release()
+    }
+
+    /// Open the request's savepoint on CONN and insert its `tx` row from META at AT. An error rolls the savepoint
+    /// back (its `Drop`), so nothing of the request stays.
+    pub(super) fn begin(
+        conn: &'a mut Connection,
+        meta: TxMeta,
+        at: f64,
+        guard: Arc<Guard>,
+    ) -> rusqlite::Result<Tx<'a>> {
+        let sp = Savepoint::with_name(conn, SAVEPOINT)?;
+        sp.execute(
+            "insert into tx (at, actor, class, session, profile, job, project, tool, req, state, reverts, imported, \
+             note) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                at,
+                meta.actor,
+                meta.class.as_str(),
+                meta.session,
+                meta.profile,
+                meta.job,
+                meta.project,
+                meta.tool,
+                meta.req,
+                meta.state.as_str(),
+                meta.reverts,
+                meta.imported,
+                meta.note,
+            ],
+        )?;
+        let id = sp.last_insert_rowid();
+        Ok(Tx {
+            id,
+            at,
+            meta,
+            guard,
+            sp,
+        })
+    }
+
+    /// Release the savepoint: what the request wrote joins the batch's transaction. Dropping a `Tx` instead rolls
+    /// the savepoint back (`ROLLBACK TO`, then `RELEASE`), leaving the batch's other requests as they were.
+    pub(super) fn release(self) -> rusqlite::Result<()> {
+        self.sp.commit()
+    }
+}
+
+/// The savepoint every request runs in (nested in the batch's `BEGIN IMMEDIATE`).
+const SAVEPOINT: &str = "urdr_req";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::schema::GRAPH_DDL;
+
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(GRAPH_DDL).unwrap();
+        c
+    }
+
+    fn txs(c: &Connection) -> i64 {
+        c.query_row("select count(*) from tx", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn for_test_keeps_only_what_is_committed() {
+        let mut c = db();
+        let mut meta = TxMeta::new("agent:s1", Class::Agent, "mcp:task_write/create");
+        meta.req = Some("r-1".into());
+        meta.note = Some("why".into());
+        {
+            let tx = Tx::for_test(&mut c, meta.clone(), Arc::default());
+            assert!(tx.id() > 0);
+            assert!(tx.at() > 0.0);
+            assert_eq!(tx.meta(), &meta);
+            // Dropped without a commit: rolled back.
+        }
+        assert_eq!(txs(&c), 0);
+        let tx = Tx::for_test(&mut c, meta, Arc::default());
+        let id = tx.id();
+        tx.commit_for_test().unwrap();
+        let row: (
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            i64,
+            Option<String>,
+        ) = c
+            .query_row(
+                "select actor, class, tool, req, state, imported, note from tx where id = ?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                "agent:s1".into(),
+                "agent".into(),
+                "mcp:task_write/create".into(),
+                Some("r-1".into()),
+                "committed".into(),
+                0,
+                Some("why".into())
+            )
+        );
     }
 }
