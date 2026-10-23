@@ -1,0 +1,1 @@
+with recursive c(i) as (select 1 union all select i + 1 from c) select count(*) from c

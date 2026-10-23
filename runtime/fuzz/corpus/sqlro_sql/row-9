@@ -1,0 +1,1 @@
+select updated_tx, (select count(*) from tx) from entity where id = ?1
