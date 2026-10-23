@@ -183,7 +183,8 @@ is not loaded yet gets a plain buffer-local value.
   gives the shipped default for them, never a half-read value. The AI settings keep their last good value instead.
 - **Never for agents or workspaces.** An agent cannot change them (`:agents never`), a workspace file or a
   `.dir-locals.el` cannot set the agents settings or the providers, and drgnx only ever reads their global value, so a
-  buffer-local `setq-local` never reaches a profile or a provider.
+  buffer-local `setq-local` never reaches a profile or a provider. The same holds for the sandbox's
+  `drgnx-sandbox-memory-max`, `drgnx-sandbox-secret-files` and `drgnx-sandbox-proxy-pinned-addresses`.
 - **The shipped data.** The presets, the default roles and the built-in profiles are data in `settings/runtime-defaults.el`
   in the checkout, with the strict defaults. You do not edit that file; to change a preset, put a provider of the same id
   in `drgnx-ai-providers`, and to change a built-in profile, copy it into `drgnx-agents-profiles`.

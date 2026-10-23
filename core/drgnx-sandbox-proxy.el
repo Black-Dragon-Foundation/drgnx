@@ -29,16 +29,17 @@
 (require 'subr-x)
 (require 'drgnx-timer)
 (require 'drgnx-guard)
+(require 'drgnx-setting)
 
 (declare-function puny-encode-domain "puny" (domain))
 (defvar drgnx-dir)
 
-(defcustom drgnx-sandbox-proxy-pinned-addresses nil
+(drgnx-defsetting drgnx-sandbox-proxy-pinned-addresses nil
   "Names the job proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4 or
 IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
 test's local upstream); a name resolved through DNS never does.  Pinning only resolves: the name must still be on the
 job's allowlist."
-  :type '(alist :key-type string :value-type string) :group 'drgnx)
+  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (defvar drgnx-sandbox-proxy-denied-functions nil
   "Called with (JOB HOST-PORT) for each target a job's proxy refused because it is not on the allowlist: once per

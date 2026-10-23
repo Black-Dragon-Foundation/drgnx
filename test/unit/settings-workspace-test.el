@@ -172,6 +172,25 @@ fixture settings; the buffers it opened are killed after."
       (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(4 5)))
       (should (cl-every (lambda (x) (string-match-p "never set by a workspace" (plist-get x :text))) p)))))
 
+(ert-deftest drgnx-settings-workspace/w1-refuses-the-sandbox-settings ()
+  ;; US-WORKSPACE-NEVER-1: a repository's .drgnx/settings.el never sets the sandbox's secrets, cap or pinned names
+  (require 'drgnx-sandbox)
+  (require 'drgnx-sandbox-proxy)
+  (let ((vars '(drgnx-sandbox-memory-max drgnx-sandbox-proxy-pinned-addresses drgnx-sandbox-secret-files)))
+    (dolist (v vars)
+      (should (equal (mapcar (lambda (k) (plist-get (drgnx-setting-meta v) k)) '(:scope :workspace :agents))
+                     '(global never never))))
+    (drgnx-swt--with
+      (drgnx-swt--shared (concat " (drgnx-sandbox-memory-max nil)\n"
+                                 " (drgnx-sandbox-proxy-pinned-addresses ((\"x.test\" . \"127.0.0.1\")))\n"
+                                 " (drgnx-sandbox-secret-files nil)\n (fill-column 81)"))
+      (drgnx-swt--in "a.txt"
+        (dolist (v vars) (should-not (local-variable-p v)))
+        (should (equal drgnx-sandbox-memory-max "4G"))
+        (should (= fill-column 81)))
+      (let ((p (drgnx-settings-workspace-problems (expand-file-name ".drgnx/settings.el" drgnx-swt--root))))
+        (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(3 4 5)))))))
+
 (ert-deftest drgnx-settings-workspace/slug-clash-gets-2 ()
   (drgnx-swt--with
     (let ((a (expand-file-name "a/proj/" drgnx-test-config-root))

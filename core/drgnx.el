@@ -39,6 +39,8 @@
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-mode)            ; language overrides (L1): on change-major-mode-after-body-hook once loaded
 (require 'drgnx-user-lisp)
+(require 'drgnx-settings-workspace)       ; workspace layers W1, W2: `drgnx-settings-workspace-enable' runs at load,
+                                        ; so the first file visited (before `drgnx-init' too) gets them
 (require 'drgnx-settings-live)
 (require 'drgnx-lisp-index)
 

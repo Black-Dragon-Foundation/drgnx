@@ -16,6 +16,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-guard)
 (require 'drgnx-timer)
+(require 'drgnx-setting)
 
 (declare-function drgnx-hub-socket "drgnx-hub-client" ())
 (declare-function drgnx-sandbox-sbpl "drgnx-sandbox-macos" (spec))
@@ -39,19 +40,19 @@ link inside where the host's PATH is a link (/bin → usr/bin on a merged /usr),
   '(("bwrap" . "/usr/bin/bwrap") ("sandbox-exec" . "/usr/bin/sandbox-exec") ("systemd-run" . "/usr/bin/systemd-run"))
   "Where each sandbox program is looked for first, before `exec-path'.")
 
-(defcustom drgnx-sandbox-memory-max "4G"
+(drgnx-defsetting drgnx-sandbox-memory-max "4G"
   "The memory cap of each sandboxed agent, the `:memory-max' of a spec that does not give one: a systemd size (4G,
 512M, 50%) or nil for none.  It applies where a systemd user manager answers (`drgnx-sandbox-memory-prefix').  An
 operational guard, so that one agent's build cannot run the session out of memory; not a security boundary."
-  :type '(choice (const :tag "No cap" nil) string) :group 'drgnx)
+  :type '(choice (const :tag "No cap" nil) string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
-(defcustom drgnx-sandbox-secret-files
+(drgnx-defsetting drgnx-sandbox-secret-files
   '(".npmrc" "etc/npmrc" ".yarnrc" ".yarnrc.yml" ".pypirc" ".netrc" ".git-credentials" ".env" "credentials"
     "credentials.toml" "credentials.json" "auth.json")
   "Where package managers keep tokens, relative to a toolchain root: each that exists inside a root of
 `drgnx-sandbox-toolchain-roots' is hidden in the sandbox (`drgnx-sandbox-toolchain-hide').  npm's global config is
 PREFIX/etc/npmrc."
-  :type '(repeat string) :group 'drgnx)
+  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (defvar drgnx-sandbox--programs nil
   "Program name → its checked absolute path, or nil when there is none (`drgnx-sandbox-program'), cached until
