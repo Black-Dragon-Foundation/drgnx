@@ -247,6 +247,7 @@ with BODY."
           ;; a download of $M: FAKE_PULL_FAIL names the model that fails
           (pull "echo \"pulling $M\"; if [ \"$M\" = \"$FAKE_PULL_FAIL\" ]; then echo 'Error: max retries exceeded'; exit 1; fi; echo success"))
      (ignore url)
+     (drgnx-test-runtime-settings--reset)          ; the roles a test sets start from the defaults, and go after
      (unwind-protect
          (progn
            (make-directory bin t) (make-directory tpl t) (make-directory (concat root "home") t) (make-directory (concat root "config") t)
@@ -283,6 +284,7 @@ with BODY."
            (drgnx-ai-onboard-test--script (concat bin "fake-serve") (concat (funcall log-line "fake-serve") "exec sleep 30\n"))
            (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
              ,@body))
+       (drgnx-test-runtime-settings--forget)
        (drgnx-ai-onboard-test--stop-jobs)
        (let ((pid (string-to-number (string-trim (drgnx-ai-onboard-test--slurp (concat root "mock.pid"))))))
          (when (and (> pid 0) (process-attributes pid)) (signal-process pid 'SIGTERM)))

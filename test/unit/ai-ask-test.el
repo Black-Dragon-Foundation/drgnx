@@ -30,8 +30,11 @@ provider `o' served by a mock answering ANSWER, its LOG."
                     (current-buffer)))
            (setq mock (drgnx-ai-test-mock-llm nil script log)
                  port (process-get mock :port))
-           (setq drgnx-ai-providers `((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                 drgnx-ai-roles '((chat (o . "m"))))
+           ;; through settings.el, as the user's own: a `setq' would be your Lisp, which a later choice never overrides
+           (drgnx-test-runtime-settings-put
+            (format "(drgnx-ai-providers ((o :name \"O\" :kind ollama :url %S :caps (chat fim))))"
+                    (format "http://127.0.0.1:%d" port))
+            "(drgnx-ai-roles ((chat (o . \"m\"))))")
            ,@body)
        (drgnx-test-runtime-settings--forget)
        (when mock (delete-process mock))

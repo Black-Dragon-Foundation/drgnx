@@ -54,8 +54,10 @@ that does not load is said, and the colours stay."
              (not (equal custom-enabled-themes (list drgnx-look-theme)))
              (memq drgnx-look-theme (custom-available-themes)))
     (condition-case e (drgnx-look--load drgnx-look-theme)
-      (error (message "drgnx: the colour theme %s does not load (%s); Color Theme picks another"
-                      drgnx-look-theme (error-message-string e))))))
+      (error (require 'drgnx-notice)
+             (drgnx-notify 'config 'warn (format "the colour theme %s does not load (%s); Color Theme picks another"
+                                                 drgnx-look-theme (error-message-string e))
+                           :id 'look-theme :command 'preferences-theme)))))
 
 (defun drgnx-look-load-theme (theme)
   "Make THEME the only theme and remember it (`drgnx-look-theme', in settings.el).  A settings.el with a mistake
@@ -82,6 +84,7 @@ refuses (`drgnx-settings-refused') before the theme changes."
 ;;;; Zen
 
 (defvar drgnx-look-zen-width 100 "Text width in zen mode, in columns.")
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-wb-area-window "drgnx-area")
 (declare-function drgnx-wb-area-hide "drgnx-area")
 (declare-function drgnx-wb-area-show "drgnx-area")
