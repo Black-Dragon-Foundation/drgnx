@@ -136,7 +136,79 @@ mutant is caught or times out, but for these equivalent ones, which no input can
 Floats are compared by value on the Rust side and in `drgnx-huginn/differential-fresh-seed`: any NaN equals any NaN,
 `-0.0` differs from `0.0`.
 
-## The writer (Task 6)
+## The writer
+
+`core/drgnx-settings-file.el` reads and writes settings files (design §5.2, §6); its tests are
+`test/unit/settings-file-test.el` (`drgnx-settings-file/`).
+
+**Reading.** `(drgnx-settings-file-parse TEXT HEAD)` and `(drgnx-settings-file-read FILE HEAD &key max-bytes)` give a
+`drgnx-settings-doc` (`file head meta entries problems failed text stamp`), HEAD `drgnx-settings` or
+`drgnx-workspace-settings`. Each entry is a `drgnx-settings-entry` (`var value merge scope beg end line`): `scope` is
+a scope path (`nil`, `((:mode . M))`, `((:dir . "D/"))`, `((:dir . "D/") (:mode . M))`), `beg`/`end` are positions in
+a buffer holding `text` from its start, and an `(:eval FORM…)` section is an entry of var `:eval`. The rules are
+`huginn`'s (`form.rs`, above), so both readers agree on every file:
+
+- The text goes through `drgnx-file--parse` first (the data subset). Then the form must be `(HEAD :version 1 …)`:
+  a syntax mistake, a wrong head, no `:version` or one other than 1 (a higher one: "written by a newer drgnx"), a
+  file with no form at all (empty, or only comments) or over the limit (1 MiB; 64 KiB in a `.drgnx` folder) makes
+  the doc `failed`, with one problem `(:file :text :line :column)`.
+- A malformed entry, a section in the wrong file or place, an unknown meta key and a second entry for one variable in
+  one scope path are problems of their own (`:beg`/`:end` too; a duplicate's names `:var` and `:scope`), and the rest
+  stands. One top-level `quote` or `function` on a value is dropped.
+- Positions come from reading the form element by element (`drgnx-settings-file--elements`), after the token check.
+  A dotted tail that is a list joins its list, as `read` reads it; any other dotted tail in a settings list fails
+  the file (huginn would read `(a . 'b)` as `(a quote b)`; no settings file needs it).
+
+`(drgnx-settings-file-state FILE HEAD)` gives `(:doc :last-good :problem)`. `settings.el` is the config file
+`settings` of the new shape `settings` (`drgnx-config-define … :shape 'settings :schema '(settings drgnx-settings)`):
+the config layer reads it (head and `:version` only, by the same rules), says its mistake once and keeps its last
+good copy (`drgnx-config-last-good-file`); `:last-good` is that copy read as a doc (its `file` is the copy). While
+the file reads, the copy holds the same text: a per-setting fallback for an entry that fails its type (Task 8) needs
+more than this copy. A file that is no config file (a workspace file) has no last good copy. `drgnx-config-update`
+refuses a settings file (an `error`): only this writer writes it.
+
+**Writing.** `(drgnx-settings-file-put FILE HEAD SCOPE VAR VALUE &key merge)`, `(drgnx-settings-file-remove FILE
+HEAD SCOPE VAR)` and `(drgnx-settings-file-sort FILE HEAD)` (the command **Settings: Sort File**, registered with the
+config commands) return the doc after. Each is one `drgnx-file-update` (the lock, waiting
+`drgnx-settings-file-lock-timeout` seconds; a fresh read under it), and each refuses with `drgnx-settings-refused`
+(a `user-error` and a `file-error`), leaving the file as it was: a failed or newer file, a modified buffer visiting
+it, a value that is not plain data, a new text over the limit, a busy lock.
+
+- **Text spans, never a re-print.** A changed entry's span (`beg`..`end`) is replaced; its comments around it stay. A
+  new entry goes before the first item of its container whose sort key is greater (plain entries by name, then
+  sections by kind `:mode`, `:dir`, `:eval` and name), above that item's comment lines; with none, after the last
+  element, past the comment on its line. Missing sections are made around it. A removed entry takes its block (the
+  `;` lines directly above it and the comment at the end of its line) and, when it has its lines to itself, those
+  lines; a section it leaves empty goes too. A duplicate of the variable goes on every put and remove of it. `merge`
+  given sets `:merge` (nil: none); left out, the entry keeps its own.
+- **Sort File** permutes each container's blocks into the slots the blocks held, so the text between items (blank
+  lines, loose comments) stays where it was; a block that ends in a comment moved before a close paren gets a newline.
+  It repeats until no container is out of order.
+- **The read-back check.** The new text is parsed again before the rename: it must not fail, its meta must be the
+  same, the changed entry must read as the new value, every other entry must read as before (in order, for put and
+  remove; as a set, for sort), and it may hold no new problem. Else nothing is written ("does not read back as
+  meant"). `drgnx-file-write` then checks the bytes on disk read back as that data.
+- **A visiting buffer.** Modified: the write refuses ("settings.el has unsaved edits in a buffer; save or revert it
+  first"). Unmodified: reverted after the write, with `inhibit-interaction` t.
+- **A new file** starts with design §5.2's three header lines (`drgnx-settings-file-global-header`), or for a
+  workspace file one line naming its folder (a `.drgnx/settings.el`: the repository's folder name, never a path),
+  then `(HEAD\n :version 1)`. A file with only comments keeps them, with the form after them.
+- `drgnx-settings-file-written-functions` run with `(FILE BEFORE AFTER)` (the docs) after every write that changed
+  the file, each under `condition-case` (an error is a `warn` notice of source `config`).
+
+**The printer.** `(drgnx-settings-print VALUE COLUMN)` is drgnx's own, not `pp` (whose output changed between Emacs
+29 and 30): one line when it ends by column 100 (`drgnx-settings-print-width`, counted in characters); else a proper
+list of two or more elements breaks, before each keyword when it holds one (the elements before the first keyword stay
+on the first line), else one element per line, each line one column in from its paren. Vectors, dotted pairs and
+strings never break. An entry that does not fit on one line puts its value on the next line, one column in. The
+print variables are bound (`print-length`, `print-level`, `print-circle`, `print-quoted` nil; `print-escape-newlines`
+and `print-escape-control-characters` t; other characters as UTF-8 text). It refuses what is not plain data: a buffer,
+a marker, a record, text properties, a unibyte or raw-byte string, a character UTF-8 cannot hold (a surrogate, past
+U+10FFFF), a circular list, nesting past 64. A put also refuses a value `(quote X)` or `(function X)`, which would
+read back as X. A comment inside a replaced value is lost.
+
+The mutation check of the plan (Task 6, Step 5): replace the span edit with a whole-file re-print; then
+`one-entry-one-span` and `comments-travel-with-their-entry` fail.
 
 ## Declaring a setting (Task 7)
 
