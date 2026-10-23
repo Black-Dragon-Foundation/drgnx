@@ -1,0 +1,115 @@
+;;; setting-test.el --- batch tests: drgnx-defsetting and the setting metadata -*- lexical-binding: t -*-
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx-setting)
+
+(defmacro drgnx-setting-test--with-fresh (vars &rest body)
+  "Run BODY, then forget the variables VARS (and their drgnx declarations)."
+  (declare (indent 1))
+  `(unwind-protect (progn ,@body)
+     (dolist (var ,vars)
+       (when (boundp var) (makunbound var))
+       (setplist var nil)
+       (setq drgnx-setting--names (delq var drgnx-setting--names))
+       (remhash var drgnx-setting--cache))))
+
+(ert-deftest drgnx-setting/declares-a-defcustom-with-the-property ()
+  (drgnx-setting-test--with-fresh '(drgnx-setting-test-a)
+    (eval '(drgnx-defsetting drgnx-setting-test-a 3 "A test setting."
+             :type 'integer :group 'drgnx :scope 'global :workspace 'safe :on-error 'strict)
+          t)
+    (should (eql drgnx-setting-test-a 3))
+    (should (eq (get 'drgnx-setting-test-a 'custom-type) 'integer))
+    (should (equal (get 'drgnx-setting-test-a 'drgnx-setting) '(:scope global :workspace safe :on-error strict)))
+    (should (drgnx-setting-own-p 'drgnx-setting-test-a))
+    (should (memq 'drgnx-setting-test-a (drgnx-setting-names)))
+    (should-not (drgnx-setting-own-p 'fill-column))))
+
+(ert-deftest drgnx-setting/an-unknown-key-is-a-compile-error ()
+  (should-error (macroexpand '(drgnx-defsetting drgnx-setting-test-b 1 "d" :type 'integer :bogus 1)))
+  (should-error (macroexpand '(drgnx-defsetting drgnx-setting-test-b 1 "d" :scope)))
+  (should (macroexpand '(drgnx-defsetting drgnx-setting-test-b 1 "d" :type 'integer :scope 'global))))
+
+(ert-deftest drgnx-setting/inference-table ()
+  (require 'savehist)
+  (let ((global (drgnx-setting-meta 'savehist-mode))
+        (code (drgnx-setting-meta 'compile-command))
+        (fill (drgnx-setting-meta 'fill-column))
+        (shell (drgnx-setting-meta 'python-shell-interpreter)))
+    (should (equal (cl-loop for key in drgnx-setting-keys collect key) (cl-loop for (key _) on global by #'cddr collect key)))
+    ;; scope
+    (should (eq (plist-get global :scope) 'global))
+    (should (eq (plist-get fill :scope) 'buffer))
+    ;; workspace: code by risky name, by suffix, by type; data otherwise
+    (should (eq (plist-get code :workspace) 'code))
+    (should (eq (plist-get shell :workspace) 'code))
+    (should (eq (plist-get fill :workspace) 'data))
+    (should (eq (plist-get (drgnx-setting-meta 'enable-local-eval) :workspace) 'never))
+    (should (eq (plist-get (drgnx-setting-meta 'drgnx-trust-anything) :workspace) 'never))
+    ;; the rest
+    (should (eq (plist-get fill :merge) 'replace))
+    (should (eq (plist-get fill :on-error) 'last-good))
+    (should (eq (plist-get fill :agents) 'grantable))
+    (should (eq (plist-get code :agents) 'never))
+    (should-not (plist-get fill :apply))
+    (should-not (plist-get fill :runtime))
+    (should-not (plist-get fill :schema))))
+
+(ert-deftest drgnx-setting/inference-by-type-and-suffix ()
+  (drgnx-setting-test--with-fresh '(drgnx-setting-test-hook drgnx-setting-test-fn drgnx-setting-test-tool-args
+                                                            drgnx-setting-test-plain)
+    (eval '(progn (defcustom drgnx-setting-test-hook nil "h" :type 'hook)
+                  (defcustom drgnx-setting-test-fn nil "f" :type '(choice (const nil) function))
+                  (defcustom drgnx-setting-test-tool-args nil "a" :type '(repeat string))
+                  (defcustom drgnx-setting-test-plain 1 "p" :type 'integer))
+          t)
+    (dolist (var '(drgnx-setting-test-hook drgnx-setting-test-fn drgnx-setting-test-tool-args))
+      (should (eq (plist-get (drgnx-setting-meta var) :workspace) 'code)))
+    (should (eq (plist-get (drgnx-setting-meta 'drgnx-setting-test-plain) :workspace) 'data))))
+
+(ert-deftest drgnx-setting/declared-keys-win ()
+  (drgnx-setting-test--with-fresh '(drgnx-setting-test-c)
+    (eval '(drgnx-defsetting drgnx-setting-test-c nil "c" :type 'hook :workspace 'safe :agents 'grantable
+             :merge 'append :apply #'ignore :runtime "Thing" :schema 'integer)
+          t)
+    (let ((meta (drgnx-setting-meta 'drgnx-setting-test-c)))
+      (should (eq (plist-get meta :workspace) 'safe))
+      (should (eq (plist-get meta :agents) 'grantable))
+      (should (eq (plist-get meta :merge) 'append))
+      (should (eq (plist-get meta :apply) #'ignore))
+      (should (equal (plist-get meta :runtime) "Thing"))
+      (should (eq (plist-get meta :schema) 'integer)))))
+
+(ert-deftest drgnx-setting/descriptions-override ()
+  (let ((drgnx-setting-meta-functions
+         (list (lambda (var _meta) (when (eq var 'fill-column) '(:scope global :workspace code))))))
+    (let ((meta (drgnx-setting-meta 'fill-column)))
+      (should (eq (plist-get meta :scope) 'global))
+      (should (eq (plist-get meta :workspace) 'code))
+      (should (eq (plist-get meta :merge) 'replace)))
+    (should (eq (plist-get (drgnx-setting-meta 'tab-width) :scope) 'buffer)))
+  ;; the function list is gone: the cached override is not served
+  (should (eq (plist-get (drgnx-setting-meta 'fill-column) :scope) 'buffer)))
+
+(ert-deftest drgnx-setting/a-new-declaration-clears-the-cache ()
+  (drgnx-setting-test--with-fresh '(drgnx-setting-test-d)
+    (eval '(defcustom drgnx-setting-test-d 1 "d" :type 'integer) t)
+    (should (eq (plist-get (drgnx-setting-meta 'drgnx-setting-test-d) :workspace) 'data))
+    (eval '(defcustom drgnx-setting-test-d nil "d" :type 'hook) t)
+    (should (eq (plist-get (drgnx-setting-meta 'drgnx-setting-test-d) :workspace) 'code))))
+
+(ert-deftest drgnx-setting/check-uses-match-and-schema ()
+  (drgnx-setting-test--with-fresh '(drgnx-setting-test-e drgnx-setting-test-f)
+    (eval '(drgnx-defsetting drgnx-setting-test-e 1 "e" :type 'integer) t)
+    (should-not (drgnx-setting-check 'drgnx-setting-test-e 5))
+    (let ((problem (drgnx-setting-check 'drgnx-setting-test-e "five")))
+      (should (consp problem))
+      (should (stringp (cdr problem))))
+    ;; a schema decides when declared, whatever the type says
+    (eval '(drgnx-defsetting drgnx-setting-test-f nil "f" :type 'sexp
+             :schema '(plist (:a integer "A" :required t)))
+          t)
+    (should-not (drgnx-setting-check 'drgnx-setting-test-f '(:a 1)))
+    (should (consp (drgnx-setting-check 'drgnx-setting-test-f '(:a "x"))))
+    ;; no type, no schema: anything goes
+    (should-not (drgnx-setting-check 'drgnx-setting-test-nothing 'whatever))))

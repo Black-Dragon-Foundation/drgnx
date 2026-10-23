@@ -138,7 +138,39 @@ Floats are compared by value on the Rust side and in `drgnx-huginn/differential-
 
 ## The writer (Task 6)
 
-## Declaring a setting (Task 7)
+## Declaring a setting
+
+drgnx's own settings are declared with `drgnx-defsetting` (`core/drgnx-setting.el`), a macro around `defcustom`:
+
+```elisp
+(drgnx-defsetting drgnx-example-limit 10 "How many rows the example shows."
+  :type 'integer :group 'drgnx
+  :scope 'buffer :workspace 'data :merge 'replace)
+```
+
+`defcustom` refuses unknown keywords, so drgnx's keys go into the symbol property `drgnx-setting`; the rest become
+the `defcustom`. A keyword that is neither is an error when the form is compiled. Values are evaluated, as in
+`defcustom` (`:scope 'global`, `:apply #'my-apply`).
+
+| Key | Values | Inferred when not declared |
+|---|---|---|
+| `:scope` | `global`, `buffer`, `project` | `global` for a global minor mode's variable (`custom-set` is `custom-set-minor-mode`, or a variable that is not automatically buffer-local, named `…-mode`, whose function is a command); else `buffer` |
+| `:workspace` | `safe`, `data`, `code`, `never` | `never` for the deny-list of names (Emacs's and drgnx's security settings); `code` when `risky-local-variable-p`, the name ends in `-interpreter`, `-executable`, `-program-name`, `-args` or `-arguments`, or the `:type` is or contains `function` or `hook`; else `data`. `safe` is never inferred: it is decided per value with `safe-local-variable-p` |
+| `:merge` | `replace`, `append`, `alist`, `lower-only` | `replace` |
+| `:on-error` | `last-good`, `strict` | `last-good` |
+| `:apply` | a function | none |
+| `:runtime` | the Rust type name | none |
+| `:agents` | `grantable`, `never` | `never` when `:workspace` is `code` or `never`, else `grantable` |
+| `:schema` | a `drgnx-schema` | none: the `:type` is used |
+
+- `(drgnx-setting-meta VAR)` returns all eight keys for any variable, declared or not. Each function of
+  `drgnx-setting-meta-functions` (the descriptions) is then called with the variable and the plist, and returns a
+  plist of the keys it overrides. The result is cached per symbol; a new `defcustom` or `drgnx-defsetting` of the
+  symbol (or a change of the function list) makes the cache entry stale on the next call.
+- `(drgnx-setting-check VAR VALUE)` returns nil or `(PATH . MESSAGE)`: `drgnx-schema-check` for a `:schema`, else the
+  `:type` must match.
+- `(drgnx-setting-own-p VAR)` and `(drgnx-setting-names)` tell what was declared with `drgnx-defsetting`.
+- `docs/reference/settings.md` lists the declared settings; it is generated (see `docs/develop/core.md`).
 
 ## The start-up order (Task 5)
 
