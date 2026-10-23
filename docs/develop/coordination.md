@@ -68,8 +68,8 @@ read-only handle (`sqlite-open` with the read-only flag, `busy_timeout` 5000), c
 and never writes. Closing it never checkpoints, so a reader that outlives the writer leaves the WAL as it is.
 `drgnx-work-db-close-all` closes the readers first, then the writers.
 
-- A missing file, or a schema below `drgnx-work-db-schema-version`, is first made or migrated by the writer
-  (`(drgnx-work-db)`, once): until the hub is Rust, every drgnx Emacs is still a writer.
+- A missing file, or a schema below `drgnx-work-db-schema-version`, reads as an empty database: the hub makes and
+  migrates work.db, and only the `local` writer mode opens it read-write ("Who opens work.db" below).
 - A newer schema is read when its `meta` `compat-read` is at most `drgnx-work-db-compat-read`; otherwise
   `drgnx-work-db-too-new` is signalled ("work.db is schema N, which this drgnx cannot read: update drgnx").
 - A select inside a transaction keeps the transaction's handle. A function that reads and then writes may read on the
@@ -242,6 +242,28 @@ them), `coord/decide` `{ok, n, status, version}`, `{held, version, changes}` or 
 `{released: [{task, agent, job}]}`. Each is one transaction; each committed one is counted in `status`'s
 `store.writes`, sends its new events to subscribers and, unless the backend made it, tells the backend
 (`coord/notify`, coalesced) so it delivers.
+
+### Who opens work.db
+
+The hub (Ratatoskr) makes work.db at schema 7, or migrates a schema-6 file, before it serves; from then on its writer
+thread is the file's one writer. No Lisp opens it read-write outside the `local` mode:
+
+- `(drgnx-work-db)`, the read-write, migrating handle, signals `drgnx-work-db-not-the-writer` ("work.db is written by
+  the drgnx hub") unless `drgnx-coord-writer` is `local`, before it opens or makes anything. An editor and the CLI
+  (`refuse`) and the Lisp backend behind Ratatoskr (`front`) get the error, so a write that slipped past the writers'
+  `pcase` fails instead of taking the write lock (and, on schema 7, instead of migrating a newer file).
+- Everything the Lisp backend reads goes through `(drgnx-work-db-read)`, which reads schema 7 through the compat
+  views: the event log's last id at start and in the tick (`drgnx-hub-serve`, `drgnx-hub--events-check`), the
+  events a client catches up on (`drgnx-hub--event-rows`), a task's job (`drgnx-job--job-of`), and a coordination
+  server's last "reports held" card (`drgnx-coord-mcp--tell-held`).
+- The writes left on `(drgnx-work-db)` are the `local` branches of the writers in `core/drgnx-coord.el`
+  (`drgnx-coord--tx`, `review-mark`, `heartbeat`, `renew`, `set-seen`, `note-held`, the daily prune), the
+  coordination server's "told" stamp, and the gateway's `spend` row (`drgnx-work-db-add-spend`). Behind the front
+  the last two are refused, the stamp silently and the spend row as a logged "spend not recorded", until the Rust
+  gateway writes `spend`.
+- `drgnx-work-db/the-writer-refuses-outside-local-mode` is the guard's test, and
+  `store/the-lisp-backend-starts-on-schema-7` the row: a schema-6 file with a job, migrated by the hub, then the
+  Lisp backend lists the job, and the jobs list adds nothing to `status.store.writes`.
 
 ### The editor writes through the hub
 

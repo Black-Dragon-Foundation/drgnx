@@ -283,20 +283,37 @@ without SVG (librsvg), e.g. a terminal-only build."
       (should (eq (lookup-key keymap [double-mouse-1]) #'ignore))
       (should (eq (lookup-key keymap (vector (nth 1 spot) 'double-mouse-1)) #'ignore)))))
 
+(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+
 (ert-deftest drgnx-work-ui/refresh-scans-in-another-process-and-redraws ()
-  (drgnx-work-ui-test--with root
-    (let ((drgnx-work-roots (list root)))
-      (write-region "# Plan Gamma\n\n### Task 1: x\n\n- [ ] y\n" nil (concat root "docs/plans/gamma.md") nil 'silent)
-      (with-current-buffer (drgnx-work-ui-buffer)
-        (should-not (string-search "Plan Gamma" (buffer-string)))
-        (let ((p (drgnx-work-ui-refresh)))
-          (should (processp p))                                 ; not the scan itself: Emacs stays free
-          (let ((d (+ (float-time) 60))) (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
-          (accept-process-output nil 0.2))
-        (should (drgnx-view-pending-p drgnx-view))              ; the sentinel only marked the view
-        (should-not (string-search "Plan Gamma" (buffer-string)))
-        (drgnx-work-ui-test--draw)
-        (should (string-search "Plan Gamma" (buffer-string)))))))
+  ;; binary: the refresh is a batch `drgnx work scan' that writes through the real hub (Ratatoskr serving ROOT), and
+  ;; this Emacs reads what it stored through the read-only handle
+  (drgnx-hub-client-test--with-ratatoskr
+    (let* ((proj (concat root "proj/")) (drgnx-work-roots (list proj))
+           (drgnx-work-db--handles nil) (drgnx-work-db--read-handles nil) (drgnx-work-ui--scan nil)
+           (drgnx-work-ui--expanded (make-hash-table :test #'equal)) (drgnx-work-ui-filter-text nil)
+           (drgnx-work-ui-hide-merged nil))
+      (unwind-protect
+          (progn
+            (make-directory (concat proj "docs/plans") t)
+            (write-region "# Plan Gamma\n\n### Task 1: x\n\n- [ ] y\n" nil (concat proj "docs/plans/gamma.md")
+                          nil 'silent)
+            (with-current-buffer (drgnx-work-ui-buffer)
+              (should-not (string-search "Plan Gamma" (buffer-string)))
+              (let ((p (drgnx-work-ui-refresh)))
+                (should (processp p))                           ; not the scan itself: Emacs stays free
+                (let ((d (+ (float-time) 60)))
+                  (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
+                (accept-process-output nil 0.2)
+                (let ((out (with-current-buffer (process-buffer p) (buffer-string))))   ; its output, when it failed
+                  (should (equal (cons (process-exit-status p) out) (cons 0 out)))))
+              (should (drgnx-view-pending-p drgnx-view))        ; the sentinel only marked the view
+              (should-not (string-search "Plan Gamma" (buffer-string)))
+              (drgnx-work-ui-test--draw)
+              (should (string-search "Plan Gamma" (buffer-string)))))
+        (when (get-buffer "*drgnx Work*") (kill-buffer "*drgnx Work*"))
+        (when (get-buffer " *drgnx work scan*") (kill-buffer " *drgnx work scan*"))
+        (drgnx-work-db-close-all)))))
 
 (ert-deftest drgnx-work-ui/a-failed-scan-says-only-its-own-output-and-never-errors ()
   ;; a stub bin/drgnx that fails; started from a deleted directory; its buffer holds an earlier scan's

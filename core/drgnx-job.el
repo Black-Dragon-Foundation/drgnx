@@ -1287,7 +1287,9 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (when (member (plist-get task :status) '("done" "dropped")) (user-error "Task %s is %s already" tid (plist-get task :status)))
     task))
 
-(defun drgnx-job--job-of (task) "The job of TASK (a store plist)." (drgnx-coord--task-job (drgnx-work-db) (plist-get task :id)))
+(defun drgnx-job--job-of (task)
+  "The job of TASK (a store plist)."
+  (drgnx-coord--task-job (drgnx-work-db-read) (plist-get task :id)))
 
 (defun drgnx-job--set-data (job key task value)
   "Job JOB's data KEY (an alist by task id) says VALUE of TASK (its id; nil: nothing); its subscribers hear of it."

@@ -491,7 +491,7 @@ the front (`drgnx-hub--behind-front') nothing: the front broadcasts the event lo
 (defun drgnx-hub--events-check ()
   "Events another process added (a coordination server, the CLI) or this one without a broadcast (a job's review,
 merge and writes) go out too: the hub's tick, every 2 s."
-  (when (> (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0) drgnx-hub--events-sent)
+  (when (> (or (caar (sqlite-select (drgnx-work-db-read) "select max(id) from event")) 0) drgnx-hub--events-sent)
     (drgnx-hub--events-soon)))
 
 (defun drgnx-hub--event-rows (since limit)
@@ -503,7 +503,8 @@ DATA the JSON object the store's checked column holds (schema 6), parsed; absent
                                                             :null-object :null :false-object :false)))))
               (append (list :id id :at at :agent agent :job job :task task :kind kind :summary summary)
                       (and d (list :data d)))))
-          (sqlite-select (drgnx-work-db) (format "select %s from event where id > ? order by id limit ?" drgnx-coord--event-cols)
+          (sqlite-select (drgnx-work-db-read)
+                         (format "select %s from event where id > ? order by id limit ?" drgnx-coord--event-cols)
                          (list since limit))))
 
 (defun drgnx-hub--events-send ()
@@ -663,7 +664,7 @@ Signals an error when a hub already serves there."
   (add-hook 'drgnx-gateway-event-functions #'drgnx-job--gateway-event)
   (drgnx-timer-start 'hub-tick 2 #'drgnx-hub--tick :repeat 2 :owner :core)
   ;; subscribers get the events from now on (`events/since' has the ones before)
-  (setq drgnx-hub--events-sent (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
+  (setq drgnx-hub--events-sent (or (caar (sqlite-select (drgnx-work-db-read) "select max(id) from event")) 0))
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t

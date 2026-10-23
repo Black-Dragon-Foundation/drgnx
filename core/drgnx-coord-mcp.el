@@ -140,7 +140,7 @@ the store, for a server started again); best effort: a busy store tells nobody a
       (puthash me now drgnx-coord-mcp--told)
       (ignore-errors
         (let* ((key (concat "rate-told:" me))
-               (stamp (caar (sqlite-select (drgnx-work-db) "select value from meta where key = ?" (list key))))
+               (stamp (caar (sqlite-select (drgnx-work-db-read) "select value from meta where key = ?" (list key))))
                (last (and stamp (string-to-number stamp))))
           (if (and last (< (- now last) 3600)) (puthash me last drgnx-coord-mcp--told)
             (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, ?)" (list key (number-to-string now)))

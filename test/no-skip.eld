@@ -65,6 +65,7 @@
   "drgnx-shell-rc/a-path-with-dollar-and-quotes-sources-for-real"
   "drgnx-shell-rc/the-line-sources-cleanly"
   "drgnx-view-live/a-mark-from-a-process-filter-only-marks"
+  "drgnx-work-ui/refresh-scans-in-another-process-and-redraws"
 )
  ;; the client against Ratatoskr: CI's unit jobs set DRGNX_RATATOSKR_BIN (Linux and macOS)
  (darwin

@@ -218,10 +218,17 @@ in `meta' `migrate-6-dropped'.  New columns: event.turn, message.answers, card.r
     (error (ignore-errors (sqlite-execute db "rollback"))
            (signal (car err) (cdr err)))))
 
+(defvar drgnx-coord-writer)            ; core/drgnx-coord.el: who writes work.db from this Emacs
+
+(define-error 'drgnx-work-db-not-the-writer "work.db is written by the drgnx hub")
+
 (defun drgnx-work-db ()
   "The open database (opened, created and migrated on first use), read-write.  Only for the Rust-bound `local' writer
-mode (the standalone Lisp hub of the v0 rows and the coordination unit tests): the tracker's entities are written by
-the hub (Ratatoskr), never from here (Task 16b makes this refuse elsewhere)."
+mode (`drgnx-coord-writer': the standalone Lisp hub of the v0 rows and the coordination unit tests).  Anywhere else —
+an editor, the CLI, the Lisp backend behind Ratatoskr — it signals `drgnx-work-db-not-the-writer' and opens nothing:
+the hub is the one writer of work.db, and readers use `drgnx-work-db-read'."
+  (unless (and (boundp 'drgnx-coord-writer) (eq drgnx-coord-writer 'local))
+    (signal 'drgnx-work-db-not-the-writer nil))
   (let ((file (drgnx-work-db-file)))
     (or (alist-get file drgnx-work-db--handles nil nil #'equal)
         (progn

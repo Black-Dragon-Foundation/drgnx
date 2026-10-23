@@ -34,7 +34,9 @@
 - `front' (the Lisp backend behind Ratatoskr, `drgnx-hub-main'): each writer is the front's method, called and waited
   for (`drgnx-hub-call-front'), and answers what it answered when it wrote here;
 - `local' (the standalone Lisp hub: the v0 rows, its tests; unit tests that set up coordination data): written here.
-`drgnx-coord--tx' signals unless it is `local'.  See docs/develop/coordination.md, \"Who writes what\".")
+`drgnx-coord--tx' signals unless it is `local', and so does `drgnx-work-db' (the read-write handle): every other
+Emacs reads through `drgnx-work-db-read'.  See docs/develop/coordination.md, \"Who writes what\" and \"Who opens
+work.db\".")
 
 (declare-function drgnx-hub-call-front "drgnx-hub-client")
 

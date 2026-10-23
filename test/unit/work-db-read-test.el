@@ -109,6 +109,20 @@
       (insert-file-contents (expand-file-name file drgnx-dir))
       (should-not (re-search-forward "(sqlite-execute (drgnx-work-db)" nil t)))))
 
+(ert-deftest drgnx-work-db/the-writer-refuses-outside-local-mode ()
+  ;; the hub is work.db's one writer: an editor (`refuse') and the Lisp backend behind Ratatoskr (`front') open
+  ;; nothing read-write — no file made, no handle kept, no migration; only `local' (the standalone Lisp hub) does
+  (drgnx-work-db-read-test--with
+    (dolist (mode '(refuse front nil))
+      (let ((drgnx-coord-writer mode))
+        (should (equal (error-message-string (should-error (drgnx-work-db) :type 'drgnx-work-db-not-the-writer))
+                       "work.db is written by the drgnx hub"))
+        (should-not (file-exists-p (concat dir "work.db")))
+        (should-not drgnx-work-db--handles)))
+    (let ((drgnx-coord-writer 'local))
+      (should (sqlitep (drgnx-work-db)))
+      (should (file-exists-p (concat dir "work.db"))))))
+
 (ert-deftest drgnx-work-db/a-writer-commit-changes-the-read-handles-stamp ()
   (drgnx-work-db-read-test--with
     (require 'drgnx)
@@ -124,6 +138,7 @@
 
 (defconst drgnx-work-db-read-test--files
   '("core/drgnx-work-db.el" "core/drgnx-coord.el" "core/drgnx-cockpit-model.el" "core/drgnx-work.el"
+    "core/drgnx-hub.el" "core/drgnx-job.el" "core/drgnx-coord-mcp.el"
     "modules/tools/drgnx-cockpit.el" "modules/tools/drgnx-cockpit-edits.el" "modules/tools/drgnx-cockpit-feed.el"))
 
 (defun drgnx-work-db-read-test--writer-call-p (x)
