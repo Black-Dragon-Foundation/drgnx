@@ -114,6 +114,38 @@ which: Ratatoskr knows it from how the connection reached it.
 - Any program running as you can still connect to these sockets: the agent sandbox, not the socket, is the boundary
   between agents and your account.
 
+## Personal notes
+
+Your personal notes never enter drgnx's store (`work.db`), so no agent can read them through it. Kept out:
+everything under `~/org/` except `~/org/board.org`, your task board, which the tracker reads. Ratatoskr checks each
+path after resolving links, so a link from a project into `~/org`, or `..` in a path, changes nothing.
+
+- **Always kept out:** `~/org/notes.org`, and under `~/org` any file whose name starts with `notes`, `journal`,
+  `diary` or `personal` (any case), or anything inside a folder so named. You cannot open these.
+- **Your own additions:** `~/.config/drgnx/personal-notes-deny.json` lists more files, folders and globs to keep
+  out, anywhere, as firmly as the built-in ones:
+
+  ```json
+  {"version": 1, "entries": [{"kind": "folder", "path": "~/Documents/diary"},
+                             {"kind": "glob", "path": "~/docs/*.private"}]}
+  ```
+
+  A glob has `*` and `?` in its last part only. The built-in list cannot be shortened. If this file cannot be read
+  or has a mistake, the built-in list still applies and no personal file is opened (below) until you fix it.
+- **Opening one file:** `~/.config/drgnx/personal-notes-allow.json` names single files under `~/org` that the store
+  may read, for example a reading list a plan refers to: `{"version": 1, "paths": ["~/org/reading.org"]}`. Only
+  existing regular files count: a folder, a glob or a path outside `~/org` is ignored. A file that is always kept out
+  stays out even if listed.
+- Keep both files `0600`. An opt-in file that others may write is ignored entirely. `drgnx doctor` lists every entry
+  it ignored and why.
+
+## Secrets in the store
+
+An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store
+credentials"): a private key block, an AWS key id, a key with a known prefix (`sk-`, `ghp_`, `gho_`, `github_pat_`,
+`glpat-`, `xoxb-` and the like), `password=…`-style assignments (`password`, `passwd`, `secret`, `token`, `api_key`
+with a value of 8 or more characters), and long random-looking strings. Commit ids, paths, URLs and dates pass.
+
 ## When something you trust is held back
 
 A checker that stays silent, or a shorthand that does not apply: look for **Restricted Mode** in the status bar, and trust
