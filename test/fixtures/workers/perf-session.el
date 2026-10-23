@@ -181,10 +181,11 @@
     (redisplay t)
     t))
 
+;; the edited buffer is the selected window's: the lab's calls run in the server's buffer, not that one
 (defun drgnx-perf-w-ts-paste-done ()
-  (and (> (buffer-size) (+ drgnx-perf-w--ts-base 400000)) (drgnx-perf-w--colored-p)))
+  (and (> (buffer-size (window-buffer)) (+ drgnx-perf-w--ts-base 400000)) (drgnx-perf-w--colored-p)))
 (defun drgnx-perf-w-ts-edit-done () (drgnx-perf-w--colored-p))
-(defun drgnx-perf-w-ts-edit-digest () (format "%d %s" (buffer-size) (drgnx-perf-w--visible-digest)))
+(defun drgnx-perf-w-ts-edit-digest () (format "%d %s" (buffer-size (window-buffer)) (drgnx-perf-w--visible-digest)))
 
 (defun drgnx-perf-w-ts-edit-teardown ()
   (pcase-dolist (`(,m . ,was) drgnx-perf-w--ts-modes) (funcall m (if was 1 -1)))
