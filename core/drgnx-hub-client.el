@@ -850,12 +850,13 @@ another `records'; a `drgnx_version' other than the binary on disk's, when that 
 
 (defun drgnx-hub--held-keys ()
   "The provider keys this Emacs holds now, asking no one: a provider's environment variable, else a key a command the
-user ran found and the hub has not taken yet (`drgnx-ai--keys').  (:PROVIDER KEY…)."
+user ran found and the hub has not taken yet (`drgnx-ai--keys').  (:PROVIDER KEY…).  An empty key is no key: it
+would replace a good one in the hub."
   (require 'drgnx-ai)                   ; the provider list: not needed to load the client, only to hand keys over
   (cl-loop for (id . p) in (drgnx-ai-providers)
            for env = (plist-get p :key-env)
            for key = (and env (let ((v (getenv env))) (if (and v (not (string-empty-p v))) v (gethash id drgnx-ai--keys))))
-           when key append (list (intern (concat ":" (symbol-name id))) key)))
+           when (and (stringp key) (not (string-empty-p key))) append (list (intern (concat ":" (symbol-name id))) key)))
 
 (defun drgnx-hub--send-keys ()
   "Hand the hub the keys this Emacs holds (`drgnx-hub--held-keys'), over the socket: never in an environment, an

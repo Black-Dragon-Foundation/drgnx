@@ -1030,7 +1030,8 @@ Provider keys reach the hub from a user connection only: `gateway/keys {keys: {P
 keys over once each subscription is answered, `drgnx-hub-ensure` and so `drgnx hub start` too) and a registration's
 `keys`. They are held in Ratatoskr's
 memory only (`bifrost::keys::Keys`): never in `runtime.db`, a file, a log, an environment, a command line or the Lisp
-backend; the last key handed over for a provider wins. `status` and the doctor name the providers whose key is held
+backend; the last key handed over for a provider wins. An empty key is no key: it is skipped, so it never replaces a
+held one or marks its provider held (the editor never sends one either). `status` and the doctor name the providers whose key is held
 (`keys_held`), never a key. A restarted hub holds no key until an editor connects again; meanwhile a request that
 needs one fails over or answers "no key", and the `gateway/need-keys {providers}` event (also sent to each new
 subscriber for the providers kept registrations need) tells the editor to hand them over. The hub is not dumpable

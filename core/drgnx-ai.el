@@ -300,7 +300,8 @@ caller only asks whether there is one."
                  (auth-source-do-cache nil)
                  (found (and auth-sources (car (auth-source-search :host host :max 1 :create nil))))
                  (secret (plist-get found :secret))
-                 (key (if (functionp secret) (funcall secret) secret)))
+                 (key (if (functionp secret) (funcall secret) secret))
+                 (key (and (stringp key) (not (string-empty-p key)) key)))   ; an empty password is no key
             (when key (puthash id key drgnx-ai--keys))
             key)))))
 

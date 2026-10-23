@@ -234,6 +234,20 @@ LOG/security.calls."
       (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))
         (should (equal (drgnx-ai-key 'openrouter) "sk-or-new-789"))))))
 
+(ert-deftest drgnx-ai/an-empty-key-is-never-handed-over ()
+  ;; review m1: an empty password in a store, or an empty key waiting here, is no key: in the hub it would replace a
+  ;; good one and every request would go upstream with an empty Bearer
+  (drgnx-ai-test--with root
+    (require 'drgnx-hub-client)
+    (let ((auth-sources (list (concat root "authinfo"))))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (list (list :secret (lambda () ""))))))
+        (should-not (drgnx-ai-key 'openrouter))
+        (should-not (gethash 'openrouter drgnx-ai--keys))))
+    (puthash 'openrouter "" drgnx-ai--keys)
+    (should-not (plist-member (drgnx-hub--held-keys) :openrouter))
+    (puthash 'openrouter "sk-or-test-123" drgnx-ai--keys)
+    (should (equal (plist-get (drgnx-hub--held-keys) :openrouter) "sk-or-test-123"))))
+
 (ert-deftest drgnx-ai/a-batch-emacs-never-searches-the-keychain-even-when-asked ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
