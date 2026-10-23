@@ -244,21 +244,17 @@ was found before the problem.  See docs/develop/settings.md, \"The Lisp index\".
   "The index in CACHE when it is of this version and for STAMP, else nil."
   (when (file-readable-p cache)
     (let ((data (condition-case nil
-                    (with-temp-buffer (insert-file-contents cache)
-                                      (let ((read-eval nil)) (read (current-buffer))))
+                    (let ((read-eval nil)) (car (read-from-string (drgnx-file-read-bounded cache))))
                   (error nil))))
       (and (eq (plist-get data :version) drgnx-lisp-index--version)
            (equal (plist-get data :stamp) stamp)
            (plist-get data :index)))))
 
 (defun drgnx-lisp-index--write-cache (cache stamp index)
-  "Write INDEX for STAMP to CACHE, through a temporary file renamed over it."
-  (make-directory (file-name-directory cache) t)
-  (let ((tmp (make-temp-file (concat cache ".")))
-        (print-length nil) (print-level nil))
-    (with-temp-file tmp
-      (prin1 (list :version drgnx-lisp-index--version :stamp stamp :index index) (current-buffer)))
-    (rename-file tmp cache t)))
+  "Write INDEX for STAMP to CACHE, atomically (`drgnx-file-write-text'; a cache, so no fsync)."
+  (let ((print-length nil) (print-level nil))
+    (drgnx-file-write-text cache (prin1-to-string (list :version drgnx-lisp-index--version :stamp stamp :index index))
+                           :fsync nil)))
 
 (defun drgnx-lisp-index-get (file)
   "The index of FILE (see `drgnx-lisp-index-file'): from the cache when FILE's stamp is the cached one, else built
