@@ -127,6 +127,30 @@ writer calls `guard::check_key`. An unregistered kind or key passes; a class oth
 - **Limits.** A revert finds the links a tx added with a scan of `link` by `tx_from` (no index; reverts are rare).
 ## Walks (Task 4)
 
+`urdr::graph::walk` answers `neighbors` and `path` from the read pool (storage §6.2). Both are async; each level is
+one `ReadPool::with` call (one connection, given back before the next level), never held across an await.
+
+- **Levels.** One level reads, in that call: the degree of each frontier node, then `select src, kind, dst from
+  link where src in (…)` (or `dst in …` for incoming; both for `Both`) in chunks of 500 ids, with the `kind in (…)`
+  filter and the live form (`tx_to = SENTINEL`) or the as-of form (`tx_from <= T and tx_to > T`), then the entity
+  rows (`n, project, kind, id, title`) of the nodes reached that the walk does not have yet. The visited set holds
+  nodes; every link between two nodes of the answer is listed once. As-of walks read the current entity rows.
+- **Path.** Bidirectional: the forward side follows outgoing links from `from`, the backward side incoming links
+  from `to`. It expands the smaller frontier a whole level at a time and, once a level meets the other side, answers
+  the shortest meeting. No path: an empty answer, with `truncated: depth` when `max_depth` stopped it.
+- **Budget.** 20,000 visited nodes (`budget`), 200 nodes in the answer (`cap`), and a 250 ms deadline armed as a
+  SQLite progress handler on the level's connection (every 1000 VM steps; cleared before the connection goes back),
+  so a slow statement is interrupted, not waited for. `kinds` is required past depth 3
+  (`Refused("name kinds for depth over 3")`); depth is clamped to 16 (`truncated: depth`). A stopped walk answers
+  what it found with `truncated`: `budget`, `deadline`, `depth`, `cap` or `scope`.
+- **Hot nodes.** A node with more than `hot_degree` (1,000) live links in the walked direction(s), counted over
+  `link` with a bound of `hot_degree + 1` (so a hot node costs a bounded scan), is answered with `hot: <degree>`
+  and not expanded. `link_stat` counts repeats of a pair and has no index by `dst`, so it is not used.
+- **Scope.** `Scope::allows(project)` decides per entity: `Hidden` is not followed, counted in `hidden`, and no
+  link naming it is answered; `Stub` shows `id`, `kind` and `title` only (no project) and is followed. `valid()` is
+  asked before the first level and before each next one; false stops with `truncated: scope`.
+- **Bench.** `benches/walk.rs` (ignored; `--features test-hooks`) builds graph B with `walk::synthetic`.
+
 ## Search (Task 5)
 
 `urdr::graph::search` holds full text, the vector scheme and rank fusion. Nothing in it knows a kind.
