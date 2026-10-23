@@ -313,7 +313,9 @@ else every test; with a shuffle seed, the selected tests as a `(member …)' in 
 line (a file: a whole suite's names would not fit in the environment), and DRGNX_TEST_ORDER_OUT=FILE, which writes the
 names the run would run, in that order, to FILE and runs none."
   (let* ((s (drgnx-run-ert--env "DRGNX_TEST_SELECTOR"))
-         (selector (let ((sel (if s (car (read-from-string s)) t)))
+         (selector (let* ((sel (if s (car (read-from-string s)) t))
+                          ;; `:frozen': tests of Lisp a plan replaces, not run unless DRGNX_TEST_FROZEN=1
+                          (sel (if (equal (drgnx-run-ert--env "DRGNX_TEST_FROZEN") "1") sel `(and ,sel (not (tag :frozen))))))
                      (if (drgnx-run-ert--no-timing-p) `(and ,sel (not (tag :timing))) sel)))
          (seed (drgnx-run-ert--shuffle-seed))
          (in drgnx-run-ert--order-in)

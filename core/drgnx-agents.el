@@ -873,9 +873,9 @@ session for its bridge closes (`drgnx-hub-mcp-session-close')."
     (drgnx-hub-mcp-session-close sid)))
 
 (defun drgnx-agents--coordination-p (s)
-  "Does S's agent get the coordination bridge of a hub session (not a sandboxed one: its sockets are its own)?"
-  (and drgnx-agents-coordination (memq 'coordination (drgnx-agents-mcp-names))
-       (not (drgnx-agent-session-mcp-dir s))))
+  "Does S's agent get the coordination tools of a hub session?  A sandboxed one too: the hub's bridge behind its own
+mcp.sock attaches to that session (`drgnx-sandbox-mcp--spec')."
+  (and drgnx-agents-coordination (memq 'coordination (drgnx-agents-mcp-names))))
 
 (defun drgnx-agents--with-mcp (s k)
   "Make S's MCP session at the hub (`drgnx-hub-mcp-session', identity = S's id: a name repeats across hubs and

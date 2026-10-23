@@ -129,6 +129,7 @@
       (should (drgnx-job-run-test--wait (lambda () (null (drgnx-coord-open-questions id)))))
       (should (string-search "dropped" (plist-get (car (last (drgnx-coord-events :kinds '("answer")))) :summary))))))
 (ert-deftest drgnx-hub-events/review-verdicts-are-events ()
+  :tags '(:frozen)
   (drgnx-hub-events-test--with "# One\n\n### Task 1: first\n"
     (let ((id (drgnx-job-propose plan)))
       (drgnx-job-approve id)

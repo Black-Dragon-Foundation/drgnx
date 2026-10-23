@@ -238,8 +238,8 @@ the session start continues from the answer. When the session cannot be made (no
 without the coordination tools and says why in its transcript. An agent outside drgnx runs `ratatoskr mcp-bridge
 --outside --kind KIND` (or the old `bin/drgnx coord mcp --kind KIND`, which execs it) and gets an identity of its own
 (below). Messages are addressed to a session's id (or its name). The Lisp server (`drgnx-coord-mcp-main`) stays on
-disk, unlaunched by agents, until phase 7; the sandbox hub's own servers (`drgnx-sandbox-mcp.el`) still start it
-through `drgnx-coord-mcp-lisp-server-spec`.
+disk, launched by nothing, until phase 7: a sandboxed session's hub-run coordination server is the same bridge
+(`drgnx-sandbox-mcp.el`).
 
 | Tool | Does |
 |---|---|

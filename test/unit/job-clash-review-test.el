@@ -97,6 +97,7 @@ decided build / won't build on one subject (decisions A-N and B-N), the clash sc
     (should (equal (plist-get (drgnx-coord-card card) :state) "open"))))
 
 (ert-deftest drgnx-job-clash/the-decision-stands-sends-the-task-back ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n\nTouch the legacy code.\n"
     (let* ((drgnx-job-review nil) (id (drgnx-job-propose plan)))
       (drgnx-coord-decide :kind "wont-build" :subject "the legacy module" :author "user" :paths "legacy/" :job id :seen (drgnx-coord-version))

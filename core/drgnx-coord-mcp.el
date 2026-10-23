@@ -622,23 +622,6 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
   (let ((drgnx-hub-client-proves nil))
     (drgnx-mcp-serve "drgnx" (drgnx-coord-mcp-tools))))
 
-(defun drgnx-coord-mcp-lisp-server-spec (agent &rest props)
-  "The entry that starts the Lisp coordination server as AGENT (its session's id, s-XXXXXXXX).  PROPS: :job, :task.
-No agent gets it any more (`drgnx-coord-mcp-server-spec' is the bridge); only the sandbox hub's own servers
-\(drgnx-sandbox-mcp.el, replaced in phase 6) still start it, until phase 7 deletes the Lisp server."
-  ;; the agent starts this with the default SIGPIPE (libuv resets it): the command ignores it itself
-  (let ((command (drgnx-command-ignoring-sigpipe
-                  (list (expand-file-name invocation-name invocation-directory)
-                        "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir)
-                        "-l" "drgnx-coord-mcp" "-f" "drgnx-coord-mcp-main"))))
-    (list :name "drgnx"
-          :command (car command) :args (vconcat (cdr command))
-          :env (vconcat (delq nil (append (list (list :name "DRGNX_AGENT" :value agent)
-                                                (and (plist-get props :job) (list :name "DRGNX_JOB" :value (plist-get props :job)))
-                                                (and (plist-get props :task) (list :name "DRGNX_TASK" :value (plist-get props :task))))
-                                          (mapcar (lambda (n) (let ((v (getenv n))) (and v (list :name n :value v))))
-                                                  '("DRGNX_DATA_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_RUNTIME_DIR"))))))))
-
 (defun drgnx-coord-mcp-server-spec (session)
   "The ACP `mcpServers' entry that gives an agent the coordination tools: Ratatoskr's bridge to SESSION's socket.
 SESSION is (:sid S :socket P) as `drgnx-hub-mcp-session' returns it.  The entry has no environment: the socket is the

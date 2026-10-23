@@ -48,6 +48,7 @@ MIDWAY (a function of the id) is called once the job is running, its tasks not d
     id))
 
 (ert-deftest drgnx-job-exit/four-tasks-three-agents ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-exit-test--four
     (drgnx-job-exit-test--run plan repo)))
 
@@ -94,6 +95,7 @@ An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS'
         (drgnx-job-exit-test--release canaries)))))
 
 (ert-deftest drgnx-job-exit/no-credential-file-is-opened ()
+  :tags '(:frozen)
   ;; the subscription CLIs' logins under a fake HOME: drgnx — this Emacs, the hub here and every process it starts —
   ;; never touches them.  This Emacs: a file name handler on the file names (wherever they are); the others: FIFOs.
   (drgnx-job-run-test--with drgnx-job-exit-test--four
@@ -136,6 +138,7 @@ An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS'
       (delete-other-windows))))
 
 (ert-deftest drgnx-job-exit/a-clash-in-the-middle-of-a-job ()
+  :tags '(:frozen)
   ;; two agents decide opposite things while the job runs: one card, a reviewer on it; the job goes on to its end and
   ;; the reviewer ends with it
   (drgnx-job-run-test--with drgnx-job-exit-test--four

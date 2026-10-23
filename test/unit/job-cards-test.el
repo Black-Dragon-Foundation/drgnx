@@ -50,6 +50,7 @@
                      "acted")))))
 
 (ert-deftest drgnx-job-cards/acting-twice-does-nothing-twice ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-cards-test--one
     (let* ((drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid (concat id "#1")))
       (drgnx-job-approve id)

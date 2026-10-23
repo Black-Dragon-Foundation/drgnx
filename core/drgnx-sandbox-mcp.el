@@ -7,7 +7,9 @@
 ;; the hub runs them outside.  Each sandboxed session SID gets a private dir, s/SID/ beside the hub's socket
 ;; (`drgnx-sandbox-mcp-dir'), which the sandbox binds as its `:run' (/run/drgnx on Linux).  The hub listens there on
 ;; mcp.sock (coordination) and, when asked, search.sock.  For each connection it starts the real server outside,
-;; with an identity it sets itself: DRGNX_AGENT is SID, DRGNX_JOB and DRGNX_TASK are the session's.  The socket a
+;; with an identity it sets itself.  The coordination server is Ratatoskr's `mcp-bridge' to the session's own socket
+;; at the hub (the Rust tools, identity = that socket; the Lisp server would be refused its writes); the search server
+;; keeps DRGNX_AGENT, DRGNX_JOB and DRGNX_TASK as the session's.  The socket a
 ;; connection comes in on is the capability, and nothing inside the sandbox names the agent.  The agent reaches the
 ;; socket through its bridge (drgnx-mcp-bridge.el).
 ;;
@@ -27,7 +29,7 @@
 (require 'drgnx-mcp-bridge)
 (require 'drgnx-sandbox-vc)
 
-(declare-function drgnx-coord-mcp-lisp-server-spec "drgnx-coord-mcp" (agent &rest props))
+(declare-function drgnx-coord-mcp-server-spec "drgnx-coord-mcp" (session))
 (declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp" (root))
 
 (defconst drgnx-sandbox-mcp-inside "/run/drgnx"
@@ -152,11 +154,14 @@ to call again."
                (delete-process conn))))))
 
 (defun drgnx-sandbox-mcp--spec (s serves)
-  "The server entry for S: the coordination server as S (SERVES `coord'), else the search server for SERVES."
+  "The server entry for S: for SERVES `coord', Ratatoskr's bridge to S's own session socket at the hub (the Rust
+tools; `drgnx-agents--with-mcp' minted it), else the search server for SERVES.  An error when S has no such socket."
   (if (eq serves 'coord)
       (progn (require 'drgnx-coord-mcp)
-             (drgnx-coord-mcp-lisp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
-                                               :task (drgnx-agent-session-task s)))
+             (unless (drgnx-agent-session-mcp-socket s)
+               (error "the coordination tools are not available: the session has no hub MCP socket"))
+             (drgnx-coord-mcp-server-spec (list :sid (drgnx-agent-session-mcp-sid s)
+                                                :socket (drgnx-agent-session-mcp-socket s))))
     (require 'drgnx-search-mcp)
     (drgnx-search-mcp-server-spec serves)))
 

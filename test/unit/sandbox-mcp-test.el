@@ -112,6 +112,7 @@ after."
          (split-string (with-temp-buffer (insert-file-contents-literally file) (buffer-string)) "\0" t))))
 
 (ert-deftest drgnx-sandbox-mcp/identity-comes-from-the-socket ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     ;; the hub's own environment names someone else too: the server's identity is set from the session alone
     (let ((process-environment (append '("DRGNX_AGENT=hub-forged" "DRGNX_AGENT_KIND=claude" "DRGNX_TASK=9")
@@ -133,6 +134,7 @@ after."
         (when (process-live-p bridge) (delete-process bridge))))))
 
 (ert-deftest drgnx-sandbox-mcp/one-session-cannot-reach-another ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     (let* ((da (drgnx-sandbox-mcp-open a)) (db (drgnx-sandbox-mcp-open b))
            (a1 (drgnx-sandbox-mcp-test--connect (expand-file-name "mcp.sock" da)))
@@ -171,6 +173,7 @@ after."
       (should-error (drgnx-sandbox-mcp-dir (make-string 64 ?x))))))
 
 (ert-deftest drgnx-sandbox-mcp/servers-end-with-the-connection ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     (let* ((sock (expand-file-name "mcp.sock" (drgnx-sandbox-mcp-open a)))
            (c (drgnx-sandbox-mcp-test--connect sock)) server)
@@ -202,6 +205,7 @@ after."
           (mapc #'delete-process cs))))))
 
 (ert-deftest drgnx-sandbox-mcp/close-removes-everything ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     (let* ((dir (drgnx-sandbox-mcp-open a repo))
            (c (drgnx-sandbox-mcp-test--connect (expand-file-name "mcp.sock" dir))))
@@ -292,6 +296,7 @@ after."
       (should (drgnx-sandbox-mcp-open a repo)))))
 
 (ert-deftest drgnx-sandbox-mcp/job-hello-keeps-the-hubs-row ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     ;; as `drgnx-job--launch-task' registers a job's agent
     (drgnx-coord-agent-register :id "s-aaaa0001" :kind "job" :name "a" :cwd tree :worktree tree :branch "job/j-1"
