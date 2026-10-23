@@ -1084,28 +1084,26 @@ mod tests {
     use runstav::registry::{self, Class as WireClass};
     use std::path::Path;
 
-    const DDL: &str = include_str!("../../../../test/fixtures/work-db-6.sql");
-
     struct Hub {
         dir: tempfile::TempDir,
         front: Front,
+        coord: CoordDb,
         _store: urdr::Store,
     }
 
-    /// A front with runtime.db and work.db (schema 6), its gateway listening.
+    /// A front with runtime.db and work.db (schema 7, made by the writer's opening rule), its gateway listening.
     async fn hub() -> Hub {
         let dir = tempfile::tempdir().unwrap();
-        urdr::Connection::open(dir.path().join("work.db"))
-            .unwrap()
-            .execute_batch(DDL)
-            .unwrap();
+        let coord = CoordDb::spawn(dir.path().join("work.db"));
+        // the opening rule has run once a request is served: the file is there for the raw seeds below
+        coord.read(|_| Ok(())).await.unwrap();
         let (store, db) = crate::runtime_db::open(dir.path()).unwrap();
         let socket = dir.path().join("hub-x.sock");
         let front = Front::new(
             Cap::generate().unwrap(),
             socket.clone(),
             WorkDb::spawn(dir.path().join("work.db")).unwrap(),
-            CoordDb::spawn(dir.path().join("work.db")),
+            coord.clone(),
             Arc::new(NoBackend),
         );
         let env = runstav::paths::Env::new(&[("TMPDIR", dir.path().to_str().unwrap())], front.uid);
@@ -1115,6 +1113,7 @@ mod tests {
         Hub {
             dir,
             front,
+            coord,
             _store: store,
         }
     }
@@ -1455,13 +1454,50 @@ mod tests {
     async fn an_agents_spend_is_its_own_jobs() {
         let h = hub().await;
         let g = &h.front.gate;
-        urdr::Connection::open(h.dir.path().join("work.db"))
-            .unwrap()
-            .execute_batch(
-                "insert into spend values (1, 'j1', 'j1#1', 'agent-1', 'p', 'm', 10, 2, 0.5, 200);
-                 insert into spend values (2, 'j2', 'j2#1', 'agent-2', 'p', 'm', 7, 1, 0.25, 200);",
-            )
+        // the rows the engine records, through the ledger
+        let ledger = WorkLedger(h.coord.clone());
+        for (job, agent, input, output, cost) in [
+            ("j1", "agent-1", 10, 2, 0.5),
+            ("j2", "agent-2", 7, 1, 0.25),
+        ] {
+            ledger
+                .record(SpendRow {
+                    job: Some(job.into()),
+                    task: Some(format!("{job}#1")),
+                    agent: Some(agent.into()),
+                    provider: "p".into(),
+                    model: Some("m".into()),
+                    input,
+                    output,
+                    cost,
+                    status: 200,
+                })
+                .await;
+        }
+        // each row carries the tx that wrote it: the hub's, as the gateway
+        let by: Vec<(String, String, String, String)> = h
+            .coord
+            .read(|c| {
+                let mut st = c.prepare(
+                    "select s.job, t.actor, t.class, t.tool from spend s join tx t on t.id = s.tx \
+                     order by s.job",
+                )?;
+                let rows = st
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
             .unwrap();
+        let hub_tx = |job: &str| {
+            (
+                job.to_string(),
+                "hub".to_string(),
+                "system".to_string(),
+                "gateway".to_string(),
+            )
+        };
+        assert_eq!(by, vec![hub_tx("j1"), hub_tx("j2")]);
         let caller = |class, job: Option<&str>| Caller {
             class,
             sid: None,
