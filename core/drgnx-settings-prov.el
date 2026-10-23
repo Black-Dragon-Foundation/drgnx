@@ -424,7 +424,11 @@ RECORDS are VAR's resolved global writes, newest first."
       (when-let* ((d (assq var (and (boundp 'dir-local-variables-alist) dir-local-variables-alist))))
         (unless (cl-some (lambda (l) (memq (plist-get l :layer) '(W1 W2))) layers)
           (push (list :layer 'dir-local :kind 'dir-local :value (cdr d) :certain t :source "directory-local") layers)))
-      (when-let* ((f (assq var file-local-variables-alist)))
+      ;; `file-local-variables-alist' holds the dir-local values applied too: one equal to its dir-local entry is not
+      ;; the file's own.
+      (when-let* ((f (assq var file-local-variables-alist))
+                  ((let ((d (assq var (and (boundp 'dir-local-variables-alist) dir-local-variables-alist))))
+                     (not (and d (equal (cdr d) (cdr f)))))))
         (push (list :layer 'file-local :kind 'file-local :value (cdr f) :file buffer-file-name :certain t
                     :source "file-local variable")
               layers)))

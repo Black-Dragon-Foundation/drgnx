@@ -19,6 +19,8 @@
 (require 'subr-x)
 (require 'drgnx-timer)
 (require 'drgnx-config)
+(require 'drgnx-setting)
+(require 'drgnx-settings-workspace)
 
 (defconst drgnx-search-chunk-max-file-bytes 1048576
   "Files larger than this are never indexed.")
@@ -87,13 +89,31 @@ whitespace are dropped, so empty TEXT has none."
                      :schema '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))
                      :doc "Narrows what a project's semantic search indexes: only these globs, not these, or off.")
 
+(defun drgnx-search--globs-p (x)
+  "Non-nil when X is a list of strings (globs): safe from any workspace, since it can only narrow the list."
+  (and (proper-list-p x) (cl-every #'stringp x)))
+
+(drgnx-defsetting drgnx-search-include nil
+  "Only files matching one of these globs are indexed (nil: all); see `drgnx-search-config'."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project)
+
+(drgnx-defsetting drgnx-search-exclude nil
+  "Files matching one of these globs are not indexed; a workspace's are added to yours (see `drgnx-search-config')."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append)
+
+(drgnx-defsetting drgnx-search-off nil
+  "Non-nil turns a project's semantic search off; see `drgnx-search-config'."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project)
+
 (defun drgnx-search-config (root)
   "The search configuration of the project at ROOT.
-A plist (:include GLOBS :exclude GLOBS :off BOOL), read by the config layer (`search-project') from
-ROOT/.drgnx/search.eld; the defaults (all nil) when there is no such file.  The file is only read as data, never
-evaluated, and at most 64 KiB.  A file that is there but cannot be read (also: a `.drgnx' that cannot be searched,
-a `search.eld' that is a dangling symlink, not a regular file, over the limit or empty), does not hold a plist, or
-gives a key the wrong type (:include or :exclude not a list of strings, :off not t or nil) is
+A plist (:include GLOBS :exclude GLOBS :off BOOL): the settings `drgnx-search-include', `drgnx-search-exclude' and
+`drgnx-search-off' for ROOT (`drgnx-setting-for-root': your private workspace file, the workspace's shared
+.drgnx/settings.el, then your settings.el), where ROOT/.drgnx/search.eld, read by the config layer
+\(`search-project'), counts as the shared file's entries; all nil when nothing sets them.  The file is only read
+as data, never evaluated, and at most 64 KiB.  A file that is there but cannot be read (also: a `.drgnx' that
+cannot be searched, a `search.eld' that is a dangling symlink, not a regular file, over the limit or empty), does
+not hold a plist, or gives a key the wrong type (:include or :exclude not a list of strings, :off not t or nil) is
 \(:error \".drgnx/search.eld cannot be read: WHY\"), never the defaults:
 `drgnx-search-files' then signals instead of listing more than the project asked for.  With `:include' only the
 files matching one of its globs are indexed; `:exclude' removes files; `:off' t turns the
@@ -116,8 +136,9 @@ directory (\"vendor/\")."
            (t (plist-get (drgnx-config-problem 'search-project root) :text)))))
     (if problem
         (list :error (concat ".drgnx/search.eld cannot be read: " problem))
-      (let ((data (drgnx-config-get 'search-project nil root)))
-        (list :include (plist-get data :include) :exclude (plist-get data :exclude) :off (plist-get data :off))))))
+      (list :include (drgnx-setting-for-root 'drgnx-search-include root)
+            :exclude (drgnx-setting-for-root 'drgnx-search-exclude root)
+            :off (drgnx-setting-for-root 'drgnx-search-off root)))))
 
 (defun drgnx-search--glob-regexp (glob)
   "A regexp matching the relative paths GLOB selects (see `drgnx-search-config')."

@@ -183,6 +183,11 @@ the defaults — that could send files you meant to exclude to the provider. Ins
 the indexer stops with ".drgnx/search.eld cannot be read: …", a search of an index made earlier refuses with the same message (in the editor, from the command line and for agents), saving a file does not schedule a re-index, and Index
 Project, Index Status and `drgnx doctor` say what is wrong. Without the file, the defaults apply. The file is read as plain data (nothing in it is ever evaluated, and `;;` comments and keys this drgnx does not know are fine), and it may be at most 64 KiB: a bigger file is refused, not cut. An empty file is refused too; delete it for the defaults. The file is one of drgnx's configuration files: see the [configuration reference](../reference/config.md). A `.drgnx` or `search.eld` that is a symlink to a readable config (dotfile managers do that) works like the file itself.
 
+The same three keys are settings too: `drgnx-search-include`, `drgnx-search-exclude` and `drgnx-search-off`. A
+project's `.drgnx/settings.el` or your private workspace file can set them, and so can your `settings.el` for every
+project ([settings.md](settings.md), "Workspace settings"). `search.eld` counts as the project's shared settings; a
+workspace's excludes are added to yours.
+
 ## How fast
 
 Measured on one development machine with a local TEI server on a GPU (Qwen3-Embedding-0.6B, 1024 dimensions); yours will
