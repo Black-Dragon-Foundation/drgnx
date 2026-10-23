@@ -84,15 +84,23 @@ its front connection fresh."
 (ert-deftest drgnx-hub-client/front-call-fails-once-at-its-deadline ()
   (drgnx-hub-client-front-test--with '("DRGNX_FAKE_HUB_SILENT=coord/job-set")
     (should (eq (drgnx-hub-call-front "coord/held" (list :agent "a1" :held t)) t))   ; proven: the deadline is the call's
-    (let* ((t0 (float-time)) (failures 0) (data nil))
+    (let* ((failures 0) (data nil))
       (condition-case err (drgnx-hub-call-front "coord/job-set" (list :id "j1" :status "stopped") 0.5)
         (drgnx-hub-front-error (cl-incf failures) (setq data (cdr err))))
       (should (= failures 1))
-      (should (< (- (float-time) t0) 0.6))
       (should (equal data '(:code nil :message "the drgnx hub did not answer coord/job-set in time" :path nil)))
       ;; dropped: a late answer is never taken for the next call's, which connects again
       (should-not drgnx-hub--front-conn)
       (should (equal (cl-count "coord/job-set" (drgnx-hub-client-front-test--methods log) :test #'equal) 1)))))
+
+(ert-deftest drgnx-hub-client/front-call-ends-at-its-deadline ()
+  :tags '(:timing)    ; a wall-clock bound: a shared runner's clock judges nothing (docs/develop/ci.md)
+  (drgnx-hub-client-front-test--with '("DRGNX_FAKE_HUB_SILENT=coord/job-set")
+    (should (eq (drgnx-hub-call-front "coord/held" (list :agent "a1" :held t)) t))   ; proven: the deadline is the call's
+    (let ((t0 (float-time)))
+      (should-error (drgnx-hub-call-front "coord/job-set" (list :id "j1" :status "stopped") 0.5)
+                    :type 'drgnx-hub-front-error)
+      (should (< (- (float-time) t0) 0.6)))))
 
 (ert-deftest drgnx-hub-client/front-call-decodes-an-error-with-its-path ()
   (drgnx-hub-client-front-test--with
