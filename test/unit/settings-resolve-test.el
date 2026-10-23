@@ -197,4 +197,27 @@ dir."
     (drgnx-settings-resolve-test--down 'test/m)
     (should (= drgnx-srt--n 90))))
 
+(ert-deftest drgnx-settings-resolve/a-claim-stays-when-the-entry-goes ()
+  ;; A live sync that finds the entry gone, and Turn Off Package Settings, let go through the resolver: the module's
+  ;; value stays (never a bare teardown back to the default).
+  (require 'drgnx-settings-live)
+  (drgnx-settings-resolve-test--with (drgnx-srt--n)
+    (let ((drgnx-settings-changed-functions nil)
+          (drgnx-settings-live--stamps (make-hash-table :test 'equal)))
+      (drgnx-settings-resolve-test--def 'drgnx-srt--n 100)
+      (drgnx-settings-resolve-test--as 'test/m (drgnx-module-set 'drgnx-srt--n 80))
+      (drgnx-settings-resolve-test--settings "(drgnx-srt--n 50)")
+      (drgnx-settings-apply-global)
+      (should (= drgnx-srt--n 50))
+      (drgnx-settings-resolve-test--settings)
+      (drgnx-settings-live-sync (drgnx-config-file 'settings))
+      (should (= drgnx-srt--n 80))
+      (drgnx-settings-resolve-test--settings "(drgnx-srt--n 50)")
+      (drgnx-settings-live-sync (drgnx-config-file 'settings))
+      (should (= drgnx-srt--n 50))
+      (should (= (drgnx-settings-turn-off-package-settings) 1))
+      (should (= drgnx-srt--n 80))
+      (drgnx-settings-resolve-test--down 'test/m)
+      (should (= drgnx-srt--n 100)))))
+
 ;;; settings-resolve-test.el ends here

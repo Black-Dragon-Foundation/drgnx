@@ -24,6 +24,8 @@
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function drgnx-settings-resolve-entry "drgnx-settings-resolve" (var entry))
+(declare-function drgnx-settings-resolve-apply "drgnx-settings-resolve" (var))
+(declare-function drgnx-settings-claims "drgnx-settings-resolve" (var))
 
 ;; Emacs's own (custom.el, preloaded) and provenance's: bound dynamically here.
 (defvar custom--inhibit-theme-enable)
@@ -158,6 +160,14 @@ Its entry leaves `theme-value' (`custom-push-theme' with `reset'); the variable 
         (when (and (default-boundp var) (equal (default-value var) ours))
           (custom-theme-recalc-variable var))
         t))))
+
+(defun drgnx-settings-let-go (var)
+  "Let go of settings.el's value of VAR, whose entry the applied entries (`drgnx-settings-apply--entries') no longer
+hold: non-nil when drgnx had a value.  A variable modules claim goes through the resolver
+\(`drgnx-settings-resolve-apply'), so the claims' value stays; any other through `drgnx-settings-teardown'."
+  (if (and (fboundp 'drgnx-settings-claims) (drgnx-settings-claims var))
+      (and (drgnx-settings-resolve-apply var) t)
+    (drgnx-settings-teardown var)))
 
 ;;;; Applying settings.el
 
@@ -312,16 +322,18 @@ first."
 
 (defun drgnx-settings-turn-off-package-settings ()
   "Take every value settings.el gives a variable drgnx does not own out of Emacs now (design §4.2).
-Each goes by `drgnx-settings-teardown': back to the layer below, unless your Lisp set it since.  drgnx's own
+Each goes by `drgnx-settings-let-go': back to the layer below (the modules' claims on it stay), unless your Lisp set
+it since.  drgnx's own
 settings (keys, agents, trust …) stay.  Until Settings: Turn On Package Settings, or the next start, only drgnx's own
 entries apply."
   (interactive)
   (setq drgnx-settings-package-settings-off t)
-  (let ((n 0) (kept nil))
-    (dolist (cell drgnx-settings-apply--entries)
-      (if (drgnx-setting-own-p (car cell)) (push cell kept)
-        (when (drgnx-settings-teardown (car cell)) (cl-incf n))))
-    (setq drgnx-settings-apply--entries (nreverse kept))
+  (let* ((n 0)
+         (gone (cl-remove-if #'drgnx-setting-own-p drgnx-settings-apply--entries :key #'car)))
+    (setq drgnx-settings-apply--entries (cl-remove-if-not #'drgnx-setting-own-p drgnx-settings-apply--entries
+                                                          :key #'car))
+    (dolist (cell gone)                 ; after the entries changed: the resolver reads them
+      (when (drgnx-settings-let-go (car cell)) (cl-incf n)))
     (when (called-interactively-p 'interactive)
       (message "Package settings are off: %d taken out; drgnx's own settings stay (Settings: Turn On Package Settings)"
                n))

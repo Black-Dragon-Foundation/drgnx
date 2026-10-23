@@ -289,6 +289,9 @@ for a theme that is not in the list, and a forced disable would reset a later `s
 - `(drgnx-settings-teardown VAR)`: `custom-push-theme 'theme-value VAR 'drgnx 'reset`, then
   `custom-theme-recalc-variable` only while the value is still `equal` to drgnx's (V2); `saved-value` is cleared
   when no theme is left. Returns non-nil when drgnx had an entry.
+- `(drgnx-settings-let-go VAR)`: what removes settings.el's value of a variable once the applied entries no longer
+  hold it (a live sync, Turn Off): `drgnx-settings-resolve-apply` when modules claim VAR, so their value stays, else
+  `drgnx-settings-teardown`.
 - `(drgnx-settings-apply-global &key owned-only)` (start, safe mode, Turn On): reads `settings.el` with
   `drgnx-settings-file-state`, checks each top-level entry with `drgnx-setting-check` and pushes it, in Emacs's
   order (`custom--sort-vars`: `:set-after`, minor modes last). An entry that fails falls back alone by `:on-error`:
@@ -302,7 +305,7 @@ for a theme that is not in the list, and a forced disable would reset a later `s
 - `drgnx-settings-apply-durations`: seconds per push of the last apply (its `:set` included);
   `(drgnx-settings-apply-slow &optional THRESHOLD)` lists those over 1 ms, slowest first.
 - **Settings: Turn Off Package Settings** / **Turn On Package Settings** (registry ids `settings-package-off`,
-  `settings-package-on`, in `drgnx-config-register-commands`): teardown of every applied entry drgnx does not own, or
+  `settings-package-on`, in `drgnx-config-register-commands`): `drgnx-settings-let-go` of every applied entry drgnx does not own, or
   `drgnx-settings-apply-global` again. `drgnx-pkg-bisect` gains the step: when the problem shows with every module
   off, it tries once more with `DRGNX_PACKAGE_SETTINGS=off` and answers `:package-settings` when that clears it.
 - Language overrides (`(:mode …)` sections) are `core/drgnx-settings-mode.el`'s; module claims resolve with G2 in
@@ -467,8 +470,8 @@ the open projects' W1 and W2); a workspace file read for the first time after th
 
 `(drgnx-settings-live-sync FILE)` for a workspace file calls `drgnx-settings-workspace-sync` (its changes since the
 last sync; its roots' open buffers re-hacked when there are any) and runs `drgnx-settings-changed-functions` the same
-way. For settings.el it re-runs `drgnx-settings-apply-global` (idempotent), tears down
-variables the applied entries had and the file no longer names, calls `drgnx-settings-prov-watch` for the rest, and
+way. For settings.el it re-runs `drgnx-settings-apply-global` (idempotent), lets go of
+variables the applied entries had and the file no longer names (`drgnx-settings-let-go`), calls `drgnx-settings-prov-watch` for the rest, and
 runs `drgnx-settings-changed-functions` with FILE and CHANGES, a list of `(SCOPE VAR OLD NEW)` (SCOPE nil for the top
 level; `:unset` for an added or removed entry). It returns CHANGES, never signals and never prompts.
 
