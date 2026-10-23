@@ -6,8 +6,10 @@
 //! 4. only while holding it: a stale socket removed, the cap written (0600, temp + rename), the socket bound and made
 //!    0600, and the agent sockets (test-hooks) bound as `s/SID/hub.sock`, each session's dir private and apart from
 //!    the backend's `hub-HASH.d/` (review M10);
-//! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick;
-//! 6. the processes `runtime.db` recorded reaped, then the Lisp backend started (and kept running) on its own socket.
+//! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick, and the
+//!    writer (`norn::store::CoordDb`), which opens a schema-6 file now and at each tick ([`crate::coord`]);
+//! 6. the processes `runtime.db` recorded reaped, then the Lisp backend started (and kept running) on its own socket,
+//!    the `events` broadcaster and the `coord/notify` coalescer.
 //!
 //! It serves until SIGTERM, SIGINT, `shutdown` or the `--parent-pid` process is gone (checked each second), then
 //! stops accepting and removes the sockets and the cap while the lock is still held.
@@ -15,6 +17,7 @@
 use crate::backend::{self, Backend};
 use crate::cli::{AgentSocket, ServeArgs, Supervisor};
 use crate::conn;
+use crate::coord;
 use crate::forward::ToBackend;
 use crate::front::Front;
 use crate::hello::Socket;
@@ -151,6 +154,19 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    // the writer: a blocking first look at the file, before anything is served
+    let coord_db = {
+        let path = paths::data_dir(&env).join("work.db");
+        match tokio::task::spawn_blocking(move || norn::store::CoordDb::spawn(path)).await {
+            Ok(db) => db,
+            Err(e) => {
+                tracing::error!("cannot start: no work.db writer: {e}");
+                remove_all(&agent_paths);
+                remove(&socket, &cap_path);
+                return Exit::CannotStart;
+            }
+        }
+    };
     // what a crashed run left (its backend's group): killed before a new backend starts
     if let Err(e) = backend::reap_recorded(&runtime).await {
         tracing::warn!("{e}");
@@ -161,12 +177,15 @@ pub async fn run(args: ServeArgs) -> Exit {
         cap,
         socket.clone(),
         work_db,
+        coord_db,
         Arc::new(ToBackend(backend.clone())),
     ));
     // read-only at start and at each tick while work.db is newer than this hub
     front.set_schema(front.work_db.schema().await.unwrap_or(0));
     tokio::spawn(watch_schema(front.clone()));
     tokio::spawn(relay::run(events_rx, front.clone()));
+    tokio::spawn(coord::broadcast_events(front.clone()));
+    tokio::spawn(coord::notify_backend(front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());
     #[cfg(feature = "test-hooks")]
     let tick = args.idle_tick_ms.map_or(idle::TICK, Duration::from_millis);
@@ -311,6 +330,8 @@ async fn accept(listener: UnixListener, front: Arc<Front>, socket: Socket) {
 }
 
 /// work.db's schema every 2 s: read-only while it is newer than this hub's.  A read that fails keeps the last state.
+/// The writer looks at the file too (opened when it is there, again when it was replaced), and the `events`
+/// broadcaster sends what the Lisp backend wrote meanwhile (`drgnx-hub--events-check`'s 2 s).
 async fn watch_schema(front: Arc<Front>) {
     let mut every = tokio::time::interval(SCHEMA_TICK);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -321,6 +342,9 @@ async fn watch_schema(front: Arc<Front>) {
             Ok(n) => front.set_schema(n),
             Err(e) => tracing::warn!("cannot read work.db's schema: {e}"),
         }
+        let db = front.writer.db.clone();
+        let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+        front.writer.signals.events_soon();
     }
 }
 

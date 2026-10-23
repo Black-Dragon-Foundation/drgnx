@@ -81,6 +81,7 @@ mod tests {
             sid: sid.map(str::to_string),
             job: job.map(str::to_string),
             conn_id: 1,
+            backend: false,
         }
     }
 

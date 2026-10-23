@@ -179,6 +179,59 @@ named_string!(
     what: "a card's action: lowercase letters and -, a letter first, at most 32"
 );
 
+named_string!(
+    /// A job's, task's or card's state as the coordination store keeps it (`running`, `needs-input`, `settled`, …).
+    Status, max: 32, pattern: Some("^[a-z][a-z-]*$"),
+    ok: |s| {
+        let mut cs = s.chars();
+        cs.next().is_some_and(|c| c.is_ascii_lowercase())
+            && cs.all(|c| c.is_ascii_lowercase() || c == '-')
+    },
+    what: "a status: lowercase letters and -, a letter first, at most 32"
+);
+
+/// A JSON object of at most 64 KiB as JSON text (an event's, a card's or a job's `data`).  The store keeps it as the
+/// JSON it is; what is inside is the writer's and its reader's business.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct JsonObject(serde_json::Map<String, Value>);
+
+impl JsonObject {
+    /// The most bytes of JSON text.
+    pub const MAX: usize = 65_536;
+
+    pub fn into_inner(self) -> serde_json::Map<String, Value> {
+        self.0
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.0.get(key)
+    }
+}
+
+impl<'de> Deserialize<'de> for JsonObject {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let m = serde_json::Map::<String, Value>::deserialize(d)?;
+        let n = serde_json::to_string(&m).map_or(usize::MAX, |t| t.len());
+        if n > Self::MAX {
+            return Err(de::Error::custom(format!(
+                "a JSON object of at most 64 KiB (65536 bytes as JSON), not {n}"
+            )));
+        }
+        Ok(JsonObject(m))
+    }
+}
+
+impl JsonSchema for JsonObject {
+    fn schema_name() -> Cow<'static, str> {
+        "JsonObject".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"type": "object",
+                      "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)"})
+    }
+}
+
 /// What `Bounded` bounds: a string's characters or a list's items.
 pub trait Bound {
     /// The JSON Schema keyword of the bound (`maxLength`, `maxItems`).
@@ -499,6 +552,12 @@ mod tests {
         refuses::<TaskRef>(json!(""), json!("t"));
         refuses::<AgentName>(json!("a\u{7f}"), json!("Agent 7"));
         refuses::<CardAction>(json!("Approve"), json!("approve-all"));
+        refuses::<Status>(json!("In-review"), json!("needs-input"));
+        refuses::<JsonObject>(json!([1]), json!({"a": [1, {"b": null}]}));
+        refuses::<JsonObject>(
+            json!({"t": "x".repeat(65_536)}),
+            json!({"t": "x".repeat(65_000)}),
+        );
         refuses::<RequestId>(json!(-1), json!(3));
         refuses::<RequestId>(json!("r".repeat(129)), json!("r1"));
         refuses::<Usd>(json!(1_000_001), json!(0.5));

@@ -1,19 +1,22 @@
-//! The front: what every connection shares, and the methods it serves itself — `hello`, `ping`, `status`,
-//! `subscribe`, `shutdown` and `events/since`.  Every other method goes to [`Forward`].
+//! The front: what every connection shares, and the methods it serves itself (`Home::Front`) — `hello`, `ping`,
+//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify` and the writes of [`crate::coord`].
+//! Every other method goes to [`Forward`].
 //!
-//! [`Front::line`] is one line of one connection: [`dispatch::prelude`], the refusal noted, the handler, the answer
-//! queued.  [`Front::start_line`] is the same for the connection loop, except that a forwarded call runs on a task
-//! of its own (at most [`MAX_IN_FLIGHT`] per connection; past that the connection is not read until one ends).
+//! [`Front::line`] is one line of one connection: [`dispatch::prelude_as`] (the connection is the backend's when its
+//! peer pid is the backend's), the refusal noted, the handler, the answer queued.  [`Front::start_line`] is the same
+//! for the connection loop, except that a forwarded call runs on a task of its own (at most [`MAX_IN_FLIGHT`] per
+//! connection; past that the connection is not read until one ends).
 
 use crate::Exit;
 use crate::conn::Outbox;
+use crate::coord::{self, Signals, ToolHub, Writer};
 use crate::dispatch::{self, Call, Caller, ErrorAnswerOrDrop, Forward, Refusals};
 use crate::hello::{self, Session};
 use crate::store::WorkDb;
 use crate::version::COMMIT;
 use runstav::line::MAX_HUB_LINE;
 use runstav::methods::Params;
-use runstav::methods::hub::{HubStatus, Runtime};
+use runstav::methods::hub::{HubStatus, Runtime, StoreStatus, WriterState};
 use runstav::proof::Cap;
 use runstav::registry;
 use runstav::registry::{Class, Method};
@@ -55,6 +58,12 @@ pub struct Front {
     /// When the hub started (RFC 3339, UTC).
     pub started: String,
     pub work_db: WorkDb,
+    /// The writer of the front's methods ([`crate::coord`]).
+    pub writer: Writer,
+    /// The coordination tools' shared state, on the same writer (for the MCP hosting).
+    pub tools: Arc<norn::tools::Coord>,
+    /// The coordination tools (`norn::tools::tools`).
+    pub tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]>,
     forward: Arc<dyn Forward>,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
@@ -69,7 +78,20 @@ pub struct Front {
 }
 
 impl Front {
-    pub fn new(cap: Cap, socket: PathBuf, work_db: WorkDb, forward: Arc<dyn Forward>) -> Front {
+    /// The front on the main SOCKET with the user's CAP, reading through WORK_DB and writing through COORD_DB, the
+    /// rest to FORWARD.
+    pub fn new(
+        cap: Cap,
+        socket: PathBuf,
+        work_db: WorkDb,
+        coord_db: norn::store::CoordDb,
+        forward: Arc<dyn Forward>,
+    ) -> Front {
+        let signals = Arc::new(Signals::default());
+        let hub = Arc::new(ToolHub {
+            forward: forward.clone(),
+            signals: signals.clone(),
+        });
         Front {
             cap,
             pid: std::process::id(),
@@ -77,6 +99,12 @@ impl Front {
             socket,
             started: crate::log::rfc3339(now()),
             work_db,
+            writer: Writer {
+                db: coord_db.clone(),
+                signals,
+            },
+            tools: Arc::new(norn::tools::Coord::new(coord_db, hub)),
+            tool_list: norn::tools::tools().into(),
             forward,
             refusals: Mutex::new(Refusals::default()),
             schema: AtomicU32::new(0),
@@ -90,6 +118,11 @@ impl Front {
 
     pub fn next_conn(&self) -> u64 {
         self.next_conn.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Where the methods the front does not serve go.
+    pub fn forward(&self) -> &dyn Forward {
+        &*self.forward
     }
 
     /// work.db's schema is SCHEMA now (0: no file): read-only while it is newer than this hub's.  Logged when that
@@ -167,6 +200,7 @@ impl Front {
     }
 
     pub fn status(&self) -> HubStatus {
+        let schema = self.schema.load(Ordering::Relaxed);
         HubStatus {
             pid: u64::from(self.pid),
             socket: Some(self.socket.to_string_lossy().into_owned()),
@@ -175,8 +209,18 @@ impl Front {
             proto_min: Some(u64::from(registry::PROTO_MIN)),
             records: Some(u64::from(registry::RECORDS)),
             drgnx_version: Some(COMMIT.into()),
-            schema: Some(u64::from(self.schema.load(Ordering::Relaxed))),
+            schema: Some(u64::from(schema)),
             read_only: self.read_only().map(u64::from),
+            // from the schema at the last tick: the writer opens a schema-6 file at that tick too
+            store: Some(StoreStatus {
+                schema: u64::from(schema),
+                writer: match schema {
+                    s if s == norn::store::SCHEMA => WriterState::Ready,
+                    s if s > norn::store::SCHEMA => WriterState::ReadOnly,
+                    _ => WriterState::NotReady,
+                },
+                writes: self.writer.signals.writes(),
+            }),
             runtime: Some(Runtime {
                 version: env!("CARGO_PKG_VERSION").into(),
                 commit: COMMIT.into(),
@@ -252,6 +296,10 @@ impl Front {
         } = f;
         let (conn, class) = (caller.conn_id, caller.class);
         let result = self.forward.call(caller, method, params).await;
+        // the Lisp backend wrote the rest of the event log meanwhile: its rows go out now
+        if method.writes && result.is_ok() {
+            self.writer.signals.events_soon();
+        }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
         {
@@ -264,7 +312,9 @@ impl Front {
 
     /// Everything of a line but a forwarded call, which it gives back.
     async fn begin(&self, s: &mut Session, out: &Arc<Outbox>, text: &str) -> Option<Forwarded> {
-        let call = match dispatch::prelude(s.class, s.proto, self.read_only(), text) {
+        // the backend's own connection (its peer pid; R-FIX-M9 must keep marking it): held to what the front serves
+        let backend = s.peer_pid.is_some() && s.peer_pid == self.forward.backend_pid();
+        let call = match dispatch::prelude_as(s.class, backend, s.proto, self.read_only(), text) {
             Ok(c) => c,
             Err(ErrorAnswerOrDrop::Drop(why)) => {
                 tracing::info!(conn = s.conn, "dropped {why}");
@@ -284,6 +334,8 @@ impl Front {
             params,
             ignored,
         } = call;
+        let mut caller = s.caller();
+        caller.backend = backend;
         let mut stop = false;
         let mut restart = false;
         let result = match params {
@@ -292,6 +344,8 @@ impl Front {
                 hello::hello(s, &self.cap, &p, schema).map(|r| json!(r))
             }
             Params::Ping(_) => Ok(json!({"pid": self.pid})),
+            // the backend never waits on itself: its status is the front's
+            Params::Status(_) if backend => Ok(json!(self.status())),
             Params::Status(_) => Ok(json!(self.status_with_backend().await)),
             Params::Subscribe(_) => {
                 self.subscribers
@@ -314,15 +368,25 @@ impl Front {
                 .await
                 .map(|page| json!(page))
                 .map_err(internal),
-            other => {
-                return Some(Forwarded {
-                    id,
-                    method,
-                    params: other,
-                    ignored,
-                    caller: s.caller(),
-                });
+            Params::CoordNotify(_) => {
+                self.writer.signals.events_soon();
+                if !backend {
+                    self.writer.signals.notify_soon();
+                }
+                Ok(json!(true))
             }
+            other => match coord::serve(&self.writer, &caller, other).await {
+                Ok(result) => result,
+                Err(params) => {
+                    return Some(Forwarded {
+                        id,
+                        method,
+                        params,
+                        ignored,
+                        caller,
+                    });
+                }
+            },
         };
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
@@ -404,6 +468,7 @@ mod tests {
             Cap::generate().unwrap(),
             dir.join("hub-x.sock"),
             WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
             Arc::new(NoBackend),
         )
     }
@@ -438,6 +503,10 @@ mod tests {
         assert_eq!(v["runtime"]["commit"], COMMIT);
         assert_eq!(v["refusals"], json!({"count": 0, "last": []}));
         assert_eq!(v["job_agents"], JOB_AGENTS);
+        assert_eq!(
+            v["store"],
+            json!({"schema": 0, "writer": "not-ready", "writes": 0})
+        );
         assert!(v.get("read_only").is_none(), "{v}");
         let started = v["started"].as_str().unwrap();
         assert!(started.len() == 20 && started.ends_with('Z'), "{started}");
@@ -585,6 +654,7 @@ mod tests {
             Cap::generate().unwrap(),
             dir.join("hub-x.sock"),
             WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
             Arc::new(Gated(gate)),
         ))
     }
@@ -656,6 +726,62 @@ mod tests {
             v.get("backend").is_none() && v.get("gateway_port").is_none(),
             "{v}"
         );
+    }
+
+    /// A backend whose pid is 4242, counting the calls forwarded to it.
+    struct Behind(std::sync::atomic::AtomicUsize);
+
+    impl Forward for Behind {
+        fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> dispatch::Answer<'a> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(json!(true)) })
+        }
+
+        fn backend_pid(&self) -> Option<i32> {
+            Some(4242)
+        }
+    }
+
+    #[tokio::test]
+    async fn the_backends_connection_is_held_to_what_the_front_serves() {
+        let dir = tempfile::tempdir().unwrap();
+        let behind = Arc::new(Behind(std::sync::atomic::AtomicUsize::new(0)));
+        let f = Front::new(
+            Cap::generate().unwrap(),
+            dir.path().join("hub-x.sock"),
+            WorkDb::spawn(dir.path().join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            behind.clone(),
+        );
+        let mut s = Session::new(f.next_conn(), Socket::Main);
+        s.class = Class::User;
+        s.peer_pid = Some(4242);
+        let out = Arc::new(Outbox::new(s.conn));
+        f.line(&mut s, &out, r#"{"id":1,"method":"job/status"}"#)
+            .await;
+        f.line(&mut s, &out, r#"{"id":2,"method":"subscribe"}"#)
+            .await;
+        f.line(&mut s, &out, r#"{"id":3,"method":"status"}"#).await;
+        let a = answers(&out);
+        assert_eq!(
+            a[0]["error"],
+            json!({"code": "not-allowed", "message": "the backend may call only what the front serves"})
+        );
+        assert_eq!(
+            a[1]["error"]["message"],
+            "the backend hears the front through notifications"
+        );
+        // its status never asks the backend
+        assert!(a[2]["result"].get("backend").is_none(), "{a:?}");
+        assert_eq!(behind.0.load(Ordering::SeqCst), 0);
+        // another pid's user connection is forwarded as before
+        let mut t = Session::new(f.next_conn(), Socket::Main);
+        t.class = Class::User;
+        t.peer_pid = Some(4243);
+        f.line(&mut t, &out, r#"{"id":4,"method":"job/status"}"#)
+            .await;
+        assert_eq!(answers(&out), vec![json!({"id": 4, "result": true})]);
+        assert_eq!(behind.0.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

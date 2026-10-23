@@ -16,7 +16,7 @@
 //!   to 10 s, log `front-answer {...}`, and answer METHOD with ANSWER, or with the front's answer when ANSWER is
 //!   `"$front"`;
 //! - logs `notification {"method", "params"}` for every `coord/notify` and `budget` it receives (its front
-//!   connection never subscribes);
+//!   connection never subscribes); a line without an id (a notification) gets no answer;
 //! - when the script's `trigger` method (default `coord/notify`) is called, sends its subscribers the events of the
 //!   file `events` (a JSON array of `{event, data}`), then `flood` `card` events of `flood_size` bytes of title;
 //! - ends when `DRGNX_HUB_PARENT_PID` is gone (checked each second), unless the script says `ignore_parent: true`.
@@ -285,6 +285,8 @@ fn serve(stream: UnixStream, shared: &Shared) {
             None => answer(&shared.script, &method),
         };
         match answer {
+            // a notification (the front's coalesced `coord/notify`) is never answered
+            Answer::Line(_) if id.is_null() => {}
             Answer::Line(v) => {
                 let mut obj = match v {
                     Value::Object(o) => o,

@@ -1,7 +1,9 @@
 //! The backend's events, relayed (design 8.2, review C5): the front subscribes to the backend once per backend start,
 //! and each event the backend sends is decoded against the registry's event type of its name before the front's
-//! subscribers get it.  Only the nine kinds main broadcasts are relayed; an event of another name, or one whose data
-//! does not decode, is dropped and logged (its name, cut, and the path where it failed; never its data).
+//! subscribers get it.  Only the eight kinds main broadcasts besides `events` are relayed (`events`, the event log, is
+//! the front's own since its writer writes the log: [`crate::coord`]; the backend's is dropped before it gets here); an
+//! event of another name, or one whose data does not decode, is dropped and logged (its name, cut, and the path where
+//! it failed; never its data).
 
 use crate::front::Front;
 use runstav::events;
@@ -9,11 +11,10 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// The events the Lisp backend broadcasts on main (`drgnx-hub--broadcast`, `drgnx-gateway--emit`).
-pub const RELAYED: [&str; 9] = [
+/// The events the Lisp backend broadcasts on main (`drgnx-hub--broadcast`, `drgnx-gateway--emit`), but `events`.
+pub const RELAYED: [&str; 8] = [
     "agent",
     "agent-entries",
-    "events",
     "lease-released",
     "fallback",
     "card",
@@ -86,9 +87,13 @@ mod tests {
         let mut names: Vec<&str> = all.iter().map(|e| e["event"].as_str().unwrap()).collect();
         names.sort_unstable();
         let mut want = RELAYED.to_vec();
+        want.push("events");
         want.sort_unstable();
         assert_eq!(names, want, "one event of each kind");
-        for e in &all {
+        // the event log is the front's: a backend's `events` is never relayed
+        let log = all.iter().find(|e| e["event"] == "events").unwrap();
+        assert!(check("events", &log["data"]).is_err());
+        for e in all.iter().filter(|e| e["event"] != "events") {
             let name = e["event"].as_str().unwrap();
             let relayed = check(name, &e["data"]).unwrap_or_else(|w| panic!("{name}: {w}"));
             assert_eq!(

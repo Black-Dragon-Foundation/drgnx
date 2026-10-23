@@ -1753,6 +1753,12 @@ impl Runner<'_> {
         }
         let db =
             rusqlite::Connection::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // "sql_file": a file of statements first (a schema's DDL, such as fixtures/work-db-6.sql)
+        if step.obj.contains_key("sql_file") {
+            let file = self.text(idx, step, "sql_file")?;
+            let sql = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
+            db.execute_batch(&sql).map_err(|e| format!("{file}: {e}"))?;
+        }
         for sql in self.strings(idx, step, "sql")? {
             db.execute_batch(&sql).map_err(|e| format!("{sql}: {e}"))?;
         }
@@ -1887,8 +1893,33 @@ impl Runner<'_> {
             } else {
                 Ok(())
             }
+        } else if let Some(p) = step.obj.get("count") {
+            // after "for_ms", the lines matching "count" number "at_least" (0) to "at_most" (any)
+            let p = self.subst(Some(i), p, false);
+            std::thread::sleep(ms(&step.obj, "for_ms", 500));
+            let text = std::fs::read_to_string(&file).unwrap_or_default();
+            let n = text
+                .lines()
+                .filter(|l| match &p {
+                    Value::String(s) => l.contains(s.as_str()),
+                    p => serde_json::from_str::<Value>(l)
+                        .is_ok_and(|v| matcher::matches(p, &v, &mut self.caps.clone()).is_ok()),
+                })
+                .count();
+            let bound = |k: &str| step.obj.get(k).and_then(Value::as_u64).map(|v| v as usize);
+            let (lo, hi) = (
+                bound("at_least").unwrap_or(0),
+                bound("at_most").unwrap_or(usize::MAX),
+            );
+            if (lo..=hi).contains(&n) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the fake backend logged {p} {n} times, not {lo} to {hi}"
+                ))
+            }
         } else {
-            Err("backend_log needs expect_line or expect_no_line".into())
+            Err("backend_log needs expect_line, expect_no_line or count".into())
         }
     }
 

@@ -95,6 +95,26 @@ pub struct Backend {
     pub pid: Option<u64>,
 }
 
+/// Whether the front's writer can write work.db: only a schema-6 file the Lisp side made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WriterState {
+    Ready,
+    NotReady,
+    ReadOnly,
+}
+
+/// work.db as the front's writer has it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoreStatus {
+    /// `meta.schema` at the last look (0: no file).
+    pub schema: u64,
+    pub writer: WriterState,
+    /// The transactions the front's methods committed since the hub started.
+    pub writes: u64,
+}
+
 /// The hub's status: the Lisp hub's keys and the front's.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +137,9 @@ pub struct HubStatus {
     /// work.db's schema, when it is newer than the hub's and so the hub is read-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only: Option<u64>,
+    /// The front's writer (none from a Lisp hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<StoreStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<Runtime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,37 +246,37 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "hello", Hello(HelloParams) -> HelloReply,
-            classes: [User, Agent, Service], writes: false,
+            classes: [User, Agent, Service], writes: false, home: Front,
             doc: "a connection's first line: versions, and the proofs that make it a user connection",
         ),
         method!(
             "ping", Ping(Empty) -> PingResult,
-            classes: [User, Agent, Service], writes: false,
+            classes: [User, Agent, Service], writes: false, home: Front,
             doc: "the hub's pid",
         ),
         method!(
             "status", Status(Empty) -> HubStatus,
-            classes: [User, Agent, Service], writes: false,
+            classes: [User, Agent, Service], writes: false, home: Front,
             doc: "the hub's state: versions, refusals, read-only, the backend",
         ),
         method!(
             "restart", Restart(Empty) -> bool,
-            classes: [User], writes: false,
+            classes: [User], writes: false, home: Front,
             doc: "answers true, then the hub exits 75 for its supervisor to start it again",
         ),
         method!(
             "shutdown", Shutdown(Empty) -> bool,
-            classes: [User], writes: false,
+            classes: [User], writes: false, home: Front,
             doc: "answers true, then the hub exits",
         ),
         method!(
             "subscribe", Subscribe(Empty) -> bool,
-            classes: [User], writes: false,
+            classes: [User], writes: false, home: Front,
             doc: "this connection receives the events from now on",
         ),
         method!(
             "events/since", EventsSince(EventsSinceParams) -> EventsPage,
-            classes: [User], writes: false,
+            classes: [User], writes: false, home: Front,
             doc: "the event log after since (0), oldest first, at most limit (200; at most 1000)",
         ),
         method!(

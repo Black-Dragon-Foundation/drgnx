@@ -1,10 +1,12 @@
-//! The events a hub sends unasked, `{event, data}`: the nine the Lisp backend broadcasts on main
-//! (`core/drgnx-hub.el`, `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge` and `notice`.  The front
-//! relays a backend event only when it decodes as its type (strict: an unknown key is an error with its path).
+//! The events a hub sends unasked, `{event, data}`: the nine the Lisp backend broadcast on main (`core/drgnx-hub.el`,
+//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge` and `notice`.  Each names the side that sends
+//! it ([`EventType::from`]): `events` is the front's since the front writes work.db (its writer's new rows), the
+//! other eight the backend's.  The front relays a backend event only when it decodes as its type (strict: an unknown
+//! key is an error with its path).
 
 use crate::methods::agents::{Entry, Snapshot};
 use crate::methods::hub::EventsPage;
-use crate::registry::{check_as, schema_of};
+use crate::registry::{Home, check_as, schema_of};
 use crate::types::{Nonce, null_as_empty};
 use crate::wire::Error;
 use schemars::{JsonSchema, Schema};
@@ -15,6 +17,8 @@ use std::sync::LazyLock;
 /// One event: its name, a line of doc, the JSON Schema of its `data` and its check (decode, then re-encode).
 pub struct EventType {
     pub name: &'static str,
+    /// Who sends it: the front, or the Lisp backend (whose events the front relays).
+    pub from: Home,
     pub doc: &'static str,
     pub data: fn() -> Schema,
     pub check: fn(&Value) -> Result<Value, Error>,
@@ -147,9 +151,10 @@ pub struct Notice {
 }
 
 macro_rules! event {
-    ($name:literal, $ty:ty, $doc:literal) => {
+    ($name:literal, $ty:ty, $from:ident, $doc:literal) => {
         EventType {
             name: $name,
+            from: Home::$from,
             doc: $doc,
             data: schema_of::<$ty>,
             check: check_as::<$ty>,
@@ -162,40 +167,62 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "agent",
             AgentEvent,
+            Backend,
             "a session's snapshot changed (at most one per session per 50 ms)"
         ),
         event!(
             "agent-entries",
             AgentEntries,
+            Backend,
             "a session's entries new or changed since the last time"
         ),
         event!(
             "events",
             EventsPage,
+            Front,
             "the event log's new rows (at most 200 a time, every 0.25 s at most)"
         ),
-        event!("lease-released", LeaseReleased, "a task's claim ran out"),
+        event!(
+            "lease-released",
+            LeaseReleased,
+            Backend,
+            "a task's claim ran out"
+        ),
         event!(
             "fallback",
             Fallback,
+            Backend,
             "a request or a task moved to the next provider or profile"
         ),
-        event!("card", Card, "a job's card needs the user"),
+        event!("card", Card, Backend, "a job's card needs the user"),
         event!(
             "job",
             JobChanged,
+            Backend,
             "a job's status, tasks or open cards changed"
         ),
-        event!("budget", Budget, "a job's spend reached its budget"),
+        event!(
+            "budget",
+            Budget,
+            Backend,
+            "a job's spend reached its budget"
+        ),
         event!(
             "request",
             Request,
+            Backend,
             "the gateway forwarded a request: its tokens and cost"
         ),
-        event!("challenge", Challenge, "the hub's nonce, sent on accept"),
+        event!(
+            "challenge",
+            Challenge,
+            Front,
+            "the hub's nonce, sent on accept"
+        ),
         event!(
             "notice",
             Notice,
+            Front,
             "a message for the user from the hub itself"
         ),
     ];

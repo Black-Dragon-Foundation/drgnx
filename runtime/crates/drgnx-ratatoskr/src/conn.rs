@@ -233,6 +233,7 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     let out = Arc::new(Outbox::new(id));
     let writer = tokio::spawn(write_loop(w, out.clone()));
     let mut session = Session::new(id, socket);
+    session.peer_pid = cred.pid();
     // the hub's challenge, the first line on every connection (design 4.2)
     match proof::nonce() {
         Ok(n) => {
