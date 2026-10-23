@@ -182,6 +182,23 @@ credentials"): a private key block, an AWS key id, a key with a known prefix (`s
 `glpat-`, `xoxb-` and the like), `password=…`-style assignments (`password`, `passwd`, `secret`, `token`, `api_key`
 with a value of 8 or more characters), and long random-looking strings. Commit ids, paths, URLs and dates pass.
 
+## Removing something for good
+
+The store keeps every version of what is written into it. When a secret or a personal text got in by mistake,
+**excise** it: only you can, and the reason you give is kept, never the text.
+
+- Excising a task, note or other entry replaces its title, text and data (or the fields you name) with
+  `[excised <n>]` in every version it ever had, in the search index, in its embedding, in the stored replies and
+  notes of the changes that wrote it, and in the notices and cards that quoted it. Excising one change does the
+  same for what that change wrote. The history still shows that something changed, and who changed it.
+- Then the store file is compacted, so the old bytes leave the file and its write-ahead log. If a drgnx editor still
+  has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
+  after closing it.
+- **Copies outside the store** are listed, not changed silently: the dated backups and the pre-upgrade copies
+  (`backup/work-pre7-*.db`, `work.db.schema5`) that still hold the text, which you can have deleted; exports, which are
+  made again; and session transcripts holding the text, which can be rewritten without it.
+- A value shorter than 12 characters is not searched for in those copies, since it would match unrelated text.
+
 ## When something you trust is held back
 
 A checker that stays silent, or a shorthand that does not apply: look for **Restricted Mode** in the status bar, and trust

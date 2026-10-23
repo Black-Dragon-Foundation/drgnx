@@ -417,6 +417,10 @@ where
             Some(TRUNCATED) => Err(WriteError::Refused(
                 "the first answer was too large to replay; read the entity".into(),
             )),
+            // `[excised <tx>]` (Task 8) is no JSON value, so it can never be a stored answer.
+            Some(text) if text.starts_with(super::excise::MARKER_PREFIX) => Err(
+                WriteError::Refused("this answer was excised; read the entity".into()),
+            ),
             Some(text) => {
                 let value = serde_json::from_str(text).map_err(|e| {
                     WriteError::Refused(format!(

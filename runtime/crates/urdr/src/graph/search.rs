@@ -35,9 +35,16 @@ pub fn fts_put(
 /// which such a table refuses), so the delete is followed by `optimize`: every segment is rewritten without its
 /// tombstoned entries (this row's and every replaced version's), and `secure_delete=ON` zeroes the old pages.
 pub fn fts_delete(tx: &mut Tx<'_>, n: i64) -> Result<(), WriteError> {
-    let sql = tx.sql();
-    sql.execute("delete from entity_fts where rowid = ?1", params![n])?;
-    sql.execute("insert into entity_fts(entity_fts) values ('optimize')", [])?;
+    tx.sql()
+        .execute("delete from entity_fts where rowid = ?1", params![n])?;
+    fts_optimize(tx)
+}
+
+/// Rewrite every FTS segment without its tombstoned entries (see [`fts_delete`]): excise runs it once after
+/// [`fts_put`] of each entity it blanked, so the old versions' tokens leave the file.
+pub(crate) fn fts_optimize(tx: &mut Tx<'_>) -> Result<(), WriteError> {
+    tx.sql()
+        .execute("insert into entity_fts(entity_fts) values ('optimize')", [])?;
     Ok(())
 }
 
