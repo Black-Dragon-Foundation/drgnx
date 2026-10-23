@@ -168,7 +168,8 @@ on a timer, never inside the process filter that saw the turn end."
 (defun drgnx-work-collect-jobs ()
   "Record the commits of the jobs that worked on a task and ended (each job once), in the repository
 the job started in (its worktree may be gone by now).  Through the hub: `graph/record' with the key `job ID' (which
-the hub keeps, so a job is never collected twice), or the key alone (`graph/put-parsed') when there is nothing to record."
+the hub keeps, so a job is never collected twice), or the key alone (`graph/put-parsed') when there is nothing to
+record."
   (require 'drgnx-jobs)
   (dolist (job (drgnx-jobs-list))
     (let* ((id (plist-get job :id)) (key (concat "job " id)))
