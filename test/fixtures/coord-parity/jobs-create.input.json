@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "clock": [],
+  "tables": ["job", "jtask", "jdep", "event"],
+  "calls": [
+    {"fn": "drgnx-coord-job-create", "now": 100.0, "args": {"id": "j1", "title": "Ship it", "plan": "plans/j1.md", "repo": "r", "data": {"plan": "plans/j1.md", "budget": 5},
+      "tasks": [{"n": 1, "title": "Build", "role": "implement", "deps": []},
+                {"n": 2, "title": "Test", "role": "test", "deps": [1]},
+                {"n": 3, "title": "Docs", "role": "docs", "deps": [1, 2]}]}},
+    {"fn": "drgnx-coord-job-create", "now": 100.5, "args": {"id": "j2", "title": "Bare", "plan": null, "repo": null, "tasks": []}},
+    {"fn": "drgnx-coord-job-set", "now": 101.0, "args": {"id": "j1", "status": "running"}},
+    {"fn": "drgnx-coord-job-set", "now": 102.0, "args": {"id": "j1", "status": "running"}},
+    {"fn": "drgnx-coord-job-set", "now": 103.0, "args": {"id": "j1", "data": {"budget": 7, "plan": "plans/j1.md"}}},
+    {"fn": "drgnx-coord-job-set", "now": 104.0, "args": {"id": "j2", "status": "done", "data": {"title": "x"}}}
+  ]
+}

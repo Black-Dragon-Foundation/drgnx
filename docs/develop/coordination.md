@@ -151,9 +151,17 @@ is deleted. Rules:
   mark takes an optional event of its own; `agent_register` keeps what is not given and `clear` nulls named fields.
   Every writer takes the caller's clock (`now`). The typed readers are in `read::{messages,cards,review,agents}`.
   `Held` carries the versions only: the caller adds `changes` from the decision reader.
-- **Parity.** `test/fixtures/coord-parity/CASE.input.json` (`setup`, `clock`, `calls`) is run by `gen.el` against the
-  real Lisp functions, which writes `CASE.expect.json` (results and tables); `norn/tests/parity.rs` replays each input
-  against the Rust writers with the same clock. `test/fixtures/work-db-6.sql` is the schema every Rust test starts
+- **Jobs, tasks, decisions, pruning.** `write::jobs` (`job_create`, `job_set`), `write::tasks` (`claim`,
+  `set_status`, `force_status`, `heartbeat`, `renew`, `release_stale`; the lease is 15 minutes, only `claimed` and
+  `running` claims go stale, so `needs-input` and `in-review` keep theirs), `write::decisions` (`held_check`,
+  `decide`: the version check, 6 decisions a minute per agent, `current` versus `proposed`, `replaces`, the author's
+  own `seen`) and `write::prune` (30 days and 100,000 rows; questions, answers and decisions are kept; the
+  `event-pruned` meta key) port the Lisp of the same names. Each takes the time as an argument. The readers are
+  `read::{jobs,tasks,decisions}`.
+- **Parity.** `test/fixtures/coord-parity/CASE.input.json` (`setup`, `clock`, `calls`, optionally `tables`, the tables
+  to compare besides `event` and `meta`) is run by `gen.el` against the real Lisp functions, which writes
+  `CASE.expect.json` (results and tables); `norn/tests/parity.rs` replays each input against the Rust writers with the
+  same clock. A call with `"now": T` sees T at every `float-time`; a refused call is `{"signal": MESSAGE}`. `test/fixtures/work-db-6.sql` is the schema every Rust test starts
   from. Run `gen.el` by hand in the build container (its header has the commands); the fixtures stay when the Lisp is
   deleted.
 

@@ -1,0 +1,23 @@
+{
+  "setup": [
+    "insert into event (at, agent, kind, summary) values (1.0, 'a', 'edit', 'e1')",
+    "insert into event (at, agent, kind, summary) values (2.0, 'a', 'edit', 'e2')",
+    "insert into event (at, agent, kind, summary) values (1.0, 'a', 'question', 'q')",
+    "insert into event (at, agent, kind, summary) values (1.0, 'a', 'answer', 'an')",
+    "insert into event (at, agent, kind, summary) values (1.0, 'a', 'decision', 'd')",
+    "insert into event (at, agent, kind, summary) values (3000000.0, 'a', 'edit', 'e6')",
+    "insert into event (at, agent, kind, summary) values (3000000.0, 'a', 'test', 't7')",
+    "insert into event (at, agent, kind, summary) values (90000000.0, 'a', 'edit', 'e8')"
+  ],
+  "clock": [],
+  "tables": ["event", "meta"],
+  "calls": [
+    {"fn": "drgnx-coord-events-prune", "now": 5000000.0, "args": {}},
+    {"fn": "drgnx-coord-events-prune-daily", "now": 5000000.0, "args": {}},
+    {"fn": "drgnx-coord-events-prune-daily", "now": 5000100.0, "args": {}},
+    {"fn": "drgnx-coord-events-prune-daily", "now": 6000000.0, "args": {}},
+    {"fn": "drgnx-coord--events-cap", "args": {"max_rows": 4}},
+    {"fn": "drgnx-coord--events-cap", "args": {"max_rows": 3}},
+    {"fn": "drgnx-coord--events-cap", "args": {"max_rows": 1}}
+  ]
+}

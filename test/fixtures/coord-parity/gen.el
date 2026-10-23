@@ -6,7 +6,7 @@
 ;;
 ;; For each CASE.input.json {setup: [SQL…], clock: [T…], calls: [{fn, args}…]} it makes a schema-6 work.db in a
 ;; temporary directory with the real `drgnx-work-db', runs the real Lisp functions in order with `float-time' answering
-;; from the case's clock, and writes CASE.expect.json {results, tables: {event, meta}}, `data' parsed.  Strings of the
+;; from the case's clock (or, in a call that has "now": T, answering T), and writes CASE.expect.json {results, tables: {event, meta}}, `data' parsed.  Strings of the
 ;; form "__REP:C:N__" stand for the character C repeated N times (long summaries, big data).  norn's
 ;; tests/parity.rs replays the same input against the Rust writers and compares.
 ;; Add a function to `drgnx-parity--call' when a later task adds cases for it.
@@ -21,19 +21,6 @@
   (cond ((and (stringp v) (string-match "\\`__REP:\\(.\\):\\([0-9]+\\)__\\'" v))
          (make-string (string-to-number (match-string 2 v)) (string-to-char (match-string 1 v))))
         ((consp v) (cons (drgnx-parity--expand (car v)) (drgnx-parity--expand (cdr v))))
-        (t v)))
-
-(defun drgnx-parity--json (v)
-  "V, a Lisp result, as JSON data: a plist is an object, a list an array, nil null (an empty :changes, an array)."
-  (cond ((and (consp v) (keywordp (car v)))
-         (let ((h (make-hash-table :test 'equal)))
-           (cl-loop for (k val) on v by #'cddr
-                    do (puthash (substring (symbol-name k) 1)
-                                (if (and (null val) (eq k :changes)) [] (drgnx-parity--json val))
-                                h))
-           h))
-        ((consp v) (vconcat (mapcar #'drgnx-parity--json v)))
-        ((null v) :null)
         (t v)))
 
 (defun drgnx-parity--call (fn args)
@@ -64,7 +51,44 @@
     ("drgnx-coord-seen" (drgnx-coord-seen (plist-get args :agent)))
     ("drgnx-coord-note-held" (drgnx-coord-note-held (plist-get args :agent) (plist-get args :held)) nil)
     ("drgnx-coord-held" (drgnx-coord-held (plist-get args :agent)))
+    ;; jobs, tasks and leases, decisions, pruning (Task 6)
+    ("drgnx-coord-job-create" (apply #'drgnx-coord-job-create args))
+    ("drgnx-coord-job-set" (drgnx-coord-job-set (plist-get args :id) :status (plist-get args :status) :data (plist-get args :data)) nil)
+    ("drgnx-coord-force-status" (drgnx-coord-force-status (plist-get args :task) (plist-get args :status) (plist-get args :agent)))
+    ("drgnx-coord-claim" (drgnx-coord-claim (plist-get args :task) (plist-get args :agent) (plist-get args :seen)))
+    ("drgnx-coord-set-status" (drgnx-coord-set-status (plist-get args :task) (plist-get args :agent) (plist-get args :status) (plist-get args :seen)))
+    ("drgnx-coord-heartbeat" (drgnx-coord-heartbeat (plist-get args :task) (plist-get args :agent)) nil)
+    ("drgnx-coord-renew" (drgnx-coord-renew (plist-get args :agent)) nil)
+    ("drgnx-coord-release-stale" (drgnx-coord-release-stale))
+    ("drgnx-coord-decide" (apply #'drgnx-coord-decide args))
+    ("drgnx-coord-events-prune" (drgnx-coord-events-prune))
+    ("drgnx-coord--events-cap"
+     (let ((drgnx-coord-event-max-rows (plist-get args :max_rows))) (drgnx-coord--tx #'drgnx-coord--events-cap)))
+    ("drgnx-coord-events-prune-daily" (drgnx-coord-events-prune-daily))
     (_ (error "No oracle call for %s" fn))))
+
+(defun drgnx-parity--json (v)
+  "V, a Lisp result, as something `json-serialize' takes: a plist becomes an object (keys without the colon), any other
+list an array, nil null (an empty :changes, an array)."
+  (cond ((null v) :null)
+        ((and (consp v) (keywordp (car v)))
+         (let ((h (make-hash-table :test 'equal)))
+           (cl-loop for (k val) on v by #'cddr
+                    do (puthash (substring (symbol-name k) 1)
+                                (if (and (null val) (eq k :changes)) [] (drgnx-parity--json val))
+                                h))
+           h))
+        ((consp v) (vconcat (mapcar #'drgnx-parity--json v)))
+        (t v)))
+
+(defvar drgnx-parity--now nil "The time `float-time' answers during a call that names one (\"now\" in the case).")
+
+(defun drgnx-parity--table (db table)
+  "TABLE's rows in rowid order (`meta' by key), every column."
+  (let ((cols (mapcar #'cadr (sqlite-select db (format "pragma table_info(%s)" table)))))
+    (drgnx-parity--rows db (format "select %s from %s order by %s" (string-join cols ", ") table
+                                   (if (equal table "meta") "key" "rowid"))
+                        cols)))
 
 (defun drgnx-parity--rows (db sql cols)
   (vconcat
@@ -92,25 +116,28 @@
     (cl-letf (((symbol-function 'drgnx-data-dir) (lambda () dir))
               ((symbol-function 'float-time)
                (lambda (&optional time)
-                 (if time (funcall orig time) (or (pop clock) (error "The clock ran out"))))))
+                 (cond (time (funcall orig time))
+                       (drgnx-parity--now)
+                       (t (or (pop clock) (error "The clock ran out")))))))
       (let* ((db (drgnx-work-db))
              (results (progn
                         (dolist (sql (plist-get case :setup)) (sqlite-execute db sql))
                         (mapcar (lambda (c)
-                                  (let ((r (drgnx-parity--call (plist-get c :fn)
-                                                               (drgnx-parity--expand (plist-get c :args)))))
-                                    (or r (if (eq r 0) 0 :null))))
+                                  ;; a call that names "now" sees that time at every `float-time'; others take the clock
+                                  (let ((drgnx-parity--now (plist-get c :now)))
+                                    (condition-case err
+                                        (drgnx-parity--json (drgnx-parity--call (plist-get c :fn)
+                                                                                (drgnx-parity--expand (plist-get c :args))))
+                                      ;; a refused call: {"signal": MESSAGE}
+                                      (error (let ((h (make-hash-table :test 'equal)))
+                                               (puthash "signal" (error-message-string err) h)
+                                               h)))))
                                 (plist-get case :calls))))
              (tables (make-hash-table :test 'equal)))
-        (puthash "event" (drgnx-parity--rows db "select id, at, agent, job, task, kind, summary, data, turn from event order by rowid"
-                                             '("id" "at" "agent" "job" "task" "kind" "summary" "data" "turn"))
-                 tables)
-        (puthash "meta" (drgnx-parity--rows db "select key, value from meta order by key" '("key" "value")) tables)
-        ;; any other table a case names in its "tables" array (Task 5: message card review_mark agent), in rowid order
-        (dolist (tb (plist-get case :tables))
-          (let ((cols (mapcar #'car (sqlite-select db (format "select name from pragma_table_info('%s')" tb)))))
-            (puthash tb (drgnx-parity--rows db (format "select %s from %s order by rowid" (string-join cols ", ") tb) cols)
-                     tables)))
+        ;; `event' and `meta' always, then any other table the case names ("tables")
+        (dolist (table (append '("event" "meta") (plist-get case :tables)))
+          (unless (gethash table tables)
+            (puthash table (drgnx-parity--table db table) tables)))
         (let ((out (make-hash-table :test 'equal)))
           (puthash "results" (vconcat results) out)
           (puthash "tables" tables out)

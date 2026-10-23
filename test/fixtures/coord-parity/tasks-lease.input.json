@@ -1,0 +1,23 @@
+{
+  "setup": [],
+  "clock": [],
+  "tables": ["jtask", "event"],
+  "calls": [
+    {"fn": "drgnx-coord-job-create", "now": 100.0, "args": {"id": "j1", "title": "Leases", "plan": null, "repo": null,
+      "tasks": [{"n": 1, "title": "One", "role": "implement", "deps": []},
+                {"n": 2, "title": "Two", "role": "implement", "deps": []},
+                {"n": 3, "title": "Three", "role": "implement", "deps": []}]}},
+    {"fn": "drgnx-coord-claim", "now": 101.0, "args": {"task": "j1#1", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 102.0, "args": {"task": "j1#2", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 103.0, "args": {"task": "j1#3", "agent": "a2", "seen": null}},
+    {"fn": "drgnx-coord-set-status", "now": 104.0, "args": {"task": "j1#2", "agent": "a1", "status": "in-review", "seen": null}},
+    {"fn": "drgnx-coord-heartbeat", "now": 500.0, "args": {"task": "j1#1", "agent": "a1"}},
+    {"fn": "drgnx-coord-heartbeat", "now": 501.0, "args": {"task": "j1#1", "agent": "a2"}},
+    {"fn": "drgnx-coord-renew", "now": 600.0, "args": {"agent": "a2"}},
+    {"fn": "drgnx-coord-release-stale", "now": 1450.0, "args": {}},
+    {"fn": "drgnx-coord-release-stale", "now": 1451.0, "args": {}},
+    {"fn": "drgnx-coord-release-stale", "now": 5000.0, "args": {}},
+    {"fn": "drgnx-coord-force-status", "now": 6000.0, "args": {"task": "j1#1", "status": "claimed", "agent": "a3"}},
+    {"fn": "drgnx-coord-force-status", "now": 6001.0, "args": {"task": "j1#1", "status": "ready", "agent": null}}
+  ]
+}
