@@ -471,3 +471,43 @@ variable watcher that only queues the variable; the queue runs on an idle tick t
 `settings-apply`), once per variable however many changes came. `drgnx-settings-apply-pass` runs at the end of init
 for each such setting whose value is not its default and not the one its `:apply` last ran for. Settings declared
 after `drgnx-settings-live-start` get their watcher at the next sync.
+
+## The migration and the shim (Task 14)
+
+`core/drgnx-settings-migrate.el` (design §14, §5.4).
+
+- **`drgnx-settings-migrate-table`**: data, `((FILE . KEY) . VAR)` for every schema key of `agents`, `ai`, `keys`,
+  `modules`, `large-files` and `session` (`drgnx-AREA-KEY`; `modules :theme` → `drgnx-look-theme`). A new key in one
+  of those schemas needs its row: `drgnx-settings-migrate/every-schema-key-has-a-target` fails without it.
+  `drgnx-settings-migrate-unset-when-nil` lists the keys whose nil means "not chosen" (`keys :layers`), which get no
+  entry.
+- **`drgnx-settings-migrate-maybe`** (first in `drgnx-init`, safe mode too) acts only while `settings.el` does not
+  exist. It never signals and never prompts. Steps:
+  - Each present file is read with `drgnx-config-read`. The definitions are loaded first: the core feature, or
+    large-files' module file by its path, defined only for the run.
+  - A file stays when it has a problem, unknown keys or a newer format, or when a value cannot be written as data.
+  - The text is built by hand: the header, then the entries sorted by name. Each key's comments (the `;` lines
+    directly above it, and its end-of-line comment) go above its entry.
+  - It is written with `drgnx-file-write-text` under settings.el's lock, only if the file is still absent.
+  - The file is read back from disk, and `drgnx-settings-migrate--difference` compares each file's plist
+    (`--plist`) with what the entries give (`--assemble`). Any difference deletes the file, and nothing moves. This
+    one comparison is the step the mutation check removes: `a-difference-moves-nothing` must go red.
+  - Then each file is `copy-file`d to `<state>/backups/migrated-DATE[-N]/` and `rename-file`d to
+    `<config>/migrated-DATE[-N]/`. A failed move leaves the file, which is still read.
+  - Last: the moved names are re-read, and the report is written to `<state>/settings-migration.eld` (statuses
+    `migrated`, `differs`, `exists`, `nothing`), with one notice.
+- **The shim:** `drgnx-config-get` calls `(drgnx-settings-migrate-shim NAME STATE)` for a name in
+  `drgnx-settings-shim-areas` (in `core/drgnx-config.el`; `drgnx-config` itself never requires the settings files).
+  - It returns the plist settings.el's top-level entries give, from the config layer's applied form. While the file
+    has a mistake, that is its last good copy, except for `agents` (strict: nothing, so the defaults apply).
+  - The keys of an old file that is still there and reads well go over it, so a writer that still writes `keys.eld`
+    keeps working until Tasks 15 and 16 move it.
+  - With no entry for the area, the old state's value is used: a file that stayed is read as before.
+  - Results are cached per area on `eq` of the settings form and the old value.
+  - Taking an area out of `drgnx-settings-shim-areas` is how Tasks 15 and 16 retire it. A file that stayed (or one an
+    old writer made after the move) then has to move first.
+- **Commands** (registry ids in `drgnx-config-register-commands`): `settings-migration-report`,
+  `settings-migrate-old-files` (refuses while `settings.el` exists) and `settings-move-old-files-away` (only files
+  whose plist settings.el already gives: `drgnx-settings-migrate-leftovers`).
+- **Doctor:** the `settings-migrated` check (fact `:settings-leftovers`) warns "already migrated" and names
+  Move Old Files Away; it has no row while nothing is left over.

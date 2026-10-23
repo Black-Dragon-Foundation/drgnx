@@ -326,6 +326,21 @@ not a project's, from a fresh `drgnx-config-read' (it applies nothing and writes
             (info (list 'info (string-join (nreverse info) "\n") nil))
             (t (list 'ok (format "%d file%s read" (length rows) (if (= (length rows) 1) "" "s")) nil))))))
 
+(declare-function drgnx-settings-migrate-leftovers "drgnx-settings-migrate" ())
+
+(defun drgnx-doctor--settings-leftovers ()
+  "The fact of the `settings-migrated' check: the old settings files left beside settings.el after the move into it
+\(`drgnx-settings-migrate-leftovers'), or (:error MESSAGE)."
+  (condition-case err (progn (require 'drgnx-settings-migrate) (drgnx-settings-migrate-leftovers))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--settings-leftovers-check (files)
+  "The `settings-migrated' check of the fact FILES (`drgnx-doctor--settings-leftovers'): nil (no row) when none."
+  (cond ((eq (car-safe files) :error) (list 'warn (format "could not check: %s" (cadr files)) "run drgnx doctor again"))
+        (files (list 'warn (format "already migrated: %s (settings.el holds their values)"
+                                   (mapconcat #'file-name-nondirectory files ", "))
+                     "Settings: Move Old Files Away moves them into migrated-DATE/ (a copy is kept)"))))
+
 (defun drgnx-doctor--config-dir ()
   "The fact of the `config-dir' check: (:dir THE-CONFIG-DIR :moved WHERE-IT-BELONGS-OR-NIL :ignored IGNORED),
 IGNORED being `drgnx-paths-ignored'."
@@ -398,6 +413,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :trust-guards (drgnx-doctor--trust-guards)
            :config-dir (drgnx-doctor--config-dir)
            :config-files (drgnx-doctor--config-files)
+           :settings-leftovers (drgnx-doctor--settings-leftovers)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
            :notices (drgnx-doctor--notices)
@@ -620,6 +636,10 @@ severity, the fix the first `:fix'."
 
 (drgnx-doctor-define 'config-files :group "drgnx" :doc "drgnx's config files read, with no mistakes"
                      :check (lambda (f) (drgnx-doctor--config-files-check (plist-get f :config-files))))
+
+(drgnx-doctor-define 'settings-migrated :group "drgnx"
+                     :doc "No old settings file (keys.eld, agents.eld …) is left beside settings.el after the move into it"
+                     :check (lambda (f) (drgnx-doctor--settings-leftovers-check (plist-get f :settings-leftovers))))
 
 (drgnx-doctor-define 'checkout-clean :group "drgnx"
                      :doc "The checkout's init/ has no local changes (install.sh's update needs that)"

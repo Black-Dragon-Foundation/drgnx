@@ -10,7 +10,7 @@ never travel.
 
 | | Files |
 | --- | --- |
-| Travels (the config dir) | `keys.eld`, `modules.eld`, `packages.eld`, `drgnx.lock.eld`, `ai.eld`, `agents.eld`, `projects.eld`, `session.eld`, `config.el`; `secrets.age` (your provider keys, encrypted: ciphertext only) |
+| Travels (the config dir) | `settings.el` and its `migrated-*/` folders, `keys.eld`, `modules.eld`, `packages.eld`, `drgnx.lock.eld`, `ai.eld`, `agents.eld`, `projects.eld`, `session.eld`, `config.el`; `secrets.age` (your provider keys, encrypted: ciphertext only) |
 | Stays on this machine | the data dir `~/.local/share/drgnx` (`$DRGNX_DATA_DIR`): `emacs` (the Emacs the installer recorded), `systemd/drgnx.service` and `applications/drgnx.desktop` (written by onboarding's Daemon and Desktop step), the packages (`elpa/`, rebuilt from the lock on the next machine), generations, the work tracker's `work.db`; the state dir `~/.local/state/drgnx` (`workbench.eld` fits this machine's monitors); the cache dir `~/.cache/drgnx` (downloaded packages). The search index is rebuilt where it is needed. |
 | Never travels | drgnx's own leftovers beside the files it writes: backups (`*.bak-*`), lock directories (`.*.lock`, and `.*.lock.stale-*` while a stale one is taken over), unfinished temp files (`.*.tmp-*`) and `keys.eld.undo` ([keys.md](keys.md)). Onboarding's repository leaves them out and its `.gitignore` names them; bootstrap counts a config dir that holds only them as empty |
 | Not drgnx's | your dotfiles, `~/org`, your project repositories, agent CLI logins (`claude` logs in again on each machine; drgnx never reads its tokens) |
@@ -52,6 +52,20 @@ done
 Anything still in the config dir afterwards has its own copy in the data dir, which drgnx uses: compare them (`diff
 -r "$c/emacs" "$d/emacs"`, and the same for `systemd` and `applications`), then delete the config dir's. Until then
 `drgnx` still reads the old `emacs` record when the data dir has none.
+
+## Moving to settings.el on two machines
+
+A drgnx with Settings moves `agents.eld`, `ai.eld`, `keys.eld`, `modules.eld`, `large-files.eld` and `session.eld`
+into one `settings.el` at its first start ([settings.md](settings.md#moving-from-the-old-files)), and puts the old
+files in `migrated-YYYY-MM-DD/` in the config dir. With a config dir you keep in git:
+
+1. Update and start drgnx on one machine. Read the notice's report.
+2. Commit and push the config dir there (`settings.el` and `migrated-*/` are new, the six files are gone).
+3. On every other machine, pull first, then update drgnx and start it. It finds `settings.el` and moves nothing.
+
+Two machines that both move before syncing make two `settings.el` files, which git shows as a conflict (both added).
+Either side's file is complete: keep one. An older drgnx on a moved config dir finds no `agents.eld` and uses its
+defaults (agents strict), so update the other machines too.
 
 ## Making your config portable
 
