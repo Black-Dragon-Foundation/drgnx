@@ -54,7 +54,8 @@ async fn graph_b_walks() {
         PathQ {
             from: 1,
             to: 99_999,
-            kinds: vec![],
+            // all six of graph B's kinds: a path past depth 3 must name them
+            kinds: (0..6).map(|k| format!("k{k}")).collect(),
             max_depth: 8,
             as_of: None,
         },
