@@ -42,7 +42,8 @@ spell out. Each is pinned by a row in the shared table or a test in `read::tests
 - **Dots.** A `.` is the dot of a dotted pair only when whitespace, `"';([#?`,` or the end follows; otherwise it
   starts a symbol (`(a .)` is `(a \.)`). A dotted tail that is a list joins it: `(a . (b c))` is `(a b c)`,
   `(a . nil)` is `(a)`, `(a . 'b)` is `(a quote b)`.
-- **`#` forms.** Only `#'`, `#x`, `#o`, `#b` and `#NrN` are data. `#!` skips the rest of its line, as Emacs does.
+- **`#` forms.** Only `#'`, `#x`, `#o`, `#b` and `#NrN` are data. `#!` is refused too, though Emacs skips the
+  rest of its line: a settings file has no use for a script line, and the Lisp check refuses it the same way.
   Every other `#` form is refused as a reader macro, including the char-table `#^[`, which the row above does not
   name, and `#t`.
 - **Depth** counts lists, vectors and `'`/`#'` (each is a list in the datum): 64 levels read, 65 are refused.

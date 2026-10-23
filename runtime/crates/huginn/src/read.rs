@@ -42,7 +42,8 @@ pub enum RefusalKind {
     /// Not well-formed: an unbalanced paren, a stray dot, …
     Syntax,
     /// A reader macro or backquote: `` ` ``, `,`, `,@`, `#s(`, `#(`, `#[`, `#&`, `#N=`, `#N#`, `#@`, `#$`, `#.`, `##`,
-    /// `#_`, `#:`, `#^[`, and every other `#` form but `#'`, `#x`, `#o`, `#b`, `#NrN` and `#!` (a skipped line).
+    /// `#_`, `#:`, `#^[`, `#!` (which Emacs reads as a skipped line), and every other `#` form but `#'`, `#x`, `#o`,
+    /// `#b` and `#NrN`.
     ReaderMacro,
     /// A string Emacs reads as unibyte with a byte ≥ 0x80 (`"\xe9"`).
     Unibyte,
@@ -174,8 +175,6 @@ enum Hash {
     Datum(Node),
     /// `#'`: `(function X)` around the next datum.
     Function,
-    /// `#!`: the rest of the line is skipped, as Emacs does.
-    Skip,
 }
 
 struct Reader<'a> {
@@ -320,7 +319,6 @@ impl Reader<'_> {
                         });
                         continue;
                     }
-                    Hash::Skip => continue,
                 },
                 '"' => self.string_literal()?,
                 '?' => self.char_literal()?,
@@ -410,7 +408,7 @@ impl Reader<'_> {
         }
     }
 
-    /// `#…`, `` ` ``, `,` and `,@`: the radix integers and `#'` are data; `#!` skips its line; every other form is
+    /// `#…`, `` ` ``, `,` and `,@`: the radix integers and `#'` are data; every other form, `#!` included, is
     /// refused with its token's span.
     fn reader_macro(&mut self, start: usize) -> Result<Hash, Refusal> {
         match self.advance() {
@@ -426,10 +424,6 @@ impl Reader<'_> {
         };
         match c {
             '\'' => Ok(Hash::Function),
-            '!' => {
-                self.skip_line();
-                Ok(Hash::Skip)
-            }
             'x' | 'X' => self.radix_integer(start, 16).map(Hash::Datum),
             'o' | 'O' => self.radix_integer(start, 8).map(Hash::Datum),
             'b' | 'B' => self.radix_integer(start, 2).map(Hash::Datum),
@@ -1168,12 +1162,6 @@ mod tests {
             "?\\C-a ?\\^a \"\\^a\"",
             json!([["int", "1"], ["int", "1"], ["str", "\u{1}"]]),
         );
-        // A shebang line is skipped where a datum may start, as Emacs does.
-        accepts("#!/usr/bin/env emacs --script\n1", json!([["int", "1"]]));
-        accepts(
-            "(a #!x\n b)",
-            json!([["list", [["sym", "a"], ["sym", "b"]]]]),
-        );
         // `\N{U+X}` takes Emacs's trailing dot, and a BOM is a symbol character.
         accepts("?\\N{U+41.}", json!([["int", "65"]]));
         // The largest escapes Emacs takes.
@@ -1208,7 +1196,6 @@ mod tests {
             ("(a . b c)", 7),
             ("(a . b . c)", 7),
             ("(a . ;c\n)", 8),
-            ("(a . b #!x\n)", 7),
             ("?ab", 0),
             ("?a\u{a0}", 0),
             ("#x", 0),
