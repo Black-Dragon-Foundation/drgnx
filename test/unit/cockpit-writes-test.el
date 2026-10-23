@@ -7,6 +7,7 @@
 (require 'drgnx)
 (require 'drgnx-agents)
 (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)   ; a fresh notice model: the real `drgnx-notify' runs
 
 (defvar drgnx-coord-writer)
 
@@ -56,7 +57,7 @@ what the hub answers.  The pane's agent is AGENT of JOB, with no session; SRC is
                ((symbol-function 'drgnx-cockpit-edits--patch-headers) (lambda (files) (push files patched)))
                ((symbol-function 'drgnx-wb-display-name) #'identity)
                ((symbol-function 'drgnx-coord-version) (lambda () 42)))
-       ,@body)))
+       (drgnx-notice-test-with-model ,@body))))
 
 (defun drgnx-cockpit-writes-test--methods (calls)
   "CALLS' method names, oldest first."
@@ -147,17 +148,21 @@ what the hub answers.  The pane's agent is AGENT of JOB, with no session; SRC is
     (should (= 3 (length calls)))
     (should-not (member "coord/notify" (drgnx-cockpit-writes-test--methods calls)))))
 
+(defun drgnx-cockpit-writes-test--hub-notices ()
+  "How many times the hub's errors were posted (the notices of source `hub', their counts added)."
+  (apply #'+ (mapcar (lambda (n) (or (plist-get n :count) 1)) (drgnx-notices :source 'hub))))
+
 (ert-deftest drgnx-cockpit-feed/an-error-is-shown-once ()
+  ;; each failed write posts one notice, "drgnx hub: TEXT" (the real Notices model; a repeat counts)
   (drgnx-cockpit-writes-test--editor
     (setq answer (lambda (_m _p) (list nil "boom")))
     (drgnx-cockpit-feed--queue "a1" "hello" #'ignore)
-    (should (equal said '("drgnx hub: boom")))
-    (setq said nil)
+    (should (equal (mapcar (lambda (n) (plist-get n :text)) (drgnx-notices :source 'hub)) '("drgnx hub: boom")))
+    (should (= 1 (drgnx-cockpit-writes-test--hub-notices)))
     (drgnx-cockpit-edits--event "comment" "s" nil)
-    (should (equal said '("drgnx hub: boom")))
-    (setq said nil)
+    (should (= 2 (drgnx-cockpit-writes-test--hub-notices)))
     (drgnx-cockpit-answer (list :id 6 :kind "question" :agent "a1" :job "j1" :card 3) "bar")
-    (should (= 1 (cl-count "drgnx hub: boom" said :test #'equal)))))
+    (should (= 3 (drgnx-cockpit-writes-test--hub-notices)))))
 
 (ert-deftest drgnx-cockpit/no-writer-call-in-the-modules ()
   ;; static: no symbol of a coordination writer, nor `sqlite-execute', in the cockpit's modules or its model

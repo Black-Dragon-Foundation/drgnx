@@ -899,9 +899,9 @@ hub answered without an error and ACCEPT, when given, approved the result; an er
   (condition-case err
       (drgnx-hub-call method params
                       (lambda (r e)
-                        (cond (e (message "drgnx hub: %s" e))
+                        (cond (e (drgnx-notify 'hub 'warn (format "drgnx hub: %s" e)))
                               ((or (null accept) (funcall accept r)) (when done (funcall done r))))))
-    (error (message "drgnx hub: %s" (error-message-string err)))))
+    (error (drgnx-notify 'hub 'warn (format "drgnx hub: %s" (error-message-string err))))))
 
 (defun drgnx-cockpit-edits--sent-p (result prefix)
   "Whether the hub's `messages/send' RESULT sent the message; a held one says why (after PREFIX) and is not."

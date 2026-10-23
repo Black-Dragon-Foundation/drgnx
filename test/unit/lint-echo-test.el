@@ -30,7 +30,7 @@
     ;; processes with no notice model of their own: the hub, the sandbox plumbing, the MCP bridge, batch entry
     ;; points (their lines are their log; Rust-bound)
     ("core/drgnx-coord.el" . 1)
-    ("core/drgnx-hub-client.el" . 2)
+    ("core/drgnx-hub-client.el" . 3)         ; + front calls' timing line (headless backend only, where `message' is its log)
     ("core/drgnx-hub.el" . 8)          ; + Gleipnir 13b: the backend's refused connection, two serve-env errors
     ("core/drgnx-mcp-bridge.el" . 1)
     ("core/drgnx-sandbox-mcp.el" . 3)
@@ -43,7 +43,7 @@
     ("modules/tools/drgnx-prs.el" . 1)           ; "fetching pull request #N…" (Show Changes, a progress line)
     ("modules/tools/drgnx-commit-message.el" . 4) ; Generate Commit Message's own answer: progress, no answer, kill ring
     ("modules/tools/drgnx-browser.el" . 7)       ; Test Report / Show Browser: a command's refusals (NT-T21-1: the sentinel ones)
-    ("modules/tools/drgnx-cockpit-cards.el" . 8) ; card commands' errors (NT-T21-1: the callbacks among them)
+    ("modules/tools/drgnx-cockpit-cards.el" . 7) ; card commands' errors (NT-T21-1: the callbacks among them)
     ("modules/tools/drgnx-cockpit-graph.el" . 1)
     ("modules/tools/drgnx-cockpit-edits.el" . 1)
     ("modules/tools/drgnx-cockpit.el" . 1)
