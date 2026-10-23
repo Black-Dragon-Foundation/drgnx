@@ -422,3 +422,143 @@ fn class_matrix_calls_every_method_from_every_class_and_the_ending_ones_last() {
     );
     assert!(!out.contains("t/end as"), "{out}");
 }
+
+const FAKE_BACKEND: &str = env!("CARGO_BIN_EXE_ratatoskr-fake-backend");
+
+/// A scripted front: one connection, a challenge, a `hello` whose proof is checked, then `n` requests answered
+/// `{"ok": true}`; what it saw goes down the channel as `(method, params)`.
+fn scripted_front(
+    socket: &Path,
+    n: usize,
+) -> std::sync::mpsc::Receiver<Result<(String, Value), String>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let listener = UnixListener::bind(socket).unwrap();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut out = stream.try_clone().unwrap();
+        let mut lines = BufReader::new(stream).lines();
+        writeln!(
+            out,
+            "{}",
+            json!({"event": "challenge", "data": {"nonce": HUB_NONCE}})
+        )
+        .unwrap();
+        let hello: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        let nonce = hello["params"]["nonce"].as_str().unwrap_or("").to_string();
+        let want = hmac_hex(&format!("drgnx-hub client {HUB_NONCE} {nonce}"));
+        if hello["method"] != "hello" || hello["params"]["proof"] != json!(want) {
+            let _ = tx.send(Err(format!("bad hello: {hello}")));
+            return;
+        }
+        let proof = hmac_hex(&format!("drgnx-hub hub {nonce} {HUB_NONCE}"));
+        writeln!(
+            out,
+            "{}",
+            json!({"id": hello["id"], "result": {"proto": 1, "class": "user", "proof": proof}})
+        )
+        .unwrap();
+        for _ in 0..n {
+            let Some(Ok(line)) = lines.next() else { return };
+            let req: Value = serde_json::from_str(&line).unwrap();
+            writeln!(out, "{}", json!({"id": req["id"], "result": {"ok": true}})).unwrap();
+            let _ = tx.send(Ok((
+                req["method"].as_str().unwrap_or("").to_string(),
+                req["params"].clone(),
+            )));
+        }
+    });
+    rx
+}
+
+#[test]
+fn fake_backend_calls_the_front() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (run, state) = (root.join("run"), root.join("state"));
+    std::fs::create_dir_all(&run).unwrap();
+    let vars = [
+        ("HOME", root.join("home")),
+        ("XDG_RUNTIME_DIR", run.clone()),
+        ("XDG_DATA_HOME", root.join("data")),
+        ("XDG_STATE_HOME", state.clone()),
+    ];
+    let var_strs: Vec<(&str, String)> = vars
+        .iter()
+        .map(|(k, v)| (*k, v.to_string_lossy().into_owned()))
+        .collect();
+    let env = paths::Env::new(
+        &var_strs
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect::<Vec<_>>(),
+        unsafe { libc::geteuid() },
+    );
+    let front_socket = paths::socket_path(&env);
+    std::fs::create_dir_all(front_socket.parent().unwrap()).unwrap();
+    std::fs::write(paths::cap_path(&front_socket), CAP).unwrap();
+    let seen = scripted_front(&front_socket, 2);
+
+    let secret = "cd".repeat(32);
+    let serve = root.join("serve.sock");
+    let script = json!({
+        "m/x": {"call_front": {"method": "t/front", "params": {"a": 1}}, "then": "$front"},
+        "m/y": {"call_front": {"method": "t/front", "params": {}}, "then": {"result": "fixed"}},
+    });
+    let mut child = Command::new(FAKE_BACKEND)
+        .env_clear()
+        .envs(var_strs.iter().map(|(k, v)| (*k, v.as_str())))
+        .env("DRGNX_HUB_SERVE_SOCKET", &serve)
+        .env("DRGNX_HUB_SERVE_SECRET", &secret)
+        .env("DRGNX_FAKE_BACKEND_SCRIPT", script.to_string())
+        .spawn()
+        .unwrap();
+
+    let mut stream = None;
+    for _ in 0..100 {
+        if let Ok(s) = UnixStream::connect(&serve) {
+            stream = Some(s);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let mut out = stream.expect("the fake backend serves its socket");
+    let mut lines = BufReader::new(out.try_clone().unwrap()).lines();
+    writeln!(out, "{}", json!({"auth": secret})).unwrap();
+    writeln!(out, "{}", json!({"id": 1, "method": "m/x"})).unwrap();
+    let a: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    writeln!(out, "{}", json!({"id": 2, "method": "m/y"})).unwrap();
+    let b: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    writeln!(
+        out,
+        "{}",
+        json!({"id": 3, "method": "coord/notify", "params": {"k": 1}})
+    )
+    .unwrap();
+    let log = state.join("drgnx/fake-backend.log");
+    let mut text = String::new();
+    for _ in 0..100 {
+        text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("notification ") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // the front saw both calls, on one connection, after a valid proof
+    let first = seen.recv().unwrap().unwrap();
+    assert_eq!(first, ("t/front".to_string(), json!({"a": 1})));
+    assert_eq!(seen.recv().unwrap().unwrap().0, "t/front");
+    assert_eq!(
+        a,
+        json!({"id": 1, "result": {"ok": true}}),
+        "$front passes the front's answer"
+    );
+    assert_eq!(b, json!({"id": 2, "result": "fixed"}));
+    assert!(text.contains("front-answer {"), "{text}");
+    assert!(
+        text.contains(r#"notification {"method":"coord/notify","params":{"k":1}}"#),
+        "{text}"
+    );
+}

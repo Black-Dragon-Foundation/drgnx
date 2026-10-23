@@ -1,0 +1,5 @@
+{"scenario": "self/raw-socket", "requires": ["v0"], "doc": "The harness's own row: a raw connection to a path: socket does no hello and reads nothing first."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "r", "hub": "h", "socket": "path:$SOCKET", "as": "raw"}
+{"do": "send", "conn": "r", "json": {"id": 5, "method": "ping"}}
+{"do": "expect", "conn": "r", "json": {"id": 5, "result": {"pid": "$PID(h)"}}}

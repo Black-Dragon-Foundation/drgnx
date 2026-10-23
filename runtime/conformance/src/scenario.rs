@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 27] = [
+pub const VERBS: [&str; 30] = [
     "start",
     "root",
     "rename",
@@ -30,6 +30,9 @@ pub const VERBS: [&str; 27] = [
     "class_matrix",
     "bad_params",
     "measure",
+    "spawn_conn",
+    "sql_expect",
+    "capture_file",
 ];
 
 #[derive(Debug)]
@@ -286,6 +289,9 @@ mod tests {
 {"do": "class_matrix", "table": "t.json"}
 {"do": "bad_params", "registry": "r.json"}
 {"do": "measure", "name": "m", "repeat": 2, "steps": []}
+{"do": "spawn_conn", "conn": "b", "argv": ["cat"]}
+{"do": "sql_expect", "sql": "select 1", "rows": [[1]]}
+{"do": "capture_file", "path": "$ROOT/x.json", "capture": "p", "json_path": "a"}
 "#;
 
     #[test]
@@ -298,6 +304,24 @@ mod tests {
             assert!(verbs.contains(&v), "verb {v} did not parse");
         }
         assert_eq!(s.steps[0].line, 3, "steps remember their file line");
+    }
+
+    #[test]
+    fn new_verbs_parse() {
+        let s = parse(
+            r#"{"scenario": "t/new"}
+{"do": "connect", "conn": "r", "socket": "path:$CAP", "as": "raw"}
+{"do": "spawn_conn", "conn": "b", "argv": ["cat"], "env": {}, "cwd": "$ROOT"}
+{"do": "sql_expect", "sql": "select 1", "rows": [[1]]}
+{"do": "capture_file", "path": "$ROOT/x.json", "capture": "p", "json_path": "a.b"}
+"#,
+        )
+        .unwrap();
+        let verbs: Vec<&str> = s.steps.iter().map(|x| x.verb.as_str()).collect();
+        assert_eq!(
+            verbs,
+            ["connect", "spawn_conn", "sql_expect", "capture_file"]
+        );
     }
 
     #[test]

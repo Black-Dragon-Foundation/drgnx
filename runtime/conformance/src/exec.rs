@@ -206,6 +206,18 @@ fn accepts_array(root: &Value, schema: &Value) -> bool {
         })
 }
 
+/// The value at PATH in V: `$` or empty is V; otherwise dot-separated object keys and array indexes (`a.0.b`, a leading
+/// `$.` allowed).
+fn json_at<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
+    let path = path.strip_prefix('$').unwrap_or(path);
+    path.split('.')
+        .filter(|s| !s.is_empty())
+        .try_fold(v, |cur, seg| match cur {
+            Value::Array(a) => seg.parse::<usize>().ok().and_then(|i| a.get(i)),
+            other => other.get(seg),
+        })
+}
+
 /// SQL's rows as JSON: an array of arrays, each value an integer, a real, a string or null (a blob as null).
 fn query_rows(db: &rusqlite::Connection, sql: &str) -> rusqlite::Result<Value> {
     use rusqlite::types::ValueRef;
@@ -648,6 +660,9 @@ impl Runner<'_> {
             "class_matrix" => self.class_matrix(step),
             "bad_params" => self.bad_params(step),
             "measure" => self.measure(step),
+            "spawn_conn" => self.spawn_conn(step),
+            "sql_expect" => self.sql_expect(step),
+            "capture_file" => self.capture_file(step),
             v => Err(format!("verb {v} has no executor")),
         }
     }
@@ -915,20 +930,26 @@ impl Runner<'_> {
         let idx = self.hub_index(str_of(&step.obj, "hub"))?;
         let name = str_of(&step.obj, "conn").unwrap_or("c").to_string();
         let hub = &self.hubs[idx];
-        let path = match str_of(&step.obj, "socket").unwrap_or("main") {
+        let socket = Self::capture_text(&self.subst(
+            Some(idx),
+            &json!(str_of(&step.obj, "socket").unwrap_or("main")),
+            true,
+        ));
+        let path = match socket.as_str() {
             "main" => hub.socket.clone(),
+            s if s.starts_with("path:") => PathBuf::from(&s[5..]),
             "backend" => runstav::paths::backend_socket_path(&hub.env, &hub.socket)
                 .map_err(|e| e.to_string())?,
             s if s.starts_with("agent:") => agent_socket(hub, &s[6..])?,
             other => {
                 return Err(format!(
-                    "\"socket\" is \"main\", \"backend\" or \"agent:SID\", not {other:?}"
+                    "\"socket\" is \"main\", \"backend\", \"agent:SID\" or \"path:STRING\", not {other:?}"
                 ));
             }
         };
         let who = str_of(&step.obj, "as").unwrap_or("user");
         let conn = match who {
-            "user" | "service" => Conn::open(&path, Duration::from_secs(2))?,
+            "user" | "service" | "raw" => Conn::open(&path, Duration::from_secs(2))?,
             "other-uid" => {
                 if !crate::scenario::sudo_available() {
                     return Err("\"other-uid\" needs root or passwordless sudo".into());
@@ -937,7 +958,7 @@ impl Runner<'_> {
             }
             other => {
                 return Err(format!(
-                    "\"as\" is user, service or other-uid, not {other:?}"
+                    "\"as\" is user, service, raw or other-uid, not {other:?}"
                 ));
             }
         };
@@ -1379,7 +1400,12 @@ impl Runner<'_> {
         use std::os::unix::process::ExitStatusExt;
         let within = ms(&step.obj, "within_ms", 10000);
         let deadline = Instant::now() + within;
-        let status = if let Some(h) = str_of(&step.obj, "hub") {
+        let status = if let Some(c) = str_of(&step.obj, "conn") {
+            self.conns
+                .get_mut(c)
+                .ok_or_else(|| format!("no connection named {c:?}"))?
+                .wait_exit(within)?
+        } else if let Some(h) = str_of(&step.obj, "hub") {
             let i = self.hub_index(Some(h))?;
             loop {
                 if let Some(s) = self.hubs[i].exited() {
@@ -1582,6 +1608,92 @@ impl Runner<'_> {
             matcher::matches(&pattern, &rows, &mut self.caps).map_err(|e| format!("{sql}: {e}"))?;
         }
         Ok(())
+    }
+
+    /// `spawn_conn`: a child whose stdin and stdout are connection `conn`.  `env` is its whole environment (`{}` is
+    /// empty, never the harness's); its stderr goes to `spawn-conn-CONN.err` in the current root (the report reads it).
+    fn spawn_conn(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let argv = self.strings(idx, step, "argv")?;
+        let (prog, rest) = argv.split_first().ok_or("\"argv\" needs a program")?;
+        let name = str_of(&step.obj, "conn").unwrap_or("c").to_string();
+        let mut cmd = Command::new(prog);
+        cmd.args(rest)
+            .env_clear()
+            .envs(self.env_pairs(idx, step)?)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        if step.obj.contains_key("cwd") {
+            cmd.current_dir(self.text(idx, step, "cwd")?);
+        }
+        match self.current_root(None)? {
+            Some(root) => {
+                let err = root.path().join(format!("spawn-conn-{name}.err"));
+                cmd.stderr(
+                    std::fs::File::create(&err).map_err(|e| format!("{}: {e}", err.display()))?,
+                );
+            }
+            None => {
+                cmd.stderr(Stdio::null());
+            }
+        }
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("cannot start {prog}: {e}"))?;
+        self.conns.insert(name, Conn::from_child(child)?);
+        Ok(())
+    }
+
+    /// `sql_expect`: a read-only query (`path`, default `$DATA/work.db`); its rows must match the pattern `rows`.
+    fn sql_expect(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let path = PathBuf::from(match step.obj.get("path") {
+            Some(_) => self.text(idx, step, "path")?,
+            None => Self::capture_text(&self.subst(idx, &json!("$DATA/work.db"), true)),
+        });
+        let db = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let sql = self.text(idx, step, "sql")?;
+        let rows = query_rows(&db, &sql).map_err(|e| format!("{sql}: {e}"))?;
+        let pattern = self.subst(
+            idx,
+            step.obj.get("rows").ok_or("sql_expect needs \"rows\"")?,
+            false,
+        );
+        matcher::matches(&pattern, &rows, &mut self.caps).map_err(|e| format!("{sql}: {e}"))
+    }
+
+    /// `capture_file`: read a JSON file (waiting up to `within_ms`, 5000, for it to exist and parse) and capture the
+    /// value at `json_path` (dot-separated keys and array indexes; absent or `$` is the whole file).
+    fn capture_file(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let path = self.text(idx, step, "path")?;
+        let name = str_of(&step.obj, "capture")
+            .ok_or("\"capture\" names the value")?
+            .to_string();
+        let jp = str_of(&step.obj, "json_path").unwrap_or("$");
+        let deadline = Instant::now() + ms(&step.obj, "within_ms", 5000);
+        loop {
+            let got = std::fs::read_to_string(&path)
+                .map_err(|e| format!("{path}: {e}"))
+                .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| format!("{path}: {e}")))
+                .and_then(|v| {
+                    json_at(&v, jp)
+                        .cloned()
+                        .ok_or_else(|| format!("{path} has nothing at {jp:?}"))
+                });
+            match got {
+                Ok(v) => {
+                    self.caps.0.insert(name.clone(), v);
+                    return Ok(());
+                }
+                Err(e) if Instant::now() > deadline => return Err(e),
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
     }
 
     fn backend_log(&mut self, step: &Step) -> R {
