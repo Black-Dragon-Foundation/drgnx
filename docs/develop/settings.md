@@ -395,3 +395,13 @@ the test runner's state, `~` or your drgnx (`test/settings-child.el`; its own te
   the row's checks: the effective value, `custom-variable-state`, `describe-variable`'s text, the
   source `drgnx-settings-explain` names, the stock answer (`drgnx-settings-test-answer` in a stock child with the same
   files), and always that the explained winner is `symbol-value`. A failed check comes back as the child's `:error`.
+
+## Language overrides (Task 10)
+
+`core/drgnx-settings-mode.el` reads the `(:mode M …)` entries of the global `settings.el` (cached per file stamp;
+`(drgnx-settings-mode-entries MODE)` -> `((VAR . VALUE)…)`) and `drgnx-settings--apply-mode-overrides` sets them from
+`change-major-mode-after-body-hook`, the mode's parents first. A variable's `:set` is called with `buffer-local` as the
+third argument only when it is loaded and its `func-arity` accepts three; otherwise `setq-local`. Never `setopt-local`,
+never a `load`. Each entry runs under `condition-case`: one message per variable per session. The file registers
+itself on the hook and on `drgnx-settings-explain-functions` (layer `L1`) when loaded; it must be required at start-up
+by the integration.
