@@ -193,15 +193,27 @@ empty.  Without the feature, nothing."
              do (dolist (f (plist-get v :fallbacks)) (when (consp f) (cl-incf n (or (cdr f) 0)))))
     n))
 
+(defun drgnx-perf--workers-phases (ph)
+  "Nidhogg's :phase-ms PH (PHASE MS …, `worker-wait' a plist of REASON MS) as PHASE MS with numbers only: the
+`worker-wait' total and one `worker-wait-REASON' per reason, rounded."
+  (cl-loop for (k v) on ph by #'cddr
+           if (numberp v) append (list k (drgnx-perf--round v))
+           else if (consp v)
+           append (cons k (cons (drgnx-perf--round (cl-loop for (_r ms) on v by #'cddr when (numberp ms) sum ms))
+                                (cl-loop for (r ms) on v by #'cddr when (numberp ms)
+                                         append (list (intern (format "%s-%s" k r)) (drgnx-perf--round ms)))))))
+
 (defun drgnx-perf--workers-end ()
   "(:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)) for the workload just run; (:workers nil)
 without the feature.  :phase-ms is the busy time of each phase, :wait-ms the main thread's waits for a worker
-(`treesit-wait' and `worker-wait'), :fallbacks the number of jobs that ran inline, :deferrals the deferred work."
+(`treesit-wait' and `worker-wait'), :fallbacks the number of jobs that ran inline, :deferrals the deferred work.
+Nidhogg reports `worker-wait' by reason (a plist): the probe gives its total as `worker-wait' and each reason as
+`worker-wait-REASON', all numbers, so the A/B judges them like every other phase."
   (if (not (drgnx-perf--workers-p))
       (list :workers nil)
-    (let* ((s (nidhogg-workers-stats)) (ph (plist-get s :phase-ms)))
-      (list :workers (list :phase-ms (cl-loop for (k v) on ph by #'cddr collect k collect (if (numberp v) (drgnx-perf--round v) v))
-                           :wait-ms (drgnx-perf--round (+ (or (plist-get ph :treesit-wait) 0) (or (plist-get ph :worker-wait) 0)))
+    (let* ((s (nidhogg-workers-stats)) (ph (drgnx-perf--workers-phases (plist-get s :phase-ms))))
+      (list :workers (list :phase-ms ph
+                           :wait-ms (drgnx-perf--round (+ (or (plist-get ph 'treesit-wait) 0) (or (plist-get ph 'worker-wait) 0)))
                            :fallbacks (drgnx-perf--workers-fallbacks s)
                            :deferrals (plist-get s :deferrals))))))
 

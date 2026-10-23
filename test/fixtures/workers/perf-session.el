@@ -394,6 +394,8 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 (defun drgnx-perf-w-image-each ()
   (when (window-live-p drgnx-perf-w--other-window) (delete-window drgnx-perf-w--other-window))
   (setq drgnx-perf-w--other-window (split-window (selected-window) nil 'right) drgnx-perf-w--img-done nil)
+  ;; every repeat decodes: the last repeat's pictures would otherwise be found in the image cache
+  (clear-image-cache t)
   (drgnx-perf-w--arm #'drgnx-perf-w--image-fire)
   t)
 
@@ -421,8 +423,13 @@ The server's own messages wait for `initialized' (the fire function sends it)."
       (drgnx-perf-w--stat :preview_ms (drgnx-perf-w--ms t0))
       (drgnx-perf-w--img-await buf t0))))
 
+(defun drgnx-perf-w--img-pending ()
+  "Image entries Nidhogg's image worker has not drawn the pixels of yet (0 without the worker)."
+  (if (fboundp 'nidhogg-workers--test-image-info) (plist-get (nidhogg-workers--test-image-info) :pending) 0))
+
 (defun drgnx-perf-w--img-await (buf t0)
-  (if (or (>= (drgnx-perf-w--count-images buf) 20) (> (- (float-time) t0) 5))
+  ;; drawn: all 20 pictures in the buffer and none still decoding (a deferred decode lands at a later redisplay)
+  (if (or (and (>= (drgnx-perf-w--count-images buf) 20) (zerop (drgnx-perf-w--img-pending))) (> (- (float-time) t0) 5))
       (progn (drgnx-perf-w--stat :preview_drawn_ms (drgnx-perf-w--ms t0))
              (drgnx-perf-w--stat :preview_images (drgnx-perf-w--count-images buf))
              (setq drgnx-perf-w--img-done t))

@@ -499,7 +499,8 @@ On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without
 `--ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default`. Sessions and containers pass it on.
 
 **The probe.** `drgnx-perf-begin` resets `nidhogg-workers-stats`, `drgnx-perf-end` reports
-`:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase, the main thread's waits for a
+`:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase (`worker-wait` as its total
+and as `worker-wait-REASON` per reason, so the A/B judges it like the other phases), the main thread's waits for a
 worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
 `:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
 `DRGNX_PERF_WATCHDOG=16`, the threshold the gates' A/Bs run with, or `on`).
@@ -549,7 +550,7 @@ only after `DRGNX_PERF_LANDED` names its step.
 | `ts-paste` | `C-y` of 500 KB into a 1 MB C file, then typing (a p95 needs 100 commands over the repeats; every repeat starts from the file on disk) (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
 | `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file | input p95 16 (ot2) |
 | `compile-flood` | `compile` (comint, a pty) of a generated 200k-line log; the digest is the count and md5 of the log lines that arrived, checked against the file | input p95 16, p99 50, max 50 (ot3) |
-| `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html` | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
+| `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html`; every repeat clears the image cache first (or only the warm-up decodes), and `:preview_drawn_ms` waits until no decode is pending on Nidhogg's image worker | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
 | `explorer-expand` | `big/` of 5,000 files expanded, listing cache cleared (the bench's operation) | `:expand_ms` 80, no 16 ms stall (ot8) |
 | `explorer-git` | the status of a 25k-file repository read in the background | input p95 16, no 16 ms stall (ot5) |
 | `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |

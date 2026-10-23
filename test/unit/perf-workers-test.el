@@ -31,6 +31,25 @@
     (should-not (drgnx-perf--workers-env))
     (should (equal (drgnx-perf--workers-end) '(:workers nil)))))
 
+(ert-deftest drgnx-perf-workers/worker-wait-is-judged ()
+  ;; Nidhogg's phase-ms: symbol keys, worker-wait by reason.  The probe gives numbers only (worker-wait's total and
+  ;; each reason), :wait-ms sums treesit-wait and worker-wait, and the A/B judges worker-wait like a phase
+  (let ((features (cons 'nidhogg-workers features)))
+    (cl-letf (((symbol-function 'nidhogg-workers-stats)
+               (lambda (&rest _) (list :phase-ms (list 'image 5.6 'treesit-wait 2.0
+                                                       'worker-wait (list 'display 200.25 'image-pixels 3.0 'drain 0.0))
+                                       :deferrals (list 'treesit 0 'image 1)))))
+      (let ((w (plist-get (drgnx-perf--workers-end) :workers)))
+        (should (equal (plist-get w :phase-ms)
+                       (list 'image (drgnx-perf--round 5.6) 'treesit-wait (drgnx-perf--round 2.0)
+                             'worker-wait (drgnx-perf--round 203.25) 'worker-wait-display (drgnx-perf--round 200.25)
+                             'worker-wait-image-pixels (drgnx-perf--round 3.0) 'worker-wait-drain (drgnx-perf--round 0.0))))
+        (should (equal (plist-get w :wait-ms) (drgnx-perf--round 205.25))))))
+  (let* ((run (lambda (wait) (list :workers (list :phase-ms (list 'image 1.0 'worker-wait wait)) :input (list :p95 4.0))))
+         (rounds (cl-loop for i below 8 collect (list :a (funcall run 0.0) :b (funcall run (+ 200.0 i)))))
+         (vs (drgnx-perf-ab-metric-verdicts rounds)))
+    (should (eq (plist-get (cdr (assoc '(:workers :phase-ms worker-wait) vs)) :verdict) 'regressed))))
+
 (ert-deftest drgnx-perf-workers/report-only-row ()
   (let ((results '((typing :alloc (:p50 20))))
         (budgets '((typing (:alloc :p50) 10 :report-only ot2))))
