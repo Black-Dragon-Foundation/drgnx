@@ -546,9 +546,11 @@ looked at again at the next tick; nothing was done.
    never removed.
 2. One `BEGIN IMMEDIATE` transaction holds every step below; a crash or an error rolls all of it back, so the file is
    schema 6 or schema 7, never between (`interrupted_migration_leaves_schema_6` kills a child mid-way).
-3. The schema-6 rows are read again under the lock. **3a, the door:** a node whose source or path the deny-list
-   denies (everything under `~/org` but the board; `Source::parse` failing is denied too), an edge with a denied end
-   or source, and a denied `file` row are not migrated; they are counted.
+3. The schema-6 rows are read again under the lock. **3a, the door:** a node whose source, id, `data.path`,
+   `data.repo` or `data.worktree` the deny-list denies (everything under `~/org` but the board; `Source::parse`
+   failing is denied too), a job task whose data's `path`, `repo` or `worktree` it denies, a decision whose task or `paths` name a
+   denied path (`~/…` and absolute words), an edge with a denied end or source, and a denied `file` row are not
+   migrated; they are counted (`denied_nodes`).
 4. Schema 7's tables (`GRAPH_DDL`); `node`, `edge`, `jtask`, `jdep` and `decision` renamed `old_*`, `file` to
    `parsed_file` and `meta` to `kv`, with read-only views `file` and `meta` over them.
 5. History in time order: one imported transaction (`tx.imported = 1`, tool `import`, class `system` or `agent`,
