@@ -316,7 +316,37 @@ checking that nothing but the one form, pair or entry differs. Undo remembers th
 
 ## Bringing an existing init.el (Task 29)
 
-## Keeping custom.el tidy (Task 30)
+## Keeping custom.el tidy
+
+`custom.el` in your config folder is Customize's file. drgnx never writes it on its own: only Customize (Save),
+package.el (`package-selected-packages`, when you install a package) and the `!` answer to a file's local variables
+(`safe-local-variable-values`) do, as in stock Emacs. **enable-command** and **disable-command** (and the "always
+allow" answer to a disabled command) write their `(put 'COMMAND 'disabled …)` line there too: stock Emacs puts it in
+your init file, which in drgnx is the checkout's `init/init.el`, and drgnx sends it to `custom.el` instead.
+
+Over time `custom.el` collects entries that do nothing. **Settings: Tidy custom.el** cleans up its
+`custom-set-variables` form:
+
+- it drops entries equal to the variable's default (an entry with a Customize comment stays);
+- it takes duplicates out of `package-selected-packages`;
+- it lists the entries of variables nothing in this Emacs defines (a package you removed, or one not loaded yet) and
+  asks which to remove; by default they all stay;
+- it prints the form as Customize does: sorted by name, one entry per line, under Customize's header comment;
+- it names the entries left that **Settings: Move into Settings…** can take into `settings.el` (and why the others
+  cannot), so you can move them one by one afterwards.
+
+Tidy works on the **file**, not on what Emacs remembers: an entry you changed by hand since Emacs started keeps your
+change, and a value saved in this session that is not in the file is not added. Everything outside the
+`custom-set-variables` form (your comments, `custom-set-faces`, `put` lines) stays exactly as it is.
+
+Before anything changes you see the diff; nothing is written unless you say yes. The file is written in one step, a
+copy from before is kept beside it (`custom.el.bak-DATE`, the newest three), and **Settings: Undo Tidy** puts it back
+(it refuses when the file changed since, and names the copy). Tidy refuses, and says why, rather than guess: when
+`custom.el` does not read to its end, has no `custom-set-variables` form or more than one, an entry of another shape,
+a variable twice, a comment of yours inside the form (move it above the form first), or unsaved edits in a buffer.
+
+`drgnx doctor` shows `custom.el`'s size, its number of entries and its dormant ones (those nothing defines) as
+information.
 
 ## Packages' settings (Task 31)
 
