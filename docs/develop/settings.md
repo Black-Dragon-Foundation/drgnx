@@ -54,3 +54,37 @@ spell out. Each is pinned by a row in the shared table or a test in `read::tests
 Found while building `huginn`, beyond the listed divergences: a string with a character that UTF-8 cannot hold, a
 surrogate or a code point beyond U+10FFFF (`"\uD800"`, `"\x110000"`), is read by Emacs and refused by `huginn`
 (`NotUtf8`). The writer never emits either.
+
+## Reading a settings file in Rust
+
+`huginn::form::parse_settings(bytes, expect_head, limits)` reads one settings file (`runtime/crates/huginn/src/form.rs`).
+The file is one form, `(HEAD :version 1 META… ENTRY… SECTION…)`, whose head must be `expect_head`
+(`drgnx-settings` or `drgnx-workspace-settings`).
+
+- **Refused whole** (`Err(Refusal)`, kind `Syntax`, or the reader's own): no form or more than one, a wrong head, no
+  `:version`, a `:version` other than 1 (a higher one says "written by a newer drgnx").
+- **Meta** is the leading `:key value` pairs: `:version`, `:roots`, `:project`, kept in `meta` with their colon. An
+  unknown or repeated meta key is a problem.
+- **Entries** are `(VAR VALUE)` or `(VAR VALUE :merge KIND)`; one leading `quote` or `function` on the value is
+  dropped (`''a` leaves `(quote a)`). `(:mode MODE ENTRY…)` is allowed anywhere; `(:dir "D/" ENTRY…)` and
+  `(:eval FORM…)` only under the head `drgnx-workspace-settings`, and a `:mode` may sit inside a `:dir`, nothing else
+  nests. An `:eval` becomes an entry with `var` `":eval"` and the list of its forms as value.
+- **Problems** are per entry and the rest of the file stands: a malformed entry, a section where it is not allowed, or
+  a second entry for the same variable in the same scope path (the problem names both lines; the first stands).
+
+`huginn::de` (feature `serde`, off by default) is a `serde::Deserializer` over a `Node` (`de::from_node`,
+`de::Deserializer::new`):
+
+| Lisp | Rust |
+|---|---|
+| plist `(:on-error strict :max-turns 3)` | struct: key without its colon, `-` as `_` (`on_error`, `max_turns`) |
+| alist `(("a" . 1) (b 1 2))` | map: `(K . V)` gives `V`; `(K A B)` is `(K . (A B))`, so `V` is the list `(A B)` |
+| list or vector | sequence |
+| dotted `(A . B)` (or a two-element list) | 2-tuple |
+| `nil` | the empty value the type asks for: empty sequence or map, `None`, `false`, a unit |
+| `t` / `nil` | `bool` |
+| string or symbol | string; integers `i64`; floats `f64` (an integer also fits a float) |
+| symbol or string, or `(VARIANT …)` | enum: unit variant, or the rest of the list is the variant's value |
+
+An `Error` carries the byte span of the node that did not fit. Use `serde_path_to_error::deserialize` around
+`Deserializer::new` for the path; `huginn` itself does not depend on it.
