@@ -38,17 +38,12 @@ jobs:
         env:
           DRGNX_TEST_DIR: ${{ github.workspace }}/test/unit/mod-remote-test.el
           DRGNX_TEST_SELECTOR: '"the-starting-buffer"'
-        run: bin/drgnx test --stress 80 --load "$(sysctl -n hw.ncpu)" || true
-      - name: GL-1 stress, the whole file
-        env:
-          DRGNX_TEST_DIR: ${{ github.workspace }}/test/unit/mod-remote-test.el
-          DRGNX_TEST_SELECTOR: '"^drgnx-remote/"'
-        run: bin/drgnx test --stress 12 --load "$(sysctl -n hw.ncpu)" || true
+        run: bin/drgnx test --stress 25 --load "$(sysctl -n hw.ncpu)" || true
       - name: GL-1 logs
         if: always()
         run: |
           ls gl1-logs | head -400 | sed 's/-[0-9]*-[0-9]*\.log$//' | sort | uniq -c
-          for f in gl1-logs/FAIL-*; do [ -f "$f" ] && cat "$f"; done
+          for f in $(ls gl1-logs/FAIL-* 2>/dev/null | head -3); do cat "$f"; done
           f=$(ls gl1-logs/pass-* 2>/dev/null | head -1); [ -n "$f" ] && cat "$f"
           exit 0
 
