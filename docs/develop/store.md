@@ -299,9 +299,85 @@ one exception is exactly `HOME/org/board.org` (`Verdict::Board`; `board.org.bak`
 
 ## Scope and grants (Task 10)
 
+All in `norn::{scope, grants}`. The caller, its class and its project come from the connection, never from a tool's
+arguments.
+
+- **`Caller`** `{ class, actor, session, profile, job, project, backend }`. `Caller::from_identity(&Identity,
+  &ProjectCache)` builds it for a tool connection: a session drgnx runs is class `agent`, actor `agent:<sid>`, with
+  its sid, profile and job, and the project of its `home` (a job's agent runs in the job's worktree, which shares
+  the repository's project); an outside agent is class `ext`, actor and session its `ext:KIND:PID-HASH` name, and
+  the project of the cwd its bridge reported; no identity is class `ext` with nothing. It runs no git: the project
+  comes from the `ProjectCache`, filled before (below). A folder the cache has not resolved and registered gives no
+  project. `Caller::user(backend)` is a proven user connection, `backend` marking the Lisp backend's. `tx_meta(tool)`
+  makes the write's `TxMeta`; `may_write_into(project)` is the user anywhere, an agent only its own project.
+- **`scope::for_caller(conn, &caller, now)`**, computed from the rows on every call and never cached:
+  - class `user` (and the hub's `system`): everything;
+  - `agent` and `ext`: the caller's project plus the projects of every active `read` grant whose `who` is the
+    caller's project, profile or session (`*`: every project, future ones too);
+  - `allows(project)`: in scope `Full`; an entity without a project (`agent:`) `Stub`; otherwise `Hidden`.
+    `reach()` gives the same as `Everything`, `AnyProject` or `Projects(&[n])` for queries that filter by project;
+  - a caller with no project and no grants reaches nothing but stubs.
+- **`valid()`** is cheap and never blocks (walks call it from async code before each level). Each database file has
+  a watch: `grants::{create, revoke}` bump it inside their tx (`scope::grants_changed`), and every `for_caller`
+  bumps it when the grants' highest `updated_tx` moved since the last look, so a change made by another path (a
+  revert, an import) still ends older scopes at the next scope computed on that file. A scope holding a grant that
+  has since expired is not valid either. The user's scope does not depend on grants and stays valid.
+- **Grants** are entities of kind `grant` (`grant:<8 base36>`, no project), `status` `active` or `revoked`, `data
+  {who: {project: N} | {profile: NAME} | {session: SID}, what: {project: N} | "*" | {task: N}, access: "read" |
+  "edit-user-tasks", expires?}`. A row that does not parse opens nothing.
+  - `create(tx, who, what, access, expires)`: a `read` grant opens a project or `*`; an `edit-user-tasks` grant a
+    task, a project or `*`. The named projects and task must exist; `expires` must be later than the tx.
+  - `revoke(tx, id)` sets `revoked`; false when there was no active grant.
+  - `list(conn, &caller, &Filter { who, active }, now)`: the user sees every grant; an agent or ext caller only the
+    grants whose `who` is its own (others would name other projects).
+  - `may_edit_user_task(conn, &caller, task, now)`: an active `edit-user-tasks` grant for the task, its project or
+    `*`, and the task in the caller's own project (a grant never opens writes across projects); the user always.
+- **The class check is in the write path.** `grants::register(&mut Guard)` puts norn's two rules into urdr's guard:
+  kind `grant` needs class `user` ("grants are the user's"), and `kv` keys `setting:*` need class `user` ("settings
+  are the user's"). `entity::{create, update, retire}` check it on every path, so a proposed tx, an import (class
+  `system`), a parsed entity (class `system`) or any agent tool that names kind `grant` is refused;
+  `grants::{create, revoke}` check it first too. Test: `grants::tests::every_agent_reachable_write_is_refused`.
+
 ## Trust (Task 10)
 
+`norn::trust`: every text field a tool returns carries its author, `Authored { text, by, class, tx, project, trust
+}`, read by `trust::authored(conn, &ent, field)` from the field's `field_tx` entry and that tx's `actor` and `class`
+(`project` is the entity's project id).
+
+- `trust` is `user` for text a user-class tx wrote, and for text of a parsed entity written by the scan (class
+  `system`). Everything else is `untrusted`: agents' and outside agents' text, the reader's own included, and the
+  hub's other `system` writes, which carry what agents sent. A tx that cannot be read gives an untrusted `unknown`
+  author.
+- `fence(text, by, project)` renders untrusted text as `<untrusted-data by="…" project="…">…</untrusted-data>`.
+  Inside the text, a backslash goes after the `<` of every `</untrusted-data` and `<untrusted-data` (ASCII case
+  ignored), so the text can neither close the fence nor open one that claims another author. `by` and `project` are
+  one line of at most 80 characters (`runstav::text::one_line`) with `&`, `"`, `<` and `>` escaped.
+  `Authored::render()` fences untrusted text and leaves the user's as it is.
+
 ## Projects (Task 10)
+
+`norn::project`. A project's id is `project:<root commit, 12 hex>`.
+
+- `resolve(cwd)` runs the hardened git of `hello` (`draugr::git`, the root-owned git, a minimal environment, 3 s)
+  and answers a `ProjectRef { id, root, slug, root_commit, roots }`, or `None` outside a repository, for the home
+  folder itself, or when no trusted git runs (Android). It is blocking: it never runs on an async worker or under
+  the writer's lock.
+  - `root` is the main repository's top-level: a linked worktree's common git dir is the main `.git`, so worktrees
+    share their repository's project. `slug` is its folder name.
+  - With several root commits (an unrelated history merged in), the earliest committer date wins, ties by sha.
+  - A repository without commits gets `project:x-<8 base36, random>`.
+- `register(tx, &root)` answers the project entity's `n`, making it when new (kind `project`, title the slug, its
+  `project` column its own `n`, `data {root, path}`):
+  - with a root commit, the stored project made from any of the repository's roots (so a later merge of an earlier
+    root, or a renamed folder, changes nothing); a `project:x-…` project of the same folder gives its aliases to
+    it, is retired, and names it in `data.moved_to`;
+  - without one, the `project:x-…` project of the same folder.
+  - The slug becomes a `project_alias` row when no project holds it yet (a rename adds one). The row is written by
+    urdr's `entity::set_alias`, the one writer of `project_alias`.
+- `ProjectCache` keeps resolved folders so `Caller::from_identity` runs no git: `fill(dir)` resolves (blocking),
+  `unregistered()` lists what one write should `register`, `set_registered(id, n)` records the answer,
+  `project_n(dir)` is what callers get, `forget(dir)` drops one. The hub fills it when a session starts; the
+  migration fills it before its transaction.
 
 ## Migration from schema 6 (Task 11)
 
