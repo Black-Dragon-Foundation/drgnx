@@ -68,7 +68,30 @@ an agent with a grant), it changes as little as it can:
 
 ## Who wins (Task 8)
 
-## Where a value comes from (Task 11)
+## Where a value comes from
+
+drgnx tells you where each value comes from, down to the file and line, and it says when it is not sure. It
+explains the value Emacs has; it never works out a value of its own.
+
+- **The layers, lowest first:** the package's default, a drgnx module, Settings (`settings.el:14`), Customize
+  (`custom.el:9`, or "this session only"), your Lisp (`config.el:31`). In a buffer, per-language settings, your
+  mode hooks, the workspace files, `.dir-locals.el` and file-local variables come on top.
+- **Your Lisp, at its line.** While `custom.el`, `config.el` and your Lisp files load, drgnx notes the line each
+  form starts at, file by file, so a `load` inside a form never hides the outer file. `setq`, `setopt`,
+  `customize-set-variable`, `use-package :custom` and macros are all seen, because drgnx watches the variable itself.
+- **Deferred.** A `with-eval-after-load` body, or a `use-package :config` that waits for its package, runs when the
+  package loads. drgnx shows it as "your Lisp (config.el:4), deferred, first seen during config.el:8": the body's own
+  line, and the form that loaded the package. That `require` is never blamed for the value.
+- **A package's own default.** When a package defines a variable whose value Settings already holds, the value is
+  Settings', not the line that loaded the package.
+- **Line unknown.** When the line cannot be confirmed (a compiled file, a `set` through a function, several setters
+  in one form), drgnx says "your Lisp (config.el, line unknown)" and lists the lines that could have set it.
+  Settings offers no Move or Undo on such a line.
+- **Changed this session.** After start, a change by anything but Settings itself (`M-x set-variable`, a `setq` you
+  evaluate) is shown as "changed this session".
+- **Only one buffer.** A `setq` of a variable that is always per buffer (`fill-column`, `indent-tabs-mode`) in
+  `config.el` sets only the buffer that was current, and the default stays. drgnx points this out: you probably
+  meant `setq-default`.
 
 ## Changes apply at once (Task 13)
 

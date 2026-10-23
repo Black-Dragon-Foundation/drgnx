@@ -265,7 +265,45 @@ settings only), and none of the rest.
 
 ## The applier rule (Task 8)
 
-## Provenance (Task 11)
+## Provenance
+
+`core/drgnx-settings-prov.el` records who set a variable and explains Emacs's value (design §4.5). Provenance
+explains; it never decides what the applier does (that is the winner rule, from Emacs's own data).
+
+- **While your Lisp loads.** `drgnx--load-user-config` wraps each load in `(drgnx-settings-prov-with-load FILE
+  BODY…)`. For BODY's extent it binds `load-read-function` to a reader that notes, per `load-file-name` (an alist, so a
+  nested `load` never overwrites the outer file's entry), the line and span of the form being read; an `:around`
+  advice on `custom-declare-variable` marks a `defcustom`'s own initialisation; an `:around` advice on
+  `do-after-load-evaluation` marks after-load bodies with the form that loaded the package. Both advices are removed
+  when BODY ends. FILE joins your Lisp files.
+- **Watchers** go on the managed variables: those theme `drgnx` holds a value for and those `settings.el` names
+  (`drgnx-settings-prov-watch VAR` adds one later). Only `set` counts (`let`, `unlet`, `makunbound` are ignored);
+  an alias is resolved with `indirect-variable`. A write is recorded as (design §4.5's table, in this order):
+  `drgnx` (inside `drgnx-settings-prov-applying`, which the applier binds, or a `defcustom` taking theme `drgnx`'s
+  value), `definition` (a `defcustom`'s own value, or the first value of a void variable), `session` (after start;
+  buffer-local writes after start are not recorded), `deferred` (an after-load body), `lisp` (a file of yours: in
+  your config dir, loaded with provenance, or listed) or `package` (any other file being loaded). At most
+  `drgnx-settings-prov-max-records` per variable. A watcher never signals.
+- **`(drgnx-settings-prov VAR)`** gives the records, newest first: `(:kind :value :file :line …)`, `:line` being
+  the line the running form starts at (none for a compiled file). The static index (`drgnx-lisp-index`, through
+  aliases) confirms it: exactly one setter of VAR inside the form's span (for `deferred`, one conditional setter in
+  your files; for a compiled file, one in its `.el`) gives `:certain t` and `:setter-line`; otherwise `:certain nil`
+  and `:candidates` (`:file :line`).
+- **`(drgnx-settings-explain VAR &optional BUFFER)`** explains `VAR`'s value in BUFFER (default the current
+  buffer): `(:value :layer :kind :source :file :line :certain :candidates :layers :changed-this-session
+  :buffer-local-only)`. `:value` is always Emacs's value there; `:source` is the text the UI shows, `:layer` one of
+  `G0` `G1` `G2` `G3` `G4` `package` `theme` `session`, or in a buffer `L1` `buffer` `W1` `dir-local` `W2`
+  `file-local`. Without a local value, the winner is the newest record whose value is Emacs's (a `session` record
+  yields to an equal theme entry, a record of your Lisp inside `custom-set-variables` is Customize's), else the first
+  `theme-value` entry with that value, else the default; nothing matching is `unknown` with the index's candidates.
+  With a local value, the buffer layers are ranked `L1` < `buffer` < `W1` < `dir-local` < `W2` < `file-local`
+  and the highest one holding the value wins.
+- **`drgnx-settings-explain-functions`**: each is called with `(VAR BUFFER)` when VAR is local in BUFFER and
+  returns layer plists `(:layer ID :value V :file F :line N :source TEXT …)`; language overrides add `L1`, the
+  workspace files `W1` and `W2`.
+- Tests: `drgnx-settings-prov/*` (`test/unit/settings-prov-test.el`) and rows C1b, C6, C23
+  (`test/unit/settings-compat-prov-test.el`), each in a child Emacs. The explained winner is always `symbol-value`
+  (`drgnx-settings-prov/explained-winner-is-symbol-value`, and `drgnx-settings-test-check-row` in every row).
 
 ## The Lisp index
 
