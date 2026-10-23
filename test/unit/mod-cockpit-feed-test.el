@@ -188,7 +188,7 @@ buffers are killed after: they owned their hooks and their timers."
                                               (drgnx-coord-events :kinds '("answer"))))))
       ;; a job's message: the hub's job/reply, and an answer event closes it
       (should (eq (drgnx-cockpit-answer job-q "this way") 'job))
-      (should (equal (car drgnx-cockpit-feed-test--hub)
+      (should (equal (assoc "job/reply" drgnx-cockpit-feed-test--hub)
                      (list "job/reply" (list :message (plist-get (plist-get job-q :data) :message) :text "this way"))))
       (should-not (drgnx-cockpit-feed-test--open-p (plist-get job-q :id)))
       (should (equal (mapcar (lambda (e) (plist-get e :summary)) (funcall answers (plist-get job-q :id))) '("this way")))
@@ -281,7 +281,11 @@ buffers are killed after: they owned their hooks and their timers."
           (should-error (drgnx-cockpit-answer q "that way") :type 'user-error)
           (should (= 1 (length pending)))
           ;; the hub answers: the question closes, and a later answer would go again
-          (funcall (nth 2 (car pending)) t nil)
+          ;; the hub answers job/reply, then the answer event it leads to, then the message mark: each in the shape the real method answers
+          (while pending
+            (pcase-let ((`(,method ,params ,cb) (pop pending)))
+              (let ((r (drgnx-cockpit-fixture-hub-write method params)))   ; the write lands in the store
+                (funcall cb (if (eq r :none) t r) nil))))
           (should-not (drgnx-cockpit-feed-test--open-p (plist-get q :id)))
           (should-not drgnx-cockpit-feed--in-flight)
           ;; a refused call lands too, and closes nothing
