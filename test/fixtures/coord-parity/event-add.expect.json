@@ -1,16 +1,1 @@
-{
-  "results": [1, 2, 3, 4],
-  "tables": {
-    "event": [
-      {"id": 1, "at": 100.0, "agent": "a1", "job": "j1", "task": "j1#1", "kind": "claim", "summary": "claimed j1#1", "data": {"paths": ["x.el"]}, "turn": null},
-      {"id": 2, "at": 101.5, "agent": "a1", "job": null, "task": null, "kind": "start", "summary": "turn one second line", "data": {"turn": true}, "turn": 1},
-      {"id": 3, "at": 102.0, "agent": "a1", "job": null, "task": null, "kind": "edit", "summary": "no data", "data": null, "turn": null},
-      {"id": 4, "at": 50.0, "agent": "a2", "job": null, "task": null, "kind": "stop", "summary": "stop without the turn flag", "data": {"command": "x"}, "turn": null}
-    ],
-    "meta": [
-      {"key": "compat-read", "value": "6"},
-      {"key": "migrate-6-dropped", "value": "0"},
-      {"key": "schema", "value": "6"}
-    ]
-  }
-}
+{"results":[1,2,3,4],"tables":{"event":[{"id":1,"at":100.0,"agent":"a1","job":"j1","task":"j1#1","kind":"claim","summary":"claimed j1#1","data":{"paths":["x.el"]},"turn":null},{"id":2,"at":101.5,"agent":"a1","job":null,"task":null,"kind":"start","summary":"turn one second line","data":{"turn":true},"turn":1},{"id":3,"at":102.0,"agent":"a1","job":null,"task":null,"kind":"edit","summary":"no data","data":null,"turn":null},{"id":4,"at":50.0,"agent":"a2","job":null,"task":null,"kind":"stop","summary":"stop without the turn flag","data":{"command":"x"},"turn":null}],"meta":[{"key":"compat-read","value":"6"},{"key":"migrate-6-dropped","value":"0"},{"key":"schema","value":"6"}]}}
