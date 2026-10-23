@@ -331,7 +331,7 @@ mod tests {
             root.path(),
             json!({"error": {"code": "not-allowed", "message": "an outside agent needs a parent process"}}),
         );
-        let e = dial(&outside(socket)).await.err().expect("refused");
+        let e = dial(&outside(socket)).await.expect_err("refused");
         assert_eq!(
             e,
             Dial::Fatal(
@@ -354,7 +354,7 @@ mod tests {
         let listener = UnixListener::bind(&socket).unwrap();
         listener.set_nonblocking(true).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let e = dial(&outside(socket)).await.err().expect("refused");
+        let e = dial(&outside(socket)).await.expect_err("refused");
         let Dial::Fatal(why) = e else {
             panic!("{e:?}");
         };

@@ -82,6 +82,7 @@ pub trait Connector: Send + Sync + 'static {
     type W: AsyncWrite + Unpin + Send + 'static;
 
     /// A connection to the hub.
+    #[allow(clippy::type_complexity)]
     fn connect(&self) -> BoxFuture<'static, Result<(Self::R, Self::W), Dial>>;
 
     /// What the connection says before it carries MCP (an outside bridge's `hello` and `mcp/attach`); the bytes the
@@ -573,9 +574,9 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
         };
         match ev {
             Ev::Agent(None) => Err(BridgeEnd::StdinClosed),
-            Ev::Agent(Some(FromAgent::Line(line))) => self.from_agent(line).await,
+            Ev::Agent(Some(FromAgent::Line(line))) => self.agent_line(line).await,
             Ev::Agent(Some(FromAgent::TooLong(id))) => self.too_long(id).await,
-            Ev::Hub(Some(line)) => self.from_hub(line).await,
+            Ev::Hub(Some(line)) => self.hub_line(line).await,
             Ev::Hub(None) => self.dropped().await,
             Ev::Dialed(d) => {
                 self.dialing = None;
@@ -612,7 +613,7 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
         }
         let mut i = 0;
         while i < self.queue.len() {
-            if !self.queue[i].wait.as_ref().is_some_and(|w| w.until <= now) {
+            if self.queue[i].wait.as_ref().is_none_or(|w| w.until > now) {
                 i += 1;
                 continue;
             }
@@ -669,14 +670,14 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
             let id = self.our_id(Ours::Initialize);
             let line =
                 json!({"jsonrpc": "2.0", "id": id, "method": "initialize", "params": params});
-            self.to_hub(&line.to_string()).await?;
+            self.send_to_hub(&line.to_string()).await?;
             if self.initialized {
                 let line = json!({"jsonrpc": "2.0", "method": INITIALIZED});
-                self.to_hub(&line.to_string()).await?;
+                self.send_to_hub(&line.to_string()).await?;
             }
             let id = self.our_id(Ours::List);
             let line = json!({"jsonrpc": "2.0", "id": id, "method": "tools/list"});
-            self.to_hub(&line.to_string()).await?;
+            self.send_to_hub(&line.to_string()).await?;
         }
         while self.live.is_some()
             && let Some(q) = self.queue.pop_front()
@@ -726,7 +727,7 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
         self.init.is_none() && meta_version(params)
     }
 
-    async fn from_agent(&mut self, line: String) -> Result<(), BridgeEnd> {
+    async fn agent_line(&mut self, line: String) -> Result<(), BridgeEnd> {
         if self.live.is_some() {
             return self.forward(line).await;
         }
@@ -789,7 +790,7 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
             Msg::Notification { method } if method == INITIALIZED => self.initialized = true,
             _ => {}
         }
-        self.to_hub(&line).await
+        self.send_to_hub(&line).await
     }
 
     async fn waited_too_long(&mut self, w: Waiting) -> Result<(), BridgeEnd> {
@@ -820,7 +821,7 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
     }
 
     /// A hub line: an answer to the bridge's own request stays here; the rest goes to the agent as it came.
-    async fn from_hub(&mut self, line: String) -> Result<(), BridgeEnd> {
+    async fn hub_line(&mut self, line: String) -> Result<(), BridgeEnd> {
         if let Msg::Answer { id, result } = classify(&line) {
             if let Some(i) = self.ours.iter().position(|(o, _)| *o == id) {
                 let (_, ours) = self.ours.remove(i);
@@ -882,7 +883,7 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
     }
 
     /// LINE to the hub, when connected; a write that fails or makes no progress for `opts.wait` drops the connection.
-    async fn to_hub(&mut self, line: &str) -> Result<(), BridgeEnd> {
+    async fn send_to_hub(&mut self, line: &str) -> Result<(), BridgeEnd> {
         let Some(live) = &mut self.live else {
             return Ok(());
         };
