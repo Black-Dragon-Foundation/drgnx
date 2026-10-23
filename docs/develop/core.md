@@ -478,6 +478,17 @@ The doctor's `config-files` check reads each non-project file fresh (`drgnx-conf
 core features that define files are listed in `drgnx-doctor-config-features`: a port appends its feature there too.
 Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
 
+**The settings reference.** `docs/reference/settings.md` is generated the same way from the settings declared with
+`drgnx-defsetting` (`harness/drgnx-settings-doc.el`; a port that declares settings appends a `(require FEATURE)` line
+to `drgnx-settings-doc-sources`). After declaring or changing one, regenerate it and commit it with the change:
+
+```sh
+emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -l drgnx-settings-doc \
+  --eval '(drgnx-settings-doc-regenerate "docs/reference/settings.md")'
+```
+
+Test: `test/unit/settings-doc-test.el` runs this very command and compares.
+
 `onboarding.eld` (state folder, an alist of step → `(:status :message :time)`, `core/drgnx-onboard.el`) is the one
 state file that is not refused when it cannot be read: `drgnx-onboard--record` is a `drgnx-file-update` with
 `:on-unreadable 'backup` (the file is copied aside, the step is recorded in a new one), so two processes keep their
