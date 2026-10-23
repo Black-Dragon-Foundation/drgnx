@@ -748,6 +748,7 @@ mod tests {
                 gateway: Some(
                     json!({"port": 4100, "registrations": 0, "providers": 0, "keys_refused": why}),
                 ),
+                store: None,
             }),
             &working(),
         );
@@ -767,6 +768,7 @@ mod tests {
                 pid: 7,
                 commit: None,
                 gateway: Some(json!({"port": 4100, "registrations": 0, "providers": 0})),
+                store: None,
             }),
             &working(),
         );
