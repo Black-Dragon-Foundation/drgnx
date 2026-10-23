@@ -62,7 +62,8 @@ nothing else in the process writes it, and no request runs SQLite on its caller'
   - On a hit it runs nothing and answers the stored first answer (`Written { replayed: true }`, the first tx's id).
   - On a miss it runs the closure and stores the value as JSON in `tx.answer`. An answer over 64 KiB is stored as
     `{"truncated":true}`, and its replay is refused: "the first answer was too large to replay; read the entity".
-    An answer excise blanked replays as "the first answer is no longer kept; read the entity".
+    An answer excise blanked (`[excised <tx>]`, never a JSON value) replays as "this answer was excised; read the
+    entity"; a null answer as "the first answer is no longer kept; read the entity".
   - The same key twice in one batch writes once: the second finds the first's row in the same transaction.
   - Without a key, `tx.req` and `tx.answer` stay null: a key nobody can repeat would protect nothing.
   - The unique index `tx_req (actor, req)` is the second guard.
@@ -262,6 +263,42 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
   `system`, kinds the guard reserves for the user are refused too.
 
 ## Excise (Task 8)
+
+`urdr::graph::excise` removes a text written in by mistake (a secret, a personal note) from everything in
+`work.db` that kept it (storage §8.3). It is the one rewrite of history; the caller checks that the user asked
+(user class), and `excise` itself refuses an agent or outside agent.
+
+- **`excise(writer, meta, target, fields, reason, blankers)`** is one tx:
+  1. **Versions.** A target `Entity(id)` blanks the named fields (default `title`, `body`, `data`; any of `title`,
+     `status`, `body`, `assignee`, `data`) in the current row and in every `entity_hist` version. A target `Tx(n)`
+     blanks, in every version of every entity, the fields whose `field_tx` names that tx (default: all five), so a
+     value it wrote is blanked in the later versions that still carried it. A text becomes `[excised <tx>]`, `data`
+     becomes `{"excised": <tx>}`; unset fields stay unset. Versions, `ver` and `field_tx` stay: history still shows
+     that something changed, and who changed it.
+  2. **FTS.** Each blanked entity's row is put again (delete, insert), then one `optimize` rewrites the segments
+     without the tombstoned tokens of every old version (see "Search").
+  3. **Vectors.** The `entity_vec` row is deleted; the embedder makes it again.
+  4. **`tx` rows.** `answer` and `note`, where set, become the marker for every tx that wrote a version of an excised
+     entity (an entity target), or wrote a blanked version (a tx target), and for the target tx. A repeat of a keyed
+     request answers `Refused("this answer was excised; read the entity")`, never the old text.
+  5. **Blankers.** Each `Blanker` (norn's: events, messages, cards) gets `Excised { entities, txs, marker }` and
+     blanks its copies in the same tx; a blanker's error fails the whole excise.
+  6. **`excise_log (tx, target, fields, reason)`**: the target is the entity's id or `tx:<n>`; never the content.
+- **`ExciseReport { tx, entities, versions, txs_blanked, blanked }`**, plus `needles` (in memory only, never
+  serialized): every value removed of at least 12 bytes (`MIN_NEEDLE`; shorter ones would match unrelated text), as
+  stored and JSON-escaped, and the blanked notes.
+- **`scrub(writer)`** is the writer's `maintain(Scrub)` (see "The writer"), run after the excise's commit, never on a
+  second connection: `secure_delete` has zeroed the cells, `VACUUM` rewrites the file without the free pages and
+  FTS5's old segments, and `wal_checkpoint(TRUNCATE)` empties the WAL. A reader's open transaction keeps the WAL
+  (`wal_truncated: false`, `blocked_by: "readers"`, after the 5 s busy timeout); `scrub` can be run again once
+  the readers are gone.
+- **Outside the file.** `kept_copies(work_db)` lists every regular file under `<data>/backup/` (dated copies,
+  `work-pre7-*.db`), the Lisp's `work.db.schema5` and every file under `<data>/export/`; `holding(files, needles)`
+  is the byte search over them (a file that cannot be read is listed). `redact(path, needles, marker)` rewrites a
+  file (a session transcript) without the needles, through a `.tmp` and a rename, keeping its mode.
+- **Limits.** `link.data`, entity ids and `source` are not blanked. A tx that did not write the target but quoted it
+  in its answer or note keeps it; its notices and cards are the blankers'. A tx target finds its versions with a
+  scan of `entity_hist` by `tx_from` (no index; excise is rare).
 
 ## The deny-list (Task 9)
 
