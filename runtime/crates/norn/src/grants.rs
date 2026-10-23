@@ -716,32 +716,4 @@ mod tests {
         assert!(!may_edit_user_task(&conn, &me, tb, NOW).unwrap());
         assert!(may_edit_user_task(&conn, &Caller::user(false), tb, NOW).unwrap());
     }
-
-    /// A grant's expiry reads back exactly as it was written (URDR-SCOPE-GRANT-FLAKE-1: serde_json's default float
-    /// parsing may land one ulp off, so a grant read back expired a hair late and `an_expired_grant_is_gone` saw it
-    /// still active at its own expiry). The three are clock times an hour ahead that the default parser read back one
-    /// ulp high (found by sampling `now + 3600`).
-    #[test]
-    fn an_expiry_reads_back_exactly() {
-        let off: Vec<f64> = [
-            1_792_798_094.918_677_3,
-            1_792_798_094.918_807_7,
-            1_792_798_094.918_868_5,
-        ]
-        .into_iter()
-        .filter(|t| {
-            let data = json!({"who": {"project": 1}, "what": {"project": 2}, "access": "read",
-                                  "expires": t});
-            parse(
-                1,
-                "grant:x".into(),
-                Some("active".into()),
-                &data.to_string(),
-            )
-            .and_then(|g| g.expires)
-                != Some(*t)
-        })
-        .collect();
-        assert!(off.is_empty(), "read back otherwise: {off:?}");
-    }
 }

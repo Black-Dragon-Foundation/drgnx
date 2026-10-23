@@ -475,6 +475,53 @@ mod tests {
         assert!(!held.valid());
     }
 
+    /// A grant is gone at its exact expiry, whatever the time's digits (URDR-SCOPE-GRANT-FLAKE-1). The expiry
+    /// round-trips through JSON text in the grant's data. serde_json's default parser reads a 17-digit number as
+    /// `significand as f64 / 10^k`, rounding twice, and reads these three clock-shaped times back one ulp high, so a
+    /// grant is still active at its expiry: `an_expired_grant_is_gone` saw Full when `now + 3600` was such a time. The
+    /// workspace's `float_roundtrip` reads them back exactly. The grants are written as entities directly:
+    /// `grants::create` takes only an expiry after the tx's (today's) time.
+    #[test]
+    fn a_grant_is_gone_at_its_exact_expiry() {
+        use serde_json::json;
+        use urdr::graph::entity::{self, EntityNew, Origin};
+        let (_d, _p, mut conn) = db();
+        let (a, b) = (project(&mut conn, "a"), project(&mut conn, "b"));
+        let caller = agent(Some(a), "s1", None);
+        // ascending: at each one's expiry the earlier grants have expired too
+        let times = [
+            1_792_798_094.123_477_5,
+            1_792_798_094.123_534_7,
+            1_792_798_094.123_560_7,
+        ];
+        for (i, t) in times.into_iter().enumerate() {
+            write(&mut conn, user(), |tx| {
+                entity::create(
+                    tx,
+                    EntityNew {
+                        id: format!("grant:t{i}"),
+                        kind: "grant".into(),
+                        project: None,
+                        title: None,
+                        status: Some("active".into()),
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({"who": {"project": a}, "what": {"project": b}, "access": "read",
+                                     "expires": t}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )
+            })
+            .unwrap();
+            let before = for_caller(&conn, &caller, t - 1.0).unwrap();
+            assert_eq!(before.allows(Some(b)), Seen::Full, "{t}");
+            let at = for_caller(&conn, &caller, t).unwrap();
+            assert_eq!(at.allows(Some(b)), Seen::Hidden, "{t}");
+        }
+    }
+
     #[test]
     fn revoke_is_seen_on_the_next_call() {
         let (_d, _p, mut conn) = db();
