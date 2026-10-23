@@ -1,5 +1,7 @@
 ;;; work-db-read-test.el --- batch tests: the read-only path to work.db (never migrates, never writes) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'cl-lib)
 (require 'drgnx-coord)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
@@ -33,7 +35,7 @@
   (drgnx-work-db-close-all)
   (ignore dir))
 
-(ert-deftest drgnx-work-db/a-reader-of-a-newer-schema-writes-nothing ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-reader-of-a-newer-schema-writes-nothing ()
   (drgnx-work-db-read-test--with
     (drgnx-work-db-read-test--newer dir 9 6)
     (let* ((file (concat dir "work.db")) (wal (concat file "-wal"))
@@ -47,14 +49,14 @@
       (should (= (drgnx-work-db-read-test--size wal) wal-size))
       (should-not drgnx-work-db--handles))))
 
-(ert-deftest drgnx-work-db/a-newer-schema-it-cannot-read-is-refused ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-newer-schema-it-cannot-read-is-refused ()
   (drgnx-work-db-read-test--with
     (drgnx-work-db-read-test--newer dir 9 7)
     (let ((err (should-error (drgnx-work-node "plan:p") :type 'drgnx-work-db-too-new)))
       (should (string-match-p "schema 9.*update drgnx" (cadr err))))
     (should-not drgnx-work-db--read-handles)))
 
-(ert-deftest drgnx-work-db/a-read-only-reader-closing-last-never-checkpoints ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-read-only-reader-closing-last-never-checkpoints ()
   (drgnx-work-db-read-test--with
     (let* ((file (concat dir "work.db")) (wal (concat file "-wal")))
       (drgnx-work-fixture-put-node "plan:p" :kind 'plan :title "P")
@@ -68,7 +70,7 @@
         (should (equal (drgnx-work-db-read-test--hash file) main))
         (should (> (drgnx-work-db-read-test--size wal) 0))))))
 
-(ert-deftest drgnx-work-db/read-never-creates ()
+(drgnx-work-db-writer-deftest drgnx-work-db/read-never-creates ()
   (drgnx-work-db-read-test--with
     (should-not (file-exists-p (concat dir "work.db")))
     (should-not (drgnx-work-node "plan:nothing"))                 ; readers answer empty
@@ -77,7 +79,7 @@
     (should-not (file-exists-p (concat dir "work.db")))           ; …and nothing was made
     (should-not drgnx-work-db--handles)))
 
-(ert-deftest drgnx-work-db/an-older-schema-is-never-migrated-by-a-reader ()
+(drgnx-work-db-writer-deftest drgnx-work-db/an-older-schema-is-never-migrated-by-a-reader ()
   (drgnx-work-db-read-test--with
     (let ((db (sqlite-open (concat dir "work.db"))))             ; the schema-5 fixture: below ours
       (sqlite-pragma db "journal_mode = WAL")
@@ -93,13 +95,13 @@
       (should (equal (drgnx-work-db-read-test--hash (concat dir "work.db")) before))
       (should-not drgnx-work-db--handles))))
 
-(ert-deftest drgnx-work-db/read-accepts-schema-7-by-compat-read ()
+(drgnx-work-db-writer-deftest drgnx-work-db/read-accepts-schema-7-by-compat-read ()
   (drgnx-work-db-read-test--with
     (drgnx-work-db-read-test--newer dir 7 6)
     (should (equal (plist-get (drgnx-work-node "plan:p") :title) "P"))
     (should (= (drgnx-work-db-version) 7))))
 
-(ert-deftest drgnx-work-db/the-writers-are-gone ()
+(drgnx-work-db-writer-deftest drgnx-work-db/the-writers-are-gone ()
   (dolist (f '(drgnx-work-put-node drgnx-work-put-edge drgnx-work-update-node drgnx-work-forget-source
                                    drgnx-work-set-file drgnx-work-drop-file drgnx-work-forget-orphan-commits))
     (should-not (fboundp f)))
@@ -109,7 +111,7 @@
       (insert-file-contents (expand-file-name file drgnx-dir))
       (should-not (re-search-forward "(sqlite-execute (drgnx-work-db)" nil t)))))
 
-(ert-deftest drgnx-work-db/the-writer-refuses-outside-local-mode ()
+(drgnx-work-db-writer-deftest drgnx-work-db/the-writer-refuses-outside-local-mode ()
   ;; the hub is work.db's one writer: an editor (`refuse') and the Lisp backend behind Ratatoskr (`front') open
   ;; nothing read-write — no file made, no handle kept, no migration; only `local' (the standalone Lisp hub) does
   (drgnx-work-db-read-test--with
@@ -123,7 +125,7 @@
       (should (sqlitep (drgnx-work-db)))
       (should (file-exists-p (concat dir "work.db"))))))
 
-(ert-deftest drgnx-work-db/a-writer-commit-changes-the-read-handles-stamp ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-writer-commit-changes-the-read-handles-stamp ()
   (drgnx-work-db-read-test--with
     (require 'drgnx)
     (load (expand-file-name "modules/tools/drgnx-cockpit" drgnx-dir) nil t)
@@ -177,14 +179,14 @@
         (end-of-file nil)))
     (nreverse out)))
 
-(ert-deftest drgnx-work-db/readers-use-the-read-only-path ()
+(drgnx-work-db-writer-deftest drgnx-work-db/readers-use-the-read-only-path ()
   (require 'drgnx-work)
   (dolist (entry drgnx-work-db--writer-reads)
     (should (stringp (cdr entry))))
   (dolist (file drgnx-work-db-read-test--files)
     (should (equal (cons file (drgnx-work-db-read-test--offenders file)) (list file)))))
 
-(ert-deftest drgnx-work-db/the-walk-catches-a-let-bound-writer-handle ()
+(drgnx-work-db-writer-deftest drgnx-work-db/the-walk-catches-a-let-bound-writer-handle ()
   (should (drgnx-work-db-read-test--selects-on-writer
            '(defun sample () (let ((db (drgnx-work-db))) (sqlite-select db "select 1")))))
   (should (drgnx-work-db-read-test--selects-on-writer

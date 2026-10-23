@@ -78,6 +78,49 @@ jobs:
           DRGNX_TEST_NO_TIMING: "1"
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 
+  # The one-writer gate (Urdr schema 7, storage §9 step 4): the whole unit suite once with DRGNX_WORK_DB_GATE=1, where
+  # opening work.db read-write signals (test/support/work-db-gate.el) and only the tests tagged :work-db-writer (the
+  # `local' writer mode of Rust-bound Lisp, kept to that code by a lint) are left out. Same steps as emacs-31; the
+  # evidence that no Lisp path but the standalone Lisp hub's still writes the tracker's database. docs/develop/ci.md
+  no-lisp-writes:
+    name: No Lisp writes work.db (gate mode)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-unit-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
+      - name: Ratatoskr (cargo build, for the client's tests)
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
+      - name: Prebuilt image for this Containerfile (else the suite builds it)
+        if: ${{ !cancelled() }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          image="ghcr.io/black-dragon-foundation/drgnx-test:$(sha256sum test/container/Containerfile | cut -c1-16)"
+          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
+          if podman pull -q "$image"; then echo "DRGNX_TEST_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
+      - name: Unit suite in gate mode, the files in parallel (no :timing tests)
+        if: ${{ !cancelled() }}
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_RERUN: "1"
+          DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_WORK_DB_GATE: "1"
+        run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
+
   scripts:
     name: Shell scripts and leak scan
     runs-on: ubuntu-24.04
@@ -97,7 +140,7 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [runtime, emacs-31, scripts]
+    needs: [runtime, emacs-31, no-lisp-writes, scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

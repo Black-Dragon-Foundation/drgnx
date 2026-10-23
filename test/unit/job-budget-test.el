@@ -1,6 +1,8 @@
 ;;; job-budget-test.el --- batch tests: the budget pauses a job; a failing provider moves the task on -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 
 (defun drgnx-job-budget-test--agent (id n)
@@ -16,7 +18,7 @@
   "The budgets of job ID's gateway registrations."
   (delq nil (mapcar (lambda (r) (and (equal (plist-get (cdr r) :job) id) (plist-get (cdr r) :budget))) (drgnx-gateway-registrations))))
 
-(ert-deftest drgnx-job/the-budget-pauses-the-job ()
+(drgnx-work-db-writer-deftest drgnx-job/the-budget-pauses-the-job ()
   (drgnx-job-run-test--with "# Two\n\n### Task 1: one\n\n### Task 2: two\n"
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan :budget 1.0)) (events nil)
            (drgnx-hub-event-functions (list (lambda (e d) (push (cons e d) events)))))
@@ -41,7 +43,7 @@
         (should (drgnx-job-run-test--wait
                  (lambda () (seq-every-p (lambda (s) (string-search "The job goes on" (format "%S" (drgnx-agent-session-entries s)))) (list a b)))))))))
 
-(ert-deftest drgnx-job/a-session-free-at-the-pause-gets-its-prompt-on-resume ()
+(drgnx-work-db-writer-deftest drgnx-job/a-session-free-at-the-pause-gets-its-prompt-on-resume ()
   ;; not busy when the budget ran out (its prompt not given yet): resuming gives it
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan :budget 1.0)))
@@ -54,7 +56,7 @@
         (drgnx-job-resume id :budget 5.0)
         (should (drgnx-job-run-test--wait (lambda () (string-search (format "[drgnx task %s#1]" id) (format "%S" (drgnx-agent-session-entries a))))))))))
 
-(ert-deftest drgnx-job/a-rate-limit-moves-the-task-to-the-next-profile ()
+(drgnx-work-db-writer-deftest drgnx-job/a-rate-limit-moves-the-task-to-the-next-profile ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
@@ -74,7 +76,7 @@
         (should (string-search "continuing" (format "%S" (drgnx-agent-session-entries b)))))
       (should (seq-find (lambda (e) (and (equal (car e) "fallback") (equal (plist-get (cdr e) :to) "mock-b"))) events)))))
 
-(ert-deftest drgnx-job/a-reviewer-at-its-limit-moves-to-the-next-review-profile ()
+(drgnx-work-db-writer-deftest drgnx-job/a-reviewer-at-its-limit-moves-to-the-next-review-profile ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
@@ -93,7 +95,7 @@
                40))
       (should second))))                                                            ; reviewed by the second, merged
 
-(ert-deftest drgnx-job/a-reviewer-at-its-limit-with-no-profile-left-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/a-reviewer-at-its-limit-with-no-profile-left-is-a-card ()
   :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
@@ -106,7 +108,7 @@
         (should card)
         (should (string-search "rev-a" (plist-get card :title)))))))
 
-(ert-deftest drgnx-job/no-next-profile-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/no-next-profile-is-a-card ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
            (drgnx-agents-profiles (cons (list "mock-a" :command mock :env '("MOCK_ACP_RATE_LIMIT=1")) drgnx-agents-profiles))
@@ -116,7 +118,7 @@
       (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "needs-input")) 20))
       (should (seq-find (lambda (m) (string-prefix-p "[fallback]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
 
-(ert-deftest drgnx-job/an-agent-that-died-of-a-rate-limit-counts-as-one ()
+(drgnx-work-db-writer-deftest drgnx-job/an-agent-that-died-of-a-rate-limit-counts-as-one ()
   ;; it exited: the error says only that; its stderr says why
   (let ((s (drgnx-agents--make :id "s-x" :status 'exited :stderr "Error: 429 Too Many Requests")))
     (should (drgnx-job--provider-limit-p s '(:code -32000 :message "the agent exited")))
@@ -124,7 +126,7 @@
                                              '(:code -32000 :message "the agent exited")))
     (should (drgnx-job--provider-limit-p (drgnx-agents--make :id "s-z" :status 'idle) '(:code 429 :message "x")))))
 
-(ert-deftest drgnx-job/after-a-fallback-the-summary-shows-the-new-profile ()
+(drgnx-work-db-writer-deftest drgnx-job/after-a-fallback-the-summary-shows-the-new-profile ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")))
       (drgnx-job-approve id)
@@ -133,7 +135,7 @@
       (drgnx-coord-force-status tid "running" "s-b")
       (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :profile) "mock-b")))))
 
-(ert-deftest drgnx-job/handover-names-log-version ()
+(drgnx-work-db-writer-deftest drgnx-job/handover-names-log-version ()
   ;; the successor is told how far the decision log was when the agent before it stopped
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)))
@@ -143,7 +145,7 @@
         (should (> (drgnx-coord-version) 0))
         (should (string-search (format "version %d" (drgnx-coord-version)) (drgnx-job--handover id s)))))))
 
-(ert-deftest drgnx-job/handover-never-quotes-a-git-failure ()
+(drgnx-work-db-writer-deftest drgnx-job/handover-never-quotes-a-git-failure ()
   ;; git cannot log there (not a repository): the successor is told "none", not git's error
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)))
