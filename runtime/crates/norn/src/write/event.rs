@@ -116,7 +116,7 @@ pub fn event(tx: &Tx, e: Event) -> Result<i64, CoordError> {
             e.job,
             e.task,
             e.kind.as_str(),
-            text::one_line(&e.summary, SUMMARY_MAX, false),
+            text::coord_line(&e.summary, SUMMARY_MAX),
             e.data.as_ref().map(data_text),
             turn.then_some(1),
         ),
@@ -175,6 +175,7 @@ mod tests {
             .unwrap();
         assert_eq!(s.chars().count(), 200);
         assert!(s.starts_with("a b c"), "{s:?}");
+        assert!(!s.ends_with('…'), "{s:?}");
     }
 
     #[test]

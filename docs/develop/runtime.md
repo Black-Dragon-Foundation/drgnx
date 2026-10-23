@@ -93,7 +93,8 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
   outstanding client requests by id with deadlines; `resolve` and `expire` each remove an entry, so it ends once.
 - **`text`**: the one sanitizer for user-visible text. `CONTROL` is the Lisp `drgnx-coord-control-chars`; `one_line`
   (runs of control characters and `\n\r\t` become one space, cut at N characters with `…`, `header` also drops `]` and
-  `#`), `cut` (the MCP tool-text rule; says whether it cut) and `agent_label` (`ext:KIND:…` is "outside agent
+  `#`), `coord_line` (event summaries and card titles as the Lisp writer stores them: each control character a
+  space, cut at N characters, no `…`), `cut` (the MCP tool-text rule; says whether it cut) and `agent_label` (`ext:KIND:…` is "outside agent
   (unverified) KIND").
 - **`url`**: `check(url, schemes)` refuses `NAME::` transports, schemes outside the list (`user@host:path` is `ssh`, an
   absolute path `file`), control characters, a leading `-`, http(s) userinfo and a missing host. `provider_base` is the

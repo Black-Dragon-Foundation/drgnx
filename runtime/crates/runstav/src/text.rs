@@ -49,6 +49,15 @@ pub fn one_line(text: &str, max: usize, header: bool) -> String {
     clip(&out, max)
 }
 
+/// Each [`CONTROL`] character becomes a space (no merging, no trim); cut at MAX characters, no `…`.  The event
+/// summary and card title rule (`drgnx-coord--one-line`): the store holds what the Lisp writer would.
+pub fn coord_line(text: &str, max: usize) -> String {
+    text.chars()
+        .map(|c| if is_control(c) { ' ' } else { c })
+        .take(max)
+        .collect()
+}
+
 /// Control characters other than `\n` and `\t` replaced (by a space), trimmed, cut at MAX characters
 /// (`drgnx-coord-mcp--text-cut`).  The flag says whether it was cut.
 pub fn cut(text: &str, max: usize) -> (String, bool) {
@@ -107,17 +116,18 @@ mod tests {
     #[test]
     fn bidi_overrides_are_stripped() {
         assert_eq!(one_line("a\u{202e}b\u{2066}\u{2069}c", 50, false), "a b c");
-        assert_eq!(
-            one_line("x\r\n\t y\u{2028}z", 50, false),
-            "x  y z".replace("  ", " ")
-        );
+        // a run becomes one space; a real space beside it stays (Lisp: `[CONTROL]+` → " ")
+        assert_eq!(one_line("x\r\n\t y\u{2028}z", 50, false), "x  y z");
+        assert_eq!(coord_line("a\u{202e}\u{202e}b\nc", 50), "a  b c");
+        assert_eq!(coord_line(&"x".repeat(300), 200), "x".repeat(200));
         let (t, cut_off) = cut("a\u{202e}b\nc\td\u{7}", 50);
         assert_eq!((t.as_str(), cut_off), ("a b\nc\td", false));
     }
 
     #[test]
     fn header_drops_brackets_and_hash() {
-        assert_eq!(one_line("[esc] #1 hi", 50, true), "esc 1 hi");
+        // each `]` and `#` is a space and `[` stays, as `drgnx-coord-message-prompt` writes the sender
+        assert_eq!(one_line("[esc] #1 hi", 50, true), "[esc   1 hi");
         assert_eq!(one_line("[esc] #1 hi", 50, false), "[esc] #1 hi");
     }
 
