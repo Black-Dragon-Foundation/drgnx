@@ -241,7 +241,7 @@ pub async fn serve(
             "graph/compact is not built yet (Urdr Task 17 brings compaction)",
         )),
         Params::GraphSettings(p) => settings(w, caller, p).await,
-        Params::GraphPrivacy(_) => privacy(tools, dirs).await,
+        Params::GraphPrivacy(p) => privacy(w, tools, dirs, caller, p).await,
         Params::TasksReady(p) => tasks_ready(w, p).await,
         Params::TasksFind(p) => tasks_find(w, p).await,
         Params::TasksWrite(p) => tasks_write(w, caller, p).await,
@@ -1215,19 +1215,51 @@ async fn settings(w: &Writer, caller: &Caller, p: api::SettingsParams) -> Result
     }))
 }
 
-/// `graph/privacy {reload}`: the opt-ins read again and applied (`norn::privacy`, Task 9b); the new list in force
-/// once applied.
-async fn privacy(tools: &Coord, dirs: Option<&StoreDirs>) -> Result<Value, Error> {
-    let (g, old) = store(tools)?;
+/// `graph/privacy {reload}`: the opt-ins read again, in force at once (so no door lets back in what goes), then
+/// applied (`norn::privacy`, Task 9b): its notice is an `event` row, and the backend hears `coord/notify`. With
+/// `delete_copies` (the user's revoke command, after asking), those of the named copies that are backups or set-aside
+/// copies are deleted; exports never are, and the backend's connection deletes nothing.
+async fn privacy(
+    w: &Writer,
+    tools: &Coord,
+    dirs: Option<&StoreDirs>,
+    caller: &Caller,
+    p: api::PrivacyParams,
+) -> Result<Value, Error> {
+    if p.delete_copies.is_some() && caller.backend {
+        return Err(not_allowed(
+            "delete_copies",
+            "only the user deletes copies: the backend's connection never does",
+        ));
+    }
+    let (g, _) = store(tools)?;
     let d = dirs.ok_or_else(|| internal("the store's folders are not known yet"))?;
     let (home, config) = (d.home.clone(), d.config.clone());
-    let new = tokio::task::spawn_blocking(move || DenyList::load(&home, &config))
-        .await
-        .map_err(|e| internal(e.to_string()))?;
-    let r = norn::privacy::apply(&g.writer, &new, old.opt_ins(), new.opt_ins())
+    let new = Arc::new(
+        tokio::task::spawn_blocking(move || DenyList::load(&home, &config))
+            .await
+            .map_err(|e| internal(e.to_string()))?,
+    );
+    *g.deny.write().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&new);
+    let r = norn::privacy::apply(&g.writer, new)
         .await
         .map_err(|t| internal(format!("graph/privacy: {t}")))?;
-    *g.deny.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(new);
+    if r.notice.is_some() {
+        w.signals.wrote();
+        w.signals.notify_soon();
+    }
+    let wanted: Vec<PathBuf> = p
+        .delete_copies
+        .map(|v| v.into_inner().into_iter().map(PathBuf::from).collect())
+        .unwrap_or_default();
+    let removed = if wanted.is_empty() {
+        Vec::new()
+    } else {
+        let db = g.writer.path().to_path_buf();
+        tokio::task::spawn_blocking(move || norn::privacy::delete_copies(&db, &wanted))
+            .await
+            .map_err(|e| internal(e.to_string()))?
+    };
     let paths = |v: &[PathBuf]| v.iter().map(|p| show(p)).collect::<Vec<_>>();
     Ok(json!(api::PrivacyAnswer {
         added: paths(&r.added),
@@ -1235,6 +1267,8 @@ async fn privacy(tools: &Coord, dirs: Option<&StoreDirs>) -> Result<Value, Error
         ignored: r.ignored,
         excised: r.excised,
         backups_holding: paths(&r.backups_holding),
+        exports_holding: paths(&r.exports_holding),
+        backups_removed: paths(&removed),
     }))
 }
 

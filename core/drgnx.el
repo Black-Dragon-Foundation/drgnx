@@ -28,6 +28,10 @@
 (autoload 'drgnx-secrets-export-keys "drgnx-secrets" nil t)
 (autoload 'drgnx-secrets-import-keys "drgnx-secrets" nil t)
 (autoload 'drgnx-heap-audit-command "drgnx-heap" nil t)
+(autoload 'drgnx-store-allow-personal-file "drgnx-store-privacy" nil t)
+(autoload 'drgnx-store-revoke-personal-file "drgnx-store-privacy" nil t)
+(autoload 'drgnx-store-deny-personal-path "drgnx-store-privacy" nil t)
+(autoload 'drgnx-store-undeny-personal-path "drgnx-store-privacy" nil t)
 (require 'drgnx-gc)
 (require 'drgnx-gc-census)
 (require 'drgnx-session)
@@ -97,6 +101,18 @@ the start."
                         :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys")
   (drgnx-command-define 'hub-restart-now :category "Agents" :title "Hub: Restart Now" :command #'drgnx-hub-restart-now
                         :doc "Restart the agent hub (Ratatoskr) now, e.g. after drgnx was updated; the agent sessions it runs end")
+  (drgnx-command-define 'store-allow-personal-file :category "Preferences" :title "Open a Personal File to the Store…"
+                        :command #'drgnx-store-allow-personal-file
+                        :doc "Let the tracker read one file under ~/org (never your personal notes); agents may then read what it parses")
+  (drgnx-command-define 'store-revoke-personal-file :category "Preferences" :title "Close a Personal File to the Store…"
+                        :command #'drgnx-store-revoke-personal-file
+                        :doc "Close a file you opened to the store; what came in from it is excised")
+  (drgnx-command-define 'store-deny-personal-path :category "Preferences" :title "Keep a Path Out of the Store…"
+                        :command #'drgnx-store-deny-personal-path
+                        :doc "Keep a file, folder or glob out of the store for good, as firmly as your notes; what came in is excised")
+  (drgnx-command-define 'store-undeny-personal-path :category "Preferences" :title "Stop Keeping a Path Out…"
+                        :command #'drgnx-store-undeny-personal-path
+                        :doc "Take one of your own entries off the store's deny list (the built-in list stays)")
   (drgnx-command-define 'portability-export-keys :category "Portability" :title "Export Keys"
                         :command #'drgnx-secrets-export-keys
                         :doc "Your provider keys into secrets.age (age, a passphrase), for a second machine")

@@ -508,6 +508,15 @@ async fn watch_schema(front: Arc<Front>) {
                 excised = r.excised,
                 "the personal-notes opt-ins changed and were applied"
             );
+            // said to every editor, whoever changed the files (any process of the user's can: M9b2-11)
+            if let Some(text) = r.notice {
+                front.broadcast(
+                    "notice",
+                    serde_json::json!({"source": "hub", "severity": "warn", "id": "privacy-opt-ins",
+                                       "life": "event", "text": text}),
+                );
+            }
+            front.writer.signals.notify_soon();
         }
         front.writer.signals.events_soon();
     }

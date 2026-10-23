@@ -1,0 +1,34 @@
+{"scenario": "privacy/opt-in-then-revoke-leaves-no-trace", "requires": ["v1", "fake-backend"], "doc": "The personal-file opt-in (Urdr Task 9b): ~/org/reading.org, holding a canary, is opened to the store; a plan names it as its spec, and the scan's put stores its title. A plain write of the opt-in file (not the command) removes it: within a few ticks every editor gets the notice, and the canary is in neither work.db nor its WAL. A dated backup holding it is left alone by that change and deleted only by the user's confirmed delete_copies (which never deletes anything but a copy). An opt-in of ~/org/notes.org written the same way is announced as ignored, and the scan's put of it is refused: its canary never arrives."}
+{"do": "root"}
+{"do": "write_file", "path": "$HOME/org/reading.org", "text": "* CANARY9bReadingQx71\n"}
+{"do": "write_file", "path": "$HOME/org/notes.org", "text": "* CANARY9bNotesZz4k private\n"}
+{"do": "write_file", "path": "$ROOT/work/docs/plans/p.md", "text": "# P\n"}
+{"do": "write_file", "path": "$CONFIG/personal-notes-allow.json", "json": {"version": 1, "paths": ["$HOME/org/reading.org"]}, "mode": "0600"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "graph/privacy", "params": {"reload": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"excised": 0}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/put-parsed", "params": {"sources": [{"source": {"kind": "spec", "path": "$HOME/org/reading.org"}, "mtime": 1.0, "entities": [{"id": "spec:$HOME/org/reading.org", "kind": "spec", "title": "CANARY9bReadingQx71", "data": {"path": "$HOME/org/reading.org", "line": 1}}]}, {"source": {"kind": "file", "path": "$ROOT/work/docs/plans/p.md"}, "mtime": 2.0, "entities": [{"id": "plan:$ROOT/work/docs/plans/p.md", "kind": "plan", "title": "P", "status": "open", "data": {"path": "$ROOT/work/docs/plans/p.md", "line": 1}}], "links": [{"src": "plan:$ROOT/work/docs/plans/p.md", "kind": "derives", "dst": "spec:$HOME/org/reading.org"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"changed": "$number", "refused": []}}}
+{"do": "sql_expect", "sql": "select count(*) from entity where title = 'CANARY9bReadingQx71'", "rows": [[1]]}
+{"do": "write_file", "path": "$DATA/backup/work-pre7-19990101.db", "text": "an old copy: CANARY9bReadingQx71"}
+{"do": "write_file", "path": "$CONFIG/personal-notes-allow.json", "json": {"version": 1, "paths": []}, "mode": "0600"}
+{"do": "expect", "conn": "e", "json": {"event": "notice", "data": {"id": "privacy-opt-ins", "text": "personal-file opt-ins changed: +0 / −1; 1 excised"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select (select count(*) from entity where coalesce(title, '') || coalesce(data, '') like '%CANARY9b%') + (select count(*) from entity_hist where coalesce(title, '') || coalesce(data, '') like '%CANARY9b%')", "rows": [[0]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'plan' and retired_tx is null", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from event where kind = 'status' and summary = 'personal-file opt-ins changed: +0 / −1; 1 excised' and data not like '%reading%'", "rows": [[1]]}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*"], "absent": "CANARY9bReadingQx71"}
+{"do": "file", "path": "$DATA/backup/work-pre7-19990101.db", "exists": true}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "graph/privacy", "params": {"reload": true, "delete_copies": ["$DATA/backup/work-pre7-19990101.db", "$DATA/work.db"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"backups_removed": ["$DATA/backup/work-pre7-19990101.db"]}}}
+{"do": "file", "path": "$DATA/backup/work-pre7-19990101.db", "exists": false}
+{"do": "file", "path": "$DATA/work.db", "exists": true}
+{"do": "write_file", "path": "$CONFIG/personal-notes-allow.json", "json": {"version": 1, "paths": ["$HOME/org/notes.org"]}, "mode": "0600"}
+{"do": "expect", "conn": "e", "json": {"event": "notice", "data": {"id": "privacy-opt-ins", "text": "personal-file opt-ins changed: +0 / −0; 1 ignored"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/put-parsed", "params": {"sources": [{"source": {"kind": "spec", "path": "$HOME/org/notes.org"}, "mtime": 3.0, "entities": [{"id": "spec:$HOME/org/notes.org", "kind": "spec", "title": "CANARY9bNotesZz4k", "data": {"path": "$HOME/org/notes.org", "line": 1}}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"changed": 0, "refused": [{"source": {"kind": "spec", "path": "$HOME/org/notes.org"}, "why": "personal notes are never stored"}]}}}
+{"do": "sql_expect", "sql": "select count(*) from entity where id like '%notes.org%' or title like '%CANARY9bNotes%'", "rows": [[0]]}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*"], "absent": "CANARY9bNotesZz4k"}

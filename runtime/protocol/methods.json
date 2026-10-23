@@ -4847,6 +4847,17 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "delete_copies": {
+            "description": "Delete these copies, as an earlier answer's `backups_holding` named them, after the user confirmed: only the\nbackups, `work.db.schema5` and the set-aside `work.db.schema7-*` count; exports are never deleted.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "reload": {
             "description": "Read `personal-notes-allow.json` and `personal-notes-deny.json` again now and apply the change.",
             "type": "boolean"
@@ -4861,7 +4872,7 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "What applying a change of the opt-ins did (`norn::privacy::PrivacyReport`).",
+        "description": "What applying a change of the opt-ins did (`norn::privacy::PrivacyReport`), and the copies deleted.",
         "properties": {
           "added": {
             "default": [],
@@ -4872,6 +4883,14 @@
           },
           "backups_holding": {
             "default": [],
+            "description": "The backups and set-aside copies that still hold an excised value (`delete_copies` may name them).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "backups_removed": {
+            "default": [],
             "items": {
               "type": "string"
             },
@@ -4881,6 +4900,14 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "exports_holding": {
+            "default": [],
+            "description": "The exports that still hold one: the user's files, listed only.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "ignored": {
             "default": [],
