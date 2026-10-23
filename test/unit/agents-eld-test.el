@@ -1,199 +1,171 @@
-;;; agents-eld-test.el --- batch tests: agents.eld through the config layer -*- lexical-binding: t -*-
-;; Every test runs under `drgnx-test-with-config' (temp config and state folders).  Values here are fakes; the file
-;; holds command names and variable names, never keys.  The hub test loads drgnx-config and drgnx-agents in a child
-;; `emacs --batch -Q', waited for under a 30 s bound.
+;;; agents-eld-test.el --- batch tests: agents.eld folded into settings.el (the drgnx-agents-* settings) -*- lexical-binding: t -*-
+;; Every test runs under `drgnx-test-with-runtime-settings' (the eight runtime settings at their defaults, a temp
+;; config folder, the applier's state fresh).  Values here are fakes; the file holds command names and variable
+;; names, never keys.  The old file's layer behaviours (last good copy, one stat, the hub reading it) are the
+;; config layer's and the live re-read's now (settings-live-test.el).
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
-(load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (require 'drgnx-agents)
 (require 'drgnx-job)
-
-(defun drgnx-agents-eld-test--put (text) (drgnx-test-config-put 'agents text))
-(defun drgnx-agents-eld-test--text () (drgnx-test-config-text 'agents))
 
 (defconst drgnx-agents-eld-test--builtin-names
   (mapcar #'car drgnx-agents-builtin-profiles) "The built-in profiles' names.")
 
+;;;; The declarations
+
+(ert-deftest drgnx-agents/settings-are-strict-and-never-for-agents ()
+  (dolist (var '(drgnx-agents-profiles drgnx-agents-default drgnx-agents-mcp drgnx-agents-routes
+                                       drgnx-agents-openrouter drgnx-agents-allow-unsandboxed))
+    (let ((meta (drgnx-setting-meta var)))
+      (should (drgnx-setting-own-p var))
+      (should (eq (plist-get meta :on-error) 'strict))
+      (should (eq (plist-get meta :agents) 'never))
+      (should (eq (plist-get meta :scope) 'global))
+      (should (eq (plist-get meta :workspace) 'never)) ; US-WORKSPACE-NEVER-1: a workspace file's refusal catches them
+      (should (stringp (plist-get meta :runtime)))))
+  (dolist (var '(drgnx-ai-providers drgnx-ai-roles))
+    (let ((meta (drgnx-setting-meta var)))
+      (should (eq (plist-get meta :agents) 'never))
+      (should (stringp (plist-get meta :runtime)))))
+  (should (eq (plist-get (drgnx-setting-meta 'drgnx-ai-providers) :workspace) 'never)))
+
+(ert-deftest drgnx-agents/the-defaults-are-the-shipped-ones ()
+  (dolist (var '(drgnx-agents-profiles drgnx-agents-default drgnx-agents-mcp drgnx-agents-routes
+                                       drgnx-agents-openrouter drgnx-agents-allow-unsandboxed))
+    (should (equal (eval (car (get var 'standard-value)) t) (drgnx-settings-defaults-value var))))
+  (should (equal (eval (car (get 'drgnx-agents-mcp 'standard-value)) t) '(coordination)))
+  (should (null (eval (car (get 'drgnx-agents-allow-unsandboxed 'standard-value)) t))))
+
 ;;;; The fallback
 
 (ert-deftest drgnx-agents-eld/a-mistake-falls-back-to-the-built-in-profiles-only ()
-  (drgnx-test-with-config
-    (let ((drgnx-agents-profiles nil))
-      (drgnx-agents-eld-test--put
-       "(:profiles ((\"mine\" :command \"not-a-list\")) :default \"mine\" :mcp (coordination search))\n")
-      (should (drgnx-config-problem 'agents))
-      (should (equal (drgnx-agents-profile-names) drgnx-agents-eld-test--builtin-names))
-      (should-error (drgnx-agents-profile "mine") :type 'user-error)
-      (should (equal (drgnx-agents-mcp-names) '(coordination)))
-      (should (equal (drgnx-agents-default-profile) "claude")))))
+  (drgnx-test-with-runtime-settings
+    (drgnx-test-runtime-settings-put
+     "(drgnx-agents-profiles ((\"mine\" :command \"not-a-list\")))"
+     "(drgnx-agents-default \"mine\")"
+     "(drgnx-agents-mcp (coordination search))")
+    ;; the bad profiles entry is replaced by the default; the others apply
+    (should (seq-find (lambda (p) (eq (plist-get p :var) 'drgnx-agents-profiles)) drgnx-settings-apply-problems))
+    (should (equal (drgnx-agents-profile-names) drgnx-agents-eld-test--builtin-names))
+    (should-error (drgnx-agents-profile "mine") :type 'user-error)
+    (should (equal (drgnx-agents-mcp-names) '(coordination search)))
+    (should (equal (drgnx-agents-default-profile) "claude"))))
 
-(ert-deftest drgnx-agents-eld/there-is-no-last-good-copy ()
-  (drgnx-test-with-config
-    (let ((drgnx-agents-profiles nil))
-      (drgnx-agents-eld-test--put "(:profiles ((\"mine\" :command (\"x\"))) :default \"mine\" :mcp (search))\n")
-      (should (equal (drgnx-agents-default-profile) "mine"))
-      (should (equal (drgnx-agents-mcp-names) '(search)))
-      (drgnx-agents-eld-test--put "(:profiles ((\"mine\" :command (\"x\"))) :default \"mine\" :mcp (search)\n") ; unclosed
-      (should (drgnx-config-problem 'agents))
-      (should-not (drgnx-config-get 'agents :default))
-      (should (equal (drgnx-agents-default-profile) "claude"))
-      (should (equal (drgnx-agents-mcp-names) '(coordination)))
-      (should-not (member "mine" (drgnx-agents-profile-names))))))
+(ert-deftest drgnx-agents-eld/a-file-that-does-not-read-gives-the-strict-defaults ()
+  (drgnx-test-with-runtime-settings
+    (drgnx-test-runtime-settings-put "(drgnx-agents-default \"mine\")"
+                                     "(drgnx-agents-profiles ((\"mine\" :command (\"x\"))))")
+    (should (equal (drgnx-agents-default-profile) "mine"))
+    (drgnx-test-config-put 'settings "(drgnx-settings :version 1 (drgnx-agents-default \"mine\")\n") ; unclosed
+    (drgnx-settings-apply-global)
+    (should (equal (drgnx-agents-default-profile) "claude"))
+    (should (equal (drgnx-agents-mcp-names) '(coordination)))
+    (should-not (member "mine" (drgnx-agents-profile-names)))))
 
 (ert-deftest drgnx-agents-eld/an-empty-mcp-list-is-none-and-an-absent-one-is-coordination ()
-  (drgnx-test-with-config
+  (drgnx-test-with-runtime-settings
     (should (equal (drgnx-agents-mcp-names) '(coordination)))          ; no file
-    (drgnx-agents-eld-test--put "(:default \"claude\")\n")
+    (drgnx-test-runtime-settings-put "(drgnx-agents-default \"claude\")")
     (should (equal (drgnx-agents-mcp-names) '(coordination)))
-    (drgnx-agents-eld-test--put "(:mcp ())\n")
+    (drgnx-test-runtime-settings-put "(drgnx-agents-mcp ())")
     (should (null (drgnx-agents-mcp-names)))))
+
+(ert-deftest drgnx-agents-eld/a-buffer-local-value-never-reaches-the-callers ()
+  (drgnx-test-with-runtime-settings
+    (drgnx-test-set-runtime 'drgnx-agents-mcp '(search))
+    (with-temp-buffer
+      (setq-local drgnx-agents-mcp '(coordination search))
+      (setq-local drgnx-agents-profiles '(("evil" :command ("rm"))))
+      (should (equal (drgnx-agents-mcp-names) '(search)))
+      (should-not (member "evil" (drgnx-agents-profile-names))))))
 
 ;;;; OpenRouter
 
 (ert-deftest drgnx-agents-eld/openrouter-agents-refuse-while-it-has-a-mistake ()
-  (drgnx-test-with-config
-    (drgnx-agents-eld-test--put "(:openrouter (:only (\"anthropic\"))\n :mcp (coordination\n")
+  (drgnx-test-with-runtime-settings
+    (drgnx-test-runtime-settings-put "(drgnx-agents-openrouter (:only (\"anthropic\")))")
+    (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic"))))
+    (drgnx-test-config-put 'settings "(drgnx-settings :version 1 (drgnx-agents-openrouter (:only (\"anthropic\")))\n")
+    (drgnx-settings-apply-global)
     (let ((err (should-error (drgnx-agents-openrouter-restrictions) :type 'user-error)))
-      (should (string-match-p "agents\\.eld has a mistake (line [0-9]+: .+): OpenRouter agents do not start until it is fixed"
+      (should (string-match-p "settings\\.el has a mistake (line [0-9]+: .+): OpenRouter agents do not start until it is fixed"
                               (error-message-string err))))
-    (drgnx-agents-eld-test--put "(:openrouter (:only (\"anthropic\")))\n")                ; fixed
+    (drgnx-test-runtime-settings-put "(drgnx-agents-openrouter (:only (\"anthropic\")))")        ; fixed
     (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic"))))))
 
 (ert-deftest drgnx-agents-eld/a-bad-openrouter-value-is-a-problem ()
-  (drgnx-test-with-config
-    (drgnx-agents-eld-test--put "(:openrouter (:zdr yes))\n")
-    (let ((p (drgnx-config-problem 'agents)))
+  (drgnx-test-with-runtime-settings
+    (drgnx-test-runtime-settings-put "(drgnx-agents-openrouter (:zdr yes))")
+    (let ((p (seq-find (lambda (p) (eq (plist-get p :var) 'drgnx-agents-openrouter)) drgnx-settings-apply-problems)))
       (should p)
       (should (string-search "not an OpenRouter restriction" (plist-get p :text)))
       (should (string-search ":zdr is yes" (plist-get p :text))))
     (should-error (drgnx-agents-openrouter-restrictions) :type 'user-error)
-    (drgnx-agents-eld-test--put "(:openrouter (:only (\"ok\") :data-collection deny :zdr t))\n")
-    (should-not (drgnx-config-problem 'agents))
+    (drgnx-test-runtime-settings-put "(drgnx-agents-openrouter (:only (\"ok\") :data-collection deny :zdr t))")
+    (should-not drgnx-settings-apply-problems)
     (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("ok") :data-collection deny :zdr t)))
-    (drgnx-agents-eld-test--put "(:profiles nil)\n")                                       ; none set
+    (drgnx-test-runtime-settings-put "(drgnx-agents-openrouter nil)")                          ; none set
     (should-not (drgnx-agents-openrouter-restrictions))))
 
 ;;;; Writing
 
 (ert-deftest drgnx-agents-eld/set-setting-keeps-comments-and-env ()
-  (drgnx-test-with-config
-    (let ((text ";; my agents\n(:profiles ((\"mine\" :command (\"x\" \"--flag\") ; the program\n               :env (\"FOO=bar\" \"BAZ=1\")))\n :routes ((implement \"mine\"))) ; end\n"))
-      (drgnx-agents-eld-test--put text)
+  (drgnx-test-with-runtime-settings
+    (let ((text ";; my agents\n(drgnx-settings\n :version 1\n ;; mine\n (drgnx-agents-profiles ((\"mine\" :command (\"x\" \"--flag\") ; the program\n                          :env (\"FOO=bar\" \"BAZ=1\")))\n )\n ) ; end\n"))
+      (drgnx-test-config-put 'settings text)
+      (drgnx-settings-apply-global)
       (drgnx-agents-set-setting :default "mine")
       (drgnx-agents-set-setting :mcp '(coordination search))
-      (let ((new (drgnx-agents-eld-test--text)))
-        (should (string-prefix-p ";; my agents\n(:profiles ((\"mine\" :command (\"x\" \"--flag\") ; the program\n               :env (\"FOO=bar\" \"BAZ=1\")))" new))
-        (should (string-search ":routes ((implement \"mine\"))\n" new))
-        (should (string-suffix-p ") ; end\n" new))
-        (should (string-search ":default \"mine\"" new)))
+      (let ((new (drgnx-test-settings-text)))
+        (should (string-search ";; mine\n (drgnx-agents-profiles ((\"mine\" :command (\"x\" \"--flag\") ; the program" new))
+        (should (string-search "(drgnx-agents-default \"mine\")" new))
+        (should (string-search "(drgnx-agents-mcp (coordination search))" new)))
       (should (equal (drgnx-agents-default-profile) "mine"))
       (should (equal (drgnx-agents-mcp-names) '(coordination search)))
       (should (equal (plist-get (cdr (drgnx-agents-profile "mine")) :env) '("FOO=bar" "BAZ=1")))
       (drgnx-agents-set-setting :mcp nil)
       (should (null (drgnx-agents-mcp-names)))
-      (should (string-search ":mcp nil" (drgnx-agents-eld-test--text))))))
+      (should (string-search "(drgnx-agents-mcp nil)" (drgnx-test-settings-text))))))
 
 (ert-deftest drgnx-agents-eld/set-setting-refuses-a-file-with-a-mistake ()
-  (drgnx-test-with-config
-    (let ((text "(:profiles ((\"mine\" :command (\"x\"))) ; typo below\n :default 5)\n"))
-      (drgnx-agents-eld-test--put text)
-      (should-error (drgnx-agents-set-setting :mcp '(search)) :type 'drgnx-config-refused)
-      (should-error (drgnx-agents-set-setting :mcp '(search)) :type 'user-error)
-      (should (equal (drgnx-agents-eld-test--text) text)))
-    (let ((text "(:profiles ((\"mine\" :command (\"x\"))\n"))                          ; does not read
-      (drgnx-agents-eld-test--put text)
+  (drgnx-test-with-runtime-settings
+    (let ((text "(drgnx-settings :version 1 (drgnx-agents-default \"mine\")\n"))                  ; does not read
+      (drgnx-test-config-put 'settings text)
       (should-error (drgnx-agents-set-setting :default "mine") :type 'user-error)
-      (should (equal (drgnx-agents-eld-test--text) text)))))
+      (should-error (drgnx-agents-set-setting :mcp '(search)) :type 'drgnx-settings-refused)
+      (should (equal (drgnx-test-settings-text) text)))
+    (should-error (drgnx-agents-set-setting :nonsense 1) :type 'user-error)))
 
-;;;; Routes and cost
+;;;; Routes
 
-(ert-deftest drgnx-agents-eld/routes-come-from-the-layer ()
-  (drgnx-test-with-config
+(ert-deftest drgnx-agents-eld/routes-come-from-the-settings ()
+  (drgnx-test-with-runtime-settings
     (let ((drgnx-job-routes nil))
-      (drgnx-agents-eld-test--put "(:routes ((implement \"a\" \"b\") (review \"c\")))\n")
+      (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement \"a\" \"b\") (review \"c\")))")
       (should (equal (drgnx-job--routes) '((implement "a" "b") (review "c"))))
       (should (equal (drgnx-job-route 'implement) '("a" "b")))
       (let ((drgnx-job-routes '((implement "z")))) (should (equal (drgnx-job-route 'implement) '("z"))))
-      (drgnx-agents-eld-test--put "(:routes ((implement . \"a\") (review \"c\")))\n")  ; one name, dotted: the v1 form
-      (should-not (drgnx-config-problem 'agents))
+      (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement . \"a\") (review \"c\")))") ; the v1 dotted form
+      (should-not drgnx-settings-apply-problems)
       (should (equal (drgnx-job-route 'implement) '("a")))
       (should (equal (drgnx-job-route 'review) '("c")))
-      (drgnx-agents-eld-test--put "(:routes ((implement . 5)))\n")                  ; neither a name nor a list: a mistake
-      (should (drgnx-config-problem 'agents))
+      (drgnx-test-runtime-settings-put "(drgnx-agents-routes ((implement . 5)))")                  ; neither: a mistake
+      (should drgnx-settings-apply-problems)
       (should-not (drgnx-job--routes)))))
 
 (ert-deftest drgnx-agents-eld/a-dotted-route-keeps-the-profiles-and-openrouter-agents ()
   ;; (ROLE . "profile") is a documented v1 form: it is never a mistake that voids the rest of the file
-  (drgnx-test-with-config
-    (drgnx-agents-eld-test--put
-     "(:profiles ((\"mine\" :command (\"x\"))) :openrouter (:only (\"anthropic\"))\n :routes ((review . \"claude\") (implement \"a\")))\n")
-    (should-not (drgnx-config-problem 'agents))
+  (drgnx-test-with-runtime-settings
+    (drgnx-test-runtime-settings-put
+     "(drgnx-agents-profiles ((\"mine\" :command (\"x\"))))"
+     "(drgnx-agents-openrouter (:only (\"anthropic\")))"
+     "(drgnx-agents-routes ((review . \"claude\") (implement \"a\")))")
+    (should-not drgnx-settings-apply-problems)
     (should (drgnx-agents-profile "mine"))
     (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic"))))
     (should (equal (drgnx-job-route 'review) '("claude")))
     (should (equal (drgnx-job-route 'implement) '("a")))))
-
-(ert-deftest drgnx-agents-eld/one-stat-per-get ()
-  (drgnx-test-with-config
-    (drgnx-agents-eld-test--put "(:profiles ((\"mine\" :command (\"x\"))) :mcp (search))\n")
-    (drgnx-agents-mcp-names)
-    (let* ((n 0) (count (lambda (&rest _) (setq n (1+ n)))))
-      (advice-add 'file-attributes :before count)
-      (unwind-protect
-          (progn (should (equal (drgnx-agents-mcp-names) '(search)))
-                 (should (= n 1))
-                 (setq n 0)
-                 (should (drgnx-agents-profile "mine"))
-                 (should (= n 1))
-                 (setq n 0)
-                 (should-not (drgnx-job--routes))
-                 (should (= n 1)))
-        (advice-remove 'file-attributes count)))))
-
-;;;; The hub
-
-(defun drgnx-agents-eld-test--wait (proc buf pattern)
-  "Wait for PROC's output in BUF to match PATTERN, under 30 s; the output."
-  (let ((deadline (+ (float-time) 30)))
-    (while (and (process-live-p proc) (< (float-time) deadline)
-                (not (string-match-p pattern (with-current-buffer buf (buffer-string)))))
-      (accept-process-output proc 0.05))
-    (with-current-buffer buf (buffer-string))))
-
-(ert-deftest drgnx-agents-eld/the-hub-reads-it-under-batch-q ()
-  (drgnx-test-with-config
-    (let* ((core (file-name-directory (locate-library "drgnx-config.el")))
-           (go (concat drgnx-test-config-root "go"))
-           (buf (generate-new-buffer " *drgnx-agents-eld-hub*" t)))
-      (unwind-protect
-          (progn
-            (drgnx-agents-eld-test--put "(:profiles ((\"one\" :command (\"x\"))) :default \"one\")\n")
-            (let ((proc (make-process
-                         :name "drgnx-agents-eld-hub" :buffer buf :noquery t
-                         :stderr (generate-new-buffer " *drgnx-agents-eld-hub-err*" t)
-                         :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                        "-L" (directory-file-name core) "-l" "drgnx-config" "-l" "drgnx-agents"
-                                        "--eval" (format "(progn (prin1 (list 'first (drgnx-config-get 'agents :default) (drgnx-config-problem 'agents))) (terpri)
- (while (not (file-exists-p %S)) (sleep-for 0.05))
- (prin1 (list 'second (drgnx-config-get 'agents :default))) (terpri))" go)))))
-              (should (string-match-p "(first \"one\" nil)" (drgnx-agents-eld-test--wait proc buf "(first")))
-              (drgnx-agents-eld-test--put "(:profiles ((\"two\" :command (\"x\"))) :default \"two\")\n")
-              (write-region "" nil go nil 'silent)
-              (should (string-match-p "(second \"two\")" (drgnx-agents-eld-test--wait proc buf "(second")))
-              (let ((deadline (+ (float-time) 30)))
-                (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05)))
-              (should (eql (process-exit-status proc) 0))))
-        (kill-buffer buf)))))
-
-(ert-deftest drgnx-agents-eld/the-hub-sees-a-change-without-polling ()
-  (drgnx-test-with-config
-    (let ((timers (copy-sequence timer-list)) (idle (copy-sequence timer-idle-list)))
-      (drgnx-agents-eld-test--put "(:default \"claude\")\n")
-      (drgnx-agents-default-profile)
-      (drgnx-agents-eld-test--put "(:default \"claude (Ollama)\")\n")
-      (should (equal (drgnx-config-get 'agents :default) "claude (Ollama)"))        ; seen at the next get
-      (should (equal timer-list timers))
-      (should (equal timer-idle-list idle)))))
 
 ;;; agents-eld-test.el ends here

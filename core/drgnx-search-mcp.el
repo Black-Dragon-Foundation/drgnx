@@ -19,6 +19,7 @@
 (require 'drgnx-mcp)
 (require 'drgnx-search-store)
 (require 'drgnx-search-query)
+(require 'drgnx-settings-defaults)
 
 (declare-function drgnx-search-index--dir-env "drgnx-search-index")
 
@@ -92,6 +93,7 @@ nothing runs where PATH points: no git, no other project's index."
   "Batch entry: `emacs --batch -L core -l drgnx-search-mcp -f drgnx-search-mcp-main [-- ROOT]'.
 Serves the `search' tool on stdin/stdout for the project at ROOT (default: the working directory)."
   (drgnx-gc-batch-setup)
+  (drgnx-settings-defaults-apply)               ; the embed role is the user's
   (let* ((args (cdr (member "--" command-line-args-left)))
          (root (expand-file-name (or (car args) default-directory))))
     (setq command-line-args-left nil)
@@ -121,6 +123,7 @@ Nothing adds it to a session by itself: see docs/guide/search.md."
 (defun drgnx-search-mcp-query-cli ()
   "Batch entry: `… -f drgnx-search-mcp-query-cli -- ROOT QUESTION… [-k N]'.
 Prints PATH:LINE: first line for each hit; the notice, if any, goes to stderr.  Exits 1 on an error (no index)."
+  (drgnx-settings-defaults-apply)               ; the embed role is the user's
   (let* ((args (cdr (member "--" command-line-args-left))) (k nil) (words nil))
     (setq command-line-args-left nil)
     (while args

@@ -7,7 +7,7 @@
 
 (defmacro drgnx-ai-embed-test--with (spec chain &rest body)
   "BODY with a mock LLM server answering SPEC on PORT (its request LOG), providers `tei', `a' (openai), `o' (ollama),
-`l' (llama.cpp) and `dead' (nothing listens) pointing at it, and the embed role set to CHAIN in ai.eld."
+`l' (llama.cpp) and `dead' (nothing listens) pointing at it, and the embed role set to CHAIN in drgnx-ai-roles."
   (declare (indent 2))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-embed" t)))
           (port nil) (dead nil)
@@ -16,6 +16,7 @@
                                              "A_KEY=sk-test-123")
                                        process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai-detected nil)
+          (drgnx-ai-providers nil) (drgnx-ai-roles nil)
           (mock nil))
      (unwind-protect
          (progn
@@ -24,15 +25,12 @@
            (setq mock (drgnx-ai-test-mock-llm nil script log)
                  port (process-get mock :port)
                  dead (drgnx-test-free-port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1
-                               :providers ((tei :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
-                                           (a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY" :caps (embed))
-                                           (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
-                                           (l :name "L" :kind llamacpp :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
-                                           (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (embed)))
-                               :roles ((embed ,@,chain)))
-                    (current-buffer)))
+           (setq drgnx-ai-providers `((tei :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
+                                      (a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY" :caps (embed))
+                                      (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
+                                      (l :name "L" :kind llamacpp :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
+                                      (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (embed)))
+                 drgnx-ai-roles `((embed ,@,chain)))
            ,@body)
        (when mock (delete-process mock))
        (delete-directory root t))))

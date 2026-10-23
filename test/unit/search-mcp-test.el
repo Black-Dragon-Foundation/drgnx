@@ -9,6 +9,7 @@
 (load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-search-mcp-test--dims 32)
 
@@ -177,13 +178,12 @@
          (process-environment (append (list "XDG_STATE_HOME=/tmp/st" "DRGNX_DATA_DIR=/tmp/dd" (concat "DRGNX_CONFIG_DIR=" conf)
                                             "MCP_TEST_KEY=sk-never-for-agents")
                                       process-environment))
-         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
+         (drgnx-ai-providers nil) (drgnx-ai-roles nil))
     (unwind-protect
         (progn
-          (with-temp-file (expand-file-name "ai.eld" conf)
-            (prin1 '(:version 1 :providers ((kz :name "K" :kind openai :url "http://127.0.0.1:1/v1" :key-env "MCP_TEST_KEY" :caps (embed)))
-                              :roles ((embed (kz . "m"))))
-                   (current-buffer)))
+          (setq drgnx-ai-providers '((kz :name "K" :kind openai :url "http://127.0.0.1:1/v1" :key-env "MCP_TEST_KEY" :caps (embed)))
+                drgnx-ai-roles '((embed (kz . "m"))))
           (let ((spec (drgnx-search-mcp-server-spec "/some/project")))
             (should (equal (plist-get spec :name) "drgnx-search"))
             (should (stringp (plist-get spec :command)))
@@ -255,10 +255,10 @@
     (unwind-protect
         (progn
           (make-directory (expand-file-name "drgnx" conf))
-          (with-temp-file (expand-file-name "drgnx/ai.eld" conf)
-            (prin1 `(:version 1 :providers ((dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (embed)))
-                              :roles ((embed (dead . "m"))))
-                   (current-buffer)))
+          (drgnx-test-write-settings               ; the subprocess reads its own settings.el
+           (expand-file-name "drgnx/settings.el" conf)
+           'drgnx-ai-providers `((dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (embed)))
+           'drgnx-ai-roles '((embed (dead . "m"))))
           (drgnx-search-mcp-test--git-init root)
           (let ((drgnx-search-last-notice nil))
             (cl-letf (((symbol-function 'drgnx-ai-embed-sync) #'drgnx-search-mcp-test--embed))

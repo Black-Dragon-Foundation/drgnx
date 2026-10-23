@@ -738,6 +738,7 @@ never falls back to the front's socket.  So is one without DRGNX_HUB_SERVE_SECRE
                               (kill-emacs 1))
                              (t (or serve (drgnx-hub-socket))))))
     (setq drgnx-hub--secret (and serve secret))
+    (drgnx-settings-defaults-apply)               ; the hub's Lisp half reads the profiles, routes and providers
     (drgnx-gc-batch-setup)
     (setq drgnx-timer-report-file "hub-timers-report.eld")   ; the hub's stopped timers go to a file of their own
     (drgnx-sandbox-vc-mode 1)                       ; the hub's own git never runs in a job's folder either

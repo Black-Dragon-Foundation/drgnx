@@ -7,16 +7,20 @@
 (require 'auth-source)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-test--with (root &rest body)
-  "BODY with ROOT a temp dir: the config dir ROOT/config, a project ROOT/proj, no provider keys in the environment."
+  "BODY with ROOT a temp dir: the config dir ROOT/config, a project ROOT/proj, no provider keys in the environment,
+the runtime settings at their defaults (a test `setq's them, or writes ROOT/config/settings.el)."
   (declare (indent 1))
   `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-ai" t)))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" ,root "config") (concat "XDG_STATE_HOME=" ,root "state")
                                              "OPENROUTER_API_KEY" "DRGNX_JOBS_LAUNCHER=detached")
                                        process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
+     (drgnx-test-runtime-settings--reset)
      (unwind-protect (progn (make-directory (concat ,root "config") t) (make-directory (concat ,root "proj/.drgnx") t) ,@body)
+       (drgnx-test-runtime-settings--forget)
        (auth-source-forget-all-cached)                  ; auth-source remembers the fixture's keys: not for later tests
        (delete-directory ,root t))))
 
@@ -53,21 +57,20 @@
       (should (equal (drgnx-ai-role 'complete) '((evil . "m") (ollama . "project-model"))))   ; roles: kept
       (should-not (drgnx-ai-usable-p 'evil)))))                                            ; …an unknown one is never asked
 
-(ert-deftest drgnx-ai/an-ai-eld-that-does-not-read-is-never-replaced ()
+(ert-deftest drgnx-ai/a-settings-el-that-does-not-read-is-never-replaced ()
   (drgnx-ai-test--with root
-    (let ((broken "(:version 1 :providers ((box :name \"GPU box\" :url \"http://box:9000/v1\"\n;; mine\n"))
-      (write-region broken nil (concat root "config/ai.eld") nil 'silent)
+    (let ((broken "(drgnx-settings :version 1 (drgnx-ai-providers ((box :name \"GPU box\" :url \"http://box:9000/v1\"\n;; mine\n"))
+      (write-region broken nil (concat root "config/settings.el") nil 'silent)
       (should-error (drgnx-ai-set-role 'chat '((ollama . "m"))) :type 'user-error)
-      (should (equal (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (buffer-string)) broken))
+      (should (equal (with-temp-buffer (insert-file-contents (concat root "config/settings.el")) (buffer-string)) broken))
       ;; fixed: read again (a changed file is never served from the cache)
-      (drgnx-ai-test--write (concat root "config/ai.eld") '(:version 1 :roles ((chat (ollama . "fixed")))))
+      (drgnx-test-runtime-settings-put "(drgnx-ai-roles ((chat (ollama . \"fixed\"))))")
       (should (equal (drgnx-ai-role 'chat) '((ollama . "fixed")))))))
 
-(ert-deftest drgnx-ai/ai-eld-adds-providers-and-a-project-overrides-a-role ()
+(ert-deftest drgnx-ai/settings-add-providers-and-a-project-overrides-a-role ()
   (drgnx-ai-test--with root
-    (drgnx-ai-test--write (concat root "config/ai.eld")
-                          '(:version 1 :providers ((mine :name "Mine" :kind openai :url "http://box:9000/v1" :key-env "MINE_KEY"))
-                                     :roles ((chat (mine . "big") (ollama . "small")))))
+    (setq drgnx-ai-providers '((mine :name "Mine" :kind openai :url "http://box:9000/v1" :key-env "MINE_KEY"))
+          drgnx-ai-roles '((chat (mine . "big") (ollama . "small"))))
     (drgnx-ai-test--write (concat root "proj/.drgnx/ai.eld") '(:version 1 :roles ((chat (ollama . "project-model")))))
     (should (equal (plist-get (alist-get 'mine (drgnx-ai-providers)) :url) "http://box:9000/v1"))
     (should (equal (drgnx-ai-role 'chat) '((mine . "big") (ollama . "small"))))
@@ -536,8 +539,7 @@ LOG/security.calls."
   ;; The keys of the providers the roles name, through the sources a command may use (the Keychain); then the
   ;; background (ghost text: not interactive) has them.  Local runners have no key: nothing is read for them.
   (drgnx-ai-test--with root
-    (drgnx-ai-test--write (concat root "config/ai.eld")
-                          '(:version 1 :roles ((complete (openrouter . "m") (ollama . "c")) (chat (openrouter . "m")))))
+    (setq drgnx-ai-roles '((complete (openrouter . "m") (ollama . "c")) (chat (openrouter . "m"))))
     (let ((system-type 'darwin) (noninteractive nil) (asked nil) (auth-sources nil))
       (cl-letf (((symbol-function 'auth-source-search)
                  (lambda (&rest spec) (push (cons (plist-get spec :host) auth-sources) asked)
@@ -700,12 +702,11 @@ here, and a variable let-bound before it loads would turn special for good."
 
 (ert-deftest drgnx-ai/a-provider-with-no-host-counts-as-remote ()
   (drgnx-ai-test--with root
-    (drgnx-ai-test--write (concat root "config/ai.eld")
-                          '(:version 1 :providers ((bare :name "b" :kind openai :url "openrouter.ai/api/v1" :caps (chat))
-                                                   (none :name "n" :kind openai :caps (chat))
-                                                   (spoof :name "s" :kind openai :url "http://localhost.evil.com/v1" :caps (chat))
-                                                   (at :name "a" :kind openai :url "http://127.0.0.1@evil.com/v1" :caps (chat))
-                                                   (v6 :name "v" :kind openai :url "http://[::1]:9/v1" :caps (chat)))))
+    (setq drgnx-ai-providers '((bare :name "b" :kind openai :url "openrouter.ai/api/v1" :caps (chat))
+                               (none :name "n" :kind openai :caps (chat))
+                               (spoof :name "s" :kind openai :url "http://localhost.evil.com/v1" :caps (chat))
+                               (at :name "a" :kind openai :url "http://127.0.0.1@evil.com/v1" :caps (chat))
+                               (v6 :name "v" :kind openai :url "http://[::1]:9/v1" :caps (chat))))
     (dolist (id '(bare none spoof at)) (should (drgnx-ai-remote-p id)))
     (should-not (drgnx-ai-remote-p 'v6))
     (should-not (drgnx-ai-remote-p 'ollama))

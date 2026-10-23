@@ -6,9 +6,10 @@
 (require 'drgnx-hub)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-agents-mirror-permission-test--with (&rest body)
-  "BODY with drgnx's dirs under ROOT, a hub process serving them (profile \"mock\" in its agents.eld), no mirrors yet."
+  "BODY with drgnx's dirs under ROOT, a hub process serving them (profile \"mock\" in its settings.el), no mirrors yet."
   (declare (indent 0))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-mirror-perm" t)))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
@@ -18,10 +19,10 @@
      (unwind-protect
          (progn
            (make-directory (concat root "config") t)
-           (with-temp-file (concat root "config/agents.eld")
-             (prin1 (list :profiles (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                                                      "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
-                    (current-buffer)))
+           (setq drgnx-agents-profiles
+                 (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                                   "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
+           (drgnx-test-write-settings (concat root "config/settings.el") 'drgnx-agents-profiles drgnx-agents-profiles)
            (drgnx-test-lisp-hub-ensure)
            ,@body)
        (ignore-errors (drgnx-hub-call-sync "shutdown" nil 3))

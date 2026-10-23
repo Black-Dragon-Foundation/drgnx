@@ -82,21 +82,21 @@ job keeps a snapshot of the plan: editing the file later does not change a runni
 
 ## Routes and the estimate
 
-Which profile does which role comes from `:routes` in `agents.eld` (config dir):
+Which profile does which role comes from the setting `drgnx-agents-routes` in `settings.el` (config dir):
 
 ```elisp
-(:routes ((implement "claude" "claude (OpenRouter)")   ; the first; the rest take over when it fails
-          (review . "claude")))                        ; or one name, dotted
+(drgnx-agents-routes ((implement "claude" "claude (OpenRouter)")   ; the first; the rest take over when it fails
+                      (review . "claude")))                        ; or one name, dotted
 ```
 
-Each role's value is a list of profile names, or one name. If `agents.eld` has a mistake (a route that is neither,
-or anything else in the file), no route is read from it until it is fixed: the roles use `drgnx-job-default-profile`, and
+Each role's value is a list of profile names, or one name. If the entry has a mistake (a route that is neither),
+or `settings.el` does not read, no route is read from it until it is fixed: the roles use `drgnx-job-default-profile`, and
 the message that names the line is said once (Preferences: Open Config File… opens the file).
 
 A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate counts
 `drgnx-job-task-tokens` (150 000 in, 15 000 out) per task at the price of the profile's provider when its traffic
 goes through the gateway; profiles drgnx cannot price (a subscription) are listed as unpriced. With a `--budget`, the
-proposal also warns about a profile on a route whose provider has no `:price` in `ai.eld`: the gateway cannot count
+proposal also warns about a profile on a route whose provider has no `:price` in `drgnx-ai-providers`: the gateway cannot count
 what it spends, so the budget would not stop it.
 
 **Only job-safe profiles run a job's agents.** A job's agent works unwatched in a repository you may not have
@@ -206,7 +206,7 @@ Plan…** and **Start as Job** take your option with them. `drgnx job propose` g
 ## Your first real job
 
 A small plan in a repository of yours, with the agents you use — say Claude Code on your subscription for the work,
-a model on OpenRouter as its fallback, and a local Ollama model for reviews. Set the routes in `agents.eld` (config
+a model on OpenRouter as its fallback, and a local Ollama model for reviews. Set the routes in `drgnx-agents-routes` (`settings.el` in the config
 dir), with profiles of your own where the built-in ones do not fit ([agents.md](agents.md),
 [ai.md](ai.md)):
 

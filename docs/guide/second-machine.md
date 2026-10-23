@@ -209,7 +209,7 @@ terminal running the same command, with a header saying what to type. drgnx itse
 the passphrase in that terminal.
 
 **What `secrets.age` holds:** for each provider that takes a key (it has a `:key-env`: OpenRouter, Anthropic, your
-own in `ai.eld`) and whose key is in your keyring, the provider's id, its host and the key. A key you only set in
+own in `drgnx-ai-providers`) and whose key is in your keyring, the provider's id, its host and the key. A key you only set in
 the environment (`OPENROUTER_API_KEY`) is not in the keyring and is not exported; with no key in the keyring
 `export` says so and writes nothing. The file is age ciphertext: it can travel with the config dir, through git
 too.
@@ -219,7 +219,7 @@ too.
 
 **Import** reads the file, then for each key: `stored` (it went into the keyring), `same` (the keyring already
 holds this key), `differs` (the keyring holds a *different* key for that host — perhaps you rotated it after the
-export — and keeps it; exit 1), `unknown` (no provider with that id and host is known here — add it to `ai.eld`,
+export — and keeps it; exit 1), `unknown` (no provider with that id and host is known here — add it to `drgnx-ai-providers`,
 then import again; nothing is stored for it) or `failed` (the keyring refused it, with the reason; exit 1). Only the
 hosts are printed, never a key. `drgnx secrets import --replace` overwrites the keys that differ. A wrong
 passphrase, a damaged file, a file from a different drgnx version, or a bundle with a host that is not a host name

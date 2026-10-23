@@ -39,10 +39,10 @@ the input hidden and stores it in the macOS Keychain or the Linux keyring ([ai.m
 An OpenRouter route also shows the **OpenRouter restrictions** (which providers it may use, whether they may keep data;
 [ai.md](ai.md#openrouter-restrictions)) with **[Change…]**, the command **OpenRouter Restrictions…** (`r`). It asks for
 the providers to use only, the providers to avoid (slugs, comma separated, empty for none), whether providers may keep
-your data, and whether to use only zero-data-retention endpoints, and saves the answers as `:openrouter` in
-`agents.eld`: one setting for every OpenRouter route. The restrictions apply through drgnx's gateway. When the hub
+your data, and whether to use only zero-data-retention endpoints, and saves the answers as `drgnx-agents-openrouter` in
+`settings.el`: one setting for every OpenRouter route. The restrictions apply through drgnx's gateway. When the hub
 cannot be had, an agent with restrictions does not start rather than go direct without them. A value that is not a
-restriction, or an `agents.eld` that does not read, shows *OpenRouter restrictions: unreadable* with the reason, and
+restriction, or a `settings.el` that does not read, shows *OpenRouter restrictions: unreadable* with the reason, and
 OpenRouter agents do not start until it is fixed (**[Change…]** replaces a wrong value; a file that does not read is
 fixed in the file itself). With the gateway turned off (`drgnx-agents-use-gateway`) and restrictions set, a Claude
 Code route shows them followed by *the gateway is turned off, so OpenRouter agents do not start: turn it on

@@ -23,6 +23,7 @@
          (port nil) (script (concat root "llm.eld"))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
          (drgnx-ai-detected '((o :up t))) (drgnx-ai-ghost--said-unavailable nil)
+         (drgnx-ai-providers nil) (drgnx-ai-roles nil)
          (mock nil))
     (unwind-protect
         (progn
@@ -30,10 +31,8 @@
           (with-temp-file script (prin1 '((:path "/api/generate" :body "{\"response\":\"(message name)\"}")) (current-buffer)))
           (setq mock (drgnx-ai-test-mock-llm nil script)
                 port (process-get mock :port))
-          (with-temp-file (concat root "config/ai.eld")
-            (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                              :roles ((complete (o . "coder"))))
-                   (current-buffer)))
+          (setq drgnx-ai-providers `((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
+                drgnx-ai-roles '((complete (o . "coder"))))
           (with-temp-buffer
             (emacs-lisp-mode)
             (drgnx-ai-ghost-mode 1)

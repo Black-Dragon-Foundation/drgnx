@@ -6,7 +6,7 @@ Every file drgnx keeps in its config and state folders, and the project files it
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: the defaults.
 
-Agent profiles, the MCP servers agents get, OpenRouter restrictions and job routes.
+The old agents.eld, read only to move it into settings.el (docs/guide/settings.md).
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
@@ -26,7 +26,7 @@ Agent profiles, the MCP servers agents get, OpenRouter restrictions and job rout
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
 
-Your AI providers and each role's chain of providers and models; never a key.
+The old ai.eld, read only to move it into settings.el (docs/guide/settings.md).
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
@@ -206,4 +206,10 @@ Whether drgnx keeps running when its last window closes (read at every start).
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
 | `:keep-running` | boolean | no | Keep drgnx running when its last window closes |
+
+## settings.el
+
+Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+Your settings, one entry per variable: written by the Settings page and by you, read as data
 

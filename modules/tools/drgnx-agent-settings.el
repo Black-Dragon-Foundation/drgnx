@@ -978,7 +978,7 @@ in the Work cockpit.  Asks first, names the file, and writes no token or key (th
 
 (defun drgnx-agent-settings-openrouter ()
   "Choose which providers OpenRouter may use for the agents' requests, and whether they may keep data.  One setting
-for every OpenRouter route, saved in agents.eld; it applies through drgnx's gateway."
+for every OpenRouter route, saved in settings.el; it applies through drgnx's gateway."
   (interactive)
   (drgnx-agent-settings--page)
   (require 'drgnx-agents)

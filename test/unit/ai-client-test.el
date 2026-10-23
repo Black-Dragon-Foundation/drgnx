@@ -7,7 +7,7 @@
 
 (defmacro drgnx-ai-client-test--with (spec &rest body)
   "BODY with a mock LLM server answering SPEC (a list of answers, see mock-llm.el) on PORT, its LOG, and providers
-`a' (openai), `o' (ollama), `l' (llama.cpp) and `dead' (nothing listens) pointing at it in ai.eld."
+`a' (openai), `o' (ollama), `l' (llama.cpp) and `dead' (nothing listens) pointing at it in `drgnx-ai-providers'."
   (declare (indent 1))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-client" t)))
           (port nil) (dead nil)
@@ -16,6 +16,7 @@
                                              "A_KEY=sk-test-123")
                                        process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai-detected nil)
+          (drgnx-ai-providers nil) (drgnx-ai-roles nil)
           (mock nil))
      (unwind-protect
          (progn
@@ -24,13 +25,10 @@
            (setq mock (drgnx-ai-test-mock-llm nil script log)
                  port (process-get mock :port)
                  dead (drgnx-test-free-port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1
-                               :providers ((a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY" :caps (chat fim))
-                                           (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
-                                           (l :name "L" :kind llamacpp :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
-                                           (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (chat fim))))
-                    (current-buffer)))
+           (setq drgnx-ai-providers `((a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY" :caps (chat fim))
+                                      (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
+                                      (l :name "L" :kind llamacpp :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
+                                      (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (chat fim))))
            ,@body)
        (when mock (delete-process mock))
        (delete-directory root t))))
@@ -142,11 +140,9 @@
   (drgnx-ai-client-test--with
       '((:path "/api/tags" :body "{\"models\":[{\"name\":\"qwen2.5-coder:1.5b\"}]}")
         (:path "/info" :body "{\"model_id\":\"BAAI/bge\",\"max_input_length\":512}"))
-    (with-temp-file (concat root "config/ai.eld")
-      (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
-                                      (t1 :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
-                                      (gone :name "Gone" :kind ollama :url ,(format "http://127.0.0.1:%d" dead) :caps (chat))))
-             (current-buffer)))
+    (setq drgnx-ai-providers `((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
+                               (t1 :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
+                               (gone :name "Gone" :kind ollama :url ,(format "http://127.0.0.1:%d" dead) :caps (chat))))
     (let ((done nil))
       (drgnx-ai-probe (lambda () (setq done t)) '(o t1 gone))
       (should-not done)                                                         ; returns at once: the answers come later
@@ -157,8 +153,7 @@
       (should-not (plist-get (alist-get 'gone drgnx-ai-detected) :up))))
   ;; something on TEI's port that is not TEI (LocalAI answers /info differently)
   (drgnx-ai-client-test--with '((:path "/info" :body "{\"version\":\"localai\"}"))
-    (with-temp-file (concat root "config/ai.eld")
-      (prin1 `(:version 1 :providers ((t1 :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed)))) (current-buffer)))
+    (setq drgnx-ai-providers `((t1 :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))))
     (let (done)
       (drgnx-ai-probe (lambda () (setq done t)) '(t1))
       (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.02)))

@@ -547,12 +547,10 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
         (should (eq (plist-get r :billing) 'local))
         (should (string-match-p "127\\.0\\.0\\.1" (plist-get r :base-url)))
         (should-not (plist-get r :key-where)))
-      ;; an agents.eld profile with the direct Anthropic route
-      (drgnx-agent-config-claude-test--put
-       (expand-file-name "agents.eld" (drgnx-user-dir))
-       "(:profiles ((\"claude (API)\" :command (\"claude-agent-acp\") :ai claude-anthropic)
-                    (\"other agent\" :command (\"some-acp\"))))")
-      (let* ((routes (drgnx-agent-config-claude-routes root))
+      ;; a `drgnx-agents-profiles' profile with the direct Anthropic route
+      (let* ((drgnx-agents-profiles '(("claude (API)" :command ("claude-agent-acp") :ai claude-anthropic)
+                                      ("other agent" :command ("some-acp"))))
+             (routes (drgnx-agent-config-claude-routes root))
              (r (cl-find "claude (API)" routes :key (lambda (r) (plist-get r :profile)) :test #'equal)))
         (should r)
         (should (eq (plist-get r :billing) 'per-token))
@@ -560,9 +558,9 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
         (should (equal (plist-get r :base-url) "https://api.anthropic.com"))
         (should (equal (plist-get r :key-where) "ANTHROPIC_API_KEY, else the keyring entry for api.anthropic.com"))
         ;; only Claude Code profiles
-        (should-not (cl-find "other agent" routes :key (lambda (r) (plist-get r :profile)) :test #'equal)))
-      ;; the read carries the routes too
-      (should (plist-get (drgnx-agent-config-read 'claude root) :routes)))))
+        (should-not (cl-find "other agent" routes :key (lambda (r) (plist-get r :profile)) :test #'equal))
+        ;; the read carries the routes too
+        (should (plist-get (drgnx-agent-config-read 'claude root) :routes))))))
 
 (ert-deftest drgnx-agent-config-claude/routes-never-look-up-a-key ()
   (drgnx-agent-config-claude-test-env

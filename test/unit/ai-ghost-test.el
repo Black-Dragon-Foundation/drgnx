@@ -18,6 +18,7 @@ LLM answering SPEC; `o' found running."
             (port nil) (script (concat root "llm.eld"))
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
             (drgnx-ai-detected '((o :up t))) (drgnx-ai-ghost--said-unavailable nil)
+            (drgnx-ai-providers nil) (drgnx-ai-roles nil)
             (mock nil))
        (unwind-protect
            (progn
@@ -25,10 +26,8 @@ LLM answering SPEC; `o' found running."
              (with-temp-file script (prin1 ,spec (current-buffer)))
              (setq mock (drgnx-ai-test-mock-llm nil script)
                    port (process-get mock :port))
-             (with-temp-file (concat root "config/ai.eld")
-               (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                                 :roles ((complete (o . "coder"))))
-                      (current-buffer)))
+             (setq drgnx-ai-providers `((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
+                   drgnx-ai-roles '((complete (o . "coder"))))
              (with-temp-buffer
                (emacs-lisp-mode)
                (drgnx-ai-ghost-mode 1)
@@ -251,8 +250,7 @@ LLM answering SPEC; `o' found running."
 (ert-deftest drgnx-ai-ghost/a-provider-without-its-key-loaded-says-load-keys-once ()
   ;; OpenRouter after a restart: its key is in the Keychain, which the background never reads.
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"never\"}"))
-    (with-temp-file (concat root "config/ai.eld")
-      (prin1 '(:version 1 :roles ((complete (openrouter . "qwen/qwen-2.5-coder-32b-instruct")))) (current-buffer)))
+    (setq drgnx-ai-roles '((complete (openrouter . "qwen/qwen-2.5-coder-32b-instruct"))))
     (let ((said nil) (process-environment (cons "OPENROUTER_API_KEY" process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))

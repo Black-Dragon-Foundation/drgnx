@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-onboard-test--with (&rest body)
   "BODY with only provider `o' (Ollama, a mock serving two models and answering chat and fill-in-the-middle)
@@ -18,6 +19,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
                                        process-environment))
           (drgnx-ai-presets nil) (drgnx-ai-detected nil) (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
           (mock nil))
+     (drgnx-test-runtime-settings--reset)
      (unwind-protect
          (progn
            (make-directory (concat root "config") t)
@@ -28,10 +30,10 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
                     (current-buffer)))
            (setq mock (drgnx-ai-test-mock-llm nil script)
                  port (process-get mock :port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))))
-                    (current-buffer)))
+           (setq drgnx-ai-providers `((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))))
+           (drgnx-test-write-settings (concat root "config/settings.el") 'drgnx-ai-providers drgnx-ai-providers) ; for a child
            ,@body)
+       (drgnx-test-runtime-settings--forget)
        (when mock (delete-process mock))
        (delete-directory root t))))
 
@@ -45,7 +47,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (string-match-p "OPENROUTER_API_KEY" (cadr r)))                        ; how to add the key: said
       (should (string-search "run this step again → Change → openrouter (keeps the key in your Keychain or keyring)" (cadr r)))
       (should-not (string-search "authinfo" (cadr r)))
-      (should-not (string-search "sk-" (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (buffer-string)))))))
+      (should-not (string-search "sk-" (with-temp-buffer (insert-file-contents (concat root "config/settings.el")) (buffer-string)))))))
 
 (ert-deftest drgnx-onboard/the-ai-step-keeps-roles-that-work ()
   (drgnx-ai-onboard-test--with
@@ -86,12 +88,12 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (string-match-p "Chat (module extra/llm) is on" (cadr r))))))
 
 (ert-deftest drgnx-ai-onboard/role-written-only-after-answer ()
-  ;; A provider that never answers leaves ai.eld's roles as they were, and the three test calls share one
+  ;; A provider that never answers leaves the roles (settings.el) as they were, and the three test calls share one
   ;; budget: the step ends within about the budget, not 3 ×.  Roles that ran out of time read "not tested".
   ;; The budget on the clock fixture: virtual time, which a loaded machine does not move.
   (drgnx-ai-onboard-test--with
     (drgnx-test-with-clock ()
-      (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (drgnx-test-clock-now)) r
+      (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/settings.el"))) (t0 (drgnx-test-clock-now)) r
             (drgnx-onboard-ai-test-budget 2))
         (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) nil)))
           (setq r (drgnx-onboard--ai-found '(:interactive nil))))
@@ -100,14 +102,14 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
         (should (= (nth 3 r) 3))
         (should (string-match-p "not tested" (cadr r)))
         (should-not (string-match-p "did not answer" (cadr r)))
-        (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))))))))
+        (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/settings.el"))))))))
 
-;; A project's ai.eld routes roles for that project only: the roles onboarding writes into the user's ai.eld start
+;; A project's ai.eld routes roles for that project only: the roles onboarding writes into the user's settings start
 ;; from the user's own chain, never from the project's.
-(defun drgnx-ai-onboard-test--user-chain (root role)
-  (alist-get role (plist-get (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (read (current-buffer))) :roles)))
+(defun drgnx-ai-onboard-test--user-chain (_root role)
+  (alist-get role (default-value 'drgnx-ai-roles)))
 
-(ert-deftest drgnx-ai-onboard/a-projects-route-never-reaches-the-global-ai-eld ()
+(ert-deftest drgnx-ai-onboard/a-projects-route-never-reaches-the-global-roles ()
   (drgnx-ai-onboard-test--with
     (make-directory (concat root "proj/.drgnx") t)
     (with-temp-file (concat root "proj/.drgnx/ai.eld")
@@ -117,7 +119,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (equal (drgnx-ai-role 'chat) '((theirs . "paid/m"))))
       (let ((r (drgnx-onboard--ai-found '(:interactive nil))))
         (should (memq (car r) '(ok warn)))
-        ;; … but what the step wrote into ai.eld is the found provider on the user's own chain
+        ;; … but what the step wrote into the settings is the found provider on the user's own chain
         (dolist (role '(complete edit chat))
           (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root role)))
           (should (assq 'o (drgnx-ai-onboard-test--user-chain root role)))))
@@ -154,7 +156,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
   ;; On the clock fixture: the 2 s budget and the provider's 30 s are virtual.
   (drgnx-ai-onboard-test--with
     (drgnx-test-with-clock ()
-      (let ((timers (list nil)) (drgnx-onboard-ai-test-budget 2) r (before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))))
+      (let ((timers (list nil)) (drgnx-onboard-ai-test-budget 2) r (before (drgnx-ai-onboard-test--slurp (concat root "config/settings.el"))))
         (unwind-protect
             (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 30 timers))
                       ((symbol-function 'completing-read) (lambda (&rest _) (error "asked")))
@@ -166,7 +168,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
               (let ((step (drgnx-onboard--ai-step '(:interactive t))))
                 (should (eq (car step) 'warn))
                 (should (string-match-p "not tested" (cadr step))))
-              (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))
+              (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/settings.el")))))
           (mapc #'cancel-timer (car timers)))))))
 
 (ert-deftest drgnx-ai-onboard/a-provider-that-refuses-at-once-did-not-answer ()
@@ -425,7 +427,7 @@ with BODY."
                 (should (string-match-p "Ask the Codebase answered" (cadr r)))
                 (should (eq (car r) 'ok))
                 (should-not (string-search "sk-or-test-123" (cadr r)))
-                (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
+                (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/settings.el")))))))
         (delete-process mock)))))
 
 (ert-deftest drgnx-ai-onboard/cli-exit-stops-the-job ()

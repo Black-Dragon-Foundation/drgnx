@@ -28,25 +28,32 @@ a chain of providers and models tried in order, so a feature keeps working when 
 The local presets use `127.0.0.1`, not `localhost`: `localhost` resolves to `::1` first, and a container's IPv6 port
 forward can accept the connection and then reset it, which curl-based clients do not retry on IPv4.
 
-Add your own, or move one, in `ai.eld` in drgnx's config directory (`~/.config/drgnx/ai.eld`); a project's `.drgnx/ai.eld` at its
-root can choose **roles** (and wins), among the providers the presets and your `ai.eld` define — never a provider
-or a key variable of its own, so a cloned repository cannot send your code, or a key, somewhere you did not choose:
+The presets ship in `settings/runtime-defaults.el` in the checkout (data, read by the editor and by the hub).
+Add your own, or move one, with the settings `drgnx-ai-providers` and `drgnx-ai-roles` in `settings.el` in drgnx's
+config directory (`~/.config/drgnx/settings.el`, [settings.md](settings.md)); this used to be `ai.eld`, and drgnx moved
+its keys there once. A project's `.drgnx/ai.eld` at its
+root can choose **roles** (and wins), among the providers the presets and your `drgnx-ai-providers` define — never a
+provider or a key variable of its own, so a cloned repository cannot send your code, or a key, somewhere you did not
+choose:
 
 ```elisp
-(:version 1
- :providers ((box :name "GPU box" :kind openai :url "http://box:9000/v1" :key-env "BOX_KEY" :caps (chat fim)))
- :roles ((chat (box . "qwen2.5-coder:32b") (openrouter . "openrouter/auto"))
-         (complete (ollama . "qwen2.5-coder:1.5b"))))
+(drgnx-ai-providers ((box :name "GPU box" :kind openai :url "http://box:9000/v1" :key-env "BOX_KEY" :caps (chat fim))))
+(drgnx-ai-roles ((chat (box . "qwen2.5-coder:32b") (openrouter . "openrouter/auto"))
+                 (complete (ollama . "qwen2.5-coder:1.5b"))))
 ```
+
+No agent can change either setting, and no workspace file can set the providers (`drgnx-ai-providers` is never read from a
+workspace). A buffer-local value is never read.
 
 `:kind` is `openai` (any OpenAI-compatible server), `ollama`, `llamacpp` or `tei` (`anthropic` too, for a provider of
 the agent gateway that speaks Anthropic's API; see below).
 
-**An `ai.eld` with a mistake** (a parenthesis missing, a `:kind` that is none of these, a `:price` that is not
-`(IN . OUT)`, a model that is not a string): your last good providers and roles are used, and drgnx says once where the
-mistake is (`Open Config File…` takes you there). Choosing a provider or model never overwrites a file it cannot read,
-and says so; an `ai.eld` written by a newer drgnx is used when it fits, but is not changed. Choosing changes only the
-role you chose: your comments, your providers and any key of your own stay as they are.
+**A `settings.el` entry with a mistake** (a `:kind` that is none of these, a `:price` that is not `(IN . OUT)`, a
+model that is not a string): your last good providers and roles are used, and drgnx says once where the mistake is
+(`Open Config File…` takes you there). A `settings.el` that does not read at all keeps the providers and roles it last
+applied. Choosing a provider or model never overwrites a file it cannot read, and says so; a `settings.el` written by a
+newer drgnx is not changed. Choosing changes only the role you chose: your comments, your providers and any key of
+your own stay as they are.
 
 A project's `.drgnx/ai.eld` is read with a limit of 64 KiB. A bigger file, or one with a mistake, is not used at all
 (there is no last good copy of a project's file: its roles are left out and drgnx says why once), and drgnx never writes it.
@@ -59,9 +66,9 @@ again; it is asked again only if the project later names a remote provider you w
 does not read is copied aside, as `ai-project-routes.eld.bak-…`, before your answer is written). The project is
 its real directory, so one repository reached through two paths is asked once, and a link re-pointed at another
 repository does not inherit the answer. A provider whose address has no host counts as remote. Choose Provider/Model
-changes your own `ai.eld` chain, never a copy of the project's. Until you say
+changes your own `drgnx-ai-roles` chain, never a copy of the project's. Until you say
 yes, and after a no, the project's remote steps are left out of its chains: ghost text, the search index and every
-other automatic path use only the local steps (or your own `ai.eld`'s chain when none is left). Nothing is ever
+other automatic path use only the local steps (or your own `drgnx-ai-roles` chain when none is left). Nothing is ever
 asked from a timer, hook or in batch.
 
 ## Roles
@@ -74,7 +81,7 @@ asked from a timer, hook or in batch.
 | `embed` | semantic search (embeddings: a vector per text, scaled to length 1) | TEI |
 | `agent` | Claude Code on OpenRouter, through the agent gateway ([agents.md](agents.md)) | OpenRouter, with the model the agent asks for |
 
-A provider in your `ai.eld` may carry `:price (IN . OUT)` — US dollars per million input and output tokens — so the
+A provider in your `drgnx-ai-providers` may carry `:price (IN . OUT)` — US dollars per million input and output tokens — so the
 agent gateway can count what agents spend when the provider does not report a cost; `:messages t` says it serves
 Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama, Anthropic, Moonshot and DeepSeek do).
 
@@ -182,7 +189,7 @@ touch ghost text (any key you type drops that question) or a job an agent is run
 provider. Only providers that can be asked are offered: local
 ones the probe found running, remote ones with their key. Then it asks for a model, offering the ones the provider
 reported. It makes one test call. Only if that answers is the choice kept: at the head of the role's chain in
-`ai.eld`, with the previous providers behind it as fallbacks. A key is never written there.
+`drgnx-ai-roles` (in `settings.el`), with the previous providers behind it as fallbacks. A key is never written there.
 
 ## Chat (gptel)
 
@@ -293,12 +300,12 @@ A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL`, `A
 `ANTHROPIC_DEFAULT_OPUS_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` to that name, and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
 (Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `claude-moonshot` or
 `claude-deepseek` profile without a `:model` does not start. The built-in names are data in
-`drgnx-agents-builtin-profiles`: copy a profile into `agents.eld` to use another model. Nothing about the route is
+`drgnx-agents-builtin-profiles`: copy a profile into `drgnx-agents-profiles` to use another model (the data is `settings/runtime-defaults.el`). Nothing about the route is
 written to `~/.claude/settings.json`: two profiles share Claude Code's configuration directory and differ only in
 these variables, so a model in that file's `env` would override them (the Claude page in Agent Settings notes it).
 
 Moonshot and DeepSeek carry no `:price`, so the gateway cannot price their answers and counts their spend as zero (a
-job's budget does not stop them). Give the provider a `:price (IN . OUT)` in your `ai.eld` to count it.
+job's budget does not stop them). Give the provider a `:price (IN . OUT)` in your `drgnx-ai-providers` to count it.
 
 **Agents do not inherit other vendors' keys.** Whatever Emacs's environment holds, an agent gets only the variables
 of its own route (its provider key or the gateway's token, the model names). The others -- every vendor key and route
@@ -311,17 +318,17 @@ Bedrock and Vertex switches (the `AWS_*` and `GOOGLE_APPLICATION_CREDENTIALS` th
 DeepSeek, OpenRouter, Ollama) gets none of these, only its route's. To pass any other variable on, remove it from
 `drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
 
-In `agents.eld`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile
+In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile
 that environment. Durable jobs get the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
 
 ### OpenRouter restrictions
 
-OpenRouter chooses, among the providers that serve a model, one for each request. The `:openrouter` setting in
-`agents.eld` narrows that choice for every OpenRouter route of every agent:
+OpenRouter chooses, among the providers that serve a model, one for each request. The `drgnx-agents-openrouter` setting in
+`settings.el` narrows that choice for every OpenRouter route of every agent:
 
 ```elisp
-(:openrouter (:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection deny :zdr t))
+(drgnx-agents-openrouter (:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection deny :zdr t))
 ```
 
 - `:only` -- the provider slugs OpenRouter may use (nothing else serves the request); `:ignore` -- slugs it must not use;
@@ -330,7 +337,7 @@ OpenRouter chooses, among the providers that serve a model, one for each request
 - `:zdr t` -- zero-data-retention endpoints only.
 
 Each key is optional; an empty value (`()`, `nil`) is no restriction. Restrictions fail closed: a value that is not a
-slug list, `deny`/`allow` or `t`/`nil`, a key other than these four, or an `agents.eld` that does not read (a parenthesis
+slug list, `deny`/`allow` or `t`/`nil`, a key other than these four, or a `settings.el` that does not read (a parenthesis
 short) is never read as "no restriction". An agent with an OpenRouter route does not start, and its session says which
 key is wrong; the Agent Settings page shows *unreadable* with the reason. The hub refuses such a registration too. The gateway puts them into the
 request's top-level `provider` object (`only`, `ignore`, `data_collection`, `zdr`), which OpenRouter's Anthropic-compatible
@@ -349,16 +356,16 @@ and sends nothing: a request that might not honour them never goes out. Without 
 They reach only
 the agents that go through the gateway. When restrictions are set and the hub cannot be had (it does not start, its
 socket refuses), an agent with an OpenRouter route does not start: it would reach OpenRouter directly without them. Its
-session says why; start the hub, or remove `:openrouter` from `agents.eld` to go direct. The hub's answer to a
+session says why; start the hub, or remove `drgnx-agents-openrouter` from `settings.el` to go direct. The hub's answer to a
 registration lists the restrictions it kept. A hub started before drgnx had restrictions keeps none, so the agent does
 not start and the session says to restart the hub (`drgnx hub stop`, then start an agent). Without restrictions, an
 agent without a hub goes direct as before. With `drgnx-agents-use-gateway` off, an agent with an OpenRouter route and
 restrictions does not start either (restrictions are never dropped silently); its session says to turn the gateway on
-or remove `:openrouter` from `agents.eld`. Without restrictions, such a route is bound by your OpenRouter account
+or remove `drgnx-agents-openrouter` from `settings.el`. Without restrictions, such a route is bound by your OpenRouter account
 settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
 that no allowed provider serves fails with OpenRouter's own error, which the agent shows.
 Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
-and the other settings in `agents.eld` stay.
+and the other entries of `settings.el` stay.
 
 ## Tests
 
@@ -371,7 +378,9 @@ and the other settings in `agents.eld` stay.
 - `test/unit/agents-profiles-test.el` — Kimi and DeepSeek profiles: direct and gateway environments, the OpenRouter
   model chain, the missing-key message, routes on the Claude page, the runner unsetting the keys.
 - `test/unit/gateway-openrouter-test.el` -- the restrictions in the request body, other providers untouched, the setting
-  in `agents.eld` with its comments, the Routes line and the Change command.
+  in `settings.el` with its comments, the Routes line and the Change command.
+- `test/unit/agents-eld-test.el`, `test/unit/ai-eld-test.el` and `test/unit/settings-defaults-test.el` -- the agents and AI
+  settings (strict, never for agents, last good values), `settings/runtime-defaults.el` against the old constants.
 - `test/live/drgnx-ai-test.el` — in a GUI session: typing, the suggestion as ghost text, Tab takes it; an inline
   edit's second hunk applied with keys, Done puts only that one in the buffer.
 - `drgnx test --perf` — the `typing-with-ghost` workload holds keystroke p95 under 16 ms with ghost text on.

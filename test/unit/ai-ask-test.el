@@ -4,6 +4,7 @@
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-ai-ask-test--delay nil "Seconds the mock waits before it answers a chat.")
 
@@ -16,6 +17,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
           (drgnx-ai-detected '((o :up t :models ("small" "big"))))
           (mock nil))
+     (drgnx-test-runtime-settings--reset)
      (unwind-protect
          (progn
            (make-directory (concat root "config") t) (make-directory (concat root "proj/src") t)
@@ -28,11 +30,10 @@ provider `o' served by a mock answering ANSWER, its LOG."
                     (current-buffer)))
            (setq mock (drgnx-ai-test-mock-llm nil script log)
                  port (process-get mock :port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                               :roles ((chat (o . "m"))))
-                    (current-buffer)))
+           (setq drgnx-ai-providers `((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
+                 drgnx-ai-roles '((chat (o . "m"))))
            ,@body)
+       (drgnx-test-runtime-settings--forget)
        (when mock (delete-process mock))
        (when (get-buffer "*AI answer*") (kill-buffer "*AI answer*"))
        (delete-directory root t))))
@@ -206,15 +207,16 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (should (drgnx-ai-ask-test--answer))
     (should (string-search "SEMANTIC HIT" (with-temp-buffer (insert-file-contents log) (buffer-string))))))
 
-(ert-deftest drgnx-ai-choose/a-role-is-written-to-ai-eld-never-a-key ()
+(ert-deftest drgnx-ai-choose/a-role-is-written-to-settings-el-never-a-key ()
   (drgnx-ai-ask-test--with "OK"
     (let ((process-environment (cons "OPENROUTER_API_KEY=sk-or-secret" process-environment)))
       (drgnx-ai-set-role 'complete '((o . "big") (openrouter . "openrouter/auto")))
       (should (equal (drgnx-ai-role 'complete) '((o . "big") (openrouter . "openrouter/auto"))))
-      (should (equal (drgnx-ai-role 'chat) '((o . "m"))))                        ; the rest of ai.eld kept
-      (let ((text (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (buffer-string))))
+      (should (equal (drgnx-ai-role 'chat) '((o . "m"))))                        ; the rest of the roles kept
+      (let ((text (with-temp-buffer (insert-file-contents (concat root "config/settings.el")) (buffer-string))))
         (should-not (string-search "sk-or" text))
-        (should (string-search "http://127.0.0.1" text))))))                  ; the providers kept
+        (should (string-search "drgnx-ai-roles" text))
+        (should (string-search "openrouter/auto" text))))))                      ; the role written
 
 (ert-deftest drgnx-ai-choose/a-live-call-tests-the-choice-before-it-is-kept ()
   (drgnx-ai-ask-test--with "OK"
@@ -231,10 +233,8 @@ provider `o' served by a mock answering ANSWER, its LOG."
 (ert-deftest drgnx-ai-choose/a-choice-that-does-not-answer-is-not-kept ()
   (drgnx-ai-ask-test--with "OK"
     (let ((dead (drgnx-test-free-port)))
-      (with-temp-file (concat root "config/ai.eld")
-        (prin1 `(:version 1 :providers ((gone :name "Gone" :kind ollama :url ,(format "http://127.0.0.1:%d" dead) :caps (chat fim)))
-                          :roles ((chat (o . "m"))))
-               (current-buffer)))
+      (setq drgnx-ai-providers `((gone :name "Gone" :kind ollama :url ,(format "http://127.0.0.1:%d" dead) :caps (chat fim)))
+            drgnx-ai-roles '((chat (o . "m"))))
       (let ((drgnx-ai-detected '((gone :up t))) (answers '("chat" "gone" "x")) (said nil))
         (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
                   ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
@@ -293,7 +293,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (should (equal asked (list (concat root "proj/"))))
         (should (equal chain (let ((default-directory (concat root "proj/"))) (drgnx-ai-role 'chat))))))))
 
-(ert-deftest drgnx-ai-choose/never-copies-a-projects-remote-route-into-the-global-ai-eld ()
+(ert-deftest drgnx-ai-choose/never-copies-a-projects-remote-route-into-the-global-roles ()
   ;; the user allowed this project's OpenRouter step; choosing a provider there must not make it global
   (drgnx-ai-ask-test--with "OK"
     (let ((process-environment (cons (concat "XDG_STATE_HOME=" root "state") process-environment))
@@ -311,5 +311,5 @@ provider `o' served by a mock answering ANSWER, its LOG."
           (let ((deadline (+ (float-time) 5)))
             (while (and (not (seq-find (lambda (m) (string-match-p "answered" m)) said)) (< (float-time) deadline))
               (accept-process-output nil 0.05)))))
-      (let ((roles (plist-get (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (read (current-buffer))) :roles)))
+      (let ((roles (default-value 'drgnx-ai-roles)))
         (should (equal (alist-get 'chat roles) '((o . "big"))))))))

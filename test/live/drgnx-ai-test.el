@@ -31,13 +31,14 @@
     (unwind-protect
         (progn
           (setq mock (drgnx-ai-test-mock-llm nil script))
-          (with-temp-file (concat root "config/ai.eld")
-            (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" (process-get mock :port)) :caps (chat fim)))
-                              :roles ((complete (o . "coder")) (edit (o . "coder"))))
+          (with-temp-file (concat root "config/settings.el")
+            (prin1 `(drgnx-settings :version 1
+                                    (drgnx-ai-providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" (process-get mock :port)) :caps (chat fim))))
+                                    (drgnx-ai-roles ((complete (o . "coder")) (edit (o . "coder")))))
                    (current-buffer)))
           (setq s (drgnx-ui-start "drgnx" "1400x800" 30) sess (drgnx-ui-own-session (plist-get s :name)))
           ;; the session's providers: the mock, found running by the probe
-          (drgnx-live-ai--q sess (format "(progn (setenv \"DRGNX_CONFIG_DIR\" %S) (drgnx-ai-probe nil) t)" (concat root "config")))
+          (drgnx-live-ai--q sess (format "(progn (setenv \"DRGNX_CONFIG_DIR\" %S) (drgnx-settings-apply-global) (drgnx-ai-probe nil) t)" (concat root "config")))
           (should (drgnx-live-ai--until sess "(drgnx-ai-usable-p 'o 'fim)" 10))
           ;; typing, then a pause: the suggestion shows; Tab takes it
           (drgnx-live-ai--q sess (format "(progn (find-file %S) (goto-char (point-min)) (forward-line 1) (back-to-indentation) drgnx-ai-ghost-mode)"
