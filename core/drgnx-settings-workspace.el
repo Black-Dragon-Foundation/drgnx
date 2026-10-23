@@ -17,7 +17,9 @@
 ;;   setting, and the pseudo-variables `eval' and `mode' (code goes in an `(:eval …)' section).  `:scope project'
 ;;   entries are not buffer values: `drgnx-setting-for-root' reads them (W2 > W1 > global, by `:merge').
 ;; - W2's `:eval' runs after its values (it is your file).  W1 applies only what
-;;   `drgnx-settings-workspace-filter-function' passes: safe values only (Task 18 replaces it).
+;;   `drgnx-settings-workspace-filter-function' passes: workspace trust's `drgnx-settings-trust-filter' (Task 18).
+;; - In safe mode and while package settings are off (`drgnx-settings-own-only-p'), only entries of drgnx's own
+;;   settings apply from W1 and W2, and no `:eval' runs.
 ;; - Today's `.drgnx/{search,ai,large-files}.eld' are read as W1 entries for `drgnx-setting-for-root' (the shim):
 ;;   the large-file sizes as `:merge lower-only'.
 ;; - `drgnx-settings-workspace-rehack' applies a root's values again in its open buffers, without their major mode;
@@ -32,8 +34,10 @@
 (require 'drgnx-config)
 (require 'drgnx-setting)
 (require 'drgnx-settings-file)
+(require 'drgnx-settings-trust)
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function drgnx-settings-own-only-p "drgnx-settings-apply" ())
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function drgnx-settings-live-watch "drgnx-settings-live" (file))
 (declare-function editorconfig--get-dir-local-variables "editorconfig" ())
@@ -54,10 +58,11 @@
   "Today's project files read as W1 entries (the shim): (CONFIG-NAME (KEY VAR [MERGE])…).  A file is read through
 the config layer, by its own definition and schema, only while that definition exists.")
 
-(defvar drgnx-settings-workspace-filter-function #'drgnx-settings-workspace-safe-only
+(defvar drgnx-settings-workspace-filter-function #'drgnx-settings-trust-filter
   "Which entries of a shared workspace file (W1) apply.  Called with ROOT, FILE and ENTRIES (the
 `drgnx-settings-entry's left after the refusals; `:eval' sections among them) and returns those to apply.  The
-default, `drgnx-settings-workspace-safe-only', passes safe values only; workspace trust (Task 18) replaces it.")
+default is workspace trust's `drgnx-settings-trust-filter' (safe values only in an untrusted workspace);
+`drgnx-settings-workspace-safe-only' passes safe values only.")
 
 (defvar drgnx-settings-workspace--docs (make-hash-table :test 'equal)
   "File -> (STAMP . DOC): a workspace file read, read again when its stamp changed.  Bounded by
@@ -206,6 +211,13 @@ PROBLEMS the file's own and one per refused entry, plists (:file :line :text :va
   (and (not (eq (drgnx-settings-entry-var entry) :eval))
        (eq (plist-get (drgnx-setting-meta (drgnx-settings-entry-var entry)) :scope) 'project)))
 
+(defun drgnx-settings-workspace--held-p (entry)
+  "Non-nil when ENTRY does not apply now because only drgnx's own settings do (`drgnx-settings-own-only-p': safe
+mode, Settings: Turn Off Package Settings): an `:eval' section, or an entry of a setting drgnx did not declare.  A
+buffer opened before keeps the values it got."
+  (and (fboundp 'drgnx-settings-own-only-p) (drgnx-settings-own-only-p)
+       (let ((var (drgnx-settings-entry-var entry))) (or (eq var :eval) (not (drgnx-setting-own-p var))))))
+
 (defun drgnx-settings-workspace--rank (entry)
   "How specific ENTRY's scope is within its directory: 0 at the top, else its mode's number of parents."
   (if-let* ((mode (alist-get :mode (drgnx-settings-entry-scope entry))))
@@ -218,7 +230,7 @@ PROBLEMS the file's own and one per refused entry, plists (:file :line :text :va
 come in the order they apply: the more specific mode after the less, `:eval' sections last."
   (let ((rel (substring name (min (length root) (length name)))) (groups nil))
     (dolist (e entries)
-      (unless (drgnx-settings-workspace--project-p e)
+      (unless (or (drgnx-settings-workspace--project-p e) (drgnx-settings-workspace--held-p e))
         (let* ((scope (drgnx-settings-entry-scope e))
                (sub (alist-get :dir scope))
                (sub (and sub (file-name-as-directory sub)))
@@ -253,10 +265,15 @@ the alist is reversed: values apply first, in order, then the `:eval' forms."
   "GROUPS as the result of a dir-local function: ((DIR . ALIST)…), each DIR a fresh string remembered as drgnx's."
   (delq nil (mapcar (lambda (g)
                       (when-let* ((alist (drgnx-settings-workspace--alist (cdr g))))
-                        (let ((dir (copy-sequence (car g))))
-                          (puthash dir t drgnx-settings-workspace--marks)
-                          (cons dir alist))))
+                        (cons (drgnx-settings-workspace-mark (car g)) alist)))
                     groups)))
+
+(defun drgnx-settings-workspace-mark (dir)
+  "A fresh copy of the directory string DIR, remembered as drgnx's: a dir-local item with it as its directory passes
+the stock filter with no prompt (`drgnx-settings-workspace--filter-around').  Workspace trust marks its items so."
+  (let ((d (copy-sequence dir)))
+    (puthash d t drgnx-settings-workspace--marks)
+    d))
 
 (defun drgnx-settings-workspace-project (_dir)
   "The Urdr project holding DIR, (ID . ROOT), for matching a private workspace file after its folder moved.
@@ -378,7 +395,8 @@ private file.  Only top-level entries count; refused ones never do.  Never signa
   (let* ((root (drgnx-settings-workspace--norm root))
          (value (and (default-boundp var) (copy-tree (default-value var))))
          (top (lambda (entries) (cl-remove-if-not (lambda (e) (and (eq (drgnx-settings-entry-var e) var)
-                                                                   (null (drgnx-settings-entry-scope e))))
+                                                                   (null (drgnx-settings-entry-scope e))
+                                                                   (not (drgnx-settings-workspace--held-p e))))
                                                   entries)))
          (shared (expand-file-name drgnx-settings-workspace-shared-file root))
          (private (drgnx-settings-workspace-file root)))
@@ -439,17 +457,19 @@ none, unless CREATE: then a new one, named after ROOT's folder (<slug>.el, <slug
 
 (defun drgnx-settings-workspace--rehack-buffer ()
   "Apply the current buffer's dir-local variables again, without its major mode: the file's own local variables
-keep winning, a `mode' entry is not run again, and a value no source gives any more is taken away (only when it is
-still the value the source gave)."
+keep winning, a `mode' entry is not run again, and a value no source applies any more (gone, or no longer passing
+the filter: workspace trust taken back) is taken away (only when it is still the value the source gave)."
   (let* ((inhibit-interaction t)
          (drgnx-settings-workspace--quiet t)
          (old dir-local-variables-alist)
          (old-file file-local-variables-alist)
-         (own (cl-remove-if (lambda (e) (memq e old)) file-local-variables-alist)))
+         (own (cl-remove-if (lambda (e) (memq e old)) file-local-variables-alist))
+         (applied nil))
     (setq dir-local-variables-alist nil file-local-variables-alist nil)
     (condition-case err (hack-dir-local-variables)
       (error (setq dir-local-variables-alist old file-local-variables-alist old-file)
              (signal (car err) (cdr err))))
+    (setq applied (copy-sequence file-local-variables-alist))   ; what passed the filter
     (setq file-local-variables-alist
           (cl-remove-if (lambda (e) (or (eq (car e) 'mode) (and (not (eq (car e) 'eval)) (assq (car e) own))))
                         file-local-variables-alist))
@@ -457,7 +477,7 @@ still the value the source gave)."
     (setq file-local-variables-alist (append file-local-variables-alist own))
     (dolist (cell old)
       (let ((var (car cell)))
-        (unless (or (memq var '(eval mode)) (assq var dir-local-variables-alist) (assq var own))
+        (unless (or (memq var '(eval mode)) (assq var applied) (assq var own))
           (when (and (local-variable-p var) (equal (symbol-value var) (cdr cell)))
             (kill-local-variable var)))))))
 
@@ -576,14 +596,16 @@ Idempotent; done when this file loads."
   (add-hook 'hack-dir-local-get-variables-functions #'drgnx-settings-workspace--private-variables -90)
   (add-hook 'hack-dir-local-get-variables-functions #'drgnx-settings-workspace--shared-variables 90)
   (advice-add 'hack-local-variables-filter :around #'drgnx-settings-workspace--filter-around)
-  (add-hook 'drgnx-settings-explain-functions #'drgnx-settings-workspace--layers))
+  (add-hook 'drgnx-settings-explain-functions #'drgnx-settings-workspace--layers)
+  (drgnx-settings-trust-enable))
 
 (defun drgnx-settings-workspace-disable ()
   "Take the workspace layers out again (`drgnx-settings-workspace-enable')."
   (remove-hook 'hack-dir-local-get-variables-functions #'drgnx-settings-workspace--private-variables)
   (remove-hook 'hack-dir-local-get-variables-functions #'drgnx-settings-workspace--shared-variables)
   (advice-remove 'hack-local-variables-filter #'drgnx-settings-workspace--filter-around)
-  (remove-hook 'drgnx-settings-explain-functions #'drgnx-settings-workspace--layers))
+  (remove-hook 'drgnx-settings-explain-functions #'drgnx-settings-workspace--layers)
+  (drgnx-settings-trust-disable))
 
 (drgnx-settings-workspace-enable)
 

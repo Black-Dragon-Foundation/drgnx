@@ -17,6 +17,8 @@ here ever asks you a question; you trust a folder when you choose to.
   newer drgnx's file. Two Emacs sessions trusting folders at once both keep theirs. A folder in the file that
   Trust This Folder would refuse (below), and a remote folder, are not trusted; reading the file never contacts
   another machine.
+- The folders of the `drgnx-trust-parents` setting that you marked `:code t` ("trusted, everything", below). A folder
+  trusted only by its location is not trusted content.
 - Anything you put in Emacs's own `trusted-content` option. drgnx only adds to it; `:all` trusts everything.
 
 Every other folder is untrusted, including the projects you open, until you trust them.
@@ -37,6 +39,38 @@ folders stay trusted). Untrusting always takes effect at once. When `trusted-fol
 cannot be used, or a newer drgnx wrote it), the message says the folder is untrusted for this session only, and
 why. Trusting a folder takes effect at once in its open files: their checkers run and their
 shorthands come back, without reopening them.
+
+## Workspace trust
+
+A project's `.dir-locals.el`, `.dir-locals-2.el` and shared `.drgnx/settings.el` can set variables and run code when
+you open one of its files. drgnx decides what applies from the project's trust (details and examples:
+[Settings, "Trusted locations"](settings.md)):
+
+- **Untrusted** (the default): safe values only from `.drgnx/settings.el`, and `.dir-locals*.el` behave exactly as in
+  plain Emacs (Emacs asks before an unsafe value when you open a file; drgnx's own background opens apply safe values
+  only and never ask).
+- **Trusted by location** (below a folder of the `drgnx-trust-parents` setting): the project's data applies; its code
+  (`eval:`, `mode:`, `(:eval …)`, risky and program-naming values) runs only after you review and allow it, and waits
+  again whenever it changes. Such a project is **not** trusted content: Flymake checkers and symbol shorthands stay
+  off there, because expanding the macros of its `.el` files is code too.
+- **Trusted** (Trust This Folder): its data applies, and the code Trust This Folder showed you; later code waits.
+- **Trusted, everything** (a `drgnx-trust-parents` entry with `:code t`, which you choose per folder): all of it
+  applies with no review, and the folder is trusted content.
+
+The rules behind it:
+- Nothing prompts. Code that waits is listed for review; allowing a piece of code applies it at once to the open
+  buffers.
+- The allowed code is kept per project, value by value, in `trusted-folders.eld` on this machine. drgnx never puts a
+  folder in `safe-local-variable-directories` (Emacs would apply every value there, an `eval` included, with no
+  question) and never writes `safe-local-variable-values`. `drgnx doctor` warns about any folder you put in
+  `safe-local-variable-directories` yourself that you did not trust.
+- drgnx's security settings (`drgnx-trust-parents`, the agent, sandbox and key settings) are in Emacs's
+  `ignored-local-variables`: no `.dir-locals.el`, `-*-` line or `Local Variables:` block can set them, whatever the
+  folder's trust, and drgnx reads them only as their global value.
+- `enable-local-variables` nil turns every workspace layer off; `enable-local-eval` nil stops every `eval`, allowed or
+  not.
+- Untrusting a project takes its values back at once and forgets its allowed code. Code that already ran cannot be
+  undone.
 
 ## What is held back in an untrusted folder
 

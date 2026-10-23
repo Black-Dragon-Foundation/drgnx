@@ -217,7 +217,8 @@ nobody trusted.  Buffers BODY opens are killed after it."
                     "(\"/x/\")"                            ; not a plist
                     "(:version 1)"                         ; no :folders
                     "(:version \"1\" :folders (\"/x/\"))"
-                    "(:version 2 :folders (\"/x/\"))"))    ; a newer drgnx's
+                    "(:version 2 :folders (\"/x/\") :allowed x)"   ; a version-2 key that is wrong
+                    "(:version 3 :folders (\"/x/\"))"))    ; a newer drgnx's
       (drgnx-trust-test--put text)
       (should-not (drgnx-trust-folders))
       (should-not (drgnx-trust-test--trusts-from-file-p "/x/")))
@@ -231,7 +232,7 @@ nobody trusted.  Buffers BODY opens are killed after it."
 
 (ert-deftest drgnx-trust/a-newer-file-is-never-overwritten ()
   (drgnx-trust-test--with (dir)
-    (let* ((text "(:version 2 :folders (\"/x/\") :except (\"/x/secret/\"))")
+    (let* ((text "(:version 3 :folders (\"/x/\") :except (\"/x/secret/\"))")
            (file (drgnx-trust-test--put text)) (inhibit-message t))
       (should-error (drgnx-trust-folder dir) :type 'user-error)
       (should-error (drgnx-trust-untrust-folder "/x/") :type 'user-error)
@@ -264,10 +265,10 @@ nobody trusted.  Buffers BODY opens are killed after it."
       (drgnx-trust-mode 1)                                       ; the start: both trusted
       (should (member ea trusted-content))
       ;; then another drgnx writes a newer file: Untrust A still takes effect; the file is left as it is
-      (let ((file (drgnx-trust-test--put "(:version 2 :folders ())")))
+      (let ((file (drgnx-trust-test--put "(:version 3 :folders ())")))
         (drgnx-trust-untrust-folder a)
         (should-not (member ea trusted-content))
-        (should (equal (drgnx-trust-test--bytes file) "(:version 2 :folders ())")))
+        (should (equal (drgnx-trust-test--bytes file) "(:version 3 :folders ())")))
       ;; a mistake: Untrust This Folder in a file of B (no argument) finds B among the folders trusted at the start
       (let ((file (drgnx-trust-test--put "(:version 1 :folders (x))")))
         (with-current-buffer (find-file-noselect (drgnx-trust-test--file b "x.txt" "x\n"))
@@ -326,7 +327,7 @@ nobody trusted.  Buffers BODY opens are killed after it."
         (should (= (length told) 1))
         (should (string-search name (car told)))
         (should (string-search "cannot be read" (car told)))
-        (drgnx-trust-test--put "(:version 2 :folders (\"/x/\"))")  ; another problem
+        (drgnx-trust-test--put "(:version 3 :folders (\"/x/\"))")  ; another problem
         (dotimes (_ 3) (should-not (drgnx-trust-folders)))
         (should (= (length told) 2))
         (should (string-search "newer" (car told)))

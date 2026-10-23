@@ -554,3 +554,23 @@ Preferences: Keep drgnx Running in the Background, which remembers it in setting
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-trust-parents
+
+Folders whose projects are trusted for data: their workspace settings apply, and their code waits for Review
+and Allow.  Each entry is ("DIR/") or ("DIR/" :code t); :code t trusts everything below DIR, code included, with
+no review (and puts DIR into `trusted-content').  A remote folder, your home folder, `/', the temp folders and their
+ancestors are never trusted.  Agents can never change it, and no workspace sets it.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (cons (directory :tag "Folder") (plist :tag "Options" :options ((:code boolean)))))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | `drgnx-settings-trust--parents-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+

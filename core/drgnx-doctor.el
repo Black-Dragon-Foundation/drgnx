@@ -354,6 +354,22 @@ settings.el does not hold, ((FILE WHY)…) (`drgnx-settings-migrate-stayed'), or
                                      (mapconcat #'file-name-nondirectory files ", "))
                        "Settings: Move Old Files Away moves them into migrated-DATE/ (a copy is kept)")))))
 
+(declare-function drgnx-settings-trust-doctor-roots "drgnx-settings-trust" ())
+
+(defun drgnx-doctor--dir-locals-trusted ()
+  "The fact of the `dir-locals-trusted' check: the folders of `safe-local-variable-directories' that are not folders
+you trusted (`drgnx-settings-trust-doctor-roots'), or (:error MESSAGE)."
+  (condition-case err (progn (require 'drgnx-settings-trust) (drgnx-settings-trust-doctor-roots))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--dir-locals-trusted-check (dirs)
+  "The `dir-locals-trusted' check of the fact DIRS (`drgnx-doctor--dir-locals-trusted'): nil (no row) when there
+are none."
+  (cond ((eq (car-safe dirs) :error) (list 'warn (format "could not check: %s" (cadr dirs)) "run drgnx doctor again"))
+        (dirs (list 'warn (format "every directory-local value applies there, risky ones included: %s"
+                                  (mapconcat #'abbreviate-file-name dirs ", "))
+                    "take them out of safe-local-variable-directories (custom.el) and use Trust This Folder: its code waits for review"))))
+
 (defun drgnx-doctor--config-dir ()
   "The fact of the `config-dir' check: (:dir THE-CONFIG-DIR :moved WHERE-IT-BELONGS-OR-NIL :ignored IGNORED),
 IGNORED being `drgnx-paths-ignored'."
@@ -428,6 +444,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :config-files (drgnx-doctor--config-files)
            :settings-leftovers (drgnx-doctor--settings-leftovers)
            :settings-stayed (drgnx-doctor--settings-stayed)
+           :dir-locals-trusted (drgnx-doctor--dir-locals-trusted)
            :checkout-init (drgnx-doctor--checkout-init drgnx-dir)
            :timers-report (drgnx-doctor--timers-report)
            :notices (drgnx-doctor--notices)
@@ -655,6 +672,10 @@ severity, the fix the first `:fix'."
                      :doc "No old settings file (keys.eld, agents.eld …) is left beside settings.el after the move into it"
                      :check (lambda (f) (drgnx-doctor--settings-leftovers-check (plist-get f :settings-leftovers)
                                                                                 (plist-get f :settings-stayed))))
+
+(drgnx-doctor-define 'dir-locals-trusted :group "drgnx"
+                     :doc "No folder in safe-local-variable-directories that you did not trust with Trust This Folder"
+                     :check (lambda (f) (drgnx-doctor--dir-locals-trusted-check (plist-get f :dir-locals-trusted))))
 
 (drgnx-doctor-define 'checkout-clean :group "drgnx"
                      :doc "The checkout's init/ has no local changes (install.sh's update needs that)"

@@ -35,6 +35,8 @@
  (:file "core/drgnx-search-index.el" :fn drgnx-search-index--lock :what write-region :why "its own lock protocol: the index lock" :until never)
  (:file "core/drgnx-secrets.el" :fn drgnx-secrets-export :what rename-file :why "age writes it: secrets.age, encrypted by age into secrets.age.new, then renamed" :until never)
  (:file "core/drgnx-settings-workspace.el" :fn drgnx-settings-workspace--dir-locals-layers :what read-site :why "a user's file: a project's .dir-locals.el, read to explain where a value comes from, never written" :until never)
+ (:file "core/drgnx-settings-trust.el" :fn drgnx-settings-trust--read-dir-locals :what read-site :why "a user's file: a project's .dir-locals.el, read to list its code for review, never written" :until never)
+ (:file "core/drgnx-settings-trust.el" :fn drgnx-settings-trust--line :what read-site :why "a user's file: a project's .dir-locals.el, read for the line a value is on, never written" :until never)
  (:file "core/drgnx-settings-migrate.el" :fn drgnx-settings-migrate--move :what rename-file :why "a directory move: an old settings file moved into <config>/migrated-DATE/ after its copy in <state>/backups/" :until never)
  (:file "core/drgnx-shell.el" :fn drgnx-shell-install :what write-region :why "a user's file: the shell's rc file gains one line, only on a yes" :until never)
  (:file "core/drgnx-startup-trace.el" :fn drgnx-startup-trace--finish :what with-temp-file :why "a developer tool: the startup trace" :until never)
