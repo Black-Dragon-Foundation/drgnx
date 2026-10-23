@@ -190,7 +190,7 @@ pub fn rotate(dir: &Path, policy: Policy) -> std::io::Result<Vec<PathBuf>> {
             copies.push((n, sunday, entry.path()));
         }
     }
-    copies.sort_by(|a, b| b.0.cmp(&a.0));
+    copies.sort_by_key(|a| std::cmp::Reverse(a.0));
     let mut sundays = 0;
     let mut removed = Vec::new();
     for (i, (_, sunday, path)) in copies.iter().enumerate() {
