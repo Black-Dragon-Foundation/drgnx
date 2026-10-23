@@ -199,7 +199,7 @@ pub async fn serve(
                 cards::card_settle(tx, card, &choice, now)
             })
             .await
-                .map(|settled| json!(api::Settled { settled }))
+            .map(|settled| json!(api::Settled { settled }))
         }
         Params::MessagesSend(p) => {
             if p.sender.is_some() && !caller.backend {
@@ -248,7 +248,7 @@ pub async fn serve(
                 messages::mark(tx, id, state, now)
             })
             .await
-                .map(|changed| json!(api::Changed { changed }))
+            .map(|changed| json!(api::Changed { changed }))
         }
         Params::EventsAdd(p) => {
             let best_effort = p.best_effort == Some(true);
@@ -328,7 +328,7 @@ pub async fn serve(
                 jobs::job_create(tx, j.clone(), now)
             })
             .await
-                .map(|id| json!(api::JobCreated { id }))
+            .map(|id| json!(api::JobCreated { id }))
         }
         Params::CoordJobSet(p) => {
             let id = p.id.as_str().to_owned();
@@ -338,7 +338,7 @@ pub async fn serve(
                 jobs::job_set(tx, &id, status.as_deref(), data.as_ref(), now)
             })
             .await
-                .map(|()| json!(true))
+            .map(|()| json!(true))
         }
         Params::CoordTaskStatus(p) => {
             let task = p.task.as_str().to_owned();
@@ -348,7 +348,7 @@ pub async fn serve(
                 tasks::force_status(tx, &task, &status, agent.as_deref(), now)
             })
             .await
-                .map(|ok| json!(ok))
+            .map(|ok| json!(ok))
         }
         Params::CoordLeases(p) => {
             let renew: Vec<String> = p
@@ -399,27 +399,27 @@ pub async fn serve(
                 decisions::decide(tx, d.clone(), now)
             })
             .await
-                .map(|r| {
-                    json!(match r {
-                        decisions::DecideResult::Ok { n, status, version } => api::Decided {
-                            ok: Some(true),
-                            n: Some(n),
-                            status: Some(status),
-                            version: Some(version),
-                            ..Default::default()
-                        },
-                        decisions::DecideResult::Held(h) => api::Decided {
-                            held: Some(true),
-                            version: Some(h.version),
-                            changes: Some(h.changes.into_iter().map(decision).collect()),
-                            ..Default::default()
-                        },
-                        decisions::DecideResult::Error(text) => api::Decided {
-                            error: Some(text),
-                            ..Default::default()
-                        },
-                    })
+            .map(|r| {
+                json!(match r {
+                    decisions::DecideResult::Ok { n, status, version } => api::Decided {
+                        ok: Some(true),
+                        n: Some(n),
+                        status: Some(status),
+                        version: Some(version),
+                        ..Default::default()
+                    },
+                    decisions::DecideResult::Held(h) => api::Decided {
+                        held: Some(true),
+                        version: Some(h.version),
+                        changes: Some(h.changes.into_iter().map(decision).collect()),
+                        ..Default::default()
+                    },
+                    decisions::DecideResult::Error(text) => api::Decided {
+                        error: Some(text),
+                        ..Default::default()
+                    },
                 })
+            })
         }
         Params::CoordAgent(p) => match (p.register, p.seen) {
             (Some(a), _) => {
@@ -446,12 +446,12 @@ pub async fn serve(
                     agents::agent_register(tx, r.clone(), now)
                 })
                 .await
-                    .map(|id| {
-                        json!(api::AgentResult {
-                            id: Some(id),
-                            ..Default::default()
-                        })
+                .map(|id| {
+                    json!(api::AgentResult {
+                        id: Some(id),
+                        ..Default::default()
                     })
+                })
             }
             (None, Some(id)) => {
                 let id = id.as_str().to_owned();
@@ -488,11 +488,11 @@ pub async fn serve(
                 cards::card_create(tx, c.clone(), now)
             })
             .await
-                .map(|id| {
-                    json!(api::CardCreated {
-                        id: id.max(0) as u64
-                    })
+            .map(|id| {
+                json!(api::CardCreated {
+                    id: id.max(0) as u64
                 })
+            })
         }
         Params::CoordCardSet(p) => {
             let id = int(p.id);
@@ -505,7 +505,7 @@ pub async fn serve(
                 cards::card_set(tx, id, set.clone(), now)
             })
             .await
-                .map(|()| json!(true))
+            .map(|()| json!(true))
         }
         Params::CoordHeld(p) => {
             let agent = p.agent.as_str().to_owned();
@@ -515,7 +515,7 @@ pub async fn serve(
                 meta::note_held(tx, &agent, held)
             })
             .await
-                .map(|()| json!(true))
+            .map(|()| json!(true))
         }
         Params::CoordPrune(_) => {
             // the daily prune never fails its caller: the next day's runs

@@ -234,9 +234,7 @@ impl CoordDb {
         if self.open_for(for_write) {
             return Ok(());
         }
-        if for_write
-            && let Some(OpenOutcome::ReadOnly { schema }) = self.graph.status().last_open
-        {
+        if for_write && let Some(OpenOutcome::ReadOnly { schema }) = self.graph.status().last_open {
             return Err(CoordError::ReadOnly { schema });
         }
         Err(self.closed())
@@ -475,7 +473,13 @@ pub(crate) mod tests {
         .unwrap();
         assert!(file.exists());
         let kv: String = db
-            .read(|c| Ok(c.query_row("select value from kv where key = 'schema'", [], |r| r.get(0))?))
+            .read(|c| {
+                Ok(
+                    c.query_row("select value from kv where key = 'schema'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
             .await
             .unwrap();
         assert_eq!(kv, "7");
@@ -501,21 +505,14 @@ pub(crate) mod tests {
         // A refusal rolls back and comes out as itself.
         let e = db
             .write(hub_meta(), |tx| {
-                tx.sql()
-                    .execute("insert into kv values ('z', '1')", [])?;
+                tx.sql().execute("insert into kv values ('z', '1')", [])?;
                 Err::<(), _>(CoordError::Refused("no".into()))
             })
             .await
             .unwrap_err();
         assert_eq!(e, CoordError::Refused("no".into()));
         let n: i64 = db
-            .read(|c| {
-                Ok(
-                    c.query_row("select count(*) from kv where key = 'z'", [], |r| {
-                        r.get(0)
-                    })?,
-                )
-            })
+            .read(|c| Ok(c.query_row("select count(*) from kv where key = 'z'", [], |r| r.get(0))?))
             .await
             .unwrap();
         assert_eq!(n, 0);
@@ -523,9 +520,10 @@ pub(crate) mod tests {
         let mut meta = TxMeta::new("agent:s-1", Class::Agent, "mcp:report_edit");
         meta.session = Some("s-1".into());
         db.write(meta, |tx| {
-            Ok(tx
-                .sql()
-                .execute("insert into event (at, kind, tx) values (1.0, 'x', ?1)", [tx.id()])?)
+            Ok(tx.sql().execute(
+                "insert into event (at, kind, tx) values (1.0, 'x', ?1)",
+                [tx.id()],
+            )?)
         })
         .await
         .unwrap();
@@ -540,7 +538,12 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(
-            (actor.as_str(), class.as_str(), tool.as_str(), session.as_deref()),
+            (
+                actor.as_str(),
+                class.as_str(),
+                tool.as_str(),
+                session.as_deref()
+            ),
             ("agent:s-1", "agent", "mcp:report_edit", Some("s-1"))
         );
     }

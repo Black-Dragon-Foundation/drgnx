@@ -234,9 +234,7 @@ pub(crate) fn blank_cards(
     }
     for id in ids {
         n += tx.sql().execute(
-            &format!(
-                "update card set {set} where json_extract(data, '$.task') = ?3 and {CHANGED}"
-            ),
+            &format!("update card set {set} where json_extract(data, '$.task') = ?3 and {CHANGED}"),
             (&ex.marker, mark, id),
         )?;
     }

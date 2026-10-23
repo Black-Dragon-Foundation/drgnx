@@ -59,7 +59,14 @@ pub fn job_create(tx: &mut WTx<'_>, j: NewJob, now: f64) -> Result<String, Coord
                 kind: "task".into(),
                 project,
                 title: Some(t.title.clone()),
-                status: Some(if t.deps.is_empty() { "ready" } else { "pending" }.into()),
+                status: Some(
+                    if t.deps.is_empty() {
+                        "ready"
+                    } else {
+                        "pending"
+                    }
+                    .into(),
+                ),
                 body: None,
                 priority: None,
                 assignee: None,
@@ -93,9 +100,10 @@ pub fn job_set(
 ) -> Result<(), CoordError> {
     let by = tx.id();
     if let Some(status) = status {
-        let old: Option<Option<String>> = opt(tx
-            .sql()
-            .query_row("select status from job where id = ?1", [id], |r| r.get(0)))?;
+        let old: Option<Option<String>> =
+            opt(tx
+                .sql()
+                .query_row("select status from job where id = ?1", [id], |r| r.get(0)))?;
         tx.sql().execute(
             "update job set status = ?1, tx = ?3 where id = ?2",
             (status, id, by),

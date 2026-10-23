@@ -79,9 +79,9 @@ async fn seen(coord: &Coord, who: &Identity, me: &str) -> Result<(), String> {
         me.to_owned(),
         coord.now(),
     )
-        .await
-        .map(drop)
-        .map_err(err)
+    .await
+    .map(drop)
+    .map_err(err)
 }
 
 // ---- list_agents ----

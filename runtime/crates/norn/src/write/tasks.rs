@@ -59,7 +59,9 @@ fn update_task(
     let Some(cur) = entity::by_id(tx.sql(), &entity_id(task))? else {
         return Ok(false);
     };
-    if cur.retired_tx.is_some() || cur.kind != "task" || cur.data.get("job").is_none_or(|j| j.is_null())
+    if cur.retired_tx.is_some()
+        || cur.kind != "task"
+        || cur.data.get("job").is_none_or(|j| j.is_null())
     {
         return Ok(false);
     }
@@ -189,8 +191,7 @@ pub fn claim(
     if status == Some("pending") {
         let mut open = Vec::new();
         for d in deps(tx.sql(), task)? {
-            let done =
-                task_row(tx.sql(), &d)?.is_some_and(|r| r.status.as_deref() == Some("done"));
+            let done = task_row(tx.sql(), &d)?.is_some_and(|r| r.status.as_deref() == Some("done"));
             if !done {
                 open.push(d);
             }
@@ -201,7 +202,12 @@ pub fn claim(
         update_task(tx, task, |cur| Changes {
             status: (cur.status.as_deref() == Some("ready")).then(|| Some("claimed".to_owned())),
             assignee: Some(Some(agent.to_owned())),
-            lease: Some(lease_with(cur, Some(agent.to_owned()), Some(lease(now)), true)),
+            lease: Some(lease_with(
+                cur,
+                Some(agent.to_owned()),
+                Some(lease(now)),
+                true,
+            )),
             ..Changes::default()
         })?;
         if status == Some("ready") {
@@ -237,7 +243,12 @@ pub fn heartbeat(tx: &mut WTx<'_>, task: &str, agent: &str, now: f64) -> Result<
             return Changes::default();
         }
         Changes {
-            lease: Some(lease_with(cur, cur.assignee.clone(), Some(lease(now)), false)),
+            lease: Some(lease_with(
+                cur,
+                cur.assignee.clone(),
+                Some(lease(now)),
+                false,
+            )),
             ..Changes::default()
         }
     })?;

@@ -230,9 +230,7 @@ fn call_jobs(tx: &mut WTx<'_>, fn_name: &str, args: &Value, clock: &mut Clock) -
         "drgnx-coord-heartbeat" => {
             tasks::heartbeat(tx, &req("task"), &req("agent"), now_of(clock)).map(|()| Value::Null)
         }
-        "drgnx-coord-renew" => {
-            tasks::renew(tx, &req("agent"), now_of(clock)).map(|()| Value::Null)
-        }
+        "drgnx-coord-renew" => tasks::renew(tx, &req("agent"), now_of(clock)).map(|()| Value::Null),
         "drgnx-coord-release-stale" => tasks::release_stale(tx, now_of(clock)).map(|rs| {
             list_or_null(
                 rs.into_iter()

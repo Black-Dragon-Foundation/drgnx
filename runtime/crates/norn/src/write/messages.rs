@@ -136,9 +136,11 @@ pub fn mark(tx: &mut WTx<'_>, id: i64, state: &str, now: f64) -> Result<bool, Co
         _ => return Err(CoordError::Refused(format!("Not a message state: {state}"))),
     };
     let cur: Option<String> =
-        match tx.sql().query_row("select state from message where id = ?1", [id], |r| {
-            r.get(0)
-        }) {
+        match tx
+            .sql()
+            .query_row("select state from message where id = ?1", [id], |r| {
+                r.get(0)
+            }) {
             Ok(s) => s,
             Err(urdr::SqliteError::QueryReturnedNoRows) => None,
             Err(e) => return Err(e.into()),

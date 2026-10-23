@@ -49,7 +49,10 @@ impl Blanker for CoordBlanker {
         }
         // `[excised 12]` → `{"excised":12}`, as the entity's own `data` is blanked
         let num: String = ex.marker.chars().filter(char::is_ascii_digit).collect();
-        let mark = format!("{{\"excised\":{}}}", if num.is_empty() { "0" } else { &num });
+        let mark = format!(
+            "{{\"excised\":{}}}",
+            if num.is_empty() { "0" } else { &num }
+        );
         let mut blanked = 0;
         blanked += event::blank_events(tx, ex, &ids, &mark).map_err(writer_error)?;
         blanked += messages::blank_messages(tx, ex).map_err(writer_error)?;
@@ -130,8 +133,14 @@ mod excise_blankers {
         assert_eq!(
             rows,
             [
-                ("[excised 77]".to_string(), Some("{\"excised\":77}".to_string())),
-                ("[excised 77]".to_string(), Some("{\"excised\":77}".to_string())),
+                (
+                    "[excised 77]".to_string(),
+                    Some("{\"excised\":77}".to_string())
+                ),
+                (
+                    "[excised 77]".to_string(),
+                    Some("{\"excised\":77}".to_string())
+                ),
                 ("fine".to_string(), Some("{\"k\":1}".to_string())),
             ]
         );

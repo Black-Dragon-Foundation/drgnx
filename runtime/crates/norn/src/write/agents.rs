@@ -69,11 +69,7 @@ pub struct AgentRegister {
 
 /// `drgnx-coord-agent-register`: note that agent `id` works (again): what is given is stored, what is not is kept,
 /// and when it started is kept.  The id.
-pub fn agent_register(
-    tx: &mut WTx<'_>,
-    a: AgentRegister,
-    now: f64,
-) -> Result<String, CoordError> {
+pub fn agent_register(tx: &mut WTx<'_>, a: AgentRegister, now: f64) -> Result<String, CoordError> {
     if a.id.is_empty() {
         return Err(CoordError::Refused("An agent needs an id".into()));
     }

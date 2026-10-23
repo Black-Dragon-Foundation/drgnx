@@ -718,7 +718,19 @@ impl World {
         self.db
             .write(TxMeta::new("scan", Class::System, "scan"), move |tx| {
                 let mut ids: std::collections::HashMap<String, (i64, String)> = Default::default();
-                for [id, kind, title, path, line, status, parent, ord, source, data] in scanned.nodes {
+                for [
+                    id,
+                    kind,
+                    title,
+                    path,
+                    line,
+                    status,
+                    parent,
+                    ord,
+                    source,
+                    data,
+                ] in scanned.nodes
+                {
                     let (id, kind) = (abs(&id.unwrap()), kind.unwrap());
                     let mut d = data
                         .and_then(|d| serde_json::from_str::<Value>(&d).ok())
@@ -749,7 +761,11 @@ impl World {
                             priority: None,
                             assignee: None,
                             data: Value::Object(d),
-                            origin: if recorded { Origin::Recorded } else { Origin::Parsed },
+                            origin: if recorded {
+                                Origin::Recorded
+                            } else {
+                                Origin::Parsed
+                            },
                             source,
                         },
                     )?;

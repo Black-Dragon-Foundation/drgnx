@@ -93,14 +93,15 @@ pub fn decide(tx: &mut WTx<'_>, d: Decide, now: f64) -> Result<DecideResult, Coo
         }),
         _ => false,
     };
-    let replaced: Option<(Option<String>, Option<String>)> = match d.replaces {
-        Some(n) => opt(tx.sql().query_row(
-            "select author, task from decision where n = ?1",
-            [n],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ))?,
-        None => None,
-    };
+    let replaced: Option<(Option<String>, Option<String>)> =
+        match d.replaces {
+            Some(n) => opt(tx.sql().query_row(
+                "select author, task from decision where n = ?1",
+                [n],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ))?,
+            None => None,
+        };
     let own_replace = d.replaces.is_none()
         || replaced
             .as_ref()
@@ -159,7 +160,15 @@ pub fn decide(tx: &mut WTx<'_>, d: Decide, now: f64) -> Result<DecideResult, Coo
         },
     )?;
     if let Some(old) = &target {
-        link::add(tx, made.n, "supersedes", old.n, None, Origin::Recorded, None)?;
+        link::add(
+            tx,
+            made.n,
+            "supersedes",
+            old.n,
+            None,
+            Origin::Recorded,
+            None,
+        )?;
     }
     event(
         tx,
@@ -271,7 +280,10 @@ mod tests {
         };
         assert_eq!(
             rows,
-            [(1, "replaced".to_string(), None), (2, "current".to_string(), Some(1))]
+            [
+                (1, "replaced".to_string(), None),
+                (2, "current".to_string(), Some(1))
+            ]
         );
         let links: i64 = tx
             .sql()
@@ -288,7 +300,9 @@ mod tests {
         decide(&mut tx, third, 3.0).unwrap();
         let replaces: Option<i64> = tx
             .sql()
-            .query_row("select replaces from decision where n = 3", [], |r| r.get(0))
+            .query_row("select replaces from decision where n = 3", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(replaces, Some(9));
     }
