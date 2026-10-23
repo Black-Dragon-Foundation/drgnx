@@ -319,7 +319,10 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
      without the tombstoned tokens of every old version (see "Search").
   3. **Vectors.** The `entity_vec` row is deleted; the embedder makes it again.
   4. **`tx` rows.** `answer` and `note`, where set, become the marker for every tx that wrote a version of an excised
-     entity (an entity target), or wrote a blanked version (a tx target), and for the target tx. A repeat of a keyed
+     entity (an entity target), or wrote a blanked version (a tx target), and for the target tx. So do the txs that
+     name the target without versioning it: a tx that wrote a link at an excised entity, the txs of the events,
+     notices and cards a blanker blanks as about it (`Blanker::txs_about`), and every tx whose answer or note holds
+     one of the needles (a keyed `task_write` that echoed the target while versioning another). A repeat of a keyed
      request answers `Refused("this answer was excised; read the entity")`, never the old text.
   5. **Blankers.** Each `Blanker` (norn's: events, messages, cards) gets `Excised { entities, txs, marker }` and
      blanks its copies in the same tx; a blanker's error fails the whole excise.
@@ -337,9 +340,9 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
   `store restore-pre7` moved aside, and every file under `<data>/export/`; `holding(files, needles)`
   is the byte search over them (a file that cannot be read is listed). `redact(path, needles, marker)` rewrites a
   file (a session transcript) without the needles, through a `.tmp` and a rename, keeping its mode.
-- **Limits.** `link.data`, entity ids and `source` are not blanked. A tx that did not write the target but quoted it
-  in its answer or note keeps it; its notices and cards are the blankers'. A tx target finds its versions with a
-  scan of `entity_hist` by `tx_from` (no index; excise is rare).
+- **Limits.** `link.data`, entity ids and `source` are not blanked. A tx that quoted a value shorter than
+  `MIN_NEEDLE` without naming the target otherwise keeps it. A tx target finds its versions with a scan of
+  `entity_hist` by `tx_from`, and the needle search scans every tx's answer and note (no index; excise is rare).
 
 ## The deny-list (Task 9)
 

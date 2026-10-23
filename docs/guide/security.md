@@ -243,7 +243,7 @@ The store keeps every version of what is written into it. When a secret or a per
 
 - Excising a task, note or other entry replaces its title, text and data (or the fields you name) with
   `[excised <n>]` in every version it ever had, in the search index, in its embedding, in the stored replies and
-  notes of the changes that wrote it, and in the notices and cards that quoted it. Excising one change does the
+  notes of the changes that wrote it, linked it or quoted it, and in the notices and cards that quoted it. Excising one change does the
   same for what that change wrote. The history still shows that something changed, and who changed it.
 - Then the store file is compacted, so the old bytes leave the file and its write-ahead log. If a drgnx editor still
   has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
