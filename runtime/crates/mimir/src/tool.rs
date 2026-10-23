@@ -151,7 +151,13 @@ fn args_error(at: Option<String>, message: &str) -> ArgsError {
             message: "required, missing".into(),
         };
     }
+    // serde_path_to_error's path to an unknown field already ends at the field itself
     if let Some(path) = field("unknown field `") {
+        let ends_at_key = |p: &String, k: &str| p == k || p.ends_with(&format!(".{k}"));
+        let path = match (&at, path.rsplit_once('.')) {
+            (Some(p), Some((_, k))) if ends_at_key(p, k) => p.clone(),
+            _ => path,
+        };
         return ArgsError {
             path,
             message: "unknown key".into(),
