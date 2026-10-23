@@ -14,6 +14,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'seq)
 (require 'drgnx-paths)
 (require 'drgnx-jobs)
 (require 'drgnx-guard)
@@ -25,6 +26,8 @@
 (declare-function drgnx-ai-providers "drgnx-ai")
 (defvar drgnx-ai--keys)
 (defvar drgnx-hub--server)              ; drgnx-hub.el: this Emacs's hub socket, when it is the hub
+(defvar drgnx-hub--editor)              ; the editor token and the held keys: defined below, used by `drgnx-hub-disconnect'
+(defvar drgnx-hub--keys-held)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
@@ -806,6 +809,8 @@ closes it when this Emacs dies."
   (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
+  (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
   (let (ids)
     (maphash (lambda (id _) (push id ids)) drgnx-hub--pending)
     (dolist (id ids) (drgnx-hub--settle id nil "disconnected from the drgnx hub"))))
@@ -931,10 +936,74 @@ saying how to load it."
         (drgnx-notify 'hub 'warn (format "agents need your %s key in the drgnx hub: run AI: Load Keys" name)
                       :id (intern (concat "need-key-" name)) :command 'drgnx-ai-load-keys)))))
 
+;;;; The editor's token, and which keys the hub holds (the editor's AI goes through the gateway)
+
+(defvar drgnx-hub--editor nil
+  "The gateway's answer to this Emacs's `gateway/editor-token': (TOKEN . URL), or nil before it came.  The token is a
+secret of this process: kept in memory only, fetched again on every proven (re)connect.")
+
+(defvar drgnx-hub--keys-held :unknown
+  "The ids (strings) of the providers whose key the hub holds, as `gateway/keys-held' and `gateway/keys-changed'
+said, or `:unknown' before the hub answered.  Never a key.")
+
+(defvar drgnx-hub-editor-token-hook nil
+  "Functions of no arguments run (inside the guard) when the hub gave this Emacs its editor token: what needed the
+gateway's address (gptel's backend) can be set up.")
+
+(defun drgnx-hub--editor-answered (result _err)
+  "The answer to `gateway/editor-token': RESULT (:token :url)."
+  (when (and (consp result) (stringp (plist-get result :token)) (stringp (plist-get result :url)))
+    (setq drgnx-hub--editor (cons (plist-get result :token) (plist-get result :url)))
+    (drgnx-guard-run-hook 'drgnx-hub-editor-token-hook)))
+
+(defun drgnx-hub--keys-held-answered (result _err)
+  "The answer to `gateway/keys-held': RESULT (:providers [ID…])."
+  (when (consp result)
+    (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get result :providers) nil)))))
+
+(defun drgnx-hub--fetch-editor ()
+  "Ask the hub for this Emacs's editor token and for the keys it holds: the ids of the two calls."
+  (list (drgnx-hub-call "gateway/editor-token" nil #'drgnx-hub--editor-answered)
+        (drgnx-hub-call "gateway/keys-held" nil #'drgnx-hub--keys-held-answered)))
+
+(defun drgnx-hub--keys-changed (event data)
+  "`gateway/keys-changed' (DATA (:providers [ID…])) from a hub that proved itself: the keys it holds now."
+  (when (and (equal event "gateway/keys-changed") (processp drgnx-hub--event-conn)
+             (process-get drgnx-hub--event-conn :drgnx-proven))
+    (setq drgnx-hub--keys-held (seq-filter #'stringp (append (plist-get data :providers) nil)))))
+
+(defun drgnx-hub-keys-held ()
+  "The ids (strings) of the providers whose key the hub holds, or `:unknown' when the hub has not said yet."
+  drgnx-hub--keys-held)
+
+(defun drgnx-hub-editor-token (&optional wait)
+  "(TOKEN . URL) for this Emacs's requests to the gateway, or nil when the hub has not given one yet.  Then the hub's
+start is asked for, without waiting, and the token arrives with the hand-over.  WAIT (a command, or a batch process;
+never in a daemon path, `inhibit-interaction'): make sure the hub runs and wait for it (`drgnx-hub-ensure'), signalling
+why it cannot."
+  (or drgnx-hub--editor
+      (progn
+        (if (and wait (not inhibit-interaction))
+            (drgnx-hub-ensure)
+          ;; asked once: a subscription under way hands the token over when the hub answers
+          (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
+            (ignore-errors
+              (drgnx-hub--ensure-running #'drgnx-hub--ensured)
+              (drgnx-hub-connect))))
+        drgnx-hub--editor)))
+
+(defun drgnx-hub-give-key (id key)
+  "Hand the hub provider ID's KEY over the socket and wait for it (a command the user ran: a key found in a store that
+asks); the hub's list of held keys then includes ID.  The key is kept nowhere here."
+  (drgnx-hub-call-sync "gateway/keys" (list :keys (list (intern (concat ":" (symbol-name id))) key)))
+  (unless (eq drgnx-hub--keys-held :unknown)
+    (cl-pushnew (symbol-name id) drgnx-hub--keys-held :test #'equal)))
+
 (defun drgnx-hub--hand-over ()
   "Hand the hub the provider table (`drgnx-hub--send-providers') and the keys this Emacs holds
-\(`drgnx-hub--send-keys'): the ids of the calls made."
-  (delq nil (list (drgnx-hub--send-providers) (drgnx-hub--send-keys))))
+\(`drgnx-hub--send-keys'), and ask it for the editor token and the keys it holds (`drgnx-hub--fetch-editor'): the ids
+of the calls made."
+  (delq nil (append (list (drgnx-hub--send-providers) (drgnx-hub--send-keys)) (drgnx-hub--fetch-editor))))
 
 (defun drgnx-hub--wait-for-keys ()
   "Hand the hub the provider table and the keys this Emacs holds (`drgnx-hub--hand-over') and wait (up to 5 s) for it
@@ -1057,7 +1126,8 @@ Asynchronous; safe to call again, also before the hub has answered (one subscrip
       (drgnx-hub--call-on c "subscribe" nil (lambda (r _err) (drgnx-hub--subscribed c r)))
       ;; both removed by `drgnx-hub-disconnect'
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
-      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys))))
+      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
+      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed))))
 
 (defun drgnx-hub--subscribed (conn result)
   "The hub answered CONN's `subscribe' with RESULT: CONN is the subscribed connection, and the hub gets the provider

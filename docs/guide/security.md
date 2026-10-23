@@ -125,7 +125,11 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   (`http://127.0.0.1:PORT/p/PROVIDER/…`), one provider per request, and only on the hub's port on this machine:
   never an agent's session socket, and never the Messages API agents use. One process holds one such token (asking
   again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
-  your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly.
+  your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly. Chat, completion, edits, commit
+  messages, embeddings and gptel all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
+  again on every reconnect and keeps it in memory only. The search indexer job asks for a token of its own, so it goes
+  with the job. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
+  waits.
 - **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
   `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
 - **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,

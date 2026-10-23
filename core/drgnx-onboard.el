@@ -13,6 +13,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(defvar drgnx-ai-via-gateway)           ; drgnx-ai.el
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-guard)
@@ -1037,7 +1038,12 @@ feature tested.  The embed role stays: OpenRouter has no embedding model here."
      (t
       (let ((stored (and new (unwind-protect
                                  ;; a copy goes in (drgnx keeps it in memory); the typed string is zeroed either way
-                                 (condition-case err (drgnx-ai-store-key 'openrouter (copy-sequence new)) (user-error (cadr err)))
+                                 (condition-case err
+                                     (prog1 (drgnx-ai-store-key 'openrouter (copy-sequence new))
+                                       ;; the hub holds it from now on (over the socket, in its memory only)
+                                       (when drgnx-ai-via-gateway (drgnx-hub-give-key 'openrouter new)))
+                                   (user-error (cadr err))
+                                   (error (format "the key is stored, but the hub did not take it (%s)" (error-message-string err))))
                                (clear-string new))))
             (env (plist-get (drgnx-ai-provider 'openrouter) :key-env)))
         (if (stringp stored) (list 'fail (concat "OpenRouter: " stored))
@@ -1076,10 +1082,22 @@ C-g stops it (and any job it waits on)."
             (string-join (drgnx-onboard--setup-commands 'ollama models) ", ")
             (string-join (drgnx-onboard--setup-commands 'lmstudio models) ", "))))
 
+(declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-hub-give-key "drgnx-hub-client")
+
+(defun drgnx-onboard--ensure-hub ()
+  "Make sure the hub runs before AI is asked anything (`drgnx-hub-ensure'): a provider with a key is only reached
+through its gateway, with the keys this Emacs holds handed over.  t, or nil when no hub can start here (local
+providers need none)."
+  (require 'drgnx-hub-client)
+  (condition-case nil (drgnx-hub-ensure) (error nil)))
+
 (defun drgnx-onboard--ai-step (ctx)
   "Find what runs here and test each role (`drgnx-onboard--ai-found').  Interactive, when no role answered: ask
 \"Set up AI with\" — Ollama, LM Studio, OpenRouter or Skip (`drgnx-onboard--ai-setup'); when some did not, or the
-step ran before: keep it or change it.  Without interaction: what was found, and what would set it up."
+step ran before: keep it or change it.  Without interaction: what was found, and what would set it up.  The hub is
+ensured first, also from the CLI (\"from the environment\")."
+  (drgnx-onboard--ensure-hub)
   (let* ((again (alist-get 'ai (drgnx-onboard-state)))
          (found (drgnx-onboard--ai-found ctx))
          (working (nth 2 found))

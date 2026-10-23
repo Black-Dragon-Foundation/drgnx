@@ -40,6 +40,8 @@
                               (setq drgnx-llm--before (cons gptel-backend gptel-model))
                               (drgnx-llm--configure)
                               (add-hook 'drgnx-ai-probe-done-hook #'drgnx-llm--configure)
+                              ;; the gateway's address comes with the hub's token
+                              (add-hook 'drgnx-hub-editor-token-hook #'drgnx-llm--configure)
                               (drgnx-command-define 'llm-menu :category "AI" :title "LLM Menu" :command 'gptel-menu
                                                     :doc "Model, context and options (gptel)")
                               (drgnx-command-define 'llm-send :category "AI" :title "Send to LLM" :command 'gptel-send
