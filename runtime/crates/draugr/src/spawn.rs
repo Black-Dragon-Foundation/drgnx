@@ -65,7 +65,10 @@ fn file_id(fd: RawFd) -> Option<(u64, u64)> {
 /// FD (a hub's listening socket) is never passed to a child: a spawn that tries panics in debug builds.
 pub fn never_pass(fd: &impl AsRawFd) {
     if let Some(id) = file_id(fd.as_raw_fd()) {
-        NEVER_PASS.lock().unwrap_or_else(|e| e.into_inner()).push(id);
+        NEVER_PASS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(id);
     }
 }
 

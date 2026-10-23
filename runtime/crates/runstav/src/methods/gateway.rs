@@ -296,7 +296,12 @@ mod tests {
             json!({"providers": [{"id": "p", "kind": "openai", "base": base, "auth": "bearer",
                                   "messages": false, "caps": ["chat"]}]})
         };
-        for bad in ["ftp://example.com", "http://user@host", "https://h/x#f", "/srv/x"] {
+        for bad in [
+            "ftp://example.com",
+            "http://user@host",
+            "https://h/x#f",
+            "/srv/x",
+        ] {
             let e = (m.decode)(&one(bad)).err().unwrap();
             assert_eq!(e.path.as_deref(), Some("providers[0].base"), "{bad}: {e:?}");
         }
@@ -316,7 +321,9 @@ mod tests {
         for b in [json!(2), json!(2.0), json!(0.25)] {
             assert!((m.decode)(&json!({"job": "j", "budget": b})).is_ok(), "{b}");
         }
-        let e = (m.decode)(&json!({"job": "j", "budget": -1})).err().unwrap();
+        let e = (m.decode)(&json!({"job": "j", "budget": -1}))
+            .err()
+            .unwrap();
         assert_eq!(e.path.as_deref(), Some("budget"));
         let spend = find("spend").unwrap();
         for cost in [json!(2), json!(2.0)] {

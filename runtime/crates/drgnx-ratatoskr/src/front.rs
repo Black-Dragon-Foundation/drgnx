@@ -398,7 +398,9 @@ impl Front {
                 .register(p, s.peer_pid, &self.mcp)
                 .await
                 .map(|r| json!(r)),
-            Params::GatewayUnregister(p) => self.gate.unregister(&p.token.0).await.map(|b| json!(b)),
+            Params::GatewayUnregister(p) => {
+                self.gate.unregister(&p.token.0).await.map(|b| json!(b))
+            }
             Params::GatewayKeys(p) => {
                 self.gate.take_keys(p.keys);
                 Ok(json!(true))

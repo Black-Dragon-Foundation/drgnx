@@ -429,7 +429,11 @@ mod tests {
         let me = std::process::id();
         let listener = crate::peer::listener_of(&path).unwrap();
         assert_eq!(listener.pid, me);
-        let start_of = |p: u32| i32::try_from(p).ok().and_then(|p| draugr::start_time(p).ok());
+        let start_of = |p: u32| {
+            i32::try_from(p)
+                .ok()
+                .and_then(|p| draugr::start_time(p).ok())
+        };
         // a lock naming another live process with its true start time (pid 1: no child is forked here, see above):
         // refused, naming both, and nothing is signalled
         // (where pid 1's start time reads, its true one; else any)
@@ -442,7 +446,10 @@ mod tests {
         assert!(alive(1));
         // the lock naming the listener with its start time: the target
         let mine = start_of(me).unwrap();
-        assert_eq!(signal_target(Some(me), Some(mine), &listener, start_of), Ok(me));
+        assert_eq!(
+            signal_target(Some(me), Some(mine), &listener, start_of),
+            Ok(me)
+        );
         // the listener's pid with another start time (a reused pid), or gone, or a lock that names nobody: refused
         let e = signal_target(Some(me), Some(mine + 1), &listener, start_of).unwrap_err();
         assert!(e.contains("(another process)"), "{e}");

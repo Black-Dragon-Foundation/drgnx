@@ -131,8 +131,12 @@ mod tests {
     fn the_job_runners_fallback_is_relayed_and_the_gateways_is_not() {
         let runner = json!({"job": "j1", "task": "j1#2", "agent": "agent-3", "from": "claude", "to": "codex",
                             "why": "exit 1"});
-        assert_eq!(check("fallback", &runner).map(|v| plain(&v)), Ok(plain(&runner)));
-        let gateway = json!({"agent": "agent-2", "from": "openrouter", "to": "anthropic", "why": "HTTP 429"});
+        assert_eq!(
+            check("fallback", &runner).map(|v| plain(&v)),
+            Ok(plain(&runner))
+        );
+        let gateway =
+            json!({"agent": "agent-2", "from": "openrouter", "to": "anthropic", "why": "HTTP 429"});
         assert!(check("fallback", &gateway).is_err());
         assert!(check("budget", &json!({"job": "j1", "spent": 2.5, "budget": 2.0})).is_err());
     }

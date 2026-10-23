@@ -95,10 +95,7 @@ mod listen {
             Ok(()) => {}
             Err(Errno::AGAIN) => return Err("the hub's socket is full".into()),
             Err(e) => {
-                return Err(format!(
-                    "nothing listens on {} ({e})",
-                    socket.display()
-                ));
+                return Err(format!("nothing listens on {} ({e})", socket.display()));
             }
         }
         let cred = rustix::net::sockopt::socket_peercred(&sock)

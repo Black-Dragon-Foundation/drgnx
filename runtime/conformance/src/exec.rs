@@ -856,13 +856,10 @@ impl Runner<'_> {
         if step.obj.get("drop_ptrace").and_then(Value::as_bool) == Some(true)
             && crate::scenario::ptrace_effective()
         {
-            let mut wrapped: Vec<String> = [
-                "--inh-caps=-sys_ptrace",
-                "--bounding-set=-sys_ptrace",
-                "--",
-            ]
-            .map(String::from)
-            .into();
+            let mut wrapped: Vec<String> =
+                ["--inh-caps=-sys_ptrace", "--bounding-set=-sys_ptrace", "--"]
+                    .map(String::from)
+                    .into();
             wrapped.push(bin.to_string_lossy().into_owned());
             wrapped.append(&mut args);
             (bin, args) = (PathBuf::from("setpriv"), wrapped);

@@ -198,7 +198,9 @@ pub async fn run(args: ServeArgs) -> Exit {
     #[cfg(not(feature = "test-hooks"))]
     let gateway_port = None;
     // the sessions' sockets: those of live owners bound again (a bridge redials the same path), before serving
-    front.mcp.open_store(env.clone(), socket.clone(), runtime.clone());
+    front
+        .mcp
+        .open_store(env.clone(), socket.clone(), runtime.clone());
     front.mcp.restore().await;
     tokio::spawn(sessions::watch(front.clone()));
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept
@@ -557,7 +559,9 @@ mod tests {
         r.read_exact(&mut d).unwrap();
         assert_eq!(d[0], 0, "the child is not dumpable after harden");
         if has_cap_sys_ptrace() {
-            eprintln!("skipped: CAP_SYS_PTRACE is effective here, so /proc/PID/exe of a non-dumpable process reads");
+            eprintln!(
+                "skipped: CAP_SYS_PTRACE is effective here, so /proc/PID/exe of a non-dumpable process reads"
+            );
         } else {
             assert!(
                 std::fs::read_link(format!("/proc/{pid}/exe")).is_err(),
@@ -578,7 +582,11 @@ mod tests {
     #[tokio::test]
     async fn the_listening_socket_is_cloexec() {
         let dir = tempfile::tempdir().unwrap();
-        let (listener, _cap) = bind(&dir.path().join("hub-x.sock"), &dir.path().join("hub-x.cap")).unwrap();
+        let (listener, _cap) = bind(
+            &dir.path().join("hub-x.sock"),
+            &dir.path().join("hub-x.cap"),
+        )
+        .unwrap();
         let cloexec = |fd: std::os::fd::BorrowedFd<'_>| {
             rustix::io::fcntl_getfd(fd)
                 .unwrap()
@@ -587,7 +595,9 @@ mod tests {
         use std::os::fd::AsFd;
         assert!(cloexec(listener.as_fd()), "the main socket");
         // and the gateway's loopback listener, bound as `Gate::listen` binds it
-        let tcp = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let tcp = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         assert!(cloexec(tcp.as_fd()), "the gateway's listener");
     }
 }

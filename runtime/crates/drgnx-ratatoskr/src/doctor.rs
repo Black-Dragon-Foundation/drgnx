@@ -211,12 +211,11 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
                 gateway: s.get("gateway").cloned(),
             })
             .or_else(|| {
-                client::ping(&socket, left().max(DOCTOR_PING))
-                    .map(|pid| Running {
-                        pid,
-                        commit: None,
-                        gateway: None,
-                    })
+                client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
+                    pid,
+                    commit: None,
+                    gateway: None,
+                })
             });
         let check = check
             .join()
@@ -313,9 +312,11 @@ mod tests {
             Some(Running {
                 pid: 7,
                 commit: Some("abc".into()),
-                gateway: Some(json!({"port": 4100, "registrations": 2, "requests": 9, "providers": 3,
+                gateway: Some(
+                    json!({"port": 4100, "registrations": 2, "requests": 9, "providers": 3,
                     "keys_held": ["openrouter"],
-                    "warnings": [{"provider": "lan", "text": "lan's key travels in clear text over http://192.0.2.10; use https"}]})),
+                    "warnings": [{"provider": "lan", "text": "lan's key travels in clear text over http://192.0.2.10; use https"}]}),
+                ),
             }),
             &working(),
         );

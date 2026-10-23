@@ -249,8 +249,8 @@ impl Gate {
         if let Some(db) = self.db.get() {
             kv_set(db, KV_PORT, &port.to_string()).await;
         }
-        let upstream =
-            Upstream::new(UpstreamOpts::default()).map_err(|e| format!("no upstream client: {e}"))?;
+        let upstream = Upstream::new(UpstreamOpts::default())
+            .map_err(|e| format!("no upstream client: {e}"))?;
         let (tx, rx) = mpsc::unbounded_channel();
         let gw = Gateway::new(
             self.regs.clone(),
@@ -601,7 +601,11 @@ impl Gate {
     }
 
     /// `spend` for CALLER (an agent: its own job's).
-    pub async fn spend(&self, caller: &crate::dispatch::Caller, p: SpendParams) -> Result<Spend, Error> {
+    pub async fn spend(
+        &self,
+        caller: &crate::dispatch::Caller,
+        p: SpendParams,
+    ) -> Result<Spend, Error> {
         let mut params = Params::Spend(p);
         shape::params(caller, &mut params)?;
         let Params::Spend(p) = params else {
@@ -677,10 +681,9 @@ impl Gate {
             _ => Class::Agent,
         };
         let owner = match (row.owner, row.owner_start) {
-            (Some(o), Some(s)) => Some((
-                u32::try_from(o).unwrap_or(0),
-                u64::try_from(s).unwrap_or(0),
-            )),
+            (Some(o), Some(s)) => {
+                Some((u32::try_from(o).unwrap_or(0), u64::try_from(s).unwrap_or(0)))
+            }
             _ => None,
         };
         Ok(Kept {
@@ -768,12 +771,15 @@ fn step(i: usize, s: Vec<Option<runstav::types::Bounded<String, 128>>>) -> Resul
 
 /// The restrictions as the engine applies them (none when nothing is restricted), and those kept as the answer says
 /// them (the keys that were given; none when none was).
-fn restrictions(o: &OpenrouterRestrictions) -> Result<(Option<Restrictions>, Option<Value>), Error> {
-    let list = |l: &Option<runstav::types::Bounded<Vec<runstav::types::Bounded<String, 128>>, 64>>| {
-        l.as_ref()
-            .map(|v| v.0.iter().map(|s| s.0.clone()).collect::<Vec<_>>())
-            .unwrap_or_default()
-    };
+fn restrictions(
+    o: &OpenrouterRestrictions,
+) -> Result<(Option<Restrictions>, Option<Value>), Error> {
+    let list =
+        |l: &Option<runstav::types::Bounded<Vec<runstav::types::Bounded<String, 128>>, 64>>| {
+            l.as_ref()
+                .map(|v| v.0.iter().map(|s| s.0.clone()).collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
     let (only, ignore) = (list(&o.only), list(&o.ignore));
     let deny = o.data_collection == Some(DataCollection::Deny);
     let zdr = o.zdr == Some(true);
@@ -1135,8 +1141,10 @@ mod tests {
         let me = std::process::id();
         let r = g
             .register(
-                register_params(json!({"chain": [["local", "m"]], "job": "j1", "agent": "agent-1",
-                                       "budget": 2, "owner": me})),
+                register_params(
+                    json!({"chain": [["local", "m"]], "job": "j1", "agent": "agent-1",
+                                       "budget": 2, "owner": me}),
+                ),
                 None,
                 &h.front.mcp,
             )
@@ -1190,7 +1198,8 @@ mod tests {
             )
             .unwrap();
         let reg = |job: &str| register_params(json!({"chain": [["local", null]], "job": job}));
-        let budgets = |dir: &Path| rows_of(dir, "select job, budget from registration order by job");
+        let budgets =
+            |dir: &Path| rows_of(dir, "select job, budget from registration order by job");
         g.register(reg("j1"), None, &h.front.mcp).await.unwrap();
         g.register(reg("j2"), None, &h.front.mcp).await.unwrap();
         // the params' budget wins over the job's
@@ -1302,7 +1311,9 @@ mod tests {
         table(g).await;
         let e = g
             .register(
-                register_params(json!({"chain": [["nowhere", null], ["chat", "m"], ["keyed", null]]})),
+                register_params(
+                    json!({"chain": [["nowhere", null], ["chat", "m"], ["keyed", null]]}),
+                ),
                 None,
                 &h.front.mcp,
             )
@@ -1353,7 +1364,9 @@ mod tests {
         // the registration's own keys go to memory first, and then it is usable
         let r = g
             .register(
-                register_params(json!({"chain": [["keyed", null]], "keys": {"keyed": "canary-key-1"}})),
+                register_params(
+                    json!({"chain": [["keyed", null]], "keys": {"keyed": "canary-key-1"}}),
+                ),
                 None,
                 &h.front.mcp,
             )
@@ -1361,7 +1374,10 @@ mod tests {
             .unwrap();
         assert_eq!(g.status().keys_held, vec!["keyed".to_string()]);
         let all = rows_of(h.dir.path(), "select * from registration");
-        assert!(!format!("{all:?}").contains("canary-key-1"), "no key in runtime.db");
+        assert!(
+            !format!("{all:?}").contains("canary-key-1"),
+            "no key in runtime.db"
+        );
         assert!(!r.token.is_empty());
     }
 
@@ -1386,7 +1402,8 @@ mod tests {
                 3,
                 vec![ProviderWarning {
                     provider: "lan".into(),
-                    text: "lan's key travels in clear text over http://192.0.2.10; use https".into()
+                    text: "lan's key travels in clear text over http://192.0.2.10; use https"
+                        .into()
                 }]
             )
         );
@@ -1418,15 +1435,24 @@ mod tests {
             backend: false,
         };
         let p = |v: Value| -> SpendParams { decoded("spend", v) };
-        let all = g.spend(&caller(WireClass::User, None), p(json!({}))).await.unwrap();
+        let all = g
+            .spend(&caller(WireClass::User, None), p(json!({})))
+            .await
+            .unwrap();
         assert_eq!((all.input, all.requests), (17, 2));
         let own = g
             .spend(&caller(WireClass::Agent, Some("j1")), p(json!({})))
             .await
             .unwrap();
-        assert_eq!((own.input, own.output, own.cost, own.requests), (10, 2, 0.5, 1));
+        assert_eq!(
+            (own.input, own.output, own.cost, own.requests),
+            (10, 2, 0.5, 1)
+        );
         let e = g
-            .spend(&caller(WireClass::Agent, Some("j1")), p(json!({"job": "j2"})))
+            .spend(
+                &caller(WireClass::Agent, Some("j1")),
+                p(json!({"job": "j2"})),
+            )
             .await
             .unwrap_err();
         assert_eq!(e.code, ErrorCode::NotAllowed);
