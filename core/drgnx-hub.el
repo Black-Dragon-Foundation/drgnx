@@ -772,9 +772,9 @@ log (no `events' from here).  Without one it is the standalone Lisp hub and writ
                (message "drgnx hub: %s" (if already "a hub already serves" (error-message-string err)))
                (kill-emacs (if already 3 1)))))
     (add-hook 'kill-emacs-hook #'drgnx-hub-stop)
-    (if drgnx-hub--behind-front
-        (message "drgnx hub: serving on %s, behind Ratatoskr (its gateway)" socket)
-      (message "drgnx hub: serving on %s, gateway on 127.0.0.1:%d" socket (drgnx-gateway-port)))
+    (message "drgnx hub: serving on %s, %s" socket
+             (if drgnx-hub--behind-front "behind Ratatoskr (its gateway)"
+               (format "gateway on 127.0.0.1:%d" (drgnx-gateway-port))))
     ;; a test's hub (DRGNX_HUB_PARENT_PID: its test Emacs) and Ratatoskr's backend end with their parent, never
     ;; outliving it
     (while t
