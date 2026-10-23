@@ -50,7 +50,8 @@ environment functions; every session is killed after."
            (list (list "claude" :command '("claude-agent-acp") :env (cons (concat "MOCK_ACP_STATE=" state) ,env))
                  (list "gemini" :command '("gemini") :env (cons (concat "MOCK_ACP_STATE=" state) ,env))))
           (drgnx-agents--sessions nil)
-          (drgnx-agents-env-functions nil))
+          (drgnx-agents-env-functions nil)
+          (drgnx-agents-coordination nil))      ; these tests are about Claude's options, not the coordination bridge
      (make-directory config t)
      ;; what a job session sends, whatever its profile: which profiles may run one is job-safe-test.el's
      (unwind-protect (cl-letf (((symbol-function 'drgnx-agents-job-safe-p) #'always)) ,@body)
