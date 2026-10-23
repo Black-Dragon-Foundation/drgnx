@@ -263,6 +263,64 @@ tier needs it: its helper starts a session itself (GL-T8-1). Either way the chil
   - links in the metadata are refused;
   - a remote-looking `gitdir:` is not found.
 
+## bifrost: the gateway
+
+`crates/bifrost` is the gateway's library: what an agent's or the editor's request must show to be forwarded, and
+what reaches the provider. It names no drgnx path: provider ids, URLs, listener ids and the token registry come from
+the caller. The port keeps what the Lisp gateway (`core/drgnx-gateway.el`) did, with the changes listed in the
+Ratatoskr phase-3 plan (chunked request bodies, keep-alive, a drained refusal, a header-read timeout).
+
+**The caller's types** (crate root):
+- `Provider { id, kind, base, auth, messages, caps, price }`. `kind` is `Openai`, `Ollama`, `Llamacpp`, `Tei` or
+  `Anthropic`; `base` is a URL already checked by `runstav::url::provider_base`; `auth` is `Bearer`, `XApiKey` or
+  `None` (a keyless local server: no key is needed or sent); `messages` says whether it speaks Anthropic's Messages
+  API; `price` is `budget::Price`.
+- `Registration { class, job, task, agent, chain, budget, openrouter, listener }`. `class` is `Agent` or `Editor`;
+  `chain` is the agent's `Step { provider, model }` list; `listener` is `Loopback` or `Session(SID)`, the only
+  listener the token is good on. `Registration::editor()` is the editor's: agent `editor`, no job, chain, budget or
+  restrictions, on `Loopback`.
+- `Restrictions` (OpenRouter's `only`, `ignore`, data collection denied, `zdr`): `Restrictions::new` refuses a slug
+  that is not `^[A-Za-z0-9][A-Za-z0-9._/-]*$`.
+- `keys::Keys`: provider id → `secrecy::SecretString`, memory only, with no `Debug`, `Clone` or `Serialize`. A key
+  is exposed in one place: the upstream request's auth header, which is marked sensitive.
+
+**Admission** (`admit::head`) runs on the request head alone, so a bad token is answered before any body is read:
+1. on the loopback listener, exactly one `Host`, `127.0.0.1:PORT` or `localhost:PORT` (else 400 "this gateway
+   answers on 127.0.0.1 only": the DNS-rebinding class);
+2. the token, from `Authorization: Bearer` ("Bearer" as written), else `x-api-key`, looked up by the SHA-256 hex of
+   its bytes (`admit::token_hash`) through the caller's `Registry`; a token issued for another listener is no token
+   (401 "not a drgnx gateway token");
+3. the path, by the registration's class (404):
+   - an agent's: `^/v1/(messages(/count_tokens)?|models(/[A-Za-z0-9._:-]+)?)(\?[^#]*)?$`, routed along its chain
+     (`Route::Chain`);
+   - the editor's: `/p/PROVIDER/REST[?query]`, PROVIDER in the provider table and REST one of its kind's paths
+     (`Kind::paths`: `openai` `/chat/completions`, `/completions`, `/embeddings`; `ollama` `/api/chat`,
+     `/api/generate`, `/api/embed`; `llamacpp` `/infill`, `/v1/chat/completions`, `/v1/embeddings`; `tei` `/embed`;
+     `anthropic` none), routed to that one provider (`Route::Provider { id, rest }`);
+   - either way no `..`, no control, space or `#` character, and only the origin form (`/…`);
+4. a `Content-Length` over 32 MiB (`admit::MAX_BODY`) is 413.
+
+A `Refusal { status, kind, message }` answers with the Lisp's body, `{"type":"error","error":{"type":…,"message":…}}`.
+
+**What reaches a provider** (`rewrite`):
+- `body`: an agent step's `model` replaces the top-level `"model"`; on OpenRouter's `/v1/messages` (any query) the
+  registration's restrictions merge into the top-level `"provider"` object, the stricter value winning: `only` the
+  intersection (a 400 "no provider in common …" when it is empty, and nothing is sent), `ignore` the union,
+  `data_collection` `"deny"`, `zdr` true; every other key of the client's object stays. With restrictions, a body
+  that is not a JSON object (or a `provider` that is not one) is a 400; without, the bytes go as they came. Key order
+  is kept; a rewritten key the client sent twice is written once, merged from its last value. The editor's route
+  never calls it: its body passes unchanged.
+- `upstream_uri` (agents): the base without a trailing `/` and then `/v1`, plus the request's path and query;
+  `provider_uri` (the editor): the base without a trailing `/`, plus REST, with no `/v1` stripping (OpenRouter's base
+  is `…/api/v1`). Both refuse a result whose scheme, host or port differ from the base's.
+- `headers`: only `content-type`, `accept`, `anthropic-version` and `anthropic-beta` are forwarded, their control
+  characters removed, plus the provider's auth header with the key (`x-api-key` for `XApiKey`, else Bearer; none for
+  a keyless provider). The client's own token never goes upstream.
+
+`cargo test -p bifrost` runs `admit::tests` (each refusal and its order, a token of another listener, both path
+classes, the proptest `admit_never_panics` over random targets and headers), `rewrite::tests` (the Lisp's
+`gateway-test.el` and `gateway-openrouter-test.el` cases by name) and `keys::tests`.
+
 ## The conformance harness
 
 `domr` runs **scenarios** (data) against a hub binary: a process that answers the hub protocol on its socket.
