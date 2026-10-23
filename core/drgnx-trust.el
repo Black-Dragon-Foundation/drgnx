@@ -494,6 +494,7 @@ is remote and SOURCE is not: a remote name taken from local text is never visite
   (drgnx-command-define 'untrust-folder :category "File" :title "Untrust This Folder"
                         :command #'drgnx-settings-trust-untrust :when #'drgnx-settings-trust-untrustable-p
                         :doc "Stop trusting this file's workspace (a folder you trusted, or one below a trusted location)")
+  (when (require 'drgnx-settings-review nil t) (drgnx-settings-review-setup))
   (drgnx-trust-mode 1))
 
 (provide 'drgnx-trust)

@@ -286,7 +286,27 @@ yours and always applies (only drgnx's security settings and global-only setting
 - **Safe mode** (`drgnx safe`) and **Settings: Turn Off Package Settings** apply only drgnx's own settings from your
   private file and the shared file, and run no `(:eval …)`; a buffer opened before keeps what it got.
 
-## Reviewing a workspace's code (Task 19)
+## Reviewing a workspace's code
+
+A workspace's code never runs until you allow it. When code in a project's `.dir-locals.el`, `.dir-locals-2.el` or
+`.drgnx/settings.el` waits (new, or changed since you allowed it), one notice per project and session says so, for
+example "3 settings and 1 piece of code wait", with **Settings: Review Workspace Code** as its action and Trust This
+Folder named as the other way. It never asks a question and never blocks.
+
+**Settings: Review Workspace Code** (palette, or the notice) opens a buffer listing each waiting piece at
+`file:line` with its value. A piece that changed since you allowed it shows the difference against the value you
+allowed (`-` old, `+` new).
+
+| Key / button | Does |
+|---|---|
+| `a` / [Allow] | allow the piece at point; it applies at once in the project's open buffers |
+| `A` / [Allow All] | allow every piece listed, exactly as shown |
+| `d` / [Deny] | ignore the piece from now on, silently (a deny is remembered; Allow undoes it) |
+| `t` / [Trust This Folder] | in a project that is not trusted: show its code and ask once |
+| `g` | draw the list again |
+
+In a project that is not trusted the buffer lists what waits for trust and offers no Allow. The Workspace group of
+Settings shows the same counts: settings (values that wait for trust) and code (that waits for review).
 
 ## Settings the runtime reads (Task 22)
 

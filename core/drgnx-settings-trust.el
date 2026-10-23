@@ -33,7 +33,8 @@
 (require 'drgnx-trust)
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
-(declare-function drgnx-settings-workspace-rehack "drgnx-settings-workspace" (root))
+(declare-function drgnx-settings-review--schedule "drgnx-settings-review" (root))
+(declare-function drgnx-settings-workspace-rehack"drgnx-settings-workspace" (root))
 (declare-function drgnx-settings-workspace-mark "drgnx-settings-workspace" (dir))
 (declare-function drgnx-settings-workspace--usable "drgnx-settings-workspace" (file))
 
@@ -206,7 +207,10 @@ settings).  `safe': VALUE passes VAR's `safe-local-variable' predicate (or the s
     (clrhash drgnx-settings-trust--waiting))
   (let ((items (gethash root drgnx-settings-trust--waiting)))
     (unless (cl-find-if (lambda (i) (drgnx-settings-trust--same-p i item)) items)
-      (puthash root (cons item items) drgnx-settings-trust--waiting))))
+      (puthash root (cons item items) drgnx-settings-trust--waiting)
+      ;; the quiet path (Task 19): one notice per workspace and session, posted after the filters ran
+      (when (or (fboundp 'drgnx-settings-review--schedule) (require 'drgnx-settings-review nil t))
+        (drgnx-settings-review--schedule root)))))
 
 (defun drgnx-settings-trust--same-p (a b)
   "Do the waiting items A and B name the same pair?"
