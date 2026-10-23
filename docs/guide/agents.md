@@ -378,7 +378,11 @@ and an agent's first `hello` brings a short brief: its project, its tasks, what 
 To turn the five tools off for a profile, set `:tracker-tools off` on it in `agents.eld`; for one task, the user sets
 it with `tasks/write` (op `tools`). The task's setting wins over the profile's: a task with the tools on gets them
 even under a profile that turns them off, and the other way round; with neither set they are on. A session keeps the
-list it started with (21 tools with the tracker tools, 16 without).
+list it started with (21 tools with the tracker tools, 16 without). The editor tells the hub at each session start:
+the profile's name (as an id: `claude (OpenRouter)` is `claude-OpenRouter`) and its `:tracker-tools` value, when it
+has one. "Only I close my tasks" is the user option `drgnx-store-only-i-close-my-tasks` (default off): with it on, an
+agent's `done` on one of your tasks waits for your acceptance; the editor sends it when it connects and when you
+change it.
 
 ## What an agent can read
 

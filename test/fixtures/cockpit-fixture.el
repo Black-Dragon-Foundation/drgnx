@@ -22,6 +22,7 @@
 (require 'subr-x)
 (require 'drgnx-coord)
 (require 'drgnx-work-scan)
+(load (expand-file-name "work-fixture" (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
 (defun drgnx-cockpit-fixture-git (dir &rest args)
   "git ARGS in DIR (the fixture's own identity, nothing of the user's): its output, trimmed; an error when git fails."
@@ -151,7 +152,7 @@ and (PLAN-LINE N) is task N's heading line."
                                           (format "# SDD ledger — plan: docs/plans/p.md\n\nTask 1: complete (commit %s)\n" sha))
              (drgnx-cockpit-fixture-write board (format "* repo\n:PROPERTIES:\n:PROJECT_ROOT: %s\n:END:\n** TODO Write the docs\n:PROPERTIES:\n:PLAN_FILE: %s\n:END:\n"
                                                         repo plan))
-             (drgnx-work-scan (list repo) :board board)
+             (drgnx-work-fixture-with-hub (drgnx-work-scan (list repo) :board board))
              ;; the job: plan tasks 2, 3, 4
              (drgnx-coord-job-create :id "jx" :title "M99 — the plan" :plan plan :repo repo
                                      :tasks '((:n 2 :title "task 2" :role "implement")

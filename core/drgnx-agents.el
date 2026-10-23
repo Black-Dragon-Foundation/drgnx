@@ -40,6 +40,7 @@
                                           (:mode (enum queue steer interrupt) "What a message to a busy agent does")
                                           (:ai symbol "The provider environment it gets")
                                           (:model string "The model it asks for")
+                                          (:tracker-tools (enum on off) "The five tracker tools; on by default")
                                           (:doc string "One line")))
                      "Your agent profiles; the built-in ones need none")
           (:default string "The profile New Agent Session… offers")
@@ -877,6 +878,15 @@ session for its bridge closes (`drgnx-hub-mcp-session-close')."
 mcp.sock attaches to that session (`drgnx-sandbox-mcp--spec')."
   (and drgnx-agents-coordination (memq 'coordination (drgnx-agents-mcp-names))))
 
+(defun drgnx-agents--tracker-tools (s)
+  "The `:tools' of S's `mcp/session': `(:tracker t)' or `(:tracker :false)' from its profile's `:tracker-tools', nil
+when the profile says nothing (the hub's task setting, else on, then decides)."
+  (when-let* ((name (drgnx-agent-session-profile s))
+              (profile (assoc name (append drgnx-agents-profiles (drgnx-config-get 'agents :profiles)
+                                           drgnx-agents-builtin-profiles)))
+              (v (plist-get (cdr profile) :tracker-tools)))
+    (list :tracker (if (member v '(off "off")) :false t))))
+
 (defun drgnx-agents--with-mcp (s k)
   "Make S's MCP session at the hub (`drgnx-hub-mcp-session', identity = S's id: a name repeats across hubs and
 editors), then call K with no arguments, which sends session/new or session/load (`drgnx-agents--mcp-servers').
@@ -900,7 +910,8 @@ An agent whose session could not be made starts without the coordination tools a
       (condition-case err
           (setq answer (drgnx-hub-mcp-session (drgnx-agent-session-id s)
                                               :job (drgnx-agent-session-job s) :task (drgnx-agent-session-task s)
-                                              :cwd (drgnx-agent-session-cwd s) :callback later))
+                                              :cwd (drgnx-agent-session-cwd s) :profile (drgnx-agent-session-profile s)
+                                              :tools (drgnx-agents--tracker-tools s) :callback later))
         (error (setq failed (error-message-string err))))
       ;; a daemon path returned nil with no error: `later' runs from the hub's answer; any other has one now
       (unless (and (null answer) (null failed))

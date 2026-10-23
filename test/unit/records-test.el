@@ -5,6 +5,7 @@
 (require 'drgnx-hub)
 (require 'drgnx-job)
 (require 'drgnx-work-scan)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defconst records-test--dir (file-name-directory (or load-file-name buffer-file-name)))
 
@@ -126,7 +127,7 @@
       (write-region (format "# SDD ledger — plan: %sdocs/plans/p.md\nTask 1: complete (commits %s..%s, tests: ok)\n" root
                             (nth 2 shas) (nth 0 shas))
                     nil (concat code ".superpowers/sdd/p/progress.md") nil 'silent)
-      (drgnx-work-scan (list root))
+      (drgnx-work-fixture-with-hub (drgnx-work-scan (list root)))
       (let ((nodes (apply #'append (mapcar #'drgnx-work-nodes '(spec plan task step commit branch ruling todo)))))
         (should (cl-some (lambda (node) (plist-get node :sha)) nodes))   ; commits: data to carry
         (dolist (node nodes)

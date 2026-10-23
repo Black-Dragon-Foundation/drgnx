@@ -30,6 +30,18 @@ changed since the last scan are read again (a rescan of 30 files takes well unde
 checks that each linked commit is still on a branch, tag or HEAD: commits a rebase, squash or amend left behind
 are marked ⚠ (and their task *stale*) until they are reachable again.
 
+### The scan writes through the hub
+
+The editor never writes the tracker's database. `drgnx work scan` reads the files (in a batch Emacs), then sends
+everything it found in **one** `graph/put-parsed` request to the hub and waits for its answer (up to 30 s, then it
+fails); the hub stores it in one transaction. Recording commits (`drgnx work record`, an agent's turn, an ended job)
+goes through `graph/record` the same way: the batch commands wait, the editor's own turn-end path only asks and never
+waits (an error shows once as "drgnx hub: …"). With no hub (Ratatoskr not built) the scan prints "the work tracker
+updates through the drgnx hub" and fails; nothing is written. Each file or spec is sent as a typed source, and the
+hub tells which it refused (shown with the reason). The scan itself leaves out files the personal-notes deny-list
+denies, and a `**Spec:**` that names one (also through a link into `~/org`); see
+[Personal notes](security.md#personal-notes). The editor only reads `work.db`, and never creates it.
+
 ## Recording commits
 
 Agent sessions and jobs can work on a task — any tracker node id, such as `task:/path/plan.md#3`:
