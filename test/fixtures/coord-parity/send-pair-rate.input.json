@@ -1,0 +1,9 @@
+{"setup": ["with recursive n(i) as (select 1 union all select i+1 from n where i < 6) insert into message (sender, recipient, text, state, at) select 'a', 'b', 'chatty', 'delivered', 990 from n",
+           "insert into message (sender, recipient, text, state, at) values ('a', 'b', 'long ago', 'delivered', 900)"],
+ "clock": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+ "tables": ["message"],
+ "calls": [
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "b", "text": "one too many", "job": "j"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "c", "text": "another pair"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "b", "recipient": "a", "text": "the other direction"}}
+ ]}

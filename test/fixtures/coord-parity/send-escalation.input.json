@@ -1,0 +1,12 @@
+{"setup": [],
+ "clock": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+ "tables": ["message"],
+ "calls": [
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "user", "text": "[escalation] help", "job": "j"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "ext:codex:1", "recipient": "user", "text": "[escalation] never a question"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "ext:codex:1", "recipient": "user", "text": "which way?", "question": true}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "user", "text": "plain"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "b", "text": "[escalation] to an agent"}},
+  {"fn": "drgnx-coord-send", "args": {"recipient": "a", "text": "left", "answers": 1}},
+  {"fn": "drgnx-coord-send", "args": {"recipient": "a", "text": "negative answers are ignored", "answers": -1}}
+ ]}

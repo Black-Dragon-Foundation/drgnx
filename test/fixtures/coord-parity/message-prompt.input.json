@@ -1,0 +1,16 @@
+{"setup": ["insert into message (id, sender, recipient, text, state, at) values (1, null, 'a', 'hello', 'queued', 1)",
+           "insert into message (id, sender, recipient, text, state, at) values (2, 'a]#b'||char(7)||'c', 'b', 'x'||char(10)||'y'||char(8232)||'z'||char(10)||char(10)||'end', 'queued', 2)",
+           "insert into message (id, sender, recipient, text, state, at) values (3, 'a', 'user', 'Which'||char(10)||char(7)||char(8232)||'  way '||replace(hex(zeroblob(60)),'0','y'), 'delivered', 3)",
+           "insert into message (id, sender, recipient, text, state, at, answers) values (4, null, 'a', 'left', 'queued', 4, 3)",
+           "insert into message (id, sender, recipient, text, state, at) values (5, 'b', 'user', 'short?', 'delivered', 5)",
+           "insert into message (id, sender, recipient, text, state, at, answers) values (6, 'user', 'a', 'wrong sender', 'queued', 6, 5)",
+           "insert into message (id, sender, recipient, text, state, at) values (7, 'a', 'b', '', 'queued', 7)"],
+ "clock": [1000.0],
+ "tables": [],
+ "calls": [
+  {"fn": "drgnx-coord-message-prompt", "args": {"id": 1}},
+  {"fn": "drgnx-coord-message-prompt", "args": {"id": 2}},
+  {"fn": "drgnx-coord-message-prompt", "args": {"id": 4}},
+  {"fn": "drgnx-coord-message-prompt", "args": {"id": 6}},
+  {"fn": "drgnx-coord-message-prompt", "args": {"id": 7}}
+ ]}

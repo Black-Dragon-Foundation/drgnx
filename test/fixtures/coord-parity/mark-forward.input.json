@@ -1,0 +1,13 @@
+{"setup": ["insert into message (id, sender, recipient, text, state, at) values (1, 'a', 'b', 'q', 'queued', 1)",
+           "insert into message (id, sender, recipient, text, state, at, reason) values (2, 'a', 'b', 'h', 'held', 2, 'queue full')",
+           "insert into message (id, sender, recipient, text, state, at) values (3, 'a', 'b', 'd', 'delivered', 3)"],
+ "clock": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+ "tables": ["message"],
+ "calls": [
+  {"fn": "drgnx-coord-mark", "args": {"id": 1, "state": "read"}},
+  {"fn": "drgnx-coord-mark", "args": {"id": 1, "state": "delivered"}},
+  {"fn": "drgnx-coord-mark", "args": {"id": 1, "state": "read"}},
+  {"fn": "drgnx-coord-mark", "args": {"id": 2, "state": "acted"}},
+  {"fn": "drgnx-coord-mark", "args": {"id": 3, "state": "acted"}},
+  {"fn": "drgnx-coord-mark", "args": {"id": 99, "state": "read"}}
+ ]}

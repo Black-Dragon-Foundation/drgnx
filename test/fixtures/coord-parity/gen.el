@@ -23,9 +23,40 @@
         ((consp v) (cons (drgnx-parity--expand (car v)) (drgnx-parity--expand (cdr v))))
         (t v)))
 
+(defun drgnx-parity--json (v)
+  "V, a Lisp result, as JSON data: a plist is an object, a list an array, nil null (an empty :changes, an array)."
+  (cond ((and (consp v) (keywordp (car v)))
+         (let ((h (make-hash-table :test 'equal)))
+           (cl-loop for (k val) on v by #'cddr
+                    do (puthash (substring (symbol-name k) 1)
+                                (if (and (null val) (eq k :changes)) [] (drgnx-parity--json val))
+                                h))
+           h))
+        ((consp v) (vconcat (mapcar #'drgnx-parity--json v)))
+        ((null v) :null)
+        (t v)))
+
 (defun drgnx-parity--call (fn args)
   "Call the Lisp function named FN with ARGS, a plist; its result (nil for the ones that return nothing useful)."
   (pcase fn
+    ;; Task 5: messages, cards, review marks and agents
+    ("drgnx-coord-send" (drgnx-parity--json (apply #'drgnx-coord-send args)))
+    ("drgnx-coord-mark" (if (drgnx-coord-mark (plist-get args :id) (plist-get args :state)) t :false))
+    ("drgnx-coord-message-prompt" (drgnx-coord-message-prompt (drgnx-coord-message (plist-get args :id))))
+    ("drgnx-coord-notice" (drgnx-coord-notice (plist-get args :v) (plist-get args :job) (plist-get args :changes)
+                                              (plist-get args :seen)))
+    ("drgnx-coord-card-create" (apply #'drgnx-coord-card-create args))
+    ("drgnx-coord-card-settle" (if (drgnx-coord-card-settle (plist-get args :id) (plist-get args :choice)) t :false))
+    ("drgnx-coord-card-set" (drgnx-coord-card-set (plist-get args :id) :title (plist-get args :title)
+                                                  :data (plist-get args :data) :state (plist-get args :state))
+     nil)
+    ("drgnx-coord-review-mark" (drgnx-coord-review-mark (plist-get args :agent) (plist-get args :path)
+                                                        (plist-get args :state) (plist-get args :hash)))
+    ("drgnx-coord-agent-register"
+     (apply #'drgnx-coord-agent-register
+            (plist-put (copy-sequence args) :clear
+                       (mapcar (lambda (s) (intern (concat ":" s))) (plist-get args :clear)))))
+    ("drgnx-coord-agent-seen" (drgnx-coord-agent-seen (plist-get args :id)))
     ((or "drgnx-coord-event-add" "drgnx-coord-event-add-best-effort") (apply (intern fn) args))
     ("drgnx-coord-version" (drgnx-coord-version))
     ("drgnx-coord--bump" (drgnx-coord--tx #'drgnx-coord--bump))
@@ -49,7 +80,8 @@
            (sqlite-select db sql))))
 
 (defun drgnx-parity--run (file)
-  (let* ((case (with-temp-buffer
+  (let* ((coding-system-for-read 'utf-8) (coding-system-for-write 'utf-8)   ; the container's locale is C
+         (case (with-temp-buffer
                  (insert-file-contents file)
                  (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)))
          (clock (append (plist-get case :clock) nil))
@@ -74,6 +106,11 @@
                                              '("id" "at" "agent" "job" "task" "kind" "summary" "data" "turn"))
                  tables)
         (puthash "meta" (drgnx-parity--rows db "select key, value from meta order by key" '("key" "value")) tables)
+        ;; any other table a case names in its "tables" array (Task 5: message card review_mark agent), in rowid order
+        (dolist (tb (plist-get case :tables))
+          (let ((cols (mapcar #'car (sqlite-select db (format "select name from pragma_table_info('%s')" tb)))))
+            (puthash tb (drgnx-parity--rows db (format "select %s from %s order by rowid" (string-join cols ", ") tb) cols)
+                     tables)))
         (let ((out (make-hash-table :test 'equal)))
           (puthash "results" (vconcat results) out)
           (puthash "tables" tables out)
