@@ -459,9 +459,13 @@ with the other settings files, so the overrides apply from the first buffer on (
 directory of every file in `(drgnx-settings-live-files)` with `file-notify` and adds `drgnx-settings-live--focus` to
 `after-focus-change-function`. Both, and the Settings page, end in `(drgnx-settings-live-check &optional FILES)`: a
 file is synced only when its `drgnx-file-stamp` is not the one last synced (the inode sees a rename over the file).
-Workspace files join `drgnx-settings-live-files` in Task 17.
+`drgnx-settings-live-files` is settings.el plus the workspace files drgnx has read (`drgnx-settings-workspace-files`,
+the open projects' W1 and W2); a workspace file read for the first time after the start is watched through
+`drgnx-settings-live-watch`. A new workspace file is seen at the next open in its folder.
 
-`(drgnx-settings-live-sync FILE)` for settings.el re-runs `drgnx-settings-apply-global` (idempotent), tears down
+`(drgnx-settings-live-sync FILE)` for a workspace file calls `drgnx-settings-workspace-sync` (its changes since the
+last sync; its roots' open buffers re-hacked when there are any) and runs `drgnx-settings-changed-functions` the same
+way. For settings.el it re-runs `drgnx-settings-apply-global` (idempotent), tears down
 variables the applied entries had and the file no longer names, calls `drgnx-settings-prov-watch` for the rest, and
 runs `drgnx-settings-changed-functions` with FILE and CHANGES, a list of `(SCOPE VAR OLD NEW)` (SCOPE nil for the top
 level; `:unset` for an added or removed entry). It returns CHANGES, never signals and never prompts.
@@ -511,3 +515,47 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   whose plist settings.el already gives: `drgnx-settings-migrate-leftovers`).
 - **Doctor:** the `settings-migrated` check (fact `:settings-leftovers`) warns "already migrated" and names
   Move Old Files Away; it has no row while nothing is left over.
+
+## Workspace layers (Task 17)
+
+`core/drgnx-settings-workspace.el` (design §4.1, §4.2, §5.3). `drgnx-settings-live` requires it; it puts itself in
+when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
+
+- **Two dir-local functions** on `hack-dir-local-get-variables-functions`: W2 (your private
+  `<config>/workspaces/<slug>.el`) at depth −90, W1 (the repository's `<root>/.drgnx/settings.el`) at depth 90, so at
+  one directory W2 beats `.dir-locals.el` and `.dir-locals.el` beats W1 (P5). Each returns items `(DIR . ALIST)`: one
+  for the root (top-level entries and the `(:mode M …)` sections whose M the buffer's mode derives from, the more
+  specific mode last) and one per `(:dir "SUB/" …)` section holding the buffer, with DIR `ROOT/SUB/`, so Emacs's sort
+  (nearest directory first, `files.el:5066`) and its duplicate filter decide between them and `.dir-locals.el` files
+  (D2). Emacs applies an item's alist from its end; the alist is built reversed so that values apply first and an
+  `(:eval F…)` section (as `(eval . (progn F…))`) after them. W2 is matched by root (the longest of a file's `:roots`
+  holding the buffer's directory, truenames), W1 by `locate-dominating-file`. Remote buffers get neither.
+- **No prompt for drgnx's items.** Each item's DIR is a fresh string kept in a weak `eq` table. The `:around` advice on
+  `hack-local-variables-filter` binds `enable-local-variables` to `:all` for a call whose DIR is one of them, only
+  while it is t. `:safe` and nil are Emacs's own (with nil Emacs runs no dir-local function, `files.el:5052`);
+  `enable-local-eval` is never bound; nothing reaches `safe-local-variable-values` or
+  `safe-local-variable-directories`. The mutation check (bind `:all` for every call) must turn
+  `drgnx-settings-workspace/safe-gives-safe-values-only` red.
+- **Refusals** (`drgnx-settings-workspace-problems FILE`, one notice condition per file): an entry of a `:scope
+  global` setting, of a `:workspace never` setting (`drgnx-setting-meta`, which holds the deny-list of design §13), and
+  the pseudo-variables `eval` and `mode`. `:scope project` entries are never buffer values.
+- **W1's filter:** `drgnx-settings-workspace-filter-function`, called with ROOT, FILE and the entries left after the
+  refusals, returns those to apply; the default `drgnx-settings-workspace-safe-only` passes `safe-local-variable-p`
+  values and never an `:eval`. Task 18 replaces it with the trust split.
+- **`(drgnx-setting-for-root VAR ROOT)`**: the global value, then W1 (the old `.drgnx/{search,ai,large-files}.eld`
+  through the config layer, `drgnx-settings-workspace-old-files`, then `.drgnx/settings.el`'s filtered entries), then
+  W2, each over the one below by its `:merge` (`replace`, `alist`, `append`, `lower-only`: the lower of two numbers,
+  anything else keeps the lower layer). `drgnx-search-config` reads `drgnx-search-{include,exclude,off}` this way.
+- **`(drgnx-settings-workspace-file ROOT &optional CREATE)`**: by root, else by `:project` through
+  `drgnx-settings-workspace-project`, which returns nil until the Urdr gate (matching a moved folder by its project id
+  is a post-gate row). CREATE writes `<slug>.el` (then `-2`, `-3` …) under the file's lock, with `:roots` and
+  `:project` when known.
+- **Re-hack:** `(drgnx-settings-workspace-rehack ROOT)` resets each buffer's `dir-local-variables-alist`, runs
+  `hack-dir-local-variables` (Emacs's own items under `:safe` meanwhile, so it never prompts) and
+  `hack-local-variables-apply` without the major mode and without `mode` entries; the file's own local variables
+  keep winning; a value no source gives any more is killed while it is still the value that source gave.
+- **Explain:** `drgnx-settings-workspace--layers` on `drgnx-settings-explain-functions` gives the W2, W1,
+  `.dir-locals.el`/`.dir-locals-2.el` (nearest folder, with the line) and EditorConfig layers of a dir-local value.
+  `drgnx-settings-prov` counts a `file-local-variables-alist` value as file-local only when it is not the dir-local
+  value Emacs applied.
+- **Docs cache:** workspace docs by file and stamp, at most `drgnx-settings-workspace-cache-max` files.

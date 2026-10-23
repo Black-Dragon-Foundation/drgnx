@@ -164,9 +164,54 @@ The value is set when the buffer's mode starts, before your mode hooks. So a `se
 buffer still opens; drgnx says so once per variable per session. Nothing is loaded for it: a variable of a package that
 is not loaded yet gets a plain buffer-local value.
 
-## Workspace settings (Task 17)
+## Workspace settings
 
-## Shared settings (Task 17)
+A workspace is a project folder. Your private settings for one live in `workspaces/<name>.el` in your config dir,
+named after the project's folder (a second project with the same folder name gets `<name>-2.el`). The file says which
+folder it belongs to; it never goes into the repository:
+
+```elisp
+(drgnx-workspace-settings
+ :version 1
+ :roots ("~/workspace/drgnx/")
+ (fill-column 100)
+ (drgnx-search-exclude ("vendor/**"))
+ (:mode python-ts-mode (python-indent-offset 4))
+ (:dir "docs/" (fill-column 72))
+ (:eval (add-hook 'before-save-hook #'my-format-buffer nil t)))
+```
+
+- **It applies like `.dir-locals.el`,** through Emacs's own directory-local machinery: packages see the values as
+  directory-local, and `describe-variable` says so. Inside the folder your private file wins over the project's
+  `.dir-locals.el`; a `.dir-locals.el` in a subfolder (`src/.dir-locals.el`) wins inside that subfolder, as it does in
+  Emacs, unless your file has its own `(:dir "src/" …)` section. File-local variables (`-*-` and `Local Variables:`)
+  win over every workspace layer.
+- **No question asked.** It is your file, so every value applies without the "unsafe local variables" prompt, and
+  its `(:eval …)` code runs after its values. Nothing is ever added to `safe-local-variable-values`.
+- **Refused, with the line:** a setting that has one value for all of Emacs (a global minor mode, `drgnx-agents-default`
+  …: "set it in Settings → User"), and drgnx's security settings, which no workspace may set. The rest of the file
+  applies; the problem names the file and the line.
+- **`enable-local-variables`** is respected: when it is nil no workspace layer applies; when it is `:safe` only safe
+  values apply.
+- **Project settings** such as search's include and exclude globs are read with the project's folder rather than set
+  in a buffer: your private file, then the shared file, then `settings.el`. A list like `drgnx-search-exclude` adds
+  the workspace's globs to yours; a limit marked `:merge lower-only` can only be lowered by a workspace.
+- **Changes apply at once** to the project's open buffers, as for `settings.el`, without restarting their modes.
+
+## Shared settings
+
+A repository can carry settings for everyone who works on it in `.drgnx/settings.el` (at most 64 KiB), with the same
+shape as your private file. They apply below the repository's `.dir-locals.el` at the same folder, and below your
+private file.
+
+- **Safe values only, for now.** A cloned repository is someone else's file: of its entries only those whose value
+  Emacs marks safe for the variable apply (`fill-column 100` does; a program to run does not), and its `(:eval …)`
+  code does not run. Nothing prompts. Trusting a folder to apply more is described in "Trusted locations" below.
+- **The same refusals** as your private file: global-only settings and drgnx's security settings never apply from it.
+- **The old project files** `.drgnx/search.eld`, `.drgnx/ai.eld` and `.drgnx/large-files.eld` still work: drgnx reads
+  them as entries of the shared file (`drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`,
+  `drgnx-ai-roles`, `drgnx-large-files-ask-above`, `drgnx-large-files-chunks-above`). A large-file size there can only
+  lower yours, as before.
 
 ## Trusted locations (Task 18)
 

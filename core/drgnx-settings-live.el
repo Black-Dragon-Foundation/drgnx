@@ -12,7 +12,8 @@
 ;; - A change to an own setting's variable (from any layer) queues its `:apply'; the queue runs on an idle tick through
 ;;   `drgnx-timer' (key `settings-apply'), never inside the watcher.  `drgnx-settings-apply-pass' runs the `:apply'
 ;;   of every own setting whose value changed while Emacs started (a `setq' in config.el included).
-;; Workspace files (W1, W2) join `drgnx-settings-live-files' in Task 17.
+;; - The workspace files drgnx has read (W1 and W2 of the open projects, Task 17) are watched too: a change re-hacks
+;;   the open buffers of their roots (`drgnx-settings-workspace-sync').
 
 ;;; Code:
 (require 'cl-lib)
@@ -22,6 +23,7 @@
 (require 'drgnx-file)
 (require 'drgnx-settings-file)
 (require 'drgnx-settings-apply)
+(require 'drgnx-settings-workspace)
 
 (declare-function drgnx-settings-prov-watch "drgnx-settings-prov" (var))
 (declare-function drgnx-config-file "drgnx-config" (name &optional root))
@@ -38,8 +40,9 @@ added or removed.  A function that signals is skipped; nothing here prompts.")
 (defvar drgnx-settings-live--applied (make-hash-table :test 'eq) "Variable -> the value its `:apply' last ran for.")
 
 (defun drgnx-settings-live-files ()
-  "The settings files watched: settings.el (Task 17 adds the workspace files)."
-  (list (drgnx-config-file 'settings)))
+  "The settings files watched: settings.el, then the workspace files drgnx has read (the open projects' W1 and W2,
+`drgnx-settings-workspace-files')."
+  (cons (drgnx-config-file 'settings) (drgnx-settings-workspace-files)))
 
 (defun drgnx-settings-live--global-p (file)
   "Non-nil when FILE is settings.el."
@@ -113,34 +116,40 @@ Never signals, never prompts."
         (push (list nil (car cell) (drgnx-settings-entry-value (cdr cell)) :unset) changes)))
     (nreverse changes)))
 
+(defun drgnx-settings-live--run-changed (file changes)
+  "Run `drgnx-settings-changed-functions' with FILE and CHANGES (when there are any); CHANGES."
+  (when changes
+    (run-hook-wrapped 'drgnx-settings-changed-functions
+                      (lambda (fn)
+                        (condition-case e (funcall fn file changes)
+                          (error (message "drgnx: %s, run because %s changed, failed: %s" fn file
+                                          (error-message-string e))))
+                        nil)))
+  changes)
+
 (defun drgnx-settings-live-sync (file)
   "Read FILE again and apply what changed; the changes, a list of (SCOPE VAR OLD NEW).
 For settings.el: `drgnx-settings-apply-global' pushes every entry (idempotent), variables the file no longer names
 are torn down, new ones are watched for provenance, and `drgnx-settings-changed-functions' runs with FILE and the
-changes.  Another file only has its stamp recorded.  Nothing prompts; a failure is one message and nil."
+changes.  For a workspace file: `drgnx-settings-workspace-sync' re-hacks its roots' open buffers when it changed, and
+the hook runs the same way.  Another file only has its stamp recorded.  Nothing prompts; a failure is one message
+and nil."
   (condition-case err
       (let ((inhibit-interaction t))
         (puthash file (drgnx-file-stamp file) drgnx-settings-live--stamps)
-        (when (drgnx-settings-live--global-p file)
+        (cond
+         ((drgnx-settings-live--global-p file)
           (drgnx-settings-live--watch-own)
           (let ((old drgnx-settings-apply--entries))
-            (progn
-              (drgnx-settings-apply-global)           ; nil for no entries as well as for a failure: the entries say
-              (let ((new drgnx-settings-apply--entries))
-                (dolist (cell old)
-                  (unless (assq (car cell) new) (drgnx-settings-teardown (car cell))))
-                (when (fboundp 'drgnx-settings-prov-watch)
-                  (dolist (cell new) (drgnx-settings-prov-watch (car cell))))
-                (let ((changes (drgnx-settings-live--changes old new)))
-                  (when changes
-                    (run-hook-wrapped
-                     'drgnx-settings-changed-functions
-                     (lambda (fn)
-                       (condition-case e (funcall fn file changes)
-                         (error (message "drgnx: %s, run because %s changed, failed: %s" fn file
-                                         (error-message-string e))))
-                       nil)))
-                  changes))))))
+            (drgnx-settings-apply-global)               ; nil for no entries as well as for a failure: the entries say
+            (let ((new drgnx-settings-apply--entries))
+              (dolist (cell old)
+                (unless (assq (car cell) new) (drgnx-settings-teardown (car cell))))
+              (when (fboundp 'drgnx-settings-prov-watch)
+                (dolist (cell new) (drgnx-settings-prov-watch (car cell))))
+              (drgnx-settings-live--run-changed file (drgnx-settings-live--changes old new)))))
+         ((drgnx-settings-workspace-file-p file)
+          (drgnx-settings-live--run-changed file (drgnx-settings-workspace-sync file)))))
     (error (message "drgnx: settings: applying %s failed: %s" file (error-message-string err)) nil)))
 
 (defun drgnx-settings-live-check (&optional files)
@@ -180,18 +189,29 @@ Cheap when nothing changed: one `file-attributes' per file.  Returns the files s
   (remove-function after-focus-change-function #'drgnx-settings-live--focus)
   (drgnx-timer-cancel 'settings-apply))
 
+(defun drgnx-settings-live--watch-file (file)
+  "Record FILE's stamp and watch its directory (once per directory)."
+  (puthash file (drgnx-file-stamp file) drgnx-settings-live--stamps)
+  (let ((dir (file-name-directory file)))
+    (when (and (file-directory-p dir) (not (assoc dir drgnx-settings-live--watches)))
+      (when-let* ((desc (ignore-errors
+                          (file-notify-add-watch dir '(change) #'drgnx-settings-live--event))))
+        (push (cons dir desc) drgnx-settings-live--watches)))))
+
+(defun drgnx-settings-live-watch (file)
+  "Watch settings FILE too (a workspace file read for the first time), once live changes have started; else
+nothing.  Never signals."
+  (when (advice-function-member-p #'drgnx-settings-live--focus after-focus-change-function)
+    (condition-case nil (drgnx-settings-live--watch-file (expand-file-name file))
+      (error nil))))
+
 (defun drgnx-settings-live-start ()
   "Start watching the settings files, so a change applies at once; idempotent.  Never signals."
   (condition-case err
       (progn
         (drgnx-settings-live-stop)
         (dolist (file (drgnx-settings-live-files))
-          (puthash file (drgnx-file-stamp file) drgnx-settings-live--stamps)
-          (let ((dir (file-name-directory file)))
-            (when (and (file-directory-p dir) (not (assoc dir drgnx-settings-live--watches)))
-              (when-let* ((desc (ignore-errors
-                                  (file-notify-add-watch dir '(change) #'drgnx-settings-live--event))))
-                (push (cons dir desc) drgnx-settings-live--watches)))))
+          (drgnx-settings-live--watch-file file))
         (drgnx-settings-live--watch-own)
         (add-function :after after-focus-change-function #'drgnx-settings-live--focus))
     (error (message "drgnx: settings: watching the files failed: %s" (error-message-string err)))))
