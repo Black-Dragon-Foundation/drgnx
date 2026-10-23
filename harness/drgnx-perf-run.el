@@ -945,9 +945,24 @@ SPEC has `:complete-when' (a form that is true once the work the actions started
   (format "(progn %s (drgnx-perf-begin) %s t)" (if audit "(drgnx-perf-audit-begin)" "")
           (if-let* ((cw (plist-get spec :complete-when))) (format "(drgnx-perf-complete-begin (lambda () %s))" cw) "")))
 
+(defconst drgnx-perf-run-complete-wait 60
+  "Seconds the lab waits after a workload's actions for its `:complete-when' to hold.  The work the keys started (a
+compile flood, the reparse after a paste) can outlast the keys; `:complete-ms', the digest and the check are read once
+it is done, or after this wait.")
+
+(defun drgnx-perf-run--await-complete (sess)
+  "Wait until SESS's completion poll has noted `:complete-ms', at most `drgnx-perf-run-complete-wait' seconds.  The
+session stays idle between the calls, so its idle poll and redisplay run as they do for a user."
+  (let ((deadline (+ (float-time) drgnx-perf-run-complete-wait)))
+    (while (and (not (eq t (drgnx-perf-run--call sess "(and drgnx-perf--complete (nth 2 drgnx-perf--complete) t)")))
+                (< (float-time) deadline))
+      (sleep-for 0.05))))
+
 (defun drgnx-perf-run--extras (sess spec)
-  "What SPEC adds to a run, read in SESS after the actions: `:complete-ms' (`:complete-when') and `:digest' (the string
-SPEC's `:digest' form returns: buffer text and faces, filter-call arguments or a message sequence)."
+  "What SPEC adds to a run, read in SESS after the actions: `:complete-ms' (`:complete-when', once it holds: see
+`drgnx-perf-run--await-complete') and `:digest' (the string SPEC's `:digest' form returns: buffer text and faces,
+filter-call arguments or a message sequence)."
+  (when (plist-get spec :complete-when) (drgnx-perf-run--await-complete sess))
   (append (and (plist-get spec :complete-when) (drgnx-perf-run--call sess "(drgnx-perf-complete-end)"))
           (and (plist-get spec :digest)
                (list :digest (plist-get (drgnx-perf-run--call sess (format "(list :digest (format \"%%s\" %s))" (plist-get spec :digest)))

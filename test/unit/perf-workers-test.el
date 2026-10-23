@@ -65,6 +65,25 @@
       (drgnx-perf-complete-begin (lambda () nil))
       (should (equal (drgnx-perf-complete-end) '(:complete-ms nil))))))
 
+(ert-deftest drgnx-perf-workers/extras-await-completion ()
+  "The lab reads `:complete-ms' and the digest only once the work is done (or after the wait), not when the keys end."
+  (let ((polls 0) sent)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call)
+               (lambda (_sess form &optional _timeout)
+                 (push form sent)
+                 (cond ((string-match-p "(nth 2 drgnx-perf--complete)" form) (>= (cl-incf polls) 3))
+                       ((string-match-p "drgnx-perf-complete-end" form) '(:complete-ms 2500.0))
+                       (t '(:digest "d")))))
+              ((symbol-function 'sleep-for) #'ignore))
+      (should (equal (drgnx-perf-run--extras 'sess '(:complete-when "(done)" :digest "(digest)"))
+                     '(:complete-ms 2500.0 :digest "d")))
+      (should (= polls 3))
+      (should (string-match-p "drgnx-perf-complete-end" (nth 1 sent)))   ; after the last poll, before the digest
+      ;; no completion form: no wait
+      (setq polls 0 sent nil)
+      (drgnx-perf-run--extras 'sess '(:digest "(digest)"))
+      (should (= polls 0)))))
+
 (defun perf-workers-test--rounds (a b)
   "ROUNDS where the A side's runs are the plists A and B's the plists B (ten rounds)."
   (cl-loop repeat 10 collect (list :a a :b b)))

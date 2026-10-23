@@ -502,8 +502,11 @@ worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. Th
 `DRGNX_PERF_WATCHDOG=on`).
 
 **Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it at idle
-through `drgnx-timer-*` and records `:complete-ms`. `:digest FORM` returns a string (buffer text plus the visible faces,
-filter-call arguments or the message sequence) kept as `:digest`.
+through `drgnx-timer-*` and records `:complete-ms`. The work can outlast the keys (a compile flood, the reparse after a
+paste), so after the actions the lab waits for the form to hold (at most 60 s, `drgnx-perf-run-complete-wait`, the
+session idle meanwhile) before it reads `:complete-ms`, the digest and the check; the input rows cover the keys only.
+`:digest FORM` returns a string (buffer text plus the visible faces, filter-call arguments or the message sequence) kept
+as `:digest`.
 
 **Report-only rows.** A budget row `(W PATH LIMIT :report-only STEP)` never fails, and the report lists it as
 `report`, until `DRGNX_PERF_LANDED` (comma separated) names STEP; the gate that lands a step adds it. From then on the
