@@ -1,7 +1,7 @@
 {"scenario": "gateway/every-step-failing-says-why", "requires": ["v1", "fake-backend"], "doc": "Task 24: no step of the chain can answer (the first provider's port refuses the connection, the second is not configured): the agent gets 502 api_error whose message names each provider and why (`no provider answered: dead: no answer (…); ghost: not configured`), and no spend row is written for a request nothing answered."}
 {"do": "root"}
-{"do": "start", "hub": "h"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "dead", "kind": "anthropic", "base": "http://127.0.0.1:1", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}

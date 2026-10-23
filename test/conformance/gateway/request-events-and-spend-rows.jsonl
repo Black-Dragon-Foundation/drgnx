@@ -2,8 +2,8 @@
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg-1\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 200, \"output_tokens\": 50}}"}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
-{"do": "start", "hub": "h"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"], "price": {"input": 1000, "output": 2000}}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}

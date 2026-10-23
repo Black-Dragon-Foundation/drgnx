@@ -2,8 +2,8 @@
 {"do": "root"}
 {"do": "spawn", "capture": "mock_a", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages-500.json", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port_a"}}
 {"do": "spawn", "capture": "mock_b", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages-429.json", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port_b"}}
-{"do": "start", "hub": "h"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port_a", "auth": "none", "messages": true, "caps": ["chat"]}, {"id": "b", "kind": "anthropic", "base": "http://127.0.0.1:$port_b", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}

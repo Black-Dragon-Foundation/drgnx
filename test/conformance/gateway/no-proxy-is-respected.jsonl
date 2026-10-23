@@ -2,8 +2,8 @@
 {"do": "root"}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
 {"do": "spawn", "capture": "proxy", "argv": ["$MOCK", "proxy", "--log", "$ROOT/proxy.log"], "capture_stdout": {"regex": "MOCK-PROXY-PORT (\\d+)", "name": "pport"}}
-{"do": "start", "hub": "h", "env": {"HTTP_PROXY": "http://127.0.0.1:$pport", "HTTPS_PROXY": "http://127.0.0.1:$pport", "NO_PROXY": "localhost"}}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h", "env": {"HTTP_PROXY": "http://127.0.0.1:$pport", "HTTPS_PROXY": "http://127.0.0.1:$pport", "NO_PROXY": "localhost"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "direct", "kind": "anthropic", "base": "http://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}, {"id": "proxied", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}

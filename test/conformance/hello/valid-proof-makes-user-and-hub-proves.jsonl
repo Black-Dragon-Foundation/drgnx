@@ -1,6 +1,6 @@
 {"scenario": "hello/valid-proof-makes-user-and-hub-proves", "requires": ["v1"], "doc": "A hello whose proof covers both nonces makes the connection user; the reply has the versions, every method and the hub's own proof (checked by the harness), and a user method then runs."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h", "as": "service"}
-{"do": "hello", "conn": "c", "proof": "valid", "expect_class": "user", "expect_result": {"proto": 1, "proto_min": 1, "records": 2, "schema": 0, "drgnx_version": "$string", "runtime": {"version": "$string", "commit": "$string"}, "methods": {"$contains": ["hello", "ping", "status", "events/since", "job/status", "gateway/keys"]}, "proof": "$hex64"}}
+{"do": "hello", "conn": "c", "proof": "valid", "expect_class": "user", "expect_result": {"proto": 1, "proto_min": 1, "records": 2, "schema": 7, "drgnx_version": "$string", "runtime": {"version": "$string", "commit": "$string"}, "methods": {"$contains": ["hello", "ping", "status", "events/since", "job/status", "gateway/keys"]}, "proof": "$hex64"}}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "events/since"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"since": 0, "last": 0, "events": []}}}

@@ -1,8 +1,8 @@
 {"scenario": "gateway/tls-with-the-system-store", "requires": ["v1", "fake-backend", "linux"], "doc": "Task 24: the gateway verifies an https provider against the platform's store, which on Linux is read from SSL_CERT_FILE when it is set. ratatoskr-mock llm --tls makes a CA and a localhost leaf at start (nothing committed). A hub without the CA in its store refuses the provider (502, nothing reaches the mock); the same registration on a hub started with SSL_CERT_FILE naming the CA gets the answer."}
 {"do": "root"}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--tls", "$ROOT/ca.pem", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
-{"do": "start", "hub": "h"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "https://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}

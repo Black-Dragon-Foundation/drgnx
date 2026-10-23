@@ -1,8 +1,8 @@
 {"scenario": "gateway/a-bad-token-is-refused-before-the-body", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: a request that announces a 20 MiB body (Content-Length 20971520) with a token the gateway does not know is answered 401 within 1 s, though no body byte is ever sent: admission runs on the head alone. The provider saw nothing of it (a good request after it is the mock's only logged request)."}
 {"do": "root"}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
-{"do": "start", "hub": "h"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
