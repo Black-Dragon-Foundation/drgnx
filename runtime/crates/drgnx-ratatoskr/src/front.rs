@@ -381,7 +381,7 @@ impl Front {
                     return Some(Forwarded {
                         id,
                         method,
-                        params,
+                        params: *params,
                         ignored,
                         caller,
                     });

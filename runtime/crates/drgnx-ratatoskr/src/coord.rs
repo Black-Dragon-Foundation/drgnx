@@ -158,12 +158,12 @@ fn turn(data: Option<&serde_json::Map<String, Value>>) -> bool {
 }
 
 /// CALLER's PARAMS when they are a method this module serves: the answer (a write committed, or why not).  Any other
-/// method's params come back.
+/// method's params come back (boxed: `Params` is large).
 pub async fn serve(
     w: &Writer,
     caller: &Caller,
     params: Params,
-) -> Result<Result<Value, Error>, Params> {
+) -> Result<Result<Value, Error>, Box<Params>> {
     let now = now();
     let answer = match params {
         Params::CardsSettle(p) => {
@@ -476,7 +476,7 @@ pub async fn serve(
             };
             Ok(json!(api::Pruned { pruned }))
         }
-        other => return Err(other),
+        other => return Err(Box::new(other)),
     };
     // the backend hears the editor's writes (delivery, the clash scan); its own it knows
     if answer.is_ok() && !caller.backend {
