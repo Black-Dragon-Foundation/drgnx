@@ -290,7 +290,8 @@ the dynamic record cannot give, and the Lisp files page (Task 28) and Move (Task
 - The cache is `<cache>/lisp-index/<sha1 of the truename>.eld`, keyed by the file stamp (`drgnx-file-stamp`) and a
   format version; a changed file is read again. `drgnx-lisp-index-get FILE` answers from it.
 - `drgnx-lisp-index-refresh` brings the cache up to date; `drgnx-lisp-index-schedule` runs it once at idle through
-  `drgnx-timer` (key `lisp-index`), never on the main thread at start. Tests: `drgnx-lisp-index/*`
+  `drgnx-timer` (key `lisp-index`), never on the main thread at start. `drgnx-init` calls it last, after the live
+  watches, and not in safe mode. Tests: `drgnx-lisp-index/*`
   (`test/unit/lisp-index-test.el`).
 
 ## Testing in a child Emacs (Task 5)

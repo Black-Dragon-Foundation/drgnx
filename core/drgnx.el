@@ -39,6 +39,7 @@
 (require 'drgnx-settings-prov)
 (require 'drgnx-user-lisp)
 (require 'drgnx-settings-live)
+(require 'drgnx-lisp-index)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -151,7 +152,8 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
             (drgnx--load-user-config)                  ; config.el
             (drgnx-user-lisp-load-all)                 ; your Lisp files
             (drgnx-settings-apply-pass)                ; the end-of-init :apply pass
-            (drgnx-settings-live-start)))              ; changes to the settings files apply at once
+            (drgnx-settings-live-start)                ; changes to the settings files apply at once
+            (drgnx-lisp-index-schedule)))              ; the index of your Lisp files, built at idle
         (drgnx-keys-apply)
         (drgnx-modal-apply-pending)                    ; a Vim stack chosen before its engine was installed
         (drgnx-surfaces-refresh))

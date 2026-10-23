@@ -6,6 +6,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-lisp-index)
+(require 'drgnx-paths)
+(load (expand-file-name "test/settings-child" drgnx-dir) nil t)
 
 (defvar lisp-index-test--canary nil "Set only if the index evaluates a form.")
 
@@ -151,6 +153,30 @@
       (with-temp-file file (insert "(setq a 1)\n(setq a 2)\n"))
       (should (= 2 (length (drgnx-lisp-index-setters 'a (list file)))))
       (should (equal (plist-get (cadr (drgnx-lisp-index-setters 'a (list file))) :file) file)))))
+
+(defconst lisp-index-test--start
+  '((require 'cl-lib)
+    (let ((ran 0))
+      (cl-letf (((symbol-function 'drgnx-lisp-index-refresh) (lambda (&rest _) (setq ran (1+ ran)) 0))
+                ((symbol-function 'drgnx-pkg-activate) #'ignore) ((symbol-function 'drgnx-modules-start) #'ignore)
+                ((symbol-function 'drgnx-keys-apply) #'ignore) ((symbol-function 'drgnx-surfaces-refresh) #'ignore)
+                ((symbol-function 'drgnx-session-setup) #'ignore))
+        (drgnx-init)
+        (let ((entry (gethash 'lisp-index drgnx-timer--table)))
+          (list (assq 'lisp-index (drgnx-timer-pending))
+                (and entry (memq (drgnx-timer--entry-timer entry) timer-idle-list) t)
+                ran)))))
+  "A start in the child: the `lisp-index' timer it leaves pending, whether it is an idle timer, and how often the
+refresh ran.")
+
+(ert-deftest drgnx-lisp-index/start-up-schedules-the-refresh-and-does-not-run-it ()
+  ;; drgnx-init leaves one idle timer for the refresh and never runs it during the start; safe mode schedules none.
+  (let ((r (drgnx-settings-test-child lisp-index-test--start)))
+    (should-not (plist-get r :error))
+    (should (equal (car (last (plist-get r :values))) '((lisp-index :core start) t 0))))
+  (let ((r (drgnx-settings-test-child lisp-index-test--start :env '("DRGNX_SAFE=1"))))
+    (should-not (plist-get r :error))
+    (should (equal (car (last (plist-get r :values))) '(nil nil 0)))))
 
 (provide 'lisp-index-test)
 ;;; lisp-index-test.el ends here
