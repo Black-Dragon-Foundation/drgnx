@@ -87,6 +87,17 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
   carries the path (`params.env[1].k`) and the line's `id` when it can be read: the top-level `id` of a line that is JSON
   (duplicates and depth aside), else the Lisp hub's rule (the first `"id": <digits>` followed by `,` or `}`), so the
   sender gets an `invalid-params` answer instead of waiting.
+- **`jsonrpc`**: the one JSON-RPC 2.0 module for ACP and MCP (not the hub protocol). `parse(line)` gives a `Message`
+  (`Request`, `Notification`, `Result`, `Error`); invalid JSON is `-32700`, and a batch (removed in MCP 2025-06-18), a
+  duplicate key (through `line::parse_strict`), a wrong `jsonrpc` or any other shape is `-32600`. `Pending<T>` holds
+  outstanding client requests by id with deadlines; `resolve` and `expire` each remove an entry, so it ends once.
+- **`text`**: the one sanitizer for user-visible text. `CONTROL` is the Lisp `drgnx-coord-control-chars`; `one_line`
+  (runs of control characters and `\n\r\t` become one space, cut at N characters with `…`, `header` also drops `]` and
+  `#`), `cut` (the MCP tool-text rule; says whether it cut) and `agent_label` (`ext:KIND:…` is "outside agent
+  (unverified) KIND").
+- **`url`**: `check(url, schemes)` refuses `NAME::` transports, schemes outside the list (`user@host:path` is `ssh`, an
+  absolute path `file`), control characters, a leading `-`, http(s) userinfo and a missing host. `provider_base` is the
+  gateway's rule: `https`, or `http` on any host, with `clear_text` set off loopback; no fragment or userinfo.
 - **`decode`**: `typed::<T>(&params)` decodes through `serde_path_to_error` around `serde_ignored`. It returns the value
   and the keys `T` has no field for, as paths (`env[0].x`), which become the answer's `ignored`. A value that does not
   fit is `invalid-params` with the path of the part that did not; a field missing at the top has no path.
