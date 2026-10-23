@@ -224,12 +224,22 @@ modules and `core/drgnx-cockpit-model.el` for a `drgnx-coord-` writer or a `sqli
 tools/call). A tool is `(NAME :description :schema :call FN)`; FN gets the arguments as a plist and returns a
 string or a value (sent as JSON); its errors are `isError` results. `drgnx-mcp-schema` builds the input schema.
 
-Every agent session gets the coordination server in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
-`drgnx-coord-mcp-server-spec`): one batch Emacs per agent, its identity in its environment (`DRGNX_AGENT` = the
-session's **id**, `s-…` — a name like "claude · drgnx" repeats across hubs and editors — `DRGNX_JOB`, `DRGNX_TASK`,
-and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. An agent outside drgnx sets
-`DRGNX_AGENT_KIND` instead and gets an identity of its own (below). Messages are addressed to a session's id
-(or its name).
+### How an agent reaches the tools
+
+Every agent session gets the coordination tools in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
+`drgnx-coord-mcp-server-spec`) as Ratatoskr's bridge: `<data>/bin/ratatoskr mcp-bridge --socket PATH`, with an empty
+environment. PATH is the `mcp.sock` of a session the hub minted for it (`mcp/session`, called by
+`drgnx-hub-mcp-session` from `drgnx-agents--with-mcp` just before `session/new` or `session/load`): the socket is the
+identity, and it names the session's **id** (`s-…` — a name like "claude · drgnx" repeats across hubs and editors),
+its job and task. The owner is the Emacs that made it (`(emacs-pid)`): when it dies the hub closes the session, and a
+session's end calls `mcp/session-close` (`drgnx-hub-mcp-session-close`). In the backend the call goes to the front
+(`drgnx-hub-call-front`); in an editor a command waits at most 2 s; a timer or startup path asks without waiting and
+the session start continues from the answer. When the session cannot be made (no binary, no hub) the agent starts
+without the coordination tools and says why in its transcript. An agent outside drgnx runs `ratatoskr mcp-bridge
+--outside --kind KIND` (or the old `bin/drgnx coord mcp --kind KIND`, which execs it) and gets an identity of its own
+(below). Messages are addressed to a session's id (or its name). The Lisp server (`drgnx-coord-mcp-main`) stays on
+disk, launched by nothing, until phase 7: a sandboxed session's hub-run coordination server is the same bridge
+(`drgnx-sandbox-mcp.el`).
 
 | Tool | Does |
 |---|---|

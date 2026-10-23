@@ -58,7 +58,8 @@
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
-  mcp-dir)                              ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
+  mcp-dir                               ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
+  mcp-sid mcp-socket)                   ; the hub's MCP session for the agent's bridge (`drgnx-agents--with-mcp'), or nil
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -860,19 +861,61 @@ outside, as S."
              (drgnx-agents--stdio-mcp-servers s))
            (drgnx-agents--profile-mcp-servers s)))
 
+(declare-function drgnx-hub-mcp-session "drgnx-hub-client")
+(declare-function drgnx-hub-mcp-session-close "drgnx-hub-client")
+
 (defun drgnx-agents--close-mcp (s)
-  "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close')."
-  (when (drgnx-agent-session-mcp-dir s) (drgnx-sandbox-mcp-close s)))
+  "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close'), and the hub's
+session for its bridge closes (`drgnx-hub-mcp-session-close')."
+  (when (drgnx-agent-session-mcp-dir s) (drgnx-sandbox-mcp-close s))
+  (when-let* ((sid (drgnx-agent-session-mcp-sid s)))
+    (setf (drgnx-agent-session-mcp-sid s) nil (drgnx-agent-session-mcp-socket s) nil)
+    (drgnx-hub-mcp-session-close sid)))
+
+(defun drgnx-agents--coordination-p (s)
+  "Does S's agent get the coordination tools of a hub session?  A sandboxed one too: the hub's bridge behind its own
+mcp.sock attaches to that session (`drgnx-sandbox-mcp--spec')."
+  (and drgnx-agents-coordination (memq 'coordination (drgnx-agents-mcp-names))))
+
+(defun drgnx-agents--with-mcp (s k)
+  "Make S's MCP session at the hub (`drgnx-hub-mcp-session', identity = S's id: a name repeats across hubs and
+editors), then call K with no arguments, which sends session/new or session/load (`drgnx-agents--mcp-servers').
+In a daemon path the hub is asked without waiting and K runs from its answer (as a start, `drgnx-agents--start-safely').
+An agent whose session could not be made starts without the coordination tools and says why in its transcript."
+  (if (or (not (drgnx-agents--coordination-p s)) (drgnx-agent-session-mcp-socket s))
+      (funcall k)
+    (require 'drgnx-hub-client)
+    (let* ((keep (lambda (answer err)
+                   (if answer
+                       (setf (drgnx-agent-session-mcp-sid s) (plist-get answer :sid)
+                             (drgnx-agent-session-mcp-socket s) (plist-get answer :socket))
+                     (drgnx-agents--add s (list :type 'error
+                                                :text (format "the coordination tools are not available: %s" err))))))
+           (later (lambda (answer err)  ; a daemon path: the hub's answer, after the command that started S returned
+                    (if (eq (drgnx-agent-session-status s) 'exited)
+                        (when answer (drgnx-hub-mcp-session-close (plist-get answer :sid)))
+                      (funcall keep answer err)
+                      (drgnx-agents--start-safely s k))))
+           (answer nil) (failed nil))
+      (condition-case err
+          (setq answer (drgnx-hub-mcp-session (drgnx-agent-session-id s)
+                                              :job (drgnx-agent-session-job s) :task (drgnx-agent-session-task s)
+                                              :cwd (drgnx-agent-session-cwd s) :callback later))
+        (error (setq failed (error-message-string err))))
+      ;; a daemon path returned nil with no error: `later' runs from the hub's answer; any other has one now
+      (unless (and (null answer) (null failed))
+        (funcall keep answer failed)
+        (funcall k)))))
 
 (defun drgnx-agents--stdio-mcp-servers (s)
-  "The servers S's agent starts itself (`drgnx-agents--mcp-servers')."
+  "The servers S's agent starts itself (`drgnx-agents--mcp-servers'): the bridge to its hub session's socket when it
+has one (`drgnx-agents--with-mcp')."
   (let ((names (drgnx-agents-mcp-names)))
     (vconcat
-     (and drgnx-agents-coordination (memq 'coordination names)
+     (and (drgnx-agents--coordination-p s) (drgnx-agent-session-mcp-socket s)
           (progn (require 'drgnx-coord-mcp)
-                 ;; its identity is its id: a name (\"profile · dir\") repeats across hubs and editors
-                 (list (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
-                                                    :task (drgnx-agent-session-task s)))))
+                 (list (drgnx-coord-mcp-server-spec (list :sid (drgnx-agent-session-mcp-sid s)
+                                                          :socket (drgnx-agent-session-mcp-socket s))))))
      (and (memq 'search names)
           (with-demoted-errors "drgnx agents: the search tool: %S"
             (require 'drgnx-search-mcp)
@@ -925,15 +968,17 @@ is not job-safe (`drgnx-agents-job-safe-p') starts nothing: the session has exit
            (error "%s is not job-safe: a job's agent runs on a profile of Claude Code (docs/guide/jobs.md)" profile))
          (drgnx-agents--connect
           s (lambda (meta)
-              (let ((pin (and meta t)))
-                (drgnx-agents--request
-                 s "session/new"
-                 (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
-                         (and meta (list :_meta meta)))
-                 (lambda (r)
-                   (if (cdr r) (drgnx-agents--failed s (cdr r))
-                     (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId))
-                     (drgnx-agents--pin-mode s pin #'drgnx-agents--ready)))))))))
+              (drgnx-agents--with-mcp
+               s (lambda ()
+                   (let ((pin (and meta t)))
+                     (drgnx-agents--request
+                      s "session/new"
+                      (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
+                              (and meta (list :_meta meta)))
+                      (lambda (r)
+                        (if (cdr r) (drgnx-agents--failed s (cdr r))
+                          (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId))
+                          (drgnx-agents--pin-mode s pin #'drgnx-agents--ready)))))))))))
     s))
 
 (defun drgnx-agents--ready (s)
@@ -986,15 +1031,17 @@ hub resuming its sessions: messages and spend follow them)."
           s (lambda (meta)
               (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
                   (progn (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)") (drgnx-agents-kill s))
-                (let ((pin (and meta t)))
-                  (drgnx-agents--request
-                   s "session/load"
-                   (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
-                                 :mcpServers (drgnx-agents--mcp-servers s))
-                           (and meta (list :_meta meta)))
-                   (lambda (r)
-                     (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
-                       (drgnx-agents--pin-mode s pin #'drgnx-agents--ready))))))))))
+                (drgnx-agents--with-mcp
+                 s (lambda ()
+                     (let ((pin (and meta t)))
+                       (drgnx-agents--request
+                        s "session/load"
+                        (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
+                                      :mcpServers (drgnx-agents--mcp-servers s))
+                                (and meta (list :_meta meta)))
+                        (lambda (r)
+                          (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
+                            (drgnx-agents--pin-mode s pin #'drgnx-agents--ready))))))))))))
     s))
 
 (defun drgnx-agents-free-p (s)

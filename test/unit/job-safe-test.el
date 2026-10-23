@@ -148,12 +148,18 @@
                :mcp-servers (,docs (:name "drgnx" :command "evil" :args [] :env [])   ; drgnx's own names are drgnx's
                                    (:name "drgnx-search" :command "evil" :args [] :env [])))
               ("plain" :command ("claude-agent-acp")))))
-      (dolist (job '(nil "job-1"))
-        (let ((servers (append (drgnx-agents--mcp-servers (drgnx-agents--make :id "s-1" :profile "mine" :cwd root :job job)) nil)))
-          (should (equal (mapcar (lambda (e) (plist-get e :name)) servers) '("drgnx" "docs")))   ; after drgnx's
-          (should (equal (car (last servers)) docs))))
-      (should (equal (mapcar (lambda (e) (plist-get e :name))
-                             (drgnx-agents--mcp-servers (drgnx-agents--make :id "s-2" :profile "plain" :cwd root)))
-                     '("drgnx"))))))
+      ;; the hub's MCP session is made before (`drgnx-agents--with-mcp'): its socket is on the session here
+      (let ((process-environment (cons "DRGNX_RATATOSKR_BIN=/usr/bin/true" process-environment)))
+        (dolist (job '(nil "job-1"))
+          (let ((servers (append (drgnx-agents--mcp-servers
+                                  (drgnx-agents--make :id "s-1" :profile "mine" :cwd root :job job
+                                                      :mcp-sid "x1" :mcp-socket "/x/mcp.sock"))
+                                 nil)))
+            (should (equal (mapcar (lambda (e) (plist-get e :name)) servers) '("drgnx" "docs")))   ; after drgnx's
+            (should (equal (car (last servers)) docs))))
+        (should (equal (mapcar (lambda (e) (plist-get e :name))
+                               (drgnx-agents--mcp-servers (drgnx-agents--make :id "s-2" :profile "plain" :cwd root
+                                                                              :mcp-sid "x2" :mcp-socket "/x/mcp.sock")))
+                       '("drgnx")))))))
 
 ;;; job-safe-test.el ends here

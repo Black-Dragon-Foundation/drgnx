@@ -746,6 +746,48 @@ Each call's time is logged."
       (message "drgnx hub: front call %s: %d ms%s" method (round (* 1000 (- (drgnx-hub--front-now) t0)))
                (if ok "" " (failed)")))))
 
+;;;; MCP sessions: the socket an agent's bridge connects to
+
+(defun drgnx-hub--mcp-answer (result)
+  "RESULT of `mcp/session' as (:sid S :socket P), or an error when the hub's answer lacks either."
+  (let ((sid (plist-get result :sid)) (socket (plist-get result :socket)))
+    (unless (and (stringp sid) (stringp socket)) (error "The drgnx hub's mcp/session answer is malformed"))
+    (list :sid sid :socket socket)))
+
+(cl-defun drgnx-hub-mcp-session (agent &key sid job task cwd callback)
+  "Ask the hub for the MCP socket of AGENT's session (`mcp/session'): (:sid S :socket P).  The socket is the agent's
+identity; the owner is this Emacs, so the hub closes the session when this Emacs dies.  SID: the session's id when its
+agent socket made the directory already; JOB, TASK, CWD as the session has them.
+- In the Lisp backend behind Ratatoskr it calls the front (`drgnx-hub-call-front') and waits.
+- In an editor, from a command, it waits at most 2 s (`drgnx-hub-call-sync').
+- In a daemon path (`inhibit-interaction') it never waits: it asks with `drgnx-hub-call' and returns nil, and
+  CALLBACK is called later with (ANSWER ERROR) — ANSWER the plist above, or nil with ERROR a message.
+Signals \"Ratatoskr is not built: run `drgnx runtime build'\" when there is no binary."
+  (unless (drgnx-hub-client-binary) (error "Ratatoskr is not built: run `drgnx runtime build'"))
+  (let ((params (append (list :agent agent)
+                        (and sid (list :sid sid)) (and job (list :job job)) (and task (list :task task))
+                        (and cwd (list :cwd (expand-file-name cwd)))
+                        (list :owner (emacs-pid)))))
+    (cond (drgnx-hub--behind-front
+           (drgnx-hub--mcp-answer (drgnx-hub-call-front "mcp/session" params)))
+          (inhibit-interaction
+           (unless callback (error "A daemon path asks for an MCP session with a callback"))
+           (drgnx-hub-call "mcp/session" params
+                           (lambda (result err)
+                             (funcall callback
+                                      (and (not err) (condition-case nil (drgnx-hub--mcp-answer result) (error nil)))
+                                      (or err (and (null result) "no answer")))))
+           nil)
+          (t (drgnx-hub--mcp-answer (drgnx-hub-call-sync "mcp/session" params 2))))))
+
+(defun drgnx-hub-mcp-session-close (sid)
+  "Tell the hub session SID's agent is gone (`mcp/session-close'); never waits and never signals: the hub also
+closes it when this Emacs dies."
+  (ignore-errors
+    (if drgnx-hub--behind-front
+        (drgnx-hub-call-front "mcp/session-close" (list :sid sid))
+      (drgnx-hub-call "mcp/session-close" (list :sid sid) #'ignore))))
+
 (defun drgnx-hub-disconnect ()
   "Close this Emacs's connections to the hub; the calls waiting on them fail (once)."
   (dolist (c (list drgnx-hub--client drgnx-hub--events drgnx-hub--subscribing))

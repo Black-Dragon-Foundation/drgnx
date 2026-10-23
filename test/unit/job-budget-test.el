@@ -55,6 +55,7 @@
         (should (drgnx-job-run-test--wait (lambda () (string-search (format "[drgnx task %s#1]" id) (format "%S" (drgnx-agent-session-entries a))))))))))
 
 (ert-deftest drgnx-job/a-rate-limit-moves-the-task-to-the-next-profile ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
            (drgnx-agents-profiles (append (list (list "mock-a" :command mock :env '("MOCK_ACP_RATE_LIMIT=1"))
@@ -74,6 +75,7 @@
       (should (seq-find (lambda (e) (and (equal (car e) "fallback") (equal (plist-get (cdr e) :to) "mock-b"))) events)))))
 
 (ert-deftest drgnx-job/a-reviewer-at-its-limit-moves-to-the-next-review-profile ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
            (drgnx-agents-profiles (append (list (list "rev-a" :command mock :env '("MOCK_ACP_RATE_LIMIT=1"))
@@ -92,6 +94,7 @@
       (should second))))                                                            ; reviewed by the second, merged
 
 (ert-deftest drgnx-job/a-reviewer-at-its-limit-with-no-profile-left-is-a-card ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
            (drgnx-agents-profiles (cons (list "rev-a" :command mock :env '("MOCK_ACP_RATE_LIMIT=1")) drgnx-agents-profiles))

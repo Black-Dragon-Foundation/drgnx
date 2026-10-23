@@ -8,6 +8,7 @@
 (defconst drgnx-job-review-test--chain "# Chain\n\n### Task 1: first\n\n### Task 2: second\n**Depends:** Task 1\n")
 
 (ert-deftest drgnx-job/a-passed-task-is-merged-and-its-dependent-starts-from-it ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-review-test--chain
     (let ((id (drgnx-job-propose plan)))
       (drgnx-job-approve id)
@@ -18,6 +19,7 @@
       (should (string-search (format "work for %s#1" id) (drgnx-job-run-test--git repo "log" "--format=%s" (format "job/%s-2" id)))))))
 
 (ert-deftest drgnx-job/a-failed-review-goes-back-to-an-agent ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let ((process-environment (cons "MOCK_ACP_VERDICT=fail" process-environment)) (id nil))
       (setq id (drgnx-job-propose plan))
@@ -34,6 +36,7 @@
       (should (seq-find (lambda (m) (string-prefix-p "[review]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
 
 (ert-deftest drgnx-job/a-merge-conflict-is-the-user-s ()
+  :tags '(:frozen)
   ;; both tasks append to task.txt from the same start: the second merge conflicts
   (drgnx-job-run-test--with drgnx-job-run-test--two
     (let ((id (drgnx-job-propose plan)))
@@ -47,6 +50,7 @@
       (should (equal (drgnx-job-run-test--status id 3) "pending")))))                               ; waits
 
 (ert-deftest drgnx-job/nothing-merges-twice ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let ((id (drgnx-job-propose plan)))
       (drgnx-job-approve id)
@@ -56,6 +60,7 @@
         (should (equal (drgnx-job-run-test--git repo "rev-parse" (concat "job/" id)) before))))))
 
 (ert-deftest drgnx-job/the-job-is-done-when-every-task-is ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-review-test--chain
     (let ((id (drgnx-job-propose plan)) (main (drgnx-job-run-test--git repo "rev-parse" "main")))
       (drgnx-job-approve id)

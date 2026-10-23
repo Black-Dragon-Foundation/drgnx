@@ -1259,32 +1259,36 @@ while :; do wait; done" job job job job job)))
           (should (equal (split-string (drgnx-bin-test--slurp seen) "\n" t) '("unset" "1"))))
       (delete-directory dir t))))
 
-(ert-deftest drgnx-bin/coord-mcp-runs-the-server-as-the-agents-child ()
+(ert-deftest drgnx-bin/coord-mcp-execs-the-bridge ()
   (drgnx-bin-test--with-setup ()
-    (let ((log (expand-file-name "coord.log" dir)) (emacs (expand-file-name "coord-emacs" dir)))
-      ;; a fake Emacs that records its argv, its parent and the identity it was given
-      (write-region (format "#!/bin/sh\n{ echo \"argv $*\"; echo \"ppid $PPID\"; echo \"kind ${DRGNX_AGENT_KIND-unset}\"
-echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset}\"; } > '%s'\n" log)
-                    nil emacs)
-      (set-file-modes emacs #o755)
+    (let ((log (expand-file-name "coord.log" dir)) (rtsk (expand-file-name "data/bin/ratatoskr" dir)))
+      (make-directory (file-name-directory rtsk) t)
+      ;; a stub ratatoskr that records its argv, its parent and the identity it was given
+      (write-region (format "#!/bin/sh\n{ echo \"argv $*\"; echo \"ppid $PPID\"; echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset}\"; } > '%s'\n" log)
+                    nil rtsk)
+      (set-file-modes rtsk #o755)
       (let ((r (drgnx-bin-test--call drgnx-bin-test--bin
-                                     (append (list (concat "DRGNX_EMACS=" emacs) "DRGNX_AGENT=s-1" "DRGNX_JOB=jx" "DRGNX_TASK=jx#2") env)
+                                     (append (list "DRGNX_AGENT=s-1" "DRGNX_JOB=jx" "DRGNX_TASK=jx#2") env)
                                      "coord" "mcp" "--kind" "claude")))
         (should (eql 0 (car r))))
       (let ((out (drgnx-bin-test--slurp log)))
-        (should (string-match-p "^argv .*-l drgnx-coord-mcp -f drgnx-coord-mcp-main" out))
-        (should (string-match-p "^kind claude$" out))
-        ;; exec: the server's parent is whoever started bin/drgnx (the agent), here this Emacs
+        (should (string-match-p "^argv mcp-bridge --outside --kind claude$" out))
+        ;; exec: the bridge's parent is whoever started bin/drgnx (the agent), here this Emacs
         (should (string-match-p (format "^ppid %d$" (emacs-pid)) out))
         ;; a drgnx session's identity in the agent's shell is not inherited
         (should (string-match-p "^agent unset job unset task unset$" out)))
-      ;; no kind, or a bad one: usage, and no server
+      ;; no kind, or a bad one: usage, and no bridge
       (dolist (args '(("coord" "mcp") ("coord" "mcp" "--kind") ("coord" "mcp" "--kind" "Bad Kind") ("coord" "nope")))
         (delete-file log)
-        (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "DRGNX_EMACS=" emacs) env) args)))
+        (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))
           (should (eql 2 (car r)))
           (should (string-match-p "usage: drgnx coord mcp --kind KIND" (cdr r))))
-        (should-not (file-exists-p log))))))
+        (should-not (file-exists-p log)))
+      ;; no binary: the message says how to build it
+      (delete-file rtsk)
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin env "coord" "mcp" "--kind" "claude")))
+        (should (eql 1 (car r)))
+        (should (string-match-p "drgnx runtime build" (cdr r)))))))
 
 (ert-deftest drgnx-bin/test-leaks-sets-the-variable ()
   ;; `bin/drgnx test --leaks' turns the leak census on: the runner reads DRGNX_TEST_LEAKS (shards and per-file

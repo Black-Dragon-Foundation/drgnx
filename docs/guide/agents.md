@@ -342,15 +342,16 @@ merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordinati
 ## Agents outside drgnx
 
 Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their
-subagents. Give the agent drgnx's coordination server as one more MCP server (stdio), with `KIND` set to the kind of
+subagents. Give the agent Ratatoskr's bridge as one more MCP server (stdio), with `KIND` set to the kind of
 agent (`claude`, `codex`, `zed`, …: a short lower-case name):
 
-- command: `<checkout>/bin/drgnx`
-- arguments: `coord mcp --kind KIND`
+- command: `<data>/bin/ratatoskr` (the installed binary; the path stays the same across updates)
+- arguments: `mcp-bridge --outside --kind KIND`
 
-For Claude Code, that is `claude mcp add drgnx -- <checkout>/bin/drgnx coord mcp --kind claude`. For Codex, it is a
-`[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's settings
-page can add it for you.
+For Claude Code, that is `claude mcp add drgnx -- <data>/bin/ratatoskr mcp-bridge --outside --kind claude`. For Codex,
+it is a `[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's
+settings page can add it for you. The bridge redials when the hub restarts, so the agent keeps its tools. Configs
+written before the bridge (`<checkout>/bin/drgnx coord mcp --kind KIND`) keep working: that command now runs the bridge.
 
 The agent must start the server in its project folder. drgnx takes the folder the server starts in (its git
 worktree) as the place the agent works. A server started in your home folder, or at `/`, can say hello, but its

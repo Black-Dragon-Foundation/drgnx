@@ -121,6 +121,7 @@
       (should (equal (drgnx-job-run-test--git repo "status" "--porcelain" "--" "docs") "")))))
 
 (ert-deftest drgnx-job-cockpit/gate-review-merges-as-today ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan :gate "review") :id)))
       (should (eq (plist-get (plist-get (drgnx-coord-job id) :data) :gate) 'review))
@@ -144,6 +145,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
   (seq-find (lambda (c) (plist-get (plist-get c :data) :gate)) (drgnx-coord-cards id "open")))
 
 (ert-deftest drgnx-job-cockpit/gate-review-and-accept-waits-for-every-file ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((drgnx-job-merge-gate 'review+accept)         ; the proposer's option goes with the job
            (id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan) :id))
@@ -234,6 +236,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
         (should-not (equal (drgnx-job-run-test--status id 1) "done"))))))
 
 (ert-deftest drgnx-job-cockpit/gate-needs-the-task-branch ()
+  :tags '(:frozen)
   ;; the gate looks at the worktree, the merge takes the branch job/ID-N: while they differ (an agent committed on the
   ;; branch, then checked out something else) nothing merges; a look leaves the card's data alone
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
@@ -280,6 +283,7 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
       (should (equal (drgnx-job-run-test--status id 1) "needs-input")))))
 
 (ert-deftest drgnx-job-cockpit/gate-merge-as-it-is-stays-the-user-s ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan :gate "review+accept") :id)))
       (drgnx-job-approve id)

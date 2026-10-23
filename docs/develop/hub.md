@@ -819,6 +819,9 @@ Ratatoskr until it stops sending it); a test reads `core/*.el` for its `(drgnx-h
 
 A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own, served by the hub
 (`core/drgnx-sandbox-mcp.el`). The agent's side, the bridge, is in [sandbox.md](sandbox.md#mcp-through-a-socket).
+For `mcp.sock` the hub's server per connection is `ratatoskr mcp-bridge --socket` to the session's own Rust socket (the
+`mcp/session` the agent start made, `:mcp-socket`), so the tools are the Rust ones; a session without one refuses the
+connection. `search.sock` is unchanged.
 
 - **Where.** `(drgnx-sandbox-mcp-dir SID)` is `s/SID` beside the hub's socket: `$XDG_RUNTIME_DIR/drgnx/s/SID`, or
   `s/SID` beside the hub socket's fallback place. These are the dirs of `drgnx-sandbox-sessions-dirs`, so the sandbox

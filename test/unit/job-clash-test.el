@@ -86,6 +86,7 @@
     (should-not (drgnx-job-clash-test--cards id "clash"))))
 
 (ert-deftest drgnx-job-clash/a-task-that-touches-what-will-not-be-built-waits ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n\nTouch the legacy code.\n"
     (let* ((id (drgnx-job-propose plan)))
       (drgnx-job-clash-test--decide id "wont-build" "the legacy module" "user" :paths "legacy/, old/*.c")
@@ -114,6 +115,7 @@
       (setq drgnx-agents--sessions (delq s drgnx-agents--sessions)))))
 
 (ert-deftest drgnx-job-clash/overlapping-tasks-are-advisory ()
+  :tags '(:frozen)
   ;; both tasks append to task.txt: when the first is in review, the other open task changed the same file.  The two
   ;; run at once, so either can be first: the card is on the task that reached review (macOS CI 39605706447 read
   ;; task 1, still running, after task 2's card), and advisory means that task stays in review

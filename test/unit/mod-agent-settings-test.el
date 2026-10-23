@@ -623,7 +623,8 @@ the first time (a fresh eln cache, as in CI), and those runs are not THUNK's."
       (should (string-search "drgnx" (car drgnx-agent-settings-test--prompts)))
       (let ((line (drgnx-agent-settings-test--await (lambda () (drgnx-agent-settings-test--argv-with "mcp add-json drgnx")))))
         (should line)
-        (should (string-search "\"coord\",\"mcp\",\"--kind\",\"claude\"" line))
+        (should (string-search "\"mcp-bridge\",\"--outside\",\"--kind\",\"claude\"" line))
+        (should (string-search "/bin/ratatoskr" line))
         (should (string-suffix-p "--scope user" line))
         (should-not (string-search "env" line))))      ; no token or key travels with it
     ;; Codex: [mcp_servers.drgnx] is appended, the rest of the file is byte-identical
@@ -727,5 +728,16 @@ the first time (a fresh eln cache, as in CI), and those runs are not THUNK's."
     (with-current-buffer (drgnx-agent-settings-open 'codex root)
       (should (string-search "Reports to drgnx: no (disabled)" (buffer-string)))
       (should-not (string-search "Reports to drgnx: yes" (buffer-string))))))
+
+(ert-deftest drgnx-agent-settings/outside-spec-is-the-bridge ()
+  ;; what the pages write for a new entry: Ratatoskr's bridge at its installed path, not Emacs and not bin/drgnx
+  (drgnx-agent-settings-test--env
+    (require 'drgnx-coord-mcp)
+    (let ((spec (drgnx-coord-mcp-outside-spec 'codex)))
+      (should (eq (plist-get spec :type) 'stdio))
+      (should (equal (plist-get spec :command) (expand-file-name "bin/ratatoskr" (drgnx-data-dir))))
+      (should (equal (plist-get spec :args) '("mcp-bridge" "--outside" "--kind" "codex")))
+      (should-not (plist-member spec :env)))        ; no token or key travels with it
+    (should-error (drgnx-coord-mcp-outside-spec "Bad Kind"))))
 
 ;;; mod-agent-settings-test.el ends here

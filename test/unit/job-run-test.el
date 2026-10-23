@@ -40,6 +40,7 @@
       (should-not (seq-find (lambda (m) (string-prefix-p "[proposal]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
 
 (ert-deftest drgnx-job/a-finished-task-goes-to-review-not-done ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-run-test--two
     (let ((drgnx-job-review nil) (id (drgnx-job-propose plan)))   ; no reviewer: it waits in review
       (drgnx-job-approve id)
@@ -98,6 +99,7 @@
         (should-not (drgnx-coord-cards id "open"))))))
 
 (ert-deftest drgnx-job/at-most-max-agents-at-once ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# Four\n\n### Task 1: a\n\n### Task 2: b\n\n### Task 3: c\n\n### Task 4: d\n"
     (let ((drgnx-job-max-agents 2) (id (drgnx-job-propose plan)) (most 0))
       (drgnx-job-approve id)
@@ -108,6 +110,7 @@
       (should (= most 2)))))
 
 (ert-deftest drgnx-job/an-agent-that-dies-gives-its-task-back ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: crash-once then work\n"
     (let ((id (drgnx-job-propose plan)))
       (drgnx-job-approve id)

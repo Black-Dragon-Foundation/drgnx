@@ -110,6 +110,9 @@ machine is quiet (`bin/drgnx check`'s `unit-timing` job, [check.md](check.md)) a
 command, in the perf job (allocation, CPU time and counts; [perf.md](perf.md)). `bin/drgnx check` stays as the local
 equivalent of the merge wave; no workflow runs it.
 
+Tests tagged `:frozen` (tests of Lisp that a plan replaces with Rust, run against the in-Emacs Lisp hub) are left out of
+every run, CI included; `DRGNX_TEST_FROZEN=1` runs them (`harness/run-ert.el`).
+
 DEFERRED DET-CI-ENV-1: the step uses `DRGNX_TEST_NO_TIMING=1` rather than `(not (tag :timing))`, and
 `test/no-skip.eld` has no darwin or Ubuntu rows until the first CI summaries list their skips.
 

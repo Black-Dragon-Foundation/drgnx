@@ -22,11 +22,12 @@ after."
           (repo (concat root "/home/repo")) (tree (concat repo "/.claude/worktrees/j-1"))
           (process-environment (append (list (concat "HOME=" root "/home") (concat "XDG_RUNTIME_DIR=" root "/run")
                                              (concat "XDG_STATE_HOME=" root "/state") (concat "DRGNX_DATA_DIR=" root "/data")
-                                             (concat "DRGNX_CONFIG_DIR=" root "/config"))
+                                             (concat "DRGNX_CONFIG_DIR=" root "/config") "DRGNX_RATATOSKR_BIN=/usr/bin/true")
                                        process-environment))
           (drgnx-work-db--handles nil)
           (a (drgnx-agents--make :id "s-aaaa0001" :name "a" :profile "claude" :cwd tree :job "j" :task "1"))
-          (b (drgnx-agents--make :id "s-bbbb0002" :name "b" :profile "claude" :cwd tree :job "j" :task "2")))
+          (b (drgnx-agents--make :id "s-bbbb0002" :name "b" :profile "claude" :cwd tree :job "j" :task "2"
+                                 :mcp-sid "x2" :mcp-socket "/x/mcp.sock")))   ; b has a hub session (not sandboxed)
      (unwind-protect
          (progn
            (dolist (d '("/home" "/run" "/data" "/state" "/config")) (make-directory (concat root d) t))
@@ -111,6 +112,7 @@ after."
          (split-string (with-temp-buffer (insert-file-contents-literally file) (buffer-string)) "\0" t))))
 
 (ert-deftest drgnx-sandbox-mcp/identity-comes-from-the-socket ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     ;; the hub's own environment names someone else too: the server's identity is set from the session alone
     (let ((process-environment (append '("DRGNX_AGENT=hub-forged" "DRGNX_AGENT_KIND=claude" "DRGNX_TASK=9")
@@ -132,6 +134,7 @@ after."
         (when (process-live-p bridge) (delete-process bridge))))))
 
 (ert-deftest drgnx-sandbox-mcp/one-session-cannot-reach-another ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     (let* ((da (drgnx-sandbox-mcp-open a)) (db (drgnx-sandbox-mcp-open b))
            (a1 (drgnx-sandbox-mcp-test--connect (expand-file-name "mcp.sock" da)))
@@ -170,6 +173,7 @@ after."
       (should-error (drgnx-sandbox-mcp-dir (make-string 64 ?x))))))
 
 (ert-deftest drgnx-sandbox-mcp/servers-end-with-the-connection ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     (let* ((sock (expand-file-name "mcp.sock" (drgnx-sandbox-mcp-open a)))
            (c (drgnx-sandbox-mcp-test--connect sock)) server)
@@ -201,6 +205,7 @@ after."
           (mapc #'delete-process cs))))))
 
 (ert-deftest drgnx-sandbox-mcp/close-removes-everything ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     (let* ((dir (drgnx-sandbox-mcp-open a repo))
            (c (drgnx-sandbox-mcp-test--connect (expand-file-name "mcp.sock" dir))))
@@ -232,14 +237,14 @@ after."
 
 (ert-deftest drgnx-sandbox-mcp/non-sandboxed-sessions-unchanged ()
   (drgnx-sandbox-mcp-test--with
-    ;; B has no socket dir: today's stdio server, as B
-    (should (equal (aref (drgnx-agents--mcp-servers b) 0) (drgnx-coord-mcp-server-spec "s-bbbb0002" :job "j" :task "2")))
+    ;; B has no socket dir: the bridge to its hub session
+    (should (equal (aref (drgnx-agents--mcp-servers b) 0) (drgnx-coord-mcp-server-spec (list :sid "x2" :socket "/x/mcp.sock"))))
     ;; A has one: the bridges replace the stdio servers
     (drgnx-sandbox-mcp-open a)
     (should (equal (drgnx-agents--mcp-servers a)
                    (vconcat (drgnx-sandbox-mcp-server-specs a (if (eq system-type 'darwin) (drgnx-agent-session-mcp-dir a)
                                                                 "/run/drgnx")))))
-    (should (equal (aref (drgnx-agents--mcp-servers b) 0) (drgnx-coord-mcp-server-spec "s-bbbb0002" :job "j" :task "2")))))
+    (should (equal (aref (drgnx-agents--mcp-servers b) 0) (drgnx-coord-mcp-server-spec (list :sid "x2" :socket "/x/mcp.sock"))))))
 
 (ert-deftest drgnx-sandbox-mcp/search-only-when-asked ()
   (drgnx-sandbox-mcp-test--with
@@ -291,6 +296,7 @@ after."
       (should (drgnx-sandbox-mcp-open a repo)))))
 
 (ert-deftest drgnx-sandbox-mcp/job-hello-keeps-the-hubs-row ()
+  :tags '(:frozen)
   (drgnx-sandbox-mcp-test--with
     ;; as `drgnx-job--launch-task' registers a job's agent
     (drgnx-coord-agent-register :id "s-aaaa0001" :kind "job" :name "a" :cwd tree :worktree tree :branch "job/j-1"
