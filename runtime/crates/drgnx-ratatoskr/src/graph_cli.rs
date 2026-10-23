@@ -100,6 +100,7 @@ fn num(v: &str, what: &str) -> Result<u64, String> {
 /// The arguments after `graph`.
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, String> {
     use lexopt::Arg::{Long, Value as Word};
+    use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
     let e = |e: lexopt::Error| e.to_string();
     let name = match p.next().map_err(e)? {

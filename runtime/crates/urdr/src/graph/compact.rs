@@ -29,7 +29,7 @@ type Doomed = (i64, i64, i64);
 
 /// The next parsed entities after CURSOR that have history: at most [`BATCH`], ascending.
 fn parsed_with_history(c: &Connection, cursor: i64) -> rusqlite::Result<Vec<i64>> {
-    let mut s = c.prepare_cached(
+    let mut s = c.prepare(
         "select n from entity e where origin = 'parsed' and n > ?1
            and exists (select 1 from entity_hist h where h.n = e.n) order by n limit ?2",
     )?;
@@ -39,7 +39,7 @@ fn parsed_with_history(c: &Connection, cursor: i64) -> rusqlite::Result<Vec<i64>
 
 /// The old versions among the parsed entities LO..=HI that a later version of the same (UTC) day makes redundant.
 fn doomed_in(c: &Connection, lo: i64, hi: i64) -> rusqlite::Result<Vec<Doomed>> {
-    let mut s = c.prepare_cached(
+    let mut s = c.prepare(
         "select h.n, h.ver, h.tx_from from entity_hist h join tx t on t.id = h.tx_from
          where h.n between ?1 and ?2 and h.n in (select n from entity where origin = 'parsed')
            and exists (select 1 from entity_hist h2 join tx t2 on t2.id = h2.tx_from
@@ -56,7 +56,7 @@ type Stat = (i64, String, i64, i64, i64, i64);
 
 /// Up to [`BATCH`] stat rows of retired sessions that point at a file and are not totals themselves.
 fn foldable(c: &Connection) -> rusqlite::Result<Vec<Stat>> {
-    let mut s = c.prepare_cached(
+    let mut s = c.prepare(
         "select s.src, s.kind, s.dst, s.count, s.first_tx, s.last_tx from link_stat s
            join entity e on e.n = s.src and e.kind = 'session' and e.retired_tx is not null
            join entity f on f.n = s.dst and f.kind = 'file'
