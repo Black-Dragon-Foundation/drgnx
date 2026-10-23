@@ -20,7 +20,10 @@ fuzz_target!(|data: &[u8]| {
 
     let one = one_line(&text, max, header);
     assert!(one.chars().count() <= max);
-    assert!(!one.chars().any(|c| control(c) || matches!(c, '\n' | '\r' | '\t')));
+    assert!(
+        !one.chars()
+            .any(|c| control(c) || matches!(c, '\n' | '\r' | '\t'))
+    );
     if header {
         assert!(!one.contains([']', '#']));
     }
@@ -31,5 +34,9 @@ fuzz_target!(|data: &[u8]| {
 
     let (clean, _) = cut(&text, max);
     assert!(clean.chars().count() <= max);
-    assert!(!clean.chars().any(|c| control(c) && !matches!(c, '\n' | '\t')));
+    assert!(
+        !clean
+            .chars()
+            .any(|c| control(c) && !matches!(c, '\n' | '\t'))
+    );
 });
