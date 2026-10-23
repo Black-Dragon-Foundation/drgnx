@@ -44,6 +44,10 @@ inside the guard, as `drgnx-hub-event-functions'.")
   "Request id → (:cb CALLBACK :conn CONNECTION :full FULL :method METHOD), until its callback has run.")
 (defvar drgnx-hub--next-id 0)
 
+(defconst drgnx-hub-schema-readable-max 7
+  "The newest work.db schema this editor reads (`drgnx-work-db-read': schema 7's compatibility views, `compat-read' 6):
+a hub whose hello says a schema from `drgnx-work-db-schema-version' to this one is not skewed.")
+
 (defconst drgnx-hub-proto 1 "The hub protocol this drgnx speaks: its `hello' says it.")
 (defconst drgnx-hub-proto-min 1 "The oldest hub protocol this drgnx still speaks.")
 (defconst drgnx-hub-records 2
@@ -754,10 +758,19 @@ Each call's time is logged."
     (unless (and (stringp sid) (stringp socket)) (error "The drgnx hub's mcp/session answer is malformed"))
     (list :sid sid :socket socket)))
 
-(cl-defun drgnx-hub-mcp-session (agent &key sid job task cwd callback)
+(defun drgnx-hub-profile-id (name)
+  "The agent profile NAME as the hub's id for it (letters, digits and ._:+-, a letter or digit at both ends, at most 127
+characters): each run of other characters becomes one `-'.  \"claude (OpenRouter)\" is \"claude-OpenRouter\"."
+  (let ((id (string-trim (replace-regexp-in-string "[^A-Za-z0-9._:+-]+" "-" name) "[^A-Za-z0-9]+" "[^A-Za-z0-9]+")))
+    (if (string-empty-p id) "profile" (substring id 0 (min 127 (length id))))))
+
+(cl-defun drgnx-hub-mcp-session (agent &key sid job task cwd profile tools callback)
   "Ask the hub for the MCP socket of AGENT's session (`mcp/session'): (:sid S :socket P).  The socket is the agent's
 identity; the owner is this Emacs, so the hub closes the session when this Emacs dies.  SID: the session's id when its
-agent socket made the directory already; JOB, TASK, CWD as the session has them.
+agent socket made the directory already; JOB, TASK, CWD as the session has them.  PROFILE: the drgnx profile's name
+\(grants by `profile:NAME' name it; see `drgnx-hub-profile-id'); TOOLS: the profile's tool sets, `(:tracker t)' or
+`(:tracker :false)' (agents.eld's `:tracker-tools'), absent when the profile says nothing — the hub resolves the task's
+own setting against it.
 - In the Lisp backend behind Ratatoskr it calls the front (`drgnx-hub-call-front') and waits.
 - In an editor, from a command, it waits at most 2 s (`drgnx-hub-call-sync').
 - In a daemon path (`inhibit-interaction') it never waits: it asks with `drgnx-hub-call' and returns nil, and
@@ -767,7 +780,9 @@ Signals \"Ratatoskr is not built: run `drgnx runtime build'\" when there is no b
   (let ((params (append (list :agent agent)
                         (and sid (list :sid sid)) (and job (list :job job)) (and task (list :task task))
                         (and cwd (list :cwd (expand-file-name cwd)))
-                        (list :owner (emacs-pid)))))
+                        (list :owner (emacs-pid))
+                        (and profile (list :profile (drgnx-hub-profile-id profile)))
+                        (and tools (list :tools tools)))))
     (cond (drgnx-hub--behind-front
            (drgnx-hub--mcp-answer (drgnx-hub-call-front "mcp/session" params)))
           (inhibit-interaction
@@ -806,15 +821,17 @@ closes it when this Emacs dies."
 (defun drgnx-hub-skew (reply)
   "What to do about the hub that answered this Emacs's hello with REPLY: `incompatible' (its protocol is older than
 `drgnx-hub-proto-min', or this drgnx's older than its `proto_min'); `restart-when-idle' (a legacy hub, `:legacy';
-another `records'; a `drgnx_version' other than the binary on disk's, when that is known; a `schema' other than
-`drgnx-work-db-schema-version', 0 — no work.db yet — counting as the same); else `ok'."
+another `records'; a `drgnx_version' other than the binary on disk's, when that is known; a `schema' this editor cannot
+read — below `drgnx-work-db-schema-version' or above `drgnx-hub-schema-readable-max', 0 (no work.db yet) counting as
+readable; schema 7 of the hub is read through its compatibility views); else `ok'."
   (cond ((eq reply :legacy) 'restart-when-idle)
         ((let ((proto (plist-get reply :proto)) (min (plist-get reply :proto_min)))
            (or (not (natnump proto)) (< proto drgnx-hub-proto-min) (and (natnump min) (< drgnx-hub-proto min))))
          'incompatible)
         ((or (not (eql (plist-get reply :records) drgnx-hub-records))
              (let ((v (drgnx-hub-client-binary-version t))) (and v (not (equal (plist-get reply :drgnx_version) v))))
-             (let ((s (plist-get reply :schema))) (and (natnump s) (/= s 0) (/= s drgnx-work-db-schema-version))))
+             (let ((s (plist-get reply :schema)))
+               (and (natnump s) (/= s 0) (not (<= drgnx-work-db-schema-version s drgnx-hub-schema-readable-max)))))
          'restart-when-idle)
         (t 'ok)))
 
@@ -949,6 +966,34 @@ Ratatoskr is shut down and Ratatoskr started in its place; no hub at all is star
         (drgnx-hub--restart-legacy)
       (drgnx-hub-call-sync "restart" nil 5))))
 
+;;;; The store's settings the editor owns
+
+(defvar drgnx-store-only-i-close-my-tasks)
+
+(defun drgnx-hub--settings-failed (text)
+  (drgnx-notify 'hub 'warn (format "drgnx hub: %s" text) :id 'store-settings))
+
+(defun drgnx-hub-send-settings ()
+  "Tell the hub the store settings this editor holds (`graph/settings': \"only I close my tasks\").  Asynchronous; an
+error shows once, as \"drgnx hub: TEXT\"."
+  (condition-case err
+      (drgnx-hub-call "graph/settings"
+                      (list :set (list :only_user_closes (if drgnx-store-only-i-close-my-tasks t :false)))
+                      (lambda (_result e) (when e (drgnx-hub--settings-failed e))))
+    (error (drgnx-hub--settings-failed (error-message-string err)))))
+
+(defun drgnx-hub--only-closes-set (symbol value)
+  "The :set of `drgnx-store-only-i-close-my-tasks': the hub hears of a change at once (when connected; else at the
+next connection)."
+  (set-default symbol value)
+  (when (or (process-live-p drgnx-hub--client) (process-live-p drgnx-hub--events))
+    (drgnx-hub-send-settings)))
+
+(defcustom drgnx-store-only-i-close-my-tasks nil
+  "Non-nil: an agent's `done' on a task of yours is a proposal until you accept it (the agent cannot close tasks).
+Sent to the hub when this editor connects and when you change it."
+  :type 'boolean :group 'drgnx :set #'drgnx-hub--only-closes-set)
+
 (defun drgnx-hub-connect ()
   "Subscribe to the hub's events (`drgnx-hub-event-functions') and hand it the keys this Emacs holds
 \(`drgnx-hub--send-keys').  Asynchronous; safe to call again, also before the hub has answered (one subscription)."
@@ -969,7 +1014,8 @@ Ratatoskr is shut down and Ratatoskr started in its place; no hub at all is star
       (drgnx-hub--call-on c "subscribe" nil (lambda (r _err) (drgnx-hub--subscribed c r)))
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)  ; removed by `drgnx-hub-disconnect'
       ;; a hub keeps keys in memory only: one that restarted has none, so each new subscription gives them again
-      (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys)))))
+      (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys))
+      (drgnx-hub-send-settings))))
 
 (defun drgnx-hub--subscribed (conn result)
   "The hub answered CONN's `subscribe' with RESULT: CONN is the subscribed connection."

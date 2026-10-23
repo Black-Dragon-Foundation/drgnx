@@ -6,6 +6,7 @@
 (require 'drgnx-coord-mcp)
 (require 'drgnx-work)
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-coord-mcp-test--out nil)
 
@@ -299,7 +300,7 @@
     ;; no plans yet: an empty array
     (should (equal (car (drgnx-coord-mcp-test--tool proc "work_status" nil)) "[]"))
     (let ((title "Café → 計画"))
-      (drgnx-work-put-node "plan:a" :kind 'plan :title title :path "/a.md" :line 1 :status "open" :source "/a.md")
+      (drgnx-work-fixture-put-node "plan:a" :kind 'plan :title title :path "/a.md" :line 1 :status "open" :source "/a.md")
       (drgnx-work-db-close-all)
       (let* ((r (drgnx-coord-mcp-test--tool proc "work_status" nil))
              (rows (json-parse-string (car r) :object-type 'plist)))

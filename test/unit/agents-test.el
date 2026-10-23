@@ -533,4 +533,19 @@ marked as a large file: the answer plist."
       (should (= (drgnx-needs-you-count) 0))
       (should-not (drgnx-needs-you-items)))))
 
+;;;; The tracker tools switch (Urdr Task 16)
+
+(ert-deftest drgnx-agents/tracker-tools-is-in-the-schema ()
+  (should (string-search ":tracker-tools (enum on off)" (format "%S" drgnx-agents-config-schema)))
+  (should (string-search "The five tracker tools; on by default" (format "%S" drgnx-agents-config-schema))))
+
+(ert-deftest drgnx-agents/a-profile-opt-out-is-passed ()
+  (let ((drgnx-agents-profiles '(("off" :command ("x") :tracker-tools off) ("on" :command ("x") :tracker-tools on)
+                                 ("none" :command ("x")))))
+    (cl-letf (((symbol-function 'drgnx-config-get) (lambda (&rest _) nil)))
+      (should (equal (drgnx-agents--tracker-tools (drgnx-agents--make :profile "off")) '(:tracker :false)))
+      (should (equal (drgnx-agents--tracker-tools (drgnx-agents--make :profile "on")) '(:tracker t)))
+      (should-not (drgnx-agents--tracker-tools (drgnx-agents--make :profile "none")))
+      (should-not (drgnx-agents--tracker-tools (drgnx-agents--make))))))
+
 ;;; agents-test.el ends here
