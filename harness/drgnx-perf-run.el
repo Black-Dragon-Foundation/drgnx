@@ -15,6 +15,7 @@
 (require 'seq)
 (require 'drgnx-ui)
 (require 'drgnx-perf)
+(require 'drgnx-perf-workloads)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
@@ -684,6 +685,8 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) (get-buffer-window drgnx-perf--term)
                     (> (buffer-chars-modified-tick drgnx-perf--term) drgnx-perf--term-tick) t)"   ; output streamed while typing
        :teardown ,(concat "(progn (drgnx-perf--term-teardown) " kill-fixture ")"))
+      ;; the off-the-main-thread workloads (§17.6): report-only until their step lands (harness/drgnx-perf-workloads.el)
+      ,@(drgnx-perf-workers-workloads)
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -1036,13 +1039,15 @@ version and the commit, as JSON in FILE."
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
 (defconst drgnx-perf-run-unseeded
-  '((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
+  `((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
     (cockpit-cards . "errored in the container: no agent busy at the end")
     (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package")
     (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream, PD-14)")
+    ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
+              drgnx-perf-workers-names)
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")

@@ -100,4 +100,76 @@
     (should (string-match-p "--cpuset-cpus 0-1" text))
     (should (string-match-p "--cpuset-cpus 0-3" text))))
 
+;;;; Task 8: the workloads of §17.6
+
+(ert-deftest drgnx-perf-workers/workloads-registered ()
+  "Every workload of the design's table is a workload with a budget row that is report-only for a step, a completion
+form and a digest, and a setup form that reads."
+  (let ((ws (drgnx-perf-run--workloads)) (budgets (drgnx-perf-run--budgets)))
+    (dolist (n '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
+                           explorer-expand explorer-git quick-open-large autosave-typing))
+      (let ((spec (cdr (assq n ws))) (rows (seq-filter (lambda (b) (eq (car b) n)) budgets)))
+        (should spec)
+        (should (stringp (plist-get spec :complete-when)))
+        (should (stringp (plist-get spec :digest)))
+        (should (consp (read (plist-get spec :setup))))
+        (should (plist-get spec :actions))
+        (should rows)
+        (dolist (r rows)
+          (should (plist-get (nthcdr 3 r) :report-only))
+          (should (memq (plist-get (nthcdr 3 r) :report-only) '(ot2 ot3 ot4 ot5 ot6 ot8))))))
+    ;; the existing workloads are still there, unchanged in kind
+    (dolist (n '(agent-stream terminal-output live-view)) (should (assq n ws)))))
+
+(defun perf-workers-test--frames (bytes)
+  "The payload sizes of the framed messages in the unibyte string BYTES: a reply counts its result text only."
+  (let ((pos 0) sizes)
+    (while (string-match "Content-Length: \\([0-9]+\\)\r\n\r\n" bytes pos)
+      (let* ((len (string-to-number (match-string 1 bytes))) (start (match-end 0)) (end (+ start len)))
+        (when (> end (length bytes)) (setq pos (length bytes)) (setq len nil))
+        (when len
+          (let ((body (substring bytes start end)))
+            (push (if (string-match "\\`{\"jsonrpc\":\"2.0\",\"id\":[0-9]+,\"result\":" body)
+                      (- len (match-end 0) 1)
+                    len)
+                  sizes))
+          (setq pos end))))
+    (nreverse sizes)))
+
+(ert-deftest drgnx-perf-workers/capture-is-replayable ()
+  "Each recorded corpus replays through the stub: the messages and bytes it sends equal the capture's manifest."
+  (skip-unless (eq system-type 'gnu/linux))   ; the stub reads its stdin through /proc
+  (let* ((dir (expand-file-name "test/fixtures/workers" drgnx-dir))
+         (manifest (with-temp-buffer (insert-file-contents (expand-file-name "manifest.eld" dir)) (read (current-buffer))))
+         (stub (expand-file-name "test/fixtures/lsp-replay.el" drgnx-dir))
+         (emacs (expand-file-name invocation-name invocation-directory)))
+    (should (= (length manifest) 3))
+    (let ((process-environment (cons "LSP_REPLAY_LIBRARY=1" process-environment)))
+      (load stub nil t))
+    (dolist (entry manifest)
+      (let* ((file (expand-file-name (format "corpus-%s.eld.gz" (car entry)) dir))
+             (corpus (lsp-replay-corpus-read file))
+             (want (list :messages (plist-get (cdr entry) :messages) :bytes (plist-get (cdr entry) :bytes))))
+        (should (equal (lsp-replay-corpus-totals corpus) want))   ; the manifest describes the corpus
+        ;; and the stub, as a process, sends exactly that
+        (let* ((out "") (id 0)
+               (process-environment (append (list (concat "LSP_REPLAY_CORPUS=" file)) process-environment))
+               (proc (make-process :name "perf-workers-test-stub" :noquery t :connection-type 'pipe :coding 'binary
+                                   :command (list emacs "--batch" "-Q" "-l" stub)
+                                   :filter (lambda (_p s) (setq out (concat out s))))))
+          (unwind-protect
+              (cl-flet ((send (json) (process-send-string proc (format "Content-Length: %d\r\n\r\n%s" (string-bytes json) json))))
+                (send "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}")
+                (send "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}")
+                (dolist (r (plist-get corpus :replies))
+                  (send (format "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":%S,\"params\":{}}" (cl-incf id) (car r))))
+                (let ((deadline (+ (float-time) 60)))
+                  (while (and (< (float-time) deadline)
+                              (< (length (perf-workers-test--frames out)) (plist-get want :messages)))
+                    (accept-process-output proc 0.1))))
+            (when (process-live-p proc) (delete-process proc)))
+          (let ((sizes (perf-workers-test--frames out)))
+            (should (= (length sizes) (plist-get want :messages)))
+            (should (= (apply #'+ sizes) (plist-get want :bytes)))))))))
+
 ;;; perf-workers-test.el ends here

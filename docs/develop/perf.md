@@ -526,6 +526,48 @@ DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=
 
 Tests: `test/unit/perf-workers-test.el`.
 
+### The workers' workloads
+
+Twelve workloads (`harness/drgnx-perf-workloads.el`, the session side in `test/fixtures/workers/perf-session.el`) measure
+what the Nidhogg workers take off the main thread. Each types the same 6 commands into the editor while the work runs; the
+first key starts it (from a timer, as it starts for a user), so the keys and the work overlap. Each has `:complete-when`
+(`:complete-ms`, polled at idle) and `:digest` (equal on and off), and a budget row `(W PATH LIMIT :report-only STEP)` in
+`test/perf/budgets.eld`: the limit is the design's table (V2 §1 or drgnx's existing row), never a first run. A row fails
+only after `DRGNX_PERF_LANDED` names its step.
+
+| Workload | What it does | Budget rows (step) |
+|---|---|---|
+| `lsp-burst` | three jsonrpc connections to `test/fixtures/lsp-replay.el`, replaying recorded rust-analyzer, clangd and tsserver traffic; each sends completion answers of 0.5, 1 and 3 MB, three rounds | input p95 16, no 16 ms stall, `:lsp :handler_ms :max` 50 (ot4) |
+| `lsp-typing` | the same servers flood 300 recorded diagnostics and progress messages a second | input p95 16, max 50 (ot4) |
+| `ts-open` | 1 and 2 MB files in `c-ts-mode`, `typescript-ts-mode`, `python-ts-mode`, opened one after the other in a second window | `:ts :draw_ms` 16 (first draw), `:ts :colored_ms` 500, no 100 ms stall (ot2) |
+| `ts-paste` | `C-y` of 500 KB into a 1 MB C file (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
+| `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file | input p95 16 (ot2) |
+| `compile-flood` | `compile` (comint, a pty) of a generated 200k-line log; the digest is the count and md5 of the log lines that arrived, checked against the file | input p95 16, p99 50, max 50 (ot3) |
+| `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html` | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
+| `explorer-expand` | `big/` of 5,000 files expanded, listing cache cleared (the bench's operation) | `:expand_ms` 80, no 16 ms stall (ot8) |
+| `explorer-git` | the status of a 25k-file repository read in the background | input p95 16, no 16 ms stall (ot5) |
+| `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
+| `autosave-typing` | a 50 MB buffer, `do-auto-save` at the first key | input max 50, `:complete-ms` 1000 (ot8) |
+
+`agent-stream`, `terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
+endless `seq` loop), so a digest that is equal on and off needs a fixed-length run; that is DEFERRED, not done here.
+
+**Fixtures.** Generators, not big files: `test/fixtures/workers/generators.el` writes the sources (1 and 2 MB per language),
+the compile log, the 5,000-file folder and the 25k- and 200k-file repositories when a workload sets up. The pictures are
+`make-images.sh`'s output (ImageMagick; `screenshot-4k.png`, `images/`, `preview-20.md`). The language-server traffic is
+recorded once from the real servers by `capture-lsp.sh` (run it in the container: `.claude/tmp/ctr.sh --image
+localhost/drgnx-dev:f45 --memory 6g -- bash test/fixtures/workers/capture-lsp.sh`): a server the image lacks (clangd,
+rust-analyzer, Node and typescript-language-server) is installed for that run only; the corpora are
+`corpus-NAME.eld.gz` and `manifest.eld` gives the message count and byte total a replay must reproduce (a test checks it).
+`lsp-replay.el` serves a corpus (`LSP_REPLAY_CORPUS`), with `LSP_REPLAY_COMPLETION_SIZES` and `LSP_REPLAY_FLOOD`.
+
+**A report-only run** (the baseline; a Nidhogg with workers, under the lease, no A/B):
+
+```sh
+DRGNX_PERF_WATCHDOG=on DRGNX_PERF_WORKLOADS="lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open explorer-expand explorer-git quick-open-large autosave-typing" \
+  .claude/tmp/perf-exclusive.sh bin/drgnx test --container --perf
+```
+
 ## Slow frames in another configuration
 
 Start with Show Freezes (the watchdog's report) and the stalls probe above. A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s
