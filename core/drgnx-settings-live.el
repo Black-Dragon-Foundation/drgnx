@@ -133,8 +133,8 @@ Never signals, never prompts."
 For settings.el: `drgnx-settings-apply-global' pushes every entry (idempotent), variables the file no longer names
 are let go (`drgnx-settings-let-go': modules' claims on them stay), new ones are watched for provenance, and
 `drgnx-settings-changed-functions' runs with FILE and the changes.  For a workspace file:
-`drgnx-settings-workspace-sync' re-hacks its roots' open buffers when it changed, and the hook runs the same way.  Another file only has its stamp recorded.  Nothing prompts; a failure is one notice
-and nil."
+`drgnx-settings-workspace-sync' re-hacks its roots' open buffers when it changed, and the hook runs the same way.
+Another file only has its stamp recorded.  Nothing prompts; a failure is one notice and nil."
   (condition-case err
       (let ((inhibit-interaction t))
         (puthash file (drgnx-file-stamp file) drgnx-settings-live--stamps)
