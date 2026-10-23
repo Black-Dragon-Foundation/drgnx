@@ -66,6 +66,25 @@
                            sat-ul-c)))
                  '(0))))
 
+(ert-deftest drgnx-user-lisp/config-tells-the-page-and-is-a-parent ()
+  ;; US-LISP-PAGE-LOADS-1: drgnx--load-user-config tells the page config.el's time and error; a file config.el turns
+  ;; on loads now, with config.el as its parent.
+  (let ((r (drgnx-user-lisp-test--run
+            `(("settings.el" . ,drgnx-user-lisp-test--off)
+              ("a.el" . "(defvar sat-ul-p 0) (setq sat-ul-p 1)\n")
+              ("config.el" . "(drgnx-user-lisp-set-on \"a.el\" t)\n(error \"boom in config\")\n"))
+            '((progn (drgnx--load-user-config)
+                     (let ((row (lambda (name)
+                                  (cl-find name (drgnx-settings-lisp-page-rows)
+                                           :key (lambda (r) (file-name-nondirectory (plist-get r :file)))
+                                           :test #'equal))))
+                       (list (bound-and-true-p sat-ul-p)
+                             (let ((c (funcall row "config.el")))
+                               (list (plist-get c :loaded) (numberp (plist-get c :seconds))
+                                     (plist-get (plist-get c :error) :text) (plist-get c :parent)))
+                             (let ((p (plist-get (funcall row "a.el") :parent))) (and p (file-name-nondirectory p))))))))))
+    (should (equal (car r) '(1 (t t "boom in config" nil) "config.el")))))
+
 (ert-deftest drgnx-user-lisp/early-file-loads-early ()
   ;; The early loader reads settings.el as data before drgnx exists; the page and notices hear of it afterwards, and
   ;; the later loader does not load it a second time.
@@ -175,6 +194,29 @@
                                         (insert-file-contents (expand-file-name "settings.el" (drgnx-user-dir)))
                                         (buffer-string))))))))))
     (should (equal (car r) '("bad.el" "config.el" t)))))
+
+(ert-deftest drgnx-user-lisp/bisect-finds-a-file-end-to-end ()
+  ;; drgnx bisect's way: each round an Emacs starts on the copy (DRGNX_CONFIG_DIR) and runs the start's loaders
+  ;; (custom.el and config.el through drgnx--load-user-config, then your Lisp files), so the copy's settings.el turns
+  ;; the files off for real; the file that sets the bad value is named.
+  (let ((r (drgnx-user-lisp-test--run
+            `(("settings.el" . "(drgnx-settings :version 1\n (drgnx-user-lisp-files '((\"a.el\") (\"bad.el\") (\"c.el\"))))\n")
+              ("a.el" . "(defvar sat-ul-ok t)\n") ("bad.el" . "(defvar sat-ul-bad t)\n") ("c.el" . "(defvar sat-ul-ok t)\n")
+              ("config.el" . "(defvar sat-ul-ok t)\n") ("custom.el" . "(custom-set-variables)\n"))
+            '((let* ((mods (make-temp-file "mods" t))
+                     (start "(progn (require 'drgnx) (drgnx-settings-apply-global) (drgnx-user-lisp-load-early)
+                                    (drgnx--load-user-config (expand-file-name \"custom.el\" (drgnx-user-dir)))
+                                    (drgnx--load-user-config) (drgnx-user-lisp-load-all)
+                                    (kill-emacs (if (bound-and-true-p sat-ul-bad) 1 0)))")
+                     (fails (lambda (dir)
+                              (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment)))
+                                (not (eql 0 (call-process (expand-file-name invocation-name invocation-directory)
+                                                          nil nil nil "--batch" "-Q"
+                                                          "--eval" (format "(setq load-path '%S)" load-path)
+                                                          "--eval" start))))))
+                     (m (drgnx-pkg-bisect fails :modules-dir mods)))
+                (and (stringp m) (file-name-nondirectory m)))))))
+    (should (equal (car r) "bad.el"))))
 
 (ert-deftest drgnx-user-lisp/a-variable-set-only-in-config-has-its-line ()
   ;; US-MOVE-UNWATCHED-1: nothing manages the variable, yet provenance records the line while config.el loads, so

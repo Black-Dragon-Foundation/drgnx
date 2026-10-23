@@ -52,14 +52,19 @@
 
 (defun drgnx--load-user-config (&optional file)
   "Load FILE (default `drgnx-user-config-file') when it exists; an error in it is a notice, never stops
-the start.  Provenance records which of its forms sets what (`drgnx-settings-prov-with-load')."
+the start.  Provenance records which of its forms sets what (`drgnx-settings-prov-with-load'); the Lisp files page
+hears the time, the error and the parent (`drgnx-settings-lisp-page-note-load')."
   (let ((file (or file (drgnx-user-config-file))))
     (drgnx-settings-prov-with-load file
       (when (and (file-exists-p file) (drgnx-user-lisp-on-p file))   ; the file's switch (Settings: Lisp Files, bisect)
-        (condition-case err (load file nil 'nomessage 'nosuffix)
-          (error (drgnx-notify 'config 'fail (format "%s: %s (the rest of it did not run)" (abbreviate-file-name file)
-                                                     (error-message-string err))
-                               :id 'config-el :life 'condition :command 'preferences-user-config)))))))
+        (let ((start (float-time)) (parent (drgnx-user-lisp-parent)) msg)
+          (condition-case err (load file nil 'nomessage 'nosuffix)
+            (error (setq msg (error-message-string err))
+                   (drgnx-notify 'config 'fail (format "%s: %s (the rest of it did not run)" (abbreviate-file-name file) msg)
+                                 :id 'config-el :life 'condition :command 'preferences-user-config)))
+          ;; inside the provenance scope, so an error's line is the form being read when it happened
+          (ignore-errors
+            (drgnx-settings-lisp-page-note-load file :seconds (- (float-time) start) :error msg :parent parent)))))))
 
 (defun drgnx-open-user-config ()
   "Open your config.el — made from a short template the first time."

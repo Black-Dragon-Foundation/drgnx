@@ -311,6 +311,24 @@
         (should (equal drgnx-stt-data "clone"))
         (should-not drgnx-stt--prompts)))))
 
+(ert-deftest drgnx-settings-trust/the-location-notice-comes-once-per-machine ()
+  ;; The first trust by location is announced once on this machine: trusted-folders.eld keeps the root (:announced),
+  ;; so the next session (fresh session state) says nothing again.
+  (drgnx-stt--with (list (list drgnx-stt--ws))
+    (drgnx-stt--put ".dir-locals.el" "((nil . ((drgnx-stt-data . \"x\"))))\n")
+    (let ((told nil))
+      (cl-letf (((symbol-function 'drgnx-notify)
+                 (lambda (_s _v text &rest _) (when (string-match-p "is trusted for data" text) (push text told)) nil)))
+        (drgnx-stt--open "a.txt")
+        (drgnx-stt--open "b.txt")
+        (should (= 1 (length told)))
+        (should (equal (mapcar #'drgnx-stt--norm
+                               (plist-get (plist-get (drgnx-file-read (drgnx-trust-folders-file)) :data) :announced))
+                       (list drgnx-stt--proj)))
+        (setq drgnx-settings-trust--announced nil drgnx-settings-trust--data nil)   ; the next start
+        (drgnx-stt--reopen "a.txt")
+        (should (= 1 (length told)))))))
+
 (ert-deftest drgnx-settings-trust/location-trust-is-not-trusted-content ()
   (drgnx-stt--with (list (list drgnx-stt--ws))
     (drgnx-settings-trust--sync-content)

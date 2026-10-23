@@ -29,7 +29,8 @@
     (require drgnx-search-chunk)          ; Task 17: drgnx-search-{include,exclude,off}
     (require drgnx-sandbox)               ; drgnx-sandbox-memory-max, -secret-files (US-WORKSPACE-NEVER-1)
     (require drgnx-sandbox-proxy)         ; drgnx-sandbox-proxy-pinned-addresses
-    (require drgnx-settings-trust))       ; Task 18: drgnx-trust-parents
+    (require drgnx-settings-trust)        ; Task 18: drgnx-trust-parents
+    (require drgnx-user-lisp))            ; Task 29: drgnx-user-lisp-files
   "What declares the settings of the reference: entries `(require FEATURE)'.")
 
 (defun drgnx-settings-doc-load ()

@@ -31,6 +31,7 @@
 (drgnx-user-lisp--require 'drgnx-paths)
 (drgnx-user-lisp--require 'drgnx-setting)
 
+(defvar drgnx-dir)
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-settings-prov--call-with-load "drgnx-settings-prov" (file body))
 (declare-function drgnx-settings-file-read "drgnx-settings-file" (file head &rest args))
@@ -117,9 +118,16 @@ left out."
       (let ((base (file-name-sans-extension file)))
         (cl-some (lambda (h) (and (stringp (car h)) (equal (file-name-sans-extension (car h)) base))) load-history))))
 
-(defun drgnx-user-lisp--report (file seconds err)
-  "Tell the Lisp files page and the notices that FILE loaded in SECONDS with ERR (a message or nil); never signals."
-  (ignore-errors (drgnx-settings-lisp-page-note-load file :seconds seconds :error err))
+(defun drgnx-user-lisp-parent ()
+  "The Lisp file of yours loading right now, which made drgnx load another one (for example a `setopt' of
+`drgnx-user-lisp-files' in config.el turns a file on): `load-file-name' when it is not one of drgnx's own files, else
+nil (drgnx itself loads).  The loaders pass it as the PARENT of `drgnx-settings-lisp-page-note-load'."
+  (and load-file-name (not (file-in-directory-p load-file-name drgnx-dir)) load-file-name))
+
+(defun drgnx-user-lisp--report (file seconds err &optional parent)
+  "Tell the Lisp files page and the notices that FILE loaded in SECONDS with ERR (a message or nil), loaded by PARENT
+\(`drgnx-user-lisp-parent'); never signals."
+  (ignore-errors (drgnx-settings-lisp-page-note-load file :seconds seconds :error err :parent parent))
   (when (and err (fboundp 'drgnx-notify))
     (ignore-errors
       (drgnx-notify 'config 'fail (format "%s: %s (the rest of it did not run)" (abbreviate-file-name file) err)
@@ -141,14 +149,14 @@ An error is returned, never signalled."
 it went.  A file loads once per session here.  Never signals."
   (push file drgnx-user-lisp--loaded)
   (condition-case err
-      (progn
+      (let ((parent (drgnx-user-lisp-parent)))
         (drgnx-user-lisp--require 'drgnx-settings-prov)
         (drgnx-settings-prov--call-with-load
          file
          (lambda ()
            (let ((r (drgnx-user-lisp--load-1 file opts)))
              ;; inside the provenance scope, so an error's line is the form being read when it happened
-             (drgnx-user-lisp--report file (car r) (cdr r))))))
+             (drgnx-user-lisp--report file (car r) (cdr r) parent)))))
     (error (drgnx-user-lisp--say (format "your Lisp file %s: %s" file (error-message-string err))))))
 
 (defun drgnx-user-lisp--catch-up ()

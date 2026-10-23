@@ -84,7 +84,8 @@ when provenance is not certain: (WON . SOURCE)."
          (rec (gethash (file-truename file) drgnx-settings-lisp-page--loads)))
     (list :file file :role role :exists exists :emacs-dir (plist-get opts :emacs-dir)
           :on (if (plist-member opts :on) (and (plist-get opts :on) t) t) :early (plist-get opts :early)
-          :loaded (and exists (drgnx-settings-lisp-page--loaded-p file loaded) t)
+          ;; the loader's note counts: a file whose load signalled ran up to the error, yet `load-history' never has it
+          :loaded (and exists (or rec (drgnx-settings-lisp-page--loaded-p file loaded)) t)
           :seconds (plist-get rec :seconds) :error (plist-get rec :error) :parent (plist-get rec :parent)
           :settings (mapcar (lambda (s) (drgnx-settings-lisp-page--setting file s)) (plist-get index :setters))
           :findings (plist-get index :findings))))

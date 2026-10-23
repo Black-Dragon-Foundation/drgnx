@@ -219,11 +219,30 @@ settings).  `safe': VALUE passes VAR's `safe-local-variable' predicate (or the s
 
 (defvar drgnx-settings-trust--announced nil "The roots trusted by location that were announced this session.")
 
+(defun drgnx-settings-trust--announced-roots (data)
+  "The roots DATA (trusted-folders.eld's plist) keeps under `:announced', normalized; anything else there is ignored."
+  (let ((a (plist-get data :announced)))
+    (and (proper-list-p a) (mapcar #'drgnx-settings-trust--unkey (seq-filter #'stringp a)))))
+
+(defun drgnx-settings-trust--announced-p (root)
+  "Was ROOT's trust by location announced: this session, or on this machine before (trusted-folders.eld's
+`:announced', the roots it keeps abbreviated)?"
+  (or (member root drgnx-settings-trust--announced)
+      (member root (drgnx-settings-trust--announced-roots (drgnx-settings-trust--state-data)))))
+
 (defun drgnx-settings-trust--announce (root)
-  "The first time this session ROOT is trusted by its location: one information notice, with [Untrust].  Never
-signals."
-  (unless (member root drgnx-settings-trust--announced)
+  "The first time on this machine ROOT is trusted by its location: one information notice, with [Untrust].  The root
+is kept in trusted-folders.eld (`:announced'), so the notice does not come back at the next start.  Never signals."
+  (unless (drgnx-settings-trust--announced-p root)
     (push root drgnx-settings-trust--announced)
+    (condition-case nil
+        (drgnx-trust-update
+         (lambda (data)
+           (if (member root (drgnx-settings-trust--announced-roots data)) data
+             (let ((a (plist-get data :announced)))
+               (plist-put data :announced (append (and (proper-list-p a) (seq-filter #'stringp a))
+                                                  (list (abbreviate-file-name root))))))))
+      (error nil))
     (condition-case nil
         (when (require 'drgnx-notice nil t)
           (let ((parent (seq-find (lambda (d) (string-prefix-p d root)) (mapcar #'car (drgnx-settings-trust--parents)))))

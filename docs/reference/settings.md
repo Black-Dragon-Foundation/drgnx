@@ -574,3 +574,26 @@ ancestors are never trusted.  Agents can never change it, and no workspace sets 
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-user-lisp-files
+
+Your own Lisp files, loaded in this order after config.el: ((FILE :on BOOL [:early t] [:emacs-dir DIR])…).
+FILE is relative to your config folder or absolute.  `:on' (default t) says whether it loads: turning one on loads it
+now, turning one off takes effect at the next start (code that already ran cannot be unloaded).  `:early t' loads it
+at the end of early-init.el, before drgnx starts.  `:emacs-dir DIR' binds `user-emacs-directory' to DIR while this one
+file loads: a `setq' of it in the file is undone afterwards, and what loads later sees drgnx's folder, so use it only
+for an init.el that expects its own.  config.el and custom.el may be listed too, only for their `:on' switch.
+Settings: Lisp Files shows the files; Settings: Add Lisp File… adds one.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (cons :tag "Lisp file" (file) (plist :key-type symbol :value-type sexp)))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-user-lisp--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of any)` |
+

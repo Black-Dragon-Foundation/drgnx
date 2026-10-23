@@ -470,14 +470,17 @@ in safe mode and with every module off).
 - **Loader.** `drgnx-user-lisp-load-all` (after config.el) and the `:apply` both run `drgnx-user-lisp--catch-up`: every
   listed file that is on, exists and has not loaded this session (this loader's list, or `load-history`) loads, in
   order, inside `drgnx-settings-prov--call-with-load` (so provenance records its lines) with `user-emacs-directory`
-  bound to `:emacs-dir` for that file only. It then calls `drgnx-settings-lisp-page-note-load` with the seconds and the
-  error, and a failure is a notice (`user-lisp:NAME`). So turning a file on loads it now, and the end-of-init `:apply`
+  bound to `:emacs-dir` for that file only. It then calls `drgnx-settings-lisp-page-note-load` with the seconds, the
+  error and the parent (`drgnx-user-lisp-parent`: the file of yours loading at the time, for example a config.el that
+  turned the file on; nil when drgnx loads it), and a failure is a notice (`user-lisp:NAME`). A file the loader noted
+  counts as loaded on the page even when its load signalled (`load-history` never lists such a file). So turning a file on loads it now, and the end-of-init `:apply`
   pass finds nothing left. Off does nothing until the next start. Safe mode loads none.
 - **Early files.** `drgnx-user-lisp-load-early` reads settings.el as data (and only when the text contains `:early`),
   loads the `:early t` files that are on without provenance or notices (neither exists yet) and keeps what happened in
   `drgnx-user-lisp--early-notes`, which `load-all` hands to the page and the notices.
 - **config.el, custom.el.** `drgnx--load-user-config` asks `drgnx-user-lisp-on-p` first: a row for the file with
-  `:on nil` skips it. Its note-load call is the integration's (US-LISP-PAGE-LOADS-1 for those two files).
+  `:on nil` skips it. It times the load and calls `drgnx-settings-lisp-page-note-load` with the seconds, the error and
+  the parent, inside the provenance scope, as the loader above does.
 - **Add Lisp File.** `drgnx-user-lisp-add-plan FILE` (nothing changes: findings from the static index plus a change
   to `package-enable-at-startup`, the count of `user-emacs-directory` uses, the early-init.el beside it,
   `drgnx-user-lisp-bootstraps`), `drgnx-user-lisp-add FILE &key early-init emacs-dir` (writes the setting with
@@ -485,7 +488,10 @@ in safe mode and with every module off).
   `user-lisp-bootstrap` is `info`.
 - **Bisect.** `drgnx-pkg-bisect` adds `drgnx-user-lisp-bisect-files` (listed files that are on, config.el, custom.el)
   to its candidates; in each copy `drgnx-user-lisp-bisect-put` writes `:on nil` for those out of the round. The result
-  is a module symbol or a file name (a string).
+  is a module symbol or a file name (a string). The start honours the copy through `core/drgnx.el`'s two calls:
+  `drgnx--load-user-config` asks `drgnx-user-lisp-on-p` before it loads custom.el and config.el, and
+  `drgnx-user-lisp-load-all` (after config.el) loads only the files that are on; the early loader reads the copy's
+  settings.el the same way. `bisect-finds-a-file-end-to-end` starts an Emacs on each copy and runs those calls.
 - **Unwatched setters (US-MOVE-UNWATCHED-1).** `drgnx-settings-prov--call-with-load` also watches the variables the
   static index finds set in your Lisp files (`drgnx-settings-prov--index-vars`), so a variable only config.el sets has
   its line recorded and Move into Settings is not refused for "line unknown".
@@ -794,8 +800,9 @@ enable/disable call `drgnx-settings-trust-enable`/`-disable`; `drgnx-trust-mode`
   `ignored-local-variables` by `drgnx-settings-trust--guard`, which re-runs from a depth −100 hook function whenever
   the number of declared settings changed.
 - **Migration:** `drgnx-settings-trust-migrate` turns a version-1 file into version 2 once, recording each trusted
-  folder's code as allowed, with one notice. `drgnx-settings-trust--announce`: one notice per root and session for a
-  location trust, with [Untrust].
+  folder's code as allowed, with one notice. `drgnx-settings-trust--announce`: one notice per root on this machine for
+  a location trust, with [Untrust]; the announced roots are kept in trusted-folders.eld's `:announced` (a key version
+  2 readers ignore), so the next start does not say it again.
 - **Doctor:** `dir-locals-trusted` (fact `:dir-locals-trusted`, `drgnx-settings-trust-doctor-roots`): folders of
   `safe-local-variable-directories` (value and custom.el's saved value) that are not trusted folders.
 - **Mutation checks** (security): drop the split → `drgnx-settings-trust/a-location-applies-data-holds-code` red; add
@@ -805,5 +812,4 @@ enable/disable call `drgnx-settings-trust-enable`/`-disable`; `drgnx-trust-mode`
   `test/unit/settings-compat-trust-test.el`. The advised function is internal to `files.el`: C8, C9 and C24 fail on a
   Nidhogg rebase that renames it.
 - **Left out:** a nested `.dir-locals.el` (`src/.dir-locals.el`) is listed as waiting once a file below it was opened
-  this session; Trust This Folder shows only the root's own files. The location notice is once per session, not once
-  ever.
+  this session; Trust This Folder shows only the root's own files.

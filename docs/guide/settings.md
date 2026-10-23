@@ -265,7 +265,7 @@ yours and always applies (only drgnx's security settings and global-only setting
   `(drgnx-trust-parents (("~/workspace/")))`. Every project below `~/workspace/` is then trusted for data, including
   repositories you clone there later. Its code waits until you review and allow it, and again after it changes (a
   `git pull`, an agent's edit); the code you allowed keeps applying. The first time a project is trusted because of
-  where it is, a notice says so, with [Untrust].
+  where it is, a notice says so, with [Untrust]; it says so once on this machine, not again at the next start.
 - **Everything.** `(drgnx-trust-parents (("~/workspace/mine/" :code t)))` runs the code of every project below that
   folder with no review, repositories you clone there included. It is off unless you write `:code t` for a folder.
   Such a folder also counts as trusted content: Flymake checkers and symbol shorthands work there.
@@ -325,7 +325,8 @@ then the files drgnx only reads:
 6. `settings.el` and the workspace settings files read this session, as data: read, never loaded.
 
 Each file says whether it is on (turning a file off takes effect at the next start: code that ran cannot be
-unloaded), whether it loaded, how long that took, and an error with its line. Under it come the settings it sets,
+unloaded), whether it loaded, how long that took, an error with its line, and which file of yours loaded it when it
+was not drgnx ("by config.el": for example a config.el that turned it on). Under it come the settings it sets,
 each with its line and whether it **won** (its value is the one in effect), **lost to** what won, or **?** when drgnx
 cannot be sure (the line is unknown: [Where a value comes from](#where-a-value-comes-from)). A setting inside `when`, `unless`,
 `with-eval-after-load` or a deferred `use-package` says "(conditional)".

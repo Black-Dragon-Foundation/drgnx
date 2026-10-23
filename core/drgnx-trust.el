@@ -33,6 +33,7 @@
 (declare-function project-root "project")
 (declare-function project-current "project")
 (declare-function drgnx-settings-trust-start "drgnx-settings-trust" ())
+(declare-function drgnx-settings-review-setup "drgnx-settings-review" ())
 ;; workspace trust (core/drgnx-settings-trust.el, which requires this file) owns the two commands' behaviour
 (autoload 'drgnx-settings-trust-this-folder "drgnx-settings-trust" nil t)
 (autoload 'drgnx-settings-trust-untrust "drgnx-settings-trust" nil t)
