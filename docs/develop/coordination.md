@@ -554,7 +554,8 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   unknown one alike.
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
-- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities lack a vector; the vector half
+- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
+  project and the projects granted to it) lack a vector; the vector half
   waits for the embedder (Task 12b).
 
 **Where Rust and Lisp differ, on purpose:**

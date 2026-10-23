@@ -465,6 +465,43 @@ mod tools {
         assert!(o.text.contains("vectors: behind"));
     }
 
+    /// Review finding 11: `vectors: behind N` counts the caller's scope only; another project's texts are not its lag
+    /// (nor its business: the count would tell how much another project writes).
+    #[tokio::test]
+    async fn vectors_behind_counts_the_callers_scope_only() {
+        let w = World::new().await;
+        let (ha, hb) = (w.place("pa"), w.place("pb"));
+        let (a, b) = (w.agent("a1", &ha), w.agent("b1", &hb));
+        create(&w, &a, "tracker words here").await;
+        for i in 0..3 {
+            create(&w, &b, &format!("beta task {i}")).await;
+        }
+        let o = w
+            .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
+            .await;
+        let pa = w.project_n(&ha);
+        let mine = w.count(&format!(
+            "select count(*) from entity where project = {pa} and (title is not null or body is not null)"
+        ));
+        assert_eq!(
+            o.structured["vectors"],
+            format!("behind {mine}"),
+            "{}",
+            o.structured
+        );
+        // under a read grant of B, B's texts are in A's scope and count
+        w.grant_read(pa, w.project_n(&hb)).await;
+        let o = w
+            .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
+            .await;
+        let pb = w.project_n(&hb);
+        let both = w.count(&format!(
+            "select count(*) from entity where project in ({pa}, {pb}) and (title is not null or body is not null)"
+        ));
+        assert!(both > mine);
+        assert_eq!(o.structured["vectors"], format!("behind {both}"));
+    }
+
     /// Review finding 8 (Task 10: "a caller with no project … writes nothing"): `note_add` from a folder that is no
     /// project is refused, as `create` is, and writes no note (one would be a stub every agent sees).
     #[tokio::test]
