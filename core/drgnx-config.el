@@ -865,9 +865,14 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
 
 (autoload 'drgnx-settings-file-sort "drgnx-settings-file"
   "Sort a settings file's entries by name, then its sections by kind and name." t)
+(autoload 'drgnx-settings-turn-off-package-settings "drgnx-settings-apply"
+  "Take settings.el's values for packages and Emacs out of Emacs now; drgnx's own stay." t)
+(autoload 'drgnx-settings-turn-on-package-settings "drgnx-settings-apply"
+  "Apply settings.el's values for packages and Emacs again now." t)
 
 (defun drgnx-config-register-commands ()
-  "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File, in the registry."
+  "Open, Reset and Migrate Config File… (Preferences), and Settings: Sort File and Turn Off / Turn On Package
+Settings, in the registry."
   (drgnx-command-define 'config-open :category "Preferences" :title "Open Config File…" :command #'drgnx-config-open
                         :doc "Open one of drgnx's config files, at its mistake when it has one")
   (drgnx-command-define 'config-reset :category "Preferences" :title "Reset Config File…" :command #'drgnx-config-reset
@@ -876,7 +881,13 @@ prompts.  A file a newer drgnx wrote is refused (`drgnx-config-refused'); a proj
                         :command #'drgnx-config-migrate
                         :doc "Write a config file an older drgnx made in this drgnx's format; the old one is backed up")
   (drgnx-command-define 'settings-sort-file :category "Settings" :title "Sort File" :command #'drgnx-settings-file-sort
-                        :doc "Sort settings.el or the workspace settings file you are in: entries by name, then sections"))
+                        :doc "Sort settings.el or the workspace settings file you are in: entries by name, then sections")
+  (drgnx-command-define 'settings-package-off :category "Settings" :title "Turn Off Package Settings"
+                        :command #'drgnx-settings-turn-off-package-settings
+                        :doc "Take settings.el's values for packages and Emacs out now (your Lisp's stay); drgnx's own stay")
+  (drgnx-command-define 'settings-package-on :category "Settings" :title "Turn On Package Settings"
+                        :command #'drgnx-settings-turn-on-package-settings
+                        :doc "Apply settings.el's values for packages and Emacs again now, where your Lisp does not set them"))
 
 (provide 'drgnx-config)
 ;;; drgnx-config.el ends here

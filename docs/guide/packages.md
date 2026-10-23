@@ -227,7 +227,9 @@ after a reboot does not hold it, and of two commands taking over the same stale 
   `modules.eld`, e.g. gryphn) included, as `external/NAME` — (in a copy of your configuration;
   your files are untouched), starts drgnx and asks whether the problem showed, and halves again — about log2(N)
   rounds. `drgnx bisect -- CMD ARGS…` runs CMD instead of asking (a non-zero exit means "the problem showed";
-  `DRGNX_CONFIG_DIR` points at the copy).
+  `DRGNX_CONFIG_DIR` points at the copy). When the problem still shows with every module off, it tries once more
+  with `settings.el`'s values for packages and Emacs off (`DRGNX_PACKAGE_SETTINGS=off`; drgnx's own settings
+  stay) and says when they are the cause (docs/guide/settings.md, "Safe mode and Turn Off Package Settings").
 - `drgnx doctor` reports packages the manifest needs that are not installed (not those your Emacs ships, such as
   `eglot`), a missing or unreadable lock, and the generations kept.
 

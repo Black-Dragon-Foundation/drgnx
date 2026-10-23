@@ -1125,8 +1125,9 @@ comes back.  One lock held throughout.  Returns (:ok :generation :restored :smok
 (cl-defun drgnx-pkg-bisect (fails &key modules-dir)
   "Find the module that makes FAILS true: FAILS is called with a configuration directory (a copy of
 the user's, whose modules.eld turns some modules off) and returns non-nil when the problem shows.
-Halves the enabled modules each round.  Returns the module, or `:not-a-module' when the problem shows
-with every module off.  The user's own files are never changed."
+Halves the enabled modules each round.  Returns the module; `:package-settings' when the problem shows with
+every module off but goes once settings.el's entries for packages and Emacs are off too (FAILS called with
+DRGNX_PACKAGE_SETTINGS=off in `process-environment'); else `:not-a-module'.  The user's own files are never changed."
   (let* ((user (drgnx-user-dir))
          (state (or (drgnx-pkg--read-file (expand-file-name "modules.eld" user)) (list :version 1)))
          (off (plist-get state :disabled))
@@ -1150,7 +1151,10 @@ with every module off.  The user's own files are never changed."
       (unwind-protect
           (progn
             (unless (try candidates) (drgnx-pkg--error "the problem does not show with your modules on; nothing to bisect"))
-            (if (try nil) :not-a-module
+            (if (try nil)
+                (if (let ((process-environment (cons "DRGNX_PACKAGE_SETTINGS=off" process-environment))) (try nil))
+                    :not-a-module
+                  :package-settings)
               (let ((set candidates))
                 (while (cdr set)
                   (let ((half (seq-take set (/ (length set) 2))))
@@ -1334,8 +1338,11 @@ ExecStart= line after the check and before anything is written.  Never restarts 
                                            (concat "--init-directory=" (expand-file-name "init" drgnx-dir))))
                            (y-or-n-p "Did the problem show? "))))
                 (m (drgnx-pkg-bisect fails)))
-           (drgnx-pkg--print (if (eq m :not-a-module) "the problem shows with every module off: not a module (try drgnx safe)"
-                               (format "the problem comes with module %s (turn it off in Preferences: Modules)" m)))
+           (drgnx-pkg--print (pcase m
+                               (:not-a-module "the problem shows with every module off: not a module (try drgnx safe)")
+                               (:package-settings
+                                "the problem comes with settings.el's values for packages and Emacs (Settings: Turn Off Package Settings; then look at settings.el)")
+                               (_ (format "the problem comes with module %s (turn it off in Preferences: Modules)" m))))
            0))
         (`("service-unit" "--refresh")
          (let* ((r (drgnx-pkg-service-unit-refresh

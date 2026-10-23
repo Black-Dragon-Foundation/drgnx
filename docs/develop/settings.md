@@ -263,7 +263,53 @@ function of the file that owns it; until that file is filled, the function does 
 Safe mode (`drgnx safe`, `DRGNX_SAFE`) runs step 2, then `drgnx-settings-apply-global :owned-only t` (drgnx's own
 settings only), and none of the rest.
 
-## The applier rule (Task 8)
+## The applier rule
+
+`core/drgnx-settings-apply.el` puts drgnx's global layers into Emacs through one custom theme, `drgnx` (design
+§4.2). The theme is declared and enabled once, then taken out of `custom-enabled-themes`, as use-package does with its
+own: `(mapc #'disable-theme custom-enabled-themes)` leaves it alone. **Never `disable-theme 'drgnx`**: it does nothing
+for a theme that is not in the list, and a forced disable would reset a later `setq` to the standard value.
+
+- `(drgnx-settings-winner-p VAR)`: drgnx's layer is Emacs's winner when (1) no theme but `drgnx` has an entry in
+  VAR's `theme-value` (no `user`, `use-package`, colour theme or `changed` stash) and (2) VAR's default value is
+  `equal` to drgnx's entry, or to the standard value when drgnx has none yet. A void VAR meets rule 2; a bound
+  variable with no standard value (a plain `defvar`) does not, so it is stored, never applied (the described
+  `defvar`s of Task 31 get their own branch). Decided from Emacs's data, never from provenance: a `setq` no watcher
+  saw breaks rule 2.
+- `(drgnx-settings-push VAR VALUE)` → `applied` or `stored`. The winner goes through `custom-theme-set-variables`
+  (`custom--inhibit-theme-enable` nil): the value applies and `:set` runs, or, for a void VAR, waits in
+  `saved-value` for the `defcustom` (for a bound VAR drgnx clears that stash at once, as `custom-declare-variable`
+  does for a non-`user` theme: `saved-value` stays Customize's). A value already in effect is only recorded (no `:set` on a no-op, row C18).
+  A loser is stored in place: drgnx's entry is replaced where it stands in `theme-value` (or appended), and
+  `theme-settings` follows. When no entry holds the value in effect (and it is not the standard value), that value
+  first becomes Emacs's `changed` stash at the front, so Emacs's own recalculation (disabling another theme, Erase
+  Customization) keeps it: V3 gives `((changed 80) (drgnx 100))`. **Never `custom-push-theme` for a losing store**:
+  Emacs 31 moves an altered entry to the front (`custom.el:987`), over your Lisp. Before deciding, an option whose
+  `custom-autoload` asks for it is loaded (`custom-load-symbol`), as `custom-theme-set-variables` does (R3).
+- `(drgnx-settings-teardown VAR)`: `custom-push-theme 'theme-value VAR 'drgnx 'reset`, then
+  `custom-theme-recalc-variable` only while the value is still `equal` to drgnx's (V2); `saved-value` is cleared
+  when no theme is left. Returns non-nil when drgnx had an entry.
+- `(drgnx-settings-apply-global &key owned-only)` (start, safe mode, Turn On): reads `settings.el` with
+  `drgnx-settings-file-state`, checks each top-level entry with `drgnx-setting-check` and pushes it, in Emacs's
+  order (`custom--sort-vars`: `:set-after`, minor modes last). An entry that fails falls back alone by `:on-error`:
+  `strict` → torn down to the default; else the value this session last applied for it, else the last good copy's
+  entry when that checks. A failed file falls back the same way per setting from the last good copy. Problems go to
+  `drgnx-settings-apply-problems` and one notice (source `config`, id `settings-entries`); the failed file is the config
+  layer's own notice. `OWNED-ONLY`, `drgnx-settings-package-settings-off` and `DRGNX_PACKAGE_SETTINGS=off` apply only
+  `drgnx-setting-own-p` entries. Returns `((VAR . RESULT)…)`, RESULT `applied`, `stored`, `default`, `problem` or
+  `failed`. It binds `inhibit-interaction` and never signals: the start-up call sites have no `condition-case`.
+- `(drgnx-settings-dormant)`: the entries last applied whose variable is still void (information, never a problem).
+- `drgnx-settings-apply-durations`: seconds per push of the last apply (its `:set` included);
+  `(drgnx-settings-apply-slow &optional THRESHOLD)` lists those over 1 ms, slowest first.
+- **Settings: Turn Off Package Settings** / **Turn On Package Settings** (registry ids `settings-package-off`,
+  `settings-package-on`, in `drgnx-config-register-commands`): teardown of every applied entry drgnx does not own, or
+  `drgnx-settings-apply-global` again. `drgnx-pkg-bisect` gains the step: when the problem shows with every module
+  off, it tries once more with `DRGNX_PACKAGE_SETTINGS=off` and answers `:package-settings` when that clears it.
+- Language overrides (`(:mode …)` sections) are `core/drgnx-settings-mode.el`'s; module claims resolve with G2 in
+  `core/drgnx-settings-resolve.el` before the push.
+
+Tests: `drgnx-settings-apply/*` (`test/unit/settings-apply-test.el`) and the rows C1, C2, C3, C5, C7, C7b, C13, C14,
+C16, C17, C18, C22 (`drgnx-settings-compat/*`, `test/unit/settings-compat-global-test.el`, each in a child Emacs).
 
 ## Provenance
 
