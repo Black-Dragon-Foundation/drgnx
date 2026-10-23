@@ -39,6 +39,7 @@
                                     :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                    "--eval" "(setq load-prefer-newer t)"
                                                    "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-coord"
+                                                   "--eval" "(setq drgnx-coord-writer 'local)"   ; a test's own writer
                                                    "--eval" (format "(progn (drgnx-coord-version) (sleep-for (max 0 (- %f (float-time))))
                                                                        (dotimes (i 30)
                                                                          (princ (format \"RESULT:%%S\\n\" (drgnx-coord-claim (format \"race#%%d\" (1+ i)) %S (drgnx-coord-version))))))"
@@ -74,6 +75,7 @@
                                     :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                    "--eval" "(setq load-prefer-newer t)"
                                                    "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-coord"
+                                                   "--eval" "(setq drgnx-coord-writer 'local)"   ; a test's own writer
                                                    "--eval" (format "(let ((i 0) (cap (+ (float-time) 20)))
                                                                       (princ (condition-case e
                                                                                  (progn

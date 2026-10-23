@@ -6,7 +6,9 @@
 ;; - `no-proof': the same, but the reply carries no proof;
 ;; - `legacy': no challenge, no `hello' ("no method hello", as the Lisp hub of before protocol 1 answers); it ends on
 ;;   `shutdown'.
-;; HOLD-HELLO: hello answers wait for `drgnx-fake-hub-release'.  SILENT: methods never answered.
+;; HOLD-HELLO: hello answers wait for `drgnx-fake-hub-release'.  SILENT: methods never answered.  ERRORS: an alist
+;; (METHOD . (:code :message :path)) of methods answered with that error.  DELAY: seconds before the answer to any other
+;; method (hello and ping answer at once).
 ;; `drgnx-fake-hub-lines' are the requests read, oldest first.  The cap file is written beside SOCKET.
 (require 'cl-lib)
 (require 'drgnx-hub-client)
@@ -45,7 +47,11 @@
           ((and (equal method "shutdown") (eq (process-get server :mode) 'legacy))
            (drgnx-fake-hub--send conn (list :id id :result t))
            (drgnx-fake-hub-stop server))
-          (t (drgnx-fake-hub--send conn (list :id id :result t))))))
+          (t (let* ((err (cdr (assoc method (process-get server :errors))))
+                    (answer (if err (list :id id :error err) (list :id id :result t)))
+                    (delay (process-get server :delay)))
+               (if delay (run-at-time delay nil #'drgnx-fake-hub--send conn answer)
+                 (drgnx-fake-hub--send conn answer)))))))
 
 (defun drgnx-fake-hub--filter (conn chunk)
   (let ((server (process-get conn :fake)) (buf (concat (or (process-get conn :buf) "") chunk)))
@@ -62,7 +68,7 @@
     (process-put conn :nonce (substring (secure-hash 'sha256 (format "%s %s" (random) (float-time))) 0 32))
     (drgnx-fake-hub--send conn (list :event "challenge" :data (list :nonce (process-get conn :nonce))))))
 
-(cl-defun drgnx-fake-hub-start (socket &key (mode 'v1) hold-hello silent (records 2))
+(cl-defun drgnx-fake-hub-start (socket &key (mode 'v1) hold-hello silent (records 2) errors delay)
   "Serve SOCKET as MODE (see the file's commentary), its hello saying RECORDS; the server process."
   (drgnx-hub--private-dir (file-name-directory socket))
   (let ((cap (secure-hash 'sha256 (format "cap %s %s" (random) (float-time))))
@@ -75,6 +81,8 @@
     (process-put server :hold-hello hold-hello)
     (process-put server :silent silent)
     (process-put server :records records)
+    (process-put server :errors errors)
+    (process-put server :delay delay)
     server))
 
 (defun drgnx-fake-hub-lines (server) "The requests SERVER read, oldest first." (reverse (process-get server :lines)))

@@ -420,7 +420,8 @@ subscribers. Eight of the nine kinds main broadcasts are relayed (`agent`, `agen
 `fallback`, `card`, `job`, `budget`, `request`), each decoded against its registry type first; an event of another
 name, or one whose data does not decode, is dropped and logged ("dropped a backend event", its name and the path).
 The backend's `events` is dropped before the relay (logged once per backend start): the front broadcasts the event
-log itself ([Events](#events)).
+log itself ([Events](#events)). Behind the front the backend sends none: `drgnx-hub-main` with a serve socket never
+runs `drgnx-hub--events-check`, so that log line is a sign of an older backend.
 
 **The front's writes.** The front writes work.db's coordination and job tables itself, through norn's writer
 (`runtime/crates/drgnx-ratatoskr/src/coord.rs`; [coordination.md](coordination.md#who-writes-what)): the editor's
@@ -436,6 +437,28 @@ too: its writes and every `coord/notify`, from any class, feed one coalescer tha
 the backend runs delivery and the clash scan as before. `status` says `store: {schema, writer: ready | not-ready |
 read-only, writes}`, the writer's state from the schema at the last tick and the transactions the front's methods
 committed since start.
+
+**The backend writes through the front.** `drgnx-hub-main` with a serve socket sets `drgnx-hub--behind-front` and
+`drgnx-coord-writer` to `front`; without one (the v0 hub, `lisp-hub.sh`) the writer is `local`. Behind the front
+every coordination and job-table write of `core/drgnx-coord.el` is a call to the front's method for it
+([coordination.md](coordination.md#who-writes-what)); its reads stay on the backend's own connection to work.db,
+which sees each write, since the front commits before it answers. The call is `(drgnx-hub-call-front METHOD
+PARAMS &optional DEADLINE)` (`core/drgnx-hub-client.el`), the one place Lisp waits for an answer:
+- it runs only where `drgnx-hub--behind-front` is set; anywhere else it signals "only the Lisp backend calls the
+  front and waits" (editors use the asynchronous `drgnx-hub-call`);
+- one connection, `drgnx-hub--front-conn`, proven like an editor's (the challenge, then a hello with the cap's proof:
+  user class, the front's proof checked) and kept; it never subscribes, so only answers arrive on it, and it never
+  carries `gateway/keys`, `gateway/register` or `subscribe` (refused before anything is sent);
+- it waits with `(accept-process-output CONN 0.05 nil 1)` until the answer or DEADLINE (`drgnx-hub-front-deadline`,
+  10 s). The integer JUST-THIS-ONE reads no other process's output and runs no timer meanwhile, so no filter, timer
+  or handler of the backend runs inside a write; the seam rule below means the front never waits on the backend
+  while it serves the call. The argument must stay an integer: `t` would run timers;
+- a second call while one waits (from a sentinel, which may still run) is refused at once with "a front call is
+  already waiting", with nothing sent;
+- it fails once, never retrying, with `drgnx-hub-front-error` and the data `(:code :message :path)`: the front's
+  error code and path, or code nil for this side's failure (no answer by the deadline, a closed connection, a hub
+  that did not prove itself), which also drops the connection: the next call connects again. Each call's time goes
+  to the backend's log ("drgnx hub: front call METHOD: N ms").
 
 **The seam rule** (call 2). A connection whose peer pid (`SO_PEERCRED`) is the backend's, starting or running, is the
 backend's (`Caller.backend`). The dispatcher's step 2b holds it to what the front serves (`home: front` in the table

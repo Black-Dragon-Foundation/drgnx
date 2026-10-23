@@ -20,7 +20,8 @@
     (make-process :name "coord-mcp" :noquery t :connection-type 'pipe :coding 'utf-8-unix
                   :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                  "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir)
-                                 "-l" "drgnx-coord-mcp" "-f" "drgnx-coord-mcp-main")
+                                 "-l" "drgnx-coord-mcp" "--eval" "(setq drgnx-coord-writer 'local)"   ; a test's own writer
+                                 "-f" "drgnx-coord-mcp-main")
                   :filter (lambda (_p s) (setq drgnx-coord-mcp-test--out (concat drgnx-coord-mcp-test--out s))))))
 
 (defvar drgnx-coord-mcp-test--id 0)

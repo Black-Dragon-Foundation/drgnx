@@ -175,7 +175,21 @@ the Lisp backend"):
 | a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`drgnx-ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection); the Lisp backend too |
 | jobs, tasks, leases, decisions, agents, the job runner's cards, held counts, the daily prune | the seam's `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` | the Lisp job runner (the backend), until it moves to Rust (phase 6) |
 | what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting |
-| everything else the Lisp hub writes today | `core/drgnx-coord.el` in the backend | the backend, until its calls move onto the seam |
+
+The Lisp side writes none of these tables itself. `drgnx-coord-writer` decides what each public writer of
+`core/drgnx-coord.el` does (a `pcase` in every one, including those that write with a direct `sqlite-execute`):
+- `front` (the backend behind Ratatoskr: `drgnx-hub-main` with a serve socket) calls the front's method above through
+  `drgnx-hub-call-front` (hub.md, "The backend writes through the front") and decodes its answer to the plist, id or
+  t/nil the function returned before. A refusal of the front is an `error` with its message. `claim`,
+  `set-status`, `heartbeat`, `set-seen` and `events-prune` have no front method (only the coordination tools,
+  `norn::tools`, write them): behind the front they signal "NAME has no front method"; `events-prune-daily` is
+  `coord/prune`, whose retention is the front's;
+- `local` (the standalone Lisp hub without a serve socket, `lisp-hub.sh`, and the unit tests: `harness/run-ert.el`
+  sets it, and a test's child Emacs that writes passes `--eval "(setq drgnx-coord-writer 'local)"`) writes work.db
+  as before;
+- `refuse`, the default, signals "coordination writes go through the drgnx hub (Ratatoskr)": an editor, the CLI and
+  the Lisp coordination server (`drgnx-coord-mcp-main`, until agents use the Rust bridge) never write these tables.
+  `drgnx-coord--tx` signals unless `local`.
 
 The front's methods take the Lisp keywords as params (`messages/send` `{recipient, text, job?, sender?, seen?,
 answers?, question?}`; only the backend may name a `sender`) and answer the Lisp results typed: `messages/send` is
