@@ -352,6 +352,13 @@ fn every_writer_fixture_replays() {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.to_string_lossy().ends_with(".input.json"))
+        // the tools' cases (`tools-*`) are tests/tools.rs's
+        .filter(|p| {
+            !p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("tools-")
+        })
         .collect();
     inputs.sort();
     assert!(!inputs.is_empty(), "no cases in {}", dir.display());

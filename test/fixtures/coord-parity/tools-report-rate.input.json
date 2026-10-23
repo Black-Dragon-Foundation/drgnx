@@ -1,0 +1,30 @@
+{
+  "setup": [],
+  "clock": [],
+  "tables": ["card"],
+  "calls": [
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000000.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check"}},
+    {"tool": "report_test", "now": 1700000061.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"command": "make check", "passed": 1}}
+  ]
+}

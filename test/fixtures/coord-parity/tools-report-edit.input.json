@@ -1,0 +1,22 @@
+{
+  "setup": [
+    "insert into agent (id, kind, name, cwd, worktree, branch, base, started, seen) values ('s-4', 'job', 'impl', '/nonexistent-parity/repo', '/nonexistent-parity/repo', 'b1', 'abc123', 1.0, 1.0)",
+    "insert into agent (id, kind, name, cwd, started, seen) values ('s-5', 'job', 'wide', '/', 1.0, 1.0)"
+  ],
+  "clock": [],
+  "tables": ["agent"],
+  "calls": [
+    {"tool": "hello", "now": 100.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {}},
+    {"tool": "report_edit", "now": 101.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"},
+     "args": {"paths": ["src/a.rs", "./b.rs", "/nonexistent-parity/repo/c/d.rs"], "summary": "three"}},
+    {"tool": "report_edit", "now": 102.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": "x.rs, y.rs"}},
+    {"tool": "report_edit", "now": 103.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": "one.rs\n two, three.rs \n"}},
+    {"tool": "report_edit", "now": 104.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": ["../up.rs"]}},
+    {"tool": "report_edit", "now": 105.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": ["/ssh:h:/x"]}},
+    {"tool": "report_edit", "now": 106.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": ["/nonexistent-parity/other/x"]}},
+    {"tool": "report_edit", "now": 107.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": []}},
+    {"tool": "report_edit", "now": 108.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": ["f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs","f.rs"]}},
+    {"tool": "report_edit", "now": 109.5, "identity": {"agent": "s-4", "job": "j2", "task": "j2#1"}, "args": {"paths": ["__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__","__REP:a:100__"]}},
+    {"tool": "report_edit", "now": 110.5, "identity": {"agent": "s-5", "job": "j2"}, "args": {"paths": ["x"]}}
+  ]
+}

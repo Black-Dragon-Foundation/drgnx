@@ -1,0 +1,14 @@
+{
+  "setup": [
+    "insert into job values ('j4', 'Outside', null, null, 'running', 1.0, null)",
+    "insert into jtask (id, job, n, title, role, status) values ('j4#1', 'j4', 1, 'One', 'implement', 'ready')"
+  ],
+  "clock": [],
+  "tables": ["message"],
+  "calls": [
+    {"tool": "report_test", "now": 500.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"command": "cargo test", "passed": 3, "failed": 1}},
+    {"tool": "ask_user", "now": 501.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"question": "ok?", "task": "j4#1"}},
+    {"tool": "ask_user", "now": 502.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"question": "ok?", "task": "mine"}},
+    {"tool": "report_test", "now": 503.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"command": "  "}}
+  ]
+}

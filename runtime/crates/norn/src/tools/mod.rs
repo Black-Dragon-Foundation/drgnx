@@ -15,7 +15,9 @@ pub mod job;
 pub mod read;
 pub mod report;
 
-/// Who is calling a tool.  Never built from a tool argument or an environment variable.
+/// Who is calling a tool.  Never built from a tool argument or an environment variable ([`identity`] holds its
+/// rules).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Identity {
     /// From a session socket (Task 10); `home` is the cwd the session was minted with.
     Session {
@@ -45,21 +47,51 @@ pub trait Hub: Send + Sync {
     fn notify(&self);
 }
 
-/// The tools' shared state.
-#[allow(dead_code)] // read by the tools of Tasks 7 and 8
+/// The clock the tools read (`float-time`): seconds since the epoch.
+pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
+
+/// The tools' shared state: one per hub, shared by every connection (the report limit counts per identity across
+/// them).
 pub struct Coord {
     db: CoordDb,
     hub: Arc<dyn Hub>,
     rates: Mutex<guard::Rates>,
+    clock: Clock,
 }
 
 impl Coord {
     pub fn new(db: CoordDb, hub: Arc<dyn Hub>) -> Coord {
+        let clock: Clock = Arc::new(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64())
+        });
+        Coord::with_clock(db, hub, clock)
+    }
+
+    /// A `Coord` whose time is CLOCK's (tests fix it, as the Lisp tests stub `drgnx-coord-mcp--now`).
+    pub fn with_clock(db: CoordDb, hub: Arc<dyn Hub>, clock: Clock) -> Coord {
         Coord {
             db,
             hub,
             rates: Mutex::default(),
+            clock,
         }
+    }
+
+    /// The store the tools write through.
+    pub fn db(&self) -> &CoordDb {
+        &self.db
+    }
+
+    /// The hub: its sessions, and `notify` after every write (the Lisp `drgnx-coord-mcp--notify-hub`).
+    pub fn hub(&self) -> &dyn Hub {
+        &*self.hub
+    }
+
+    /// Now, as `float-time` gives it.
+    pub fn now(&self) -> f64 {
+        (self.clock)()
     }
 }
 
