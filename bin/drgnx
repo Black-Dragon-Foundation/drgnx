@@ -356,13 +356,14 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     build=(--build-arg "FEDORA=$fedora")
     args=(--security-opt seccomp=unconfined --security-opt label=disable --memory 3g)   # the GUI tier's options; tmux and Emacs sessions
     mount="$here:/src:ro"
-    # packages the key and popup tests load (kkp, corfu), read-only; without them those tests skip
-    if [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
-      elpa="$(cd "$DRGNX_USER_ELPA" && pwd)"
-      # a `:' would split -v's SOURCE:TARGET:OPTIONS (and could add options)
-      case "$elpa" in *:*) echo "drgnx: DRGNX_USER_ELPA must not contain ':' (it is mounted with -v): $elpa" >&2; return 2 ;; esac
-      args+=(-v "$elpa:/elpa:ro" -e DRGNX_USER_ELPA=/elpa)
-    fi
+  fi
+  # packages the key and popup tests (kkp, corfu) and the perf lab's terminal workloads (eat) load, read-only; without
+  # them those tests skip
+  if { [ "$tier" = tty ] || [ "$tier" = perf ]; } && [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
+    elpa="$(cd "$DRGNX_USER_ELPA" && pwd)"
+    # a `:' would split -v's SOURCE:TARGET:OPTIONS (and could add options)
+    case "$elpa" in *:*) echo "drgnx: DRGNX_USER_ELPA must not contain ':' (it is mounted with -v): $elpa" >&2; return 2 ;; esac
+    args+=(-v "$elpa:/elpa:ro" -e DRGNX_USER_ELPA=/elpa)
   fi
   echo "container runtime: $rt" >&2
   if [ -n "$prebuilt" ]; then

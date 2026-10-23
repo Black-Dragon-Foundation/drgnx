@@ -135,7 +135,7 @@ seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out 
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
-In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the two mock-agent ones, the Live view and the terminal ones, the last three for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. `transcript-replay` (the synthetic day's stream, below) replaces `agent-stream` there.
+In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the two mock-agent ones, the Live view and the terminal ones, the last three for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. With `DRGNX_USER_ELPA` naming a directory that holds an `eat-VERSION` package, `bin/drgnx test --container --perf` mounts it read-only and the terminal workloads run in the container too (the workers' OT3 gate measures `terminal-output` so). `transcript-replay` (the synthetic day's stream, below) replaces `agent-stream` there.
 
 **Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
 reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
@@ -473,7 +473,8 @@ Without the feature the probe reports `:watchdog nil` and no stalls row is judge
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 
 **The switch.** `DRGNX_PERF_WATCHDOG` is read once when a session records: unset or `default` runs
-`nidhogg-watchdog-mode` at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off.
+`nidhogg-watchdog-mode` at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), a number at that many
+ms (`16`: the workers' gates, whose `stalls-ge16` rows count stalls of 16 ms or more), `off` leaves it off.
 
 **Budgets.** `(W (:stalls) 0)`, `(W (:gc :max) 250)` and `(W (:gc :p95) 50)` for every input workload. They are
 reported until seeded (`drgnx-perf-watchdog-gated`), as every new row is. The GC max is skipped when the workload
@@ -499,7 +500,7 @@ On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without
 `:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase, the main thread's waits for a
 worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
 `:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
-`DRGNX_PERF_WATCHDOG=on`).
+`DRGNX_PERF_WATCHDOG=16`, the gates' setting, or `on`).
 
 **Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it at idle
 through `drgnx-timer-*` and records `:complete-ms`. The work can outlast the keys (a compile flood, the reparse after a

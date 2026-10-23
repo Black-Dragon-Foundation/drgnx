@@ -33,7 +33,11 @@
   (should (equal (perf-watchdog-test--env "on") '(t . 1)))
   (should (equal (perf-watchdog-test--env nil) '(t . 100)))
   (should (equal (perf-watchdog-test--env "default") '(t . 100)))
-  (should (null (car (perf-watchdog-test--env "off")))))
+  (should (null (car (perf-watchdog-test--env "off"))))
+  ;; a number: that threshold (the gates' `stalls-ge16' rows run at 16); anything else is the default
+  (should (equal (perf-watchdog-test--env "16") '(t . 16)))
+  (should (equal (perf-watchdog-test--env "0") '(t . 100)))
+  (should (equal (perf-watchdog-test--env "16ms") '(t . 100))))
 
 (ert-deftest drgnx-perf/stalls-probe-shape ()
   (perf-watchdog-test--with-feature

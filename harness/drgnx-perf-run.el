@@ -412,13 +412,24 @@ order.  A name that is no workload is an error: a typo must not run nothing and 
         (unless (assq (intern n) workloads) (error "DRGNX_PERF_WORKLOADS: no workload %S" n)))
       (seq-filter (lambda (w) (member (symbol-name (car w)) names)) workloads))))
 
+(defun drgnx-perf-run--user-elpa ()
+  "The package directory $DRGNX_USER_ELPA names, or nil."
+  (let ((dir (getenv "DRGNX_USER_ELPA")))
+    (and dir (not (string-empty-p dir)) (expand-file-name dir))))
+
+(defun drgnx-perf-run--eat-elpa-p ()
+  "Non-nil when $DRGNX_USER_ELPA holds an eat package (the terminal workloads can then run in the container)."
+  (let ((elpa (drgnx-perf-run--user-elpa)))
+    (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`eat-[0-9.]+\\'") t)))
+
 (defun drgnx-perf-run--terminal-setup-form (command &rest switches)
   "The terminal workloads' setup: eat (from the user's packages if need be) and the session functions they use.
 The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell configuration is involved."
   (prin1-to-string
    `(progn
       (unless (require 'eat nil t)
-        (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+        ;; the lab's $DRGNX_USER_ELPA, put in here: the session does not inherit it
+        (let* ((elpa (expand-file-name (or ,(drgnx-perf-run--user-elpa) "~/.config/emacs/elpa")))
                (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`eat-[0-9.]+\\'"))))))
           (unless dir (error "The terminal workloads need the eat package"))
           (add-to-list 'load-path dir)
@@ -1083,6 +1094,12 @@ container.  Seed one (budgets.eld) and take it off this list.")
 them and leaves them out (as it leaves out the evil workloads without evil), so one that cannot run there does not
 fail the whole run; they still run on a host.  Each is also in `drgnx-perf-run-unseeded'.")
 
+(defun drgnx-perf-run--container-skip (workload)
+  "Why WORKLOAD is left out in the container (`drgnx-perf-run-container-skipped'), or nil.  The terminal workloads
+run when $DRGNX_USER_ELPA holds eat (`bin/drgnx' mounts it in the perf tier)."
+  (unless (and (memq workload '(terminal-typing terminal-output)) (drgnx-perf-run--eat-elpa-p))
+    (cdr (assq workload drgnx-perf-run-container-skipped))))
+
 (defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
 (defconst drgnx-perf-run-hook-command-budget 1.5
   "ms (p90): all the audited hook functions and timers together, per command, judged in the --audit pass.  The
@@ -1127,7 +1144,7 @@ its own cost to the other numbers)."
         (progn
           (drgnx-perf-run--check-gc sess)
           (dolist (w (drgnx-perf-run--only selected))
-            (if-let* ((why (and (drgnx-env-container) (cdr (assq (car w) drgnx-perf-run-container-skipped)))))
+            (if-let* ((why (and (drgnx-env-container) (drgnx-perf-run--container-skip (car w)))))
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
               (message "perf: %s…" (car w))
               (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))

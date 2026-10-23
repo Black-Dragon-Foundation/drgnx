@@ -207,6 +207,24 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
       (should (assq (car u) drgnx-perf-run-unseeded))
       (should (stringp (cdr u))))))
 
+(ert-deftest drgnx-perf-run/the-terminal-workloads-run-in-the-container-with-eat ()
+  ;; DRGNX_USER_ELPA with an eat package: the terminal workloads are not skipped, and their setup names that directory
+  ;; (the session does not inherit the variable); the other skipped workloads stay skipped
+  (let ((elpa (make-temp-file "drgnx-perf-elpa" t)))
+    (unwind-protect
+        (progn
+          (let ((process-environment (cons "DRGNX_USER_ELPA" process-environment)))
+            (should (stringp (drgnx-perf-run--container-skip 'terminal-output))))
+          (let ((process-environment (cons (concat "DRGNX_USER_ELPA=" elpa) process-environment)))
+            (should (stringp (drgnx-perf-run--container-skip 'terminal-output)))   ; no eat in it yet
+            (make-directory (expand-file-name "eat-0.9.4" elpa))
+            (should-not (drgnx-perf-run--container-skip 'terminal-output))
+            (should-not (drgnx-perf-run--container-skip 'terminal-typing))
+            (should (stringp (drgnx-perf-run--container-skip 'live-view)))
+            (should (string-search (prin1-to-string elpa)
+                                   (plist-get (cdr (assq 'terminal-output (drgnx-perf-run--workloads))) :setup)))))
+      (delete-directory elpa t))))
+
 (ert-deftest drgnx-perf-run/the-terminal-workloads-run-a-program-not-a-shell ()
   "terminal-typing runs cat, terminal-output a seq loop; their setup forms are readable and name no shell config."
   (let ((ws (drgnx-perf-run--workloads)))
