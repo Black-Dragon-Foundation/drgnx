@@ -192,9 +192,11 @@ dependencies = [
 name = "drgnx-fuzz"
 version = "0.0.0"
 dependencies = [
+ "bifrost",
  "bytes",
  "drgnx-ratatoskr",
  "gleipnir",
+ "http",
  "libfuzzer-sys",
  "mimir",
  "norn",

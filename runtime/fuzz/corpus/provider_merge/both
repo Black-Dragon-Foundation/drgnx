@@ -1,0 +1,3 @@
+anthropic,google
+azure
+{"model":"a","provider":{"only":["google","x"],"zdr":false}}
