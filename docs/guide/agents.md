@@ -350,19 +350,17 @@ agent (`claude`, `codex`, `zed`, …: a short lower-case name):
 
 For Claude Code, that is `claude mcp add drgnx -- <data>/bin/ratatoskr mcp-bridge --outside --kind claude`. For Codex,
 it is a `[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's
-settings page can add it for you. The bridge redials when the hub restarts, so the agent keeps its tools. Configs
-written before the bridge (`<checkout>/bin/drgnx coord mcp --kind KIND`) keep working: that command now runs the bridge.
+settings page can add it for you. Configs written before the bridge (`<checkout>/bin/drgnx coord mcp --kind KIND`)
+keep working: that command now runs the bridge.
 
-The agent must start the server in its project folder. drgnx takes the folder the server starts in (its git
-worktree) as the place the agent works. A server started in your home folder, or at `/`, can say hello, but its
-file reports are refused.
+The agent must start the bridge in its project folder (`--cwd DIR` names it when the agent cannot). drgnx takes the
+folder it starts in (its git worktree) as the place the agent works. A bridge started in your home folder, or at `/`,
+can say hello, but its file reports are refused.
 
-With Ratatoskr, drgnx's runtime, the server is `ratatoskr mcp-bridge --outside --kind KIND` (`--cwd DIR` names the
-project folder when the agent cannot start it there). It survives a restart of the hub: while the hub is away the
-agent still sees its tools, a call waits up to 10 seconds and then reports "drgnx hub restarting; retry", and a call
-that was running when the hub went is reported as an error, never sent twice: the agent checks before it retries.
-After 10 minutes without a hub the server ends. It refuses to connect when the hub's socket folder is open to other
-users.
+The bridge survives a restart of the hub: while the hub is away the agent still sees its tools, a call waits up to 10
+seconds and then reports "drgnx hub restarting; retry", and a call that was running when the hub went is reported as
+an error, never sent twice: the agent checks before it retries. After 10 minutes without a hub the bridge ends. It
+refuses to connect when the hub's socket folder is open to other users.
 
 The agent then gets four tools to report with:
 - **hello**: who it is and where it works;

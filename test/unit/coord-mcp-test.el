@@ -279,28 +279,19 @@
     (should (equal (plist-get (drgnx-coord-task "j#1") :status) "claimed"))
     (should-not (cdr (drgnx-coord-mcp-test--tool proc "update_task" (list :task "j#1" :status "needs-input" :seen_version (drgnx-coord-version)))))))
 
-(ert-deftest drgnx-coord-mcp/server-spec-ignores-sigpipe ()
-  ;; the agent starts this server: a write to an agent that left must be an error in it, not its end (libuv resets
-  ;; SIGPIPE in an agent's children, so the command ignores it itself)
-  (let ((spec (drgnx-coord-mcp-server-spec "a" :job "j")))
-    (should (equal (plist-get spec :command) "sh"))
-    (let ((args (append (plist-get spec :args) nil)))
-      (should (equal (car args) "-c"))
-      (should (string-search "trap '' PIPE" (nth 1 args)))
-      (should (member "drgnx-coord-mcp-main" args))))
-  (let ((system-type 'windows-nt))
-    (should (file-executable-p (plist-get (drgnx-coord-mcp-server-spec "a") :command)))))
+;; The old `server-spec-ignores-sigpipe' is gone: its point (a shell wrapper that traps SIGPIPE for a batch Emacs) no
+;; longer exists, since the entry runs the Rust bridge directly and a Rust binary ignores SIGPIPE itself.
 
 (ert-deftest drgnx-coord-mcp/the-server-spec-for-acp ()
-  (let* ((process-environment (append '("DRGNX_DATA_DIR=/d" "XDG_STATE_HOME=/s") process-environment))
-         (spec (drgnx-coord-mcp-server-spec "agent one" :job "j" :task "j#1"))
-         (env (mapcar (lambda (e) (cons (plist-get e :name) (plist-get e :value))) (plist-get spec :env))))
+  (let* ((process-environment (cons "DRGNX_RATATOSKR_BIN=/usr/bin/true" process-environment))
+         (spec (drgnx-coord-mcp-server-spec '(:sid "x1" :socket "/run/s/x1/mcp.sock"))))
     (should (equal (plist-get spec :name) "drgnx"))
-    (should (executable-find (plist-get spec :command)))
-    (should (member "drgnx-coord-mcp-main" (append (plist-get spec :args) nil)))
-    (should (equal (cdr (assoc "DRGNX_AGENT" env)) "agent one"))
-    (should (equal (cdr (assoc "DRGNX_TASK" env)) "j#1"))
-    (should (equal (cdr (assoc "DRGNX_DATA_DIR" env)) "/d"))))
+    (should (equal (plist-get spec :command) "/usr/bin/true"))   ; the binary itself: no shell, no Emacs
+    (should (equal (plist-get spec :args) ["mcp-bridge" "--socket" "/run/s/x1/mcp.sock"]))
+    (should (equal (plist-get spec :env) []))                    ; the socket is the identity
+    ;; no binary: the message says how to build it
+    (let ((process-environment (append '("DRGNX_RATATOSKR_BIN" "DRGNX_DATA_DIR=/nonexistent-drgnx") process-environment)))
+      (should-error (drgnx-coord-mcp-server-spec '(:sid "x1" :socket "/s"))))))
 
 (ert-deftest drgnx-coord-mcp/work-status-gives-the-plan-rows-as-utf-8-json ()
   "`work_status' answers what `drgnx work status --json' does: one object per plan, a non-ASCII title as it went in."
@@ -691,12 +682,12 @@ data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
       (should (seq-every-p (lambda (e) (null (plist-get e :job))) (drgnx-coord-events :agent me)))
       (should (= (drgnx-coord-mcp-test--rate-cards) 1)))))
 
-(ert-deftest drgnx-coord-mcp/the-outside-spec-runs-bin-drgnx-coord-mcp ()
-  "The MCP item M11c-2's agent settings pages write (C11)."
-  (should (equal (drgnx-coord-mcp-outside-spec "codex")
-                 (list :type 'stdio :command (expand-file-name "bin/drgnx" drgnx-dir) :args '("coord" "mcp" "--kind" "codex"))))
-  (should (equal (plist-get (drgnx-coord-mcp-outside-spec 'claude) :args) '("coord" "mcp" "--kind" "claude")))
-  (should (file-executable-p (plist-get (drgnx-coord-mcp-outside-spec "claude") :command)))
+(ert-deftest drgnx-coord-mcp/the-outside-spec-runs-the-bridge ()
+  "The MCP item M11c-2's agent settings pages write (C11): Ratatoskr's bridge at its installed path."
+  (let ((bin (expand-file-name "bin/ratatoskr" (drgnx-data-dir))))
+    (should (equal (drgnx-coord-mcp-outside-spec "codex")
+                   (list :type 'stdio :command bin :args '("mcp-bridge" "--outside" "--kind" "codex"))))
+    (should (equal (plist-get (drgnx-coord-mcp-outside-spec 'claude) :args) '("mcp-bridge" "--outside" "--kind" "claude"))))
   (should-error (drgnx-coord-mcp-outside-spec "a b"))
   (should-error (drgnx-coord-mcp-outside-spec "")))
 
