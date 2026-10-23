@@ -34,6 +34,11 @@
 (require 'drgnx-notice-echo)
 (require 'drgnx-notice-save)
 (require 'drgnx-notices)
+(require 'drgnx-settings-migrate)
+(require 'drgnx-settings-apply)
+(require 'drgnx-settings-prov)
+(require 'drgnx-user-lisp)
+(require 'drgnx-settings-live)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -43,13 +48,14 @@
 
 (defun drgnx--load-user-config (&optional file)
   "Load FILE (default `drgnx-user-config-file') when it exists; an error in it is a notice, never stops
-the start."
+the start.  Provenance records which of its forms sets what (`drgnx-settings-prov-with-load')."
   (let ((file (or file (drgnx-user-config-file))))
-    (when (file-exists-p file)
-      (condition-case err (load file nil 'nomessage 'nosuffix)
-        (error (drgnx-notify 'config 'fail (format "%s: %s (the rest of it did not run)" (abbreviate-file-name file)
-                                                   (error-message-string err))
-                             :id 'config-el :life 'condition :command 'preferences-user-config))))))
+    (drgnx-settings-prov-with-load file
+      (when (file-exists-p file)
+        (condition-case err (load file nil 'nomessage 'nosuffix)
+          (error (drgnx-notify 'config 'fail (format "%s: %s (the rest of it did not run)" (abbreviate-file-name file)
+                                                     (error-message-string err))
+                               :id 'config-el :life 'condition :command 'preferences-user-config)))))))
 
 (defun drgnx-open-user-config ()
   "Open your config.el — made from a short template the first time."
@@ -124,11 +130,14 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only
-          (unless safe
+          (drgnx-settings-migrate-maybe)               ; the old settings files into settings.el, once (safe mode too)
+          (if safe
+              (drgnx-settings-apply-global :owned-only t)   ; safe mode: drgnx's own settings only
             (condition-case err (drgnx-pkg-activate)
               (error (drgnx-notify 'modules 'fail (format "packages were not activated: %s" (error-message-string err))
                                    :id 'packages :life 'condition)))
             (drgnx-pkg-guard-mode 1)
+            (drgnx-settings-apply-global)              ; settings.el: after the packages, before custom.el
             (when custom-file (drgnx--load-user-config custom-file)))  ; what Customize saved: packages active, guarded
           (drgnx--core-commands)
           ;; Modules that run later (idle, first frame, …) register commands after the keys were applied.
@@ -139,7 +148,10 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
             (condition-case err (drgnx-modules-start (expand-file-name "modules" drgnx-dir))   ; never stops the rest
               (error (drgnx-notify 'modules 'fail (format "modules did not start: %s" (error-message-string err))
                                    :id 'start :life 'condition)))
-            (drgnx--load-user-config)))
+            (drgnx--load-user-config)                  ; config.el
+            (drgnx-user-lisp-load-all)                 ; your Lisp files
+            (drgnx-settings-apply-pass)                ; the end-of-init :apply pass
+            (drgnx-settings-live-start)))              ; changes to the settings files apply at once
         (drgnx-keys-apply)
         (drgnx-modal-apply-pending)                    ; a Vim stack chosen before its engine was installed
         (drgnx-surfaces-refresh))

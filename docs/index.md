@@ -32,6 +32,7 @@ Using drgnx.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 - [Trusted folders](guide/security.md): Trust This Folder, the "Restricted Mode" mark, what files from untrusted folders cannot make Emacs do.
 - [In a terminal](guide/terminal.md): the graphical window, a capable terminal and a legacy one (Alt+Shift and F6); what each terminal can do (kitty, WezTerm, foot, Ghostty, Ptyxis, tmux …) and which rows a test ran, the lines that fix what is missing, SSH, tmux, `EDITOR`, the clipboard, the mouse, colours.
+- [Settings](guide/settings.md): settings.el, the Settings page, and how your settings meet your Lisp, Customize and packages (being written).
 - [Your files](guide/files.md): when a settings file has a mistake (the last good copy, Open and Reset), backups, locks and `config-good/`, two machines sharing one folder.
 - [A second machine](guide/second-machine.md): what travels (the whole config dir), what stays on this machine (the data, state and cache dirs), paths written `~/…`, the doctor's `portable-config` check, provider keys in `secrets.age`, the one command `drgnx bootstrap`.
 - [Notices](guide/notices.md): how drgnx tells you things; the two counts in the mode line and the Notices list; desktop notifications for everything waiting on you, once each, while no drgnx window has focus (D-Bus, `osascript` on macOS), and the off switch.
@@ -57,6 +58,7 @@ How drgnx is built, tested and measured.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
 - [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
+- [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.

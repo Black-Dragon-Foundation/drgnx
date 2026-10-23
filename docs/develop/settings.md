@@ -1,7 +1,7 @@
 # Settings (contributors)
 
 How drgnx's settings work inside: the files, the layers and how they are applied, and the two readers that read them.
-The user's side is [docs/guide/settings.md](../guide/settings.md) (once it exists).
+The user's side is [docs/guide/settings.md](../guide/settings.md).
 
 ## The data subset
 
@@ -135,3 +135,50 @@ mutant is caught or times out, but for these equivalent ones, which no input can
 
 Floats are compared by value on the Rust side and in `drgnx-huginn/differential-fresh-seed`: any NaN equals any NaN,
 `-0.0` differs from `0.0`.
+
+## The writer (Task 6)
+
+## Declaring a setting (Task 7)
+
+## The start-up order (Task 5)
+
+`drgnx-init` (`core/drgnx.el`) and `init/early-init.el` call the settings code in one fixed order. Each call is a
+function of the file that owns it; until that file is filled, the function does nothing.
+
+1. `init/early-init.el`: `drgnx-user-lisp-load-early` (`core/drgnx-user-lisp.el`, loaded by its path): your
+   `:early t` Lisp files. Not in safe mode.
+2. `drgnx-settings-migrate-maybe` (`core/drgnx-settings-migrate.el`): the old settings files into `settings.el`, once.
+3. `drgnx-pkg-activate`, then `drgnx-settings-apply-global` (`core/drgnx-settings-apply.el`): `settings.el`, after the
+   packages are active and before `custom.el`.
+4. `custom.el`, then (after the modules start) `config.el`: each loaded by `drgnx--load-user-config` inside
+   `drgnx-settings-prov-with-load` (`core/drgnx-settings-prov.el`), which records who sets what.
+5. `drgnx-user-lisp-load-all` (`core/drgnx-user-lisp.el`): your Lisp files.
+6. `drgnx-settings-apply-pass`, then `drgnx-settings-live-start` (`core/drgnx-settings-live.el`): the end-of-init
+   `:apply` pass, then the watches that apply a changed settings file at once.
+
+Safe mode (`drgnx safe`, `DRGNX_SAFE`) runs step 2, then `drgnx-settings-apply-global :owned-only t` (drgnx's own
+settings only), and none of the rest.
+
+## The applier rule (Task 8)
+
+## Provenance (Task 11)
+
+## The Lisp index (Task 12)
+
+## Testing in a child Emacs (Task 5)
+
+A compatibility row runs in a child Emacs of its own, under a fresh temporary HOME and config dir, so it never sees
+the test runner's state, `~` or your drgnx (`test/settings-child.el`; its own test is
+`drgnx-settings-child/a-child-has-a-temp-home`).
+
+- `(drgnx-settings-test-child FORMS :files FILES :env ENV)` writes FILES (`(NAME . TEXT)`; NAME relative to the
+  config dir, or `~/…` for the temp HOME), starts this Emacs batch and `-Q` with the runner's `load-path`, requires
+  `drgnx` as a test file does (no init file, no `drgnx-init`: a form calls it when a row needs a start), evaluates
+  FORMS in order and returns `(:results :values :error :exit :output :root)`: each value printed and read back, what
+  stopped the forms, the exit code and the child's output. ENV strings win over the test environment
+  (`drgnx-test-env`); `DRGNX_SAFE=1` starts in safe mode, `DRGNX_SETTINGS_TEST_STOCK=1` gives a stock Emacs (drgnx
+  not loaded).
+- `(drgnx-settings-test-check-row VAR :value :state :describe :source :stock-equal)`, a form in the child, asserts
+  the row's checks: the effective value, `custom-variable-state`, `describe-variable`'s text, the
+  source `drgnx-settings-explain` names, the stock answer (`drgnx-settings-test-answer` in a stock child with the same
+  files), and always that the explained winner is `symbol-value`. A failed check comes back as the child's `:error`.
