@@ -508,6 +508,29 @@ pub fn by_n(conn: &Connection, n: i64) -> rusqlite::Result<Option<Ent>> {
     .optional()
 }
 
+/// Point SLUG at the project entity PROJECT in `project_alias` (a new slug, or one that moves), stamped with this
+/// tx. Which slugs a project may take is the caller's policy (norn's `project::register`); an entity that is not of
+/// kind `project` is refused.
+pub fn set_alias(tx: &mut Tx<'_>, slug: &str, project: i64) -> Result<(), WriteError> {
+    let kind: Option<String> = tx
+        .sql()
+        .query_row("select kind from entity where n = ?1", [project], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if kind.as_deref() != Some("project") {
+        return Err(WriteError::Refused(format!(
+            "entity {project} is not a project"
+        )));
+    }
+    tx.sql().execute(
+        "insert into project_alias (slug, project, tx) values (?1, ?2, ?3) \
+         on conflict(slug) do update set project = excluded.project, tx = excluded.tx",
+        params![slug, project, tx.id()],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

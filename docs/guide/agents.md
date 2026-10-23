@@ -339,6 +339,19 @@ minutes the task is free again (the Work cockpit's What needs you shows it; mess
 there too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
+## What an agent can read
+
+drgnx's store (tasks, decisions, notes, and how they link) is shared by every agent, but each agent reads only its
+own **project**: the git repository it was started in, all of its worktrees included (a repository is known by its
+first commit, so renaming its folder changes nothing). An agent started outside any repository reads nothing but the
+names of agents, unless a grant opens a project to it, and writes nothing. Things in other projects are left out of what it reads and only counted ("3 hidden"), never named.
+
+To let agents read another project, give them a grant (an agent can ask for one; the request waits for you in the
+Work cockpit): for every agent in a project, for one profile, or for one session, until you revoke it or it expires.
+Grants open reading only: agents still write only into their own project. Whatever another agent wrote reaches an
+agent marked as that agent's text, as data rather than instructions. More in
+[security.md](security.md#grants).
+
 ## Agents outside drgnx
 
 Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their

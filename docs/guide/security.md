@@ -139,6 +139,27 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 - Keep both files `0600`. An opt-in file that others may write is ignored entirely. `drgnx doctor` lists every entry
   it ignored and why.
 
+## Grants
+
+An agent reads only its own project in drgnx's store: the project of the folder it was started in (for an agent
+outside drgnx, the folder its bridge reported). To let it read another project, you give a **grant**; nothing else
+widens what it sees.
+
+- A grant is for a project (every agent working in it), a profile (every session of that profile, in any project)
+  or one session, and opens one project or all of them (`*`, future ones included). It may expire.
+- A second kind of grant lets agents edit the title, text and status of tasks **you** made, one task or a whole
+  project. It never reaches a task in a project other than the agent's own: no grant lets an agent write into
+  another project.
+- **Only you make, change and revoke grants.** The store refuses any write of a grant that does not come from you,
+  whatever path it takes (an agent's tool, a proposed change, an import, a scanned file), and the same holds for the
+  store's settings. An agent can only ask (an access card in the Work cockpit), never grant itself or another
+  anything.
+- Revoking takes effect at once: the next read by any agent runs without it, and a walk through the graph already
+  running stops at its next step.
+- An agent sees the grants given to it, never the others (they would name your other projects).
+- Text agents wrote is shown to other agents as data, not instructions, fenced with its author and project, even
+  under a grant and even to the agent that wrote it.
+
 ## Secrets in the store
 
 An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store
