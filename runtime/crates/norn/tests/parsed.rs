@@ -205,9 +205,11 @@ fn data_path_into_org_is_refused() {
     let f = fx();
     let mut c = db();
     let notes = f.notes();
+    // each refused by its own check: data.path through the record's paths, data.repo and data.worktree by name
     for (key, value) in [
         ("path", notes.clone()),
         ("repo", f.home.join("org").display().to_string()),
+        ("worktree", f.home.join("org").display().to_string()),
     ] {
         let mut src = plan_source(&f.plan);
         src["entities"][1]["data"][key] = json!(value);

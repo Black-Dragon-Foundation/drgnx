@@ -1024,6 +1024,41 @@ fn denied_sources_are_not_migrated() {
 }
 
 #[test]
+fn an_edge_whose_own_source_is_denied_is_not_migrated() {
+    // Both ends pass the node door; only the edge's source names a file under org/ (the edge door alone denies it).
+    // Its twin with a project source is kept.
+    let fx = empty_fx();
+    fs::create_dir_all(fx.home.join("org")).unwrap();
+    fs::write(fx.home.join("org/notes.org"), "* a note\n").unwrap();
+    let h = fx.home.display().to_string();
+    let c = Connection::open(&fx.db).unwrap();
+    c.execute_batch(DDL6).unwrap();
+    c.execute_batch(&format!(
+        "insert into node (id, kind, title, path, line, status, parent, ord, source, data, updated) values
+           ('plan:{h}/w/p.md', 'plan', 'P', '{h}/w/p.md', 1, 'open', null, null, '{h}/w/p.md', null, 1.0),
+           ('spec:{h}/w/s.md', 'spec', 'S', '{h}/w/s.md', 1, null, null, null, 'spec {h}/w/s.md', null, 1.0),
+           ('spec:{h}/w/t.md', 'spec', 'T', '{h}/w/t.md', 1, null, null, null, 'spec {h}/w/t.md', null, 1.0);
+         insert into edge (src, dst, kind, origin, source) values
+           ('plan:{h}/w/p.md', 'spec:{h}/w/s.md', 'derives', 'parsed', '{h}/org/notes.org'),
+           ('plan:{h}/w/p.md', 'spec:{h}/w/t.md', 'derives', 'parsed', '{h}/w/p.md');"
+    ))
+    .unwrap();
+    drop(c);
+    let mut c = writer_conn(&fx.db);
+    let report = run(&mut c, &fx.db, &fx.opts).unwrap();
+    assert_eq!((report.denied_nodes, report.denied_edges), (0, 1));
+    assert_eq!(report.links["derives->denied"], 1);
+    assert_eq!(
+        rows(&c, "select src, dst, source from edge where kind = 'derives'"),
+        vec![vec![
+            json!(format!("plan:{h}/w/p.md")),
+            json!(format!("spec:{h}/w/t.md")),
+            json!(format!("{h}/w/p.md"))
+        ]]
+    );
+}
+
+#[test]
 fn the_spec_form_is_denied() {
     let (fx, c, report) = migrated();
     let home = fx.home.display();
