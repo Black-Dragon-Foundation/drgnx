@@ -3,7 +3,8 @@
 //! [`CoordDb`] opens `work.db` only when `meta.schema` is exactly [`SCHEMA`] (the Lisp side makes and migrates the
 //! file; Ratatoskr never does).  Every statement runs on `urdr`'s store thread, never on the caller's.  The hub's 2 s
 //! schema tick calls [`CoordDb::tick`], which opens the file when it is not open and opens it again when the file at
-//! the path is another file than the one opened (a removed and re-made `work.db`).
+//! the path is another file than the one opened (a removed and re-made `work.db`).  A read or write that finds the
+//! file not open runs the tick's open once itself first, so a work.db made between two ticks is used at once.
 
 use std::fmt;
 use std::os::unix::fs::MetadataExt;
@@ -187,12 +188,26 @@ impl CoordDb {
         }
     }
 
+    /// [`handle`](Self::handle), but a file that is not open is looked at once more first (the tick's open, on a
+    /// blocking thread): a work.db the Lisp side made since the last tick is used at once, not at the next tick.  Every
+    /// write and read goes through here, the front's methods and the coordination tools alike.
+    async fn ready(&self, for_write: bool) -> Result<Handle, CoordError> {
+        match self.handle(for_write) {
+            Err(CoordError::NotReady { .. }) => {
+                let db = self.clone();
+                let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+                self.handle(for_write)
+            }
+            r => r,
+        }
+    }
+
     /// Run `f` on the store thread inside one `BEGIN IMMEDIATE` transaction: committed on `Ok`, rolled back on `Err`.
     pub async fn write<R: Send + 'static>(
         &self,
         f: impl FnOnce(&Tx) -> Result<R, CoordError> + Send + 'static,
     ) -> Result<R, CoordError> {
-        let handle = self.handle(true)?;
+        let handle = self.ready(true).await?;
         run(f, true, handle).await
     }
 
@@ -201,7 +216,7 @@ impl CoordDb {
         &self,
         f: impl FnOnce(&Tx) -> Result<R, CoordError> + Send + 'static,
     ) -> Result<R, CoordError> {
-        let handle = self.handle(false)?;
+        let handle = self.ready(false).await?;
         run(f, false, handle).await
     }
 }

@@ -137,7 +137,9 @@ is deleted. Rules:
 - **Not ready.** Below schema 6 (or missing) a write is `NotReady { schema }`: "work.db is not ready (schema N); the
   Lisp side makes it". A newer schema is opened read-only; a write is `ReadOnly { schema }`.
 - **Follows the file.** The hub's 2 s schema tick calls `CoordDb::tick`: it opens when not open, and opens again when
-  the file's `(dev, inode)` changed (a removed and re-made `work.db`, R-T14-2).
+  the file's `(dev, inode)` changed (a removed and re-made `work.db`, R-T14-2). A read or write that finds the file
+  not open runs that open once itself first (on a blocking thread), so a `work.db` made after the hub started is used
+  by the next call, the front's methods and the coordination tools alike, not 2 s later.
 - **Events and meta.** `write::event` is `drgnx-coord--event`: the summary is one line of at most 200 characters
   (`runstav::text::one_line`), data over 4096 characters is stored as `{"truncated": true, "size": N}`, `turn` is 1
   for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 17 of `drgnx-coord-event-kinds` (a test

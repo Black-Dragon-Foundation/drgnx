@@ -869,3 +869,33 @@ async fn a_held_write_is_counted_and_a_good_one_clears_it() {
         "a held write stored nothing"
     );
 }
+
+/// A hub that started before work.db existed: the first tool call after the Lisp side made it is answered, with no
+/// schema tick between (the store looks at the file once more itself).
+#[tokio::test]
+async fn a_work_db_made_after_the_start_is_used_by_the_next_tool_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("work.db");
+    let db = CoordDb::spawn(&file);
+    let hub = Arc::new(CountingHub::default());
+    let coord = Arc::new(Coord::new(db, hub));
+    let who = session("s-1", None, dir.path());
+    let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
+    assert!(
+        error && text.contains("work.db is not ready (schema 0)"),
+        "{text}"
+    );
+    Connection::open(&file)
+        .unwrap()
+        .execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+        .unwrap();
+    let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
+    assert!(!error, "{text}");
+    let events: i64 = Connection::open(&file)
+        .unwrap()
+        .query_row("select count(*) from event where kind = 'test'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(events, 1);
+}
