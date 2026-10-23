@@ -119,7 +119,19 @@ a refuse file (but for kind `CharName`, the listed `\N{NAME}` divergence). hugin
 `runtime/crates/huginn/tests/{differential,properties}.rs`: `committed_corpus_matches`, `random_seeded_matches`, and
 the property that every node's span, sliced out of the source, reads alone to the same datum. The fuzz target is
 `huginn_read` (docs/develop/runtime.md, "Fuzzing"). The mutation check over the refusal paths is
-`cargo mutants -p huginn --file src/read.rs` (and `src/form.rs`) with no surviving mutant in them.
+`cargo mutants -p huginn --file crates/huginn/src/read.rs`, from `runtime/` (and `form.rs`, and `de.rs` with
+`--features serde`; it tests a copy of `runtime/` alone, so the checkout's `test/` must sit beside that copy:
+`/tmp/test` for a copy in `/tmp`): every
+mutant is caught or times out, but for these equivalent ones, which no input can tell apart from the code:
+
+- `read.rs`, `|` to `^` in `MODIFIERS`, in `META | (META - 1)` and in `code | modifiers` (`string_escape`'s
+  result), and in `0x7FF8_0000_0000_0000 | payload` (the NaN in `decimal`): the bits never overlap.
+- `read.rs`, `ch | 0x80` to `ch ^ 0x80` (`string_literal`, `\M-`): `ch` is below 0x80 there. To `ch & 0x80`: the
+  string is refused as unibyte or raw-byte before the character is looked at.
+- `read.rs`, `i + 1` to `i * 1` in `skip_line`: it stops on the newline, which the caller then skips as space.
+- `read.rs`, `count < 3` to `count <= 3` (`\x`): only `count == 0` and `count < 3` are read, so a cap of 4
+  changes neither.
+- `form.rs`, `*n > 1` to `*n >= 1` (`:version`): `1` is matched by the arm before.
 
 Floats are compared by value on the Rust side and in `drgnx-huginn/differential-fresh-seed`: any NaN equals any NaN,
 `-0.0` differs from `0.0`.

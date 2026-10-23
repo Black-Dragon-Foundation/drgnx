@@ -1332,6 +1332,26 @@ mod tests {
         refuses_bytes(b"\"\xc3\"", RefusalKind::NotUtf8, 1);
         refuses_bytes(b"ok \xe9", RefusalKind::NotUtf8, 3);
         refuses_bytes(b"\xed\xa0\x80", RefusalKind::NotUtf8, 0);
+        // The span is the bad sequence: one byte, or what is left of a sequence the file cuts short.
+        let span = |bytes: &[u8]| read_all(bytes, Limits::default()).expect_err("not UTF-8").span;
+        assert_eq!(span(b"(a \xff)"), Span { start: 3, end: 4 });
+        assert_eq!(span(b"ok \xe2\x82"), Span { start: 3, end: 5 });
+    }
+
+    #[test]
+    fn a_refusal_says_why_and_where() {
+        let r = read("(a #37r0)").expect_err("radix 37");
+        assert_eq!(r.to_string(), "radix 37 is not 2 to 36 (bytes 3..7)");
+    }
+
+    #[test]
+    fn a_nan_keeps_its_leading_integer_as_payload() {
+        // Emacs prints it back: `5.0e+NaN`.
+        let nodes = read("5.0e+NaN").expect("a NaN");
+        let Datum::Float(f) = nodes[0].datum else {
+            panic!("a float");
+        };
+        assert_eq!(f.to_bits(), 0x7FF8_0000_0000_0005);
     }
 
     #[test]
@@ -1343,6 +1363,7 @@ mod tests {
             let r = read(&nested(65, open, close)).expect_err("65 levels");
             assert_eq!(r.kind, RefusalKind::TooDeep, "{open}");
             assert_eq!(r.span.start, 64 * open.len(), "{open}");
+            assert_eq!(r.span.end, r.span.start + 1, "{open}");
         }
         let limits = Limits {
             max_depth: 2,

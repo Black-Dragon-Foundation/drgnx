@@ -165,5 +165,14 @@
   {"id": "integer-below-int64-refused", "text": "-9223372036854775809", "expect": "refuse", "kind": "IntRange", "at": 0},
   {"id": "hex-integer-above-int64-refused", "text": "(a #x8000000000000000)", "expect": "refuse", "kind": "IntRange", "at": 3},
   {"id": "bytes-invalid-utf8-in-a-string", "text": "(a \"\u00ff\")", "expect": "refuse", "kind": "NotUtf8", "at": 4},
-  {"id": "bytes-invalid-utf8-in-a-comment", "text": ";\u00ff\n1", "expect": "refuse", "kind": "NotUtf8", "at": 1}
+  {"id": "bytes-invalid-utf8-in-a-comment", "text": ";\u00ff\n1", "expect": "refuse", "kind": "NotUtf8", "at": 1},
+  {"id": "char-hex-at-the-raw-byte-boundary", "text": "?\\x3FFF7F ?\\x3FFF80", "expect": "accept",
+   "dump": [["int", "4194175"], ["int", "128"]]},
+  {"id": "string-shift-on-a-capital-letter", "text": "\"\\S-A\"", "expect": "accept", "dump": [["str", "A"]]},
+  {"id": "char-name-space-after-u-plus-refused", "text": "?\\N{U+ 41}", "expect": "refuse", "kind": "Syntax", "at": 1},
+  {"id": "char-name-two-signs-refused", "text": "?\\N{U++41}", "expect": "refuse", "kind": "Syntax", "at": 1},
+  {"id": "char-name-of-200-characters", "expect": "accept", "dump": [["int", "65"]],
+   "text": "?\\N{U+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000041}"},
+  {"id": "char-name-of-201-characters-refused", "expect": "refuse", "kind": "Syntax", "at": 1,
+   "text": "?\\N{U+0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000041}"}
 ]

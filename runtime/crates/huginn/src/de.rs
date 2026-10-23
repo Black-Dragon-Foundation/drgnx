@@ -748,4 +748,101 @@ mod tests {
         assert!(from_node::<OnError>(&node("(strict 1)")).is_err());
         assert!(from_node::<OnError>(&node("other")).is_err());
     }
+
+    #[test]
+    fn an_error_says_why_and_where() {
+        // An alist entry's value is the rest of the entry: its span runs from the first to the last element.
+        let src = "((a 1 2 3))";
+        let err = from_node::<BTreeMap<String, (i64, i64)>>(&node(src)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected 2 elements, found 3 (bytes 4..9)"
+        );
+    }
+
+    #[test]
+    fn self_describing_values() {
+        use serde_json::{Value, json};
+        let any = |src: &str| from_node::<Value>(&node(src)).expect(src);
+        assert_eq!(any("nil"), Value::Null);
+        assert_eq!(any("t"), json!(true));
+        assert_eq!(any("(:a 1 :b-c 2)"), json!({"a": 1, "b_c": 2}));
+        // Not plists: a symbol or a bare colon as a key, an odd length, no keywords.
+        assert_eq!(any("(ab 1)"), json!(["ab", 1]));
+        assert_eq!(any("(: 1)"), json!([":", 1]));
+        assert_eq!(any("(:a 1 :b)"), json!([":a", 1, ":b"]));
+        assert_eq!(any("(1 2)"), json!([1, 2]));
+        assert_eq!(any("[1 2.5]"), json!([1, 2.5]));
+    }
+
+    #[test]
+    fn values_of_the_wrong_shape_are_errors() {
+        assert_eq!(from_node::<f64>(&node("1.5")).unwrap(), 1.5);
+        assert!(from_node::<bool>(&node("foo")).is_err());
+        assert!(from_node::<BTreeMap<String, i64>>(&node("foo")).is_err());
+        assert!(from_node::<Vec<i64>>(&node("(1 . 2)")).is_err());
+        // An alist entry is (KEY . VALUE) or a proper list; `(a b . c)` is neither, never `a` → `c`.
+        assert!(from_node::<BTreeMap<String, String>>(&node("((a b . c))")).is_err());
+    }
+
+    /// The size hints a visitor sees: before the first element, then after each one.
+    struct Hints(Vec<Option<usize>>);
+
+    /// The same, over an alist (`deserialize_map`).
+    struct AlistHints(Vec<Option<usize>>);
+
+    struct HintsVisitor;
+
+    impl<'de> Visitor<'de> for HintsVisitor {
+        type Value = Vec<Option<usize>>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a list")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut hints = vec![seq.size_hint()];
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                hints.push(seq.size_hint());
+            }
+            Ok(hints)
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            use serde::de::IgnoredAny;
+            let mut hints = vec![map.size_hint()];
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {
+                hints.push(map.size_hint());
+            }
+            Ok(hints)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Hints {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_any(HintsVisitor).map(Hints)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for AlistHints {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_map(HintsVisitor).map(AlistHints)
+        }
+    }
+
+    #[test]
+    fn size_hints_count_what_is_left() {
+        let all = [Some(2), Some(1), Some(0)];
+        assert_eq!(
+            from_node::<Hints>(&node("(1 2 3)")).unwrap().0,
+            [Some(3), Some(2), Some(1), Some(0)]
+        );
+        assert_eq!(from_node::<Hints>(&node("(:a 1 :b 2)")).unwrap().0, all);
+        assert_eq!(
+            from_node::<AlistHints>(&node("((a . 1) (b . 2))"))
+                .unwrap()
+                .0,
+            all
+        );
+    }
 }

@@ -434,6 +434,28 @@ mod tests {
         assert!(parse("(drgnx-settings :version 1)", "drgnx-workspace-settings").is_err());
         assert!(parse("(drgnx-settings :version 1) (a 1)", "drgnx-settings").is_err());
         assert!(parse("", "drgnx-settings").is_err());
+        let err = parse("(drgnx-settings :version 0)", "drgnx-settings").unwrap_err();
+        assert!(err.message.contains("unsupported :version"), "{err}");
+    }
+
+    #[test]
+    fn each_meta_key_once() {
+        let file =
+            global("(drgnx-settings :version 1 :roots (\"~/a/\") :project \"p\" :roots nil (a 1))");
+        let keys: Vec<&str> = file.meta.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, [":version", ":roots", ":project"]);
+        assert_eq!(file.problems.len(), 1);
+        assert!(file.problems[0].message.contains(":roots is given twice"));
+    }
+
+    #[test]
+    fn keywords_nil_and_t_name_no_variable_or_mode() {
+        let file = global(
+            "(drgnx-settings :version 1 (:foo 1) (nil 1) (t 1) (:mode :m (a 1)) (:mode nil (b 1)) (:mode t (c 1)) \
+             (d 1 :foo e))",
+        );
+        assert_eq!(file.entries, []);
+        assert_eq!(file.problems.len(), 7);
     }
 
     #[test]
