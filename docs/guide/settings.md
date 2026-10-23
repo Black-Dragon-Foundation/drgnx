@@ -74,7 +74,20 @@ an agent with a grant), it changes as little as it can:
 
 ## Modules and your settings (Task 9)
 
-## Per language (Task 10)
+## Per language
+
+A `(:mode MODE ENTRY…)` section of `settings.el` sets variables only in buffers of that mode (and the modes derived
+from it):
+
+```elisp
+(:mode python-ts-mode
+ (fill-column 88))
+```
+
+The value is set when the buffer's mode starts, before your mode hooks. So a `setq-local` in a mode hook beats it, and a
+`.dir-locals.el`, a workspace file or a file-local variable beats that, as in stock Emacs. If one entry fails, the
+buffer still opens; drgnx says so once per variable per session. Nothing is loaded for it: a variable of a package that
+is not loaded yet gets a plain buffer-local value.
 
 ## Workspace settings (Task 17)
 
