@@ -245,10 +245,8 @@ fn check_shape(tx: &Tx<'_>, s: &ParsedSource) -> Result<(), String> {
                     return Err(format!("{id} is no commit:SHA"));
                 }
             }
-            (_, SourceKind::Branch) => {
-                if id.strip_prefix("branch:").is_none_or(str::is_empty) {
-                    return Err(format!("{id} is no branch:…"));
-                }
+            (_, SourceKind::Branch) if id.strip_prefix("branch:").is_none_or(str::is_empty) => {
+                return Err(format!("{id} is no branch:…"));
             }
             _ => {}
         }
