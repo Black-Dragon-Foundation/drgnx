@@ -7,7 +7,8 @@
 ;; - `drgnx-file-read-bounded' gives a local regular file's text, or refuses: a remote name, a symbolic link to
 ;;   nothing, anything that is not a regular file (checked before opening, so a FIFO never blocks) and a file over the
 ;;   limit (never truncated).
-;; - `drgnx-file-read' reads exactly one plain data form from it, or names the problem with its line and column.
+;; - `drgnx-file-read' reads exactly one plain data form from it, or names the problem with its line and column.  A
+;;   token check before `read' holds it to the data subset Ratatoskr's reader shares (`drgnx-file--parse').
 ;; - `drgnx-file-write' and `drgnx-file-write-text' replace a file atomically through a temp file beside it: a symlink
 ;;   stays a symlink, the mode is kept, data must read back `equal', and no buffer ever visits the file.
 ;; - `drgnx-file-update' is the locked read-modify-write: a `make-directory' lock, a fresh read, the change applied,
@@ -113,15 +114,75 @@ The inode sees a file renamed over FILE within one mtime tick."
     (goto-char pos)
     (list :text text :line (or line (line-number-at-pos pos t)) :column (or column (1+ (- pos (line-beginning-position)))))))
 
+(defun drgnx-file--atom-why (x)
+  "Why X, a string or a number, is outside the data subset both settings readers share (design §11.2), or nil:
+\(unibyte) for a unibyte string with a byte above 127 (`\"\\xe9\"', `\"\\351\"', `\"\\M-a\"'), (raw-byte) for a
+multibyte string holding a raw byte (a character of charset `eight-bit': `\"é\\xe9\"'), (integer-range) for an
+integer beyond 64 bits."
+  (cond ((stringp x)
+         (if (multibyte-string-p x)
+             (and (memq 'eight-bit (find-charset-string x)) '(raw-byte))
+           (and (not (string-match-p "\\`[[:ascii:]]*\\'" x)) '(unibyte))))
+        ((integerp x)
+         (and (not (<= -9223372036854775808 x 9223372036854775807)) '(integer-range)))))
+
+(defun drgnx-file--scan (&optional atom-why)
+  "The first refused token in the current buffer from point on, scanned as `read' reads (lread.c's `read0'):
+\(POS . WHY), POS where it starts and WHY `backquote', `comma' (`,' and `,@') or `reader-macro' (every `#' syntax
+but `#'', `#x', `#o', `#b' and `#NrDIGITS', in either case); nil when there is none.  Each atom is read by `read'
+itself, so strings, character literals and escaped symbol characters are never mistaken for tokens; comments are
+skipped.  With ATOM-WHY, a function of an atom giving (WHY) or nil, the first atom it refuses is a problem too:
+\(POS . WHY).  Moves point.  An error reading an atom propagates."
+  (let ((read-circle nil) (read-symbol-shorthands nil) (found nil))
+    (while (and (not found)
+                (progn (while (progn (skip-chars-forward "\0- \u00a0") (eq (char-after) ?\;))
+                         (forward-line 1))
+                       (not (eobp))))
+      (let ((pos (point)) (c (char-after)) (next (char-after (1+ (point)))))
+        (cond ((memq c '(?\( ?\) ?\[ ?\] ?\')) (forward-char))
+              ((eq c ?\`) (setq found (cons pos 'backquote)))
+              ((eq c ?\,) (setq found (cons pos 'comma)))
+              ((and (eq c ?#) (eq next ?\')) (forward-char 2))
+              ((and (eq c ?#) (not (looking-at "#\\(?:[xXoObB]\\|[0-9]+[rR]\\)")))
+               (setq found (cons pos 'reader-macro)))
+              ((and (eq c ?.) (or (null next) (<= next 32) (memq next '(#xa0 ?\" ?\' ?\; ?\( ?\[ ?# ?? ?\` ?\,))))
+               (forward-char))                          ; a dotted pair's dot
+              (t (let ((x (read (current-buffer))))
+                   (when-let* ((why (and atom-why (car (funcall atom-why x)))))
+                     (setq found (cons pos why))))))))
+    found))
+
+(defun drgnx-file--token-check (text)
+  "Where TEXT holds a token the data subset refuses (design §11.2), outside strings, comments, character literals
+and escaped symbol characters: (POS . WHY), POS the index in TEXT where the token starts and WHY `backquote',
+`comma' or `reader-macro' (`drgnx-file--scan'); nil when there is none.  An error reading TEXT propagates."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (when-let* ((found (drgnx-file--scan)))
+      (cons (1- (car found)) (cdr found)))))
+
+(defun drgnx-file--not-utf-8 ()
+  "Where the current buffer holds a raw byte (charset `eight-bit'), which is what decoding makes of bytes that are
+not valid UTF-8: (POS . not-utf-8), or nil."
+  (when (memq 'eight-bit (find-charset-region (point-min) (point-max)))
+    (save-excursion
+      (goto-char (point-min))
+      (while (< (char-after) #x3fff80) (forward-char))
+      (cons (point) 'not-utf-8))))
+
 (defun drgnx-file--walk (object)
   "Why OBJECT is not plain data, or nil: (depth) when lists and vectors nest deeper than `drgnx-file-max-depth',
 \(string) for a string with text properties, (TYPE) for anything but a symbol, a number, a string, a cons or a
-vector (a record, a hash table, byte-code, a bool-vector, a char-table, …)."
+vector (a record, a hash table, byte-code, a bool-vector, a char-table, …), and `drgnx-file--atom-why''s reasons
+for a string or an integer outside the data subset."
   (let ((max drgnx-file-max-depth))
     (cl-labels ((walk (x depth)                         ; DEPTH: the containers around X
-                  (cond ((or (symbolp x) (numberp x)) nil)
-                        ((stringp x) (and (> (length x) 0) (or (text-properties-at 0 x) (next-property-change 0 x))
-                                          '(string)))
+                  (cond ((symbolp x) nil)
+                        ((numberp x) (drgnx-file--atom-why x))
+                        ((stringp x) (or (and (> (length x) 0) (or (text-properties-at 0 x) (next-property-change 0 x))
+                                              '(string))
+                                         (drgnx-file--atom-why x)))
                         ((or (consp x) (vectorp x))
                          (if (>= depth max) '(depth)
                            (let ((why nil))
@@ -154,38 +215,59 @@ vector (a record, a hash table, byte-code, a bool-vector, a char-table, …)."
   (pcase (car why)
     ('depth (format "lists nest deeper than %d" drgnx-file-max-depth))
     ('string "a string with text properties")
+    ('backquote "a backquote (`), which is code, not data")
+    ('comma "a comma (, or ,@), which is code, not data")
+    ('reader-macro (format "the reader syntax %s, which is not plain data" (or (cadr why) "#")))
+    ('unibyte "a string with a byte above 127 (\\xNN, octal or \\M-): write the character, or \\uNNNN")
+    ('raw-byte "a string holding a raw byte: write the character, or \\uNNNN")
+    ('integer-range "an integer beyond 64 bits")
+    ('not-utf-8 "not valid UTF-8")
     (type (format "a %s, which is not plain data" type))))
 
-(defun drgnx-file--parse (text)
-  "TEXT's one data form: (ok . DATA), (absent) for only whitespace and comments, or (problem . PROBLEM)."
+(defun drgnx-file--parse (text &optional all)
+  "TEXT's one data form: (ok . DATA), (absent) for only whitespace and comments, or (problem . PROBLEM).
+With ALL, TEXT holds any number of data forms and DATA is the list of them.  Before anything is read, TEXT is
+refused at the first raw byte (not valid UTF-8), then at the first token or atom outside the data subset
+\(`drgnx-file--scan' with `drgnx-file--atom-why'): backquote, comma, `#' syntax but radix integers and `#'',
+unibyte and raw-byte strings, integers beyond 64 bits."
   (with-temp-buffer
     (insert text)
     (set-syntax-table lisp-data-mode-syntax-table)
     (goto-char (point-min))
-    (forward-comment (buffer-size))
-    (if (eobp) (list 'absent)
-      (let ((start (point)))
-        (condition-case err
-            (let* ((data (let ((read-circle nil) (read-symbol-shorthands nil)) (read (current-buffer))))
-                   (why (progn (forward-comment (buffer-size)) (and (eobp) (drgnx-file--walk data)))))
-              (cond ((not (eobp)) (cons 'problem (drgnx-file--problem "text after the data" (point))))
-                    (why (cons 'problem (drgnx-file--problem (drgnx-file--why-text why) (drgnx-file--locate why start))))
-                    (t (cons 'ok data))))
-          (invalid-read-syntax
-           (let ((line (nth 2 err)) (column (nth 3 err)))
-             (cons 'problem (drgnx-file--problem (format "invalid syntax: %s" (nth 1 err)) (point)
-                                                 (and (natnump line) (natnump column) line)
-                                                 (and (natnump line) (natnump column) column)))))
-          (end-of-file (cons 'problem (drgnx-file--problem "the file ends inside a form" (point-max))))
-          (error (cons 'problem (drgnx-file--problem (error-message-string err) (point)))))))))
+    (condition-case err
+        (if-let* ((bad (or (drgnx-file--not-utf-8) (drgnx-file--scan #'drgnx-file--atom-why))))
+            (cons 'problem (drgnx-file--problem
+                            (drgnx-file--why-text
+                             (list (cdr bad) (buffer-substring-no-properties (car bad) (min (point-max) (+ 2 (car bad))))))
+                            (car bad)))
+          (goto-char (point-min))
+          (let ((read-circle nil) (read-symbol-shorthands nil) (data nil) (why nil) (start nil))
+            (while (and (not why) (progn (forward-comment (buffer-size)) (not (eobp))) (or all (null start)))
+              (setq start (point))
+              (let ((x (read (current-buffer))))
+                (setq why (drgnx-file--walk x))
+                (push x data)))
+            (cond ((null start) (list 'absent))
+                  (why (cons 'problem (drgnx-file--problem (drgnx-file--why-text why) (drgnx-file--locate why start))))
+                  ((not (eobp)) (cons 'problem (drgnx-file--problem "text after the data" (point))))
+                  (t (cons 'ok (if all (nreverse data) (car data)))))))
+      (invalid-read-syntax
+       (let ((line (nth 2 err)) (column (nth 3 err)))
+         (cons 'problem (drgnx-file--problem (format "invalid syntax: %s" (nth 1 err)) (point)
+                                             (and (natnump line) (natnump column) line)
+                                             (and (natnump line) (natnump column) column)))))
+      (end-of-file (cons 'problem (drgnx-file--problem "the file ends inside a form" (point-max))))
+      (error (cons 'problem (drgnx-file--problem (error-message-string err) (point)))))))
 
 (cl-defun drgnx-file-read (file &key max-bytes)
   "FILE read as one data form: (:status S :data D :text T :problem P :stamp ST).
 S is `absent' (missing, empty, or only whitespace and comments), `ok' or `unreadable'.  D is the data (ok only), T
 the decoded text, P (:text STRING :line N :column N) (lines and columns 1-based) and ST `drgnx-file-stamp'.
 Unreadable: a refusal of `drgnx-file-read-bounded' (MAX-BYTES, default `drgnx-file-max-bytes'), an error reading,
-`#1=' (no shared or circular structure), text after the form, nesting deeper than `drgnx-file-max-depth', or an
-object that is not plain data (records, hash tables, byte-code, strings with text properties, …)."
+`#1=' (no shared or circular structure), text after the form, nesting deeper than `drgnx-file-max-depth', an
+object that is not plain data (records, hash tables, byte-code, strings with text properties, …), or anything outside
+the data subset of `drgnx-file--parse' (backquote, comma, `#' syntax, unibyte or raw-byte strings, integers beyond
+64 bits, text that is not valid UTF-8)."
   (let ((stamp (drgnx-file-stamp file)))
     (condition-case err
         (let ((text (drgnx-file-read-bounded file :max-bytes (or max-bytes drgnx-file-max-bytes))))

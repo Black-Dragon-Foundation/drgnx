@@ -11,7 +11,8 @@
 
 - `id`: unique, stable.
 - `text`: the file's text (UTF-8; a case about invalid UTF-8 uses `\u` escapes the test turns into bytes as its
-  `id` says).
+  `id` says: an `id` starting `bytes-` means each character of `text`, all below U+0100, is one byte (U+00FF
+  is the byte 0xFF).
 - `expect`:
   - `accept`: both readers read it; `dump` is the list of top-level data, each in the format below.
   - `refuse`: both refuse; `kind` is huginn's `RefusalKind` (`ReaderMacro`, `Unibyte`, …) and `at` the byte offset
