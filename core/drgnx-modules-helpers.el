@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-modules-record)
+(require 'drgnx-settings-resolve)
 
 (defun drgnx-module--set-option (var value)
   "Set the default value of VAR to VALUE through its custom setter, else `set-default'.
@@ -52,28 +53,51 @@ started whichever module is torn down first."
 ;;; Helpers
 
 (defun drgnx-module-set (var value)
-  "Set option VAR to VALUE; the module's undo puts the old value back.
-Both ways go through VAR's custom `:set' function when it has one (else `set-default'), so a
-setter that does more than store runs again on the way back.  The undo runs only while VAR's
+  "Set option VAR to VALUE as the module's claim; the module's undo drops the claim.
+In a setup, an option (a `defcustom', a built-in option, or a variable not loaded yet) is
+claimed for the module (`drgnx-settings-claim') and resolved with settings.el
+\(`drgnx-settings-resolve-apply'): the value goes through theme `drgnx' and applies only where
+drgnx's layer is Emacs's winner, so Customize, `use-package :custom' and your Lisp keep theirs,
+and a settings.el entry wins over it by the setting's `:merge'.  The undo drops the claim and
+resolves again: another module's claim takes over, else the option goes back to the layer below
+\(or unbound again, if it was) while its value is still the one drgnx left there.
+
+A plain variable (bound, no standard value) is set directly: through VAR's custom `:set'
+function when it has one (else `set-default'), both ways.  Its undo runs only while VAR's
 default value is still the one this call set; a list that is stored by reference and changed
 in place later still counts as ours, so the undo overwrites that change.  Two modules that set
 the same VAR may be torn down in either order."
-  (let* ((rec (drgnx-modules--recording-p))
-         (had (and rec (default-boundp var)))
-         (old (and had (default-value var))))
-    (drgnx-module--set-option var value)
-    (when rec
-      (let* ((ours (default-value var))   ; what a setter stored, which may differ from VALUE
-             (target (list 'option var))
-             (box (drgnx-module--claim target (cons had old))))
-        (drgnx-modules-push-undo
-         (format "option %s" var)
-         (lambda ()
-           (drgnx-module--release
-            target box
-            (lambda () (and (default-boundp var) (equal (default-value var) ours)))
-            (lambda (prev)
-              (if (car prev) (drgnx-module--set-option var (cdr prev)) (makunbound var))))))))))
+  (let ((rec (drgnx-modules--recording-p)))
+    (if (and rec (drgnx-settings-resolve--value-route-p var))
+        (let ((module drgnx-modules--current))
+          (drgnx-settings-claim var module 'value value)
+          (drgnx-modules-push-undo                 ; first: a setter that fails rolls the claim back too
+           (format "option %s" var)
+           (lambda ()
+             (drgnx-settings-unclaim var module 'value value)
+             (drgnx-settings-resolve-apply var)))
+          (drgnx-settings-resolve-apply var))
+      (let* ((had (and rec (default-boundp var)))
+             (old (and had (default-value var))))
+        (drgnx-module--set-option var value)
+        (when rec
+          (let* ((ours (default-value var))   ; what a setter stored, which may differ from VALUE
+                 (target (list 'option var))
+                 (box (drgnx-module--claim target (cons had old)))
+                 (module drgnx-modules--current))
+            (drgnx-settings-claim var module 'value value)
+            (drgnx-settings-resolve--note var)
+            (drgnx-modules-push-undo
+             (format "option %s" var)
+             (lambda ()
+               (drgnx-module--release
+                target box
+                (lambda () (and (default-boundp var) (equal (default-value var) ours)))
+                (lambda (prev)
+                  (if (car prev) (drgnx-module--set-option var (cdr prev)) (makunbound var))))
+               (drgnx-settings-unclaim var module 'value value)
+               (drgnx-settings-resolve--forget var)
+               (drgnx-settings-resolve--note var)))))))))
 
 (defun drgnx-module-alist-put (var key value)
   "Set KEY to VALUE in the alist that is VAR's default value; the module's undo puts it back.
@@ -81,30 +105,53 @@ KEY is compared with `equal' (an `auto-mode-alist' key is a string).  The alist 
 never mutated, and stored through VAR's custom `:set' function when it has one.  VAR need not be
 bound yet (the alist is then empty).  The undo puts the old entry back, or removes KEY when there
 was none, only while KEY still holds VALUE.  Two modules that put the same KEY may be torn down in
-either order."
+either order.
+In a setup the key is also the module's claim (`drgnx-settings-claim').  When settings.el has an
+entry for VAR (or theme `drgnx' holds VAR), the claim is resolved with it by the setting's
+`:merge' instead (`drgnx-settings-resolve-apply': `replace' leaves the key out and lists it as
+replaced, `alist' keeps it beside settings.el's keys), and the undo drops the claim and resolves
+again."
   (let* ((rec (drgnx-modules--recording-p))
-         (alist (and (default-boundp var) (default-value var)))
-         (old (assoc key alist))
+         (module drgnx-modules--current)
          (new (cons key value)))
-    (drgnx-module--set-option var (if old
-                                      (mapcar (lambda (cell) (if (eq cell old) new cell)) alist)
-                                    (cons new alist)))
-    (when rec
-      (let* ((target (list 'alist var key))
-             (box (drgnx-module--claim target old)))
-        (drgnx-modules-push-undo
-         (format "alist %s key %S" var key)
-         (lambda ()
-           (drgnx-module--release
-            target box
-            (lambda ()
-              (let ((cell (and (default-boundp var) (assoc key (default-value var)))))
-                (and cell (equal (cdr cell) value))))
-            (lambda (prev)
-              (let* ((alist (default-value var)) (cell (assoc key alist)))
-                (drgnx-module--set-option var (if prev
-                                                  (mapcar (lambda (c) (if (eq c cell) prev c)) alist)
-                                                (remq cell alist))))))))))))
+    (if (and rec (drgnx-settings-resolve--theme-p var))
+        (progn
+          (drgnx-settings-claim var module 'key new)
+          (drgnx-modules-push-undo                 ; first: a setter that fails rolls the claim back too
+           (format "alist %s key %S" var key)
+           (lambda ()
+             (drgnx-settings-unclaim var module 'key new)
+             (drgnx-settings-resolve-apply var)))
+          (drgnx-settings-resolve-apply var))
+      (let* ((alist (and (default-boundp var) (default-value var)))
+             (old (assoc key alist)))
+        (drgnx-module--set-option var (if old
+                                          (mapcar (lambda (cell) (if (eq cell old) new cell)) alist)
+                                        (cons new alist)))
+        (when rec
+          (let* ((target (list 'alist var key))
+                 (box (drgnx-module--claim target old)))
+            (drgnx-settings-claim var module 'key new)
+            (drgnx-settings-resolve--note var)
+            (drgnx-modules-push-undo
+             (format "alist %s key %S" var key)
+             (lambda ()
+               (if (drgnx-settings-resolve--theme-p var)
+                   ;; settings.el holds VAR now: the resolved value has no direct change of ours to put back
+                   (drgnx-module--release target box #'ignore #'ignore)
+                 (drgnx-module--release
+                  target box
+                  (lambda ()
+                    (let ((cell (and (default-boundp var) (assoc key (default-value var)))))
+                      (and cell (equal (cdr cell) value))))
+                  (lambda (prev)
+                    (let* ((alist (default-value var)) (cell (assoc key alist)))
+                      (drgnx-module--set-option var (if prev
+                                                        (mapcar (lambda (c) (if (eq c cell) prev c)) alist)
+                                                      (remq cell alist)))))))
+               (drgnx-settings-unclaim var module 'key new)
+               (drgnx-settings-resolve-apply var)
+               (drgnx-settings-resolve--note var)))))))))
 
 (defun drgnx-module-face-spec (face spec)
   "Give FACE the default spec SPEC (`face-defface-spec'); the module's undo puts the old one back.

@@ -115,7 +115,28 @@ explains the value Emacs has; it never works out a value of its own.
 
 ## Changes apply at once (Task 13)
 
-## Modules and your settings (Task 9)
+## Modules and your settings
+
+drgnx's modules choose some values for you (the tree-sitter modes, Evil's undo system, the frame's scroll bars).
+Those choices sit just above the package's default, below everything you set:
+
+- **Settings, Customize and your Lisp win over a module.** A module never overrides a value you saved with
+  Customize, put in `settings.el` or set in your Lisp. The module's choice is kept and shows as "module lang/eglot"
+  in the row's layers, and it applies again if you remove yours.
+- **A list or alist that modules add to** (`major-mode-remap-alist`, `auto-mode-alist`): the modules add their own
+  keys or elements. When you give the whole variable a value in Settings, your value replaces theirs, and the row
+  says which entries it replaced. **Keep Module Entries** (*Settings: Keep Module Entries…* in the palette) changes
+  that entry to merge per key instead: your keys win, and the modules' other keys stay. It writes `:merge alist` on
+  the entry in `settings.el` and applies at once:
+
+  ```elisp
+  (major-mode-remap-alist ((c-mode . c-ts-mode)) :merge alist)
+  ```
+
+  `:merge append` keeps the modules' elements of a list and adds yours after them; `:merge lower-only` takes the
+  lower of a module's number and yours.
+- **Turning a module off** takes only its own choices away: a key it added goes only while it still holds the
+  module's value, and a value you set since stays.
 
 ## Per language
 

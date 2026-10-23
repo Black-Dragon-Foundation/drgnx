@@ -938,9 +938,18 @@ or another module put there since. Outside a setup a helper only makes the chang
 | `(drgnx-module-face-spec FACE SPEC)` | a face's default spec, instead of `face-spec-set` | puts the previous default spec back |
 | `(drgnx-module-define-key MAP-SYMBOL KEY DEF)` | a remap or a mouse/chrome event in a global map such as `global-map` | puts the previous binding back, or removes the entry |
 
-- `drgnx-module-set` sets through the option's custom `:set` function when it has one, else `set-default`, and the
-  undo goes through the same setter, so a `:set` that does more than store runs again on the way back. The undo runs
-  while the default value is still the one stored (what a setter stored, which can differ from VALUE).
+- **Claims in settings.** In a setup, `drgnx-module-set`, `drgnx-module-alist-put` and `add-to-list` are the
+  module's claims on the variable (layer G1 of the settings, [settings.md](settings.md), "Module claims and the
+  resolver"). An option's value goes through theme `drgnx` and applies only where drgnx's layer is Emacs's winner:
+  a value saved with Customize, set by `use-package :custom` or your Lisp, or given in `settings.el` stays, and the
+  module's is kept behind it. An alist key or list element goes in directly, as below, until `settings.el` has an
+  entry for the variable; then the entry's `:merge` decides (`replace` leaves the module's key out, `alist` keeps
+  it). The undo drops the claim and resolves again.
+- `drgnx-module-set` on a plain variable (bound, no standard value) sets through the variable's custom `:set` function
+  when it has one, else `set-default`, and the undo goes through the same setter, so a `:set` that does more than
+  store runs again on the way back. The undo runs while the default value is still the one stored (what a setter
+  stored, which can differ from VALUE). On an option the theme does both: the `:set` runs at the push and again
+  when the undo puts the layer below back, while the value is still the one drgnx left.
 - `drgnx-module-alist-put` compares keys with `equal` (an `auto-mode-alist` key is a string) and replaces the alist
   instead of changing it, so a list shared with the original value is never mutated. It stores through the
   variable's custom `:set` function too, and an alist that is not loaded yet counts as empty. A hook or an advice
@@ -1124,7 +1133,9 @@ gives the same statuses and commands with the recorder as without it.
 `advice-add` of a named function, timers, `add-to-list` of a `defvar`ed variable (see "`add-to-list` that the
 compiler rewrote" above), `eval-after-load`, global minor modes, `drgnx-module-set` for another
 package's options, `drgnx-module-alist-put` for alist keys, `drgnx-module-face-spec` for face specs and
-`drgnx-module-define-key` for remaps in global maps. Anything else — a theme, a connection, live frames'
+`drgnx-module-define-key` for remaps in global maps. An option, an alist key and a list element a setup sets this way
+are the module's claims: they sit below Settings, Customize and the user's Lisp, and turning the module off drops
+only its own (settings.md, "Module claims and the resolver"). Anything else — a theme, a connection, live frames'
 parameters, a mode turned on in live buffers, a sub-module's own state — is undone by the module's `:teardown`
 (which calls the sub-modules' off functions), or the module declares `:teardown 'restart`. A test never stubs a
 setup to keep its effects out of the process: it sets the module up and tears it down. Code a setup defers
