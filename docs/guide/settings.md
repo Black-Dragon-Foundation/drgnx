@@ -164,6 +164,34 @@ The value is set when the buffer's mode starts, before your mode hooks. So a `se
 buffer still opens; drgnx says so once per variable per session. Nothing is loaded for it: a variable of a package that
 is not loaded yet gets a plain buffer-local value.
 
+## Agents and AI settings (Task 15)
+
+`agents.eld` and `ai.eld` are settings now. In `settings.el`:
+
+| Setting | What |
+|---|---|
+| `drgnx-agents-profiles` | your agent profiles ([agents.md](agents.md)) |
+| `drgnx-agents-default` | the profile New Agent Session offers on Return |
+| `drgnx-agents-mcp` | the MCP servers agents get: `coordination`, `search` |
+| `drgnx-agents-routes` | which profile does each job role ([jobs.md](jobs.md#routes-and-the-estimate)) |
+| `drgnx-agents-openrouter` | which providers OpenRouter may use for agents ([ai.md](ai.md#openrouter-restrictions)) |
+| `drgnx-agents-allow-unsandboxed` | whether agents may run without the sandbox (off) |
+| `drgnx-ai-providers` | AI providers of your own, or presets moved ([ai.md](ai.md)) |
+| `drgnx-ai-roles` | each role's chain of providers and models |
+
+- **Strict.** The agents settings are `:on-error strict`: an entry with a mistake, or a `settings.el` that does not read,
+  gives the shipped default for them, never a half-read value. The AI settings keep their last good value instead.
+- **Never for agents or workspaces.** An agent cannot change them (`:agents never`), a workspace file or a
+  `.dir-locals.el` cannot set the agents settings or the providers, and drgnx only ever reads their global value, so a
+  buffer-local `setq-local` never reaches a profile or a provider.
+- **The shipped data.** The presets, the default roles and the built-in profiles are data in `settings/runtime-defaults.el`
+  in the checkout, with the strict defaults. You do not edit that file; to change a preset, put a provider of the same id
+  in `drgnx-ai-providers`, and to change a built-in profile, copy it into `drgnx-agents-profiles`.
+- **The runtime.** The settings are marked as the ones the hub reads. Until the hub reads `settings.el` itself, the
+  hub's Lisp half applies your entries when it starts.
+- **An old file that stayed.** An `agents.eld` or `ai.eld` the migration left because it had a mistake is no longer
+  read. The Migration Report lists it; write its entries into `settings.el` (or fix the file and move it away).
+
 ## Workspace settings (Task 17)
 
 ## Shared settings (Task 17)

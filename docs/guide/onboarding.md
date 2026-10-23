@@ -92,7 +92,7 @@ always gets `qwen2.5-coder:1.5b`; Edit and Chat get `qwen2.5-coder:7b` when both
 (16 GB: the 7B; 8 GB: the 3B). It also downloads an embedding model (`nomic-embed-text`; LM Studio:
 `nomic-embed-text-v1.5`) and puts it first in the `embed` role, so the next step, Semantic Search, can index. LM Studio
 gets the same models as GGUF files from Hugging Face (`lmstudio-community/Qwen2.5-Coder-…-Instruct-GGUF`). Each model
-goes first in its role in `~/.config/drgnx/ai.eld`; what the role had stays behind it as a fallback.
+goes first in its role in `drgnx-ai-roles` (`~/.config/drgnx/settings.el`); what the role had stays behind it as a fallback.
 
 Every command runs as a drgnx job with its own log. While the step works, its row in the Welcome says what it is
 doing — "Starting Ollama…", the download's last log line (without colour codes or progress redraws), "Testing every feature…" — always with "— C-g stops", and
@@ -159,7 +159,7 @@ drgnx could not tell still checks the agent; the result says the login was not v
 that alone.
 
 **The check.** With Claude Code logged in, it starts the `claude` profile's program (`claude-agent-acp`, or what
-your `agents.eld` says), sends the ACP `initialize` request, waits up to ten seconds for the answer and stops it
+your `drgnx-agents-profiles` says), sends the ACP `initialize` request, waits up to ten seconds for the answer and stops it
 again — `ok` when it answers; otherwise the step fails, saying whether the program ended at once (with the end of
 its error output) or did not answer. Then Agents: New Agent Session… starts it in the agent panel
 ([agents.md](agents.md)). The adapter is not pinned: npm installs the latest version. When the adapter that answered
@@ -169,11 +169,11 @@ in a terminal, or what to do when the adapter is not in a global npm prefix ([ag
 interactively. The old adapter keeps working until you run the command.
 
 **The defaults for your agents.** Once the check passes (`ok`, or `warn` for an old adapter), run interactively, the step asks three more things and
-saves the answers in `agents.eld` ([agents.md](agents.md#what-agents-get)): the **default agent profile** (what Agents:
+saves the answers in `settings.el` ([agents.md](agents.md#what-agents-get)): the **default agent profile** (what Agents:
 New Agent Session… offers on Return; Return alone keeps the one you have), whether the agents drgnx starts get its
 **coordination tools** (tasks, messages, the decision log; on until you say otherwise) and whether they get its
 **search tool** too (off: it lets an agent read the indexed code of all your projects). The result names the answers.
-Running the step again shows your current answers. An `agents.eld` that cannot be read is left alone and the result says
+Running the step again shows your current answers. A `settings.el` that cannot be read is left alone and the result says
 so. `drgnx onboard --non-interactive` asks nothing and changes nothing.
 
 With `--non-interactive` nothing is installed, no terminal opens, no question is asked: the step is "info" and lists

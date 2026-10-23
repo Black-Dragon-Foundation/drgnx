@@ -39,6 +39,7 @@
                                              (concat "XDG_STATE_HOME=" root "state"))
                                        process-environment))
           (drgnx-work-db--handles nil) (drgnx-job-routes nil) (drgnx-ai--keys (make-hash-table :test #'eq))
+          (drgnx-ai-providers nil) (drgnx-ai-roles nil)
           (plan (concat root "docs/plans/p.md")))
      (unwind-protect
          (progn (make-directory (concat root "docs/plans") t) (make-directory (concat root "code") t)
@@ -62,11 +63,9 @@
 
 (ert-deftest drgnx-job/a-proposal-is-stored-with-routes-and-an-estimate ()
   (drgnx-job-test--with
-    (with-temp-file (concat root "config/ai.eld")
-      (prin1 '(:version 1 :providers ((openrouter :name "OR" :kind openai :url "https://openrouter.ai/api/v1"
-                                                  :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t :price (3.0 . 15.0)))
-                        :roles ((agent (openrouter))))
-             (current-buffer)))
+    (setq drgnx-ai-providers '((openrouter :name "OR" :kind openai :url "https://openrouter.ai/api/v1"
+                                           :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t :price (3.0 . 15.0)))
+          drgnx-ai-roles '((agent (openrouter))))
     (let* ((drgnx-job-routes '((implement . "claude (OpenRouter)") (test . "claude (OpenRouter)")))
            (id (drgnx-job-propose plan))
            (job (drgnx-job-get id)) (prop (plist-get job :proposal)))
@@ -81,11 +80,9 @@
 (ert-deftest drgnx-job/a-budget-with-an-unpriced-provider-is-warned-about ()
   ;; the gateway counts only what it can price: a budget set over a provider without :price does not stop it
   (drgnx-job-test--with
-    (with-temp-file (concat root "config/ai.eld")
-      (prin1 '(:version 1 :providers ((openrouter :name "OR" :kind openai :url "https://openrouter.ai/api/v1"
-                                                  :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t))
-                        :roles ((agent (openrouter))))
-             (current-buffer)))
+    (setq drgnx-ai-providers '((openrouter :name "OR" :kind openai :url "https://openrouter.ai/api/v1"
+                                           :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t))
+          drgnx-ai-roles '((agent (openrouter))))
     (let* ((drgnx-job-routes '((implement . "claude (OpenRouter)") (test "claude" "claude (OpenRouter)")))
            (warned (drgnx-job-get (drgnx-job-propose plan :budget 5)))
            (quiet (drgnx-job-get (drgnx-job-propose plan)))

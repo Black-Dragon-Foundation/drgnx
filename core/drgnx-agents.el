@@ -18,7 +18,9 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-config)
-(require 'drgnx-file)                   ; `drgnx-file-truename': an agent's names, with no file name handler
+(require 'drgnx-setting)
+(require 'drgnx-settings-defaults)     ; the shipped built-in profiles, and `drgnx-agents-set-setting's writer
+(require 'drgnx-file)                 ; `drgnx-file-truename': an agent's names, with no file name handler
 (require 'drgnx-acp)
 (require 'drgnx-timer)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
@@ -47,22 +49,63 @@
           (:openrouter (pred drgnx-agents--openrouter-ok-p "not an OpenRouter restriction (:only :ignore :data-collection :zdr)")
                        "Which providers OpenRouter may use")
           (:routes (alist symbol (or string (list-of string))) "Which profiles do each job role: a list of names, or one name"))
-  "The schema of agents.eld.")
+  "The schema of agents.eld, which the migration still reads (`drgnx-settings-migrate').
+The settings below use its parts.")
 
 (drgnx-config-define 'agents
                      :file "agents.eld" :shape 'plist :version 1 :schema drgnx-agents-config-schema
                      :default '(:profiles nil :mcp (coordination)) :reload 'mtime :last-good nil :max-bytes 262144
                      :header ";; drgnx agents (docs/guide/agents.md)\n"
-                     :doc "Agent profiles, the MCP servers agents get, OpenRouter restrictions and job routes.")
+                     :doc "The old agents.eld, read only to move it into settings.el (docs/guide/settings.md).")
+
+;;;; The settings (agents.eld folded into settings.el; docs/guide/agents.md)
+;; All `:on-error strict' (a settings.el that does not read gives the shipped default, never a half-read value),
+;; `:agents never' (an agent cannot change them), `:workspace never' (a cloned repository cannot set them: a profile
+;; is a program, a route chooses where your code goes) and `:runtime' (the hub reads them).  Callers read the
+;; default value, so a buffer-local value never reaches them.
+
+(defun drgnx-agents--key-schema (key)
+  "The schema of KEY in `drgnx-agents-config-schema'."
+  (nth 1 (assq key (cdr drgnx-agents-config-schema))))
+
+(drgnx-defsetting drgnx-agents-profiles nil
+  "Your agent profiles: an alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt
+:ai PROVIDER-ENVIRONMENT :model MODEL :doc LINE).  The built-in ones need none; never holds secrets (keys come from
+the environment)."
+  :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<AgentProfile>" :schema (drgnx-agents--key-schema :profiles))
+
+(drgnx-defsetting drgnx-agents-default nil
+  "The profile New Agent Session offers on Return: a profile's name, or nil for claude."
+  :type '(choice (const :tag "claude" nil) string) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
+(drgnx-defsetting drgnx-agents-mcp '(coordination)
+  "The MCP servers agents get: `coordination' and `search'."
+  :type '(repeat symbol) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema (drgnx-agents--key-schema :mcp))
+
+(drgnx-defsetting drgnx-agents-routes nil
+  "Which profiles do each job role: an alist ROLE → a profile's name, or a list of names."
+  :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<AgentRoute>" :schema (drgnx-agents--key-schema :routes))
+
+(drgnx-defsetting drgnx-agents-openrouter nil
+  "Which providers OpenRouter may use for the agents' requests: a plist (:only SLUGS :ignore SLUGS
+:data-collection deny|allow :zdr t), each key only when set.  A value that is not a restriction is refused, and
+OpenRouter agents do not start until it is fixed."
+  :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "OpenRouterRestrictions" :schema (drgnx-agents--key-schema :openrouter))
+
+(drgnx-defsetting drgnx-agents-allow-unsandboxed nil
+  "Non-nil: agents may run without the sandbox.  Off unless you turn it on; no workspace and no agent can."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
   mcp-dir)                              ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
-
-(defvar drgnx-agents-profiles nil
-  "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
-agents.eld (config dir) and the built-in ones; never holds secrets (keys come from the environment).")
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 
@@ -74,22 +117,10 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 `turn-end': the work tracker records the commits each turn made (docs/guide/work.md).")
 
 (defconst drgnx-agents-builtin-profiles
-  '(("claude" :command ("claude-agent-acp") :mode queue :job-safe t :doc "Claude through the unmodified agent (subscription or API key)")
-    ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
-     :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
-    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-ollama :doc "Claude Code on a local Ollama model")
-    ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-moonshot :model "kimi-k3"
-     :doc "Claude Code on Kimi through Moonshot's own API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
-    ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-deepseek :model "deepseek-v4-pro"
-     :doc "Claude Code on DeepSeek through its own API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
-    ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter :model "moonshotai/kimi-k3"
-     :doc "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
-    ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
-     :model "deepseek/deepseek-v4-pro"
-     :doc "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)"))
+  (drgnx-settings-defaults-value 'drgnx-agents-builtin-profiles)
   "Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
 \(`drgnx-ai-agent-env'); :job-safe, that a job may run it (`drgnx-job-safe-p': Claude Code, whose job sessions
-ignore a repository's own settings).")
+ignore a repository's own settings).  Shipped in settings/runtime-defaults.el, which the hub reads too.")
 
 ;;;; The Claude Code adapter
 
@@ -210,42 +241,48 @@ not installed (starting it says so) is left as it is."
       (cons (plist-get a :program) (cdr command)))))
 
 (defun drgnx-agents-profile (name)
-  (or (assoc name drgnx-agents-profiles)
-      (assoc name (drgnx-config-get 'agents :profiles))
+  (or (assoc name (default-value 'drgnx-agents-profiles))
       (assoc name drgnx-agents-builtin-profiles)
       (user-error "No agent profile %s" name)))
 
 (defun drgnx-agents-profile-names ()
-  (delete-dups (mapcar #'car (append drgnx-agents-profiles (drgnx-config-get 'agents :profiles)
-                                     drgnx-agents-builtin-profiles))))
+  (delete-dups (mapcar #'car (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles))))
 
 (defun drgnx-agents-default-profile ()
-  "The profile New Agent Session offers on Return: agents.eld's `:default' when it names a profile, else claude."
-  (let ((d (drgnx-config-get 'agents :default)))
+  "The profile New Agent Session offers on Return: `drgnx-agents-default' when it names a profile, else claude."
+  (let ((d (default-value 'drgnx-agents-default)))
     (if (and (stringp d) (member d (drgnx-agents-profile-names))) d "claude")))
 
 (defun drgnx-agents-mcp-names ()
-  "The MCP servers agents get, from agents.eld's `:mcp' (`coordination', `search'): the coordination tools alone
+  "The MCP servers agents get, from `drgnx-agents-mcp' (`coordination', `search'): the coordination tools alone
 until it says otherwise."
-  (drgnx-config-get 'agents :mcp))
+  (default-value 'drgnx-agents-mcp))
 
 (defun drgnx-agents-set-setting (key value)
-  "Save VALUE as KEY (`:default', `:mcp', `:openrouter') in agents.eld: only that value changes, comments and the
-rest stay.  A file with a mistake is a `drgnx-config-refused' (a `user-error') and is not changed."
-  (drgnx-config-set 'agents key value))
+  "Save VALUE as KEY (`:profiles', `:default', `:mcp', `:routes', `:openrouter') in settings.el, and apply it at
+once: only that entry changes, comments and the rest stay.  A settings.el with a mistake is a
+`drgnx-settings-refused' (a `user-error') and is not changed."
+  (unless (memq key '(:profiles :default :mcp :routes :openrouter))
+    (user-error "No agent setting %s" key))
+  (drgnx-settings-defaults-save (intern (concat "drgnx-agents-" (substring (symbol-name key) 1))) value))
 
 (declare-function drgnx-gateway-restrictions "drgnx-gateway")
+(defvar drgnx-settings-apply-problems)
 
 (defun drgnx-agents-openrouter-restrictions ()
-  "Which providers OpenRouter may use for the agents' requests, from agents.eld's `:openrouter': (:only SLUGS
-:ignore SLUGS :data-collection deny|allow :zdr t), each only when set, or nil.  A file with a mistake (it does not read,
-or a value is not a restriction) is a `user-error' naming it: OpenRouter agents do not start until it is fixed, and a
-typo never turns a restriction off.  One setting for every OpenRouter route; it applies through the gateway only."
+  "Which providers OpenRouter may use for the agents' requests, from `drgnx-agents-openrouter': (:only SLUGS
+:ignore SLUGS :data-collection deny|allow :zdr t), each only when set, or nil.  A settings.el that does not read, or
+an entry of it that did not apply (a value that is not a restriction), is a `user-error' naming it: OpenRouter agents
+do not start until it is fixed, and a typo never turns a restriction off.  One setting for every OpenRouter route; it
+applies through the gateway only."
   (require 'drgnx-gateway)
-  (when-let* ((p (drgnx-config-problem 'agents)))
+  (when-let* ((p (or (drgnx-config-problem 'settings)
+                     (and (boundp 'drgnx-settings-apply-problems)
+                          (seq-find (lambda (p) (eq (plist-get p :var) 'drgnx-agents-openrouter))
+                                    drgnx-settings-apply-problems)))))
     (user-error "%s has a mistake (line %s: %s): OpenRouter agents do not start until it is fixed"
-                (abbreviate-file-name (plist-get p :file)) (plist-get p :line) (plist-get p :text)))
-  (drgnx-gateway-restrictions (drgnx-config-get 'agents :openrouter) t))
+                (abbreviate-file-name (or (plist-get p :file) "settings.el")) (plist-get p :line) (plist-get p :text)))
+  (drgnx-gateway-restrictions (default-value 'drgnx-agents-openrouter) t))
 
 (defun drgnx-agents--openrouter-json (restrictions)
   "RESTRICTIONS as a hub call carries them (vectors for lists, a string for the symbol)."
@@ -603,7 +640,7 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                      r))
                (error
                 (when restrictions
-                  (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's hub only, which is not available (%s): %s is not started directly without them; start the hub, or remove :openrouter from agents.eld to go direct"
+                  (user-error "OpenRouter restrictions are set in drgnx-agents-openrouter and apply through drgnx's hub only, which is not available (%s): %s is not started directly without them; start the hub, or remove drgnx-agents-openrouter from settings.el to go direct"
                               (error-message-string err) (drgnx-agent-session-name s)))
                 (setf (drgnx-agent-session-via s) 'direct)
                 (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
@@ -622,7 +659,7 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
 its chain has an OpenRouter step and restrictions are set (or do not read) — they are never dropped silently."
   (when (and (memq kind drgnx-ai-gateway-kinds) (assq 'openrouter (drgnx-ai-agent-gateway-chain kind model))
              (drgnx-agents-openrouter-restrictions))
-    (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's gateway only, which is turned off (drgnx-agents-use-gateway): %s is not started without them; turn the gateway on, or remove :openrouter from agents.eld"
+    (user-error "OpenRouter restrictions are set in drgnx-agents-openrouter and apply through drgnx's gateway only, which is turned off (drgnx-agents-use-gateway): %s is not started without them; turn the gateway on, or remove drgnx-agents-openrouter from settings.el"
                 (drgnx-agent-session-name s))))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -638,16 +675,16 @@ its chain has an OpenRouter step and restrictions are set (or do not read) — t
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
 returned that is not a string.")
 
-(defcustom drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
+(drgnx-defsetting drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
   "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
 MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
 An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
 nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
 route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
 another one on, remove it from this list (or set it in the profile's `:env')."
-  :type '(repeat string) :group 'drgnx)
+  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
-(defcustom drgnx-agents-own-env
+(drgnx-defsetting drgnx-agents-own-env
   '((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL"
             "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
             "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL"
@@ -658,14 +695,15 @@ another one on, remove it from this list (or set it in the profile's `:env')."
 own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
 `drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
 at all."
-  :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx)
+  :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx
+  :scope 'global :workspace 'never :agents 'never)
 
 (defun drgnx-agents--command-agent (command)
   "Which agent in `drgnx-agents-own-env' the profile COMMAND (a list) starts, or nil: the first of claude, codex
 and gemini that a program or argument's file name contains."
   (let ((words (mapcar #'file-name-nondirectory (seq-filter #'stringp command))))
     (seq-find (lambda (agent) (seq-some (lambda (w) (string-search (symbol-name agent) w)) words))
-              (mapcar #'car drgnx-agents-own-env))))
+              (mapcar #'car (default-value 'drgnx-agents-own-env)))))
 
 (defun drgnx-agents--scrub (env &optional profile)
   "ENV (\"NAME=value\"…) followed by a bare-name entry (it unsets the variable) for each of
@@ -673,8 +711,10 @@ and gemini that a program or argument's file name contains."
 profile's options) without an `:ai' route keeps its agent's own names (`drgnx-agents-own-env')."
   (let* ((set (mapcar (lambda (e) (car (split-string e "="))) env))
          (own (and profile (not (plist-get profile :ai))
-                   (cdr (assq (drgnx-agents--command-agent (plist-get profile :command)) drgnx-agents-own-env)))))
-    (append env (seq-remove (lambda (name) (or (member name set) (member name own))) drgnx-agents-scrubbed-env))))
+                   (cdr (assq (drgnx-agents--command-agent (plist-get profile :command))
+                              (default-value 'drgnx-agents-own-env))))))
+    (append env (seq-remove (lambda (name) (or (member name set) (member name own)))
+                            (default-value 'drgnx-agents-scrubbed-env)))))
 
 (defun drgnx-agents--env (s)
   "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
@@ -831,14 +871,14 @@ so no `_meta' at all, for any other."
 \(drgnx-coord-mcp.el) and the search tool (drgnx-search-mcp.el).  No server of a profile's `:mcp-servers' takes them.")
 
 (defun drgnx-agents--profile-mcp-servers (s)
-  "The `:mcp-servers' of S's profile (ACP `mcpServers' entries the user wrote in agents.eld), those that are a plist
-with a name: one that takes a name of `drgnx-agents-own-mcp-servers' is left out, and a message says so (a job's
+  "The `:mcp-servers' of S's profile (ACP `mcpServers' entries the user wrote in
+a profile of `drgnx-agents-profiles'), those that are a plist with a name: one that takes a name of
+`drgnx-agents-own-mcp-servers' is left out, and a message says so (a job's
 permission check lets drgnx's own servers through).  A session without a profile (or one whose profile is gone) has
 none."
   (let ((profile (and (drgnx-agent-session-profile s)
                       (assoc (drgnx-agent-session-profile s)
-                             (append drgnx-agents-profiles (drgnx-config-get 'agents :profiles)
-                                     drgnx-agents-builtin-profiles)))))
+                             (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles)))))
     (seq-filter (lambda (e)
                   (and (plistp e) (stringp (plist-get e :name))
                        (or (not (member (plist-get e :name) drgnx-agents-own-mcp-servers))
@@ -850,7 +890,7 @@ none."
 
 (defun drgnx-agents--mcp-servers (s)
   "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
-agents.eld asks for it (`drgnx-agents-mcp-names'), then the servers of S's profile
+`drgnx-agents-mcp' asks for it (`drgnx-agents-mcp-names'), then the servers of S's profile
 \(`drgnx-agents--profile-mcp-servers'), for a job's session too.  A sandboxed session (its `mcp-dir' set by
 `drgnx-sandbox-mcp-open') gets bridges to its own sockets instead of the first two: the hub runs the servers
 outside, as S."

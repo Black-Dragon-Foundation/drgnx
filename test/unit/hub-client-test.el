@@ -10,6 +10,7 @@
 (require 'drgnx-hub)
 (require 'drgnx-agents-mirror)
 (require 'drgnx-coord-mcp)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/fake-hub" drgnx-dir) nil t)
@@ -85,12 +86,12 @@ without the binary."
    "the Lisp backend runs"))
 
 (defun drgnx-hub-client-test--mock-profile (root)
-  "The profile \"mock\" (test/fixtures/mock-acp.el) in ROOT's agents.eld."
-  (with-temp-file (concat root "config/agents.eld")
-    (prin1 (list :profiles (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir)
-                                                             (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                                             "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
-           (current-buffer))))
+  "The profile \"mock\" (test/fixtures/mock-acp.el) in ROOT's settings.el."
+  (drgnx-test-write-settings
+   (concat root "config/settings.el")
+   'drgnx-agents-profiles (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir)
+                                                            (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                                            "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))))
 
 (ert-deftest drgnx-hub-client/proves-itself-and-is-user ()
   ;; binary: the hello's proof makes the connection user class, and Ratatoskr's proof back checks out

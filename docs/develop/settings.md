@@ -511,3 +511,41 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   whose plist settings.el already gives: `drgnx-settings-migrate-leftovers`).
 - **Doctor:** the `settings-migrated` check (fact `:settings-leftovers`) warns "already migrated" and names
   Move Old Files Away; it has no row while nothing is left over.
+
+## Agents, AI and the shipped defaults (Task 15)
+
+`core/drgnx-agents.el`, `core/drgnx-ai.el`, `core/drgnx-settings-defaults.el`, `settings/runtime-defaults.el`.
+
+- **The settings.** `drgnx-agents-{profiles,default,mcp,routes,openrouter,allow-unsandboxed}` are declared with
+  `drgnx-defsetting`: `:scope global`, `:workspace never` (so a workspace file's refusal catches them), `:on-error strict`,
+  `:agents never`, `:runtime TYPE` (a Rust type name, the list Task 20 checks against `RUNTIME_NAMES`) and a `:schema`
+  taken from `drgnx-agents-config-schema`. `drgnx-ai-providers` is `:workspace never`; `drgnx-ai-roles` is
+  `:scope project`, `:workspace data` (a project may route roles among your providers); both are `:agents never` and
+  `:runtime`, `:on-error last-good`. `drgnx-agents-allow-unsandboxed` is new (nothing reads it before the sandbox
+  tasks).
+- **Callers read `default-value`.** `drgnx-agents-profile`, `-profile-names`, `-default-profile`, `-mcp-names`,
+  `drgnx-job--routes`, `drgnx-ai-providers` (the function), `drgnx-ai-role` and `drgnx-ai-user-role` read the global
+  value, so a buffer-local value (a `.dir-locals.el`, a `setq-local`) never reaches them. Tests bind the variable with
+  `let`, which is the global value.
+- **Writers.** `drgnx-agents-set-setting KEY VALUE` (KEY `:profiles :default :mcp :routes :openrouter`) and
+  `drgnx-ai-set-role ROLE CHAIN` write one entry through `drgnx-settings-defaults-save` (`drgnx-settings-file-put`, then
+  `drgnx-settings-live-sync`, so the value applies at once). A settings.el with a mistake is a `drgnx-settings-refused`
+  (a `user-error`) and stays as it is.
+- **OpenRouter fails closed.** `drgnx-agents-openrouter-restrictions` signals a `user-error` when the config layer
+  has a problem with settings.el, or `drgnx-settings-apply-problems` holds one for `drgnx-agents-openrouter`: strict
+  would otherwise turn a mistyped restriction into "none".
+- **The shipped data.** `settings/runtime-defaults.el` (head `drgnx-settings`) holds `drgnx-ai-presets`,
+  `drgnx-ai-default-roles`, `drgnx-agents-builtin-profiles` and the strict default of every `:on-error strict`
+  setting. `drgnx-settings-defaults-value VAR` reads it with the data reader (cached per file stamp, never `load`ed);
+  the three `defconst`s take their values from it. `test/fixtures/settings/defconsts-before.eld` is the three constants
+  as `main` had them: `drgnx-settings-defaults/equal-the-old-defconsts` compares. Ratatoskr embeds the same file
+  (Task 20).
+- **The old files.** `drgnx-config-define 'agents` and `'ai` stay, for the migration only (it reads the old files
+  through them). `agents` and `ai` are out of `drgnx-settings-shim-areas`, so a file that stayed is no longer read.
+  The project's `.drgnx/ai.eld` (`ai-project`) is unchanged until the workspace layers fold it in.
+- **Batch entry points.** A batch Emacs that loads no init (the hub, `search index`, `search mcp`/`query`, `onboard`)
+  calls `drgnx-settings-defaults-apply`: it applies drgnx's own entries of settings.el, so the profiles, routes,
+  providers and roles are the user's there too.
+- **Tests.** `test/fixtures/runtime-settings-fixture.el`: `drgnx-test-with-runtime-settings` (the eight settings at
+  their defaults, a temp config dir, the applier's traces removed afterwards), `drgnx-test-with-runtime-bindings` (no
+  config dir), `drgnx-test-runtime-settings-put`, `drgnx-test-write-settings` (a settings.el for a child process).

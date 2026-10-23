@@ -7,6 +7,7 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-hub-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT (so the hub's socket is this test's own), a mock OpenRouter on OR-PORT logging
@@ -21,6 +22,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
                                              (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))   ; …ending with this Emacs
                                        process-environment))
           (drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil) (drgnx-work-db--handles nil)
+          (drgnx-ai-providers nil) (drgnx-ai-roles nil)
           (drgnx-gateway--keys (make-hash-table :test #'eq)) (drgnx-gateway--registrations (make-hash-table :test #'equal))
           (drgnx-hub--exit-function #'drgnx-hub-stop) (mock nil))
      (unwind-protect
@@ -30,10 +32,9 @@ to OR-LOG, OPENROUTER_API_KEY unset."
              (prin1 '((:path "/api/v1/messages" :body "{\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}")) (current-buffer)))
            (setq mock (drgnx-ai-test-mock-llm nil (concat root "or.eld") or-log)
                  or-port (process-get mock :port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1 :providers ((openrouter :name "OR" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
-                                                         :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t)))
-                    (current-buffer)))
+           (setq drgnx-ai-providers `((openrouter :name "OR" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
+                                                  :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t)))
+           (drgnx-test-write-settings (concat root "config/settings.el") 'drgnx-ai-providers drgnx-ai-providers)
            ,@body)
        (ignore-errors (drgnx-hub-call-sync "shutdown" nil 2))
        (drgnx-hub-stop)
@@ -716,10 +717,9 @@ about) and keeps the tests within their time limits."
              (current-buffer)))
     (delete-process mock) (setq mock (drgnx-ai-test-mock-llm or-port (concat root "or.eld") or-log))
     ;; a provider that needs no key: the hub started here is of protocol 0, which never gets this Emacs's keys
-    (with-temp-file (concat root "config/ai.eld")
-      (prin1 `(:version 1 :providers ((openrouter :name "OR" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
-                                                  :caps (chat) :messages t)))
-             (current-buffer)))
+    (setq drgnx-ai-providers `((openrouter :name "OR" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
+                                           :caps (chat) :messages t)))
+    (drgnx-test-write-settings (concat root "config/settings.el") 'drgnx-ai-providers drgnx-ai-providers)
     (should (= 0 (call-process "sh" nil nil nil "-c" "trap - PIPE; exec \"$0\" \"$@\""
                                (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub"

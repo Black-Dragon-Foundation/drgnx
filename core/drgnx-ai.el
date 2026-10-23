@@ -4,9 +4,10 @@
 
 ;;; Commentary:
 ;; One registry for every AI feature — ghost text, inline edit, chat (gptel), embeddings, agents.  Providers are
-;; presets for OpenRouter and the local runners, plus the user's (ai.eld in the config dir) and the project's
-;; (.drgnx/ai.eld); roles (complete, edit, chat, embed, agent) are fallback chains of (PROVIDER . MODEL).  Both files
-;; are config files (`drgnx-config': a mistake keeps the last good providers; a project's file is read-only, 64 KiB).
+;; presets for OpenRouter and the local runners (settings/runtime-defaults.el), plus the user's (the setting
+;; `drgnx-ai-providers', in settings.el); roles (complete, edit, chat, embed, agent) are fallback chains of
+;; (PROVIDER . MODEL): the user's `drgnx-ai-roles' and the project's (.drgnx/ai.eld, a config file: read-only, 64 KiB).
+;; An entry of settings.el with a mistake keeps the last good value (`drgnx-settings-apply-global').
 ;; Keys come from where the user keeps them — the environment, then auth-source (the macOS Keychain and the Linux
 ;; keyring included, for commands the user ran) — when they are needed.  drgnx writes a key in one place only, that
 ;; Keychain or keyring, and only when the user asks (`drgnx-ai-store-key'); never in a command line, a log or a
@@ -20,44 +21,21 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-config)
+(require 'drgnx-setting)
+(require 'drgnx-settings-defaults)     ; the shipped presets and default roles, and the writer of `drgnx-ai-set-role'
 (require 'drgnx-timer)
 
 (defconst drgnx-ai-presets
-  '((openrouter :name "OpenRouter" :kind openai :url "https://openrouter.ai/api/v1" :key-env "OPENROUTER_API_KEY"
-                :caps (chat fim embed) :messages t)
-    (ollama     :name "Ollama" :kind ollama :url "http://127.0.0.1:11434" :caps (chat fim embed) :messages t)
-    ;; the agent gateway only (Claude Code with your own Anthropic API key): no editor feature asks it
-    (anthropic  :name "Anthropic API" :kind anthropic :url "https://api.anthropic.com/v1" :key-env "ANTHROPIC_API_KEY"
-                :auth x-api-key :caps () :messages t)
-    ;; Kimi and DeepSeek on their own Anthropic-compatible APIs (Claude Code agents only; Bearer through
-    ;; ANTHROPIC_AUTH_TOKEN, as both vendors' Claude Code guides have it)
-    (moonshot   :name "Moonshot (Kimi)" :kind anthropic :url "https://api.moonshot.ai/anthropic" :key-env "MOONSHOT_API_KEY"
-                :caps () :messages t)
-    (deepseek   :name "DeepSeek" :kind anthropic :url "https://api.deepseek.com/anthropic" :key-env "DEEPSEEK_API_KEY"
-                :caps () :messages t)
-    (lmstudio   :name "LM Studio" :kind openai :url "http://127.0.0.1:1234/v1" :caps (chat fim embed))
-    (llamacpp   :name "llama.cpp server" :kind llamacpp :url "http://127.0.0.1:8012" :caps (chat fim embed))   ; its 8080 is TEI's
-    (vllm       :name "vLLM" :kind openai :url "http://127.0.0.1:8000/v1" :caps (chat fim embed))
-    (jan        :name "Jan" :kind openai :url "http://127.0.0.1:1337/v1" :caps (chat))
-    (localai    :name "LocalAI" :kind openai :url "http://127.0.0.1:8090/v1" :caps (chat fim embed))
-    (koboldcpp  :name "KoboldCpp" :kind openai :url "http://127.0.0.1:5001/v1" :caps (chat fim))
-    (tabbyapi   :name "TabbyAPI / text-generation-webui" :kind openai :url "http://127.0.0.1:5000/v1" :caps (chat fim))
-    (gpt4all    :name "GPT4All" :kind openai :url "http://127.0.0.1:4891/v1" :caps (chat))
-    (lemonade   :name "Lemonade" :kind openai :url "http://127.0.0.1:13305/api/v1" :caps (chat fim embed))
-    (llamafile  :name "llamafile" :kind openai :url "http://127.0.0.1:8081/v1" :caps (chat fim))       ; its 8080 is TEI's
-    (tei        :name "Text Embeddings Inference" :kind tei :url "http://127.0.0.1:8080" :caps (embed)))
+  (drgnx-settings-defaults-value 'drgnx-ai-presets)
   "The providers drgnx knows without configuration: id → (:name :kind :url [:key-env] :caps [:messages] [:auth]).
 :messages — it serves Anthropic's Messages API (URL without /v1, then the agent's path): the agent gateway can carry
-it; :auth x-api-key — its key goes in that header (else `Authorization: Bearer').  A provider in ai.eld may add
-:price (IN . OUT), USD per million tokens, for the gateway's spend.")
+it; :auth x-api-key — its key goes in that header (else `Authorization: Bearer').  A provider in `drgnx-ai-providers'
+may add :price (IN . OUT), USD per million tokens, for the gateway's spend.  Shipped in settings/runtime-defaults.el,
+which the hub reads too.")
 
 (defconst drgnx-ai-default-roles
-  '((complete (ollama . "qwen2.5-coder:1.5b"))           ; fits next to TEI on a 6 GB GPU
-    (edit (openrouter . "openrouter/auto") (ollama . "qwen2.5-coder:7b"))
-    (chat (openrouter . "openrouter/auto") (ollama . "qwen2.5-coder:7b"))
-    (embed (tei))
-    (agent (openrouter)))                                ; the gateway's chain for agents; nil model: the agent's own
-  "Each role's chain when neither the project nor the user names one.")
+  (drgnx-settings-defaults-value 'drgnx-ai-default-roles)
+  "Each role's chain when neither the project nor the user names one (settings/runtime-defaults.el).")
 
 (defconst drgnx-ai-lmstudio-models
   '(("qwen2.5-coder:1.5b" "qwen2.5-coder-1.5b-instruct" "https://huggingface.co/lmstudio-community/Qwen2.5-Coder-1.5B-Instruct-GGUF")
@@ -91,23 +69,43 @@ it when both fit, else the 3B, else the 1.5B too.  ROOM nil: as little as can be
   "Non-nil when PRICE is (IN . OUT): two non-negative numbers."
   (and (consp price) (numberp (car price)) (numberp (cdr price)) (>= (car price) 0) (>= (cdr price) 0)))
 
+(defconst drgnx-ai--providers-schema
+  '(alist symbol
+          (plist (:name string "What the provider is called")
+                 ;; anthropic: the presets that serve agents only
+                 (:kind (enum openai ollama llamacpp tei anthropic) "How to talk to it")
+                 (:url string "Its address")
+                 (:key-env string "The environment variable holding its key (never the key)")
+                 (:caps (list-of symbol) "What it does: chat, fim, embed")
+                 (:price (pred drgnx-ai--price-p "(IN . OUT) dollars per million tokens")
+                         "What the agent gateway counts its spend by")
+                 (:messages boolean "Whether it serves Anthropic's Messages API")))
+  "A provider id → its plist: ((ID :name :kind :url…)…).")
+
+;; ai.eld itself is read only by the migration (`drgnx-settings-migrate'); its keys are settings now.
 (drgnx-config-define 'ai
                      :file "ai.eld" :shape 'plist :version 1 :reload 'mtime :last-good t
-                     :schema `(plist (:providers (alist symbol
-                                                        (plist (:name string "What the provider is called")
-                                                               ;; anthropic: the presets that serve agents only
-                                                               (:kind (enum openai ollama llamacpp tei anthropic) "How to talk to it")
-                                                               (:url string "Its address")
-                                                               (:key-env string "The environment variable holding its key (never the key)")
-                                                               (:caps (list-of symbol) "What it does: chat, fim, embed")
-                                                               (:price (pred drgnx-ai--price-p "(IN . OUT) dollars per million tokens")
-                                                                       "What the agent gateway counts its spend by")
-                                                               (:messages boolean "Whether it serves Anthropic's Messages API")))
+                     :schema `(plist (:providers ,drgnx-ai--providers-schema
                                                  "Providers of your own, or presets moved (an entry replaces the preset with its id)")
                                      (:roles ,drgnx-ai--roles-schema "Each role's chain of (PROVIDER . MODEL), tried in order"))
                      :default nil
                      :header ";; drgnx AI providers and roles (docs/guide/ai.md) — never a key here\n"
-                     :doc "Your AI providers and each role's chain of providers and models; never a key.")
+                     :doc "The old ai.eld, read only to move it into settings.el (docs/guide/settings.md).")
+
+;; `:agents never' (an agent cannot change where your code goes), `:runtime' (the hub reads them).  Callers read the
+;; default value.  Providers are `:workspace never': a cloned repository must not choose where your code and keys go;
+;; roles may be routed by a project (its .drgnx/ai.eld, until the workspace layers fold it in), among your providers.
+(drgnx-defsetting drgnx-ai-providers nil
+  "Providers of your own, or presets moved: an alist ID → (:name :kind :url :key-env :caps :price :messages).
+An entry replaces the preset with its id.  Never holds a key (:key-env names the variable that does)."
+  :type 'sexp :group 'drgnx :scope 'global :workspace 'never :agents 'never
+  :runtime "Vec<ProviderConfig>" :schema drgnx-ai--providers-schema)
+
+(drgnx-defsetting drgnx-ai-roles nil
+  "Each role's chain of (PROVIDER . MODEL), tried in order: an alist ROLE → chain.  A MODEL is a name, or nil for
+the provider's own.  A role you do not name has the shipped default chain."
+  :type 'sexp :group 'drgnx :scope 'project :workspace 'data :agents 'never
+  :runtime "Vec<RoleChain>" :schema drgnx-ai--roles-schema)
 
 (drgnx-config-define 'ai-project
                      :dir 'project :file "ai.eld" :shape 'plist :version 1 :reload 'mtime
@@ -130,10 +128,10 @@ it when both fit, else the 3B, else the 1.5B too.  ROOM nil: as little as can be
     (drgnx-config-get 'ai-project :roles (file-name-directory (directory-file-name (file-name-directory file))))))
 
 (defun drgnx-ai-providers ()
-  "Every provider: the presets, then the user's ai.eld (an entry replaces a preset with its id).  A project's
-ai.eld never adds or changes one: a cloned repository must not choose where your code and keys go."
+  "Every provider: the presets, then the user's `drgnx-ai-providers' (an entry replaces a preset with its id).  A
+project's ai.eld never adds or changes one: a cloned repository must not choose where your code and keys go."
   (let ((ps (copy-sequence drgnx-ai-presets)))
-    (dolist (p (drgnx-config-get 'ai :providers))
+    (dolist (p (default-value 'drgnx-ai-providers))
       (setq ps (cons p (assq-delete-all (car p) ps))))
     ps))
 
@@ -211,13 +209,13 @@ that name a remote provider count only once the user allowed it (`drgnx-ai-confi
       (let ((allowed (drgnx-ai--allowed-remote-ids)))
         (setq project (seq-remove (lambda (step) (and (drgnx-ai-remote-p (car step)) (not (memq (car step) allowed)))) project))))
     (or project
-        (alist-get role (drgnx-config-get 'ai :roles))
+        (alist-get role (default-value 'drgnx-ai-roles))
         (alist-get role drgnx-ai-default-roles))))
 
 (defun drgnx-ai-user-role (role)
-  "ROLE's chain in the user's own configuration (their ai.eld, else the default), without any project's: what a
-choice written back to ai.eld starts from, so one project's route never becomes global."
-  (or (alist-get role (drgnx-config-get 'ai :roles))
+  "ROLE's chain in the user's own configuration (their `drgnx-ai-roles', else the default), without any project's: what a
+choice written back to settings.el starts from, so one project's route never becomes global."
+  (or (alist-get role (default-value 'drgnx-ai-roles))
       (alist-get role drgnx-ai-default-roles)))
 
 ;;;; Keys
@@ -524,16 +522,15 @@ login, which drgnx never reads."
     ('claude-deepseek (drgnx-ai--agent-bearer-env 'deepseek "DeepSeek" interactive))
     (_ nil)))
 
-;;;; Choosing (written to ai.eld: providers and models, never a key)
+;;;; Choosing (written to settings.el: providers and models, never a key)
 
 (defun drgnx-ai-set-role (role chain)
-  "Make CHAIN ((PROVIDER . MODEL)…) ROLE's in the user's ai.eld; everything else in it stays.  An ai.eld that
-has a mistake, or was written by a newer drgnx, is never replaced: the error (`drgnx-config-refused') says so."
-  (drgnx-config-update 'ai
-                       (lambda (conf)
-                         (let ((roles (plist-get conf :roles)))
-                           (setf (alist-get role roles) chain)
-                           (plist-put conf :roles roles)))))
+  "Make CHAIN ((PROVIDER . MODEL)…) ROLE's in the user's `drgnx-ai-roles' (settings.el), and apply it at once;
+every other role stays.  A settings.el that has a mistake, or was written by a newer drgnx, is never replaced: the
+error (`drgnx-settings-refused', a `user-error') says so."
+  (let ((roles (copy-alist (default-value 'drgnx-ai-roles))))
+    (setf (alist-get role roles) chain)
+    (drgnx-settings-defaults-save 'drgnx-ai-roles roles)))
 
 ;;;; gptel (the chat UI) from the registry
 

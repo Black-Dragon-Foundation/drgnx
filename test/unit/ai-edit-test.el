@@ -14,6 +14,7 @@
           (port nil) (script (concat root "llm.eld")) (log (concat root "llm.log"))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config")) process-environment))
           (drgnx-ai-detected '((o :up t)))
+          (drgnx-ai-providers nil) (drgnx-ai-roles nil)
           (mock nil))
      (unwind-protect
          (progn
@@ -24,10 +25,8 @@
                     (current-buffer)))
            (setq mock (drgnx-ai-test-mock-llm nil script log)
                  port (process-get mock :port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
-                               :roles ((edit (o . "m"))))
-                    (current-buffer)))
+           (setq drgnx-ai-providers `((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
+                 drgnx-ai-roles '((edit (o . "m"))))
            ,@body)
        (when mock (delete-process mock))
        (dolist (b (buffer-list)) (when (string-prefix-p "*AI edit" (buffer-name b)) (kill-buffer b)))
@@ -230,7 +229,7 @@
 (ert-deftest drgnx-ai-edit/no-provider-says-why-and-changes-nothing ()
   (drgnx-ai-edit-test--with "never"
     (let ((drgnx-ai-detected nil) (said nil))
-      (with-temp-file (concat root "config/ai.eld") (prin1 '(:version 1 :roles ((edit (dead . "m")))) (current-buffer)))
+      (setq drgnx-ai-roles '((edit (dead . "m"))))
       (with-temp-buffer
         (insert "x\n")
         (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))

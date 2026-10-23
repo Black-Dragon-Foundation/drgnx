@@ -455,15 +455,13 @@ started, stays."
          (proj (make-temp-file "drgnx-search-proj" t))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" conf) "ROLE_A_KEY=sk-a" "ROLE_B_KEY=sk-b")
                                       process-environment))
-         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
+         (drgnx-ai-providers nil) (drgnx-ai-roles nil))
     (unwind-protect
         (progn
-          (with-temp-file (expand-file-name "ai.eld" conf)
-            (prin1 '(:version 1
-                              :providers ((ka :name "A" :kind openai :url "http://127.0.0.1:1/v1" :key-env "ROLE_A_KEY" :caps (embed))
-                                          (kb :name "B" :kind openai :url "http://127.0.0.1:2/v1" :key-env "ROLE_B_KEY" :caps (embed)))
-                              :roles ((embed (ka . "m"))))
-                   (current-buffer)))
+          (setq drgnx-ai-providers '((ka :name "A" :kind openai :url "http://127.0.0.1:1/v1" :key-env "ROLE_A_KEY" :caps (embed))
+                                     (kb :name "B" :kind openai :url "http://127.0.0.1:2/v1" :key-env "ROLE_B_KEY" :caps (embed)))
+                drgnx-ai-roles '((embed (ka . "m"))))
           (make-directory (expand-file-name ".drgnx" proj))
           (with-temp-file (expand-file-name ".drgnx/ai.eld" proj) (prin1 '(:roles ((embed (kb . "m")))) (current-buffer)))
           (let* ((default-directory (file-name-as-directory conf))
@@ -493,15 +491,13 @@ started, stays."
                                             "SEARCH_TEST_KEY=sk-secret-1" "DRGNX_TASK=nope")
                                       process-environment))
          (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
+         (drgnx-ai-providers nil) (drgnx-ai-roles nil)
          started)
     (unwind-protect
         (progn
-          (with-temp-file (expand-file-name "ai.eld" conf)
-            (prin1 '(:version 1
-                              :providers ((kz :name "K" :kind openai :url "http://127.0.0.1:1/v1" :key-env "SEARCH_TEST_KEY" :caps (embed))
-                                          (nokey :name "N" :kind openai :url "http://127.0.0.1:2/v1" :key-env "SEARCH_TEST_NOKEY" :caps (embed)))
-                              :roles ((embed (kz . "m") (nokey . "m") (tei))))
-                   (current-buffer)))
+          (setq drgnx-ai-providers '((kz :name "K" :kind openai :url "http://127.0.0.1:1/v1" :key-env "SEARCH_TEST_KEY" :caps (embed))
+                                     (nokey :name "N" :kind openai :url "http://127.0.0.1:2/v1" :key-env "SEARCH_TEST_NOKEY" :caps (embed)))
+                drgnx-ai-roles '((embed (kz . "m") (nokey . "m") (tei))))
           (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest args) (setq started args) "job-1"))
                     ((symbol-function 'drgnx-jobs-list) (lambda () nil)))
             (drgnx-search-index-start "/tmp/some-project"))

@@ -23,7 +23,7 @@
 
 (defvar drgnx-job-routes nil
   "Alist ROLE (a symbol: implement, test, review, docs) → agent profile name (or a list: fallbacks in order).  Read
-from agents.eld's :routes when nil.")
+from `drgnx-agents-routes' when nil.")
 
 (defvar drgnx-job-default-profile "claude" "The profile a role without a route gets.")
 (defvar drgnx-job-task-tokens '(150000 . 15000) "The estimate's tokens per task: (INPUT . OUTPUT).")
@@ -111,7 +111,7 @@ yours.  A job keeps the gate it was proposed with (the hub runs it): this option
 (defvar drgnx-job-review)
 
 (defun drgnx-job--routes ()
-  (or drgnx-job-routes (drgnx-config-get 'agents :routes)))
+  (or drgnx-job-routes (default-value 'drgnx-agents-routes)))
 
 (defun drgnx-job-route (role)
   "ROLE's profiles, in order (the first is used; the rest are its fallbacks)."
@@ -131,7 +131,7 @@ is the job's, of kind `profile', which the user dismisses."
     (let ((p (cdr (ignore-errors (drgnx-agents-profile profile)))))
       (drgnx-job--card
        id task (if task "agent" "profile")
-       (format "%s cannot run a job's agent: %s; use %s (agents.eld's :routes)" profile
+       (format "%s cannot run a job's agent: %s; use %s (drgnx-agents-routes)" profile
                (cond ((null p) "there is no such profile")
                      ((and (eq system-type 'darwin) (plist-get p :job-safe) (not (plist-get p :ai)))
                       "on macOS a job's Claude runs on a gateway profile (the subscription keeps its token in the Keychain)")

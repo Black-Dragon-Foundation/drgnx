@@ -3,6 +3,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-hub)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-job-cli/propose-then-approve-then-status ()
   ;; the CLI starts the hub: Ratatoskr (DRGNX_RATATOSKR_BIN), detached from the test but ending with it
@@ -22,11 +23,11 @@
         (progn
           (make-directory (concat root "config") t) (make-directory (concat root "home") t)
           (make-directory (concat repo "docs/plans") t)
-          (with-temp-file (concat root "config/agents.eld")   ; mock agents on every route: nothing real starts
-            (prin1 `(:profiles (("mock" :command ("sh" ,(expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) ,(expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                                  "-l" ,(expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
-                               :routes ((implement . "mock") (review . "mock")))
-                   (current-buffer)))
+          (drgnx-test-write-settings    ; mock agents on every route: nothing real starts
+           (concat root "config/settings.el")
+           'drgnx-agents-profiles `(("mock" :command ("sh" ,(expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) ,(expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                                      "-l" ,(expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
+           'drgnx-agents-routes '((implement . "mock") (review . "mock")))
           (write-region "# CLI\n\n### Task 1: one\n\n### Task 2: two\n**Depends:** Task 1\n" nil plan nil 'silent)
           (dolist (args '(("init" "-q" "-b" "main") ("add" "-A") ("commit" "-q" "-m" "start")))
             (let ((default-directory repo)) (should (eql 0 (apply #'call-process "git" nil nil nil args)))))

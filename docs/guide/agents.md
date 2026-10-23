@@ -11,20 +11,24 @@ when the profile asks for it and the agent supports it. Only **Stop** cancels.
 ## Sessions
 
 Agents: New Agent Session… (palette) starts a **profile** in the current project; Show Agents (`C-k a`, ⌘K A on a
-Mac) opens the Agents tab. Profiles live in
-`~/.config/drgnx/agents.eld`:
+Mac) opens the Agents tab. Profiles are the setting `drgnx-agents-profiles` in
+`~/.config/drgnx/settings.el` ([settings.md](settings.md)); this file used to be `agents.eld`, and drgnx moved its
+keys into `settings.el` once ([Moving from the old files](settings.md#moving-from-the-old-files)):
 
 ```elisp
-(:profiles (("claude" :command ("claude-agent-acp") :mode queue)
-            ("local" :command ("my-acp-agent" "--model" "qwen") :mode steer)))
+(drgnx-agents-profiles (("claude" :command ("claude-agent-acp") :mode queue)
+                        ("local" :command ("my-acp-agent" "--model" "qwen") :mode steer)))
 ```
 
-**If `agents.eld` has a mistake** (it does not read, or a value is the wrong kind: a `:command` that is not a list of
-strings, a `:mcp` name that is neither `coordination` nor `search`, an `:openrouter` value that is not a restriction),
-drgnx does not apply any of it and says where the mistake is, once. Only the built-in profiles are offered, the agents
+The agent settings are `drgnx-agents-profiles`, `-default`, `-mcp`, `-routes`, `-openrouter` and
+`-allow-unsandboxed`. They are **strict**: a value that is the wrong kind (a `:command` that is not a list of strings,
+a `:mcp` name that is neither `coordination` nor `search`, an `:openrouter` value that is not a restriction) is not
+applied and drgnx says where the mistake is, once; that setting is then at its shipped default. A `settings.el` that
+does not read at all gives the shipped defaults for all of them. So only the built-in profiles are offered, the agents
 get the coordination tools alone, and OpenRouter agents wait until it is fixed: a restriction you wrote is never
-dropped for a typo. The settings pages and onboarding do not write to a file with a mistake; they say so. The file is
-read again at the next use after you save it, with no restart.
+dropped for a typo. The settings pages and onboarding do not write to a file with a mistake; they say so. Changes to
+`settings.el` apply at once, with no restart. No agent, no workspace file and no `.dir-locals.el` can change these
+settings, and a buffer-local value is never read: a profile is a program, and a route chooses where your code goes.
 
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
@@ -255,11 +259,11 @@ tasks again).
 
 Every agent drgnx starts gets MCP servers in its ACP `session/new`: the **coordination tools** (see below) by default,
 and, when you ask for it, the **search tool** (`drgnx search mcp`, [search.md](search.md#the-mcp-tool)) for the project
-the agent works in. `agents.eld` holds the choice, next to `:profiles`:
+the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profiles`:
 
 ```elisp
-(:default "claude"                   ; what New Agent Session… offers on Return
- :mcp (coordination search))         ; the servers; absent: coordination only; () gives none
+(drgnx-agents-default "claude")                   ; what New Agent Session… offers on Return
+(drgnx-agents-mcp (coordination search))          ; the servers; absent: coordination only; () gives none
 ```
 
 Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can

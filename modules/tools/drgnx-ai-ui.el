@@ -572,7 +572,7 @@ best snippets go to the `chat' role with it, the answer cites the files."
 
 (defun drgnx-ai-choose ()
   "Choose the provider and model of a role (from what runs here and what has a key), test it with one call,
-and keep it in ai.eld (never a key)."
+and keep it in settings.el (never a key)."
   (interactive)
   ;; what runs here now (a runner started since the last probe counts): at most the probe's one second
   (let ((done nil) (deadline (+ (float-time) 2)))
@@ -585,7 +585,7 @@ and keep it in ai.eld (never a key)."
          (model (completing-read "Model: " (plist-get (alist-get id drgnx-ai-detected) :models)))
          (keep (lambda ()
                  (drgnx-ai-set-role role (cons (cons id model) (seq-remove (lambda (s) (eq (car s) id)) (drgnx-ai-user-role role))))
-                 (message "AI: %s/%s answered; %s uses it now (ai.eld)" id model role))))
+                 (message "AI: %s/%s answered; %s uses it now (settings.el)" id model role))))
     (if (eq cap 'embed) (funcall keep)
       (message "AI: asking %s/%s…" id model)
       (drgnx-ai-request role (if (eq cap 'fim) 'fim 'chat)

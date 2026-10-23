@@ -7,7 +7,7 @@
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 
 (defmacro drgnx-job-safe-test--with (&rest body)
-  "BODY with no agents.eld (a temporary config dir), no profiles of the user's Lisp, on Linux."
+  "BODY with no settings.el (a temporary config dir), no profiles of the user's Lisp, on Linux."
   (declare (indent 0))
   `(let* ((root (make-temp-file "drgnx-job-safe" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" root) process-environment))

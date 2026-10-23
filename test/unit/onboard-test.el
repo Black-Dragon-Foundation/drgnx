@@ -9,6 +9,7 @@
 (require 'drgnx-config-doc)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-onboard-test--with (root &rest body)
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
@@ -679,7 +680,8 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
                                              (concat "PATH=" bin))
                                        process-environment))
           (exec-path (list bin))
-          (drgnx-onboard--progress nil) (drgnx-agents-profiles nil) (drgnx-onboard--current nil))
+          (drgnx-onboard--progress nil) (drgnx-onboard--current nil))
+     (drgnx-test-runtime-settings--reset)
      (unwind-protect
          (progn
            (make-directory bin t) (make-directory home t) (make-directory (concat root "config") t)
@@ -723,6 +725,7 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
            (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform))
                      ((symbol-function 'drgnx-onboard--agents-offers) #'ignore))
              ,@body))
+       (drgnx-test-runtime-settings--forget)
        (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
        (when-let* ((b (get-buffer "*Claude login*")))
          (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
@@ -1381,7 +1384,6 @@ record the prompts and the default in the lists they return as the cars of (PROM
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
      (let* ((a (drgnx-onboard-test--offers-answers "claude (Ollama)" t t))
-            (file (expand-file-name "agents.eld" (drgnx-user-dir)))
             (r (cl-letf (((symbol-function 'drgnx-onboard--agents-offers) drgnx-onboard-test--offers)
                          ((symbol-function 'completing-read) (nth 0 a)) ((symbol-function 'y-or-n-p) (nth 1 a)))
                  (drgnx-onboard--agents-step '(:interactive t)))))
@@ -1389,9 +1391,9 @@ record the prompts and the default in the lists they return as the cars of (PROM
        (should (string-match-p "default agent profile: claude (Ollama)" (cadr r)))
        (should (string-match-p "coordination, search" (cadr r)))
        (should (equal (car (car (nth 3 a))) "claude"))        ; Return alone: the built-in claude profile
-       (let ((saved (drgnx-onboard-test--read file)))
-         (should (equal (plist-get saved :default) "claude (Ollama)"))
-         (should (equal (plist-get saved :mcp) '(coordination search))))
+       (let ((saved (drgnx-onboard-test--read (expand-file-name "settings.el" (drgnx-user-dir)))))
+         (should (equal (cadr (assq 'drgnx-agents-default (cdddr saved))) "claude (Ollama)"))
+         (should (equal (cadr (assq 'drgnx-agents-mcp (cdddr saved))) '(coordination search))))
        (should (equal (drgnx-agents-default-profile) "claude (Ollama)"))
        ;; the next run offers what was chosen
        (let ((b (drgnx-onboard-test--offers-answers "claude (Ollama)" t nil)))
@@ -1418,31 +1420,33 @@ record the prompts and the default in the lists they return as the cars of (PROM
        (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
          (should (eq (car r) 'ok))
          (should-not (string-match-p "default agent profile" (cadr r)))))
-     (should-not (file-exists-p (expand-file-name "agents.eld" (drgnx-user-dir))))
+     (should-not (file-exists-p (expand-file-name "settings.el" (drgnx-user-dir))))
      ;; and the servers stay as before: the coordination tools only
      (should (equal (drgnx-agents-mcp-names) '(coordination)))
      (should (equal (drgnx-agents-default-profile) "claude")))))
 
-(ert-deftest drgnx-ai-onboard/agent-defaults-keep-the-rest-of-agents-eld ()
+(ert-deftest drgnx-ai-onboard/agent-defaults-keep-the-rest-of-settings-el ()
   (drgnx-onboard-test--claude 'macos
-    (let ((file (expand-file-name "agents.eld" (drgnx-user-dir))) (a (drgnx-onboard-test--offers-answers "mine" nil nil)))
-      (write-region ";; my agents\n(:profiles ((\"mine\" :command (\"x\"))) :routes nil)\n" nil file nil 'silent)
+    (let ((file (expand-file-name "settings.el" (drgnx-user-dir))) (a (drgnx-onboard-test--offers-answers "mine" nil nil)))
+      (write-region ";; my agents\n(drgnx-settings :version 1\n (drgnx-agents-profiles ((\"mine\" :command (\"x\"))))\n (drgnx-agents-routes nil))\n"
+                    nil file nil 'silent)
+      (drgnx-settings-apply-global)
       (cl-letf (((symbol-function 'completing-read) (nth 0 a)) ((symbol-function 'y-or-n-p) (nth 1 a)))
         (should (string-match-p "tools for agents: none" (funcall drgnx-onboard-test--offers))))
       (let ((text (drgnx-onboard-test--slurp file)))
         (should (string-prefix-p ";; my agents" text))
-        (let ((saved (drgnx-onboard-test--read file)))
-          (should (equal (plist-get saved :default) "mine"))
-          (should (plist-member saved :mcp))
-          (should-not (plist-get saved :mcp))
-          (should (equal (plist-get saved :profiles) '(("mine" :command ("x")))))
-          (should (plist-member saved :routes))))
+        (let ((entries (cdddr (drgnx-onboard-test--read file))))
+          (should (equal (cadr (assq 'drgnx-agents-default entries)) "mine"))
+          (should (assq 'drgnx-agents-mcp entries))
+          (should-not (cadr (assq 'drgnx-agents-mcp entries)))
+          (should (equal (cadr (assq 'drgnx-agents-profiles entries)) '(("mine" :command ("x")))))
+          (should (assq 'drgnx-agents-routes entries))))
       (should (equal (drgnx-agents--mcp-servers (drgnx-agents--make :id "s1" :name "s1" :cwd root)) []))
       ;; a file that cannot be read is not touched; the result says so
-      (write-region "(:profiles" nil file nil 'silent)
+      (write-region "(drgnx-settings :version 1 (drgnx-agents-profiles" nil file nil 'silent)
       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "claude")) ((symbol-function 'y-or-n-p) (nth 1 a)))
-        (should (string-match-p "agents.eld has a mistake" (funcall drgnx-onboard-test--offers))))
-      (should (equal (drgnx-onboard-test--slurp file) "(:profiles")))))
+        (should (string-match-p "settings.el has a mistake" (funcall drgnx-onboard-test--offers))))
+      (should (equal (drgnx-onboard-test--slurp file) "(drgnx-settings :version 1 (drgnx-agents-profiles")))))
 
 ;;;; Task 19: onboarding.eld on the config layer
 

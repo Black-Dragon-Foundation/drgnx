@@ -15,6 +15,7 @@
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-settings" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-gateway-openrouter-test--restrictions
   '(:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection deny :zdr t)
@@ -33,6 +34,7 @@
           (drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil)
           (drgnx-gateway--keys (make-hash-table :test #'eq)) (drgnx-gateway--registrations (make-hash-table :test #'equal))
           (drgnx-work-db--handles nil) (mocks nil) (port nil))
+     (drgnx-test-runtime-settings--reset)
      (unwind-protect
          (progn
            (make-directory (concat root "config") t)
@@ -43,13 +45,12 @@
            (push (drgnx-ai-test-mock-llm nil (concat root "or.eld") or-log) mocks)
            (push (drgnx-ai-test-mock-llm nil (concat root "ol.eld") ol-log) mocks)
            (setq or-port (process-get (cadr mocks) :port) ol-port (process-get (car mocks) :port))
-           (with-temp-file (concat root "config/ai.eld")
-             (prin1 `(:version 1 :providers ((openrouter :name "OpenRouter" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
-                                                         :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t)
-                                             (ollama :name "Ollama" :kind ollama :url ,(format "http://127.0.0.1:%d" ol-port) :caps (chat) :messages t)))
-                    (current-buffer)))
+           (setq drgnx-ai-providers `((openrouter :name "OpenRouter" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
+                                                  :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t)
+                                      (ollama :name "Ollama" :kind ollama :url ,(format "http://127.0.0.1:%d" ol-port) :caps (chat) :messages t)))
            (setq port (drgnx-gateway-start))
            ,@body)
+       (drgnx-test-runtime-settings--forget)
        (drgnx-gateway-stop)
        (mapc #'delete-process mocks)
        (drgnx-work-db-close-all)
@@ -183,15 +184,13 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
       (drgnx-gateway-openrouter-test--request port token nil "/v1/messages?beta=true")
       (should (string-search "\"zdr\":true" (drgnx-gateway-openrouter-test--log or-log))))))
 
-(defun drgnx-gateway-openrouter-test--put-agents-eld (text)
-  "Make agents.eld hold TEXT, as an editor would: a new file renamed over it (the layer saw the old one change)."
-  (let ((file (expand-file-name "agents.eld" (drgnx-user-dir))))
-    (make-directory (file-name-directory file) t)
-    (write-region text nil (concat file ".new") nil 'silent)
-    (rename-file (concat file ".new") file t)))
+(defun drgnx-gateway-openrouter-test--put-settings (entries)
+  "Make settings.el hold ENTRIES (the text of its entries), as an editor would: a new file renamed over it; apply it."
+  (drgnx-test-config-put 'settings (concat "(drgnx-settings :version 1 " entries ")\n"))
+  (drgnx-settings-apply-global))
 
-(ert-deftest drgnx-gateway-openrouter/restrictions-travel-from-agents-eld-to-the-registration ()
-  ;; drgnx-agents--gateway: agents.eld's :openrouter reaches the registration of an OpenRouter agent, through the hub's
+(ert-deftest drgnx-gateway-openrouter/restrictions-travel-from-settings-to-the-registration ()
+  ;; drgnx-agents--gateway: `drgnx-agents-openrouter' reaches the registration of an OpenRouter agent, through the hub's
   ;; register call, which keeps it as lists (the JSON call turns them into vectors)
   (drgnx-gateway-openrouter-test--with
     (let ((drgnx-agents-profiles nil) (drgnx-hub--exit-function #'drgnx-hub-stop))
@@ -256,54 +255,56 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
           (should (string-search "OpenRouter restrictions" (error-message-string err)))
           (should (string-search "turned off" (error-message-string err)))
           (should (string-search "drgnx-agents-use-gateway" (error-message-string err)))
-          (should (string-search "remove :openrouter" (error-message-string err))))
+          (should (string-search "remove drgnx-agents-openrouter" (error-message-string err))))
         (let ((s (drgnx-agents-start "claude (OpenRouter)" temporary-file-directory)))
           (should-not started)
           (should (eq (drgnx-agent-session-status s) 'exited))
           (should (seq-find (lambda (e) (string-search "turned off" (or (plist-get e :text) "")))
                             (drgnx-agent-session-entries s))))
         ;; a value that does not read refuses too
-        (drgnx-gateway-openrouter-test--put-agents-eld "(:openrouter (:zdr yes))\n")
+        (drgnx-gateway-openrouter-test--put-settings "(drgnx-agents-openrouter (:zdr yes))")
         (should-error (drgnx-agents--env (drgnx-gateway-openrouter-test--session)) :type 'user-error)
         ;; no OpenRouter step: not held up
         (should (drgnx-agents--env (drgnx-gateway-openrouter-test--session "claude (Ollama)")))
         ;; no restrictions: direct, as before
-        (drgnx-gateway-openrouter-test--put-agents-eld "(:openrouter nil)\n")
+        (drgnx-gateway-openrouter-test--put-settings "(drgnx-agents-openrouter nil)")
         (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_BASE_URL=" e))
                           (drgnx-agents--env (drgnx-gateway-openrouter-test--session))))
         (should-not hub-asked)))))
 
 (ert-deftest drgnx-gateway-openrouter/restrictions-that-cannot-be-read-refuse-the-start ()
-  ;; a typo never turns a restriction off: an agents.eld that does not read, or an :openrouter value that is not one,
-  ;; refuses the OpenRouter agent's start, naming the problem; the hub refuses such a registration itself
+  ;; a typo never turns a restriction off: a settings.el that does not read, or a `drgnx-agents-openrouter' value that
+  ;; is not one, refuses the OpenRouter agent's start, naming the problem; the hub refuses such a registration itself
   (drgnx-gateway-openrouter-test--with
     (let ((drgnx-agents-profiles nil) (drgnx-hub--exit-function #'drgnx-hub-stop)
-          (file (concat root "config/agents.eld")))
+          (file (concat root "config/settings.el")))
       (unwind-protect
           (progn
             (drgnx-hub-serve (drgnx-hub-socket))
             (pcase-dolist (`(,text . ,named)
-                           '(("(:openrouter (:zdr t)" . "agents.eld")             ; a parenthesis short
-                             ("(:openrouter (:only \"anthropic\"))" . ":only")    ; a string, not a list
-                             ("(:openrouter (:only (\"bad slug!\")))" . ":only")
-                             ("(:openrouter (:ignore (anthropic)))" . ":ignore")   ; a symbol, not a slug
-                             ("(:openrouter (:zdr 1))" . ":zdr")
-                             ("(:openrouter (:zdr yes))" . ":zdr")
-                             ("(:openrouter (:data-collection no))" . ":data-collection")
-                             ("(:openrouter (:zdrr t))" . ":zdrr")                ; a key that is not one
-                             ("(:openrouter \"anthropic\")" . ":openrouter")))
-              (with-temp-file file (insert ";; mine\n" text "\n"))
+                           '(("(drgnx-settings :version 1 (drgnx-agents-openrouter (:zdr t))" . "settings.el") ; a parenthesis short
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter (:only \"anthropic\")))" . ":only") ; a string, not a list
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter (:only (\"bad slug!\"))))" . ":only")
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter (:ignore (anthropic))))" . ":ignore") ; a symbol, not a slug
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter (:zdr 1)))" . ":zdr")
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter (:zdr yes)))" . ":zdr")
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter (:data-collection no)))" . ":data-collection")
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter (:zdrr t)))" . ":zdrr") ; a key that is not one
+                             ("(drgnx-settings :version 1 (drgnx-agents-openrouter \"anthropic\"))" . "drgnx-agents-openrouter")))
+              (drgnx-test-config-put 'settings (concat ";; mine\n" text "\n"))
+              (drgnx-settings-apply-global)
               (let ((err (should-error (drgnx-agents--env (drgnx-gateway-openrouter-test--session)) :type 'user-error)))
                 (should (string-search named (error-message-string err))))
               (should-not (drgnx-gateway-registrations)))
             ;; a file of comments only has no restrictions
-            (with-temp-file file (insert ";; nothing yet\n"))
+            (drgnx-test-config-put 'settings "(drgnx-settings :version 1 ;; nothing yet\n)\n")
+            (drgnx-settings-apply-global)
             (should-not (drgnx-agents-openrouter-restrictions))
             ;; empty values are no restriction, as the JSON call carries them
-            (with-temp-file file (insert "(:openrouter (:only () :zdr nil))\n"))
+            (drgnx-gateway-openrouter-test--put-settings "(drgnx-agents-openrouter (:only () :zdr nil))")
             (should-not (drgnx-agents-openrouter-restrictions))
             ;; an agent with no OpenRouter step is not held up by a broken value
-            (with-temp-file file (insert "(:openrouter (:zdr yes))\n"))
+            (drgnx-gateway-openrouter-test--put-settings "(drgnx-agents-openrouter (:zdr yes))")
             (drgnx-agents--env (drgnx-gateway-openrouter-test--session "claude (Ollama)"))
             (should (= (length (drgnx-gateway-registrations)) 1))
             ;; the hub: in this Emacs and over its socket
@@ -372,34 +373,37 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
         (drgnx-hub-disconnect)
         (drgnx-hub-stop)))))
 
-(ert-deftest drgnx-gateway-openrouter/saved-in-agents-eld-comments-kept ()
-  (let* ((root (file-name-as-directory (make-temp-file "drgnx-gw-or" t)))
-         (process-environment (cons (concat "DRGNX_CONFIG_DIR=" root) process-environment))
-         (file (concat root "agents.eld")))
-    (unwind-protect
-        (progn
-          (should-not (drgnx-agents-openrouter-restrictions))
-          (with-temp-file file (insert ";; my agents\n(:default \"claude\"   ; the usual one\n :mcp (coordination))\n"))
-          (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
-          (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
-            (should (string-search ";; my agents" text))
-            (should (string-search "; the usual one" text))
-            (should (string-search ":mcp (coordination)" text)))
-          (should (equal (drgnx-agents-default-profile) "claude"))
-          (should (equal (drgnx-agents-openrouter-restrictions) drgnx-gateway-openrouter-test--restrictions))
-          ;; saving again replaces the value only
-          (drgnx-agents-set-setting :openrouter '(:only ("anthropic") :data-collection allow))
-          (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic") :data-collection allow)))
-          (should (string-search "; the usual one" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-          ;; what is not a restriction is refused when read, never read as none: slugs that could break the JSON or
-          ;; the line, odd values
-          (drgnx-gateway-openrouter-test--put-agents-eld
-           "(:openrouter (:only (\"ok\" \"bad\\\"slug\" 5) :ignore \"x\" :data-collection maybe :zdr maybe))\n")
-          (should-error (drgnx-agents-openrouter-restrictions) :type 'user-error)
-          (should-error (drgnx-agents-set-setting :openrouter nil) :type 'user-error) ; a file with a mistake is not written
-          (drgnx-gateway-openrouter-test--put-agents-eld "(:openrouter nil)\n")
-          (should-not (drgnx-agents-openrouter-restrictions)))
-      (delete-directory root t))))
+(ert-deftest drgnx-gateway-openrouter/saved-in-settings-el-comments-kept ()
+  (drgnx-gateway-openrouter-test--with
+    (let ((file (concat root "config/settings.el")))
+      (should-not (drgnx-agents-openrouter-restrictions))
+      (drgnx-test-config-put 'settings ";; my agents\n(drgnx-settings :version 1\n (drgnx-agents-default \"claude\")   ; the usual one\n (drgnx-agents-mcp (coordination)))\n")
+      (drgnx-settings-apply-global)
+      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+      (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+        (should (string-search ";; my agents" text))
+        (should (string-search "; the usual one" text))
+        (should (string-search "(drgnx-agents-mcp (coordination))" text)))
+      (should (equal (drgnx-agents-default-profile) "claude"))
+      (should (equal (drgnx-agents-openrouter-restrictions) drgnx-gateway-openrouter-test--restrictions))
+      ;; saving again replaces the value only
+      (drgnx-agents-set-setting :openrouter '(:only ("anthropic") :data-collection allow))
+      (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic") :data-collection allow)))
+      (should (string-search "; the usual one" (with-temp-buffer (insert-file-contents file) (buffer-string))))
+      ;; what is not a restriction is refused when read, never read as none: slugs that could break the JSON or
+      ;; the line, odd values
+      (drgnx-gateway-openrouter-test--put-settings
+       "(drgnx-agents-openrouter (:only (\"ok\" \"bad\\\"slug\" 5) :ignore \"x\" :data-collection maybe :zdr maybe))")
+      (should-error (drgnx-agents-openrouter-restrictions) :type 'user-error)
+      (drgnx-test-config-put 'settings "(drgnx-settings :version 1 (drgnx-agents-openrouter (:zdr t))\n") ; does not read
+      (should-error (drgnx-agents-set-setting :openrouter nil) :type 'user-error) ; a file with a mistake is not written
+      (drgnx-gateway-openrouter-test--put-settings "(drgnx-agents-openrouter nil)")
+      (should-not (drgnx-agents-openrouter-restrictions)))))
+
+(defmacro drgnx-gateway-openrouter-test--agent-env (&rest body)
+  "`drgnx-agent-config-test-env' with the runtime settings at their defaults, and out of the theme afterwards."
+  (declare (indent 0))
+  `(drgnx-test-with-runtime-bindings (drgnx-agent-config-test-env ,@body)))
 
 (defun drgnx-gateway-openrouter-test--page-text (use-gateway root)
   "The text of Claude Code's settings page for ROOT, USE-GATEWAY as `drgnx-agents-use-gateway'."
@@ -408,7 +412,7 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
       (prog1 (buffer-string) (kill-buffer (current-buffer))))))
 
 (ert-deftest drgnx-gateway-openrouter/direct-route-says-gateway-only ()
-  (drgnx-agent-config-test-env
+  (drgnx-gateway-openrouter-test--agent-env
     (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
           (drgnx-agents-profiles nil))
       (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
@@ -433,18 +437,18 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
         (should-not (string-search "applies through drgnx's gateway only" text))))))
 
 (ert-deftest drgnx-gateway-openrouter/the-page-says-when-they-cannot-be-read ()
-  (drgnx-agent-config-test-env
+  (drgnx-gateway-openrouter-test--agent-env
     (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
           (drgnx-agents-profiles nil))
-      (make-directory (concat home "cfg") t)
-      (with-temp-file (concat home "cfg/agents.eld") (insert "(:openrouter (:zdr yes))\n"))
+      (drgnx-test-config-put 'settings "(drgnx-settings :version 1 (drgnx-agents-openrouter (:zdr yes)))\n")
+      (drgnx-settings-apply-global)
       (let ((text (drgnx-gateway-openrouter-test--page-text t root)))
         (should (string-search "OpenRouter restrictions: unreadable" text))
         (should (string-search ":zdr" text))
         (should (string-search "OpenRouter agents do not start" text))))))
 
 (ert-deftest drgnx-gateway-openrouter/the-command-asks-and-saves ()
-  (drgnx-agent-config-test-env
+  (drgnx-gateway-openrouter-test--agent-env
     (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
           (drgnx-agents-profiles nil) (answers (list "anthropic, google-vertex" "azure" "deny" t)))
       (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop answers)))
@@ -465,7 +469,7 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
             (kill-buffer (current-buffer))))))))
 
 (ert-deftest drgnx-gateway-openrouter/the-zdr-question-says-what-n-does ()
-  (drgnx-agent-config-test-env
+  (drgnx-gateway-openrouter-test--agent-env
     (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
           (drgnx-agents-profiles nil) (answers nil) (asked nil))
       (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop answers)))

@@ -19,6 +19,8 @@
 (defvar drgnx-settings-doc-sources
   '(
     ;; one entry per line, appended below by each port
+    (require drgnx-agents)                ; Task 15: drgnx-agents-*
+    (require drgnx-ai)                    ; Task 15: drgnx-ai-providers, drgnx-ai-roles
     )
   "What declares the settings of the reference: entries `(require FEATURE)'.")
 

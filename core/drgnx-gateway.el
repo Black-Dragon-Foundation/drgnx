@@ -270,7 +270,7 @@ restriction."
                 (_ (user-error "OpenRouter restrictions: %S is not one of :only :ignore :data-collection :zdr" key)))))
 
 (defun drgnx-gateway-restrictions (raw &optional strict)
-  "RAW (agents.eld's `:openrouter', or what a hub call carried: lists or vectors, strings for symbols) as the
+  "RAW (`drgnx-agents-openrouter', or what a hub call carried: lists or vectors, strings for symbols) as the
 restrictions a registration keeps: (:only SLUGS :ignore SLUGS :data-collection deny|allow :zdr t), each only when
 set; nil when none is.  STRICT: anything in RAW that is not a restriction is a `user-error' naming it
 \(`drgnx-gateway--restrictions-check'), never \"no restriction\" — an agent's start and the hub's registration use it."

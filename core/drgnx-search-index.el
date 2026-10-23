@@ -21,6 +21,7 @@
 (require 'drgnx-search-store)
 (require 'drgnx-search-chunk)
 (require 'drgnx-ai-client)
+(require 'drgnx-settings-defaults)
 (require 'drgnx-jobs)
 (require 'drgnx-gc)
 
@@ -279,6 +280,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
 ROOT may be any directory of the project: its git top level is indexed (`drgnx-search-toplevel').
 Prints one summary line; exits 0, or 1 on an error."
   (drgnx-gc-batch-setup)
+  (drgnx-settings-defaults-apply)               ; the embed role is the user's
   (let* ((args command-line-args-left) (rebuild (member "--rebuild" args)) (root (car (delete "--rebuild" (copy-sequence args)))))
     (setq command-line-args-left nil)
     (if (null root)

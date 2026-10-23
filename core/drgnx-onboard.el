@@ -21,6 +21,7 @@
 (require 'drgnx-ui-kit)
 (require 'drgnx-file)
 (require 'drgnx-config)
+(require 'drgnx-settings-defaults)
 (require 'drgnx-modules)
 (require 'drgnx-timer)
 (require 'drgnx-registry)
@@ -1250,7 +1251,7 @@ end: a program you chose earlier on the PATH keeps winning."
 
 (defun drgnx-onboard--agents-offers ()
   "Ask (interactive only) which profile New Agent Session offers on Return and which MCP servers the agents drgnx
-starts get — the coordination tools and the search tool — and save both in agents.eld.  The sentence for the step's
+starts get — the coordination tools and the search tool — and save both in settings.el.  The sentence for the step's
 result."
   (require 'drgnx-agents)
   (let* ((now (drgnx-agents-mcp-names))
@@ -1912,6 +1913,7 @@ never inside the hook (the window and the restored layout come first)."
   "bin/drgnx onboard: the arguments after --."
   (let ((args (cdr (member "--" command-line-args-left))))
     (setq command-line-args-left nil)
+    (drgnx-settings-defaults-apply)               ; the roles and profiles it reads and extends are the user's
     (kill-emacs (drgnx-onboard-cli-run args))))
 
 (provide 'drgnx-onboard)

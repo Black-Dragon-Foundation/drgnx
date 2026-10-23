@@ -28,12 +28,14 @@
   (drgnx-large-files--define-config))
 
 (defmacro drgnx-settings-migrate-test--with (&rest body)
-  "BODY under `drgnx-test-with-config', large-files.eld defined, the shim's caches empty, `custom-file' in the temp
+  "BODY under `drgnx-test-with-config', large-files.eld defined, every area in the shim, its caches empty, `custom-file' in the temp
 config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drgnx-settings-migrate-test--notices'."
   (declare (indent 0) (debug t))
   `(drgnx-test-with-config
      (let ((custom-file (expand-file-name "custom.el" (drgnx-user-dir)))
            (inhibit-interaction t)
+           ;; agents and ai left the shim's areas (Task 15); the shim still answers for them here
+           (drgnx-settings-shim-areas drgnx-settings-migrate-names)
            (drgnx-settings-migrate--shim-cache nil)
            (drgnx-settings-migrate--values-cache nil)
            (drgnx-settings-migrate-test--notices nil))
