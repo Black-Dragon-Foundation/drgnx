@@ -475,14 +475,15 @@ mod tests {
                 "the backend hears the front through notifications"
             )
         );
-        // every method: step 2b refuses exactly the backend's own and subscribe
+        // every method: step 2b refuses exactly the backend's own and subscribe (step 2 refuses, before it, what the
+        // user class may not call: the service-only mcp/attach)
         for m in registry::registry() {
             let line = json!({"id": 1, "method": m.name}).to_string();
             let r = prelude_as(User, true, 1, None, &line);
             let not_allowed = matches!(&r, Err(ErrorAnswerOrDrop::Refused(x)) if x.error.code == ErrorCode::NotAllowed);
             assert_eq!(
                 not_allowed,
-                m.home == Home::Backend || m.name == "subscribe",
+                !m.allows(User) || m.home == Home::Backend || m.name == "subscribe",
                 "{}",
                 m.name
             );
