@@ -25,6 +25,7 @@
     ("core/drgnx-keys.el" . 1)
     ("core/drgnx-notice.el" . 2)
     ("core/drgnx-notice-save.el" . 1)
+    ("core/drgnx-settings-apply.el" . 1) ; settings.el's problems when the notice itself failed
     ("core/drgnx-timer.el" . 1)
     ("core/drgnx-tty-fallback.el" . 1)
     ;; processes with no notice model of their own: the hub, the sandbox plumbing, the MCP bridge, batch entry
