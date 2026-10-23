@@ -404,6 +404,7 @@
         (settings-move-undo :none "in the palette, after a move")
         (settings-tidy-custom-file :none "it rewrites custom.el: only when asked; in the palette")
         (settings-tidy-undo :none "in the palette, after a tidy")
+        (review-workspace-code :none "the palette, or the notice that code waits")
         (notices :none "the status bar's counts and the echo line; the palette")
         (notices-dismiss :none "the Dismiss button on each row; the palette")
         (large-file-next-chunk :none "vlf's own C-c C-v n; in the palette")
