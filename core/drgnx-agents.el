@@ -566,14 +566,17 @@ without a hub they go to the provider directly.")
 
 (defun drgnx-agents--gateway (s kind &optional model)
   "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
-no hub can be had (S then goes direct, and says so).  In the hub, keys are only those editors handed over (and the
-environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says how one comes.
+no hub can be had (S then goes direct, and says so).  In the standalone Lisp hub, keys are only those editors handed
+over (and the environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says
+how one comes.  In the Lisp backend behind Ratatoskr (`drgnx-hub--behind-front') the front registers it and judges
+the chain and its keys itself; there is no direct route there (the backend holds no key): a refusal fails the start
+with the front's text.
 An OpenRouter chain with restrictions (`drgnx-agents-openrouter-restrictions') fails closed: restrictions that do
 not read, no hub, or a hub that did not keep them all is a `user-error' — never a direct start without them."
   (let* ((chain (drgnx-ai-agent-gateway-chain kind model))
          ;; read before anything can fall back: a file that does not read refuses the start here
          (restrictions (and (assq 'openrouter chain) (drgnx-agents-openrouter-restrictions))))
-    (when (drgnx-agents--in-hub-p)
+    (when (and (drgnx-agents--in-hub-p) (not (bound-and-true-p drgnx-hub--behind-front)))
       (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
                         chain)
         (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
@@ -603,6 +606,10 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                      (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
                      r))
                (error
+                (when (bound-and-true-p drgnx-hub--behind-front)
+                  (user-error "%s is not started: %s" (drgnx-agent-session-name s)
+                              (if (eq (car err) 'drgnx-hub-front-error) (plist-get (cdr err) :message)
+                                (error-message-string err))))
                 (when restrictions
                   (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's hub only, which is not available (%s): %s is not started directly without them; start the hub, or remove :openrouter from agents.eld to go direct"
                               (error-message-string err) (drgnx-agent-session-name s)))
