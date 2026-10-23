@@ -572,8 +572,8 @@ no hub can be had; nil: it always goes directly.  For keyed profiles (OpenRouter
   "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token).  When no hub can
 be had a keyed KIND (`drgnx-ai-agent-keyed-p') fails closed with a `user-error' (only the hub holds keys); a keyless
 one (Ollama) gets nil, goes direct and says so.  Keys this command finds go with the registration, and once the hub
-took them this Emacs drops them (`drgnx-hub--drop-keys').  In the standalone Lisp hub, keys are only those editors handed
-over (and the environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says
+took them this Emacs drops them (`drgnx-hub--drop-keys').  In the standalone Lisp hub, keys are only those editors
+handed over (and the environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says
 how one comes.  In the Lisp backend behind Ratatoskr (`drgnx-hub--behind-front') the front registers it and judges
 the chain and its keys itself; there is no direct route there (the backend holds no key): a refusal fails the start
 with the front's text.

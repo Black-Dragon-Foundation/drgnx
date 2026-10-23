@@ -309,7 +309,8 @@ caller only asks whether there is one."
 (defun drgnx-ai-forget-keys (keys)
   "The hub took KEYS (:PROVIDER KEY…) over a connection that proved itself: this Emacs keeps none of them.  Each one
 still waiting in `drgnx-ai--keys' goes (a key found since, for the same provider, stays until it goes too), and
-auth-source's cache is emptied.  The environment is left as it is: keys the user put there stay (docs/guide/security.md)."
+auth-source's cache is emptied.  The environment is left as it is: keys the user put there stay
+\(docs/guide/security.md)."
   (cl-loop for (k v) on keys by #'cddr
            when (keywordp k)
            do (let ((id (intern (substring (symbol-name k) 1))))

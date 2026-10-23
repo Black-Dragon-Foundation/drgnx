@@ -519,6 +519,11 @@
 
 (ert-deftest drgnx-doctor/config-files-ok ()
   (drgnx-test-with-config
+    ;; only this test's definitions: the counts must not depend on which libraries an earlier test loaded (drgnx-ai is
+    ;; required at the top of this file). The first read loads the check's features (they define their files), then
+    ;; those definitions go; the fixture puts every one back after.
+    (drgnx-doctor--config-files)
+    (clrhash drgnx-config--defs)
     (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
     (drgnx-doctor-test--define-config 'doctor-test-b "b.eld")
     (drgnx-test-config-put 'doctor-test-a "(:a 2 :b \"x\")\n")
