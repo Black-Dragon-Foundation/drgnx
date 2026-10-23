@@ -32,7 +32,15 @@ what the hub answers.  The pane's agent is AGENT of JOB, with no session; SRC is
      (cl-letf (((symbol-function 'drgnx-hub-call)
                 (lambda (method params cb &rest _)
                   (push (cons method params) calls)
-                  (let ((r (if answer (funcall answer method params) (list t nil))))
+                  (let ((r (if answer (funcall answer method params)
+                             ;; each method's real answer shape (Task 9): the product reads these
+                             (list (pcase method
+                                     ("cards/settle" (list :settled t))
+                                     ("messages/mark" (list :changed t))
+                                     ("events/add" (list :id 1))
+                                     ("messages/send" (list :ok t :id 1 :state "queued"))
+                                     (_ t))
+                                   nil))))
                     (funcall cb (car r) (cadr r)))
                   1))
                ((symbol-function 'message) (lambda (f &rest a) (when f (push (apply #'format f a) said))))
