@@ -775,3 +775,85 @@ fn a_recorded_commit_again_takes_its_project_subject_and_data() {
         (Some(n), Some("first, amended"), json!(2.0), 2)
     );
 }
+
+/// The refusal of one `graph/record` of commit aaaa1111 on TASK in REPO (the tx is dropped, never committed).
+fn record_refusal(c: &mut Connection, deny: &DenyList, task: &str, repo: &str) -> String {
+    let req: Record = serde_json::from_value(json!({
+        "task": task, "repo": repo,
+        "commits": [{"sha": "aaaa1111", "date": 1.0, "subject": "s", "seq": -1}]
+    }))
+    .unwrap();
+    let mut tx = Tx::for_test(
+        c,
+        TxMeta::new("backend", Class::System, "proto:graph/record"),
+        guard(),
+    );
+    match parsed::record(&mut tx, deny, &mut ProjectCache::default(), req) {
+        Err(urdr::graph::WriteError::Refused(why)) => why,
+        other => panic!("{task} in {repo}: not refused: {other:?}"),
+    }
+}
+
+/// Door 1 of `graph/record`: a repository in `~/org` is refused with an allowed task, and a task whose id names the
+/// notes with an allowed repository; either alone is enough (URDR-MUT-RECORD-1, parsed.rs's `||`).
+#[test]
+fn record_refuses_a_denied_repo_or_a_denied_task_alone() {
+    let f = fx();
+    let mut c = db();
+    let p = &f.plan;
+    put(&mut c, &f.deny, json!({"sources": [plan_source(p)]}));
+    let org_repo = f.home.join("org/proj");
+    std::fs::create_dir_all(&org_repo).unwrap();
+    let task = format!("task:{p}#1");
+    let repo = Path::new(p).parent().unwrap().display().to_string();
+    let notes_task = format!("task:{}#1", f.notes());
+    assert_eq!(
+        record_refusal(&mut c, &f.deny, &task, &org_repo.display().to_string()),
+        DENIED
+    );
+    assert_eq!(record_refusal(&mut c, &f.deny, &notes_task, &repo), DENIED);
+    assert_eq!(
+        count(&c, "select count(*) from entity where kind = 'commit'"),
+        0
+    );
+    nothing_of_the_notes(&c, &f);
+}
+
+/// A commit is recorded only on a live task, step or todo: a retired task and a live entity of another kind are
+/// "no task" (URDR-MUT-RECORD-1, parsed.rs's `&&` of the task filter).
+#[test]
+fn record_needs_a_live_task_of_a_task_kind() {
+    let f = fx();
+    let mut c = db();
+    let p = &f.plan;
+    put(&mut c, &f.deny, json!({"sources": [plan_source(p)]}));
+    let repo = Path::new(p).parent().unwrap().display().to_string();
+    let plan = format!("plan:{p}");
+    assert_eq!(
+        record_refusal(&mut c, &f.deny, &plan, &repo),
+        format!("no task {plan}")
+    );
+    let task = format!("task:{p}#1");
+    let n = entity::by_id(&c, &task).unwrap().unwrap().n;
+    let mut tx = Tx::for_test(&mut c, scan(), guard());
+    entity::retire(&mut tx, n).unwrap();
+    tx.commit_for_test().unwrap();
+    assert_eq!(
+        record_refusal(&mut c, &f.deny, &task, &repo),
+        format!("no task {task}")
+    );
+    // the step is still live: a commit on it is recorded
+    let step = format!("step:{p}#1.1");
+    let req: Record = serde_json::from_value(json!({
+        "task": step, "repo": repo,
+        "commits": [{"sha": "aaaa1111", "date": 1.0, "subject": "s", "seq": -1}]
+    }))
+    .unwrap();
+    let mut tx = Tx::for_test(
+        &mut c,
+        TxMeta::new("backend", Class::System, "proto:graph/record"),
+        guard(),
+    );
+    let a = parsed::record(&mut tx, &f.deny, &mut ProjectCache::default(), req).unwrap();
+    assert_eq!(a.ids, ["commit:aaaa1111"]);
+}

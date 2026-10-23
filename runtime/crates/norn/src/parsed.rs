@@ -431,8 +431,8 @@ fn apply_want(
         )?;
         return Ok(true);
     };
+    // brought back is written; else written when the update made a version
     let back = entity::unretire(tx, cur.n)?;
-    let ver = cur.ver + i64::from(back);
     let patch = diff(&cur.data, &want.data);
     let changes = Changes {
         project: project.filter(|p| cur.project != Some(*p)).map(Some),
@@ -442,7 +442,7 @@ fn apply_want(
         ..Changes::default()
     };
     match entity::update(tx, cur.n, None, changes)? {
-        Update::Done { ver: now } => Ok(back || now != ver),
+        Update::Done { ver: now } => Ok(back || now != cur.ver),
         Update::Conflict { .. } => Err(WriteError::Refused(format!("{id} changed meanwhile"))),
     }
 }
