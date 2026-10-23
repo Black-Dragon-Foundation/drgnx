@@ -1,6 +1,7 @@
 {"scenario": "coord/messages-send-held-by-version", "requires": ["v1", "fake-backend"], "doc": "A message whose seen is behind the decision log is held, nothing sent (drgnx-coord-send): the answer has the log's version and the decisions after seen, newest first, each as the Lisp plist has it; at the log's version it is queued."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into meta values ('log-version', '3')", "insert into decision (n, kind, subject, author, status, at, ver) values (1, 'build', 'the parser', 'agent-1', 'current', 1.0, 1)", "insert into decision (n, kind, subject, author, status, at, ver) values (2, 'wait', 'the lexer', 'agent-2', 'proposed', 2.0, 3)"]}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "messages/send", "params": {"recipient": "agent-1", "text": "go on", "seen": 2}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"held": true, "version": 3, "ok": "$absent", "changes": [{"n": 2, "kind": "wait", "subject": "the lexer", "author": "agent-2", "status": "proposed", "ver": 3, "task": "$absent"}]}}}

@@ -388,6 +388,76 @@ arguments.
 
 ## Migration from schema 6 (Task 11)
 
+`norn::migrate7` moves a schema-6 `work.db` to schema 7. The hub runs it as the graph writer's opening rule
+(`open_rule(MigrateOpts{backup_dir, home, config_dir})`), before it serves anything, so the first request sees the
+result. What the rule answers for the file it finds:
+
+| The file | The answer |
+|---|---|
+| missing (or empty) | made at schema 7: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then `Ready { 7 }` |
+| schema 7 | `Ready { 7 }` |
+| above 7 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
+| a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
+
+Another process holding the write lock, or changing the file between the look and the lock, is `NotReady` and is
+looked at again at the next tick; nothing was done.
+
+**The steps.**
+
+0. Outside any transaction: the deny-list loaded from `HOME` and the config dir, and every project folder the old
+   rows name (`data.repo`, a commit's or branch's path, a file's folder, the jobs' repositories; denied folders
+   left out) resolved through `ProjectCache::fill`. All git runs here, never under the lock.
+1. The copy: `VACUUM INTO <data>/backup/work-pre7-<unix>.db` (the dir 0700, the file 0600, written at a `.tmp` name and
+   renamed once `urdr::graph::backup::check` passed). A copy that fails its check is deleted and the migration
+   fails. Within one process an unchanged file reuses its copy (one copy per hub process at most); an older copy is
+   never removed.
+2. One `BEGIN IMMEDIATE` transaction holds every step below; a crash or an error rolls all of it back, so the file is
+   schema 6 or schema 7, never between (`interrupted_migration_leaves_schema_6` kills a child mid-way).
+3. The schema-6 rows are read again under the lock. **3a, the door:** a node whose source or path the deny-list
+   denies (everything under `~/org` but the board; `Source::parse` failing is denied too), an edge with a denied end
+   or source, and a denied `file` row are not migrated; they are counted.
+4. Schema 7's tables (`GRAPH_DDL`); `node`, `edge`, `jtask`, `jdep` and `decision` renamed `old_*`, `file` to
+   `parsed_file` and `meta` to `kv`, with read-only views `file` and `meta` over them.
+5. History in time order: one imported transaction (`tx.imported = 1`, tool `import`, class `system` or `agent`,
+   never `user`) per (time, actor) group, the earliest first; the project registrations go first.
+   - Nodes become entities of their kind (an unknown kind becomes `note` with `data.was_kind`); time `updated`, a
+     commit's the earlier of that and its date. `path`, `line`, `parent` and `ord` go to `data`; origin `recorded`
+     when the source said so, else `parsed`.
+   - Job tasks become `task:<job>#<n>` entities (assignee the agent, a held lease kept with epoch 1), timed by
+     their job's creation or first event; `jdep` rows become `blocks` links.
+   - Decisions become `decision:<n>` entities (subject the title, reason the body; author `user` is actor `user`
+     with class `system`); `replaces` becomes a `supersedes` link.
+   - Edges keep their kind where `kinds::LINKS` allows it (`on-branch` becomes `on_branch`); any other kind or pair
+     becomes `relates` with `data.was`. `ledger-of` has no kind of its own: its ledger file becomes a `file:<path>`
+     entity and the edge `relates` file → plan, `{"was": "ledger-of"}`. Parents become `parent_of` links.
+   - An edge whose end is no node is dropped. Every edge is counted by old kind → new kind (`->dropped`,
+     `->denied`, `->merged` included).
+   - History before the move is approximate: `hist::entity_as_of` says so for a time before the migration.
+6. The kept tables (`job`, `card`, `message`, `spend`, `event`, `agent`, `review_mark`) gain a `tx` column, `message`
+   and `card` an `entity` column; their rows stay.
+7. Compat views `node`, `edge`, `jtask`, `jdep` and `decision` with schema 6's columns, so the Lisp readers' selects
+   run unchanged (`every_old_select_runs_on_the_views` extracts every one from `core/` and `modules/`); writes to
+   them fail (`every_schema_6_lisp_write_fails_on_7`).
+8. `kv`: `schema` 7, `compat-read` 6, and `migrate-7`, the report. The `old_*` tables are dropped.
+9. Commit. When step 3a denied anything, `VACUUM` and a WAL checkpoint follow, so what was denied leaves the file
+   and its WAL; the report names the copies that still hold it (the pre-migration copy, `work.db.schema5` if any).
+
+**The report** (`kv.migrate-7`, the hub log, `status.store.migrated_at` and `denied_in`, the doctor): rows in and out
+per table, links per old → new kind, denied counts, entities without a project, retyped and duplicate rows, the
+transactions and the time. Never a path of the user's content, a title or a body.
+
+**Commands** (`ratatoskr store`, `drgnx-ratatoskr/src/store_cli.rs`):
+
+- `store migrate-check --db FILE --scratch DIR [--json]` migrates FILE, a copy, in place with the same code, its
+  pre-migration copy in DIR, and prints the report. It refuses the configured live `work.db` (by path or inode)
+  and a file in the data dir of a running hub.
+- `store restore-pre7 [--yes]` refuses while a hub holds the lock; it copies the newest `work-pre7-*.db` that checks
+  to a temporary name first (a copy that fails is skipped; the backups are never changed), then moves `work.db`,
+  `work.db-wal` and `work.db-shm` aside together to `work.db.schema7-<unix>` (`-wal`, `-shm`), and renames the copy
+  into place. A schema-7 WAL beside the restored file would corrupt it. Without `--yes` it says what it would do.
+
 ## Parsed entities (Task 15a)
 
 ## The one-writer gate (Task 18)

@@ -1,6 +1,7 @@
 {"scenario": "coord/only-the-backend-names-a-sender", "requires": ["v1", "fake-backend"], "doc": "Only the Lisp backend names a message's sender (call 6): a user's messages/send with sender is not-allowed and writes nothing; the fake backend's call_front messages/send with sender is sent as that agent."}
-{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"call_front\": {\"method\": \"messages/send\", \"params\": {\"recipient\": \"user\", \"text\": \"done\", \"sender\": \"agent-1\"}}, \"then\": {\"result\": {\"id\": \"j1\"}}}}"}}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"call_front\": {\"method\": \"messages/send\", \"params\": {\"recipient\": \"user\", \"text\": \"done\", \"sender\": \"agent-1\"}}, \"then\": {\"result\": {\"id\": \"j1\"}}}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "messages/send", "params": {"recipient": "agent-2", "text": "hi", "sender": "agent-1"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed", "message": "only the backend names a message's sender", "path": "sender"}}}

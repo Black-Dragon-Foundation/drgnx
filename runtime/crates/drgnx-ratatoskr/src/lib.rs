@@ -1,14 +1,15 @@
 //! Ratatoskr, drgnx's agent runtime: the hub protocol's server (docs/develop/hub.md, docs/develop/runtime.md).
 //!
 //! - [`cli`]: the command line (`serve`, `ensure`, `stop`, `status`, `doctor`, `restart`, `version`, `methods`,
-//!   `mcp-bridge`) and
+//!   `mcp-bridge`, `store`) and
 //!   the exit codes.
+//! - [`store_cli`]: `store migrate-check` (a copy migrated to schema 7, counts only) and `store restore-pre7`.
 //! - [`supervise`]: `ensure` (a transient systemd unit, launchd or a detached process) and `stop`.
 //! - [`client`]: the blocking client those commands use (a raw ping, a proven user connection).
 //! - [`idle`]: restart-when-idle: the binary on disk changed, restart between turns.
 //! - [`doctor`]: `status`, `doctor --json` and `restart`.
 //! - [`lock`]: one hub per data dir (an exclusive `flock`; a Lisp hub's lock directory respected).
-//! - [`server`]: the start order, the accept loops, signals, the parent watch, the schema tick and the stop.
+//! - [`server`]: the start order (the store opened, or made, or migrated, before anything is served), the accept loops, signals, the parent watch, the schema tick and the stop.
 //! - [`conn`]: one connection: the peer-uid check, the challenge, lines, the writer queue that drops a stopped reader.
 //! - [`hello`]: a connection's class and `hello` v1 (the challenge, the proofs both ways, at most once).
 //! - [`dispatch`]: the contract's checks before any method runs, the refusals, and [`dispatch::Forward`].
@@ -57,6 +58,7 @@ pub mod server;
 pub mod sessions;
 pub mod shape;
 pub mod store;
+pub mod store_cli;
 pub mod supervise;
 pub mod version;
 

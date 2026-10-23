@@ -2,8 +2,10 @@
 //!
 //! `doctor --json` is
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
-//! warnings}?, socket_dir: {path, mode, ok}, sqlite, job_agents, sandbox: {backend, version, ok, reason, fix,
-//! landlock_abi, in_use}}`.  `gateway` is the running hub's (its `status`): `keys_held` names providers only, and
+//! warnings}?, store: {schema, writer, failed, denied_in}?, socket_dir: {path, mode, ok}, sqlite, job_agents,
+//! sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use}}`.  `store` is the running hub's work.db: a
+//! failed move to schema 7, and the copies that still hold what its deny-list kept out.
+//! `gateway` is the running hub's (its `status`): `keys_held` names providers only, and
 //! `warnings` are its clear-text providers (`config/providers`). `sandbox` is the job sandbox's check
 //! (`gleipnir::check`), `in_use` false until phase 6.
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet
@@ -32,11 +34,12 @@ const DOCTOR_CHECK: Duration = Duration::from_millis(1400);
 // core/drgnx-doctor.el waits 2 s for `doctor --json`
 const _: () = assert!(DOCTOR_ASK.as_millis() + DOCTOR_PING.as_millis() < 2000);
 
-/// The running hub's pid and commit, and its `status`'s `gateway`, for the report.
+/// The running hub's pid and commit, and its `status`'s `gateway` and `store`, for the report.
 pub struct Running {
     pub pid: u32,
     pub commit: Option<String>,
     pub gateway: Option<Value>,
+    pub store: Option<Value>,
 }
 
 /// The socket directory's state.
@@ -117,8 +120,39 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
                 "warnings": g.get("warnings").cloned().unwrap_or_else(|| json!([])),
             });
         }
+        if let Some(s) = r.store {
+            v["store"] = json!({
+                "schema": s["schema"],
+                "writer": s["writer"],
+                "failed": s.get("failed").cloned().unwrap_or(Value::Null),
+                "denied_in": s.get("denied_in").cloned().unwrap_or_else(|| json!([])),
+            });
+        }
     }
     v
+}
+
+/// What the doctor and `status` say of work.db beyond "ready": a migration that failed (and how to go back), and the
+/// copies that still hold what the migration's deny-list kept out.
+fn store_lines(store: &Value) -> String {
+    let mut out = String::new();
+    if let Some(why) = store.get("failed").and_then(Value::as_str) {
+        out.push_str(&format!(
+            "\nwork.db: {why} (work.db is still schema 6; `ratatoskr store restore-pre7` puts the pre-migration copy \
+             back if it is needed)"
+        ));
+    }
+    if let Some(copies) = store.get("denied_in").and_then(Value::as_array)
+        && !copies.is_empty()
+    {
+        let names: Vec<&str> = copies.iter().filter_map(Value::as_str).collect();
+        out.push_str(&format!(
+            "\nwork.db: the migration kept personal notes out; these copies still hold them, remove them once you \
+             no longer need them: {}",
+            names.join(", ")
+        ));
+    }
+    out
 }
 
 /// `status`: the hub's `status` (with `"running": true`), or `{"running": false}` and exit 1 when none answers.
@@ -184,6 +218,9 @@ fn summary(v: &Value) -> String {
             "\nread-only: work.db is schema {n}, newer than this hub's"
         ));
     }
+    if let Some(s) = v.get("store") {
+        out.push_str(&store_lines(s));
+    }
     out.push_str(&format!("\njob agents: {}", text(&v["job_agents"])));
     out
 }
@@ -209,12 +246,14 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
                     .unwrap_or(0),
                 commit: s["runtime"]["commit"].as_str().map(str::to_string),
                 gateway: s.get("gateway").cloned(),
+                store: s.get("store").cloned(),
             })
             .or_else(|| {
                 client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
                     pid,
                     commit: None,
                     gateway: None,
+                    store: None,
                 })
             });
         let check = check
@@ -248,6 +287,9 @@ fn text(v: &Value, sandbox: &Check) -> String {
     );
     if let Some(r) = v.get("running") {
         out.push_str(&format!("\nrunning: pid {}", r["pid"]));
+    }
+    if let Some(s) = v.get("store") {
+        out.push_str(&store_lines(s));
     }
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
@@ -317,9 +359,19 @@ mod tests {
                     "keys_held": ["openrouter"],
                     "warnings": [{"provider": "lan", "text": "lan's key travels in clear text over http://192.0.2.10; use https"}]}),
                 ),
+                store: Some(json!({"schema": 6, "writer": "not-ready", "writes": 0,
+                    "failed": "the move of work.db to schema 7 failed: x", "denied_in": ["/d/backup/work-pre7-1.db"]})),
             }),
             &working(),
         );
+        assert_eq!(
+            up["store"],
+            json!({"schema": 6, "writer": "not-ready", "failed": "the move of work.db to schema 7 failed: x",
+                   "denied_in": ["/d/backup/work-pre7-1.db"]})
+        );
+        let lines = store_lines(&up["store"]);
+        assert!(lines.contains("restore-pre7"), "{lines}");
+        assert!(lines.contains("/d/backup/work-pre7-1.db"), "{lines}");
         assert_eq!(up["running"], json!({"pid": 7, "commit": "abc"}));
         // the gateway's ids and warnings only, never its traffic
         assert_eq!(

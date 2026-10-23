@@ -1,6 +1,7 @@
 {"scenario": "forward/spend-is-own-job-for-an-agent", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "spend is the front's, summed from work.db's spend rows: from an agent socket it reads its own job (job defaults to it), another job is not-allowed; the backend is never asked."}
-{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"spend\": {\"result\": {\"input\": 99, \"output\": 99, \"cost\": 9.0, \"requests\": 9}}}"}}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into spend values (1.0, 'j1', null, 'a1', 'mock', 'm', 1, 2, 0.5, 200)", "insert into spend values (2.0, 'j2', null, 'a2', 'mock', 'm', 7, 7, 3.0, 200)"]}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"spend\": {\"result\": {\"input\": 99, \"output\": 99, \"cost\": 9.0, \"requests\": 9}}}"}}
 {"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
 {"do": "send", "conn": "a", "json": {"id": 1, "method": "spend"}}
 {"do": "expect", "conn": "a", "json": {"id": 1, "result": {"input": 1, "output": 2, "cost": 0.5, "requests": 1}}}

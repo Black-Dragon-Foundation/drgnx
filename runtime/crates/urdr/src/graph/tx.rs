@@ -146,6 +146,25 @@ impl<'a> Tx<'a> {
         self.release()
     }
 
+    /// A tx inside an opening rule's own transaction (norn's migration, Task 11): the rule runs on the writer thread
+    /// with the write connection before the first batch, opens `BEGIN IMMEDIATE` itself, and makes one `Tx` per
+    /// backfilled time with its AT (the writer reads the file's newest `at` as its floor once the rule answers
+    /// `Ready`). Released with [`Tx::release_in_rule`]; dropped, it rolls back as a request's does. Nothing else calls
+    /// it: requests get their `Tx` from the writer.
+    pub fn in_rule(
+        conn: &'a mut Connection,
+        meta: TxMeta,
+        at: f64,
+        guard: Arc<Guard>,
+    ) -> rusqlite::Result<Tx<'a>> {
+        Tx::begin(conn, meta, at, guard)
+    }
+
+    /// Release a [`Tx::in_rule`]: what it wrote joins the rule's transaction.
+    pub fn release_in_rule(self) -> rusqlite::Result<()> {
+        self.release()
+    }
+
     /// Open the request's savepoint on CONN and insert its `tx` row from META at AT. An error rolls the savepoint
     /// back (its `Drop`), so nothing of the request stays.
     pub(super) fn begin(

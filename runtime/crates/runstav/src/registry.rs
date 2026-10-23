@@ -19,8 +19,8 @@ pub const PROTO: u32 = 1;
 pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
-/// The work.db schema this code knows.
-pub const SCHEMA: u32 = 6;
+/// The work.db schema this code knows (7: the hub makes it, or migrates a schema-6 file to it at start).
+pub const SCHEMA: u32 = 7;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.

@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
+use urdr::graph::OpenOutcome;
 use tokio::sync::Semaphore;
 
 /// What `status` and the doctor say of job agents in this phase.
@@ -80,6 +81,9 @@ pub struct Front {
     schema: AtomicU32,
     /// work.db's schema while it is newer than this hub's, else 0.
     read_only: AtomicU32,
+    /// From work.db's `migrate-7` report: when the move from schema 6 committed, and the copies that still hold what
+    /// its deny-list kept out.
+    migration: Mutex<(Option<f64>, Vec<String>)>,
     subscribers: Mutex<BTreeMap<u64, Arc<Outbox>>>,
     stop: Notify,
     /// The stop asked for is a restart.
@@ -89,12 +93,25 @@ pub struct Front {
 
 impl Front {
     /// The front on the main SOCKET with the user's CAP, reading through WORK_DB and writing through COORD_DB, the
-    /// rest to FORWARD.
+    /// rest to FORWARD; no graph store (the tests' fronts on a schema-6 file).
     pub fn new(
         cap: Cap,
         socket: PathBuf,
         work_db: WorkDb,
         coord_db: norn::store::CoordDb,
+        forward: Arc<dyn Forward>,
+    ) -> Front {
+        Front::with_graph(cap, socket, work_db, coord_db, None, forward)
+    }
+
+    /// [`Front::new`] with the graph store GRAPH the coordination tools read and write through (the hub's, on the
+    /// graph writer that made or migrated work.db).
+    pub fn with_graph(
+        cap: Cap,
+        socket: PathBuf,
+        work_db: WorkDb,
+        coord_db: norn::store::CoordDb,
+        graph: Option<norn::tools::GraphStore>,
         forward: Arc<dyn Forward>,
     ) -> Front {
         let signals = Arc::new(Signals::default());
@@ -103,7 +120,11 @@ impl Front {
             signals: signals.clone(),
         });
         let uid = rustix::process::geteuid().as_raw();
-        let tools = Arc::new(norn::tools::Coord::new(coord_db.clone(), hub));
+        let coord = norn::tools::Coord::new(coord_db.clone(), hub);
+        let tools = Arc::new(match graph {
+            Some(g) => coord.with_graph(g),
+            None => coord,
+        });
         let gate = Gate::new(coord_db.clone());
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         Front {
@@ -126,6 +147,7 @@ impl Front {
             refusals: Mutex::new(Refusals::default()),
             schema: AtomicU32::new(0),
             read_only: AtomicU32::new(0),
+            migration: Mutex::new((None, Vec::new())),
             subscribers: Mutex::new(BTreeMap::new()),
             stop: Notify::new(),
             restart: AtomicBool::new(false),
@@ -162,6 +184,25 @@ impl Front {
                 );
             }
         }
+    }
+
+    /// work.db's `migrate-7` report REPORT (its JSON text; none for a file made at schema 7): `status.store`'s
+    /// `migrated_at` and `denied_in`.
+    pub fn note_migration(&self, report: Option<&str>) {
+        let v: Value = report
+            .and_then(|r| serde_json::from_str(r).ok())
+            .unwrap_or(Value::Null);
+        let at = v["at"].as_f64().filter(|a| *a > 0.0);
+        let copies: Vec<String> = v["denied_in"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        *self.migration.lock().expect("migration") = (at, copies);
     }
 
     pub fn read_only(&self) -> Option<u32> {
@@ -217,16 +258,7 @@ impl Front {
             drgnx_version: Some(COMMIT.into()),
             schema: Some(u64::from(schema)),
             read_only: self.read_only().map(u64::from),
-            // from the schema at the last tick: the writer opens a schema-6 file at that tick too
-            store: Some(StoreStatus {
-                schema: u64::from(schema),
-                writer: match schema {
-                    s if s == norn::store::SCHEMA => WriterState::Ready,
-                    s if s > norn::store::SCHEMA => WriterState::ReadOnly,
-                    _ => WriterState::NotReady,
-                },
-                writes: self.writer.signals.writes(),
-            }),
+            store: Some(self.store_status(schema)),
             mcp: Some(self.mcp.status()),
             runtime: Some(Runtime {
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -239,6 +271,42 @@ impl Front {
             gateway_port: None,
             registrations: None,
         }
+    }
+
+    /// `status.store`: with the hub's graph writer, its opening rule's last answer (a failed migration's reason in
+    /// `failed`) and the WAL's size; without one (the tests' fronts), from the schema at the last tick.
+    fn store_status(&self, schema: u32) -> StoreStatus {
+        let (migrated_at, denied_in) = self.migration.lock().expect("migration").clone();
+        let mut st = StoreStatus {
+            schema: u64::from(schema),
+            writer: match schema {
+                s if s == norn::store::SCHEMA => WriterState::Ready,
+                s if s > norn::store::SCHEMA => WriterState::ReadOnly,
+                _ => WriterState::NotReady,
+            },
+            writes: self.writer.signals.writes(),
+            migrated_at,
+            failed: None,
+            wal_bytes: None,
+            last_backup: None,
+            backup_ok: None,
+            denied_in,
+        };
+        if let Some(w) = self.writer.db.graph_writer() {
+            let open = w.status().last_open;
+            st.writer = match &open {
+                Some(OpenOutcome::Ready { .. }) => WriterState::Ready,
+                Some(OpenOutcome::ReadOnly { .. }) => WriterState::ReadOnly,
+                _ => WriterState::NotReady,
+            };
+            if let Some(OpenOutcome::Failed(why)) = open {
+                st.failed = Some(why);
+            }
+            let mut wal = w.path().as_os_str().to_owned();
+            wal.push("-wal");
+            st.wal_bytes = Some(std::fs::metadata(PathBuf::from(wal)).map_or(0, |m| m.len()));
+        }
+        st
     }
 
     /// `status`: the front's keys (the gateway's among them), and the backend's state.

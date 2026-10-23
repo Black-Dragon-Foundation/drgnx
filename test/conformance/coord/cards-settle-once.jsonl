@@ -1,6 +1,7 @@
 {"scenario": "coord/cards-settle-once", "requires": ["v1", "fake-backend"], "doc": "An open card settles once (drgnx-coord-card-settle): the second cards/settle answers settled false, the card keeps the first choice, and status counts the two transactions the front's writer committed."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into card (id, kind, title, state, at) values (7, 'review', 'review j1#1', 'open', 1.0)"]}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "cards/settle", "params": {"card": 7, "choice": "accept"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"settled": true}}}

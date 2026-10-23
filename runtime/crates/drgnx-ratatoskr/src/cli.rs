@@ -19,6 +19,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)\n\
     \x20      ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET...   (the sandbox's relay; run by the sandbox only)\n\
     \x20      ratatoskr sandbox check [--json] [--tier full|reduced]   (does the job sandbox start here?)\n\
+    \x20      ratatoskr store migrate-check --db FILE --scratch DIR [--json]   (migrate a copy of work.db; counts only)\n\
+    \x20      ratatoskr store restore-pre7 [--yes]   (the hub stopped: work.db back from before schema 7)\n\
     \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
@@ -73,6 +75,21 @@ pub enum Command {
     SandboxRun(SandboxRunArgs),
     /// `mcp-bridge`: an agent's stdio MCP server, copied to the hub (`crate::bridge`).
     McpBridge(BridgeArgs),
+    /// `store migrate-check` and `store restore-pre7` (`crate::store_cli`).
+    Store(StoreCommand),
+}
+
+/// `store`'s subcommands.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StoreCommand {
+    /// `migrate-check --db FILE --scratch DIR [--json]`: migrate a copy, print the counts.
+    MigrateCheck {
+        db: PathBuf,
+        scratch: PathBuf,
+        json: bool,
+    },
+    /// `restore-pre7 [--yes]`: the newest pre-migration copy back as work.db.
+    RestorePre7 { yes: bool },
 }
 
 /// `mcp-bridge`'s arguments.
@@ -313,7 +330,48 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             }
         }
         "mcp-bridge" => mcp_bridge(&mut p).map(Command::McpBridge),
+        "store" => store(&mut p).map(Command::Store),
         other => Err(format!("unknown command {other:?}")),
+    }
+}
+
+/// `store migrate-check --db FILE --scratch DIR [--json]`, or `store restore-pre7 [--yes]`.
+fn store(p: &mut lexopt::Parser) -> Result<StoreCommand, String> {
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let sub = match p.next().map_err(e)? {
+        Some(Value(v)) => v.string().map_err(e)?,
+        Some(other) => return Err(other.unexpected().to_string()),
+        None => return Err("store needs a subcommand: migrate-check or restore-pre7".into()),
+    };
+    match sub.as_str() {
+        "migrate-check" => {
+            let (mut db, mut scratch, mut json) = (None, None, false);
+            while let Some(arg) = p.next().map_err(e)? {
+                match arg {
+                    Long("db") => db = Some(PathBuf::from(p.value().map_err(e)?)),
+                    Long("scratch") => scratch = Some(PathBuf::from(p.value().map_err(e)?)),
+                    Long("json") => json = true,
+                    other => return Err(other.unexpected().to_string()),
+                }
+            }
+            Ok(StoreCommand::MigrateCheck {
+                db: db.ok_or("store migrate-check needs --db FILE")?,
+                scratch: scratch.ok_or("store migrate-check needs --scratch DIR")?,
+                json,
+            })
+        }
+        "restore-pre7" => {
+            let mut yes = false;
+            while let Some(arg) = p.next().map_err(e)? {
+                match arg {
+                    Long("yes") => yes = true,
+                    other => return Err(other.unexpected().to_string()),
+                }
+            }
+            Ok(StoreCommand::RestorePre7 { yes })
+        }
+        other => Err(format!("unknown store subcommand {other:?}")),
     }
 }
 
@@ -508,6 +566,35 @@ mod tests {
 
     fn p(args: &[&str]) -> Result<Command, String> {
         parse(args.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn store_parses() {
+        assert_eq!(
+            p(&["store", "migrate-check", "--db", "c/work.db", "--scratch", "c/s", "--json"]),
+            Ok(Command::Store(StoreCommand::MigrateCheck {
+                db: PathBuf::from("c/work.db"),
+                scratch: PathBuf::from("c/s"),
+                json: true,
+            }))
+        );
+        assert_eq!(
+            p(&["store", "restore-pre7"]),
+            Ok(Command::Store(StoreCommand::RestorePre7 { yes: false }))
+        );
+        assert_eq!(
+            p(&["store", "restore-pre7", "--yes"]),
+            Ok(Command::Store(StoreCommand::RestorePre7 { yes: true }))
+        );
+        for bad in [
+            &["store"][..],
+            &["store", "migrate-check", "--db", "x"],
+            &["store", "migrate-check", "--scratch", "x"],
+            &["store", "restore-pre7", "--force"],
+            &["store", "vacuum"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

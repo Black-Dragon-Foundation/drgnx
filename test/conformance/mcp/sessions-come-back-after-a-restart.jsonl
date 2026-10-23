@@ -1,6 +1,7 @@
 {"scenario": "mcp/sessions-come-back-after-a-restart", "requires": ["v1", "fake-backend"], "doc": "A session whose owner (the harness) outlives the hub: after a stop and a start on the same root the same socket path answers again, as the same agent (one agent row)."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}

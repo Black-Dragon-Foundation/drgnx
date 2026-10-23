@@ -1,0 +1,16 @@
+{"scenario": "store/restore-pre7-puts-back-schema-6", "requires": ["v1"], "doc": "The way back (call 18): migrate, stop the hub, ratatoskr store restore-pre7 --yes: work.db is the schema-6 file again, every row of it, with no WAL of schema 7 beside it; the schema-7 file and its WAL are kept aside together. A running hub refuses it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6-shaped.sql", "sql": ["update node set id = replace(id, '$' || 'HOME', '$HOME'), path = replace(path, '$' || 'HOME', '$HOME'), parent = replace(parent, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME'), data = replace(data, '$' || 'HOME', '$HOME')", "update edge set src = replace(src, '$' || 'HOME', '$HOME'), dst = replace(dst, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME')", "update file set path = replace(path, '$' || 'HOME', '$HOME')", "update job set plan = replace(plan, '$' || 'HOME', '$HOME'), repo = replace(repo, '$' || 'HOME', '$HOME')", "update agent set cwd = replace(cwd, '$' || 'HOME', '$HOME'), worktree = replace(worktree, '$' || 'HOME', '$HOME'), plan = replace(plan, '$' || 'HOME', '$HOME'), task = replace(task, '$' || 'HOME', '$HOME')"]}
+{"do": "start", "hub": "h"}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}
+{"do": "run", "args": ["store", "restore-pre7", "--yes"], "expect_code": 1, "expect_stderr": "the hub is running"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "run", "args": ["store", "restore-pre7", "--yes"], "expect_code": 0, "expect_stdout": "put back work-pre7-"}
+{"do": "file", "path": "$DATA/work.db-wal", "exists": false}
+{"do": "file", "path": "$DATA/work.db-shm", "exists": false}
+{"do": "file", "path": "$DATA/work.db", "mode": "600"}
+{"do": "sql_expect", "sql": "select value from meta where key = 'schema'", "rows": [["6"]]}
+{"do": "sql_expect", "sql": "select (select count(*) from node), (select count(*) from edge), (select count(*) from decision), (select count(*) from jtask), (select count(*) from sqlite_master where name = 'entity')", "rows": [[970, 169, 4, 5, 0]]}
+{"do": "file", "path": "$DATA/work.db.schema7-*", "exists": true}

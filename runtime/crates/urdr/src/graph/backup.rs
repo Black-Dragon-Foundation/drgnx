@@ -130,6 +130,17 @@ fn check_inner(dest: &Path) -> Result<(), String> {
         return Err(format!("integrity_check: {}", lines.join("; ")));
     }
     drop(stmt);
+    // A schema-6 copy (the migration's `work-pre7-*.db`, Task 11) has no FTS table to check.
+    let fts: i64 = conn
+        .query_row(
+            "select count(*) from sqlite_master where name = 'entity_fts'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if fts == 0 {
+        return Ok(());
+    }
     conn.execute(
         "insert into entity_fts(entity_fts, rank) values('integrity-check', 0)",
         [],

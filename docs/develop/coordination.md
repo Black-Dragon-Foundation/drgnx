@@ -127,15 +127,18 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
 Ratatoskr writes the coordination tables through `norn`; the Lisp in `core/drgnx-coord.el` stays the oracle until it
 is deleted. Rules:
 
-- **Schema 6 only.** `urdr`'s `Mode::ReadWriteExisting { expect_schema, synchronous_full }` opens an existing file
-  read-write. It never creates a file, never migrates and leaves the journal mode alone; `busy_timeout` is 5 s. A
-  missing file is `Error::Missing`, a `meta.schema` other than the expected one is `Error::Schema { found }`, with
-  nothing written. The Lisp side makes and migrates `work.db`.
+- **The expected schema only.** `urdr`'s `Mode::ReadWriteExisting { expect_schema, synchronous_full }` opens an
+  existing file read-write. It never creates a file, never migrates and leaves the journal mode alone; `busy_timeout`
+  is 5 s. A missing file is `Error::Missing`, a `meta.schema` other than the expected one is `Error::Schema { found }`,
+  with nothing written. The hub's `CoordDb::with_graph` expects schema 7: the graph writer beside it makes the file
+  or migrates a schema-6 one first ([store.md](store.md#migration-from-schema-6-task-11)), and `CoordDb` follows
+  the writer's answer. `CoordDb::spawn` (without a graph writer) still expects schema 6.
 - **One thread.** `norn::store::CoordDb` owns the connection on `urdr`'s store thread, so no statement runs on an async
   worker. `write` runs its closure inside `BEGIN IMMEDIATE` (committed on `Ok`, rolled back on `Err`); `read` runs
   outside a transaction. The closure gets `&Tx` (the connection, already in the transaction).
-- **Not ready.** Below schema 6 (or missing) a write is `NotReady { schema }`: "work.db is not ready (schema N); the
-  Lisp side makes it". A newer schema is opened read-only; a write is `ReadOnly { schema }`.
+- **Not ready.** While the graph writer is not ready (a file below schema 6, a migration that failed) a write is
+  `NotReady` with the opening rule's text; without a graph writer, below schema 6 (or missing) it is "work.db is not
+  ready (schema N); the Lisp side makes it". A newer schema is opened read-only; a write is `ReadOnly { schema }`.
 - **Follows the file.** The hub's 2 s schema tick calls `CoordDb::tick`: it opens when not open, and opens again when
   the file's `(dev, inode)` changed (a removed and re-made `work.db`, R-T14-2). A read or write that finds the file
   not open runs that open once itself first (on a blocking thread), so a `work.db` made after the hub started is used

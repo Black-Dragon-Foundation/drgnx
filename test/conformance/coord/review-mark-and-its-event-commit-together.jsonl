@@ -1,6 +1,7 @@
 {"scenario": "coord/review-mark-and-its-event-commit-together", "requires": ["v1", "fake-backend"], "doc": "review/mark writes the mark and its event in one transaction (call 6): both are there, and when the event cannot be written (a trigger refuses it) neither is."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["create trigger no_revert before insert on event when new.kind = 'revert' begin select raise(abort, 'no revert events'); end"]}
+{"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "review/mark", "params": {"agent": "agent-1", "path": "src/a.el", "state": "accepted", "hash": "abc123", "event": {"kind": "accept", "job": "j1", "summary": "accepted src/a.el", "data": {"path": "src/a.el"}}}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}

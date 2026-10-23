@@ -1,6 +1,7 @@
-{"scenario": "basics/events-since-without-a-work-db", "requires": ["v1"], "doc": "A fresh install has no work.db yet: events/since answers no events (not internal), and the hub makes no work.db."}
+{"scenario": "basics/events-since-without-a-work-db", "requires": ["v1"], "doc": "A fresh install has no work.db: the hub makes one at schema 7 before it serves (Urdr Task 11), and events/since answers no events (not internal)."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "events/since", "params": {}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"since": 0, "last": 0, "events": []}}}
-{"do": "file", "path": "$DATA/work.db", "exists": false}
+{"do": "file", "path": "$DATA/work.db", "exists": true}
+{"do": "sql_expect", "sql": "select count(*) from event", "rows": [[0]]}

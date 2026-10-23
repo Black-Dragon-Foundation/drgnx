@@ -1,6 +1,7 @@
 {"scenario": "bridge/tools-list-from-the-cache-while-away", "requires": ["v1", "fake-backend"], "doc": "With no hub, tools/list is answered at once from the bridge's cache (the list the agent saw last) and ping with {}."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}

@@ -124,6 +124,24 @@ The store keeps dated copies of `work.db` (`backup/work-YYYYMMDD.db`: the last 7
 copy is checked and a bad one is deleted, so the previous good one stays). `work-pre7-*.db`, made before the move to
 the new store, is only ever removed by you.
 
+### The move to the new store
+
+The first time the new hub starts it moves your `work.db` to the new store (schema 7) before it answers anything:
+it first copies the file to `backup/work-pre7-<time>.db` and checks the copy, then moves everything in one step, so
+an interruption leaves the old file as it was. What it reads from your personal notes folder (`~/org`, the board
+aside) is not moved; the doctor says which copies still hold it, so you can remove them.
+
+### If the migration fails
+
+The hub keeps running without writing: the doctor says why (`ratatoskr doctor`, `store.failed`), and it does not
+try again until it restarts. Your file is unchanged. To go back to the previous drgnx:
+
+1. `drgnx hub stop`
+2. `ratatoskr store restore-pre7 --yes`: the newest checked `work-pre7-*.db` becomes `work.db` again; the new file
+   is kept beside it as `work.db.schema7-<time>` (with its `-wal` and `-shm`). Without `--yes` it only says what it
+   would do.
+3. Install the drgnx from before the move, and start the hub.
+
 An export is a folder of plain JSONL files: `entities.jsonl` and `links.jsonl` (what you and your agents wrote, one
 item per line, sorted so a change touches only its lines), `tx.jsonl` (who changed what), and on request
 `history.jsonl` and the activity (sessions, what they touched). Notes you keep outside the store's reach never

@@ -1,6 +1,7 @@
 {"scenario": "bridge/gives-up", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "A bridge with no hub for its give-up time (10 min; 200 ms here, a test hook) ends with exit 1 and says why on stderr."}
-{"do": "start", "hub": "h"}
+{"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
 {"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}

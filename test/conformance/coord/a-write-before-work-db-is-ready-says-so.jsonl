@@ -1,11 +1,9 @@
-{"scenario": "coord/a-write-before-work-db-is-ready-says-so", "requires": ["v1", "fake-backend"], "doc": "With no work.db (the Lisp side makes it) a write is internal with the writer's text and status says not-ready; once a schema-6 file is there the same write goes through (the writer looks again before it answers, within the tick at most)."}
+{"scenario": "coord/a-write-before-work-db-is-ready-says-so", "requires": ["v1", "fake-backend"], "doc": "A write before the store opened waits for it: with no work.db the hub makes a schema-7 one before it serves anything (Urdr Task 11; before it the Lisp side made the file and an early write was internal), so the first write goes through and status says the writer is ready."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "events/add", "params": {"kind": "comment", "summary": "early"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "internal", "message": "work.db is not ready (schema 0); the Lisp side makes it"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": 1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"store": {"schema": 0, "writer": "not-ready", "writes": 0}}}}
-{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
-{"do": "send", "conn": "c", "json": {"id": 3, "method": "events/add", "params": {"kind": "comment", "summary": "now"}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": 1}}, "within_ms": 3000}
-{"do": "sql_expect", "sql": "select kind, summary from event", "rows": [["comment", "now"]]}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready", "writes": 1, "migrated_at": "$absent", "failed": "$absent"}}}}
+{"do": "sql_expect", "sql": "select kind, summary from event", "rows": [["comment", "early"]]}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}

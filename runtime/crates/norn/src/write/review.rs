@@ -20,7 +20,8 @@ pub fn review_mark(
         )));
     }
     tx.execute(
-        "insert or replace into review_mark values (?1, ?2, ?3, ?4, ?5)",
+        // the columns named: schema 7 adds `tx`
+        "insert or replace into review_mark (agent, path, state, hash, at) values (?1, ?2, ?3, ?4, ?5)",
         (agent, path, state, hash, now),
     )?;
     if let Some(ev) = ev {

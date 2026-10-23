@@ -17,8 +17,8 @@ path = "src/main.rs"
 
 [features]
 # Every test-only surface (the `__test_flood` method, `--agent-socket`, `sandbox run`): off in the binary install.sh
-# builds.
-test-hooks = ["gleipnir/test-hooks"]
+# builds. The migration's seams too (`DRGNX_TEST_MIGRATE7_FAIL`, `_PAUSE`).
+test-hooks = ["gleipnir/test-hooks", "norn/test-hooks"]
 
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }

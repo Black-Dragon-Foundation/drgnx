@@ -29,7 +29,8 @@ pub struct NewJob {
 /// Make the job, its tasks (`ID#N`) and their dependencies, at time NOW: the job's id (`drgnx-coord-job-create`).
 pub fn job_create(tx: &Tx, j: NewJob, now: f64) -> Result<String, CoordError> {
     tx.execute(
-        "insert into job values (?1, ?2, ?3, ?4, 'proposed', ?5, ?6)",
+        // the columns named: schema 7 adds `tx`
+        "insert into job (id, title, plan, repo, status, created, data) values (?1, ?2, ?3, ?4, 'proposed', ?5, ?6)",
         (
             &j.id,
             &j.title,
