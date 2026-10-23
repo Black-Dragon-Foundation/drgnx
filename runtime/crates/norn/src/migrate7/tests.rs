@@ -22,7 +22,12 @@ pub(super) mod hooks {
     /// The migration reached STEP on DB: traced, and failed when a test asked for it.
     pub(in crate::migrate7) fn reach(db: &Path, step: &'static str) -> Result<(), Stop> {
         TRACE.lock().unwrap().push((db.to_path_buf(), step));
-        if FAIL.lock().unwrap().iter().any(|(p, s)| p == db && *s == step) {
+        if FAIL
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, s)| p == db && *s == step)
+        {
             return Err(Stop::Failed(format!("a test hook failed step {step}")));
         }
         Ok(())
@@ -30,7 +35,12 @@ pub(super) mod hooks {
 
     /// Before the copy's check: a test that asked for `check` breaks the copy, so the real check fails.
     pub(in crate::migrate7) fn before_check(db: &Path, copy: &Path) {
-        if FAIL.lock().unwrap().iter().any(|(p, s)| p == db && *s == "check") {
+        if FAIL
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, s)| p == db && *s == "check")
+        {
             std::fs::write(copy, b"not a database: a broken copy").unwrap();
         }
     }
@@ -158,23 +168,23 @@ fn rows(c: &Connection, sql: &str) -> Vec<Vec<Value>> {
     let mut stmt = c.prepare(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
     let n = stmt.column_count();
     stmt.query_map([], |r| {
-            (0..n)
-                .map(|i| {
-                    let text: Option<String> = r.get::<_, Option<String>>(i).ok().flatten();
-                    let int: Option<i64> = r.get::<_, Option<i64>>(i).ok().flatten();
-                    let real: Option<f64> = r.get::<_, Option<f64>>(i).ok().flatten();
-                    Ok(match (int, real, text) {
-                        (Some(v), _, _) => json!(v),
-                        (None, Some(v), _) => json!(v),
-                        (None, None, Some(t)) => json!(t),
-                        _ => Value::Null,
-                    })
+        (0..n)
+            .map(|i| {
+                let text: Option<String> = r.get::<_, Option<String>>(i).ok().flatten();
+                let int: Option<i64> = r.get::<_, Option<i64>>(i).ok().flatten();
+                let real: Option<f64> = r.get::<_, Option<f64>>(i).ok().flatten();
+                Ok(match (int, real, text) {
+                    (Some(v), _, _) => json!(v),
+                    (None, Some(v), _) => json!(v),
+                    (None, None, Some(t)) => json!(t),
+                    _ => Value::Null,
                 })
-                .collect::<Result<Vec<Value>, _>>()
-        })
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
+            })
+            .collect::<Result<Vec<Value>, _>>()
+    })
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap()
 }
 
 /// The fixture before migration, in memory, for comparing the views with schema 6's tables.
@@ -204,7 +214,8 @@ fn parse_data(v: &Value) -> Value {
     }
 }
 
-const DENIED_IDS: &str = "('plan:H/org/plans/secret.md', 'task:H/org/plans/secret.md#1', 'spec:H/org/notes.org')";
+const DENIED_IDS: &str =
+    "('plan:H/org/plans/secret.md', 'task:H/org/plans/secret.md#1', 'spec:H/org/notes.org')";
 
 fn denied_ids(home: &Path) -> String {
     DENIED_IDS.replace('H', home.to_str().unwrap())
@@ -234,7 +245,10 @@ fn counts_are_kept() {
         let now: i64 = one(&c, &format!("select count(*) from {name}"));
         assert_eq!(now, n as i64, "{name}");
     }
-    let by_kind = rows(&c, "select kind, count(*) from node group by kind order by kind");
+    let by_kind = rows(
+        &c,
+        "select kind, count(*) from node group by kind order by kind",
+    );
     assert_eq!(
         by_kind,
         [
@@ -310,9 +324,15 @@ fn counts_are_kept() {
     assert_eq!(after, before);
     for (view, sql) in [
         ("jtask", "select * from jtask order by id"),
-        ("jdep", "select * from jdep where dep <> 'j9#9' order by task, dep"),
+        (
+            "jdep",
+            "select * from jdep where dep <> 'j9#9' order by task, dep",
+        ),
         ("decision", "select * from decision order by n"),
-        ("file", "select * from file where path not like '%/org/plans/%' and path not like '%notes.org' order by path"),
+        (
+            "file",
+            "select * from file where path not like '%/org/plans/%' and path not like '%notes.org' order by path",
+        ),
     ] {
         let mut before = rows(&old, sql);
         let mut after = rows(&c, &sql.replace(" where dep <> 'j9#9'", ""));
@@ -343,7 +363,10 @@ fn views_have_schema_6_columns() {
         .collect()
     };
     for t in ["node", "edge", "jtask", "jdep", "decision", "file", "meta"] {
-        let ty: String = one(&c, &format!("select type from sqlite_master where name = '{t}'"));
+        let ty: String = one(
+            &c,
+            &format!("select type from sqlite_master where name = '{t}'"),
+        );
         assert_eq!(ty, "view", "{t}");
         assert_eq!(cols(&c, t), cols(&old, t), "{t}");
         assert!(!cols(&old, t).is_empty());
@@ -381,8 +404,11 @@ fn literals(src: &str) -> Vec<(String, String, String)> {
                         i += 1;
                     }
                 }
-                let before = String::from_utf8_lossy(&b[start.saturating_sub(80)..start]).into_owned();
-                let after = String::from_utf8_lossy(&b[(i + 1).min(b.len())..(i + 81).min(b.len())]).into_owned();
+                let before =
+                    String::from_utf8_lossy(&b[start.saturating_sub(80)..start]).into_owned();
+                let after =
+                    String::from_utf8_lossy(&b[(i + 1).min(b.len())..(i + 81).min(b.len())])
+                        .into_owned();
                 out.push((String::from_utf8_lossy(&s).into_owned(), before, after));
                 i += 1;
             }
@@ -478,7 +504,9 @@ fn every_old_select_runs_on_the_views() {
                 let Some(value) = constants.get(&sym) else {
                     let raw = lit.trim_start().to_lowercase();
                     if raw.starts_with("select")
-                        && tables_named(&lit).iter().any(|t| ours.contains(&t.as_str()))
+                        && tables_named(&lit)
+                            .iter()
+                            .any(|t| ours.contains(&t.as_str()))
                     {
                         failures.push(format!(
                             "{}: a format select names {sym:?}, not one of {FORMAT_CONSTANTS:?}: {lit}",
@@ -496,7 +524,9 @@ fn every_old_select_runs_on_the_views() {
                 lit.clone()
             };
             if !sql.trim_start().to_lowercase().starts_with("select")
-                || !tables_named(&sql).iter().any(|t| ours.contains(&t.as_str()))
+                || !tables_named(&sql)
+                    .iter()
+                    .any(|t| ours.contains(&t.as_str()))
             {
                 continue;
             }
@@ -515,7 +545,11 @@ fn every_old_select_runs_on_the_views() {
             .any(|s| s.contains("not in (select e.src from edge e join node s")),
         "{checked:#?}"
     );
-    assert!(checked.iter().any(|s| s.contains("from decision where ver > ?")));
+    assert!(
+        checked
+            .iter()
+            .any(|s| s.contains("from decision where ver > ?"))
+    );
 }
 
 #[test]
@@ -656,10 +690,7 @@ fn jtask_becomes_task_entities_with_blocks() {
             json!("recorded")
         ]]
     );
-    let free: i64 = one(
-        &c,
-        "select lease_epoch from entity where id = 'task:j1#1'",
-    );
+    let free: i64 = one(&c, "select lease_epoch from entity where id = 'task:j1#1'");
     assert_eq!(free, 0, "a task without a lease_until holds none");
     let blocks = rows(
         &c,
@@ -847,7 +878,11 @@ fn a_failed_backup_check_stops_it() {
     let mut c = writer_conn(&fx.db);
     let e = run(&mut c, &fx.db, &fx.opts).unwrap_err();
     assert!(e.contains("failed its check"), "{e}");
-    assert_eq!(fx.backups(), Vec::<String>::new(), "a failed copy is removed");
+    assert_eq!(
+        fx.backups(),
+        Vec::<String>::new(),
+        "a failed copy is removed"
+    );
     let schema: String = one(&c, "select value from meta where key = 'schema'");
     assert_eq!(schema, "6");
     let ty: String = one(&c, "select type from sqlite_master where name = 'node'");
@@ -919,10 +954,7 @@ fn a_fresh_file_is_schema_7() {
     // A write of a coordination table works; a view refuses one.
     c.execute("insert into event (at, kind) values (1.0, 'x')", [])
         .unwrap();
-    assert!(
-        c.execute("insert into node (id) values ('x')", [])
-            .is_err()
-    );
+    assert!(c.execute("insert into node (id) values ('x')", []).is_err());
 }
 
 #[test]
@@ -945,7 +977,11 @@ fn no_git_runs_inside_the_transaction() {
 fn denied_sources_are_not_migrated() {
     let (fx, c, report) = migrated();
     assert_eq!(
-        (report.denied_nodes, report.denied_edges, report.denied_files),
+        (
+            report.denied_nodes,
+            report.denied_edges,
+            report.denied_files
+        ),
         (3, 2, 2)
     );
     let org: i64 = one(
@@ -953,9 +989,15 @@ fn denied_sources_are_not_migrated() {
         "select count(*) from entity where id like '%/org/%' and id not like '%/org/board.org%'",
     );
     assert_eq!(org, 0);
-    let board: i64 = one(&c, "select count(*) from entity where id like '%/org/board.org#t1'");
+    let board: i64 = one(
+        &c,
+        "select count(*) from entity where id like '%/org/board.org#t1'",
+    );
     assert_eq!(board, 1, "the board is not a personal note");
-    let files = rows(&c, "select path from file where path like '%/org/%' order by path");
+    let files = rows(
+        &c,
+        "select path from file where path like '%/org/%' order by path",
+    );
     assert_eq!(
         files,
         vec![vec![json!(format!("{}/org/board.org", fx.home.display()))]]
@@ -967,11 +1009,11 @@ fn denied_sources_are_not_migrated() {
     assert_eq!(linked, 0);
     let kept: String = one(&c, "select value from kv where key = 'migrate-7'");
     let kept: Value = serde_json::from_str(&kept).unwrap();
-    assert_eq!(
-        kept["denied"],
-        json!({"nodes": 3, "edges": 2, "files": 2})
+    assert_eq!(kept["denied"], json!({"nodes": 3, "edges": 2, "files": 2}));
+    assert!(
+        !kept.to_string().contains("/org/"),
+        "the report names no path of the user's"
     );
-    assert!(!kept.to_string().contains("/org/"), "the report names no path of the user's");
     assert_eq!(report.denied_in, vec![report.backup.clone().unwrap()]);
     // After the scrub, the canary is in neither the file nor its WAL (the pre-migration copy still has it).
     assert!(!file_has(&fx.db, CANARY));
@@ -1019,9 +1061,18 @@ fn the_spec_form_is_denied() {
         data: None,
         updated: None,
     };
-    assert!(node_denied(&deny, &node(&format!("spec {home}/org/notes.org"))));
-    assert!(node_denied(&deny, &node("spec relative/notes.org")), "an unknown form is denied");
-    assert!(!node_denied(&deny, &node(&format!("spec {home}/w/alpha/s.md"))));
+    assert!(node_denied(
+        &deny,
+        &node(&format!("spec {home}/org/notes.org"))
+    ));
+    assert!(
+        node_denied(&deny, &node("spec relative/notes.org")),
+        "an unknown form is denied"
+    );
+    assert!(!node_denied(
+        &deny,
+        &node(&format!("spec {home}/w/alpha/s.md"))
+    ));
 }
 
 /// Task 8 on a store Task 11 made: an imported entity's text leaves every version (the imported, approximate one in
@@ -1053,18 +1104,21 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
     // A change after the migration moves the imported version into entity_hist.
     handle
-        .write(TxMeta::new("hub", Class::System, "test"), move |tx: &mut Tx<'_>| {
-            entity::update(
-                tx,
-                n,
-                None,
-                Changes {
-                    body: Some(Some(format!("{TEXT} body"))),
-                    ..Changes::default()
-                },
-            )
-            .map(|_| ())
-        })
+        .write(
+            TxMeta::new("hub", Class::System, "test"),
+            move |tx: &mut Tx<'_>| {
+                entity::update(
+                    tx,
+                    n,
+                    None,
+                    Changes {
+                        body: Some(Some(format!("{TEXT} body"))),
+                        ..Changes::default()
+                    },
+                )
+                .map(|_| ())
+            },
+        )
         .await
         .unwrap();
     let imported = format!(
@@ -1072,7 +1126,10 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     );
     let imported_versions: i64 = one(&read(), &imported);
     assert!(imported_versions >= 1, "an imported version in entity_hist");
-    let first: i64 = one(&read(), &format!("select created_tx from entity where n = {n}"));
+    let first: i64 = one(
+        &read(),
+        &format!("select created_tx from entity where n = {n}"),
+    );
     let asof = hist::entity_as_of(&read(), n, first).unwrap().unwrap();
     assert!(asof.approximate, "the imported version is approximate");
     assert!(file_has(&fx.db, TEXT.as_bytes()) || file_has(&wal_of(&fx.db), TEXT.as_bytes()));
@@ -1102,10 +1159,17 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     assert_eq!(still_imported, imported_versions, "the history stays");
     drop(c);
     assert!(!file_has(&fx.db, TEXT.as_bytes()), "work.db holds the text");
-    assert!(!file_has(&wal_of(&fx.db), TEXT.as_bytes()), "work.db-wal holds the text");
+    assert!(
+        !file_has(&wal_of(&fx.db), TEXT.as_bytes()),
+        "work.db-wal holds the text"
+    );
     // The pre-migration copy is a kept copy, and it still holds the text.
     let pre7 = fx.opts.backup_dir.join(&fx.backups()[0]);
-    assert!(fx.backups()[0].starts_with("work-pre7-"), "{:?}", fx.backups());
+    assert!(
+        fx.backups()[0].starts_with("work-pre7-"),
+        "{:?}",
+        fx.backups()
+    );
     let kept = excise::kept_copies(&fx.db);
     assert!(kept.contains(&pre7), "{kept:?}");
     assert_eq!(excise::holding(&kept, &report.needles), vec![pre7]);

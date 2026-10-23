@@ -332,11 +332,11 @@ fn run(
         }
     }
     for &n in &entities {
-        let (title, body): (Option<String>, Option<String>) = tx.sql().query_row(
-            "select title, body from entity where n = ?1",
-            [n],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
+        let (title, body): (Option<String>, Option<String>) =
+            tx.sql()
+                .query_row("select title, body from entity where n = ?1", [n], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?;
         // Put again (delete, insert), then one `optimize` below: the old versions' tombstoned tokens leave the file.
         fts_put(tx, n, title.as_deref(), body.as_deref())?;
         tx.sql()
@@ -694,11 +694,9 @@ mod tests {
         .await
         .unwrap();
         let (status, title): (String, String) = ro(&path)
-            .query_row(
-                "select status, title from entity where n = ?1",
-                [n],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row("select status, title from entity where n = ?1", [n], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         assert_eq!((status, title), (marker(r2.tx), m));
         // Unknown fields, an empty reason and an agent are refused before anything is written.
@@ -720,9 +718,16 @@ mod tests {
             .unwrap_err();
             assert!(matches!(e, WriteError::Refused(_)), "{e:?}");
         }
-        let e = excise(&h, user(), Target::Entity("task:none".into()), None, "r".into(), vec![])
-            .await
-            .unwrap_err();
+        let e = excise(
+            &h,
+            user(),
+            Target::Entity("task:none".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap_err();
         assert_eq!(e, WriteError::Refused("no entity task:none".into()));
         stop(w).await;
     }
@@ -732,7 +737,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (w, h, path) = spawn(&dir);
         let c = canary();
-        let (n, _) = create(&h, agent(), task("task:a", "a plain title", "b1", json!({}))).await;
+        let (n, _) = create(
+            &h,
+            agent(),
+            task("task:a", "a plain title", "b1", json!({})),
+        )
+        .await;
         let t = change(&h, agent(), n, body(format!("b2 {c}"))).await;
         change(
             &h,
@@ -751,14 +761,22 @@ mod tests {
         let rows = stored(&path, n);
         let bodies: Vec<Option<String>> = rows.iter().map(|r| r.2.clone()).collect();
         // ver 1 (b1) stays; ver 2 (written by t) and ver 3 (the status change, body still t's) are blanked.
-        assert_eq!(bodies, [Some("b1".into()), Some(m.clone()), Some(m.clone())]);
+        assert_eq!(
+            bodies,
+            [Some("b1".into()), Some(m.clone()), Some(m.clone())]
+        );
         assert!(rows.iter().all(|r| r.1.as_deref() == Some("a plain title")));
         let status: String = ro(&path)
             .query_row("select status from entity where n = ?1", [n], |r| r.get(0))
             .unwrap();
         assert_eq!(status, "done", "a field the tx did not write stays");
         assert_eq!((report.entities, report.versions), (1, 2));
-        assert!(report.needles.iter().any(|x| x == format!("b2 {c}").as_bytes()));
+        assert!(
+            report
+                .needles
+                .iter()
+                .any(|x| x == format!("b2 {c}").as_bytes())
+        );
         let e = excise(&h, user(), Target::Tx(9999), None, "r".into(), vec![])
             .await
             .unwrap_err();
@@ -794,16 +812,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (w, h, path) = spawn(&dir);
         let c = canary();
-        let (n, _) = create(&h, agent(), task("task:a", &c, &format!("x {c}"), json!({}))).await;
+        let (n, _) = create(
+            &h,
+            agent(),
+            task("task:a", &c, &format!("x {c}"), json!({})),
+        )
+        .await;
         change(&h, agent(), n, body(format!("y {c}"))).await;
-        create(&h, agent(), task("task:b", "another one", "other words", json!({}))).await;
-        assert!(contains(&fts_bytes(&path), c.as_bytes()), "the token is indexed");
+        create(
+            &h,
+            agent(),
+            task("task:b", "another one", "other words", json!({})),
+        )
+        .await;
+        assert!(
+            contains(&fts_bytes(&path), c.as_bytes()),
+            "the token is indexed"
+        );
         assert_eq!(find_fts(&ro(&path), &c, 10).unwrap().len(), 1);
-        excise(&h, user(), Target::Entity("task:a".into()), None, "r".into(), vec![])
-            .await
-            .unwrap();
+        excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
         assert!(find_fts(&ro(&path), &c, 10).unwrap().is_empty());
-        assert!(!contains(&fts_bytes(&path), c.as_bytes()), "no token left in the index");
+        assert!(
+            !contains(&fts_bytes(&path), c.as_bytes()),
+            "no token left in the index"
+        );
         // The marker is indexed in its place, and the other entity is still found.
         let hits = find_fts(&ro(&path), "excised", 10).unwrap();
         assert_eq!(hits.iter().map(|h| h.n).collect::<Vec<_>>(), [n]);
@@ -823,9 +864,16 @@ mod tests {
         })
         .await
         .unwrap();
-        excise(&h, user(), Target::Entity("task:a".into()), None, "r".into(), vec![])
-            .await
-            .unwrap();
+        excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
         let left: Vec<i64> = {
             let c = ro(&path);
             let mut st = c.prepare("select n from entity_vec order by n").unwrap();
@@ -834,7 +882,11 @@ mod tests {
                 .map(|r| r.unwrap())
                 .collect()
         };
-        assert_eq!(left, [m], "the excised entity's vector is gone; the embedder makes it again");
+        assert_eq!(
+            left,
+            [m],
+            "the excised entity's vector is gone; the embedder makes it again"
+        );
         stop(w).await;
     }
 
@@ -897,14 +949,26 @@ mod tests {
         };
         assert_eq!(txs, [report.tx, report.tx], "in the excise's own tx");
         // A failing blanker fails the whole excise: nothing is blanked, nothing logged.
-        let (m, _) = create(&h, agent(), task("task:b", "keep this title", "b", json!({}))).await;
+        let (m, _) = create(
+            &h,
+            agent(),
+            task("task:b", "keep this title", "b", json!({})),
+        )
+        .await;
         let failing: Arc<dyn Blanker> = Arc::new(Probe {
             seen: Default::default(),
             fail: true,
         });
-        let e = excise(&h, user(), Target::Entity("task:b".into()), None, "r".into(), vec![failing])
-            .await
-            .unwrap_err();
+        let e = excise(
+            &h,
+            user(),
+            Target::Entity("task:b".into()),
+            None,
+            "r".into(),
+            vec![failing],
+        )
+        .await
+        .unwrap_err();
         assert_eq!(e, WriteError::Refused("the probe failed".into()));
         let c = ro(&path);
         let title: String = c
@@ -935,9 +999,11 @@ mod tests {
         .await
         .unwrap();
         let row: (i64, String, String, String) = ro(&path)
-            .query_row("select tx, target, fields, reason from excise_log", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
+            .query_row(
+                "select tx, target, fields, reason from excise_log",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
             .unwrap();
         assert_eq!(
             row,
@@ -960,7 +1026,10 @@ mod tests {
         for text in [format!("{row:?}"), tx_row, shown] {
             assert!(!text.contains(&c), "{text}");
         }
-        assert!(report.needles.iter().any(|x| x == c.as_bytes()), "kept in memory only");
+        assert!(
+            report.needles.iter().any(|x| x == c.as_bytes()),
+            "kept in memory only"
+        );
         stop(w).await;
     }
 
@@ -986,9 +1055,16 @@ mod tests {
         let mut other = agent();
         other.note = Some("an unrelated note".into());
         create(&h, other, task("task:b", "b title here", "b", json!({}))).await;
-        let report = excise(&h, user(), Target::Entity("task:a".into()), None, "r".into(), vec![])
-            .await
-            .unwrap();
+        let report = excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
         let m = marker(report.tx);
         assert_eq!(report.txs_blanked, 2);
         let c2 = ro(&path);
@@ -998,13 +1074,26 @@ mod tests {
             })
             .unwrap()
         };
-        assert_eq!(row(first.tx), (Some(m.clone()), None), "an unset note stays unset");
+        assert_eq!(
+            row(first.tx),
+            (Some(m.clone()), None),
+            "an unset note stays unset"
+        );
         assert_eq!(row(t2), (None, Some(m.clone())));
         let unrelated: String = c2
-            .query_row("select note from tx where note like 'an unrelated%'", [], |r| r.get(0))
+            .query_row(
+                "select note from tx where note like 'an unrelated%'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(unrelated, "an unrelated note");
-        assert!(report.needles.iter().any(|x| x == format!("because {c}").as_bytes()));
+        assert!(
+            report
+                .needles
+                .iter()
+                .any(|x| x == format!("because {c}").as_bytes())
+        );
         stop(w).await;
     }
 
@@ -1018,9 +1107,16 @@ mod tests {
         };
         let first = h.write(keyed("agent:s1", "r-1"), make()).await.unwrap();
         assert_eq!(first.value.as_deref(), Some("a secret title"));
-        excise(&h, user(), Target::Entity("task:a".into()), None, "r".into(), vec![])
-            .await
-            .unwrap();
+        excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
         let again = h.write(keyed("agent:s1", "r-1"), make()).await.unwrap_err();
         assert_eq!(
             again,
@@ -1041,9 +1137,16 @@ mod tests {
         // A quote in the title: an export holds it JSON-escaped.
         let title = format!("say \"{c}\"");
         create(&h, agent(), task("task:a", &title, "b", json!({}))).await;
-        let report = excise(&h, user(), Target::Entity("task:a".into()), None, "r".into(), vec![])
-            .await
-            .unwrap();
+        let report = excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
         let data = dir.path();
         let backup = data.join("backup");
         let export = data.join("export").join("e1");
@@ -1057,9 +1160,17 @@ mod tests {
         fs::write(data.join("work.db.schema5"), title.as_bytes()).unwrap();
         // What `restore-pre7` moved aside: a schema-7 file and its WAL.
         fs::write(data.join("work.db.schema7-1761000100"), b"no text").unwrap();
-        fs::write(data.join("work.db.schema7-1761000100-wal"), title.as_bytes()).unwrap();
+        fs::write(
+            data.join("work.db.schema7-1761000100-wal"),
+            title.as_bytes(),
+        )
+        .unwrap();
         let escaped = serde_json::to_string(&title).unwrap();
-        fs::write(export.join("entities.jsonl"), format!("{{\"title\":{escaped}}}\n")).unwrap();
+        fs::write(
+            export.join("entities.jsonl"),
+            format!("{{\"title\":{escaped}}}\n"),
+        )
+        .unwrap();
         fs::write(export.join("links.jsonl"), b"").unwrap();
         let files = kept_copies(&path);
         assert_eq!(
@@ -1109,7 +1220,10 @@ mod tests {
         let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         assert!(!tmp_of(&file).exists());
-        assert!(!redact(&file, &needles, "[excised 9]").unwrap(), "nothing left");
+        assert!(
+            !redact(&file, &needles, "[excised 9]").unwrap(),
+            "nothing left"
+        );
     }
 
     #[tokio::test]
@@ -1118,7 +1232,12 @@ mod tests {
         let (w, h, path) = spawn(&dir);
         let c = canary();
         // A keyed write whose answer is the canary title.
-        let new = task("task:a", &format!("t {c}"), &format!("b1 {c}"), json!({ "k": c }));
+        let new = task(
+            "task:a",
+            &format!("t {c}"),
+            &format!("b1 {c}"),
+            json!({ "k": c }),
+        );
         h.write(keyed("agent:s1", "r-1"), move |tx: &mut Tx<'_>| {
             Ok(entity::create(tx, new)?.title)
         })
@@ -1133,10 +1252,20 @@ mod tests {
         change(&h, noted, n, body(format!("b2 {c}"))).await;
         change(&h, agent(), n, body(format!("b3 {c}"))).await;
         let both = |path: &Path| [bytes(path), bytes(&wal(path))].concat();
-        assert!(contains(&both(&path), c.as_bytes()), "the canary is in the file first");
-        excise(&h, user(), Target::Entity("task:a".into()), None, "r".into(), vec![])
-            .await
-            .unwrap();
+        assert!(
+            contains(&both(&path), c.as_bytes()),
+            "the canary is in the file first"
+        );
+        excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
         let report = scrub(&h).await.unwrap();
         assert_eq!(
             report,
@@ -1146,8 +1275,14 @@ mod tests {
                 blocked_by: None
             }
         );
-        assert!(!contains(&bytes(&path), c.as_bytes()), "work.db holds the canary");
-        assert!(!contains(&bytes(&wal(&path)), c.as_bytes()), "work.db-wal holds the canary");
+        assert!(
+            !contains(&bytes(&path), c.as_bytes()),
+            "work.db holds the canary"
+        );
+        assert!(
+            !contains(&bytes(&wal(&path)), c.as_bytes()),
+            "work.db-wal holds the canary"
+        );
         stop(w).await;
     }
 
@@ -1162,12 +1297,22 @@ mod tests {
         let _: i64 = reader
             .query_row("select count(*) from entity", [], |r| r.get(0))
             .unwrap();
-        excise(&h, user(), Target::Entity("task:a".into()), None, "r".into(), vec![])
-            .await
-            .unwrap();
+        excise(
+            &h,
+            user(),
+            Target::Entity("task:a".into()),
+            None,
+            "r".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
         let report = scrub(&h).await.unwrap();
         assert!(!report.wal_truncated);
-        assert_eq!(report.blocked_by, Some(crate::graph::writer::Blocker::Readers));
+        assert_eq!(
+            report.blocked_by,
+            Some(crate::graph::writer::Blocker::Readers)
+        );
         let shown = serde_json::to_value(&report).unwrap();
         assert_eq!(shown["wal_truncated"], json!(false));
         assert_eq!(shown["blocked_by"], json!("readers"));
@@ -1175,7 +1320,10 @@ mod tests {
         reader.execute_batch("commit").unwrap();
         drop(reader);
         let again = scrub(&h).await.unwrap();
-        assert!(again.wal_truncated && again.blocked_by.is_none(), "{again:?}");
+        assert!(
+            again.wal_truncated && again.blocked_by.is_none(),
+            "{again:?}"
+        );
         stop(w).await;
     }
 }
