@@ -906,7 +906,7 @@ mod tests {
             .into_iter()
             .map(|r| r.sid)
             .collect();
-        assert_eq!(sids, [a.sid.clone()]);
+        assert_eq!(sids, std::slice::from_ref(&a.sid));
         // the socket answers MCP at once (no challenge)
         let c = tokio::net::UnixStream::connect(&a.socket).await.unwrap();
         let (r, mut w) = c.into_split();
