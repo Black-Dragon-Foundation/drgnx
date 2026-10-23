@@ -11,6 +11,7 @@ use rusqlite::params_from_iter;
 use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 
+use super::hist;
 use super::link::Direction;
 use super::pool::ReadPool;
 use super::schema::SENTINEL;
@@ -236,12 +237,29 @@ fn col(d: Direction) -> &'static str {
     if d == Direction::In { "dst" } else { "src" }
 }
 
-/// Entity rows for IDS (those that exist), chunked.
-fn rows_of(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec<Row>> {
+/// Entity rows for IDS: those that exist and are not retired (search's rule), chunked. AS_OF reads each entity as
+/// it was at that tx through history ([`hist::entity_as_of`]): one created later or retired by then is left out.
+fn rows_of(conn: &Connection, ids: &[i64], as_of: Option<i64>) -> rusqlite::Result<Vec<Row>> {
     let mut out = Vec::new();
+    if let Some(t) = as_of {
+        for &n in ids {
+            if let Some(a) = hist::entity_as_of(conn, n, t)?
+                && a.ent.retired_tx.is_none()
+            {
+                out.push(Row {
+                    n: a.ent.n,
+                    project: a.ent.project,
+                    kind: a.ent.kind,
+                    id: a.ent.id,
+                    title: a.ent.title,
+                });
+            }
+        }
+        return Ok(out);
+    }
     for chunk in ids.chunks(CHUNK) {
         let sql = format!(
-            "select n, project, kind, id, title from entity where n in ({})",
+            "select n, project, kind, id, title from entity where n in ({}) and retired_tx is null",
             marks(chunk.len())
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -339,7 +357,7 @@ fn level(conn: &Connection, q: &Level) -> rusqlite::Result<LevelOut> {
     edges.sort_by(|a, b| (a.src, &a.kind, a.dst).cmp(&(b.src, &b.kind, b.dst)));
     edges.dedup();
     reached.sort_unstable();
-    let rows = rows_of(conn, &reached)?;
+    let rows = rows_of(conn, &reached, q.as_of)?;
     Ok(LevelOut { hot, edges, rows })
 }
 
@@ -388,7 +406,8 @@ pub async fn neighbors(
         out.truncated = Some(Truncated::Scope);
         return Ok(out);
     }
-    let root = match guarded(pool, end, move |c| rows_of(c, &[walk.from])).await {
+    let (from, as_of) = (walk.from, walk.as_of);
+    let root = match guarded(pool, end, move |c| rows_of(c, &[from], as_of)).await {
         Ok(rows) => rows,
         Err(Stop::Late) => {
             out.truncated = Some(Truncated::Deadline);
@@ -536,7 +555,8 @@ async fn path_stats(
         return Ok((out, stats));
     }
     let ends = vec![q.from, q.to];
-    let rows = match guarded(pool, end, move |c| rows_of(c, &ends)).await {
+    let as_of = q.as_of;
+    let rows = match guarded(pool, end, move |c| rows_of(c, &ends, as_of)).await {
         Ok(r) => r,
         Err(Stop::Late) => {
             out.truncated = Some(Truncated::Deadline);
@@ -1142,5 +1162,98 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ids(&o), vec![1, 2, 3]);
+    }
+
+    /// Entity N: version 1 (title OLD) from tx 1 until tx AT, then version 2 written at AT: a new title, or retired.
+    fn second_version(f: &Fx, n: i64, at: i64, retire: bool) {
+        f.conn
+            .execute(
+                "insert into entity_hist (n, ver, tx_from, tx_to, kind, project, title, data, field_tx)
+                 values (?1, 1, 1, ?2, 'note', 1, 'old', '{}', '{}')",
+                rusqlite::params![n, at],
+            )
+            .unwrap();
+        let sql = if retire {
+            "update entity set ver = 2, updated_tx = ?2, retired_tx = ?2, title = 'old' where n = ?1"
+        } else {
+            "update entity set ver = 2, updated_tx = ?2, title = 'new' where n = ?1"
+        };
+        f.conn.execute(sql, rusqlite::params![n, at]).unwrap();
+    }
+
+    fn title_of(o: &WalkOut, n: i64) -> Option<String> {
+        o.nodes.iter().find(|x| x.n == n).unwrap().title.clone()
+    }
+
+    #[tokio::test]
+    async fn an_as_of_walk_reads_entities_as_they_were() {
+        let f = fx(1);
+        f.ents(1, 3);
+        second_version(&f, 2, 5, false);
+        second_version(&f, 3, 2, true);
+        f.link(1, "x", 2);
+        f.link(1, "x", 3);
+        let mut w = walk(1, 1);
+        w.as_of = Some(1);
+        let o = neighbors(&f.pool, w.clone(), &Open, Budget::default())
+            .await
+            .unwrap();
+        assert_eq!(ids(&o), vec![1, 2, 3], "3 was not retired yet");
+        assert_eq!(title_of(&o, 2).as_deref(), Some("old"));
+        w.as_of = Some(3);
+        let o = neighbors(&f.pool, w, &Open, Budget::default())
+            .await
+            .unwrap();
+        assert_eq!(ids(&o), vec![1, 2], "3 was retired at tx 2");
+        assert_eq!(title_of(&o, 2).as_deref(), Some("old"));
+        let q = PathQ {
+            from: 1,
+            to: 3,
+            kinds: vec!["x".into()],
+            max_depth: 2,
+            as_of: Some(1),
+        };
+        let o = path(&f.pool, q, &Open, Budget::default()).await.unwrap();
+        assert_eq!(ids(&o), vec![1, 3]);
+        assert_eq!(title_of(&o, 3).as_deref(), Some("old"));
+        let o = neighbors(&f.pool, walk(1, 1), &Open, Budget::default())
+            .await
+            .unwrap();
+        assert_eq!(title_of(&o, 2).as_deref(), Some("new"));
+    }
+
+    #[tokio::test]
+    async fn a_current_walk_never_surfaces_a_retired_entity() {
+        let f = fx(1);
+        f.ents(1, 4);
+        second_version(&f, 3, 2, true);
+        f.link(1, "x", 2);
+        f.link(2, "x", 3);
+        f.link(3, "x", 4);
+        let o = neighbors(&f.pool, walk(1, 3), &Open, Budget::default())
+            .await
+            .unwrap();
+        assert_eq!(ids(&o), vec![1, 2]);
+        assert!(o.links.iter().all(|l| l.src != 3 && l.dst != 3));
+        assert_eq!(o.hidden, 0, "retired is gone, not hidden");
+        let o = neighbors(&f.pool, walk(3, 1), &Open, Budget::default())
+            .await
+            .unwrap();
+        assert!(o.nodes.is_empty(), "a retired root answers nothing");
+        let q = |from, to| PathQ {
+            from,
+            to,
+            kinds: vec!["x".into()],
+            max_depth: 4,
+            as_of: None,
+        };
+        let o = path(&f.pool, q(1, 4), &Open, Budget::default())
+            .await
+            .unwrap();
+        assert!(o.nodes.is_empty(), "no path through a retired node");
+        let o = path(&f.pool, q(1, 3), &Open, Budget::default())
+            .await
+            .unwrap();
+        assert!(o.nodes.is_empty(), "no path to a retired node");
     }
 }

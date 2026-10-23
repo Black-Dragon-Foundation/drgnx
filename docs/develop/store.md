@@ -137,7 +137,11 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
   link where src in (…)` (or `dst in …` for incoming; both for `Both`) in chunks of 500 ids, with the `kind in (…)`
   filter and the live form (`tx_to = SENTINEL`) or the as-of form (`tx_from <= T and tx_to > T`), then the entity
   rows (`n, project, kind, id, title`) of the nodes reached that the walk does not have yet. The visited set holds
-  nodes; every link between two nodes of the answer is listed once. As-of walks read the current entity rows.
+  nodes; every link between two nodes of the answer is listed once.
+- **Retired and as-of.** A current walk reads only entities with `retired_tx is null` (search's rule): a retired
+  entity is neither answered, followed, counted in `hidden` nor named by a link, and a retired root or path end
+  answers nothing. An as-of walk reads each entity through `hist::entity_as_of` (its fields at that tx; one created
+  later, or retired by then, is left out) and links with `links_as_of`'s `tx_from <= T < tx_to`.
 - **Path.** Bidirectional: the forward side follows outgoing links from `from`, the backward side incoming links
   from `to`. It expands the smaller frontier a whole level at a time and, once a level meets the other side, answers
   the shortest meeting. No path: an empty answer, with `truncated: depth` when `max_depth` stopped it.
