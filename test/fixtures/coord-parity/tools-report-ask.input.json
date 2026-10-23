@@ -1,0 +1,17 @@
+{
+  "setup": [
+    "insert into job values ('j1', 'Ask', null, null, 'running', 1.0, null)",
+    "insert into jtask (id, job, n, title, role, status, agent, lease_until) values ('j1#1', 'j1', 1, 'One', 'implement', 'claimed', 's-3', 0.0)"
+  ],
+  "clock": [],
+  "tables": ["message", "jtask"],
+  "calls": [
+    {"tool": "ask_user", "now": 300.5, "identity": {"agent": "s-3", "job": "j1", "task": "j1#1"},
+     "args": {"question": "Which way?\nOptions: a | b\nmore", "options": ["left", " right\n"]}},
+    {"tool": "ask_user", "now": 301.5, "identity": {"agent": "s-3", "job": "j1", "task": "j1#1"}, "args": {"question": "x", "options": ["a|b"]}},
+    {"tool": "ask_user", "now": 302.5, "identity": {"agent": "s-3", "job": "j1", "task": "j1#1"}, "args": {"question": "   "}},
+    {"tool": "ask_user", "now": 303.5, "identity": {"agent": "s-3", "job": "j1", "task": "j1#1"},
+     "args": {"question": "__REP:q:2100__", "options": "one\n\ntwo", "task": "mine"}},
+    {"tool": "ask_user", "now": 304.5, "identity": {"agent": "s-3", "job": "j1", "task": "j1#1"}, "args": {"question": "again?"}}
+  ]
+}

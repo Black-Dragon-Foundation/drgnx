@@ -10,9 +10,13 @@
 ;; form "__REP:C:N__" stand for the character C repeated N times (long summaries, big data).  norn's
 ;; tests/parity.rs replays the same input against the Rust writers and compares.
 ;; Add a function to `drgnx-parity--call' when a later task adds cases for it.
+;; A call with "tool" instead of "fn" runs one of the coordination tools (`drgnx-coord-mcp-tools') as the MCP server
+;; does, as the "identity" the call names; its result is {"text": T} or {"error": T}.  Those cases are named
+;; tools-*.input.json, and norn's tests/tools.rs replays them against the Rust tools.
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-coord)
+(require 'drgnx-coord-mcp)
 
 (defvar drgnx-parity--dir (file-name-directory (or load-file-name buffer-file-name)))
 
@@ -83,6 +87,44 @@ list an array, nil null (an empty :changes, an array)."
 
 (defvar drgnx-parity--now nil "The time `float-time' answers during a call that names one (\"now\" in the case).")
 
+(defun drgnx-parity--env (name value)
+  "NAME=VALUE for `process-environment', or NAME alone (unset there) when VALUE is nil."
+  (if value (concat name "=" value) name))
+
+(defun drgnx-parity--tool-args (v)
+  "V, a tool call's arguments as the case file was read (arrays as lists), as the MCP server parses them: arrays as
+vectors."
+  (cond ((and (consp v) (keywordp (car v)))
+         (cl-loop for (k x) on v by #'cddr append (list k (drgnx-parity--tool-args x))))
+        ((consp v) (vconcat (mapcar #'drgnx-parity--tool-args v)))
+        (t v)))
+
+(defun drgnx-parity--tool (call)
+  "Run CALL's coordination tool (\"tool\", \"args\") as `drgnx-mcp-serve' does: {\"text\": T} or {\"error\": T}.
+CALL's \"identity\" is {agent, job?, task?} for one of drgnx's sessions, {outside: KIND, tag: PID-HASH} for an agent
+outside drgnx, or null (it only reads).  No hub answers (`list_agents' falls back to the job's tasks) and none is told."
+  (let* ((who (plist-get call :identity))
+         (kind (plist-get who :outside))
+         (process-environment
+          (append (list (drgnx-parity--env "DRGNX_AGENT" (plist-get who :agent))
+                        (drgnx-parity--env "DRGNX_AGENT_KIND" kind)
+                        (drgnx-parity--env "DRGNX_JOB" (plist-get who :job))
+                        (drgnx-parity--env "DRGNX_TASK" (plist-get who :task)))
+                  process-environment))
+         (drgnx-coord-mcp--parent (and kind (list :pid (string-to-number (plist-get who :tag))
+                                                  :tag (plist-get who :tag) :parent t)))
+         (tool (or (assoc (plist-get call :tool) (drgnx-coord-mcp-tools))
+                   (error "No tool %s" (plist-get call :tool))))
+         (out (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'drgnx-coord-mcp--notify-hub) #'ignore)
+              ((symbol-function 'drgnx-coord-mcp--hub-agents) (lambda () 'none)))
+      (condition-case err
+          (let ((v (funcall (plist-get (cdr tool) :call)
+                            (drgnx-parity--tool-args (drgnx-parity--expand (plist-get call :args))))))
+            (puthash "text" (if (stringp v) v (drgnx-mcp--json v)) out))
+        (error (puthash "error" (error-message-string err) out))))
+    out))
+
 (defun drgnx-parity--table (db table)
   "TABLE's rows in rowid order (`meta' by key), every column."
   (let ((cols (mapcar #'cadr (sqlite-select db (format "pragma table_info(%s)" table)))))
@@ -112,7 +154,11 @@ list an array, nil null (an empty :changes, an array)."
          (dir (make-temp-file "parity" t))
          (orig (symbol-function 'float-time))
          (drgnx-work-db--handles nil)
-         (drgnx-work-db--read-handles nil))
+         (drgnx-work-db--read-handles nil)
+         ;; each case is a server started afresh: no reports counted, no home found yet
+         (drgnx-coord-mcp--reports (make-hash-table :test #'equal))
+         (drgnx-coord-mcp--told (make-hash-table :test #'equal))
+         (drgnx-coord-mcp--home nil))
     (cl-letf (((symbol-function 'drgnx-data-dir) (lambda () dir))
               ((symbol-function 'float-time)
                (lambda (&optional time)
@@ -125,13 +171,14 @@ list an array, nil null (an empty :changes, an array)."
                         (mapcar (lambda (c)
                                   ;; a call that names "now" sees that time at every `float-time'; others take the clock
                                   (let ((drgnx-parity--now (plist-get c :now)))
-                                    (condition-case err
-                                        (drgnx-parity--json (drgnx-parity--call (plist-get c :fn)
-                                                                                (drgnx-parity--expand (plist-get c :args))))
-                                      ;; a refused call: {"signal": MESSAGE}
-                                      (error (let ((h (make-hash-table :test 'equal)))
-                                               (puthash "signal" (error-message-string err) h)
-                                               h)))))
+                                    (if (plist-get c :tool) (drgnx-parity--tool c)
+                                      (condition-case err
+                                          (drgnx-parity--json (drgnx-parity--call (plist-get c :fn)
+                                                                                  (drgnx-parity--expand (plist-get c :args))))
+                                        ;; a refused call: {"signal": MESSAGE}
+                                        (error (let ((h (make-hash-table :test 'equal)))
+                                                 (puthash "signal" (error-message-string err) h)
+                                                 h))))))
                                 (plist-get case :calls))))
              (tables (make-hash-table :test 'equal)))
         ;; `event' and `meta' always, then any other table the case names ("tables")

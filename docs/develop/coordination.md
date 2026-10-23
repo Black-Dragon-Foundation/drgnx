@@ -293,6 +293,49 @@ and its answer is then nil. No tool asks anything.
 **The command** M11c-2's agent settings pages write is `(drgnx-coord-mcp-outside-spec KIND)` → `(:type stdio
 :command "<checkout>/bin/drgnx" :args ("coord" "mcp" "--kind" KIND))`.
 
+### The tools in Ratatoskr (`runtime/crates/norn/src/tools`)
+
+Ratatoskr serves the same tools in its own process, on `mimir`, one `Coord` per hub (the store, the hub, the report
+limit, the clock). Each tool is the Lisp tool of the same name, ported with the Lisp as the oracle: the rules, the
+answers (JSON in the Lisp's key order; an empty list is `null`, as the Lisp's nil) and the error texts are the
+Lisp's. `tests/tools.rs` replays the cases `gen.el` makes by running the Lisp tools
+(`test/fixtures/coord-parity/tools-*.json`). `report.rs` has `hello`, `report_edit`, `report_test`, `ask_user` and
+`list_agents`; `job.rs` and `read.rs` have the rest.
+
+**Who an agent is.** A call's context is `(Arc<Coord>, Identity)`, and the identity comes from the connection, never
+from an argument or an environment variable (`DRGNX_AGENT` is never read):
+- `Identity::Session {agent, job, task, home}`: a session's own `mcp.sock` (hub.md, "Sessions and their sockets"). Its
+  job and task are what `DRGNX_JOB` and `DRGNX_TASK` were; `home` is the folder the session started in, the Lisp
+  server's `default-directory`.
+- `Identity::Outside {id, kind, home}`: an outside bridge. `Identity::outside(KIND, PID, START, HOME)` makes
+  `ext:KIND:PID-HASH` from the bridge's peer process, as the Lisp did for itself: PID the agent's process, HASH 6 hex
+  of sha1 over its start time to the second (`ext:KIND:PID` without one; `hello` then says so in `note`). An outside
+  agent has no job and no task. With no `home` (a bridge that named no folder), `hello` and `report_edit` answer "No
+  folder is known for you".
+- `Identity::None`: reads only; a write answers "This server has no agent identity …".
+
+**The guard.** Every tool is a `CoordTool` wrapped by `guard::guarded`, so none can skip it:
+- the identity is checked on every call: `user` in any case, or an id that is not plain, refuses every tool;
+- an argument named `agent`, `from`, `sender`, `as` or `identity` is refused twice: by the tool's check (`agent:
+  tools never take an identity`, a tool error with its path, before the typed check that would also refuse it as an
+  unknown key) and again in the call, with the Lisp text (`No tool takes `agent': you are …`).
+
+**The report limit** (`guard::REPORT_RATE`, 20 a minute per identity) counts in the hub's memory across all of an
+agent's connections; a held report writes nothing. The `rate` card and the store's `rate-told:ID` stamp are written in
+one transaction, at most once an hour per identity, also across a hub restart. A failed write tells nobody, as in
+the Lisp.
+
+**git** (`hello`'s worktree, base and branch; `report_edit`'s root): the root-owned git of `draugr::git` with its
+overrides (no fsmonitor, no hook, no pager, no `ext::`, `--no-optional-locks`), in a minimal environment
+(`PATH`, `HOME`, the locale, `TMPDIR`), stdin closed, killed after 3 s (manager's call 10). The worktree is looked up
+on each call; the Lisp server found it once.
+
+**Where Rust and Lisp differ, on purpose:**
+- an identity's error texts name the agent's id instead of `DRGNX_AGENT`;
+- a missing or ill-typed argument is a tool error with its path (contract Task 10, amended), before the tool runs;
+- `ask_user`'s message and its task's `needs-input` commit in one transaction, and so do `hello`'s registration and its
+  `start` event (the Lisp made two).
+
 ## What this does not protect against
 
 The same Unix user is no security boundary. Any process running as the user can get round the coordination
@@ -442,3 +485,8 @@ or flooding — `drgnx-coord-mcp/outside-agents-cannot-forge-or-flood`),
 decisions, leases); the job tests are listed in [jobs.md](../guide/jobs.md#tests). The mock agent's `coord TOOL JSON` prompt
 calls a tool of the server it was given; `[drgnx task ID]` does a task, `[drgnx review ID]` reviews one
 (`MOCK_ACP_VERDICT=fail`), `MOCK_ACP_RATE_LIMIT` answers every prompt with a 429.
+
+The Rust tools: `runtime/crates/norn/tests/tools.rs` (identity names refused on every tool, `user` never an
+identity, no identity reads only, outside agents kept off the job tools, the report limit and its card, path rules,
+`hello`'s cwd, a planted git hook and fsmonitor that never run, and the Lisp tools' cases replayed) and the unit tests
+of `norn::tools::{identity, guard, report}`.
