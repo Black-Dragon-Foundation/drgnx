@@ -263,9 +263,93 @@ function of the file that owns it; until that file is filled, the function does 
 Safe mode (`drgnx safe`, `DRGNX_SAFE`) runs step 2, then `drgnx-settings-apply-global :owned-only t` (drgnx's own
 settings only), and none of the rest.
 
-## The applier rule (Task 8)
+## The applier rule
 
-## Provenance (Task 11)
+`core/drgnx-settings-apply.el` puts drgnx's global layers into Emacs through one custom theme, `drgnx` (design
+§4.2). The theme is declared and enabled once, then taken out of `custom-enabled-themes`, as use-package does with its
+own: `(mapc #'disable-theme custom-enabled-themes)` leaves it alone. **Never `disable-theme 'drgnx`**: it does nothing
+for a theme that is not in the list, and a forced disable would reset a later `setq` to the standard value.
+
+- `(drgnx-settings-winner-p VAR)`: drgnx's layer is Emacs's winner when (1) no theme but `drgnx` has an entry in
+  VAR's `theme-value` (no `user`, `use-package`, colour theme or `changed` stash) and (2) VAR's default value is
+  `equal` to drgnx's entry, or to the standard value when drgnx has none yet. A void VAR meets rule 2; a bound
+  variable with no standard value (a plain `defvar`) does not, so it is stored, never applied (the described
+  `defvar`s of Task 31 get their own branch). Decided from Emacs's data, never from provenance: a `setq` no watcher
+  saw breaks rule 2.
+- `(drgnx-settings-push VAR VALUE)` → `applied` or `stored`. The winner goes through `custom-theme-set-variables`
+  (`custom--inhibit-theme-enable` nil): the value applies and `:set` runs, or, for a void VAR, waits in
+  `saved-value` for the `defcustom` (for a bound VAR drgnx clears that stash at once, as `custom-declare-variable`
+  does for a non-`user` theme: `saved-value` stays Customize's). A value already in effect is only recorded (no `:set` on a no-op, row C18).
+  A loser is stored in place: drgnx's entry is replaced where it stands in `theme-value` (or appended), and
+  `theme-settings` follows. When no entry holds the value in effect (and it is not the standard value), that value
+  first becomes Emacs's `changed` stash at the front, so Emacs's own recalculation (disabling another theme, Erase
+  Customization) keeps it: V3 gives `((changed 80) (drgnx 100))`. **Never `custom-push-theme` for a losing store**:
+  Emacs 31 moves an altered entry to the front (`custom.el:987`), over your Lisp. Before deciding, an option whose
+  `custom-autoload` asks for it is loaded (`custom-load-symbol`), as `custom-theme-set-variables` does (R3).
+- `(drgnx-settings-teardown VAR)`: `custom-push-theme 'theme-value VAR 'drgnx 'reset`, then
+  `custom-theme-recalc-variable` only while the value is still `equal` to drgnx's (V2); `saved-value` is cleared
+  when no theme is left. Returns non-nil when drgnx had an entry.
+- `(drgnx-settings-apply-global &key owned-only)` (start, safe mode, Turn On): reads `settings.el` with
+  `drgnx-settings-file-state`, checks each top-level entry with `drgnx-setting-check` and pushes it, in Emacs's
+  order (`custom--sort-vars`: `:set-after`, minor modes last). An entry that fails falls back alone by `:on-error`:
+  `strict` → torn down to the default; else the value this session last applied for it, else the last good copy's
+  entry when that checks. A failed file falls back the same way per setting from the last good copy. Problems go to
+  `drgnx-settings-apply-problems` and one notice (source `config`, id `settings-entries`); the failed file is the config
+  layer's own notice. `OWNED-ONLY`, `drgnx-settings-package-settings-off` and `DRGNX_PACKAGE_SETTINGS=off` apply only
+  `drgnx-setting-own-p` entries. Returns `((VAR . RESULT)…)`, RESULT `applied`, `stored`, `default`, `problem` or
+  `failed`. It binds `inhibit-interaction` and never signals: the start-up call sites have no `condition-case`.
+- `(drgnx-settings-dormant)`: the entries last applied whose variable is still void (information, never a problem).
+- `drgnx-settings-apply-durations`: seconds per push of the last apply (its `:set` included);
+  `(drgnx-settings-apply-slow &optional THRESHOLD)` lists those over 1 ms, slowest first.
+- **Settings: Turn Off Package Settings** / **Turn On Package Settings** (registry ids `settings-package-off`,
+  `settings-package-on`, in `drgnx-config-register-commands`): teardown of every applied entry drgnx does not own, or
+  `drgnx-settings-apply-global` again. `drgnx-pkg-bisect` gains the step: when the problem shows with every module
+  off, it tries once more with `DRGNX_PACKAGE_SETTINGS=off` and answers `:package-settings` when that clears it.
+- Language overrides (`(:mode …)` sections) are `core/drgnx-settings-mode.el`'s; module claims resolve with G2 in
+  `core/drgnx-settings-resolve.el` before the push.
+
+Tests: `drgnx-settings-apply/*` (`test/unit/settings-apply-test.el`) and the rows C1, C2, C3, C5, C7, C7b, C13, C14,
+C16, C17, C18, C22 (`drgnx-settings-compat/*`, `test/unit/settings-compat-global-test.el`, each in a child Emacs).
+
+## Provenance
+
+`core/drgnx-settings-prov.el` records who set a variable and explains Emacs's value (design §4.5). Provenance
+explains; it never decides what the applier does (that is the winner rule, from Emacs's own data).
+
+- **While your Lisp loads.** `drgnx--load-user-config` wraps each load in `(drgnx-settings-prov-with-load FILE
+  BODY…)`. For BODY's extent it binds `load-read-function` to a reader that notes, per `load-file-name` (an alist, so a
+  nested `load` never overwrites the outer file's entry), the line and span of the form being read; an `:around`
+  advice on `custom-declare-variable` marks a `defcustom`'s own initialisation; an `:around` advice on
+  `do-after-load-evaluation` marks after-load bodies with the form that loaded the package. Both advices are removed
+  when BODY ends. FILE joins your Lisp files.
+- **Watchers** go on the managed variables: those theme `drgnx` holds a value for and those `settings.el` names
+  (`drgnx-settings-prov-watch VAR` adds one later). Only `set` counts (`let`, `unlet`, `makunbound` are ignored);
+  an alias is resolved with `indirect-variable`. A write is recorded as (design §4.5's table, in this order):
+  `drgnx` (inside `drgnx-settings-prov-applying`, which the applier binds, or a `defcustom` taking theme `drgnx`'s
+  value), `definition` (a `defcustom`'s own value, or the first value of a void variable), `session` (after start;
+  buffer-local writes after start are not recorded), `deferred` (an after-load body), `lisp` (a file of yours: in
+  your config dir, loaded with provenance, or listed) or `package` (any other file being loaded). At most
+  `drgnx-settings-prov-max-records` per variable. A watcher never signals.
+- **`(drgnx-settings-prov VAR)`** gives the records, newest first: `(:kind :value :file :line …)`, `:line` being
+  the line the running form starts at (none for a compiled file). The static index (`drgnx-lisp-index`, through
+  aliases) confirms it: exactly one setter of VAR inside the form's span (for `deferred`, one conditional setter in
+  your files; for a compiled file, one in its `.el`) gives `:certain t` and `:setter-line`; otherwise `:certain nil`
+  and `:candidates` (`:file :line`).
+- **`(drgnx-settings-explain VAR &optional BUFFER)`** explains `VAR`'s value in BUFFER (default the current
+  buffer): `(:value :layer :kind :source :file :line :certain :candidates :layers :changed-this-session
+  :buffer-local-only)`. `:value` is always Emacs's value there; `:source` is the text the UI shows, `:layer` one of
+  `G0` `G1` `G2` `G3` `G4` `package` `theme` `session`, or in a buffer `L1` `buffer` `W1` `dir-local` `W2`
+  `file-local`. Without a local value, the winner is the newest record whose value is Emacs's (a `session` record
+  yields to an equal theme entry, a record of your Lisp inside `custom-set-variables` is Customize's), else the first
+  `theme-value` entry with that value, else the default; nothing matching is `unknown` with the index's candidates.
+  With a local value, the buffer layers are ranked `L1` < `buffer` < `W1` < `dir-local` < `W2` < `file-local`
+  and the highest one holding the value wins.
+- **`drgnx-settings-explain-functions`**: each is called with `(VAR BUFFER)` when VAR is local in BUFFER and
+  returns layer plists `(:layer ID :value V :file F :line N :source TEXT …)`; language overrides add `L1`, the
+  workspace files `W1` and `W2`.
+- Tests: `drgnx-settings-prov/*` (`test/unit/settings-prov-test.el`) and rows C1b, C6, C23
+  (`test/unit/settings-compat-prov-test.el`), each in a child Emacs. The explained winner is always `symbol-value`
+  (`drgnx-settings-prov/explained-winner-is-symbol-value`, and `drgnx-settings-test-check-row` in every row).
 
 ## The Lisp index
 

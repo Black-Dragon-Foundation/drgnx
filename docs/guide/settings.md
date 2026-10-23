@@ -66,9 +66,52 @@ an agent with a grant), it changes as little as it can:
 
 ## Editing a value (Task 27)
 
-## Who wins (Task 8)
+## Who wins
 
-## Where a value comes from (Task 11)
+Your Lisp wins. At start drgnx applies `settings.el` right after your packages are activated and before `custom.el`,
+so `custom.el` (what Customize saved), `use-package :custom` and the `setq`s in `config.el` and your Lisp files all
+come later and win, as they would in Emacs without drgnx.
+
+- **A value in `settings.el` for a package that is not loaded yet** waits and applies when the package loads (at its
+  `defcustom`, with the package's own setter). drgnx never loads a package for an ordinary setting.
+- **A minor mode's variable** (`savehist-mode`, `display-time-mode`) loads its package when it is applied, exactly
+  as the same entry in `custom.el` does: turning the mode on needs its code.
+- **A change you make in Settings while Emacs runs** applies at once only when nothing else set that variable since:
+  no `setq`, `setopt`, Customize, `use-package :custom` or colour theme. Otherwise it is saved in `settings.el` and
+  kept for when it can apply (the row says who sets the variable instead), and the value in effect stays.
+- **Customize** sees drgnx's values: `M-x customize-variable` shows them as set by a theme ("THEMED"), and
+  `describe-variable` shows the original value.
+- **A value that is wrong for its variable** (text where a number belongs) is skipped alone: the variable keeps its
+  last good value from `settings.el` (or its default, for the agent and sandbox settings), and the problem names the
+  line. When `settings.el` does not read at all (a missing parenthesis), every setting falls back the same way; the
+  file's problem names the line and column.
+- **A variable nobody defines** (a package you have not installed) keeps its entry; it applies when the package
+  arrives.
+
+## Where a value comes from
+
+drgnx tells you where each value comes from, down to the file and line, and it says when it is not sure. It
+explains the value Emacs has; it never works out a value of its own.
+
+- **The layers, lowest first:** the package's default, a drgnx module, Settings (`settings.el:14`), Customize
+  (`custom.el:9`, or "this session only"), your Lisp (`config.el:31`). In a buffer, per-language settings, your
+  mode hooks, the workspace files, `.dir-locals.el` and file-local variables come on top.
+- **Your Lisp, at its line.** While `custom.el`, `config.el` and your Lisp files load, drgnx notes the line each
+  form starts at, file by file, so a `load` inside a form never hides the outer file. `setq`, `setopt`,
+  `customize-set-variable`, `use-package :custom` and macros are all seen, because drgnx watches the variable itself.
+- **Deferred.** A `with-eval-after-load` body, or a `use-package :config` that waits for its package, runs when the
+  package loads. drgnx shows it as "your Lisp (config.el:4), deferred, first seen during config.el:8": the body's own
+  line, and the form that loaded the package. That `require` is never blamed for the value.
+- **A package's own default.** When a package defines a variable whose value Settings already holds, the value is
+  Settings', not the line that loaded the package.
+- **Line unknown.** When the line cannot be confirmed (a compiled file, a `set` through a function, several setters
+  in one form), drgnx says "your Lisp (config.el, line unknown)" and lists the lines that could have set it.
+  Settings offers no Move or Undo on such a line.
+- **Changed this session.** After start, a change by anything but Settings itself (`M-x set-variable`, a `setq` you
+  evaluate) is shown as "changed this session".
+- **Only one buffer.** A `setq` of a variable that is always per buffer (`fill-column`, `indent-tabs-mode`) in
+  `config.el` sets only the buffer that was current, and the default stays. drgnx points this out: you probably
+  meant `setq-default`.
 
 ## Changes apply at once (Task 13)
 
@@ -100,4 +143,19 @@ an agent with a grant), it changes as little as it can:
 
 ## Moving from the old files (Task 14)
 
-## Safe mode and Turn Off Package Settings (Task 8)
+## Safe mode and Turn Off Package Settings
+
+drgnx's own settings (keys, agents, the sandbox, trust, the modules you turned off) always apply. The rest of
+`settings.el` — values for packages and for Emacs itself — can be set aside:
+
+- **`drgnx safe`** applies only drgnx's own entries of `settings.el`. Package and Emacs entries wait, and no module
+  runs.
+- **Settings: Turn Off Package Settings** takes every package and Emacs value of `settings.el` out of Emacs now. Each
+  variable goes back to what it would be without `settings.el` — unless your Lisp set it since, in which case your
+  value stays. **Settings: Turn On Package Settings** applies them again now, by the same rule as a change in Settings:
+  where your Lisp or Customize set a variable since, their value stays. Both act at once; nothing restarts. Off lasts
+  until you turn it on, or until the next start.
+- **`drgnx bisect`**: when a problem still shows with every module off, it tries once more with package settings off
+  and tells you when `settings.el`'s values are the cause.
+- Loading `settings.el` by mistake (`emacs -Q -l settings.el`) changes nothing: it stops at its first word,
+  `drgnx-settings`, before any value is read.

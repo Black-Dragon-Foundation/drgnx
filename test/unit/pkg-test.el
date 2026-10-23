@@ -329,6 +329,10 @@
         (should (eq (drgnx-pkg-bisect (funcall fails-with 'x/m4) :modules-dir (concat root "mods")) 'x/m4))
         (should (<= runs 6))                                           ; halving, not one by one
         (should (eq (drgnx-pkg-bisect (lambda (_) t) :modules-dir (concat root "mods")) :not-a-module))
+        ;; every module off and still there, gone with package settings off: settings.el's step
+        (should (eq (drgnx-pkg-bisect (lambda (_) (not (equal (getenv "DRGNX_PACKAGE_SETTINGS") "off")))
+                                      :modules-dir (concat root "mods"))
+                    :package-settings))
         (should-error (drgnx-pkg-bisect (lambda (_) nil) :modules-dir (concat root "mods")) :type 'drgnx-pkg-error)
         ;; the user's modules.eld is untouched
         (should (equal (drgnx-pkg--read-file (concat root "config/modules.eld")) '(:version 1 :disabled (x/m0) :theme tango)))))))
