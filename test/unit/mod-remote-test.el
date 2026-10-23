@@ -693,6 +693,45 @@ set, the file joins the server of that start; after the start's `eglot-connect-t
             (should-not (drgnx-remote-test--managed-p d)))
         (advice-remove 'after-find-file answer-first)))))
 
+(ert-deftest drgnx-remote/an-answer-read-inside-a-tramp-call-attaches-the-project ()
+  "On macOS a long TRAMP command fills the host's terminal, and Emacs, waiting to write the rest, runs the process
+filters and the timers due on the current `timer-list', which TRAMP binds to nil for its call: jsonrpc's filter put
+the timer that hands the server's answer to eglot on that binding, where it ran inside TRAMP's call (every call eglot
+makes there is refused) or was dropped with it (the answer was lost and eglot gave up after `eglot-connect-timeout').
+Here the server's output is held back (the visit of a.py may read it too, in a write of its own) and let through in
+the first write of a TRAMP command in the visit of b.py, outside a command and with its mode set, where the test runs
+the due timers as a macOS terminal makes Emacs wait.  Both buffers are managed once the call is over, and TRAMP
+refused nothing."
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook (list #'drgnx-lang--maybe-eglot))
+           (eglot-sync-connect nil) a b (b-mode nil) (holding t) (held nil)
+           (python-mode-hook (list (lambda () (when (string-suffix-p "/b.py" buffer-file-name) (setq b-mode t)))))
+           (hold (lambda (filter proc string)                ; the server's output, kept until b.py's write
+                   (if holding (push (list proc string) held) (funcall filter proc string))))
+           (answer-inside (lambda (proc &rest _)              ; a TRAMP command's write, in b.py's visit after its mode
+                            (when (and b-mode holding (process-get proc 'tramp-vector)
+                                       (tramp-get-connection-property proc "locked"))
+                              (setq holding nil)
+                              (dolist (h (nreverse held)) (apply #'jsonrpc--process-filter h))
+                              (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p)))
+                                               :what "the timers due inside TRAMP's call")))))
+      (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+      (drgnx-lang-probe-remote root)
+      (advice-add 'jsonrpc--process-filter :around hold)
+      (advice-add 'process-send-string :before answer-inside)
+      (unwind-protect
+          (progn (let ((drgnx-lang--user-command t)) (setq a (find-file-noselect (concat root "a.py"))))
+                 (drgnx-test-wait (lambda () held) :what "the server's answer, held back")
+                 (should-not (with-current-buffer a (eglot-current-server)))   ; not handled yet
+                 (setq b (find-file-noselect (concat root "b.py"))))          ; a timer opens it
+        (advice-remove 'process-send-string answer-inside)
+        (advice-remove 'jsonrpc--process-filter hold))
+      (should-not holding)                                          ; the answer came inside a TRAMP call
+      (drgnx-remote-test--wait-for-server a)
+      (should (drgnx-remote-test--managed-p a))
+      (should (drgnx-remote-test--managed-p b))
+      (should-not (seq-find (lambda (m) (string-match-p "reentrant" m)) messages)))))
+
 (ert-deftest drgnx-remote/open-remote-manages-the-buffers-it-started-servers-for ()
   (drgnx-remote-test--with
     (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook nil) (eglot-sync-connect nil) (python-mode-hook nil) a b)
@@ -732,10 +771,12 @@ set, the file joins the server of that start; after the start's `eglot-connect-t
   (drgnx-test-with-modules '(lang/eglot) :strict t
                            (should (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
                            (should (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
-                           (should (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
-  ;; and the module's teardown took all three away
+                           (should (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode))
+                           (should (advice-member-p #'drgnx-lang--answers-on-top-level-timers 'jsonrpc--process-filter)))
+  ;; and the module's teardown took them all away
   (should-not (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
   (should-not (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
+  (should-not (advice-member-p #'drgnx-lang--answers-on-top-level-timers 'jsonrpc--process-filter))
   (should-not (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
 
 (ert-deftest drgnx-remote/an-eglot-without-the-activation-function-is-reported-once ()

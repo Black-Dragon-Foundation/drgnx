@@ -260,14 +260,27 @@ server, with no I/O, so those of other hosts stay as they are.  One buffer that 
                      (or (eq modes t) (apply #'derived-mode-p modes)))
             (with-demoted-errors "Remote: language server: %S" (eglot--maybe-activate-editing-mode))))))))
 
+(defun drgnx-lang--answers-on-top-level-timers (filter proc string)
+  "Around advice of `jsonrpc--process-filter': call FILTER with PROC and STRING on the top-level `timer-list', so the
+timers it starts to hand each message it read to eglot (the answer to initialize, say) run from the command loop.
+TRAMP binds `timer-list' to nil for each of its calls (`with-tramp-suspended-timers'), and the filter may run inside
+one: on macOS a long TRAMP command fills the host's terminal, and Emacs, waiting to write the rest, reads the other
+processes' output.  On TRAMP's binding the timers would run inside the call, where every TRAMP call eglot makes is
+refused (\"Forbidden reentrant call of Tramp\"), or be dropped with the binding when the call returns."
+  (let ((timer-list (default-toplevel-value 'timer-list)))
+    (unwind-protect (funcall filter proc string)
+      (set-default-toplevel-value 'timer-list timer-list))))
+
 (defvar drgnx-lang--eglot-warned nil "Was the missing eglot function reported?")
 
 (defun drgnx-lang--install-eglot-guards ()
   "Put the remote guards on eglot (after it is loaded): no automatic reconnect of a remote server, no attaching of
-a remote buffer from outside a command, and the attaching of a server's project after it answered."
+a remote buffer from outside a command, the attaching of a server's project after it answered, and a server's
+answers handled outside TRAMP's calls."
   (add-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
   (add-hook 'eglot-connect-hook #'drgnx-lang--attach-buffers t)   ; after the other connect hooks
   (advice-add 'eglot-reconnect :around #'drgnx-lang--guard-reconnect)
+  (advice-add 'jsonrpc--process-filter :around #'drgnx-lang--answers-on-top-level-timers)
   (if (fboundp 'eglot--maybe-activate-editing-mode)
       (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation)
     (unless drgnx-lang--eglot-warned
@@ -291,6 +304,7 @@ outside the module's setup (a test).  The module's own teardown removes the ones
   (remove-hook 'eglot-connect-hook #'drgnx-lang--attach-buffers)
   (remove-hook 'after-init-hook #'drgnx-lang--report-missing-activation)
   (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect)
+  (advice-remove 'jsonrpc--process-filter #'drgnx-lang--answers-on-top-level-timers)
   (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation))
 
 (defun drgnx-lang--maybe-eglot-remote (file)

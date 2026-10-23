@@ -94,7 +94,10 @@ file of a container that runs as root), from a visit, a daemon or a sentinel ali
   the file), or when a server you started has answered (then the open files of that server's project are attached).
   A file of the project opened outside a command while its server starts (within `eglot-connect-timeout` of the
   start) joins it as soon as both the server has answered and the file's mode is set: on a slow host the answer often
-  comes while that file is still being read. After that, a remote buffer whose mode changes outside a command, from a
+  comes while that file is still being read. A server's answer read while TRAMP is in the middle of a call (on macOS a
+  long TRAMP command fills the host's terminal, and Emacs reads other processes' output while it waits to write the
+  rest) is handled once that call is over, never inside it: TRAMP refuses a call made inside another ("Forbidden
+  reentrant call of Tramp"). After that, a remote buffer whose mode changes outside a command, from a
   timer or a revert, say, stays unattached to its language server until you reopen it, revert it in a command, or run Reconnect. Remote files are never restored at the next
   start, so nothing is waiting to be attached then.
 - The private auto-save folder helps only while drgnx's state directory is outside the temp directory
