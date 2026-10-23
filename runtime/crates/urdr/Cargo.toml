@@ -12,11 +12,13 @@ publish = false
 test-hooks = []
 
 [dependencies]
-# `hooks`: the progress handler (walk and graph/sql deadlines) and the authorizer (graph/sql)
-rusqlite = { workspace = true, features = ["hooks"] }
+# `hooks`: the progress handler (walk and graph/sql deadlines) and the authorizer (graph/sql); `limits`: graph/sql's
+# lowered `sqlite3_limit`s
+rusqlite = { workspace = true, features = ["hooks", "limits"] }
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+# `rt`: `spawn_blocking`, so the read pool and graph/sql never run SQLite on an async worker
+tokio = { workspace = true, features = ["sync", "rt"] }
 
 [dev-dependencies]
 tempfile.workspace = true
