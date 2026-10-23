@@ -114,14 +114,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
     let mut opts: Vec<(String, Option<String>)> = Vec::new();
     // options that take a value
     let valued = [
-        "project", "out", "since", "tx", "entity", "to-ver", "field", "reason", "who", "access", "expires", "with",
+        "project", "out", "since", "tx", "entity", "to-ver", "field", "reason", "who", "access",
+        "expires", "with",
     ];
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("json") => json = true,
             Long(k) if valued.contains(&k) => {
+                let k = k.to_string();
                 let v = p.value().map_err(e)?.string().map_err(e)?;
-                opts.push((k.to_string(), Some(v)));
+                opts.push((k, Some(v)));
             }
             Long(k) => opts.push((k.to_string(), None)),
             Word(v) => words.push(v.string().map_err(e)?),
@@ -219,7 +221,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             known(&["field", "reason", "rotate-backups", "transcripts", "yes"])?;
             no_words(1)?;
             Sub::Excise {
-                target: words.first().cloned().ok_or("graph excise needs an ID or a TX")?,
+                target: words
+                    .first()
+                    .cloned()
+                    .ok_or("graph excise needs an ID or a TX")?,
                 fields: opts
                     .iter()
                     .filter(|(k, _)| k == "field")
@@ -247,8 +252,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                 Some("grant") => {
                     no_words(3)?;
                     GrantsSub::Grant {
-                        who: w.next().ok_or("graph grants grant needs WHO and WHAT")?.into(),
-                        what: w.next().ok_or("graph grants grant needs WHO and WHAT")?.into(),
+                        who: w
+                            .next()
+                            .ok_or("graph grants grant needs WHO and WHAT")?
+                            .into(),
+                        what: w
+                            .next()
+                            .ok_or("graph grants grant needs WHO and WHAT")?
+                            .into(),
                         access: get("access").unwrap_or_else(|| "read".into()),
                         expires: get("expires"),
                     }
@@ -564,9 +575,15 @@ pub fn render(sub: &Sub, a: &Value) -> (String, bool) {
                 out.push_str(&format!("{w}\n"));
             }
             for (key, text) in [
-                ("backups_holding", "still holds the text (run again with --rotate-backups to remove it)"),
+                (
+                    "backups_holding",
+                    "still holds the text (run again with --rotate-backups to remove it)",
+                ),
                 ("backups_removed", "removed"),
-                ("transcripts_holding", "still holds the text (run again with --transcripts to redact it)"),
+                (
+                    "transcripts_holding",
+                    "still holds the text (run again with --transcripts to redact it)",
+                ),
                 ("transcripts_redacted", "redacted"),
             ] {
                 for f in list(&a[key]) {
@@ -601,9 +618,10 @@ pub fn render(sub: &Sub, a: &Value) -> (String, bool) {
                     g["what"].as_str().unwrap_or("?"),
                     g["access"].as_str().unwrap_or("?"),
                     g["status"].as_str().unwrap_or("?"),
-                    g["expires"]
-                        .as_f64()
-                        .map_or(String::new(), |t| format!(" until {}", crate::log::rfc3339(t as u64)))
+                    g["expires"].as_f64().map_or(String::new(), |t| format!(
+                        " until {}",
+                        crate::log::rfc3339(t as u64)
+                    ))
                 ));
             }
             if a["grants"].is_array() && rows.is_empty() {
@@ -679,7 +697,10 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
         }
     };
     if let Sub::Excise {
-        target, yes, reason, ..
+        target,
+        yes,
+        reason,
+        ..
     } = &cmd.sub
     {
         let stdin = std::io::stdin();
@@ -702,12 +723,12 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
             }
         }
     }
-    let hub = crate::supervise::ensure(env, ENSURE_TIMEOUT);
+    let hub = crate::supervise::ensure_quiet(env, ENSURE_TIMEOUT);
     if hub != 0 {
         return hub;
     }
-    let answer = Client::user(env, Duration::from_secs(5))
-        .and_then(|mut c| c.call(method, params, LONG));
+    let answer =
+        Client::user(env, Duration::from_secs(5)).and_then(|mut c| c.call(method, params, LONG));
     match answer {
         Ok(a) => {
             if cmd.json {
@@ -742,7 +763,10 @@ mod tests {
         assert_eq!(method, "graph/export");
         assert_eq!(params, json!({"project": "demo", "out": "/work/rel/dir"}));
         // the default goes to the hub's own folder
-        let (_, none) = p(&["export"]).unwrap().request(Path::new("/w"), 0.0).unwrap();
+        let (_, none) = p(&["export"])
+            .unwrap()
+            .request(Path::new("/w"), 0.0)
+            .unwrap();
         assert_eq!(none, json!({}));
     }
 
@@ -767,12 +791,33 @@ mod tests {
         assert_eq!(m(&["backup", "now"]), ("graph/backup", json!({})));
         assert_eq!(m(&["scrub"]), ("graph/scrub", json!({})));
         assert_eq!(
-            m(&["revert", "--entity", "task:a-00001", "--to-ver", "2", "--cascade"]),
-            ("graph/revert", json!({"entity": "task:a-00001", "ver": 2, "cascade": true}))
+            m(&[
+                "revert",
+                "--entity",
+                "task:a-00001",
+                "--to-ver",
+                "2",
+                "--cascade"
+            ]),
+            (
+                "graph/revert",
+                json!({"entity": "task:a-00001", "ver": 2, "cascade": true})
+            )
         );
-        assert_eq!(m(&["revert", "--tx", "7"]), ("graph/revert", json!({"tx": 7})));
         assert_eq!(
-            m(&["excise", "12", "--reason", "leaked", "--field", "body", "--rotate-backups"]),
+            m(&["revert", "--tx", "7"]),
+            ("graph/revert", json!({"tx": 7}))
+        );
+        assert_eq!(
+            m(&[
+                "excise",
+                "12",
+                "--reason",
+                "leaked",
+                "--field",
+                "body",
+                "--rotate-backups"
+            ]),
             (
                 "graph/excise",
                 json!({"target": 12, "reason": "leaked", "fields": ["body"], "rotate_backups": true})
@@ -783,16 +828,32 @@ mod tests {
             "task:a-00001"
         );
         assert_eq!(
-            m(&["grants", "grant", "profile:review", "project:3", "--expires", "2h"]),
+            m(&[
+                "grants",
+                "grant",
+                "profile:review",
+                "project:3",
+                "--expires",
+                "2h"
+            ]),
             (
                 "graph/grants",
                 json!({"grant": {"who": "profile:review", "what": "project:3", "access": "read", "expires": 8200.0}})
             )
         );
-        assert_eq!(m(&["grants", "revoke", "g1"]), ("graph/grants", json!({"revoke": "g1"})));
+        assert_eq!(
+            m(&["grants", "revoke", "g1"]),
+            ("graph/grants", json!({"revoke": "g1"}))
+        );
         assert_eq!(m(&["grants"]), ("graph/grants", json!({"list": {}})));
-        assert_eq!(m(&["sql", "select 1"]), ("graph/sql", json!({"sql": "select 1"})));
-        assert_eq!(m(&["compact", "--dry-run"]), ("graph/compact", json!({"dry_run": true})));
+        assert_eq!(
+            m(&["sql", "select 1"]),
+            ("graph/sql", json!({"sql": "select 1"}))
+        );
+        assert_eq!(
+            m(&["compact", "--dry-run"]),
+            ("graph/compact", json!({"dry_run": true}))
+        );
         assert_eq!(
             m(&["proposed", "reject", "4", "5"]),
             ("graph/proposed", json!({"reject": [4, 5]}))
@@ -829,21 +890,54 @@ mod tests {
 
     #[test]
     fn answers_read_as_text_and_failures_exit_nonzero() {
-        let (t, ok) = render(&Sub::Backup, &json!({"ok": true, "path": "/d/backup/work-1.db", "bytes": 10, "ms": 3.0, "removed": []}));
-        assert!(ok && t.contains("work-1.db") && t.contains("checked"), "{t}");
-        let (t, ok) = render(&Sub::Backup, &json!({"ok": false, "error": "integrity", "path": "x", "bytes": 0, "ms": 1.0, "removed": []}));
+        let (t, ok) = render(
+            &Sub::Backup,
+            &json!({"ok": true, "path": "/d/backup/work-1.db", "bytes": 10, "ms": 3.0, "removed": []}),
+        );
+        assert!(
+            ok && t.contains("work-1.db") && t.contains("checked"),
+            "{t}"
+        );
+        let (t, ok) = render(
+            &Sub::Backup,
+            &json!({"ok": false, "error": "integrity", "path": "x", "bytes": 0, "ms": 1.0, "removed": []}),
+        );
         assert!(!ok && t.contains("integrity"), "{t}");
         let (t, ok) = render(
-            &Sub::Excise { target: "1".into(), fields: vec![], reason: "r".into(), rotate_backups: false, transcripts: false, yes: true },
+            &Sub::Excise {
+                target: "1".into(),
+                fields: vec![],
+                reason: "r".into(),
+                rotate_backups: false,
+                transcripts: false,
+                yes: true,
+            },
             &json!({"tx": 9, "entities": 1, "versions": 3, "txs_blanked": 2, "blanked": 0, "vacuumed": true,
                     "wal_truncated": false, "blocked_by": "readers", "backups_holding": ["/d/backup/work-1.db"]}),
         );
         assert!(ok);
-        assert!(t.contains("close drgnx editors and run `drgnx graph scrub`"), "{t}");
+        assert!(
+            t.contains("close drgnx editors and run `drgnx graph scrub`"),
+            "{t}"
+        );
         assert!(t.contains("work-1.db: still holds"), "{t}");
-        let (_, ok) = render(&Sub::Revert { tx: Some(1), entity: None, to_ver: None, cascade: false }, &json!({"blocked": [5]}));
+        let (_, ok) = render(
+            &Sub::Revert {
+                tx: Some(1),
+                entity: None,
+                to_ver: None,
+                cascade: false,
+            },
+            &json!({"blocked": [5]}),
+        );
         assert!(!ok);
-        let (t, _) = render(&Sub::Sql("x".into()), &json!({"columns": ["a", "b"], "rows": [[1, "x"], [null, "y"]], "truncated": true}));
-        assert!(t.starts_with("a\tb\n1\tx\nNULL\ty\n") && t.contains("truncated"), "{t}");
+        let (t, _) = render(
+            &Sub::Sql("x".into()),
+            &json!({"columns": ["a", "b"], "rows": [[1, "x"], [null, "y"]], "truncated": true}),
+        );
+        assert!(
+            t.starts_with("a\tb\n1\tx\nNULL\ty\n") && t.contains("truncated"),
+            "{t}"
+        );
     }
 }

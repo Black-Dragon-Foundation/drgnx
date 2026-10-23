@@ -627,7 +627,10 @@ fn blocker(b: Option<Blocker>) -> Option<String> {
 /// `graph/scrub`: `VACUUM` and a TRUNCATE checkpoint as a writer request (what an excise ends with, on its own).
 async fn scrub_of(w: &Writer, caller: &Caller) -> Result<Value, Error> {
     if caller.backend {
-        return Err(not_allowed("", "only the user scrubs: the backend's connection never does"));
+        return Err(not_allowed(
+            "",
+            "only the user scrubs: the backend's connection never does",
+        ));
     }
     let writer =
         w.db.graph_writer()

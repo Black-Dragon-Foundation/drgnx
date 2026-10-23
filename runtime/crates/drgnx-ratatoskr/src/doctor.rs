@@ -546,7 +546,11 @@ mod tests {
     #[test]
     fn the_store_section_warns_and_lists_the_copies() {
         let dir = tempfile::tempdir().unwrap();
-        let (data, home, config) = (dir.path().join("d"), dir.path().join("h"), dir.path().join("c"));
+        let (data, home, config) = (
+            dir.path().join("d"),
+            dir.path().join("h"),
+            dir.path().join("c"),
+        );
         std::fs::create_dir_all(data.join("backup")).unwrap();
         std::fs::create_dir_all(home.join("org")).unwrap();
         std::fs::create_dir_all(&config).unwrap();
@@ -576,8 +580,14 @@ mod tests {
         let w = s["warnings"].to_string();
         assert!(w.contains("close idle editors"), "{w}");
         assert!(w.contains("hours old"), "{w}");
-        assert!(w.contains("writable") || w.contains("personal-notes-allow"), "{w}");
-        assert_eq!(s["copies"], json!({"pre7": ["work-pre7-1.db"], "schema5": true}));
+        assert!(
+            w.contains("writable") || w.contains("personal-notes-allow"),
+            "{w}"
+        );
+        assert_eq!(
+            s["copies"],
+            json!({"pre7": ["work-pre7-1.db"], "schema5": true})
+        );
         assert_eq!(s["deny_list"]["opted_in"], 0);
         assert!(s["backup_age_s"].as_u64().unwrap() > BACKUP_STALE);
         // no work.db and no hub: no section

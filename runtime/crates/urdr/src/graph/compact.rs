@@ -104,12 +104,14 @@ pub async fn dry_run(pool: &ReadPool) -> Result<Report, WriteError> {
 }
 
 fn drop_versions(tx: &mut Tx<'_>, doomed: &[Doomed]) -> Result<(), WriteError> {
-    for &(n, ver, tx_from) in doomed {
-        // the kept version of that day takes over the dropped one's span, so an as-of read finds no gap
+    for &(n, ver, _) in doomed {
+        // the kept version of that day takes over the dropped one's span (as it stands now: an earlier drop of this
+        // batch may have widened it), so an as-of read finds no gap
         tx.sql().execute(
-            "update entity_hist set tx_from = min(tx_from, ?3)
+            "update entity_hist set tx_from = min(tx_from,
+                 (select tx_from from entity_hist where n = ?1 and ver = ?2))
               where n = ?1 and ver = (select min(ver) from entity_hist where n = ?1 and ver > ?2)",
-            params![n, ver, tx_from],
+            params![n, ver],
         )?;
         tx.sql().execute(
             "delete from entity_hist where n = ?1 and ver = ?2",
@@ -222,10 +224,18 @@ mod tests {
 
     /// Entity ID of KIND/ORIGIN with EDITS further versions, each in its own tx, the tx times DAYS days apart in
     /// the list's order (an edit at day 0.0 and 0.5 is the same day).
-    async fn with_versions(h: &WriterHandle, kind: &str, id: &str, origin: Origin, days: &[f64]) -> i64 {
+    async fn with_versions(
+        h: &WriterHandle,
+        kind: &str,
+        id: &str,
+        origin: Origin,
+        days: &[f64],
+    ) -> i64 {
         let (kind, id) = (kind.to_string(), id.to_string());
         let n = h
-            .write(user(), move |tx: &mut Tx<'_>| Ok(entity::create(tx, new(&kind, &id, origin))?.n))
+            .write(user(), move |tx: &mut Tx<'_>| {
+                Ok(entity::create(tx, new(&kind, &id, origin))?.n)
+            })
             .await
             .unwrap()
             .value;
@@ -244,7 +254,10 @@ mod tests {
                 // days apart, the first of them on a fixed midnight
                 tx.sql().execute(
                     "update tx set at = ?1 where id = ?2",
-                    params![1_700_000_000.0 - 1_700_000_000.0 % 86400.0 + day * 86400.0, tx.id()],
+                    params![
+                        1_700_000_000.0 - 1_700_000_000.0 % 86400.0 + day * 86400.0,
+                        tx.id()
+                    ],
                 )?;
                 Ok(())
             })
@@ -272,8 +285,18 @@ mod tests {
         let hist = |n: i64| format!("select count(*) from entity_hist where n = {n}");
         assert_eq!(count(&pool, hist(parsed)).await, 5);
         let seen = dry_run(&pool).await.unwrap();
-        assert_eq!(seen, Report { versions: 2, link_stats: 0 });
-        assert_eq!(count(&pool, hist(parsed)).await, 5, "a dry run changes nothing");
+        assert_eq!(
+            seen,
+            Report {
+                versions: 2,
+                link_stats: 0
+            }
+        );
+        assert_eq!(
+            count(&pool, hist(parsed)).await,
+            5,
+            "a dry run changes nothing"
+        );
         let done = run(&h, &pool, user()).await.unwrap();
         assert_eq!(done, seen);
         // the parsed entity keeps the last old version of each day, the authored ones every version
@@ -283,7 +306,8 @@ mod tests {
         // the span of a dropped version went to the kept one: no gap
         let gaps = count(
             &pool,
-            "select count(*) from entity_hist a join entity_hist b on b.n = a.n and b.ver > a.ver
+            "select count(*) from entity_hist a join entity_hist b on b.n = a.n
+               and b.ver = (select min(ver) from entity_hist where n = a.n and ver > a.ver)
              where a.n = (select n from entity where id = 'plan:a') and a.tx_to < b.tx_from",
         )
         .await;
@@ -296,14 +320,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (_w, h, pool, _) = spawn(&dir);
         let file = h
-            .write(user(), |tx: &mut Tx<'_>| Ok(entity::create(tx, new("file", "file:/a", Origin::Inferred))?.n))
+            .write(user(), |tx: &mut Tx<'_>| {
+                Ok(entity::create(tx, new("file", "file:/a", Origin::Inferred))?.n)
+            })
             .await
             .unwrap()
             .value;
         let mut sessions = Vec::new();
         for id in ["session:1", "session:2", "session:3"] {
             let n = h
-                .write(user(), move |tx: &mut Tx<'_>| Ok(entity::create(tx, new("session", id, Origin::Recorded))?.n))
+                .write(user(), move |tx: &mut Tx<'_>| {
+                    Ok(entity::create(tx, new("session", id, Origin::Recorded))?.n)
+                })
                 .await
                 .unwrap()
                 .value;
@@ -322,7 +350,13 @@ mod tests {
                 .await
                 .unwrap();
         }
-        assert_eq!(dry_run(&pool).await.unwrap(), Report { versions: 0, link_stats: 2 });
+        assert_eq!(
+            dry_run(&pool).await.unwrap(),
+            Report {
+                versions: 0,
+                link_stats: 2
+            }
+        );
         assert_eq!(run(&h, &pool, user()).await.unwrap().link_stats, 2);
         let total = count(
             &pool,
@@ -330,7 +364,14 @@ mod tests {
         )
         .await;
         assert_eq!(total, 4);
-        assert_eq!(count(&pool, "select count(*) from link_stat where kind = 'touched'").await, 1);
+        assert_eq!(
+            count(
+                &pool,
+                "select count(*) from link_stat where kind = 'touched'"
+            )
+            .await,
+            1
+        );
         assert_eq!(run(&h, &pool, user()).await.unwrap(), Report::default());
     }
 }
