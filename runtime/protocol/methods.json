@@ -624,6 +624,35 @@
     },
     {
       "data": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The ids of the providers whose key the hub holds, never a key: `gateway/keys-held`'s answer, and the data of the\nevent `gateway/keys-changed`.",
+        "properties": {
+          "providers": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Id"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeysHeld",
+        "type": "object"
+      },
+      "doc": "the providers whose key the hub holds changed: their ids, never a key (to user connections)",
+      "from": "front",
+      "name": "gateway/keys-changed"
+    },
+    {
+      "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "Providers whose key the hub does not hold, though a registration needs it: an editor hands its keys over.",
@@ -3448,6 +3477,40 @@
       "classes": [
         "user"
       ],
+      "doc": "the caller's editor token (loopback only, the /p/PROVIDER/… paths; one per owner, kept across a restart)",
+      "home": "front",
+      "name": "gateway/editor-token",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The editor's token (class `editor`: the `/p/PROVIDER/…` paths only) and the loopback URL it is good on.",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "url"
+        ],
+        "title": "EditorToken",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "provider keys to the hub's memory (never a file, never the backend)",
       "home": "front",
       "name": "gateway/keys",
@@ -3489,6 +3552,45 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the providers whose key the hub holds (ids only)",
+      "home": "front",
+      "name": "gateway/keys-held",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The ids of the providers whose key the hub holds, never a key: `gateway/keys-held`'s answer, and the data of the\nevent `gateway/keys-changed`.",
+        "properties": {
+          "providers": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Id"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeysHeld",
+        "type": "object"
       },
       "writes": false
     },

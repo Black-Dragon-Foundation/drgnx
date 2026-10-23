@@ -1,5 +1,6 @@
 //! The events a hub sends unasked, `{event, data}`: the nine the Lisp backend broadcast on main (`core/drgnx-hub.el`,
-//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice` and `gateway/need-keys`.  Each names
+//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice`, `gateway/need-keys` and
+//! `gateway/keys-changed`.  Each names
 //! the side that sends it ([`EventType::from`]): `events` is the front's since the front writes work.db (its writer's
 //! new rows), and the gateway's `request`, `budget` and `fallback` since the front serves the gateway (Task 22; a
 //! job's `fallback`, with its `job`, still comes from the backend's job runner); the other five are the backend's.
@@ -7,6 +8,7 @@
 //! path).
 
 use crate::methods::agents::{Entry, Snapshot};
+use crate::methods::gateway::KeysHeld;
 use crate::methods::hub::EventsPage;
 use crate::registry::{Home, check_as, schema_of};
 use crate::types::{Nonce, null_as_empty};
@@ -225,6 +227,12 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a registration needs keys the hub does not hold (to user connections)"
         ),
         event!(
+            "gateway/keys-changed",
+            KeysHeld,
+            Front,
+            "the providers whose key the hub holds changed: their ids, never a key (to user connections)"
+        ),
+        event!(
             "challenge",
             Challenge,
             Front,
@@ -292,7 +300,15 @@ mod tests {
         let ours: BTreeSet<String> = events()
             .iter()
             .map(|e| e.name.to_string())
-            .filter(|n| !["challenge", "notice", "gateway/need-keys"].contains(&n.as_str()))
+            .filter(|n| {
+                ![
+                    "challenge",
+                    "notice",
+                    "gateway/need-keys",
+                    "gateway/keys-changed",
+                ]
+                .contains(&n.as_str())
+            })
             .collect();
         assert_eq!(ours, found);
         assert_eq!(found.len(), 9, "{found:?}");
@@ -304,7 +320,16 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 12);
+        assert_eq!(events().len(), 13);
+        // ids only: a key-shaped value is no id, and nothing but `providers` is taken
+        let changed = event("gateway/keys-changed").unwrap();
+        assert_eq!(changed.from, Home::Front);
+        assert_eq!(
+            (changed.check)(&json!({"providers": ["anthropic", "openrouter"]})).unwrap(),
+            json!({"providers": ["anthropic", "openrouter"]})
+        );
+        assert!((changed.check)(&json!({"providers": ["sk or-v1 x"]})).is_err());
+        assert!((changed.check)(&json!({"providers": [], "keys": {"a": "k"}})).is_err());
         assert_eq!(event("request").map(|e| e.from), Some(Home::Front));
         assert_eq!(
             (event("gateway/need-keys").unwrap().check)(&json!({"providers": ["openrouter"]}))

@@ -728,7 +728,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | backend |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes | front |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no | front |
+| `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no | front |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | front |
+| `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no | front |
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no | front |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no | front |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no | front |
@@ -775,7 +777,7 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/providers`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
+| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/providers`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
 | service | `mcp/attach` (an outside agent's bridge: [Sessions and their sockets](#sessions-and-their-sockets)) |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
@@ -835,6 +837,7 @@ result is (`event(NAME).check`):
 | `budget` | the gateway | `{job, spent, budget}` |
 | `request` | the gateway | `{job, task, agent, provider, model, status, input, output, cost}` |
 | `gateway/need-keys` | the gateway | `{providers: [Id]}`: a request needed these providers' keys, which the hub does not hold (at most once a minute each; a subscriber that connects later gets the pending ones after its `subscribe` answer) |
+| `gateway/keys-changed` | the gateway | `{providers: [Id]}`: the ids whose key the hub holds, sent when that set changes (`gateway/keys`, a registration's `keys`); never a key ([The editor's token](#the-editors-token)) |
 | `challenge` | the front, on accept | `{nonce}` |
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
 
@@ -967,7 +970,8 @@ Test hooks: `--bridge-backoff-ms N` and `--bridge-give-up-ms N` shorten the timi
 
 The gateway runs in Ratatoskr (`runtime/crates/drgnx-ratatoskr/src/gateway.rs`, forwarding by
 [`bifrost`](runtime.md#bifrost-the-gateway)): the front serves `gateway/register`, `gateway/unregister`,
-`gateway/keys`, `gateway/set-budget`, `config/providers` and `spend` itself, and none of them reaches the Lisp backend.
+`gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `config/providers` and `spend`
+itself, and none of them reaches the Lisp backend.
 
 `gateway/register {chain, job?, task?, agent?, budget?, openrouter?, keys?, owner?, sid?}` returns `{token, url?,
 socket?, openrouter?}`: a token of 64 hex digits (32 random bytes) and, without `sid`, the loopback URL
@@ -1033,3 +1037,31 @@ subscriber for the providers kept registrations need) tells the editor to hand t
 
 The Lisp hub (v0, before Ratatoskr) still has its own gateway, `core/drgnx-gateway.el`: registrations in
 `<state>/hub/registrations.eld` (hashes only), the port in `<state>/hub/port`, keys in its memory, curl per request.
+
+## The editor's token
+
+The editor's own AI requests (chat, completion, embeddings of a provider with a key) go through the gateway too, with
+a token of their own, so the editor need not hold the keys.
+
+- **`gateway/editor-token {}`** (user) returns `{token, url}`: a registration of class `editor`, owned by the caller's
+  process (its pid as the system reports it, with its start time; a caller whose process cannot be read is
+  `not-allowed`), and `url` is `http://127.0.0.1:PORT`.
+- **What it reaches.** Only `/p/PROVIDER/REST[?query]`, PROVIDER in the provider table and REST one of its kind's paths
+  (`openai` `/chat/completions`, `/completions`, `/embeddings`; `ollama` `/api/chat`, `/api/generate`, `/api/embed`;
+  `llamacpp` `/infill`, `/v1/chat/completions`, `/v1/embeddings`; `tei` `/embed`; `anthropic` none), forwarded to
+  the provider's base + REST as they came: one provider, no chain or fallback, no model rewrite, no budget, no
+  OpenRouter restrictions. A Messages path is 404 for it, and an agent's token never reaches `/p/…`
+  ([runtime.md](runtime.md#bifrost-the-gateway)). Each request is a `spend` row with no job and agent `editor`.
+- **Loopback only.** The token is good on the loopback listener and nowhere else: on a session's `gateway.sock` it is
+  401. A `runtime.db` row of class `editor` that names another listener, or no owner, is dropped at start.
+- **One per owner.** A second call from the same process deletes its earlier editor token first, so a reconnecting
+  editor rotates; another process (a batch job such as the search indexer, the `drgnx` CLI) takes its own.
+- **Kept across a restart.** It is a `registration` row like an agent's: read back at start, pruned with its owner,
+  and good again as long as the port is the same (`kv.gateway_port`). The editor asks for its token again on every
+  proven reconnect, so it learns a new port.
+
+**Which keys the hub holds.** `gateway/keys-held {}` (user) answers `{providers: [Id]}`, the ids whose key is held, and
+user subscribers get the event `gateway/keys-changed {providers}` whenever that set changes (`gateway/keys`, a
+registration's `keys`; a key replaced for a provider already held changes nothing). Never a key. The editor judges a
+provider usable from these, not from a key of its own. A restarted hub holds none: a reconnecting editor asks
+`gateway/keys-held`, and hears `gateway/keys-changed` when its handover fills the set again.
