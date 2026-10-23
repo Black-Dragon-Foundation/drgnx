@@ -233,16 +233,58 @@ A repository can carry settings for everyone who works on it in `.drgnx/settings
 shape as your private file. They apply below the repository's `.dir-locals.el` at the same folder, and below your
 private file.
 
-- **Safe values only, for now.** A cloned repository is someone else's file: of its entries only those whose value
-  Emacs marks safe for the variable apply (`fill-column 100` does; a program to run does not), and its `(:eval …)`
-  code does not run. Nothing prompts. Trusting a folder to apply more is described in "Trusted locations" below.
+- **Safe values only, until you trust it.** A cloned repository is someone else's file: in an untrusted workspace
+  only the entries whose value Emacs marks safe for the variable apply (`fill-column 100` does; a program to run does
+  not), and its `(:eval …)` code does not run. Nothing prompts. Trusting a folder to apply more is described in
+  "Trusted locations" below.
 - **The same refusals** as your private file: global-only settings and drgnx's security settings never apply from it.
 - **The old project files** `.drgnx/search.eld`, `.drgnx/ai.eld` and `.drgnx/large-files.eld` still work: drgnx reads
   them as entries of the shared file (`drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`,
   `drgnx-ai-roles`, `drgnx-large-files-ask-above`, `drgnx-large-files-chunks-above`). A large-file size there can only
   lower yours, as before.
 
-## Trusted locations (Task 18)
+## Trusted locations
+
+A workspace (the project folder a file is in: its git root, or a folder you trusted) is in one of four states. They
+decide what its shared `.drgnx/settings.el`, `.dir-locals.el` and `.dir-locals-2.el` may do. Your private file is
+yours and always applies (only drgnx's security settings and global-only settings are refused there).
+
+| State | How a workspace gets it | Safe values | Data | Code |
+|---|---|---|---|---|
+| untrusted | the default | apply | wait | wait; `.dir-locals*.el` behave as in plain Emacs |
+| trusted by location | it is below a folder of `drgnx-trust-parents` | apply | apply | waits for review, then each allowed piece applies |
+| trusted | **File: Trust This Folder** | apply | apply | what Trust This Folder showed applies; new code waits |
+| trusted, everything | below a `drgnx-trust-parents` entry with `:code t` | apply | apply | applies, no review |
+
+- **Code** is an `(:eval …)` section, an `eval:` or `mode:` entry of `.dir-locals.el` (a `mode:` entry turns on a
+  minor mode, which can run anything), and any value of a setting that names a program, a function or a hook (Emacs's
+  risky variables, names ending in `-program`, `-executable`, `-args` …). **Data** is any other value Emacs does not
+  mark safe. drgnx's security settings (`drgnx-trust-parents`, the agent and sandbox settings, the key settings) never
+  apply from a workspace in any state: Emacs ignores them in every `.dir-locals.el` and `-*-` line.
+- **Trusted locations.** Set `drgnx-trust-parents` in Settings → User, for example
+  `(drgnx-trust-parents (("~/workspace/")))`. Every project below `~/workspace/` is then trusted for data, including
+  repositories you clone there later. Its code waits until you review and allow it, and again after it changes (a
+  `git pull`, an agent's edit); the code you allowed keeps applying. The first time a project is trusted because of
+  where it is, a notice says so, with [Untrust].
+- **Everything.** `(drgnx-trust-parents (("~/workspace/mine/" :code t)))` runs the code of every project below that
+  folder with no review, repositories you clone there included. It is off unless you write `:code t` for a folder.
+  Such a folder also counts as trusted content: Flymake checkers and symbol shorthands work there.
+- **Never trusted:** your home folder, `/`, the temp folders and anything above them, and remote folders, also as
+  `drgnx-trust-parents` entries.
+- **Trust This Folder** (File menu, palette, or a click on "Restricted Mode") shows the code in the folder's
+  `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx/settings.el` and asks once; trusting allows exactly that code. Code
+  added or changed afterwards waits.
+- **Untrust This Folder** takes everything back at once: the values trust gave leave the folder's open buffers, and the
+  code you allowed there is forgotten. Code that already ran cannot be undone. Below a trusted location, Untrust keeps
+  that one project untrusted on this machine.
+- **Where it is kept.** The allowed (and denied) pieces of code are kept per folder in
+  `~/.local/state/drgnx/trusted-folders.eld`, on this machine only. Nothing is ever written to `custom.el`'s
+  `safe-local-variable-values`, and no folder is put in `safe-local-variable-directories` (every value there would
+  apply, risky ones included; `drgnx doctor` warns about any folder you put there yourself).
+- **Upgrading.** The first start with workspace trust keeps the folders you trusted before, and records the code in
+  each as allowed, once, with one notice listing it.
+- **Safe mode** (`drgnx safe`) and **Settings: Turn Off Package Settings** apply only drgnx's own settings from your
+  private file and the shared file, and run no `(:eval …)`; a buffer opened before keeps what it got.
 
 ## Reviewing a workspace's code (Task 19)
 

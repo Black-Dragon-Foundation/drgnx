@@ -631,8 +631,11 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
   global` setting, of a `:workspace never` setting (`drgnx-setting-meta`, which holds the deny-list of design §13), and
   the pseudo-variables `eval` and `mode`. `:scope project` entries are never buffer values.
 - **W1's filter:** `drgnx-settings-workspace-filter-function`, called with ROOT, FILE and the entries left after the
-  refusals, returns those to apply; the default `drgnx-settings-workspace-safe-only` passes `safe-local-variable-p`
-  values and never an `:eval`. Task 18 replaces it with the trust split.
+  refusals, returns those to apply: workspace trust's `drgnx-settings-trust-filter` (below);
+  `drgnx-settings-workspace-safe-only` passes `safe-local-variable-p` values and never an `:eval`.
+- **Safe mode and Turn Off Package Settings** (`drgnx-settings-own-only-p`): W1 and W2 apply only entries of drgnx's
+  own settings and no `:eval` (`drgnx-settings-workspace--held-p`, in the groups and in `drgnx-setting-for-root`), as
+  L1 does (US-WORKSPACE-SAFE-MODE-1).
 - **`(drgnx-setting-for-root VAR ROOT)`**: the global value, then W1 (the old `.drgnx/{search,ai,large-files}.eld`
   through the config layer, `drgnx-settings-workspace-old-files`, then `.drgnx/settings.el`'s filtered entries), then
   W2, each over the one below by its `:merge` (`replace`, `alist`, `append`, `lower-only`: the lower of two numbers,
@@ -644,9 +647,64 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
 - **Re-hack:** `(drgnx-settings-workspace-rehack ROOT)` resets each buffer's `dir-local-variables-alist`, runs
   `hack-dir-local-variables` (Emacs's own items under `:safe` meanwhile, so it never prompts) and
   `hack-local-variables-apply` without the major mode and without `mode` entries; the file's own local variables
-  keep winning; a value no source gives any more is killed while it is still the value that source gave.
+  keep winning; a value no source applies any more (gone, or rejected by the filter after trust was taken back) is
+  killed while it is still the value that source gave.
 - **Explain:** `drgnx-settings-workspace--layers` on `drgnx-settings-explain-functions` gives the W2, W1,
   `.dir-locals.el`/`.dir-locals-2.el` (nearest folder, with the line) and EditorConfig layers of a dir-local value.
   `drgnx-settings-prov` counts a `file-local-variables-alist` value as file-local only when it is not the dir-local
   value Emacs applied.
 - **Docs cache:** workspace docs by file and stamp, at most `drgnx-settings-workspace-cache-max` files.
+
+## Workspace trust (Task 18)
+
+`core/drgnx-settings-trust.el` (design §9, §13, decisions 7 and 11). `drgnx-settings-workspace` requires it and its
+enable/disable call `drgnx-settings-trust-enable`/`-disable`; `drgnx-trust-mode` calls `drgnx-settings-trust-start`
+(guard, migration, `trusted-content`).
+
+- **Classes:** `(drgnx-settings-trust-class VAR VALUE SOURCE)` → `never` (in `ignored-local-variables`, or
+  `:workspace never`), `code` (`:eval`, `eval`, `mode`, `:workspace code`), `safe` (`:workspace safe`, or
+  `safe-local-variable-p`), else `data`; checked in that order, so a `:workspace code` setting is code even with a safe
+  predicate. SOURCE `private` (W2) is never classed beyond `never`.
+- **Roots and states:** `(drgnx-settings-trust-root DIR)` is the longest folder of Trust This Folder holding DIR, else
+  the nearest version-control root (`drgnx-settings-trust-root-markers`, never a broad folder), else DIR; it never calls
+  `project-current`, which reads dir-locals itself (`project--value-in-dir`). `(drgnx-settings-trust-state ROOT)` →
+  `untrusted` (also an exception in `:untrusted`, and every remote root) > `everything` (a `drgnx-trust-parents` entry
+  with `:code t`) > `trusted` (Trust This Folder) > `location`. `drgnx-trust-parents` is a `drgnx-defsetting`
+  (`:scope global :workspace never :agents never :on-error strict`, `:risky`); `drgnx-trust--broad-p` drops home, `/`,
+  the temp dirs and their ancestors (with `:code t` too) and remote entries; it is read with `default-value`.
+- **The split:** an `:around` advice on `hack-dir-local--get-variables` (the design says `:filter-return`; `:around`
+  lets a call with a PREDICATE, `set-auto-mode`'s `auto-mode-alist` read, pass untouched). Untrusted, or no
+  `.dir-locals` file at DIR (a class set from Lisp): Emacs's own result. Else one item with DIR marked
+  (`drgnx-settings-workspace-mark`, so the filter advice binds `:all`): safe and data entries, and code whose pair
+  applies (`drgnx-settings-trust--decide`); `never` entries are dropped; waiting code is remembered per root for the
+  session. A code entry's FILE is found by collecting each `.dir-locals*.el` of DIR alone (the `-2` file first).
+- **W1:** `drgnx-settings-trust-filter` is `drgnx-settings-workspace-filter-function`'s default, the same rule.
+- **Pairs:** `(FILE VAR VALUE)`, FILE relative to the root, kept in trusted-folders.eld version 2 (`drgnx-trust.el`:
+  `:allowed`/`:denied` `((ROOT (FILE VAR TEXT)…)…)`, `:untrusted` roots) with VALUE as its printed text (an `eval` form
+  may hold a backquote, which the data reader refuses). `drgnx-trust-update FN` writes them under the file's lock; a
+  version above 2 is a newer drgnx's, never changed. `(drgnx-settings-trust-allow ROOT PAIRS)`,
+  `(drgnx-settings-trust-deny ROOT PAIRS)` (PAIRS as lists or as the plists of `-waiting`; a new value of a non-`eval`
+  pair replaces the old one) re-hack at once. `(drgnx-settings-trust-waiting ROOT)` → plists `(:file :var :value :line
+  :class)` plus `:was` for a changed pair; untrusted: W1's data and code; `everything`: nil.
+  `(drgnx-settings-trust-code-pairs ROOT)`: all code in the root's own three files, every section.
+- **Commands:** the registry's `trust-folder` and `untrust-folder` run `drgnx-settings-trust-this-folder (ROOT SHOWN)`
+  (interactively: shows the code, asks once, allows exactly that) and `drgnx-settings-trust-untrust (ROOT)` (forgets the
+  pairs, records an exception below a location, re-hacks; the re-hack kills values the filter now rejects).
+- **Security settings:** `drgnx-settings-trust-security-settings` (own settings `:workspace never` or `:agents never`,
+  plus `drgnx-user-lisp-files`, `drgnx-trust-parents`) are put `risky-local-variable` and into the default value of
+  `ignored-local-variables` by `drgnx-settings-trust--guard`, which re-runs from a depth −100 hook function whenever
+  the number of declared settings changed.
+- **Migration:** `drgnx-settings-trust-migrate` turns a version-1 file into version 2 once, recording each trusted
+  folder's code as allowed, with one notice. `drgnx-settings-trust--announce`: one notice per root and session for a
+  location trust, with [Untrust].
+- **Doctor:** `dir-locals-trusted` (fact `:dir-locals-trusted`, `drgnx-settings-trust-doctor-roots`): folders of
+  `safe-local-variable-directories` (value and custom.el's saved value) that are not trusted folders.
+- **Mutation checks** (security): drop the split → `drgnx-settings-trust/a-location-applies-data-holds-code` red; add
+  the root to `safe-local-variable-directories` in Trust This Folder →
+  `drgnx-settings-trust/never-a-root-in-safe-local-variable-directories` red.
+- **Rows:** C8 (untrusted `.dir-locals.el` equals stock, prompt and all) and C24 (a clone below a location) in
+  `test/unit/settings-compat-trust-test.el`. The advised function is internal to `files.el`: C8, C9 and C24 fail on a
+  Nidhogg rebase that renames it.
+- **Left out:** a nested `.dir-locals.el` (`src/.dir-locals.el`) is listed as waiting once a file below it was opened
+  this session; Trust This Folder shows only the root's own files. The location notice is once per session, not once
+  ever.

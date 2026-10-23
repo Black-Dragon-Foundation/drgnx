@@ -32,6 +32,11 @@
 (declare-function flymake-start "flymake")
 (declare-function project-root "project")
 (declare-function project-current "project")
+(declare-function drgnx-settings-trust-start "drgnx-settings-trust" ())
+;; workspace trust (core/drgnx-settings-trust.el, which requires this file) owns the two commands' behaviour
+(autoload 'drgnx-settings-trust-this-folder "drgnx-settings-trust" nil t)
+(autoload 'drgnx-settings-trust-untrust "drgnx-settings-trust" nil t)
+(autoload 'drgnx-settings-trust-untrustable-p "drgnx-settings-trust")
 
 (defface drgnx-trust-restricted '((t :inherit shadow))
   "The \"restricted\" mark in the mode line." :group 'drgnx)
@@ -51,16 +56,35 @@
 (defconst drgnx-trust--header ";; drgnx: the folders you trusted (Trust This Folder; docs/guide/security.md)\n"
   "The comment line trusted-folders.eld starts with.")
 
+(defconst drgnx-trust-folders-version 2
+  "The version of trusted-folders.eld this drgnx writes.  Version 2 (workspace trust) adds :allowed and :denied,
+the pairs (FILE VAR TEXT) of each root, ((ROOT (FILE VAR TEXT)…)…), and :untrusted, the roots you untrusted
+although a trusted location holds them.")
+
+(defun drgnx-trust--pairs-p (x)
+  "Is X a list of (ROOT (FILE VAR TEXT)…) entries, ROOT, FILE and TEXT strings and VAR a symbol?"
+  (and (proper-list-p x)
+       (seq-every-p (lambda (e)
+                      (and (consp e) (stringp (car e)) (proper-list-p (cdr e))
+                           (seq-every-p (lambda (p) (and (proper-list-p p) (= (length p) 3) (stringp (nth 0 p))
+                                                         (symbolp (nth 1 p)) (stringp (nth 2 p))))
+                                        (cdr e))))
+                    x)))
+
 (defun drgnx-trust--folders-of (data)
   "The folders DATA, trusted-folders.eld's form, lists: a list of strings (nil for no file), else `newer' when a
-newer drgnx wrote it (:version above 1), or `bad' for a mistake.  A missing :version is version 1."
+newer drgnx wrote it (:version above `drgnx-trust-folders-version'), or `bad' for a mistake (also in :allowed,
+:denied or :untrusted).  A missing :version is version 1."
   (let ((version (and (plistp data) (plist-get data :version))) (folders (and (plistp data) (plist-get data :folders))))
     (cond ((null data) nil)
           ((not (plistp data)) 'bad)
-          ((and (natnump version) (> version 1)) 'newer)
-          ((not (memq version '(nil 1))) 'bad)
+          ((and (natnump version) (> version drgnx-trust-folders-version)) 'newer)
+          ((not (memq version '(nil 1 2))) 'bad)
           ((not (plist-member data :folders)) 'bad)
           ((not (and (proper-list-p folders) (seq-every-p #'stringp folders))) 'bad)
+          ((not (and (drgnx-trust--pairs-p (plist-get data :allowed)) (drgnx-trust--pairs-p (plist-get data :denied))
+                     (proper-list-p (plist-get data :untrusted)) (seq-every-p #'stringp (plist-get data :untrusted))))
+           'bad)
           (t folders))))
 
 (defvar drgnx-trust--told nil
@@ -96,23 +120,29 @@ message says WHY once per change of the file.  Only entries `drgnx-trust--read-e
   "The folders Untrust This Folder can take back: trusted-folders.eld's and those trusted this session."
   (seq-union (drgnx-trust-folders) drgnx-trust--added))
 
-(defun drgnx-trust--write (fn)
-  "Change trusted-folders.eld under its lock: FN gets the folders in it now and returns the new list, so two
-changes at once both stay.  Only :folders changes; other keys are kept.  A file that cannot be read or holds a
-mistake is copied aside (NAME.bak-…) and FN gets nil; a newer drgnx's file is a `user-error', left as it is."
+(defun drgnx-trust-update (fn)
+  "Change trusted-folders.eld under its lock: FN gets its data now (a plist: :folders, and :allowed, :denied and
+:untrusted when present; a fresh one when there is no file) and returns the new data, so two changes at once both
+stay.  Other keys are kept.  A change is written at `drgnx-trust-folders-version'; no change writes nothing.  A file
+that cannot be read or holds a mistake is copied aside (NAME.bak-…) and FN gets a fresh plist; a newer drgnx's file
+is a `user-error', left as it is."
   (let ((file (drgnx-trust-folders-file)))
     (drgnx-file-update
      file
      (lambda (data)
-       (let ((old (drgnx-trust--folders-of data)))
-         (pcase old
-           ('newer (user-error "%s was written by a newer drgnx, which this one never changes: trust folders there"
-                               (abbreviate-file-name file)))
-           ('bad (drgnx-file-backup file) (setq data nil old nil)))
-         (let ((new (funcall fn old)))
-           (if (and data (equal new old)) data
-             (plist-put (or data (list :version 1 :folders nil)) :folders new)))))
+       (pcase (drgnx-trust--folders-of data)
+         ('newer (user-error "%s was written by a newer drgnx, which this one never changes: trust folders there"
+                             (abbreviate-file-name file)))
+         ('bad (drgnx-file-backup file) (setq data nil)))
+       (let ((new (funcall fn (if data (copy-tree data) (list :version drgnx-trust-folders-version :folders nil)))))
+         (if (and data (equal new data)) data
+           (plist-put new :version drgnx-trust-folders-version))))
      :on-unreadable 'backup :pretty t :header drgnx-trust--header)))
+
+(defun drgnx-trust--write (fn)
+  "Change the folders of trusted-folders.eld under its lock (`drgnx-trust-update'): FN gets the folders in it now
+\(nil when it cannot be used) and returns the new list."
+  (drgnx-trust-update (lambda (data) (plist-put data :folders (funcall fn (plist-get data :folders))))))
 
 (defun drgnx-trust--add (entries)
   "Append ENTRIES to `trusted-content' (never when it is :all, which trusts everything already)."
@@ -398,6 +428,8 @@ is untrusted for this session only, and why."
                              nil))))
           (drgnx-trust--add (append (drgnx-trust--builtin) user))
           (setq drgnx-trust--added (seq-union drgnx-trust--added user)))
+        ;; workspace trust (loaded with core/drgnx.el): migrate trusted-folders.eld once, :code t locations
+        (when (fboundp 'drgnx-settings-trust-start) (drgnx-settings-trust-start))
         (drgnx-trust--tramp-guard t)
         (drgnx-trust--ffap-guard t)
         (drgnx-trust--auto-save-guard t)
@@ -456,12 +488,12 @@ is remote and SOURCE is not: a remote name taken from local text is never visite
 
 (defun drgnx-trust-setup ()
   "The Trust commands, and the guards on (core/basics calls this at startup)."
-  (drgnx-command-define 'trust-folder :category "File" :title "Trust This Folder" :command #'drgnx-trust-folder
-                        :when (lambda () buffer-file-name)
-                        :doc "Trust this project's folder: its Flymake checkers and symbol shorthands run")
+  (drgnx-command-define 'trust-folder :category "File" :title "Trust This Folder"
+                        :command #'drgnx-settings-trust-this-folder :when (lambda () buffer-file-name)
+                        :doc "Trust this project's folder: its settings and the code shown apply, its Flymake checkers and symbol shorthands run")
   (drgnx-command-define 'untrust-folder :category "File" :title "Untrust This Folder"
-                        :command #'drgnx-trust-untrust-folder :when #'drgnx-trust--user-entry
-                        :doc "Stop trusting the folder you trusted that holds this file")
+                        :command #'drgnx-settings-trust-untrust :when #'drgnx-settings-trust-untrustable-p
+                        :doc "Stop trusting this file's workspace (a folder you trusted, or one below a trusted location)")
   (drgnx-trust-mode 1))
 
 (provide 'drgnx-trust)
