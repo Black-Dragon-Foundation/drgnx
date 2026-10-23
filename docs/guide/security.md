@@ -162,7 +162,8 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
   git never runs there (nor in a repository inside `~/org` that a project contains); the other roots are scanned.
 - **The entity embedder skips them too.** When the hub makes the store's search vectors (a `tei` embedding provider
   in your providers), an entity whose source, path or id the rules deny is never sent, even one stored before you
-  added its folder to your deny list.
+  added its folder to your deny list. A text you excise (or a file you revoke) while the provider is answering gets
+  no vector of what was sent.
 - **The code search index never reads `~/org`.** `drgnx search index` refuses a project whose root is inside
   `~/org` (or reaches it through a link) with "the search index never reads ~/org (personal notes)", before it
   reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose

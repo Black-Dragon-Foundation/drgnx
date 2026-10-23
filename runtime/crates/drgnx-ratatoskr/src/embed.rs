@@ -8,6 +8,9 @@
 //!   at a time.  An entity whose source, id or `data.path` the personal-notes deny-list denies (an unknown source form
 //!   too) is never sent, even when the scan's door let it in (door 4).  A batch that fails is tried once more; failing
 //!   twice stops the round.
+//! - **The write checks again.** The provider is awaited outside the writer, so the write stores a vector only for an
+//!   entity that, in the writer's tx, is live at the version and with the text that was read: one excised, revoked,
+//!   retired or changed meanwhile keeps no vector of the old text, and the next batch sends its text of now.
 //! - **The schedule** ([`Timer`]): a round runs after the store has seen no write that put an entity's text for
 //!   [`IDLE`] (the writer's `texts`, [`urdr::graph::writer::WriterStatus::texts`]).  Lease, status, event and `kv` writes do
 //!   not count: the Lisp backend's housekeeping writes every 60 s, and would keep every round away.  After a stop,
@@ -173,6 +176,8 @@ pub enum Outcome {
 /// One entity as the round needs it.
 struct Row {
     n: i64,
+    /// The version the text was read at.
+    ver: i64,
     id: String,
     source: Option<String>,
     data: Value,
@@ -206,6 +211,21 @@ fn text_of(title: Option<String>, body: Option<String>) -> String {
         t.push_str(&b);
     }
     t.chars().take(MAX_TEXT).collect()
+}
+
+/// Whether R is, in the writer's tx, still live at the version and with the text it was read with: its vector may be
+/// stored.  An excise blanks in place without a new version, so the text is compared too.
+fn unchanged(c: &urdr::Connection, r: &Row) -> Result<bool, CoordError> {
+    let now = c.query_row(
+        "select ver, title, body from entity where n = ?1 and retired_tx is null",
+        [r.n],
+        |row| Ok((row.get::<_, i64>(0)?, text_of(row.get(1)?, row.get(2)?))),
+    );
+    match now {
+        Ok((ver, text)) => Ok(ver == r.ver && text == r.text),
+        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Give the stale entities of E's model their vectors, BATCH at a time, until none is left that may be sent.
@@ -253,13 +273,14 @@ pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
         let loaded = db
             .read(move |c| {
                 let mut st = c.prepare(
-                    "select n, id, source, data, title, body from entity where n = ?1 and retired_tx is null",
+                    "select n, id, source, data, title, body, ver from entity where n = ?1 and retired_tx is null",
                 )?;
                 let mut out = Vec::new();
                 for n in ns {
                     let mut rows = st.query_map([n], |r| {
                         Ok(Row {
                             n: r.get(0)?,
+                            ver: r.get(6)?,
                             id: r.get(1)?,
                             source: r.get(2)?,
                             data: serde_json::from_str(&r.get::<_, String>(3)?)
@@ -319,19 +340,26 @@ pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
                 why: format!("{} vectors for {} texts", vectors.len(), send.len()),
             };
         }
-        let put: Vec<(i64, Vec<f32>)> = send.iter().map(|r| r.n).zip(vectors).collect();
+        let put: Vec<(Row, Vec<f32>)> = send.into_iter().zip(vectors).collect();
         let m = model.clone();
-        let count = put.len();
         let wrote = db
             .write(meta(), move |tx| {
-                for (n, v) in &put {
-                    vec_put(tx, *n, &m, v).map_err(CoordError::from)?;
+                let mut count = 0;
+                for (r, v) in &put {
+                    // the provider was awaited outside the writer: an entity excised, retired or changed meanwhile
+                    // keeps no vector of the text that was sent (it is stale again, and the next batch sends its
+                    // text of now)
+                    if !unchanged(tx.sql(), r)? {
+                        continue;
+                    }
+                    vec_put(tx, r.n, &m, v).map_err(CoordError::from)?;
+                    count += 1;
                 }
-                Ok(())
+                Ok(count)
             })
             .await;
         match wrote {
-            Ok(()) => embedded += count,
+            Ok(count) => embedded += count,
             Err(e) => {
                 return Outcome::Stopped {
                     embedded,
@@ -667,6 +695,160 @@ mod tests {
             Outcome::Nothing
         );
         assert_eq!(mock.requests().len(), 3);
+    }
+
+    /// An embedder without a provider: each text's vector is made from its bytes (64 signs of an FNV-1a hash), so a
+    /// vector shows which text it was made from.  With `hold`, its first call says so (`called`) and waits for `go`.
+    struct Fake {
+        hold: bool,
+        calls: std::sync::atomic::AtomicUsize,
+        called: tokio::sync::Notify,
+        go: tokio::sync::Notify,
+    }
+
+    impl Fake {
+        fn new(hold: bool) -> Fake {
+            Fake {
+                hold,
+                calls: Default::default(),
+                called: tokio::sync::Notify::new(),
+                go: tokio::sync::Notify::new(),
+            }
+        }
+
+        fn vector(text: &str) -> Vec<f32> {
+            let h = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            });
+            (0..64)
+                .map(|i| if (h >> i) & 1 == 1 { 0.125 } else { -0.125 })
+                .collect()
+        }
+    }
+
+    impl Embedder for Fake {
+        fn embed<'a>(
+            &'a self,
+            texts: &'a [String],
+        ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+            Box::pin(async move {
+                let first = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                if self.hold && first {
+                    self.called.notify_one();
+                    self.go.notified().await;
+                }
+                Ok(texts.iter().map(|t| Fake::vector(t)).collect())
+            })
+        }
+
+        fn model(&self) -> &str {
+            "fake"
+        }
+    }
+
+    /// Every entity that has a vector, with its current text and whether the vector was made from that text.
+    async fn vectors_and_texts(db: &CoordDb) -> Vec<(String, String, bool)> {
+        db.read(|c| {
+            let mut st = c.prepare(
+                "select e.id, e.title, e.body, v.bits from entity e join entity_vec v on v.n = e.n order by e.n",
+            )?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    text_of(r.get(1)?, r.get(2)?),
+                    r.get::<_, Vec<u8>>(3)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, text, bits) = row?;
+                let current = urdr::graph::search::vec::quantize(&Fake::vector(&text)).0 == bits;
+                out.push((id, text, current));
+            }
+            Ok(out)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// The bits of entity ID's vector, if it has one.
+    async fn bits_of(db: &CoordDb, id: &'static str) -> Option<Vec<u8>> {
+        db.read(move |c| {
+            Ok(c.query_row(
+                "select v.bits from entity_vec v join entity e on e.n = v.n where e.id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .ok())
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Entity ID's title set to TITLE.
+    async fn retitle(db: &CoordDb, id: &'static str, title: &'static str) {
+        db.write(meta(), move |tx| {
+            let n = urdr::graph::entity::by_id(tx.sql(), id)?.expect("stored").n;
+            urdr::graph::entity::update(
+                tx,
+                n,
+                None,
+                urdr::graph::entity::Changes {
+                    title: Some(Some(title.into())),
+                    ..Default::default()
+                },
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    /// The embedder vs excise and edits (review finding 6): a text excised, retired or changed while the provider is
+    /// answering gets no vector of the text that was sent; the vector each one has afterwards is of its text now.
+    #[tokio::test]
+    async fn a_text_changed_while_the_provider_answers_gets_no_old_vector() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        put(&db, "task:keep", None, "kept as it is", json!({})).await;
+        put(&db, "task:gone", None, "a text to excise now", json!({})).await;
+        put(&db, "task:moved", None, "the first text", json!({})).await;
+        put(&db, "task:retired", None, "retired meanwhile", json!({})).await;
+        let e = Fake::new(true);
+        let writer = db.graph_writer().unwrap().clone();
+        let deny = allow_all(dir.path());
+        let (out, ()) = tokio::join!(fill(&db, &e, &deny), async {
+            e.called.notified().await;
+            urdr::graph::excise::excise(
+                &writer,
+                TxMeta::new("user", Class::User, "test"),
+                urdr::graph::excise::Target::Entity("task:gone".into()),
+                None,
+                "a test".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+            retitle(&db, "task:moved", "the second text").await;
+            db.write(meta(), |tx| {
+                let n = urdr::graph::entity::by_id(tx.sql(), "task:retired")?
+                    .expect("stored")
+                    .n;
+                urdr::graph::entity::retire(tx, n)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            e.go.notify_one();
+        });
+        assert!(matches!(out, Outcome::Filled { .. }), "{out:?}");
+        let old = |t: &str| Some(urdr::graph::search::vec::quantize(&Fake::vector(t)).0);
+        assert_ne!(bits_of(&db, "task:gone").await, old("a text to excise now"));
+        assert_ne!(bits_of(&db, "task:moved").await, old("the first text"));
+        assert_eq!(bits_of(&db, "task:retired").await, None);
+        assert_eq!(bits_of(&db, "task:keep").await, old("kept as it is"));
+        let all = vectors_and_texts(&db).await;
+        assert!(all.iter().all(|(_, _, current)| *current), "{all:?}");
     }
 
     #[test]
