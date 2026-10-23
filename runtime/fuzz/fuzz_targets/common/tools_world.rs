@@ -1,8 +1,9 @@
-//! One schema-7 store with its tools, shared by the `task_write_args` and `graph_read_args` targets: a file made by
-//! the graph writer, the tools over it, a caller whose folder is a project, and one task made at the start (the
-//! text `@T` in an input stands for its id).
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, RwLock};
+//! A schema-7 store with its tools, for the `task_write_args` and `graph_read_args` targets: a file made by the graph
+//! writer, the tools over it, a caller whose folder is a project, and one task made at the start (the text `@T` in an
+//! input stands for its id).  Each input gets a fresh store, so a crash reproduces from its input alone.
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use mimir::{BoxFuture, Tool};
 use norn::deny::DenyList;
@@ -29,8 +30,7 @@ struct World {
     task: String,
 }
 
-fn make() -> World {
-    let dir = std::env::temp_dir().join(format!("drgnx-fuzz-tools-{}", std::process::id()));
+fn make(dir: &Path) -> World {
     let home = dir.join("work/alpha");
     std::fs::create_dir_all(&home).unwrap();
     let file = dir.join("work.db");
@@ -98,16 +98,24 @@ impl World {
     }
 }
 
-/// Arguments (JSON, `@T` replaced by the seed task's id) through TOOL's check and call. A refusal is an answer;
+/// Arguments (JSON, `@T` replaced by the seed task's id) through TOOL's check and call, on a fresh store (its own
+/// folder, removed after: the writer thread of the last one may still be closing its file). A refusal is an answer;
 /// nothing may panic or hang.
 pub fn run(tool: &str, data: &[u8]) {
-    static WORLD: OnceLock<std::sync::Mutex<World>> = OnceLock::new();
-    let w = WORLD
-        .get_or_init(|| std::sync::Mutex::new(make()))
-        .lock()
-        .unwrap();
-    let text = String::from_utf8_lossy(data).replace("@T", &w.task);
+    let Ok(args) = serde_json::from_slice::<Value>(data) else {
+        return;
+    };
+    static N: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "drgnx-fuzz-tools-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let w = make(&dir);
+    let text = args.to_string().replace("@T", &w.task);
     if let Ok(args) = serde_json::from_str::<Value>(&text) {
         let _ = w.call(tool, args);
     }
+    drop(w);
+    let _ = std::fs::remove_dir_all(&dir);
 }
