@@ -1023,3 +1023,93 @@ fn the_spec_form_is_denied() {
     assert!(node_denied(&deny, &node("spec relative/notes.org")), "an unknown form is denied");
     assert!(!node_denied(&deny, &node(&format!("spec {home}/w/alpha/s.md"))));
 }
+
+/// Task 8 on a store Task 11 made: an imported entity's text leaves every version (the imported, approximate one in
+/// `entity_hist` included), the file and its WAL; the pre-migration copy is a kept copy that still holds it.
+#[tokio::test]
+async fn excise_on_a_migrated_store_leaves_no_trace() {
+    use urdr::graph::excise::{self, Target};
+    const TEXT: &str = "EXCISE-MIGRATED-c4n4ry";
+    let fx = fixture();
+    {
+        let c = Connection::open(&fx.db).unwrap();
+        c.execute(
+            "update jtask set title = ?1, data = ?2 where id = 'j1#2'",
+            [
+                format!("{TEXT} title"),
+                json!({ "note": format!("{TEXT} note") }).to_string(),
+            ],
+        )
+        .unwrap();
+    }
+    let (writer, handle) =
+        Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
+    handle.tick().await;
+    assert_eq!(
+        handle.status().last_open,
+        Some(OpenOutcome::Ready { schema: SCHEMA })
+    );
+    let read = || Connection::open(&fx.db).unwrap();
+    let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
+    // A change after the migration moves the imported version into entity_hist.
+    handle
+        .write(TxMeta::new("hub", Class::System, "test"), move |tx: &mut Tx<'_>| {
+            entity::update(
+                tx,
+                n,
+                None,
+                Changes {
+                    body: Some(Some(format!("{TEXT} body"))),
+                    ..Changes::default()
+                },
+            )
+            .map(|_| ())
+        })
+        .await
+        .unwrap();
+    let imported = format!(
+        "select count(*) from entity_hist h join tx t on t.id = h.tx_from where h.n = {n} and t.imported = 1"
+    );
+    let imported_versions: i64 = one(&read(), &imported);
+    assert!(imported_versions >= 1, "an imported version in entity_hist");
+    let first: i64 = one(&read(), &format!("select created_tx from entity where n = {n}"));
+    let asof = hist::entity_as_of(&read(), n, first).unwrap().unwrap();
+    assert!(asof.approximate, "the imported version is approximate");
+    assert!(file_has(&fx.db, TEXT.as_bytes()) || file_has(&wal_of(&fx.db), TEXT.as_bytes()));
+    let report = excise::excise(
+        &handle,
+        TxMeta::new("user", Class::User, "cli:graph-excise"),
+        Target::Entity("task:j1#2".into()),
+        None,
+        "integration".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+    let scrubbed = excise::scrub(&handle).await.unwrap();
+    assert!(scrubbed.vacuumed && scrubbed.wal_truncated, "{scrubbed:?}");
+    let c = read();
+    let left: i64 = one(
+        &c,
+        &format!(
+            "select count(*) from (select title, body, data from entity_hist where n = {n} \
+             union all select title, body, data from entity where n = {n}) \
+             where title like '%{TEXT}%' or body like '%{TEXT}%' or data like '%{TEXT}%'"
+        ),
+    );
+    assert_eq!(left, 0, "every version blanked");
+    let still_imported: i64 = one(&c, &imported);
+    assert_eq!(still_imported, imported_versions, "the history stays");
+    drop(c);
+    assert!(!file_has(&fx.db, TEXT.as_bytes()), "work.db holds the text");
+    assert!(!file_has(&wal_of(&fx.db), TEXT.as_bytes()), "work.db-wal holds the text");
+    // The pre-migration copy is a kept copy, and it still holds the text.
+    let pre7 = fx.opts.backup_dir.join(&fx.backups()[0]);
+    assert!(fx.backups()[0].starts_with("work-pre7-"), "{:?}", fx.backups());
+    let kept = excise::kept_copies(&fx.db);
+    assert!(kept.contains(&pre7), "{kept:?}");
+    assert_eq!(excise::holding(&kept, &report.needles), vec![pre7]);
+    tokio::task::spawn_blocking(move || writer.shutdown())
+        .await
+        .unwrap();
+}
