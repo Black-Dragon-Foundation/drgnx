@@ -339,6 +339,27 @@ minutes the task is free again (the Work cockpit's What needs you shows it; mess
 there too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
+## Working on shared tasks
+
+Besides a job's tasks, agents keep a shared task list in their project: they create tasks, split them, link them
+(what blocks what, what is part of what), label them and claim them. Only tasks of the agent's own project can be
+changed; tasks from your plans and your board are your files', so an agent adds a note or a task that relates to
+them instead.
+
+- **One agent at a time.** Claiming a task holds it for 15 minutes, renewed while the agent works. If another agent
+  reassigns it (always with a note saying why) or the claim ran out and someone else took it, the first agent is
+  told to stop at its next step, and its late changes are refused.
+- **No lost edits.** Two agents changing the same task: the second is told what changed since it read it and
+  re-reads. Labels and links are added and removed one by one, so nothing is overwritten.
+- **Ready is worked out**: a task is ready when nothing open blocks it and its parts are done. A link that would make
+  tasks wait on each other in a circle is refused.
+- **Your tasks stay yours.** On a task you made, an agent adds notes, links, labels and the priority; it changes the
+  title, body or acceptance only with your permission and never drops it. Without permission, an agent's "done"
+  is `in-review` and you close the task. With **only I close my tasks** on, even a permitted "done" is only a
+  proposal: a card for you, and the task waits.
+- **Agents are told** when someone else changes a task they hold or are assigned, when a task they wait on becomes
+  ready, and when they lose a claim. Notices about the same task are merged until read.
+
 ## What an agent can read
 
 drgnx's store (tasks, decisions, notes, and how they link) is shared by every agent, but each agent reads only its

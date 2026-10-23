@@ -260,6 +260,69 @@ An error is said once as "drgnx hub: TEXT". The editor sends no `coord/notify` a
 itself after a write. Reads stay on the read-only path. `drgnx-cockpit/no-writer-call-in-the-modules` walks the cockpit
 modules and `core/drgnx-cockpit-model.el` for a `drgnx-coord-` writer or a `sqlite-execute`.
 
+## The tracker (`runtime/crates/norn/src/tracker`)
+
+Tasks agents share, besides a job's tasks. `tracker::op(tx, caller, TaskOp)` runs one op in the caller's tx (the
+`task_write` tool and `tasks/write` call it) and adds one `event` of kind `task` (`summary` "OP ID: TITLE", `data
+{op, id, ver[, parts]}`). The answer is `Done {id, title, ver, lease, parts}`, `Conflict {id, ver, changed_since,
+next}`, `LeaseLost {by, how, tx, note, next}` or `Proposed {card}`; a refusal is `WriteError::Refused` with what to
+do instead, and rolls the request back. A conflict or a lost lease writes nothing but the tx row and no event.
+
+- **A tracker task** is an entity of kind `task`, origin `recorded`, id `task:<pp>-<5 base36>` (`pp`: the first two
+  letters of its project's first alias), in its creator's project (a caller without a project makes none, the user
+  included: `tasks/write` passes the project), with `data {labels?, acceptance?, tracker_tools?, lease_end?}`. The
+  ops: `create` (optionally under a `parent`), `update` (title, body, priority, acceptance, status), `claim`,
+  `heartbeat`, `release`, `handoff`, `reassign`, `split`, `complete`, `link`, `unlink`, `label` and, user only,
+  `tools` (`data.tracker_tools`, on job tasks too).
+- **What an agent may change:** a tracker task of its own project. A task out of its scope, missing or retired is
+  "no such task" (never "forbidden"); one a read grant shows is refused as another project's. A parsed entity (a
+  plan's or a board's task, origin `parsed`) is the file's: "this comes from FILE; add a note or a task that relates
+  to it", for the user too, since the next scan would overwrite it. A job's task (`data.job`) answers "use
+  claim_task, update_task or complete_task".
+- **Versions:** `update`, `reassign` and `split` take the `ver` the caller read; a stale one answers `Conflict` with
+  each field changed since (its value, who, their class, the tx). `label` (add and remove, never a whole list),
+  `link`, `unlink` and the lease ops need none, so concurrent label adds lose nothing.
+- **Links** follow `norn::kinds`. `blocks` and `parent_of` change what is ready, so both ends must be in the
+  caller's project (writes into another project are not grantable), neither parsed nor a job's; `relates` and
+  `duplicates` may point into a project a grant shows. A `blocks` link that would close a cycle is refused with the
+  path (`A → B → C → A`).
+- **Ready is computed**, never stored (`tracker::ready`): an open task, or a claimed one whose lease ran out, with no
+  live lease, no open `blocks` into it and no open `parent_of` part. `split` makes the parts (`split_from` the
+  original; project, labels and priority inherited) and either adds `parent_of` (`children`, the default: the
+  original waits for its parts) or drops the original with `duplicates` links (`replace`).
+- **The user's tasks** (made in a user-class tx): an agent adds notes, links, labels and the priority freely; the
+  title, body and acceptance change only under an `edit-user-tasks` grant (`norn::grants`), never `dropped`.
+  Without the grant an agent sets only `in-review`, and `complete` gives `in-review`; with it `done` is done, unless
+  **only I close my tasks** (`kv` `setting:only-user-closes`, `1`) is on: then `done` is a `close` card (`card` kind
+  `close`, `entity` the task, `data {task, ver, by, note}`, merged while one is open) and a notice to the user, and
+  the task is unchanged, so it unblocks nothing. An agent's own task goes `in-review` on `complete`.
+- **Secrets:** a title, body, acceptance, label or note that looks like a credential (`runstav::secrets`) is
+  refused with the rule's name.
+
+### Leases
+
+`claim` takes a ready task (or one whose lease ran out): status `claimed`, assignee and holder the caller, 15
+minutes, **epoch + 1**, a `works_on` link from the caller's `session:SID`. The answer's `lease` is the epoch, and
+`heartbeat`, `release`, `handoff` and `complete` must give it back: the fence passes only when the caller holds the
+lease, the epoch matches and it has not run out. Otherwise the op answers `LeaseLost` and writes nothing: `how`
+`reassign` (with the reassigner and the note), `reclaimed` (someone claimed after it ran out; a holder that claimed
+again after reconnecting has a new epoch too, and the old one is dead) or `expired`. The epoch that ended is kept in
+`data.lease_end`. `reassign` needs a note and the task's `ver` and is anyone's in the project: no holder, epoch + 1,
+status `open`, assignee `to`. `release` and `handoff` (a note required, to an agent, the user or nobody) set
+`open` and keep the epoch. While another holds a live lease, nobody else changes the status. Closing a task clears
+its lease. Notes are entities of kind `note` with an `about` link to the task.
+
+### Notices
+
+The agents a change affects get a `message` in the change's tx (`norn::write::notices`): sender `tracker`,
+recipient the actor (`agent:SID`, `ext:…`), `entity` the task's `n`, `text` JSON `{kind: "task-changed", task,
+title, fields, by, tx, notes, says, changes}`. Told: the task's assignee and holder before and after the change, the
+maker on `complete`, the assignee of a task a closed blocker (or a removed `blocks`) made ready (`says` "now
+ready"), the old holder of a lost lease ("lease lost"), and the user only of a close proposal. Never the caller.
+While a notice is queued, the next one about the same task merges into it (fields, notes and says joined,
+`changes` counted). Notes appear by id only, so excising a note leaves no copy. `tracker::notices::notices_unread`
+counts them for an actor; the tool calls the hub's `notify()` after `COMMIT`.
+
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 
 `drgnx-mcp-serve NAME TOOLS` is a small MCP server (stdio, protocol 2025-06-18: initialize, ping, tools/list,
