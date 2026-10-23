@@ -1115,6 +1115,59 @@ fn the_spec_form_is_denied() {
     ));
 }
 
+/// URDR-HIST-RETIRED-1 on a store Task 11 made: a held job task's migrated version keeps its lease when a later
+/// change moves it into `entity_hist`, so as of the migration the task is held.
+#[tokio::test]
+async fn a_migrated_lease_stays_in_history() {
+    let fx = fixture();
+    let (writer, handle) =
+        Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
+    handle.tick().await;
+    assert_eq!(
+        handle.status().last_open,
+        Some(OpenOutcome::Ready { schema: SCHEMA })
+    );
+    let read = || Connection::open(&fx.db).unwrap();
+    let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
+    let migrated: i64 = one(
+        &read(),
+        &format!("select updated_tx from entity where n = {n}"),
+    );
+    handle
+        .write(
+            TxMeta::new("hub", Class::System, "test"),
+            move |tx: &mut Tx<'_>| {
+                entity::update(
+                    tx,
+                    n,
+                    None,
+                    Changes {
+                        lease: Some(Lease::default()),
+                        ..Changes::default()
+                    },
+                )
+                .map(|_| ())
+            },
+        )
+        .await
+        .unwrap();
+    let asof = hist::entity_as_of(&read(), n, migrated).unwrap().unwrap();
+    assert_eq!(
+        asof.ent.lease,
+        Lease {
+            holder: Some("a1".into()),
+            epoch: 1,
+            until: Some(1700009999.0),
+        }
+    );
+    assert_eq!(asof.ent.origin, Origin::Recorded);
+    let now = entity::by_n(&read(), n).unwrap().unwrap();
+    assert_eq!(now.lease.holder, None);
+    tokio::task::spawn_blocking(move || writer.shutdown())
+        .await
+        .unwrap();
+}
+
 /// Task 8 on a store Task 11 made: an imported entity's text leaves every version (the imported, approximate one in
 /// `entity_hist` included), the file and its WAL; the pre-migration copy is a kept copy that still holds it.
 #[tokio::test]

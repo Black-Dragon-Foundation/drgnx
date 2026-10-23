@@ -218,11 +218,12 @@ fn field_value(e: &Ent, field: &str) -> Value {
     }
 }
 
-/// Copy entity E's current row to `entity_hist`, valid until this tx.
+/// Copy entity E's current row to `entity_hist`, valid until this tx: its fields, lease, origin and retirement.
 fn to_hist(tx: &Tx<'_>, e: &Ent) -> Result<(), WriteError> {
     tx.sql().execute(
         "insert into entity_hist (n, ver, tx_from, tx_to, kind, project, title, status, body, priority, assignee, \
-         data, field_tx) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+         data, field_tx, lease_holder, lease_epoch, lease_until, origin, retired_tx) \
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             e.n,
             e.ver,
@@ -237,6 +238,11 @@ fn to_hist(tx: &Tx<'_>, e: &Ent) -> Result<(), WriteError> {
             e.assignee,
             e.data.to_string(),
             serde_json::to_string(&e.field_tx).expect("a map of integers"),
+            e.lease.holder,
+            e.lease.epoch,
+            e.lease.until,
+            e.origin.as_str(),
+            e.retired_tx,
         ],
     )?;
     Ok(())
@@ -499,7 +505,8 @@ pub fn unretire(tx: &mut Tx<'_>, n: i64) -> Result<bool, WriteError> {
     set_version(tx, &cur, &Snap::of(&cur), Some(None))
 }
 
-/// The fields a version carries and a restoring write sets (no `kind`, no lease: `entity_hist` keeps neither).
+/// The fields a restoring write sets from a version (no `kind`, lease, origin or retirement: a restore leaves those
+/// as they are, though `entity_hist` keeps them for as-of reads).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Snap {
     pub(crate) project: Option<i64>,

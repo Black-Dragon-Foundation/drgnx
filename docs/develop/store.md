@@ -13,8 +13,9 @@ triggers and no foreign keys; the primitives write versions, FTS rows and stats 
 (`urdr/tests/one_write_path.rs`) fails when other Rust code writes these tables.
 
 - `tx.answer` holds a keyed request's answer (at most 64 KiB, else `{"truncated": true}`); `entity_vec.model` names
-  the embedding model, so `vec_stale` can list entities without a vector of a model. Both are departures from the
-  design's sketch.
+  the embedding model, so `vec_stale` can list entities without a vector of a model; `entity_hist` also keeps each
+  version's lease (`lease_holder`, `lease_epoch`, `lease_until`), `origin` and `retired_tx`, so an as-of read shows
+  them as they were (URDR-HIST-RETIRED-1). All three are departures from the design's sketch.
 - `entity.n` is an explicit integer key: the FTS rowid and the link ends. Entities are never deleted, so `n` is
   never reused.
 - `entity_fts` is `fts5(title, body, content='', contentless_delete=1)`. The DDL ends with
@@ -115,8 +116,9 @@ writer calls `guard::check_key`. An unregistered kind or key passes; a class oth
 - **As of a tx.** `tx_at(conn, at)` is the last tx at or before a time. `entity_as_of(conn, n, tx)` answers the
   current row if `updated_tx <= tx`, else the `entity_hist` row that held at `tx` (one seek on `entity_hist_tx`:
   the first `tx_to` past `tx`), none before creation. `approximate` is true when that version's tx is `imported`.
-  `entity_hist` keeps no lease, origin or retirement: an old version has the default lease, the entity's origin and
-  source, and `retired_tx` only if the entity was retired at or before it. `links_as_of(conn, n, kinds, direction,
+  Every `entity_hist` row keeps its version's lease, origin and `retired_tx` (written by `to_hist` with the fields),
+  so an old version answers them as they were: an entity retired and later brought back is retired as of the time
+  between, a lease held then is held; the source is the entity's. `links_as_of(conn, n, kinds, direction,
   tx)` is `tx_from <= tx < tx_to` on `link_out` / `link_in`.
 - **Who changed what.** `history(conn, n, since)` lists versions (tx, time, actor, class, tool, session, the fields
   that version set, from `field_tx`; `retired` for the retiring version; `since` is inclusive).
