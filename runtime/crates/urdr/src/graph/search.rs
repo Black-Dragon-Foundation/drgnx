@@ -391,7 +391,7 @@ mod tests {
         let live = put(&mut c, "task:live", Some("migration"), None);
         let gone = put(&mut c, "task:gone", Some("migration"), None);
         {
-            let mut tx = Tx::for_test(
+            let tx = Tx::for_test(
                 &mut c,
                 TxMeta::new("user", Class::User, "test"),
                 Arc::default(),
