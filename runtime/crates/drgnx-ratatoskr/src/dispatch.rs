@@ -2,19 +2,21 @@
 //!
 //! 1. an unknown method → `no-method`;
 //! 2. a class the method does not take → `not-allowed`;
+//!    2b. the Lisp backend calling the front ([`Caller::backend`]): a method the front does not serve, or `subscribe`
+//!    → `not-allowed` (the seam rule: a backend call never waits on the backend, so it cannot deadlock);
 //! 3. a call on a user connection whose hello said a newer protocol → `proto`;
 //! 4. the typed decode → `invalid-params` with its `path` (keys the method does not know are dropped and listed);
 //! 5. a method that writes while work.db is newer than this hub → `schema`;
 //! 6. the handler, whose failure is `internal`.
 //!
-//! [`prelude`] is steps 1–5 with no handler: the connection loop and the fuzz target both call it.  A refusal is
+//! [`prelude_as`] is steps 1–5 with no handler: the connection loop calls it, the fuzz target [`prelude`] (no backend).  A refusal is
 //! logged and counted by [`Refusals::note`], with the method, the code, the class and the path, never the params or
 //! the message (a decode error's message can quote a value: a key, a prompt).
 
 use runstav::line;
 use runstav::methods::Params;
 use runstav::methods::hub::{Backend, Refusals as RefusalsResult};
-use runstav::registry::{self, Class, Method};
+use runstav::registry::{self, Class, Home, Method};
 use runstav::wire::{Error, ErrorCode, Id, Request};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -57,9 +59,20 @@ pub enum ErrorAnswerOrDrop {
 }
 
 /// Steps 1–5 for LINE on a connection of CLASS whose hello said PROTO (0: no hello), while work.db's schema is
-/// READ_ONLY when it is newer than this hub's.
+/// READ_ONLY when it is newer than this hub's.  A connection that is not the backend's: [`prelude_as`].
 pub fn prelude(
     class: Class,
+    proto: u32,
+    read_only: Option<u32>,
+    line: &str,
+) -> Result<Call, ErrorAnswerOrDrop> {
+    prelude_as(class, false, proto, read_only, line)
+}
+
+/// [`prelude`] on a connection that is the Lisp backend's when BACKEND ([`Caller::backend`]): step 2b applies.
+pub fn prelude_as(
+    class: Class,
+    backend: bool,
     proto: u32,
     read_only: Option<u32>,
     line: &str,
@@ -125,6 +138,21 @@ pub fn prelude(
             )
         };
         return Err(refuse(ErrorCode::NotAllowed, message, None));
+    }
+    // 2b: the backend waits on nothing that waits on it
+    if backend && m.home == Home::Backend {
+        return Err(refuse(
+            ErrorCode::NotAllowed,
+            "the backend may call only what the front serves".into(),
+            None,
+        ));
+    }
+    if backend && m.name == "subscribe" {
+        return Err(refuse(
+            ErrorCode::NotAllowed,
+            "the backend hears the front through notifications".into(),
+            None,
+        ));
     }
     // 3
     if class == Class::User && m.name != "hello" && proto > registry::PROTO {
@@ -234,13 +262,19 @@ impl Refusals {
     }
 }
 
-/// Who calls a forwarded method: the connection's class, and for an agent socket its session and job.
+/// Who calls a method: the connection's class, for an agent socket its session and job, and whether it is the Lisp
+/// backend.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
     pub class: Class,
     pub sid: Option<String>,
     pub job: Option<String>,
     pub conn_id: u64,
+    /// The connection's peer pid is the backend's (starting or running): the seam rule (dispatch step 2b) holds it to
+    /// what the front serves, and only it may name a message's sender.  Any relaxation of the peer-pid rule (R-FIX-M9:
+    /// a backend that connects through a helper, say) must keep marking the backend's connections, or a backend call
+    /// could wait on the backend itself (call 2, review m10).
+    pub backend: bool,
 }
 
 /// What a forwarded call answers.
@@ -263,6 +297,20 @@ pub trait Forward: Send + Sync {
     /// What `status` says of the backend (nothing, without one).
     fn status<'a>(&'a self) -> Pin<Box<dyn Future<Output = BackendInfo> + Send + 'a>> {
         Box::pin(async { BackendInfo::default() })
+    }
+
+    /// The backend's pid while it is starting (once spawned) or running: a connection from it is [`Caller::backend`].
+    fn backend_pid(&self) -> Option<i32> {
+        None
+    }
+
+    /// METHOD sent to the backend as a notification (no id, never awaited): dropped when no backend runs.
+    fn notify_backend<'a>(
+        &'a self,
+        method: &'static str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        let _ = method;
+        Box::pin(async {})
     }
 }
 
@@ -387,6 +435,64 @@ mod tests {
     }
 
     #[test]
+    fn a_backend_caller_gets_only_front_methods() {
+        use Class::*;
+        // the backend (a proven user) may call what the front serves
+        for line in [
+            r#"{"id":1,"method":"ping"}"#,
+            r#"{"id":1,"method":"status"}"#,
+            r#"{"id":1,"method":"coord/notify"}"#,
+            r#"{"id":1,"method":"events/add","params":{"kind":"job"}}"#,
+        ] {
+            assert!(prelude_as(User, true, 1, None, line).is_ok(), "{line}");
+        }
+        // never what it serves itself: that call would wait on the backend
+        let r = refused(prelude_as(
+            User,
+            true,
+            1,
+            None,
+            r#"{"id":1,"method":"job/status"}"#,
+        ));
+        assert_eq!(
+            (r.error.code, r.error.message.as_str()),
+            (
+                ErrorCode::NotAllowed,
+                "the backend may call only what the front serves"
+            )
+        );
+        let r = refused(prelude_as(
+            User,
+            true,
+            1,
+            None,
+            r#"{"id":1,"method":"subscribe"}"#,
+        ));
+        assert_eq!(
+            (r.error.code, r.error.message.as_str()),
+            (
+                ErrorCode::NotAllowed,
+                "the backend hears the front through notifications"
+            )
+        );
+        // every method: step 2b refuses exactly the backend's own and subscribe
+        for m in registry::registry() {
+            let line = json!({"id": 1, "method": m.name}).to_string();
+            let r = prelude_as(User, true, 1, None, &line);
+            let not_allowed = matches!(&r, Err(ErrorAnswerOrDrop::Refused(x)) if x.error.code == ErrorCode::NotAllowed);
+            assert_eq!(
+                not_allowed,
+                m.home == Home::Backend || m.name == "subscribe",
+                "{}",
+                m.name
+            );
+        }
+        // another user connection is not held to it
+        assert!(prelude_as(User, false, 1, None, r#"{"id":1,"method":"job/status"}"#).is_ok());
+        assert!(prelude(User, 1, None, r#"{"id":1,"method":"subscribe"}"#).is_ok());
+    }
+
+    #[test]
     fn lines_that_are_no_request() {
         use Class::*;
         // a duplicate key, with the id read: invalid-params at its path
@@ -477,6 +583,7 @@ mod tests {
             Cap::generate().unwrap(),
             dir.join("hub-x.sock"),
             work_db,
+            norn::store::CoordDb::spawn(dir.join("work.db")),
             forward,
         ))
     }

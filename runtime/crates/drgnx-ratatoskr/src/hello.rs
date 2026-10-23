@@ -34,6 +34,8 @@ pub struct Session {
     pub proto: u32,
     /// A hello has been answered here.
     pub hello_done: bool,
+    /// The peer's pid (`SO_PEERCRED`), when the system gives it: the front compares it with the backend's.
+    pub peer_pid: Option<i32>,
 }
 
 impl Session {
@@ -49,9 +51,11 @@ impl Session {
             hub_nonce: String::new(),
             proto: 0,
             hello_done: false,
+            peer_pid: None,
         }
     }
 
+    /// The caller this connection is; [`Caller::backend`] is the front's to set (it knows the backend's pid).
     pub fn caller(&self) -> Caller {
         let (sid, job) = match &self.socket {
             Socket::Main => (None, None),
@@ -62,6 +66,7 @@ impl Session {
             sid,
             job,
             conn_id: self.conn,
+            backend: false,
         }
     }
 }

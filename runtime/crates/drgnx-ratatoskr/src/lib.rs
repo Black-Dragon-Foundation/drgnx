@@ -11,8 +11,11 @@
 //! - [`conn`]: one connection: the peer-uid check, the challenge, lines, the writer queue that drops a stopped reader.
 //! - [`hello`]: a connection's class and `hello` v1 (the challenge, the proofs both ways, at most once).
 //! - [`dispatch`]: the contract's checks before any method runs, the refusals, and [`dispatch::Forward`].
-//! - [`front`]: what connections share and the methods the front serves itself.
+//! - [`front`]: what connections share and the methods the front serves itself (the seam rule: the backend's own
+//!   connection is held to them).
 //! - [`store`]: `work.db`, read-only, on a thread of its own.
+//! - [`coord`]: the front's writes to `work.db` (the editor's methods, the seam's `coord/*`), the `events` broadcast,
+//!   the `coord/notify` coalescer and the coordination tools' hub.
 //! - [`log`]: tracing to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` and warnings to stderr.
 //! - [`runtime_db`]: `<state>/hub/runtime.db`, the hub's own recovery state.
 //! - [`backend`]: the Lisp backend: its command, environment, record, connection and restarts.
@@ -26,6 +29,7 @@ pub mod backend;
 pub mod cli;
 pub mod client;
 pub mod conn;
+pub mod coord;
 pub mod dispatch;
 pub mod doctor;
 pub mod forward;

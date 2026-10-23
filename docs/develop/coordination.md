@@ -165,6 +165,26 @@ is deleted. Rules:
   from. Run `gen.el` by hand in the build container (its header has the commands); the fixtures stay when the Lisp is
   deleted.
 
+### Who writes what
+
+Under Ratatoskr, work.db has one writer per table group while the job runner is still Lisp (hub.md, "Ratatoskr and
+the Lisp backend"):
+
+| Writes | Through | Who calls |
+|---|---|---|
+| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`drgnx-ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection); the Lisp backend too |
+| jobs, tasks, leases, decisions, agents, the job runner's cards, held counts, the daily prune | the seam's `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` | the Lisp job runner (the backend), until it moves to Rust (phase 6) |
+| what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting |
+| everything else the Lisp hub writes today | `core/drgnx-coord.el` in the backend | the backend, until its calls move onto the seam |
+
+The front's methods take the Lisp keywords as params (`messages/send` `{recipient, text, job?, sender?, seen?,
+answers?, question?}`; only the backend may name a `sender`) and answer the Lisp results typed: `messages/send` is
+`{ok, id, state}` or `{held, version, changes}` (the decisions after `seen`, newest first, as `decisions_since` reads
+them), `coord/decide` `{ok, n, status, version}`, `{held, version, changes}` or `{error}`, `coord/leases`
+`{released: [{task, agent, job}]}`. Each is one transaction; each committed one is counted in `status`'s
+`store.writes`, sends its new events to subscribers and, unless the backend made it, tells the backend
+(`coord/notify`, coalesced) so it delivers.
+
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 
 `drgnx-mcp-serve NAME TOOLS` is a small MCP server (stdio, protocol 2025-06-18: initialize, ping, tools/list,
@@ -300,7 +320,10 @@ limit, the clock). Each tool is the Lisp tool of the same name, ported with the 
 answers (JSON in the Lisp's key order; an empty list is `null`, as the Lisp's nil) and the error texts are the
 Lisp's. `tests/tools.rs` replays the cases `gen.el` makes by running the Lisp tools
 (`test/fixtures/coord-parity/tools-*.json`). `report.rs` has `hello`, `report_edit`, `report_test`, `ask_user` and
-`list_agents`; `job.rs` and `read.rs` have the rest.
+`list_agents`; `job.rs` and `read.rs` have the rest. The hub's `Front` holds the one `Coord` (`Front.tools`, on the
+front's writer) and the list (`Front.tool_list`, `norn::tools::tools()`); its `Hub` (`coord::ToolHub`) answers
+`sessions()` with the backend's `agents/list` (2 s) and `notify()` with the front's `events` and the coalesced
+`coord/notify`.
 
 **Who an agent is.** A call's context is `(Arc<Coord>, Identity)`, and the identity comes from the connection, never
 from an argument or an environment variable (`DRGNX_AGENT` is never read):

@@ -44,6 +44,25 @@ impl Class {
     }
 }
 
+/// Which side serves a method, or sends an event (docs/develop/hub.md, "Ratatoskr and the Lisp backend"): the front
+/// (Ratatoskr itself) or the Lisp backend behind it.  The backend may call only `Front` methods (the seam rule), so
+/// the front never waits on the backend while it serves the backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Home {
+    Front,
+    Backend,
+}
+
+impl Home {
+    pub fn name(self) -> &'static str {
+        match self {
+            Home::Front => "front",
+            Home::Backend => "backend",
+        }
+    }
+}
+
 /// A method's params, decoded, and the dotted paths of the keys it dropped (the answer's `ignored`).
 pub type Decoded = (Params, Vec<String>);
 
@@ -54,6 +73,8 @@ pub struct Method {
     pub classes: &'static [Class],
     /// It writes work.db, so a read-only hub refuses it (`schema`).
     pub writes: bool,
+    /// Who serves it.
+    pub home: Home,
     pub doc: &'static str,
     pub params: fn() -> Schema,
     pub result: fn() -> Schema,
@@ -142,6 +163,7 @@ pub fn methods_json() -> Value {
                 "name": m.name,
                 "classes": m.classes.iter().map(|c| c.name()).collect::<Vec<_>>(),
                 "writes": m.writes,
+                "home": m.home.name(),
                 "doc": m.doc,
                 "params": (m.params)().to_value(),
                 "result": (m.result)().to_value(),
@@ -150,7 +172,9 @@ pub fn methods_json() -> Value {
         .collect();
     let events: Vec<Value> = events()
         .iter()
-        .map(|e| json!({"name": e.name, "doc": e.doc, "data": (e.data)().to_value()}))
+        .map(|e| {
+            json!({"name": e.name, "from": e.from.name(), "doc": e.doc, "data": (e.data)().to_value()})
+        })
         .collect();
     sorted(json!({
         "proto": PROTO, "proto_min": PROTO_MIN, "records": RECORDS, "schema": SCHEMA,
@@ -181,17 +205,19 @@ fn sorted(v: Value) -> Value {
 /// The Markdown table of the registry that `docs/develop/hub.md` holds between `<!-- hub-methods:begin -->` and
 /// `<!-- hub-methods:end -->`.
 pub fn markdown_table() -> String {
-    let mut s =
-        String::from("| Method | Class | Params | Result | Writes |\n|---|---|---|---|---|\n");
+    let mut s = String::from(
+        "| Method | Class | Params | Result | Writes | Home |\n|---|---|---|---|---|---|\n",
+    );
     for m in registry() {
         let classes: Vec<&str> = m.classes.iter().map(|c| c.name()).collect();
         s.push_str(&format!(
-            "| `{}` | {} | `{}` | `{}` | {} |\n",
+            "| `{}` | {} | `{}` | `{}` | {} | {} |\n",
             m.name,
             classes.join(", "),
             cell(&schema_words((m.params)().as_value(), true)),
             cell(&schema_words((m.result)().as_value(), false)),
-            if m.writes { "yes" } else { "no" }
+            if m.writes { "yes" } else { "no" },
+            m.home.name()
         ));
     }
     s
@@ -366,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 34, "{names:?}");
+        assert_eq!(names.len(), 49, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -385,6 +411,7 @@ mod tests {
             "gateway/register",
             "gateway/unregister",
         ];
+        want.extend(FRONT_WRITES);
         want.extend(
             registry()
                 .iter()
@@ -393,6 +420,82 @@ mod tests {
         );
         want.sort();
         assert_eq!(writes, want);
+    }
+
+    /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
+    const FRONT_WRITES: [&str; 15] = [
+        "cards/settle",
+        "messages/send",
+        "messages/mark",
+        "events/add",
+        "review/mark",
+        "coord/job-create",
+        "coord/job-set",
+        "coord/task-status",
+        "coord/leases",
+        "coord/decide",
+        "coord/agent",
+        "coord/card-create",
+        "coord/card-set",
+        "coord/held",
+        "coord/prune",
+    ];
+
+    #[test]
+    fn every_method_has_a_home() {
+        let front: Vec<&str> = registry()
+            .iter()
+            .filter(|m| m.home == Home::Front)
+            .map(|m| m.name)
+            .collect();
+        let mut want = vec![
+            "hello",
+            "ping",
+            "status",
+            "subscribe",
+            "shutdown",
+            "restart",
+            "events/since",
+            "coord/notify",
+        ];
+        want.extend(FRONT_WRITES);
+        want.sort();
+        assert_eq!(front, want, "the methods the front serves itself");
+        // every other method is the backend's, and each event names the side that sends it
+        assert!(
+            registry()
+                .iter()
+                .filter(|m| !want.contains(&m.name))
+                .all(|m| m.home == Home::Backend)
+        );
+        let from = |name| events().iter().find(|e| e.name == name).map(|e| e.from);
+        assert_eq!(from("events"), Some(Home::Front));
+        assert_eq!(from("challenge"), Some(Home::Front));
+        assert_eq!(from("job"), Some(Home::Backend));
+        let methods = methods_json();
+        assert_eq!(
+            methods["methods"][0]["home"],
+            json!("backend"),
+            "{}",
+            methods["methods"][0]
+        );
+    }
+
+    #[test]
+    fn the_docs_table_has_the_home_column() {
+        let t = markdown_table();
+        assert!(
+            t.starts_with("| Method | Class | Params | Result | Writes | Home |\n"),
+            "{t}"
+        );
+        assert!(
+            t.contains("| `cards/settle` | user | `{card: natnum, choice: string}` | `{settled: boolean}` | yes | front |"),
+            "{t}"
+        );
+        assert!(
+            t.contains("| `coord/notify` | user, agent, service | `{}` | `boolean` | no | front |"),
+            "{t}"
+        );
     }
 
     #[test]
@@ -474,6 +577,11 @@ mod tests {
         for m in registry() {
             let schema = (m.params)().to_value();
             let req = required(&schema);
+            if m.name == "coord/agent" {
+                // one of two keys, neither required on its own: its check refuses `{}`
+                assert!((m.decode)(&json!({})).is_err());
+                continue;
+            }
             match (m.decode)(&json!({})) {
                 Ok(_) => assert!(req.is_empty(), "{} took {{}} but needs {req:?}", m.name),
                 Err(e) => {
@@ -489,7 +597,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 24);
+        assert_eq!(with, 35);
     }
 
     #[test]
@@ -636,11 +744,11 @@ mod tests {
     fn the_table_spells_out_params() {
         let t = markdown_table();
         assert!(
-            t.contains("| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |"),
+            t.contains("| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |"),
             "{t}"
         );
         assert!(
-            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes |"),
+            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |"),
             "{t}"
         );
         assert!(

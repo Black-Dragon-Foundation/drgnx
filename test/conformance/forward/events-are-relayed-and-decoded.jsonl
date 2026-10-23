@@ -1,10 +1,11 @@
-{"scenario": "forward/events-are-relayed-and-decoded", "requires": ["v1", "fake-backend"], "doc": "The backend's events reach the front's subscribers decoded against their registry type (a null key comes out absent)."}
+{"scenario": "forward/events-are-relayed-and-decoded", "requires": ["v1", "fake-backend"], "doc": "The backend's events reach the front's subscribers decoded against their registry type (a null key comes out absent); its events event is dropped, since the front broadcasts the event log (logged once per backend start)."}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"events\": \"$ROOT/events.json\"}"}}
-{"do": "write_file", "path": "$ROOT/events.json", "text": "[{\"event\": \"job\", \"data\": {\"id\": \"j1\"}}, {\"event\": \"events\", \"data\": {\"since\": 0, \"last\": 1, \"events\": [{\"id\": 1, \"at\": 1.5, \"agent\": null, \"job\": \"j1\", \"kind\": \"job\", \"summary\": \"job j1 stopped\", \"data\": {\"status\": \"stopped\"}}]}}]"}
+{"do": "write_file", "path": "$ROOT/events.json", "text": "[{\"event\": \"events\", \"data\": {\"since\": 0, \"last\": 1, \"events\": [{\"id\": 1, \"at\": 1.5, \"agent\": null, \"job\": \"j1\", \"kind\": \"job\", \"summary\": \"job j1 stopped\", \"data\": {\"status\": \"stopped\"}}]}}, {\"event\": \"card\", \"data\": {\"id\": 7, \"job\": null, \"title\": \"t\"}}]"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "coord/notify"}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
-{"do": "expect", "conn": "c", "json": {"event": "job", "data": {"id": "j1"}}}
-{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"since": 0, "last": 1, "events": [{"id": 1, "agent": "$absent", "job": "j1", "data": {"status": "stopped"}}]}}}
+{"do": "expect_next", "conn": "c", "json": {"event": "card", "data": {"id": 7, "job": "$absent", "title": "t"}}}
+{"do": "expect_silent", "conn": "c", "for_ms": 500}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "dropped the Lisp backend's events event"}

@@ -1,0 +1,8 @@
+{"scenario": "seam/a-backend-call-to-the-front-never-deadlocks", "requires": ["v1", "fake-backend"], "doc": "Design 8.2's test: the fake backend's job/stop calls the front's events/add (call_front) before it answers; a user's job/stop through the front is answered within 2 s, the front's answer to the backend has the event's id, and the event is in work.db."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"call_front\": {\"method\": \"events/add\", \"params\": {\"kind\": \"job\", \"job\": \"j1\", \"summary\": \"job j1 stopped\", \"data\": {\"status\": \"stopped\"}}}, \"then\": {\"result\": {\"id\": \"j1\"}}}}"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/stop", "params": {"id": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "j1"}}, "within_ms": 2000}
+{"do": "backend_log", "expect_line": "\"result\":{\"id\":1}"}
+{"do": "sql_expect", "sql": "select id, kind, job, summary from event", "rows": [[1, "job", "j1", "job j1 stopped"]]}

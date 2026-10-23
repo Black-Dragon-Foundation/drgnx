@@ -1,5 +1,6 @@
-//! `work.db`, read-only (storage design §9 step 0): the Lisp backend writes it, the front only reads it, through
-//! `urdr::open_readonly` on a thread of its own, so SQLite never runs on an async worker.  The file may not exist yet
+//! `work.db`, read-only (storage design §9 step 0): the front's reads (`events/since`, the `events` broadcast, the
+//! schema tick); its writes go through norn's writer ([`crate::coord`]), the backend's own through the Lisp.  Read
+//! through `urdr::open_readonly` on a thread of its own, so SQLite never runs on an async worker.  The file may not exist yet
 //! (a fresh install): it is opened the first time it is there, and until then every read says so.
 
 use runstav::methods::hub::{EventRow, EventsPage};
@@ -67,6 +68,21 @@ impl WorkDb {
             Some(c) => urdr::meta(c, "schema")
                 .map(|v| v.and_then(|s| s.trim().parse().ok()).unwrap_or(0))
                 .map_err(|e| e.to_string()),
+        })
+        .await
+    }
+
+    /// The newest event's id: where the front's `events` broadcast starts (0 without a file, a table or a row).
+    pub async fn last_event_id(&self) -> Result<u64, String> {
+        self.run(|c| match c {
+            None => Ok(0),
+            Some(c) => match c.query_row("select coalesce(max(id), 0) from event", [], |r| {
+                r.get::<_, i64>(0)
+            }) {
+                Ok(n) => Ok(n.max(0) as u64),
+                Err(e) if e.to_string().contains("no such table") => Ok(0),
+                Err(e) => Err(e.to_string()),
+            },
         })
         .await
     }
@@ -159,6 +175,7 @@ mod tests {
             json!({"since": 0, "last": 0, "events": []})
         );
         assert_eq!(w.events_since(Some(7), None).await.unwrap().last, 7);
+        assert_eq!(w.last_event_id().await.unwrap(), 0);
         assert!(!dir.path().join("work.db").exists(), "a read makes no file");
         db(
             dir.path(),
@@ -167,6 +184,7 @@ mod tests {
         assert_eq!(w.schema().await.unwrap(), 6);
         // a schema-6 file without an event table yet: no events, not an error
         assert!(w.events_since(None, None).await.unwrap().events.is_empty());
+        assert_eq!(w.last_event_id().await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -181,6 +199,7 @@ mod tests {
              insert into event(at, agent, kind, data) values ('3', 7, 'note', '[1]');",
         );
         let w = WorkDb::spawn(path).unwrap();
+        assert_eq!(w.last_event_id().await.unwrap(), 3);
         let page = serde_json::to_value(w.events_since(Some(0), Some(2)).await.unwrap()).unwrap();
         assert_eq!(
             page,

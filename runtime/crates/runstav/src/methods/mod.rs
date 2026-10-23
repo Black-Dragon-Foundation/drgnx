@@ -18,17 +18,21 @@ use serde_json::Value;
 pub struct Empty {}
 
 /// One method's definition (`registry::Method`): the params and result types give its schemas, its typed decode
-/// (wrapped in `Params::$variant`) and its result check.  `check:` adds a check of meaning after the decode.
+/// (wrapped in `Params::$variant`) and its result check.  `home: Front` marks a method the front serves itself (the
+/// default is the backend's); `check:` adds a check of meaning after the decode.
 macro_rules! method {
+    (@home) => { $crate::registry::Home::Backend };
+    (@home $home:ident) => { $crate::registry::Home::$home };
     (
         $name:literal, $variant:ident($params:ty) -> $result:ty,
-        classes: [$($class:ident),+], writes: $writes:expr, doc: $doc:literal
+        classes: [$($class:ident),+], writes: $writes:expr, $(home: $home:ident,)? doc: $doc:literal
         $(, check: $check:expr)? $(,)?
     ) => {
         $crate::registry::Method {
             name: $name,
             classes: &[$($crate::registry::Class::$class),+],
             writes: $writes,
+            home: $crate::methods::method!(@home $($home)?),
             doc: $doc,
             params: $crate::registry::schema_of::<$params>,
             result: $crate::registry::schema_of::<$result>,
@@ -83,6 +87,21 @@ params! {
     EventsSince(hub::EventsSinceParams),
     EnvSet(hub::EnvSetParams),
     CoordNotify(Empty),
+    CardsSettle(coord::SettleParams),
+    MessagesSend(coord::SendParams),
+    MessagesMark(coord::MarkParams),
+    EventsAdd(coord::AddEventParams),
+    ReviewMark(coord::ReviewMarkParams),
+    CoordJobCreate(coord::JobCreateParams),
+    CoordJobSet(coord::JobSetParams),
+    CoordTaskStatus(coord::TaskStatusParams),
+    CoordLeases(coord::LeasesParams),
+    CoordDecide(coord::DecideParams),
+    CoordAgent(coord::AgentParams),
+    CoordCardCreate(coord::CardCreateParams),
+    CoordCardSet(coord::CardSetParams),
+    CoordHeld(coord::HeldParams),
+    CoordPrune(Empty),
     Spend(gateway::SpendParams),
     GatewayRegister(gateway::RegisterParams),
     GatewayUnregister(gateway::UnregisterParams),

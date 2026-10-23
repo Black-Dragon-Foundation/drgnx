@@ -109,6 +109,17 @@ impl Forward for ToBackend {
     fn status<'a>(&'a self) -> Pin<Box<dyn Future<Output = BackendInfo> + Send + 'a>> {
         Box::pin(self.0.info())
     }
+
+    fn backend_pid(&self) -> Option<i32> {
+        self.0.pid()
+    }
+
+    fn notify_backend<'a>(
+        &'a self,
+        method: &'static str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.0.notify(method))
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +138,7 @@ mod tests {
             sid: sid.map(str::to_string),
             job: job.map(str::to_string),
             conn_id: 3,
+            backend: false,
         }
     }
 

@@ -316,13 +316,14 @@ in [The registry](#the-registry-protocol-v1).
 ### Errors
 
 An error is `{"id", "error": {"code", "message", "path"?}}`. Every line goes through the dispatcher
-(`dispatch::prelude`) before any method runs, in the contract's order:
+(`dispatch::prelude_as`) before any method runs, in the contract's order:
 
 | Step | Refusal | When |
 |---|---|---|
 | (line) | `invalid-params` (with `path` when it is known) | not a JSON object, a duplicate key at any depth, nesting deeper than 64, no `method`. Answered when the line's `id` reads, else dropped and logged |
 | 1 | `no-method` | the method is not in the registry |
 | 2 | `not-allowed` | the connection's class may not call it. A `service` connection calling a `user` method gets "METHOD needs the user's capability (an editor or CLI of an older drgnx: update it)" |
+| 2b | `not-allowed` | the Lisp backend's own connection calls a method the front does not serve, or `subscribe` (the seam rule, next section) |
 | 3 | `proto` | a call (not `hello`) on a user connection whose hello said a newer protocol |
 | 4 | `invalid-params` with `path` | the typed decode failed. Keys the method does not know are dropped and listed in the answer's `ignored` |
 | 5 | `schema` | the method writes while the hub is read-only: "work.db is schema N, newer than this hub's 6: update drgnx" |
@@ -334,9 +335,10 @@ such as a wrong proof or a second hello) is logged at info ("refused a call") an
 only those: never the params or the message, since a decode error's message can quote a value (a key, a prompt).
 
 **Served by the front:** `hello`, `ping` `{pid}`, `status`, `subscribe` (the connection gets the broadcast events
-from now on), `shutdown` (answers `true`, then the hub stops as on SIGTERM) and `events/since`. `status` is `{pid,
-socket, started, proto, proto_min, records, drgnx_version, schema, read_only?, runtime, refusals, job_agents:
-"unsandboxed (as on main; the sandbox comes with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
+from now on), `shutdown` (answers `true`, then the hub stops as on SIGTERM), `restart`, `events/since`,
+`coord/notify` and the front's writes (next section). `status` is `{pid, socket, started, proto, proto_min, records,
+drgnx_version, schema, read_only?, store, runtime, refusals, job_agents: "unsandboxed (as on main; the sandbox comes
+with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
 last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since` (0), at most `limit` (200, at most
 1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
 says `backend: {state: running|starting|missing|failed, pid?}`, and `gateway_port` and `registrations` from the
@@ -411,9 +413,34 @@ M12), so this is no claim of zeroisation.
   class check).
 
 **Events.** The front subscribes to the backend once per backend start and relays its events to the front's
-subscribers. Only the nine kinds main broadcasts are relayed (`agent`, `agent-entries`, `events`, `lease-released`,
+subscribers. Eight of the nine kinds main broadcasts are relayed (`agent`, `agent-entries`, `lease-released`,
 `fallback`, `card`, `job`, `budget`, `request`), each decoded against its registry type first; an event of another
 name, or one whose data does not decode, is dropped and logged ("dropped a backend event", its name and the path).
+The backend's `events` is dropped before the relay (logged once per backend start): the front broadcasts the event
+log itself ([Events](#events)).
+
+**The front's writes.** The front writes work.db's coordination and job tables itself, through norn's writer
+(`runtime/crates/drgnx-ratatoskr/src/coord.rs`; [coordination.md](coordination.md#who-writes-what)): the editor's
+`cards/settle`, `messages/send`, `messages/mark`, `events/add` and `review/mark`, and the seam's `coord/*` methods,
+which the Lisp job runner calls until it moves (phase 6). Each is decoded by the registry, written in one transaction
+and answered typed. A work.db that is not ready (missing, below schema 6: the Lisp side makes it) is `internal` "work.db
+is not ready (schema N); the Lisp side makes it" (the writer looks at the file once more first, so a file the Lisp
+side just made is written at once); a newer one is `schema`; a busy one `internal` "work.db is busy; retry" (a
+`best_effort` event and `coord/agent`'s `seen` answer `{}`); a writer's refusal (a `seen` from the future, a review
+state) `invalid-params` with its text. `coord/prune` never fails (`{pruned: false}`). `coord/notify` is the front's
+too: its writes and every `coord/notify`, from any class, feed one coalescer that sends the backend at most one
+`coord/notify` notification (no id, never awaited) each 0.25 s, waiting up to 10 s for a backend that is starting;
+the backend runs delivery and the clash scan as before. `status` says `store: {schema, writer: ready | not-ready |
+read-only, writes}`, the writer's state from the schema at the last tick and the transactions the front's methods
+committed since start.
+
+**The seam rule** (call 2). A connection whose peer pid (`SO_PEERCRED`) is the backend's, starting or running, is the
+backend's (`Caller.backend`). The dispatcher's step 2b holds it to what the front serves (`home: front` in the table
+below): any other method is `not-allowed` "the backend may call only what the front serves", so a call the backend
+makes never waits on the backend itself and cannot deadlock; its `subscribe` is `not-allowed` "the backend hears the
+front through notifications"; its `status` is the front's alone (no backend query). Only the backend names a
+`messages/send` `sender` (an agent's message); from anyone else it is `not-allowed` at `sender`. Any relaxation of the
+peer-pid rule (R-FIX-M9) must keep marking the backend's connections.
 
 **Its life.** The backend must answer a `ping` on its socket within 10 s of its start. When it exits, or its
 connection ends, the calls in flight fail once (`internal` "the Lisp backend restarted"), calls sent meanwhile wait
@@ -567,7 +594,10 @@ Subscribers get them as `events` (`:since ID :last ID :events [{id, at, agent, j
 most one every `drgnx-hub-events-interval` (0.25 s) and 200 a time. The hub's session events and `coord/notify`
 schedule a broadcast at once; its tick (2 s) catches what other processes wrote and the job events above, which go out
 within those 2 s. Event ids are never reused (`autoincrement`), so a pruned log never sends an id twice. A new hub
-starts after the last event there is; a client catching up asks `events/since`. In an editor, the `test` events with
+starts after the last event there is; a client catching up asks `events/since`. Under Ratatoskr the front sends
+`events` (`coord.rs`, `broadcast_events`): from the newest row at its start, woken by each transaction its writer
+commits, by each forwarded call that writes (the Lisp backend still writes the rest), by `coord/notify` and by its 2 s
+schema tick; at most 200 rows an event and one event each 0.25 s, as above. In an editor, the `test` events with
 counts reach the status bar (`drgnx-statusbar-note-tests`) through `drgnx-statusbar--hub-tests`, which
 `drgnx-statusbar-mode` adds to `drgnx-hub-event-functions` and removes when it is off; the hub client knows nothing of
 the status bar.
@@ -603,7 +633,8 @@ What crosses the socket is JSON shaped by the record schemas of `core/drgnx-reco
 
 Every method of the hub protocol is one Rust definition in `runtime/crates/runstav/src/methods/` (`hub.rs`,
 `gateway.rs`, `agents.rs`, `jobs.rs`, `coord.rs`): its name, the classes that may call it, its params type, its result
-type, whether it writes work.db, and a line of doc. `runstav::registry::registry()` lists them sorted by name and
+type, whether it writes work.db, its home (`front`: Ratatoskr serves it; `backend`: it goes on to the Lisp backend),
+and a line of doc. `runstav::registry::registry()` lists them sorted by name and
 `find(NAME)` looks one up. Each method's `decode` is the typed decode the dispatcher runs: a value that does not fit
 is `invalid-params` with its `path` (a missing key is named too: `{}` for `job/stop` is refused at `id`), and unknown
 keys are dropped and listed in `ignored`. Its `check_result` decodes a result into the result type and encodes it
@@ -611,7 +642,7 @@ again: strict, so a key the registry does not know is an error with its path, an
 out `[]` (A-17). `PROTO` is 1, `PROTO_MIN` 1, `RECORDS` 2 and `SCHEMA` 6.
 
 From the registry come `runtime/protocol/methods.json` (`{proto, proto_min, records, schema, methods: [{name, classes,
-writes, doc, params, result}], events: [{name, doc, data}]}`, each schema JSON Schema 2020-12 with the named types
+writes, home, doc, params, result}], events: [{name, from, doc, data}]}`, each schema JSON Schema 2020-12 with the named types
 under `$defs`, keys sorted) and the table below (`registry::markdown_table()`). Tests fail when either is out of date;
 `UPDATE_METHODS_JSON=1 cargo test -p runstav registry` (through the cargo wrapper) writes both again. In the table
 `{a: T, b?: T}` is an object with `a` required and `b` optional (absent or `null`), `[T]` a list, `A | B` either, and
@@ -673,13 +704,14 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}` |
+| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, and the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}` |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
 classes see of the shared methods: `agents/list` gives a `service` the `{id, name, job, task}` of every session and an
 `agent` the same of its own job's; `spend` of an `agent` is its own job's. The methods that write work.db (`writes`,
 refused with `schema` while the hub is read-only) are `gateway/register`, `gateway/unregister`,
-`agents/{start,send,stop,kill,permission,do}` and every `job/…` but `job/status`.
+`agents/{start,send,stop,kill,permission,do}`, every `job/…` but `job/status`, and the front's writes (the editor's
+five and the seam's ten `coord/…`, all but `coord/notify`).
 
 ### Types
 
@@ -703,6 +735,8 @@ type's schema carries the same `pattern` and `maxLength`.
 | `Usd` | a number in 0..=1000000 |
 | `Delta` | an integer in -1000..=1000 (`job/order`) |
 | `StringOrNumber` | a string of at most 4096, or a number (`job/card`'s `arg`) |
+| `Status` | a job's, task's or card's state: `^[a-z][a-z-]*$`, at most 32 |
+| `JsonObject` | a JSON object of at most 64 KiB (65536 bytes as JSON): a stored `data` |
 | `ProviderKeys` | an object `Id` → key, at most 32 keys of at most 4096 each; kept secret (no `Debug`), serialised only when the params go on to the backend |
 | `Bounded<T, MAX>` | a string or list of at most MAX: every bound of the contract (`env/set`'s list: 16, a value 32768; a chain: 16 steps of `[provider, model-or-null]`; a profile: 128) |
 
@@ -719,7 +753,7 @@ result is (`event(NAME).check`):
 |---|---|---|
 | `agent` | sessions | `{id, seq, session: Snapshot}` |
 | `agent-entries` | sessions | `{id, seq, entries: [[index, Entry]]}` |
-| `events` | the event log | `{since, last, events: [{id, at, agent, job, task, kind, summary, data?}]}` |
+| `events` | the event log (the front's writer: [Events](#events)) | `{since, last, events: [{id, at, agent, job, task, kind, summary, data?}]}` |
 | `lease-released` | the hub's housekeeping | `{task, agent, job}` |
 | `fallback` | the gateway, jobs | `{agent, from, to, why}`, from a job with `job` and `task` too |
 | `card` | jobs | `{id, job, task, kind, title}` |
@@ -729,7 +763,9 @@ result is (`event(NAME).check`):
 | `challenge` | the front, on accept | `{nonce}` |
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
 
-The first nine are what the Lisp backend broadcasts on main; a test reads `core/*.el` for its `(drgnx-hub--broadcast
+Each event type says which side sends it (`from`, in `methods.json`): `events`, `challenge` and `notice` the front,
+the rest the backend. The first nine are what the Lisp backend broadcasts on main (its `events` is dropped under
+Ratatoskr until it stops sending it); a test reads `core/*.el` for its `(drgnx-hub--broadcast
 'NAME`, `(drgnx-job--broadcast 'NAME` and `drgnx-gateway--emit 'NAME` calls and fails when the two lists differ.
 
 ## Per-session sockets
