@@ -26,6 +26,8 @@ sha1.workspace = true
 [dev-dependencies]
 # `test-hooks`: `urdr::graph::Tx::for_test`, so the policy's tests write through the primitives without a writer
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
+# tests/canary.rs: the hub's entity embedder (door 4) over the canary store (a dev-dependency cycle cargo allows)
+drgnx-ratatoskr = { path = "../drgnx-ratatoskr", version = "0.1.0" }
 tempfile.workspace = true
 proptest.workspace = true
 insta.workspace = true

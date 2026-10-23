@@ -1,8 +1,8 @@
 //! The personal-notes canary over the Rust-only doors (Urdr Task 19; storage §5.6): `graph/put-parsed` with crafted
 //! payloads (door 1, without the Lisp scan in front of it), the 6 → 7 migration (door 2,
-//! `test/fixtures/work-db-6-canary.sql`), `graph/import` of a tampered export (door 2) and `graph/export` (door 5).
-//! The entity embedder (door 4) is Task 12b's: `needs: 12b`, Task 21 adds it here. The Lisp scan and indexer are the
-//! row `privacy/personal-notes-canary`'s.
+//! `test/fixtures/work-db-6-canary.sql`), `graph/import` of a tampered export (door 2), `graph/export` (door 5) and
+//! the hub's entity embedder (door 4, `drgnx_ratatoskr::embed::fill`, a dev-dependency) over everything stored. The
+//! Lisp scan and indexer are the row `privacy/personal-notes-canary`'s.
 //!
 //! Everything lives under a temp HOME. The canaries are random bytes generated here, written only into fixture files
 //! under that HOME's `org/`; nothing reads the real `~`.
@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use urdr::Connection;
 use urdr::graph::entity::{self, Ent, EntityNew, Origin};
 use urdr::graph::export::{self, Allow, Opts};
+use urdr::graph::search::{EmbedError, Embedder};
 use urdr::graph::{Class, ReadPool, TxMeta};
 
 /// 32 random bytes as hex: a canary no fixture, code or test text holds.
@@ -137,6 +138,27 @@ fn holds(path: &Path, needle: &str) -> bool {
     fs::read(path).is_ok_and(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes()))
 }
 
+/// Door 4's provider: it keeps every text it is sent and answers a vector for each.
+#[derive(Default)]
+struct Recorder {
+    sent: std::sync::Mutex<Vec<String>>,
+}
+
+impl Embedder for Recorder {
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> urdr::graph::search::BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+        self.sent.lock().unwrap().extend(texts.iter().cloned());
+        let n = texts.len();
+        Box::pin(async move { Ok(vec![vec![1.0, 0.0, 0.5, 0.25]; n]) })
+    }
+
+    fn model(&self) -> &str {
+        "canary"
+    }
+}
+
 struct QuietHub;
 
 impl Hub for QuietHub {
@@ -150,6 +172,10 @@ impl Hub for QuietHub {
 struct Ran {
     /// The hub's tools over the store (it holds the store open).
     coord: Arc<Coord>,
+    /// The store the tools write.
+    db: CoordDb,
+    /// The canary of the record stored before the user's deny file kept its folder out (door 5's).
+    kept_out: String,
     /// Door 1's answers to the crafted payloads (each must refuse its source), then the allowed plan's and the
     /// board's.
     refused: Vec<PutAnswer>,
@@ -372,9 +398,11 @@ async fn run_doors(fx: &Fx) -> Ran {
         pool,
         deny: Arc::new(RwLock::new(Arc::clone(&deny))),
     };
-    let coord = Arc::new(Coord::new(db, Arc::new(QuietHub)).with_graph(graph));
+    let coord = Arc::new(Coord::new(db.clone(), Arc::new(QuietHub)).with_graph(graph));
     Ran {
         coord,
+        db,
+        kept_out,
         refused,
         allowed,
         imported,
@@ -458,6 +486,24 @@ async fn rust_doors_never_store_the_canary() {
         "an entity names a path into org/"
     );
     // The migration's own copy (`backup/`) still holds them by design: the doctor lists it, nothing reads it.
+
+    // Door 4, the embedder: a round over every stale entity sends none of the canaries, nor the record the user's deny
+    // file kept out after it was stored (it stays in the store, unsent), and the allowed ones are sent.
+    let recorder = Recorder::default();
+    let out = drgnx_ratatoskr::embed::fill(&ran.db, &recorder, &fx.deny()).await;
+    assert!(
+        matches!(out, drgnx_ratatoskr::embed::Outcome::Filled { embedded, denied: 1 } if embedded >= 4),
+        "door 4: {out:?}"
+    );
+    let sent = recorder.sent.lock().unwrap().join("\n");
+    for (name, c) in [
+        ("notes.org", &fx.notes),
+        ("org/other.md", &fx.other),
+        ("docs/private.txt", &ran.kept_out),
+    ] {
+        assert!(!sent.contains(c.as_str()), "door 4 sent the canary of {name}");
+    }
+    assert!(sent.contains("a recorded note") && sent.contains("a plain imported note"));
 }
 
 #[tokio::test]
