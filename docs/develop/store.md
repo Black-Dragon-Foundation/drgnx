@@ -104,6 +104,27 @@ writer calls `guard::check_key`. An unregistered kind or key passes; a class oth
 
 ## History (Task 3)
 
+`urdr::graph::hist` reads and rewrites the past. It is policy-free: the caller checks the class (user only).
+
+- **As of a tx.** `tx_at(conn, at)` is the last tx at or before a time. `entity_as_of(conn, n, tx)` answers the
+  current row if `updated_tx <= tx`, else the `entity_hist` row that held at `tx` (one seek on `entity_hist_tx`:
+  the first `tx_to` past `tx`), none before creation. `approximate` is true when that version's tx is `imported`.
+  `entity_hist` keeps no lease, origin or retirement: an old version has the default lease, the entity's origin and
+  source, and `retired_tx` only if the entity was retired at or before it. `links_as_of(conn, n, kinds, direction,
+  tx)` is `tx_from <= tx < tx_to` on `link_out` / `link_in`.
+- **Who changed what.** `history(conn, n, since)` lists versions (tx, time, actor, class, tool, session, the fields
+  that version set, from `field_tx`; `retired` for the retiring version; `since` is inclusive).
+  `link_history(conn, n)` lists a link's rows with the authors of `tx_from` and `tx_to`.
+- **Revert.** `revert(tx, target)` gives every entity the target wrote a version of its previous state as a new
+  version (an entity the target created is retired; one it retired is un-retired), retires the links the target
+  added and adds again, as new rows, those it retired; the new tx's `reverts` names the target. If any such
+  entity has a later version by another tx, nothing is written and the answer is `Blocked { later }`. Reverting a
+  revert follows the same rule. `restore(tx, n, ver)` sets the fields of an old version (a new version; retirement
+  untouched).
+- **Proposed txs.** `settle_proposed(tx, txs, accept)` marks proposed txs `accepted`, or reverts them newest first
+  (the batch's own earlier reverts are not "later changes"; a block rolls the whole call back) and marks them
+  `reverted`. Any other state is refused. The settling tx is the user's record of the decision.
+- **Limits.** A revert finds the links a tx added with a scan of `link` by `tx_from` (no index; reverts are rare).
 ## Walks (Task 4)
 
 ## Search (Task 5)
