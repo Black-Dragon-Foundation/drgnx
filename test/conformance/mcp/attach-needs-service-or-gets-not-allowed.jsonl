@@ -1,0 +1,13 @@
+{"scenario": "mcp/attach-needs-service-or-gets-not-allowed", "requires": ["v1", "test-hooks"], "doc": "mcp/attach is the service class's alone (an outside agent's bridge): from an agent socket and from a user connection it is not-allowed, and the connection stays a hub connection."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "agent"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "mcp/attach", "params": {"kind": "claude"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed", "message": "mcp/attach is not allowed on this connection (agent class)"}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "result": {"pid": "$PID(h)"}}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "mcp/attach", "params": {"kind": "claude"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"mcp": {"sessions": 0, "outside": 0}}}}

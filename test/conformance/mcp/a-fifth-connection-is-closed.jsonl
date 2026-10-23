@@ -1,0 +1,22 @@
+{"scenario": "mcp/a-fifth-connection-is-closed", "requires": ["v1"], "doc": "A session socket serves at most 4 connections at once: a fifth is closed with nothing said and logged, and the four go on."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m1", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "method": "ping"}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "result": {}}}
+{"do": "connect", "conn": "m2", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "method": "ping"}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "result": {}}}
+{"do": "connect", "conn": "m3", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m3", "json": {"jsonrpc": "2.0", "id": 1, "method": "ping"}}
+{"do": "expect", "conn": "m3", "json": {"jsonrpc": "2.0", "id": 1, "result": {}}}
+{"do": "connect", "conn": "m4", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m4", "json": {"jsonrpc": "2.0", "id": 1, "method": "ping"}}
+{"do": "expect", "conn": "m4", "json": {"jsonrpc": "2.0", "id": 1, "result": {}}}
+{"do": "connect", "conn": "m5", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "expect_closed", "conn": "m5", "within_ms": 2000, "silent": true}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "it serves at most 4 at once"}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "method": "ping"}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "result": {}}}

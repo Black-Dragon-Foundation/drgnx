@@ -49,11 +49,14 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   3. The lock (below).
   4. Only while holding the lock: a stale socket is removed, the cap is written (0600, a temporary file and a
      rename), and the socket is bound and made 0600.
-  5. `<state>/hub/runtime.db` is opened through urdr (0600, WAL, `synchronous=FULL`; schema 1: the `proc` table the
-     orphan reaper fills). A newer schema (after `update --back`) is moved aside with its `-wal` and `-shm` as
-     `runtime.db.newer-N-UNIXTIME` and a new file is made: nothing in it outlives a hub in phase 1.
+  5. `<state>/hub/runtime.db` is opened through urdr (0600, WAL, `synchronous=FULL`; schema 2: the `proc` table the
+     orphan reaper fills, and `msession`, the session sockets of
+     [Sessions and their sockets](#sessions-and-their-sockets)). A newer schema (after `update --back`) is moved aside
+     with its `-wal` and `-shm` as `runtime.db.newer-N-UNIXTIME` and a new file is made: the sessions it kept are lost
+     (their bridges fail and their editors open them again), which is accepted because installs are disposable.
   6. The processes `runtime.db` recorded (a crashed run's backend) are reaped, then the Lisp backend is started
-     ([Ratatoskr and the Lisp backend](#ratatoskr-and-the-lisp-backend)).
+     ([Ratatoskr and the Lisp backend](#ratatoskr-and-the-lisp-backend)), then the session sockets whose owners
+     still run are bound again.
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
   `--parent-pid` counts). It stops accepting, stops the Lisp backend (its group: SIGTERM, SIGKILL after 2 s; at most
@@ -632,7 +635,7 @@ What crosses the socket is JSON shaped by the record schemas of `core/drgnx-reco
 ## The registry (protocol v1)
 
 Every method of the hub protocol is one Rust definition in `runtime/crates/runstav/src/methods/` (`hub.rs`,
-`gateway.rs`, `agents.rs`, `jobs.rs`, `coord.rs`): its name, the classes that may call it, its params type, its result
+`gateway.rs`, `agents.rs`, `jobs.rs`, `coord.rs`, `mcp.rs`): its name, the classes that may call it, its params type, its result
 type, whether it writes work.db, its home (`front`: Ratatoskr serves it; `backend`: it goes on to the Lisp backend),
 and a line of doc. `runstav::registry::registry()` lists them sorted by name and
 `find(NAME)` looks one up. Each method's `decode` is the typed decode the dispatcher runs: a value that does not fit
@@ -679,7 +682,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | backend |
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, task?: TaskRef}` | `{openrouter?: any, token: string, url: string}` | yes | backend |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | yes | backend |
-| `hello` | user, agent, service | `{client?: string, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
+| `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | backend |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes | backend |
@@ -693,6 +696,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no | backend |
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes | backend |
+| `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no | front |
+| `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, sid?: SessionId, task?: TaskRef}` | `{sid: string, socket: string}` | no | front |
+| `mcp/session-close` | user | `{sid: SessionId}` | `boolean` | no | front |
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes | front |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes | front |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |
@@ -719,7 +725,8 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, and the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}` |
+| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
+| service | `mcp/attach` (an outside agent's bridge: [Sessions and their sockets](#sessions-and-their-sockets)) |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
 classes see of the shared methods: `agents/list` gives a `service` the `{id, name, job, task}` of every session and an
@@ -745,6 +752,8 @@ type's schema carries the same `pattern` and `maxLength`.
 | `Hex64` | `^[0-9a-f]{64}$` |
 | `TaskRef` | no control characters, 1 to 512 |
 | `AgentName` | no control characters, at most 256 |
+| `SessionId` | `^[A-Za-z0-9_-]+$`, at most 64: a session directory's name (`mcp/session`) |
+| `AgentKind` | `^[a-z0-9][a-z0-9_-]*$`, at most 32: an outside agent's kind (`mcp/attach`) |
 | `CardAction` | `^[a-z][a-z-]*$`, at most 32 |
 | `RequestId` | a natural number, or a string of at most 128 |
 | `Usd` | a number in 0..=1000000 |
@@ -822,6 +831,49 @@ A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own
   Every other session, interactive agents included, keeps the stdio servers.
 
 Tests: `test/unit/sandbox-mcp-test.el` (`drgnx-sandbox-mcp/`).
+
+## Sessions and their sockets
+
+Under Ratatoskr the coordination tools (`norn::tools`, served by `mimir`) run in the hub itself, with no server
+process per connection (`runtime/crates/drgnx-ratatoskr/src/sessions.rs`). Two doors lead to them, and neither takes
+an identity from the agent: not from a tool's arguments, and never from `DRGNX_AGENT` (the hub's own is ignored).
+
+- **A session's socket (`mcp/session`, user).** `{agent, sid?, job?, task?, cwd?, owner}` answers `{sid, socket}`.
+  - Without `sid` the hub mints one (12 hex digits of `getrandom`) and makes its directory with
+    `runstav::paths::make_session_dir` (Gleipnir's session directory: `s/SID` beside the main socket, or under
+    `<tmp>/drgnx-hub-UID/` when the longest socket name, `gateway.sock`, would not fit 103 bytes; each level 0700, the
+    user's). With `sid`, `mcp.sock` goes beside the session's agent `hub.sock`: one directory per session.
+  - `agent` is an agent's id (letters, digits, `.`, `_`, `:`, `-`; never `user`: `invalid-params` at `agent`).
+    `owner` is the pid of the process the session belongs to; it must be running (`invalid-params` at `owner`), and its
+    start time is kept with it.
+  - The row `msession(sid, agent, job, task, cwd, owner, owner_start, at)` is written to `runtime.db` **before**
+    `mcp.sock` is bound (0600): a hub that dies in between leaves a row the next start binds. A bind that fails deletes
+    the row again.
+  - Whoever connects is that agent: the tools act as `agent` (with its `job` and `task`), their home is `cwd` (`/`
+    without one). The peer's uid is checked as on every socket, there is no challenge (the first byte is MCP), and a
+    socket serves at most 4 connections at once: a fifth is closed with nothing said and logged.
+- **Closing.** `mcp/session-close {sid}` (user) answers `true` once (`false` for a session that is not open): the
+  socket, the directory (unless the session's `hub.sock` is still in it) and the row go, then its connections are
+  closed — a client that sees its connection close finds the rest gone. Each second the hub closes the sessions whose
+  owner is gone: not running, a zombie, or a pid the system gave to a new process (another start time).
+  `__test_owner_gone {owner}` (test hooks) closes an owner's sessions at once and answers `{closed: N}`.
+- **Across a restart.** At the stop the sockets are unbound and their connections end; rows and directories stay. At
+  the next start, after the reaper, each row whose owner runs with its recorded start time is bound again at the same
+  path (a bridge redials it); the others are deleted with their directories. A newer-schema `runtime.db` that is moved
+  aside loses them (step 5 of the start order).
+- **An outside agent's bridge (`mcp/attach`, service).** The bridge of an agent drgnx did not start connects to the
+  main socket, says `hello` without a proof but with its `cwd` (it stays `service`), then
+  `mcp/attach {kind}` (`AgentKind`, e.g. `claude`). The hub reads the connection's peer (`SO_PEERCRED`;
+  `LOCAL_PEERPID` on macOS), that process's parent and the parent's start time (`/proc/PID/stat`; `proc_pidinfo` on
+  macOS; elsewhere unsupported), and answers `{identity: "ext:KIND:PID-HASH"}`: PID the parent's, HASH the first 6
+  hex digits of the SHA-1 of its start time in whole seconds. A parent that is init (pid 1) is refused (`not-allowed`,
+  "an outside agent needs a parent process"). After the answer line the same connection carries MCP, with
+  `hello`'s `cwd` as the tools' home; whatever the bridge sent after `mcp/attach` is read as MCP. An outside identity
+  is unverified: it may report, but a job's tools (`claim_task`, `update_task`, `complete_task`, `record_decision`)
+  are a tool error for it.
+- **What `status` says.** `mcp: {sessions, outside}`: the session sockets bound and the outside bridges attached.
+
+Rows: `test/conformance/mcp/`.
 
 ## Registrations
 

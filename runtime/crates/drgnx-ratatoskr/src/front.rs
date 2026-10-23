@@ -1,6 +1,6 @@
 //! The front: what every connection shares, and the methods it serves itself (`Home::Front`) — `hello`, `ping`,
-//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify` and the writes of [`crate::coord`].
-//! Every other method goes to [`Forward`].
+//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`] and
+//! the MCP hosting of [`crate::sessions`] (`mcp/*`).  Every other method goes to [`Forward`].
 //!
 //! [`Front::line`] is one line of one connection: [`dispatch::prelude_as`] (the connection is the backend's when its
 //! peer pid is the backend's), the refusal noted, the handler, the answer queued.  [`Front::start_line`] is the same
@@ -12,11 +12,13 @@ use crate::conn::Outbox;
 use crate::coord::{self, Signals, ToolHub, Writer};
 use crate::dispatch::{self, Call, Caller, ErrorAnswerOrDrop, Forward, Refusals};
 use crate::hello::{self, Session};
+use crate::sessions::{self, Sessions};
 use crate::store::WorkDb;
 use crate::version::COMMIT;
 use runstav::line::MAX_HUB_LINE;
 use runstav::methods::Params;
 use runstav::methods::hub::{HubStatus, Runtime, StoreStatus, WriterState};
+use runstav::methods::mcp::AttachAnswer;
 use runstav::proof::Cap;
 use runstav::registry;
 use runstav::registry::{Class, Method};
@@ -64,6 +66,8 @@ pub struct Front {
     pub tools: Arc<norn::tools::Coord>,
     /// The coordination tools (`norn::tools::tools`).
     pub tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]>,
+    /// The tools on the sessions' sockets and for outside bridges ([`crate::sessions`]).
+    pub mcp: Sessions,
     forward: Arc<dyn Forward>,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
@@ -92,19 +96,23 @@ impl Front {
             forward: forward.clone(),
             signals: signals.clone(),
         });
+        let uid = rustix::process::geteuid().as_raw();
+        let tools = Arc::new(norn::tools::Coord::new(coord_db.clone(), hub));
+        let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         Front {
             cap,
             pid: std::process::id(),
-            uid: rustix::process::geteuid().as_raw(),
+            uid,
             socket,
             started: crate::log::rfc3339(now()),
             work_db,
             writer: Writer {
-                db: coord_db.clone(),
+                db: coord_db,
                 signals,
             },
-            tools: Arc::new(norn::tools::Coord::new(coord_db, hub)),
-            tool_list: norn::tools::tools().into(),
+            mcp: Sessions::new(uid, tools.clone(), tool_list.clone()),
+            tools,
+            tool_list,
             forward,
             refusals: Mutex::new(Refusals::default()),
             schema: AtomicU32::new(0),
@@ -221,6 +229,7 @@ impl Front {
                 },
                 writes: self.writer.signals.writes(),
             }),
+            mcp: Some(self.mcp.status()),
             runtime: Some(Runtime {
                 version: env!("CARGO_PKG_VERSION").into(),
                 commit: COMMIT.into(),
@@ -375,6 +384,14 @@ impl Front {
                 }
                 Ok(json!(true))
             }
+            Params::McpSession(p) => self.mcp.open(p).await.map(|a| json!(a)),
+            Params::McpSessionClose(p) => self.mcp.close(p.sid.as_str()).await.map(|b| json!(b)),
+            // the answer goes out first; the connection loop then hands the connection to MCP
+            Params::McpAttach(p) => sessions::outside(s, p.kind.as_str()).map(|who| {
+                let identity = who.id().unwrap_or_default().to_owned();
+                s.attach = Some(who);
+                json!(AttachAnswer { identity })
+            }),
             other => match coord::serve(&self.writer, &caller, other).await {
                 Ok(result) => result,
                 Err(params) => {
@@ -507,6 +524,7 @@ mod tests {
             v["store"],
             json!({"schema": 0, "writer": "not-ready", "writes": 0})
         );
+        assert_eq!(v["mcp"], json!({"sessions": 0, "outside": 0}));
         assert!(v.get("read_only").is_none(), "{v}");
         let started = v["started"].as_str().unwrap();
         assert!(started.len() == 20 && started.ends_with('Z'), "{started}");
@@ -782,6 +800,59 @@ mod tests {
             .await;
         assert_eq!(answers(&out), vec![json!({"id": 4, "result": true})]);
         assert_eq!(behind.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn attach_is_the_peers_parent_and_hands_the_connection_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        // the peer is a child of this process (a test runner may itself be pid 1's child, or pid 1)
+        let mut peer = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let attach = r#"{"id":1,"method":"mcp/attach","params":{"kind":"claude"}}"#;
+        let mut s = Session::new(f.next_conn(), Socket::Main);
+        s.peer_pid = Some(peer.id() as i32);
+        s.cwd = Some(PathBuf::from("/w"));
+        let out = Arc::new(Outbox::new(s.conn));
+        f.line(&mut s, &out, attach).await;
+        let a = answers(&out);
+        let id = a[0]["result"]["identity"].as_str().unwrap_or_default();
+        let hash = norn::tools::identity::start_hash(
+            crate::peer::parent_of(peer.id() as i32)
+                .unwrap()
+                .start
+                .unwrap(),
+        );
+        assert_eq!(
+            id,
+            format!("ext:claude:{}-{hash}", std::process::id()),
+            "{a:?}"
+        );
+        let who = s.attach.as_ref().expect("the connection is handed to MCP");
+        assert_eq!(
+            (who.id(), who.home(), who.job()),
+            (Some(id), Some(std::path::Path::new("/w")), None)
+        );
+        // a user connection never attaches, and a kind is the bin/drgnx rule
+        let mut u = Session::new(f.next_conn(), Socket::Main);
+        u.class = Class::User;
+        u.peer_pid = s.peer_pid;
+        f.line(&mut u, &out, attach).await;
+        let bad = r#"{"id":2,"method":"mcp/attach","params":{"kind":"Claude"}}"#;
+        let mut t = Session::new(f.next_conn(), Socket::Main);
+        t.peer_pid = s.peer_pid;
+        f.line(&mut t, &out, bad).await;
+        let a = answers(&out);
+        assert_eq!(a[0]["error"]["code"], "not-allowed", "{a:?}");
+        assert_eq!(
+            (a[1]["error"]["code"].clone(), a[1]["error"]["path"].clone()),
+            (json!("invalid-params"), json!("kind"))
+        );
+        assert!(u.attach.is_none() && t.attach.is_none());
+        peer.kill().unwrap();
+        peer.wait().unwrap();
     }
 
     #[tokio::test]

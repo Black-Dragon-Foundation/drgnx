@@ -1,0 +1,16 @@
+{"scenario": "mcp/a-session-socket-is-its-identity", "requires": ["v1", "fake-backend"], "doc": "mcp/session mints a session socket for an agent; whoever connects to it is that agent: hello registers s-0000000a, and an agent named in a tool's arguments (s-evil) is never who it is."}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "job": "j1", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}}
+{"do": "sql_expect", "sql": "select id from agent", "rows": [["s-0000000a"]]}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "hello", "arguments": {"agent": "s-evil"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": "$any"}}
+{"do": "sql_expect", "sql": "select id from agent", "rows": [["s-0000000a"]]}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select sid, agent, job, cwd, owner from msession", "rows": [["$sid", "s-0000000a", "j1", "$HOME", "$HARNESS_PID"]]}

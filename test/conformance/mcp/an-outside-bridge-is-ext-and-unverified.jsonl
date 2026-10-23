@@ -1,0 +1,19 @@
+{"scenario": "mcp/an-outside-bridge-is-ext-and-unverified", "requires": ["v1", "fake-backend"], "doc": "An outside agent's bridge: a hello without a proof but with its cwd (service class), mcp/attach {kind: claude}, then MCP on the same connection.  Its identity is ext:claude:PID-HASH of the bridge's parent (the harness's here), and a job's tool (claim_task) is a tool error."}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "b", "hub": "h", "as": "raw"}
+{"do": "expect_next", "conn": "b", "json": {"event": "challenge", "data": {"nonce": "$string"}}, "within_ms": 2000}
+{"do": "send", "conn": "b", "json": {"id": 1, "method": "hello", "params": {"proto": 1, "nonce": "0123456789abcdef0123456789abcdef", "client": "mcp-bridge", "cwd": "$HOME"}}}
+{"do": "expect", "conn": "b", "json": {"id": 1, "result": {"class": "service"}}}
+{"do": "send", "conn": "b", "json": {"id": 2, "method": "mcp/attach", "params": {"kind": "claude"}}}
+{"do": "expect", "conn": "b", "json": {"id": 2, "result": {"identity": "$capture:who"}}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"mcp": {"sessions": 0, "outside": 1}}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}}
+{"do": "sql_expect", "sql": "select id glob 'ext:claude:[1-9]*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]', id = '$who', kind from agent", "rows": [[1, 1, "claude"]]}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "claim_task", "arguments": {"task": "j1#1", "seen_version": 0}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "jobs are drgnx's: report your work with report_edit (claim_task is for drgnx's own job agents)"}], "isError": true}}}

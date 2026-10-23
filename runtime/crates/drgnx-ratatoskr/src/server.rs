@@ -9,10 +9,12 @@
 //! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick, and the
 //!    writer (`norn::store::CoordDb`), which opens a schema-6 file now and at each tick ([`crate::coord`]);
 //! 6. the processes `runtime.db` recorded reaped, then the Lisp backend started (and kept running) on its own socket,
+//!    the sessions' `mcp.sock` of live owners bound again ([`crate::sessions`]; their owners watched each second),
 //!    the `events` broadcaster and the `coord/notify` coalescer.
 //!
 //! It serves until SIGTERM, SIGINT, `shutdown` or the `--parent-pid` process is gone (checked each second), then
-//! stops accepting and removes the sockets and the cap while the lock is still held.
+//! stops accepting and removes the sockets (the sessions' too; their rows stay) and the cap while the lock is still
+//! held.
 
 use crate::backend::{self, Backend};
 use crate::cli::{AgentSocket, ServeArgs, Supervisor};
@@ -24,6 +26,7 @@ use crate::hello::Socket;
 use crate::idle;
 use crate::lock::{self, LockError};
 use crate::relay;
+use crate::sessions;
 use crate::store::WorkDb;
 use crate::{Exit, log, runtime_db};
 use runstav::paths::{self, Env};
@@ -172,7 +175,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         tracing::warn!("{e}");
     }
     let (events_tx, events_rx) = tokio::sync::mpsc::channel(relay::QUEUE);
-    let backend = new_backend(&env, &socket, runtime, events_tx);
+    let backend = new_backend(&env, &socket, runtime.clone(), events_tx);
     let front = Arc::new(Front::new(
         cap,
         socket.clone(),
@@ -180,6 +183,10 @@ pub async fn run(args: ServeArgs) -> Exit {
         coord_db,
         Arc::new(ToBackend(backend.clone())),
     ));
+    // the sessions' sockets: those of live owners bound again (a bridge redials the same path), before serving
+    front.mcp.open_store(env.clone(), socket.clone(), runtime);
+    front.mcp.restore().await;
+    tokio::spawn(sessions::watch(front.clone()));
     // read-only at start and at each tick while work.db is newer than this hub
     front.set_schema(front.work_db.schema().await.unwrap_or(0));
     tokio::spawn(watch_schema(front.clone()));
@@ -264,7 +271,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     {
         tracing::warn!("the Lisp backend did not stop within 10 s");
     }
-    // the lock is still held: these are ours
+    // the lock is still held: these are ours (the sessions' rows stay for the next start)
+    front.mcp.unbind_all();
     remove_all(&agent_paths);
     remove(&socket, &cap_path);
     let _ = tokio::task::spawn_blocking(move || store.shutdown()).await;

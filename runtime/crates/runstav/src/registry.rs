@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 49, "{names:?}");
+        assert_eq!(names.len(), 52, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -457,10 +457,22 @@ mod tests {
             "restart",
             "events/since",
             "coord/notify",
+            "mcp/session",
+            "mcp/session-close",
+            "mcp/attach",
         ];
         want.extend(FRONT_WRITES);
         want.sort();
         assert_eq!(front, want, "the methods the front serves itself");
+        // an outside agent's bridge attaches without a proof; minting a session's socket is the user's
+        assert_eq!(
+            find("mcp/attach").map(|m| m.classes),
+            Some(&[Class::Service][..])
+        );
+        assert_eq!(
+            find("mcp/session").map(|m| m.classes),
+            Some(&[Class::User][..])
+        );
         // every other method is the backend's, and each event names the side that sends it
         assert!(
             registry()
@@ -597,7 +609,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 35);
+        assert_eq!(with, 38);
     }
 
     #[test]
