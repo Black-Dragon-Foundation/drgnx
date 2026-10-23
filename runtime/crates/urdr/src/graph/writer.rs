@@ -312,7 +312,7 @@ impl WriterHandle {
         });
         self.tx
             .send(Msg::Write {
-                meta,
+                meta: Box::new(meta),
                 job,
                 _permit: permit,
             })
@@ -353,7 +353,8 @@ impl WriterHandle {
 
 enum Msg {
     Write {
-        meta: TxMeta,
+        /// Boxed: `TxMeta` makes the variant far larger than the others (clippy `large_enum_variant`).
+        meta: Box<TxMeta>,
         job: Box<dyn Job>,
         /// Released when the writer thread takes the request off the channel.
         _permit: OwnedSemaphorePermit,
@@ -708,7 +709,7 @@ impl State {
                     _permit: permit,
                 } => {
                     drop(permit);
-                    let mut batch = vec![Item { meta, job }];
+                    let mut batch = vec![Item { meta: *meta, job }];
                     let deadline = Instant::now() + self.opts.max_wait;
                     while batch.len() < max_batch {
                         let left = deadline.saturating_duration_since(Instant::now());
@@ -727,7 +728,7 @@ impl State {
                                 _permit: permit,
                             }) => {
                                 drop(permit);
-                                batch.push(Item { meta, job });
+                                batch.push(Item { meta: *meta, job });
                             }
                             Ok(other) => {
                                 pending = Some(other);
@@ -1598,7 +1599,7 @@ pub(crate) mod tests {
                         .await
                     }),
                 ));
-                if next(&mut rng) % 4 == 0 {
+                if next(&mut rng).is_multiple_of(4) {
                     tokio::task::yield_now().await;
                 }
             }

@@ -83,7 +83,7 @@ pub fn find_fts(conn: &Connection, q: &str, limit: u32) -> rusqlite::Result<Vec<
     let mut st = conn.prepare(
         "select entity_fts.rowid, bm25(entity_fts, ?2, ?3) as r, e.title, e.body \
          from entity_fts join entity e on e.n = entity_fts.rowid \
-         where entity_fts match ?1 order by r, entity_fts.rowid limit ?4",
+         where entity_fts match ?1 and e.retired_tx is null order by r, entity_fts.rowid limit ?4",
     )?;
     let rows = st.query_map(
         params![m, TITLE_WEIGHT, BODY_WEIGHT, i64::from(limit)],
@@ -173,12 +173,9 @@ pub mod vec {
 
     fn distance(a: &[u8], b: &[u8]) -> u32 {
         let mut d = 0;
-        let (ca, cb) = (a.chunks_exact(8), b.chunks_exact(8));
-        let (ra, rb) = (ca.remainder(), cb.remainder());
-        for (x, y) in ca.zip(cb) {
-            let x = u64::from_le_bytes(x.try_into().expect("8 bytes"));
-            let y = u64::from_le_bytes(y.try_into().expect("8 bytes"));
-            d += (x ^ y).count_ones();
+        let ((ca, ra), (cb, rb)) = (a.as_chunks::<8>(), b.as_chunks::<8>());
+        for (x, y) in ca.iter().zip(cb) {
+            d += (u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y)).count_ones();
         }
         for (x, y) in ra.iter().zip(rb) {
             d += (x ^ y).count_ones();
@@ -386,6 +383,30 @@ mod tests {
         assert_eq!(hit.snippet.as_deref(), Some("migration only title"));
         // The limit applies.
         assert_eq!(find_fts(&c, "migration", 2).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn find_fts_skips_retired() {
+        let mut c = db();
+        let live = put(&mut c, "task:live", Some("migration"), None);
+        let gone = put(&mut c, "task:gone", Some("migration"), None);
+        {
+            let mut tx = Tx::for_test(
+                &mut c,
+                TxMeta::new("user", Class::User, "test"),
+                Arc::default(),
+            );
+            // Retire keeps the FTS row (entity::retire); the search filters it.
+            tx.sql()
+                .execute(
+                    "update entity set retired_tx = 1 where n = ?1",
+                    params![gone],
+                )
+                .unwrap();
+            tx.commit_for_test().unwrap();
+        }
+        let hits = find_fts(&c, "migration", 10).unwrap();
+        assert_eq!(hits.iter().map(|h| h.n).collect::<Vec<_>>(), [live]);
     }
 
     #[test]

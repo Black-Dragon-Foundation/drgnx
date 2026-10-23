@@ -111,7 +111,8 @@ writer calls `guard::check_key`. An unregistered kind or key passes; a class oth
   row and inserts it (never an `UPDATE`), `fts_delete` deletes by rowid; the entity primitives call them in the
   same transaction as the change. `find_fts(conn, q, limit)` takes the words of `q` (letters, digits, `_`), quotes each,
   and joins them with `OR`: no operator, column filter, prefix star or `NEAR` from a query reaches FTS5, and a query with
-  no word answers nothing. Hits are ranked by `bm25(entity_fts, 5, 1)` (a title match counts five body matches;
+  no word answers nothing. Retiring an entity keeps its FTS row, so `find_fts` answers only live entities
+  (`retired_tx is null`). Hits are ranked by `bm25(entity_fts, 5, 1)` (a title match counts five body matches;
   lower is better). A contentless table cannot make snippets, so they come from `entity.body` (about 160 characters
   around the first matching word; the title when there is no body).
 - **Vectors.** `vec::quantize` is `drgnx-search-quantize`: sign bits (bit `i % 8` of byte `i / 8`), int8 values

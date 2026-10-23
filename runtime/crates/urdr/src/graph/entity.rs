@@ -391,51 +391,51 @@ pub fn update(
 ) -> Result<Update, WriteError> {
     let cur = by_n(tx.sql(), n)?.ok_or_else(|| WriteError::Refused(format!("no entity {n}")))?;
     guard::check(tx.guard(), tx.meta(), &cur.kind)?;
-    if let Some(v) = expect_ver {
-        if v != cur.ver {
-            return Ok(Update::Conflict {
-                ver: cur.ver,
-                changed_since: changed_since(tx, &cur, v)?,
-            });
-        }
+    if let Some(v) = expect_ver
+        && v != cur.ver
+    {
+        return Ok(Update::Conflict {
+            ver: cur.ver,
+            changed_since: changed_since(tx, &cur, v)?,
+        });
     }
     let mut new = cur.clone();
     let mut changed: Vec<&str> = Vec::new();
-    if let Some(v) = changes.project {
-        if v != cur.project {
-            new.project = v;
-            changed.push("project");
-        }
+    if let Some(v) = changes.project
+        && v != cur.project
+    {
+        new.project = v;
+        changed.push("project");
     }
-    if let Some(v) = changes.title {
-        if v != cur.title {
-            new.title = v;
-            changed.push("title");
-        }
+    if let Some(v) = changes.title
+        && v != cur.title
+    {
+        new.title = v;
+        changed.push("title");
     }
-    if let Some(v) = changes.status {
-        if v != cur.status {
-            new.status = v;
-            changed.push("status");
-        }
+    if let Some(v) = changes.status
+        && v != cur.status
+    {
+        new.status = v;
+        changed.push("status");
     }
-    if let Some(v) = changes.body {
-        if v != cur.body {
-            new.body = v;
-            changed.push("body");
-        }
+    if let Some(v) = changes.body
+        && v != cur.body
+    {
+        new.body = v;
+        changed.push("body");
     }
-    if let Some(v) = changes.priority {
-        if v != cur.priority {
-            new.priority = v;
-            changed.push("priority");
-        }
+    if let Some(v) = changes.priority
+        && v != cur.priority
+    {
+        new.priority = v;
+        changed.push("priority");
     }
-    if let Some(v) = changes.assignee {
-        if v != cur.assignee {
-            new.assignee = v;
-            changed.push("assignee");
-        }
+    if let Some(v) = changes.assignee
+        && v != cur.assignee
+    {
+        new.assignee = v;
+        changed.push("assignee");
     }
     if let Some(patch) = &changes.data_patch {
         if !patch.is_object() {
@@ -450,11 +450,11 @@ pub fn update(
             changed.push("data");
         }
     }
-    if let Some(l) = changes.lease {
-        if l != cur.lease {
-            new.lease = l;
-            changed.push("lease");
-        }
+    if let Some(l) = changes.lease
+        && l != cur.lease
+    {
+        new.lease = l;
+        changed.push("lease");
     }
     if changed.is_empty() {
         return Ok(Update::Done { ver: cur.ver });
