@@ -14,6 +14,25 @@
 (require 'drgnx-registry)
 (require 'drgnx-wb)
 
+;;;; Chrome (Glitnir, the compositor)
+
+(defcustom drgnx-look-chrome
+  '((corner-radius . 8) (shadow . (:blur 16 :offset (0 . 6) :spread 0 :opacity 0.35)))
+  "The chrome of popups (child frames) under Glitnir, in logical pixels: `child-frame-chrome' while ui/look is on.
+No colours: the shadow takes the `child-frame-shadow' face, the border what the toolkit drew."
+  :type 'sexp :group 'drgnx-face)
+
+(defvar child-frame-chrome)
+(declare-function glitnir-refresh "glitnir")
+
+(defun drgnx-look--chrome-on ()
+  "With Glitnir: popups rounded and shadowed, at once (`child-frame-chrome' set through the module; its undo
+restores the old value, and the refresh recorded before it runs after that).  Without it, nothing."
+  (when (featurep 'glitnir)
+    (drgnx-modules-push-undo "glitnir chrome refresh" (lambda () (glitnir-refresh)))
+    (drgnx-module-set 'child-frame-chrome drgnx-look-chrome)
+    (glitnir-refresh)))
+
 ;;;; Theme
 
 (defun drgnx-look--saved-theme () (plist-get (drgnx-modules-read-state) :theme))
@@ -94,12 +113,13 @@ theme changes."
     (drgnx-look--margins t)))
 
 (drgnx-module-define 'ui/look
-                     :doc "Colour theme (remembered) and zen mode."
+                     :doc "Colour theme (remembered), zen mode, rounded shadowed popups under Glitnir."
                      :stage 'startup
                      :teardown #'drgnx-look--teardown
                      :setup
                      (lambda ()
                        (setq drgnx-look--taken (list :previous (copy-sequence custom-enabled-themes) :ours nil))
+                       (drgnx-look--chrome-on)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window

@@ -252,6 +252,10 @@ The Nidhogg repository and the commit the installer pins are `DRGNX_INSTALL_NIDH
 and `DRGNX_INSTALL_NIDHOGG_COMMIT`, for tests; the installer's own defaults are the published release. Older versions stay in
 `~/.local/opt/nidhogg/<version>`; remove one you no longer need with `rm -rf`.
 
+A Nidhogg build with Glitnir (the compositor that draws rounded, shadowed popups; `ui/look` turns it on) needs a
+Rust toolchain (`cargo`, `rustc`) to build from source; the container build brings its own, a host build needs them
+installed (for example through `mise`). Without Glitnir nothing changes.
+
 Debian, Arch and other systems have no Nidhogg recipe yet: the plan says so and installs GNU Emacs 31.1 as before.
 
 ## Older Emacs
