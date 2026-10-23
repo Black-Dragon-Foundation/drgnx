@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use urdr::graph::excise::{self, Target};
 use urdr::graph::guard::{self, Guard};
 use urdr::graph::schema::SENTINEL;
-use urdr::graph::{Class, ReadPool, TxMeta, WriteError, WriterHandle, entity, link};
+use urdr::graph::{Class, TxMeta, WriteError, WriterHandle, entity, link};
 
 use crate::deny::{self, ALLOW_FILE, DENY_FILE, DenyList, EntryKind, SharedDeny, Source, Verdict};
 use crate::store::CoordError;
@@ -39,6 +39,9 @@ pub const REASON: &str = "personal-file opt-in revoked";
 
 /// The guard's refusal of a `privacy:` key from any other class.
 pub const PRIVACY_IS_THE_USERS: &str = "the personal-file opt-ins are the user's";
+
+/// The refusal that rolls back [`apply`]'s read in the writer when the list denies nothing stored.
+const NOTHING_DENIED: &str = "nothing stored is denied";
 
 /// What applying a change of the opt-ins did.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -196,6 +199,9 @@ fn denied_in(c: &urdr::Connection, deny: &DenyList) -> Result<Vec<Found>, urdr::
     Ok(out)
 }
 
+/// What [`apply`] read in the writer: the applied state, and the entities the list now denies.
+type Read = (Applied, Vec<Found>);
+
 /// The user's tx: the files are the user's, whoever wrote them.
 fn meta() -> TxMeta {
     TxMeta::new("user", Class::User, "privacy")
@@ -274,14 +280,35 @@ fn retire_all(
 /// written in one tx, then the store is scrubbed. Nothing is written when nothing changed. The caller loads DENY;
 /// this reads no file but the store.
 pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> Result<PrivacyReport, String> {
-    let (old, found) = {
-        let pool = ReadPool::open(writer.path(), 1);
-        let d = Arc::clone(&deny);
-        pool.with(move |c| Ok::<_, urdr::SqliteError>((applied_in(c)?, denied_in(c, &d)?)))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?
+    #[cfg(test)]
+    tests::hooks::reads(writer.path());
+    // What the list now denies is read, and retired, inside the writer (call 8): every write queued before this one
+    // (a scan's put with the list it read before the change) has committed by then, and every write after it reads
+    // DENY. A read from a pool snapshot would miss a put still in the writer, which then stayed.
+    let seen: Arc<Mutex<Option<Read>>> = Arc::default();
+    let (d, s) = (Arc::clone(&deny), Arc::clone(&seen));
+    let retired = writer
+        .write(meta(), move |tx| {
+            let old = applied_in(tx.sql())?;
+            let found = denied_in(tx.sql(), &d)?;
+            let doomed: Vec<(i64, Option<String>)> =
+                found.iter().map(|f| (f.n, f.source.clone())).collect();
+            *s.lock().unwrap_or_else(PoisonError::into_inner) = Some((old, found));
+            if doomed.is_empty() {
+                // rolled back: nothing to retire leaves no tx row
+                return Err(WriteError::Refused(NOTHING_DENIED.into()));
+            }
+            retire_all(tx, &doomed)
+        })
+        .await;
+    let Some((old, found)) = seen.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+        return Err(retired.map_or_else(|e| e.to_string(), |_| "nothing was read".into()));
     };
+    if let Err(e) = retired
+        && !found.is_empty()
+    {
+        return Err(e.to_string());
+    }
     let new = Applied::of(&deny);
     let mut report = PrivacyReport {
         added: minus(&new.opt_ins, &old.opt_ins)
@@ -302,12 +329,6 @@ pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> Result<Privacy
     }
     let mut needles = Vec::new();
     if !found.is_empty() {
-        let doomed: Vec<(i64, Option<String>)> =
-            found.iter().map(|f| (f.n, f.source.clone())).collect();
-        writer
-            .write(meta(), move |tx| retire_all(tx, &doomed))
-            .await
-            .map_err(|e| e.to_string())?;
         for f in &found {
             let rep = excise::excise(
                 writer,

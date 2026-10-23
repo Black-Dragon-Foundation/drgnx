@@ -405,7 +405,9 @@ the store; `core/drgnx-store-privacy.el` holds the user's commands that write th
   warnings). Only `apply` writes that key (a test reads the sources); the `privacy:` key guard (`privacy::register`,
   called by `grants::register`) refuses every class but the user's.
 - **What the list now denies goes.** Every entity one of whose absolute paths (`deny::paths_of`) the list denies is
-  retired with its current links (one tx), then excised entity by entity (`excise::FIELDS`, reason "personal-file
+  retired with its current links (one tx, which reads the applied state and the denied entities itself, inside the
+  writer: a write queued before it is seen, so nothing it stored with the old list stays; when nothing is denied
+  the tx is rolled back and writes no row), then excised entity by entity (`excise::FIELDS`, reason "personal-file
   opt-in revoked", `write::blankers()`), its source's `parsed_file` row forgotten (so a later opt-in is read
   again), then the applied state and the notice are written (one tx), then `scrub`; the report lists the copies
   that still hold an excised value (`excise::holding`): `backups_holding` (`deletable_copies`: `backup/`,
@@ -591,7 +593,9 @@ transactions and the time. Never a path of the user's content, a title or a body
 
 The tracker scan reads plans, specs, ledgers and git; what it finds reaches the graph through two front methods
 (`norn/src/parsed.rs`, `drgnx-ratatoskr/src/graph.rs`; class `user`, hub.md's table). Each is one request of the
-graph writer, with the deny-list in force at the call.
+graph writer, with the deny-list in force when the writer runs it: the list is read inside the writer's closure,
+after the git resolution, so a revoke or deny entry applied meanwhile (whose `apply` the writer runs first, or
+after) is never undone by a write that checked the older list.
 
 **`graph/put-parsed`** `{root?, sources?, gone?, updates?, collected?}` → `{changed, retired, refused}`:
 

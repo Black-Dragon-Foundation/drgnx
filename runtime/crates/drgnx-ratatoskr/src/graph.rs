@@ -258,7 +258,7 @@ pub async fn put_parsed(
 ) -> Result<Value, Error> {
     let (g, deny) = store(tools)?;
     let req = Arc::new(p);
-    let (d, r) = (deny.clone(), req.clone());
+    let (d, r) = (deny, req.clone());
     let dirs = g
         .pool
         .with(move |conn| parsed::dirs(conn, &d, &r))
@@ -266,13 +266,19 @@ pub async fn put_parsed(
         .map_err(|e| internal(e.to_string()))?
         .map_err(|e| internal(e.to_string()))?;
     let mut projects = resolve(dirs.into_iter().collect()).await;
+    #[cfg(test)]
+    hooks::between_resolve_and_write(g.writer.path()).await;
     let req = Arc::try_unwrap(req).unwrap_or_else(|r| (*r).clone());
     let actor = match &req.root {
         Some(root) => format!("scan:{}", root.as_str()),
         None => "scan".into(),
     };
     let meta = TxMeta::new(actor, TxClass::System, "scan");
+    // The list in force when the write runs, not the one read before the resolve: the one writer orders this write
+    // after a revoke's excise, which a list read earlier would undo (call 8).
+    let now = g.deny.clone();
     let written = write(&g.writer, meta, move |tx| {
+        let deny = now.read().unwrap_or_else(PoisonError::into_inner).clone();
         parsed::put_with(tx, &deny, &mut projects, req)
     })
     .await?;
@@ -289,9 +295,14 @@ pub async fn record(
 ) -> Result<Value, Error> {
     let (g, deny) = store(tools)?;
     let mut projects = resolve(parsed::record_dir(&deny, &p).into_iter().collect()).await;
+    #[cfg(test)]
+    hooks::between_resolve_and_write(g.writer.path()).await;
     let mut meta = coord::tx_meta(caller, "graph/record");
     meta.req = p.collected.as_ref().map(|k| k.to_string());
+    // As in `put_parsed`: the list in force when the write runs.
+    let now = g.deny.clone();
     let written = write(&g.writer, meta, move |tx| {
+        let deny = now.read().unwrap_or_else(PoisonError::into_inner).clone();
         parsed::record(tx, &deny, &mut projects, p)
     })
     .await?;
@@ -299,6 +310,45 @@ pub async fn record(
         w.signals.wrote();
     }
     Ok(json!(written.value))
+}
+
+/// The test seam between a put's or a record's resolve (git, seconds) and its write: a test holds one there.
+#[cfg(test)]
+mod hooks {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use tokio::sync::oneshot;
+
+    type Armed = (PathBuf, oneshot::Sender<()>, oneshot::Receiver<()>);
+
+    static ARMED: Mutex<Vec<Armed>> = Mutex::new(Vec::new());
+
+    /// The next put or record on the store at DB stops after its resolve: the first answer says it got there, and
+    /// it goes on when the second is sent.
+    pub(super) fn arm(db: &Path) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (reached, told) = oneshot::channel();
+        let (go, wait) = oneshot::channel();
+        ARMED
+            .lock()
+            .unwrap()
+            .push((db.to_path_buf(), reached, wait));
+        (told, go)
+    }
+
+    pub(super) async fn between_resolve_and_write(db: &Path) {
+        let armed = {
+            let mut armed = ARMED.lock().unwrap_or_else(|e| e.into_inner());
+            armed
+                .iter()
+                .position(|(p, _, _)| p == db)
+                .map(|i| armed.remove(i))
+        };
+        if let Some((_, reached, wait)) = armed {
+            let _ = reached.send(());
+            let _ = wait.await;
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------------------- reads
@@ -1761,6 +1811,190 @@ mod tests {
         tasks_write(w, &user(false), serde_json::from_value(p).unwrap())
             .await
             .unwrap()
+    }
+
+    struct Quiet;
+
+    impl norn::tools::Hub for Quiet {
+        fn sessions(&self) -> mimir::BoxFuture<'_, Option<Vec<norn::tools::SessionRow>>> {
+            Box::pin(async { None })
+        }
+        fn notify(&self) {}
+    }
+
+    const CANARY: &str = "CANARY-u7a-revoke-race-5m1x";
+
+    /// A schema-7 store with a graph and the deny-list of a temp HOME, whose `~/org/reading.org` is opted in.
+    struct Race {
+        dir: tempfile::TempDir,
+        home: PathBuf,
+        config: PathBuf,
+        w: Arc<Writer>,
+        coord: Arc<Coord>,
+        deny: norn::deny::SharedDeny,
+    }
+
+    impl Race {
+        async fn new() -> Race {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            let config = dir.path().join("config");
+            std::fs::create_dir_all(home.join("org")).unwrap();
+            std::fs::create_dir_all(&config).unwrap();
+            std::fs::write(home.join("org/reading.org"), format!("* {CANARY}\n")).unwrap();
+            let file = dir.path().join("work.db");
+            let db = CoordDb::spawn(&file);
+            db.write(system(), |_| Ok(())).await.unwrap();
+            let writer = db.graph_writer().unwrap().clone();
+            let deny: norn::deny::SharedDeny = Arc::new(std::sync::RwLock::new(Arc::new(
+                DenyList::load(&home, &config),
+            )));
+            let coord = Coord::new(db.clone(), Arc::new(Quiet)).with_graph(GraphStore {
+                writer,
+                pool: urdr::graph::ReadPool::open(&file, 2),
+                deny: deny.clone(),
+            });
+            let r = Race {
+                w: Arc::new(Writer {
+                    db,
+                    signals: Arc::default(),
+                }),
+                coord: Arc::new(coord),
+                dir,
+                home,
+                config,
+                deny,
+            };
+            r.allow(&[&r.reading()]);
+            r.reload().await;
+            r
+        }
+
+        fn reading(&self) -> PathBuf {
+            std::fs::canonicalize(self.home.join("org/reading.org")).unwrap()
+        }
+
+        fn writer(&self) -> urdr::graph::WriterHandle {
+            self.w.db.graph_writer().unwrap().clone()
+        }
+
+        fn allow(&self, paths: &[&Path]) {
+            std::fs::write(
+                self.config.join(norn::deny::ALLOW_FILE),
+                json!({"version": 1, "paths": paths}).to_string(),
+            )
+            .unwrap();
+        }
+
+        /// What `privacy::tick` does on a change: the list reloaded, in force at once, then applied.
+        async fn reload(&self) -> norn::privacy::PrivacyReport {
+            let list = Arc::new(DenyList::load(&self.home, &self.config));
+            *self.deny.write().unwrap() = list.clone();
+            norn::privacy::apply(&self.writer(), list).await.unwrap()
+        }
+
+        async fn canaries(&self) -> i64 {
+            let like = format!("%{CANARY}%");
+            self.w
+                .db
+                .read(move |c| {
+                    Ok(c.query_row(
+                        "select count(*) from entity where coalesce(title, '') like ?1",
+                        [&like],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap()
+        }
+    }
+
+    /// The revoke race (call 8), the scan's half: a `graph/put-parsed` that resolved its projects before the opt-in
+    /// was revoked writes after the revoke's excise. It reads the deny-list inside the writer, so it stores nothing
+    /// of the file. Held by the test seam between resolve and write, never by a wait.
+    #[tokio::test]
+    async fn a_put_resolved_before_a_revoke_stores_nothing() {
+        let race = Race::new().await;
+        let r = race.reading().to_string_lossy().into_owned();
+        let p: api::PutParsedParams = serde_json::from_value(json!({"sources": [
+            {"source": {"kind": "spec", "path": r}, "mtime": 1.0,
+             "entities": [{"id": format!("spec:{r}"), "kind": "spec", "title": CANARY,
+                           "data": {"path": r, "line": 1}}]}
+        ]}))
+        .unwrap();
+        let (reached, go) = hooks::arm(race.writer().path());
+        let (w, coord) = (race.w.clone(), race.coord.clone());
+        let scan = tokio::spawn(async move { put_parsed(&w, &coord, p).await });
+        reached.await.unwrap();
+        race.allow(&[]);
+        let revoked = race.reload().await;
+        assert_eq!(revoked.removed, [race.reading()]);
+        go.send(()).unwrap();
+        let answer = scan.await.unwrap().unwrap();
+        assert_eq!(
+            answer["refused"].as_array().map(Vec::len),
+            Some(1),
+            "{answer}"
+        );
+        assert_eq!(
+            race.canaries().await,
+            0,
+            "the put brought the file in after the revoke"
+        );
+    }
+
+    /// The same race for `graph/record`: a folder added to the user's deny file while a record resolves.
+    #[tokio::test]
+    async fn a_record_resolved_before_a_deny_entry_stores_nothing() {
+        let race = Race::new().await;
+        let repo = race.dir.path().join("w/repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo = std::fs::canonicalize(&repo).unwrap();
+        race.w
+            .db
+            .write(system(), |tx| {
+                entity::create(
+                    tx,
+                    entity::EntityNew {
+                        id: "task:t1".into(),
+                        kind: "task".into(),
+                        project: None,
+                        title: Some("t".into()),
+                        status: Some("open".into()),
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({}),
+                        origin: entity::Origin::Recorded,
+                        source: None,
+                    },
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let p: api::RecordParams = serde_json::from_value(json!({
+            "task": "task:t1", "repo": repo,
+            "commits": [{"sha": "abcdef0123456789", "date": 1.0, "subject": CANARY}]
+        }))
+        .unwrap();
+        let (reached, go) = hooks::arm(race.writer().path());
+        let (w, coord) = (race.w.clone(), race.coord.clone());
+        let rec = tokio::spawn(async move { record(&w, &coord, &user(false), p).await });
+        reached.await.unwrap();
+        std::fs::write(
+            race.config.join(norn::deny::DENY_FILE),
+            json!({"version": 1, "entries": [{"kind": "folder", "path": repo}]}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(race.reload().await.denied_added.len(), 1);
+        go.send(()).unwrap();
+        assert!(rec.await.unwrap().is_err(), "the record is refused");
+        assert_eq!(
+            race.canaries().await,
+            0,
+            "the record wrote after the deny entry"
+        );
     }
 
     #[tokio::test]
