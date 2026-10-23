@@ -33,8 +33,9 @@
              (vector "cons" (vconcat (nreverse items)) (huginn-gen--tree x))))))
 
 (defun huginn-gen-dump (datum)
-  "DATUM as one JSON string in the dump format (call 4 of the plan)."
-  (json-serialize (huginn-gen--tree datum)))
+  "DATUM as one JSON string in the dump format (call 4 of the plan).
+Decoded: `json-serialize' returns UTF-8 bytes (a unibyte string), and the dumps compare as text."
+  (decode-coding-string (json-serialize (huginn-gen--tree datum)) 'utf-8-unix))
 
 (defun huginn-gen-dump-all (data)
   "The list DATA as one JSON array of dumps."
