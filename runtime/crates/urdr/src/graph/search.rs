@@ -13,7 +13,8 @@ use super::writer::WriteError;
 /// A boxed, sendable future (no `futures` crate in the workspace; mimir's is the same type).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Put entity N's FTS row (rowid = N): delete, then insert (never a partial `UPDATE`).
+/// Put entity N's FTS row (rowid = N): delete, then insert (never a partial `UPDATE`). The replaced row's tokens
+/// stay in the index under a tombstone (the old text is in `entity_hist` anyway) until [`fts_delete`] or a merge.
 pub fn fts_put(
     tx: &mut Tx<'_>,
     n: i64,
@@ -29,10 +30,14 @@ pub fn fts_put(
     Ok(())
 }
 
-/// Delete entity N's FTS row by rowid.
+/// Delete entity N's FTS row by rowid, and its tokens with it. A contentless-delete table only tombstones a deleted
+/// rowid (its terms stay in the segment, and FTS5's `secure-delete` cannot reach them: it needs the old values,
+/// which such a table refuses), so the delete is followed by `optimize`: every segment is rewritten without its
+/// tombstoned entries (this row's and every replaced version's), and `secure_delete=ON` zeroes the old pages.
 pub fn fts_delete(tx: &mut Tx<'_>, n: i64) -> Result<(), WriteError> {
-    tx.sql()
-        .execute("delete from entity_fts where rowid = ?1", params![n])?;
+    let sql = tx.sql();
+    sql.execute("delete from entity_fts where rowid = ?1", params![n])?;
+    sql.execute("insert into entity_fts(entity_fts) values ('optimize')", [])?;
     Ok(())
 }
 

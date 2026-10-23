@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::guard;
+use super::search::fts_put;
 use super::tx::{Class, Tx};
 use super::writer::WriteError;
 
@@ -174,28 +175,6 @@ pub(crate) fn from_row(r: &Row<'_>) -> rusqlite::Result<Ent> {
     })
 }
 
-/// Replace entity N's FTS row (delete by rowid, then insert: the only forms a contentless-delete table allows
-/// without all columns).
-pub(crate) fn fts_put(
-    conn: &Connection,
-    n: i64,
-    title: Option<&str>,
-    body: Option<&str>,
-) -> rusqlite::Result<()> {
-    fts_delete(conn, n)?;
-    conn.execute(
-        "insert into entity_fts (rowid, title, body) values (?1, ?2, ?3)",
-        params![n, title.unwrap_or(""), body.unwrap_or("")],
-    )?;
-    Ok(())
-}
-
-/// Remove entity N's FTS row.
-pub(crate) fn fts_delete(conn: &Connection, n: i64) -> rusqlite::Result<()> {
-    conn.execute("delete from entity_fts where rowid = ?1", [n])?;
-    Ok(())
-}
-
 /// RFC 7396.
 fn merge_patch(target: &mut Value, patch: &Value) {
     match patch {
@@ -322,7 +301,7 @@ pub fn create(tx: &mut Tx<'_>, new: EntityNew) -> Result<Ent, WriteError> {
         ],
     )?;
     let n = tx.sql().last_insert_rowid();
-    fts_put(tx.sql(), n, new.title.as_deref(), new.body.as_deref())?;
+    fts_put(tx, n, new.title.as_deref(), new.body.as_deref())?;
     Ok(Ent {
         n,
         id: new.id,
@@ -487,7 +466,7 @@ pub fn update(
         ],
     )?;
     if changed.contains(&"title") || changed.contains(&"body") {
-        fts_put(tx.sql(), n, new.title.as_deref(), new.body.as_deref())?;
+        fts_put(tx, n, new.title.as_deref(), new.body.as_deref())?;
     }
     Ok(Update::Done { ver: new.ver })
 }
@@ -753,11 +732,21 @@ mod tests {
         assert_eq!(fts_hits(t.sql(), "renamed"), vec![n]);
     }
 
+    /// Checkpoint CONN's WAL into PATH (truncating it), then scan PATH's bytes for TOKEN.
+    fn in_file(conn: &Connection, path: &std::path::Path, token: &str) -> bool {
+        conn.query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
+            .unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        bytes.windows(token.len()).any(|w| w == token.as_bytes())
+    }
+
     #[test]
     fn fts_delete_by_rowid_leaves_no_token() {
+        use crate::graph::search::fts_delete;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fts.db");
-        let conn = Connection::open(&path).unwrap();
+        let mut conn = Connection::open(&path).unwrap();
+        // As the writer runs: WAL and `secure_delete=ON`.
         conn.execute_batch("pragma journal_mode = wal; pragma secure_delete = on;")
             .unwrap();
         conn.execute_batch(GRAPH_DDL).unwrap();
@@ -765,31 +754,38 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let token = format!("zq{nanos:x}x");
-        fts_put(
-            &conn,
-            1,
-            Some("a title"),
-            Some(&format!("some {token} body")),
-        )
-        .unwrap();
-        conn.query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
-            .unwrap();
-        let has = |p: &std::path::Path| {
-            let bytes = std::fs::read(p).unwrap();
-            bytes.windows(token.len()).any(|w| w == token.as_bytes())
+        // One token in a version that an update replaced, one in the version that is deleted. They share no prefix
+        // with each other or the other words, so FTS5's prefix compression stores each whole (the scan can see it).
+        let old = format!("old{nanos:x}");
+        let cur = format!("cur{nanos:x}");
+        let put = |conn: &mut Connection, n: i64, body: &str| {
+            let mut t = tx(conn, "user", Class::User);
+            fts_put(&mut t, n, Some("a title"), Some(body)).unwrap();
+            t.commit_for_test().unwrap();
         };
-        // The control: before the delete the token is in the file, so the scan can see it.
+        put(&mut conn, 2, "a keeper row");
+        put(&mut conn, 1, &format!("some {old} body"));
+        // The controls: each token is in the file once written, so the scan can see it.
         assert!(
-            has(&path),
-            "the token should be in the file after the insert"
+            in_file(&conn, &path, &old),
+            "the old token after the insert"
         );
-        fts_delete(&conn, 1).unwrap();
-        conn.query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
-            .unwrap();
+        put(&mut conn, 1, &format!("some {cur} body"));
+        assert!(in_file(&conn, &path, &cur), "the token after the update");
+        {
+            let mut t = tx(&mut conn, "user", Class::User);
+            fts_delete(&mut t, 1).unwrap();
+            t.commit_for_test().unwrap();
+        }
         assert!(
-            !has(&path),
-            "the token is still in the file after the delete"
+            !in_file(&conn, &path, &cur),
+            "the deleted row's token is still in the file"
         );
+        assert!(
+            !in_file(&conn, &path, &old),
+            "a replaced version's token is still in the file"
+        );
+        // The other row survives the rewrite.
+        assert_eq!(fts_hits(&conn, "keeper"), vec![2]);
     }
 }

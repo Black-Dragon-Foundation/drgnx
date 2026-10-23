@@ -542,28 +542,44 @@ mod tests {
         let (_dir, pool) = fixture();
         let file = pool.path().to_path_buf();
         let before = bytes(&file);
-        // A pragma's table-valued function prepares `PRAGMA …` on the same connection when it runs, which the
-        // authorizer refuses; only pragmas without side effects have such functions at all.
-        for text in [
-            "select * from pragma_table_info('t')",
-            "select * from pragma_journal_mode('delete')",
-            "select * from pragma_wal_checkpoint('truncate')",
-            "select * from pragma_query_only(0)",
-            "select name from pragma_function_list",
+        let mode = || -> String {
+            crate::open_readonly(&file)
+                .unwrap()
+                .query_row("pragma journal_mode", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(mode(), "wal");
+        // A pragma's table-valued function prepares `PRAGMA [schema.]name[=arg]` on the same connection when it
+        // runs, and the authorizer refuses that (`NotAllowed("pragma")`). Where SQLite itself rejects the call first
+        // (`Sql(…)`), nothing ran either. Either way the file and its journal mode stay as they were.
+        for (text, want) in [
+            // Accepted with an argument (the table): the authorizer refuses the inner PRAGMA.
+            ("select * from pragma_table_info('t')", "pragma"),
+            // journal_mode's only hidden column is the schema: with a real one the authorizer refuses ...
+            ("select * from pragma_journal_mode('main')", "pragma"),
+            // ... and a mode in its place is read as a schema name, which SQLite refuses before preparing anything.
+            (
+                "select * from pragma_journal_mode('delete')",
+                "unknown database 'delete'",
+            ),
+            // wal_checkpoint has no table-valued function; query_only's takes no argument.
+            (
+                "select * from pragma_wal_checkpoint('truncate')",
+                "no such table",
+            ),
+            ("select * from pragma_query_only(0)", "too many arguments"),
+            ("select name from pragma_function_list", "pragma"),
         ] {
             match sql(&pool, text).await {
-                Ok(_) => {}
-                Err(SqlRefusal::NotAllowed(a)) => assert_eq!(a, "pragma", "{text}"),
-                Err(SqlRefusal::Sql(t)) if t.contains("no such table") => {}
-                other => panic!("{text}: {other:?}"),
+                Err(SqlRefusal::NotAllowed(a)) if want == "pragma" => assert_eq!(a, want, "{text}"),
+                Err(SqlRefusal::Sql(t)) if want != "pragma" => {
+                    assert!(t.contains(want), "{text}: {t}")
+                }
+                other => panic!("{text}: {other:?}, expected {want}"),
             }
+            assert_eq!(bytes(&file), before, "{text}");
+            assert_eq!(mode(), "wal", "{text}");
         }
-        assert_eq!(bytes(&file), before);
-        let mode: String = Connection::open(&file)
-            .unwrap()
-            .query_row("pragma journal_mode", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(mode, "wal");
     }
 
     #[tokio::test]

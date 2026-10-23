@@ -18,9 +18,12 @@ triggers and no foreign keys; the primitives write versions, FTS rows and stats 
 - `entity.n` is an explicit integer key: the FTS rowid and the link ends. Entities are never deleted, so `n` is
   never reused.
 - `entity_fts` is `fts5(title, body, content='', contentless_delete=1)`. The DDL ends with
-  `insert into entity_fts(entity_fts, rank) values('secure-delete', 1)`, and the writer runs with
-  `secure_delete=ON`: a deleted row's tokens leave the file (FTS5 before 3.42.0 cannot read the table afterwards;
-  no Lisp reader opens it).
+  `insert into entity_fts(entity_fts, rank) values('secure-delete', 1)` (FTS5 before 3.42.0 cannot read the table
+  afterwards; no Lisp reader opens it), and the writer runs with `secure_delete=ON`, so deleted cells and freed
+  pages are zeroed. FTS5's `secure-delete` alone does not remove a deleted row's tokens here: a contentless-delete
+  table only tombstones the rowid (removing terms in place needs the old values, which such a table refuses). So
+  `search::fts_delete` follows the delete with `optimize`, which rewrites the index without tombstoned entries;
+  only then do a deleted row's tokens, and those of versions `fts_put` replaced, leave the file.
 - A current link has `tx_to = SENTINEL` (2^62). Current reads plan on `link_cur`, as-of reads on `link_out` or
   `link_in` (`tx_to > T`, `tx_from <= T`).
 
@@ -108,8 +111,9 @@ writer calls `guard::check_key`. An unregistered kind or key passes; a class oth
 `urdr::graph::search` holds full text, the vector scheme and rank fusion. Nothing in it knows a kind.
 
 - **Full text.** `entity_fts(title, body)` is contentless with delete; its rowid is `entity.n`. `fts_put` deletes the
-  row and inserts it (never an `UPDATE`), `fts_delete` deletes by rowid; the entity primitives call them in the
-  same transaction as the change. `find_fts(conn, q, limit)` takes the words of `q` (letters, digits, `_`), quotes each,
+  row and inserts it (never an `UPDATE`), `fts_delete` deletes by rowid and then runs `optimize` so the tokens leave
+  the file ("Tables"); the entity primitives call them (the only FTS write path) in the same transaction as the
+  change. `find_fts(conn, q, limit)` takes the words of `q` (letters, digits, `_`), quotes each,
   and joins them with `OR`: no operator, column filter, prefix star or `NEAR` from a query reaches FTS5, and a query with
   no word answers nothing. Retiring an entity keeps its FTS row, so `find_fts` answers only live entities
   (`retired_tx is null`). Hits are ranked by `bm25(entity_fts, 5, 1)` (a title match counts five body matches;
@@ -155,7 +159,8 @@ a pool connection, and hardens it before preparing anything:
   authorizer stays installed for the connection's life, because SQLite may re-prepare a statement during a step.
   This also covers statements that only act when they run: a pragma's table-valued function (`pragma_table_info`)
   prepares a `PRAGMA` when it runs, and `VACUUM` (including `VACUUM INTO`) attaches a database when it runs; both
-  are refused at that point.
+  are refused at that point. A pragma function SQLite rejects itself is as harmless: `pragma_journal_mode('delete')`
+  reads its argument as a schema name and fails with `unknown database 'delete'` before it prepares anything.
 - **Lowered limits** on that connection only, because the progress handler cannot interrupt a single opcode
   (`randomblob(999999999)` would allocate about 1 GB first): `LENGTH` 1,000,000, `SQL_LENGTH` 100,000,
   `ATTACHED` 0, `EXPR_DEPTH` 100, `COMPOUND_SELECT` 50, `FUNCTION_ARG` 8, `LIKE_PATTERN_LENGTH` 1,000. The
