@@ -4,7 +4,9 @@
 
 ;;; Commentary:
 ;; One server process per agent, started by the agent from the `mcpServers' entry drgnx gives it in ACP's
-;; session/new (`drgnx-coord-mcp-server-spec').  Its identity comes from its environment: DRGNX_AGENT (required to
+;; session/new.  Agents no longer start it: they get Ratatoskr's `mcp-bridge' on a socket the hub minted
+;; (`drgnx-coord-mcp-server-spec'), and outside agents run `ratatoskr mcp-bridge --outside' (`-outside-spec'); this
+;; server stays on disk, unlaunched but for the sandbox hub's own, until phase 7.  Its identity comes from its environment: DRGNX_AGENT (required to
 ;; write), DRGNX_JOB, DRGNX_TASK.  The tools read and write the coordination store (drgnx-coord.el); every write
 ;; carries the decision-log version the agent last read, and a write made from an old version is held — nothing
 ;; written, the changes returned.  After a write the server tells the hub, so messages go out at once.
@@ -620,9 +622,10 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
   (let ((drgnx-hub-client-proves nil))
     (drgnx-mcp-serve "drgnx" (drgnx-coord-mcp-tools))))
 
-(defun drgnx-coord-mcp-server-spec (agent &rest props)
-  "The ACP `mcpServers' entry that gives AGENT (its session's id, s-XXXXXXXX) the coordination tools.  PROPS: :job,
-:task."
+(defun drgnx-coord-mcp-lisp-server-spec (agent &rest props)
+  "The entry that starts the Lisp coordination server as AGENT (its session's id, s-XXXXXXXX).  PROPS: :job, :task.
+No agent gets it any more (`drgnx-coord-mcp-server-spec' is the bridge); only the sandbox hub's own servers
+\(drgnx-sandbox-mcp.el, replaced in phase 6) still start it, until phase 7 deletes the Lisp server."
   ;; the agent starts this with the default SIGPIPE (libuv resets it): the command ignores it itself
   (let ((command (drgnx-command-ignoring-sigpipe
                   (list (expand-file-name invocation-name invocation-directory)
@@ -636,11 +639,21 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
                                           (mapcar (lambda (n) (let ((v (getenv n))) (and v (list :name n :value v))))
                                                   '("DRGNX_DATA_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_RUNTIME_DIR"))))))))
 
+(defun drgnx-coord-mcp-server-spec (session)
+  "The ACP `mcpServers' entry that gives an agent the coordination tools: Ratatoskr's bridge to SESSION's socket.
+SESSION is (:sid S :socket P) as `drgnx-hub-mcp-session' returns it.  The entry has no environment: the socket is the
+agent's identity."
+  (require 'drgnx-hub-client)
+  (list :name "drgnx" :command (or (drgnx-hub-client-binary)
+                                   (error "Ratatoskr is not built: run `drgnx runtime build'"))
+        :args (vector "mcp-bridge" "--socket" (plist-get session :socket)) :env []))
+
 (defun drgnx-coord-mcp-outside-spec (kind)
   "The MCP server item an agent outside drgnx of KIND (claude, codex, …) is given — what the agent settings pages
-write into its config: `bin/drgnx coord mcp --kind KIND', which runs this server with DRGNX_AGENT_KIND=KIND."
-  (list :type 'stdio :command (expand-file-name "bin/drgnx" drgnx-dir)
-        :args (list "coord" "mcp" "--kind" (drgnx-coord-mcp--valid-kind kind))))
+write into its config: Ratatoskr's `mcp-bridge --outside --kind KIND', at the installed path (<data>/bin/ratatoskr,
+stable across updates), which connects to the hub as a service and is ext:KIND:PID-HASH there."
+  (list :type 'stdio :command (expand-file-name "bin/ratatoskr" (drgnx-data-dir))
+        :args (list "mcp-bridge" "--outside" "--kind" (drgnx-coord-mcp--valid-kind kind))))
 
 (provide 'drgnx-coord-mcp)
 ;;; drgnx-coord-mcp.el ends here

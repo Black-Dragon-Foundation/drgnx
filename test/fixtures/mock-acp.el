@@ -34,6 +34,7 @@
 ;; Usage comes as a usage_update (:used :size 1000) at the end of each turn (claude-agent-acp's shape).
 ;; MOCK_ACP_NO_LOAD / MOCK_ACP_NO_STEER turn off session/load and steering; MOCK_ACP_STEER_FAILS
 ;; answers steering with an error; MOCK_ACP_LATE_CANCEL=SECS answers a cancel that late ("end_turn").
+;; MOCK_ACP_LOG=FILE appends one line per session/new: "mcpServers " and the mcpServers it was given, as JSON.
 ;; MOCK_ACP_RATE_LIMIT answers every prompt with error 429 (a provider at its limit).
 ;; MOCK_ACP_SET_MODE_FAILS answers session/set_mode with an error; MOCK_ACP_SET_MODE_SLOW=SECS sets the mode and
 ;; answers that late.
@@ -467,6 +468,11 @@ the environment says: a bridge to the hub's server).  The verdict is the effect,
       (let ((sid (format "mock-%d-%d" (emacs-pid) (cl-incf mock--sessions))))
         (setf (alist-get sid mock--mcp nil nil #'equal) (plist-get params :mcpServers)
               (alist-get sid mock--meta nil nil #'equal) (mock--line-meta))
+        (when-let* ((log (getenv "MOCK_ACP_LOG")))      ; what the session was given: the launch rows read it
+          (write-region (concat "mcpServers "
+                                (json-serialize (or (plist-get params :mcpServers) []) :null-object :null :false-object :false)
+                                "\n")
+                        nil log 'append 'silent))
         (mock--respond id (list :sessionId sid))
         (run-at-time 0.01 nil (lambda () (mock--update sid '(:sessionUpdate "available_commands_update"
                                                                             :availableCommands [(:name "compact" :description "Compact the context")

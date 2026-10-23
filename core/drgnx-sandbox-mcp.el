@@ -27,7 +27,7 @@
 (require 'drgnx-mcp-bridge)
 (require 'drgnx-sandbox-vc)
 
-(declare-function drgnx-coord-mcp-server-spec "drgnx-coord-mcp" (agent &rest props))
+(declare-function drgnx-coord-mcp-lisp-server-spec "drgnx-coord-mcp" (agent &rest props))
 (declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp" (root))
 
 (defconst drgnx-sandbox-mcp-inside "/run/drgnx"
@@ -155,8 +155,8 @@ to call again."
   "The server entry for S: the coordination server as S (SERVES `coord'), else the search server for SERVES."
   (if (eq serves 'coord)
       (progn (require 'drgnx-coord-mcp)
-             (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
-                                          :task (drgnx-agent-session-task s)))
+             (drgnx-coord-mcp-lisp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
+                                               :task (drgnx-agent-session-task s)))
     (require 'drgnx-search-mcp)
     (drgnx-search-mcp-server-spec serves)))
 

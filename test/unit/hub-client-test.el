@@ -674,4 +674,54 @@ without the binary."
         (drgnx-hub-disconnect)
         (call-process bin nil nil nil "stop" "--timeout" "10")))))
 
+;;;; MCP sessions (Task 14)
+
+(ert-deftest drgnx-hub-client/mcp-session-calls-the-hub-and-returns-the-socket ()
+  (drgnx-hub-client-test--with
+    (let ((process-environment
+           (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "exit 0")) process-environment))
+          (asked nil) (closed nil))
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                 (lambda (method params &optional timeout)
+                   (push (list method params timeout) asked)
+                   (list :sid "x1" :socket "/run/s/x1/mcp.sock")))
+                ((symbol-function 'drgnx-hub-call)
+                 (lambda (method params cb) (push (list method params) closed) (funcall cb t nil))))
+        (should (equal (drgnx-hub-mcp-session "s-0000000a" :job "j" :task "j#1" :cwd root)
+                       '(:sid "x1" :socket "/run/s/x1/mcp.sock")))
+        (let ((call (car asked)))
+          (should (equal (nth 0 call) "mcp/session"))
+          (should (equal (nth 2 call) 2))
+          (should (equal (plist-get (nth 1 call) :agent) "s-0000000a"))
+          (should (equal (plist-get (nth 1 call) :job) "j"))
+          (should (equal (plist-get (nth 1 call) :task) "j#1"))
+          (should (equal (plist-get (nth 1 call) :cwd) (expand-file-name root)))
+          (should (eql (plist-get (nth 1 call) :owner) (emacs-pid)))
+          (should-not (plist-member (nth 1 call) :sid)))
+        (drgnx-hub-mcp-session-close "x1")
+        (should (equal (car closed) '("mcp/session-close" (:sid "x1"))))))))
+
+(ert-deftest drgnx-hub-client/mcp-session-without-a-binary-says-how ()
+  (drgnx-hub-client-test--with
+    (let ((process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (ert-fail "asked the hub"))))
+        (should (string-search (format-message "Ratatoskr is not built: run `drgnx runtime build'")
+                               (error-message-string (should-error (drgnx-hub-mcp-session "s-0000000a")))))))))
+
+(ert-deftest drgnx-hub-client/mcp-session-in-a-daemon-path-never-waits ()
+  (drgnx-hub-client-test--with
+    (let ((process-environment
+           (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "exit 0")) process-environment))
+          (inhibit-interaction t) (got :none) (pending nil))
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (ert-fail "waited in a daemon path")))
+                ((symbol-function 'drgnx-hub-call)
+                 (lambda (method params cb) (should (equal method "mcp/session")) (setq pending (cons cb params)))))
+        (should-not (drgnx-hub-mcp-session "s-0000000a" :callback (lambda (answer err) (setq got (list answer err)))))
+        (should (eq got :none))                         ; asked, not answered yet
+        (funcall (car pending) (list :sid "x1" :socket "/run/s/x1/mcp.sock") nil)
+        (should (equal got '((:sid "x1" :socket "/run/s/x1/mcp.sock") nil)))
+        ;; a refusal reaches the callback as its message
+        (funcall (car pending) nil "no room")
+        (should (equal got '(nil "no room")))))))
+
 ;;; hub-client-test.el ends here

@@ -1724,13 +1724,14 @@ case "${1:-help}" in
           *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
         esac ;;
   coord) shift
-        # an agent outside drgnx: exec, so the server's parent is the agent (its identity); no cd (the folder it
-        # starts in is where the agent works); a drgnx session's identity in the agent's shell is not inherited
+        # an agent outside drgnx (configs written before the bridge keep working through this): exec Ratatoskr's
+        # bridge, so its parent is the agent (its identity, computed by the hub); no cd (the folder it starts in is
+        # where the agent works); a drgnx session's identity in the agent's shell is not inherited
         if [[ "${1:-}" == mcp && "${2:-}" == --kind && "$#" -eq 3 && "$3" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+          rtsk="$(drgnx_dir data)/bin/ratatoskr"
+          if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
           unset DRGNX_AGENT DRGNX_JOB DRGNX_TASK
-          trap '' PIPE
-          DRGNX_AGENT_KIND="$3" exec "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-               -l drgnx-coord-mcp -f drgnx-coord-mcp-main
+          exec "$rtsk" mcp-bridge --outside --kind "$3"
         fi
         echo "usage: drgnx coord mcp --kind KIND   (KIND: a short lower-case name: claude, codex, zed…)" >&2; exit 2 ;;
   keys) shift

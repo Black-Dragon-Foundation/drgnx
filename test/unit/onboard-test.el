@@ -1400,7 +1400,8 @@ record the prompts and the default in the lists they return as the cars of (PROM
            (should (string-match-p "tools for agents: coordination\\'" (cadr (drgnx-onboard--agents-step '(:interactive t))))))
          (should (equal (car (car (nth 3 b))) "claude (Ollama)")))
        ;; the sessions started now get both servers; one agent, one search server for its own project
-       (let ((s (drgnx-agents--make :id "s1" :name "s1" :cwd root)))
+       (let ((s (drgnx-agents--make :id "s1" :name "s1" :cwd root :mcp-sid "x1" :mcp-socket "/x/mcp.sock"))
+             (process-environment (cons "DRGNX_RATATOSKR_BIN=/usr/bin/true" process-environment)))
          (should (equal (mapcar (lambda (e) (plist-get e :name)) (drgnx-agents--mcp-servers s)) '("drgnx")))
          (drgnx-agents-set-setting :mcp '(coordination search))
          (let ((servers (drgnx-agents--mcp-servers s)))
