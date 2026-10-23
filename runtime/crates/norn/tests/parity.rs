@@ -4,7 +4,12 @@
 
 use norn::store::CoordError;
 use norn::write::event::{Event, EventKind, event};
+use norn::read::decisions::Decision;
+use norn::write::decisions::{self, Decide, DecideResult, Held};
+use norn::write::jobs::{self, NewJob, NewTask};
 use norn::write::meta;
+use norn::write::prune;
+use norn::write::tasks::{self, ClaimResult};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use urdr::Connection;
@@ -90,8 +95,175 @@ fn call(
             Value::Null
         }
         "drgnx-coord-held" => ok(meta::held(conn, &agent())),
-        other => panic!("no Rust writer for {other}"),
+        other => call_jobs(conn, other, args, clock),
     }
+}
+
+// ---- Task 6: jobs, tasks and leases, decisions, pruning ----
+
+/// The time of a call that has `"now"` in its case (the clock then answers it forever).
+fn now_of(clock: &mut impl Iterator<Item = f64>) -> f64 {
+    clock.next().expect("this call needs a \"now\" in its case")
+}
+
+/// An empty list is nil in the Lisp, so null in the oracle's output.
+fn list_or_null(v: Vec<Value>) -> Value {
+    if v.is_empty() { Value::Null } else { json!(v) }
+}
+
+fn decision_json(d: &Decision) -> Value {
+    json!({"n": d.n, "kind": d.kind, "subject": d.subject, "task": d.task, "paths": d.paths,
+           "reason": d.reason, "author": d.author, "status": d.status, "job": d.job,
+           "replaces": d.replaces, "at": d.at, "ver": d.ver})
+}
+
+fn held_json(h: &Held) -> Value {
+    json!({"held": true, "version": h.version,
+           "changes": list_or_null(h.changes.iter().map(decision_json).collect())})
+}
+
+fn claim_json(r: ClaimResult) -> Value {
+    match r {
+        ClaimResult::Ok => json!({"ok": true}),
+        ClaimResult::Held(h) => held_json(&h),
+        ClaimResult::Taken(a) => json!({"taken": a}),
+        ClaimResult::NotReady(d) => json!({"not-ready": list_or_null(d.into_iter().map(Value::from).collect())}),
+        ClaimResult::Error(m) => json!({"error": m}),
+    }
+}
+
+/// A refused call is `{"signal": MESSAGE}`, as the oracle records an error.
+fn signal(r: Result<Value, CoordError>) -> Value {
+    match r {
+        Ok(v) => v,
+        Err(CoordError::Refused(m)) => json!({"signal": m}),
+        Err(e) => panic!("{e}"),
+    }
+}
+
+fn seen_of(args: &Value) -> Option<u64> {
+    args.get("seen").and_then(Value::as_u64)
+}
+
+fn call_jobs(
+    conn: &Connection,
+    fn_name: &str,
+    args: &Value,
+    clock: &mut impl Iterator<Item = f64>,
+) -> Value {
+    let s = |k: &str| text(args, k);
+    let req = |k: &str| text(args, k).unwrap_or_else(|| panic!("{fn_name} needs {k}"));
+    let data = args.get("data").filter(|d| !d.is_null()).cloned();
+    signal(match fn_name {
+        "drgnx-coord-job-create" => {
+            let tasks = args["tasks"]
+                .as_array()
+                .map(|ts| {
+                    ts.iter()
+                        .map(|t| NewTask {
+                            n: t["n"].as_i64().unwrap(),
+                            title: t["title"].as_str().unwrap().to_owned(),
+                            role: text(t, "role"),
+                            deps: t["deps"]
+                                .as_array()
+                                .map(|d| d.iter().map(|n| n.as_i64().unwrap()).collect())
+                                .unwrap_or_default(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            jobs::job_create(
+                conn,
+                NewJob {
+                    id: req("id"),
+                    title: req("title"),
+                    plan: s("plan"),
+                    repo: s("repo"),
+                    tasks,
+                    data,
+                },
+                now_of(clock),
+            )
+            .map(|id| json!(id))
+        }
+        "drgnx-coord-job-set" => jobs::job_set(
+            conn,
+            &req("id"),
+            s("status").as_deref(),
+            data.as_ref(),
+            now_of(clock),
+        )
+        .map(|()| Value::Null),
+        "drgnx-coord-force-status" => tasks::force_status(
+            conn,
+            &req("task"),
+            &req("status"),
+            s("agent").as_deref(),
+            now_of(clock),
+        )
+        .map(|b| json!(b)),
+        "drgnx-coord-claim" => tasks::claim(
+            conn,
+            &req("task"),
+            &req("agent"),
+            seen_of(args),
+            now_of(clock),
+        )
+        .map(claim_json),
+        "drgnx-coord-set-status" => tasks::set_status(
+            conn,
+            &req("task"),
+            &req("agent"),
+            &req("status"),
+            seen_of(args),
+            now_of(clock),
+        )
+        .map(claim_json),
+        "drgnx-coord-heartbeat" => {
+            tasks::heartbeat(conn, &req("task"), &req("agent"), now_of(clock)).map(|()| Value::Null)
+        }
+        "drgnx-coord-renew" => {
+            tasks::renew(conn, &req("agent"), now_of(clock)).map(|()| Value::Null)
+        }
+        "drgnx-coord-release-stale" => tasks::release_stale(conn, now_of(clock)).map(|rs| {
+            list_or_null(
+                rs.into_iter()
+                    .map(|r| json!({"task": r.task, "agent": r.agent, "job": r.job}))
+                    .collect(),
+            )
+        }),
+        "drgnx-coord-decide" => decisions::decide(
+            conn,
+            Decide {
+                kind: req("kind"),
+                subject: req("subject"),
+                task: s("task"),
+                paths: s("paths"),
+                reason: s("reason"),
+                author: req("author"),
+                seen: seen_of(args),
+                replaces: args.get("replaces").and_then(Value::as_i64),
+                job: s("job"),
+            },
+            now_of(clock),
+        )
+        .map(|r| match r {
+            DecideResult::Ok { n, status, version } => {
+                json!({"ok": true, "n": n, "status": status, "version": version})
+            }
+            DecideResult::Held(h) => held_json(&h),
+            DecideResult::Error(m) => json!({"error": m}),
+        }),
+        "drgnx-coord-events-prune" => prune::events_prune(conn, now_of(clock)).map(|n| json!(n)),
+        "drgnx-coord--events-cap" => {
+            prune::events_cap_to(conn, args["max_rows"].as_i64().unwrap())
+                .map(|n| n.map_or(Value::Null, |n| json!(n)))
+        }
+        "drgnx-coord-events-prune-daily" => {
+            prune::prune_daily_tx(conn, now_of(clock)).map(|ran| if ran { json!(true) } else { Value::Null })
+        }
+        other => panic!("no Rust writer for {other}"),
+    })
 }
 
 /// One table as the oracle dumps it: rows in rowid order (`meta` by key), `data` parsed.
@@ -121,6 +293,9 @@ fn dump(conn: &Connection, table: &str) -> Value {
     rows
 }
 
+/// Every table a case can name (`"tables"` in `gen.el`); only the ones `CASE.expect.json` has are compared.
+const TABLES: [&str; 6] = ["event", "meta", "job", "jtask", "jdep", "decision"];
+
 fn replay(input: &Value) -> Value {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
@@ -139,9 +314,20 @@ fn replay(input: &Value) -> Value {
         .as_array()
         .unwrap()
         .iter()
-        .map(|c| call(&conn, c["fn"].as_str().unwrap(), &c["args"], &mut clock))
+        .map(|c| {
+            let name = c["fn"].as_str().unwrap();
+            // A call with "now" sees that time at every `float-time`; the others take the clock.
+            match c.get("now").and_then(Value::as_f64) {
+                Some(now) => call(&conn, name, &c["args"], &mut std::iter::repeat(now)),
+                None => call(&conn, name, &c["args"], &mut clock),
+            }
+        })
         .collect();
-    json!({"results": results, "tables": {"event": dump(&conn, "event"), "meta": dump(&conn, "meta")}})
+    let tables: serde_json::Map<String, Value> = TABLES
+        .iter()
+        .map(|t| ((*t).to_owned(), dump(&conn, t)))
+        .collect();
+    json!({"results": results, "tables": tables})
 }
 
 #[test]
