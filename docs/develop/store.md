@@ -287,7 +287,8 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
   from their files. With `with_activity`: `inferred` entities and `session` entities, `touched` links and
   `link_stat.jsonl`.
 - **`allow`** (door 5 for export, door 2 for import) is asked for every entity; a refused one leaves no line, no
-  history, and no link to it.
+  history, and no link to it. On export it is asked for the entities not exported too (parsed, retired), and the
+  tx log leaves out every tx that wrote a version of a refused entity or a link at one, so its note never leaves.
 - **No half exports.** The files are written into `dir.tmp` and renamed; a failure or panic removes `dir.tmp`, and an
   earlier export at `dir` stays until the new one replaces it. The folders an export makes are 0700; an existing
   parent keeps its mode.

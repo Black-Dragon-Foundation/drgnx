@@ -171,7 +171,8 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 - **Every other way in is checked too.** Importing an export (`graph/import`) drops a record that names a denied
   path or has a source form it cannot read; a store from before schema 7 loses such rows when it is upgraded
   (its pre-upgrade backup keeps them, and `drgnx doctor` lists that backup); and an export (`graph/export`) checks
-  every record again, so a path you add to your deny list never leaves in a later export. A test plants random
+  every record again, so a path you add to your deny list never leaves in a later export, nor do the notes of the
+  changes that wrote such a record. A test plants random
   bytes in fixture notes and checks that none of them reaches the store, its write-ahead log, the code index, an
   export, the embedding provider or the hub's log; the hub never writes a file under `~/org`.
 
