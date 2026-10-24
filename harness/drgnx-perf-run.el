@@ -1252,10 +1252,12 @@ b then a…, so a fixed order bias (the side that runs second pays for the first
 (defun drgnx-perf-ab--budget-fails (workload stats budgets &optional run compose-n)
   "The work tree's absolute wall-clock BUDGETS for WORKLOAD against STATS (of its samples), judged at n >= 100.
 `:compose' rows are read from RUN (the work tree's run, median-reduced over its rounds) and judged at COMPOSE-N
-(`(:compose :count)' summed over its rounds) >= 100."
+(`(:compose :count)' summed over its rounds) >= 100.  A `:compose' row whose plist has `:known ID :fails-above
+CEILING' (a known failure, e.g. GL-POPUP-CHURN-FULL-1) is reported as (:known LINE) while its value is above LIMIT
+but at most CEILING, and fails only above CEILING."
   (let (out)
     (dolist (b budgets)
-      (pcase-let ((`(,w ,path ,limit . ,_) b))
+      (pcase-let ((`(,w ,path ,limit . ,plist) b))
         (cond
          ((not (eq w workload)))
          ((and (eq (car path) :input) (not (cdr (cdr path))))
@@ -1263,9 +1265,15 @@ b then a…, so a fixed order bias (the side that runs second pays for the first
             (when (and (>= (plist-get stats :n) 100) (numberp v) (> v limit))
               (push (format "%s input %s %s > %s" w (substring (symbol-name (cadr path)) 1) (drgnx-perf--round v) limit) out))))
          ((eq (car path) :compose)
-          (let ((v (drgnx-perf--path-value run path)))
+          (let ((v (drgnx-perf--path-value run path))
+                (known (plist-get plist :known)) (ceiling (plist-get plist :fails-above)))
             (when (and (>= (or compose-n 0) 100) (numberp v) (> v limit))
-              (push (format "%s %s %s > %s" w (drgnx-perf--path-name path) (drgnx-perf--round v) limit) out)))))))
+              (let ((line (format "%s %s %s > %s" w (drgnx-perf--path-name path) (drgnx-perf--round v) limit)))
+                (push (cond ((not known) line)
+                            ((and (numberp ceiling) (<= v ceiling))
+                             (list :known (format "%s (%s; fails above %s)" line known ceiling)))
+                            (t (format "%s (%s) and > %s" line known ceiling)))
+                      out))))))))
     (nreverse out)))
 
 (defun drgnx-perf-ab--workload (name spec sa sb n)
@@ -1417,8 +1425,11 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
                                ;; --ab-env also judges the p95 and the probe verdicts; --ab only prints the p95 one
                                (and env (mapcar (lambda (e) (plist-get (plist-get e :p95-verdict) :verdict)) entries))
                                (and env (mapcar (lambda (e) (plist-get (plist-get e :probe-verdict) :verdict)) entries))))
-             (fails (append (seq-mapcat (lambda (e) (plist-get e :budget-fails)) entries)
+             (rows (seq-mapcat (lambda (e) (plist-get e :budget-fails)) entries))
+             (known (seq-filter (lambda (f) (eq (car-safe f) :known)) rows))
+             (fails (append (seq-remove (lambda (f) (eq (car-safe f) :known)) rows)
                             (seq-filter (lambda (e) (eq (plist-get e :status) 'error)) entries))))
+        (dolist (k known) (princ (format "KNOWN %s\n" (cadr k))))
         (dolist (f (seq-filter #'stringp fails)) (princ (format "FAIL %s\n" f)))
         (cond ((or (memq 'regressed verdicts) fails) 1)
               ((or (memq 'inconclusive verdicts) (seq-some (lambda (e) (eq (plist-get e :status) 'not-judged)) entries)

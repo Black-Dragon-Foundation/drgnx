@@ -313,6 +313,46 @@ B's is round 1 (+/-4 ms)."
     ;; within the row
     (should (eql (car (go 20 1.5)) 0))))
 
+(ert-deftest drgnx-perf/ab-env-known-compose-row ()
+  "A row tagged `:known' is reported above its limit and fails only above its `:fails-above' ceiling."
+  (cl-flet ((go (p95)
+              (drgnx-perf-ab-test--with-fake 0
+                (cl-letf (((symbol-function 'drgnx-perf-ab--start)
+                           (lambda (_tree &optional env) (list :name (if (member "DRGNX_PERF_GLITNIR=on" env) 'sess-b 'sess-a))))
+                          ((symbol-function 'drgnx-perf-run--budgets)
+                           (lambda () '((typing (:compose :compose-ms :p95) 2 :known GL-POPUP-CHURN-FULL-1 :fails-above 4.42))))
+                          ((symbol-function 'drgnx-perf-ab--one)
+                           (lambda (sess _spec)
+                             (list :samples (drgnx-perf-ab-test--samples 5 25)
+                                   :run (list :alloc (list :p50 100) :cpu_ms (list :p90 1.0) :rows 1
+                                              :compose (list :count 20 :compose-ms (list :p95 (if (eq sess 'sess-b) p95 1.0))
+                                                             :draw-ms (list :p95 1.0)))))))
+                  (let (code out)
+                    (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+                    (cons code out))))))
+    (let ((r (go 3.5)))
+      (should (eql (car r) 0))
+      (should (string-match-p "KNOWN typing compose compose-ms p95 3.5 > 2 (GL-POPUP-CHURN-FULL-1; fails above 4.42)" (cdr r)))
+      (should-not (let ((case-fold-search nil)) (string-match-p "^FAIL " (cdr r)))))
+    (let ((r (go 5.0)))
+      (should (eql (car r) 1))
+      (should (string-match-p "FAIL typing compose compose-ms p95 5.0 > 2 (GL-POPUP-CHURN-FULL-1) and > 4.42" (cdr r))))))
+
+(ert-deftest drgnx-perf/p1-budget-rows ()
+  "The Glitnir P1 rows (§9.2): compose p95 2 / max 8 and input p95 16 for the three popup workloads; the
+typing and churn compose p95 rows known (GL-POPUP-CHURN-FULL-1) up to spike (i)'s 4.42 ms; no scroll-full-window gate."
+  (let ((budgets (drgnx-perf-run--budgets)))
+    (dolist (w '(popup-typing popup-churn scroll-under-popup))
+      (dolist (row `(((:compose :compose-ms :p95) 2) ((:compose :compose-ms :max) 8) ((:input :p95) 16)))
+        (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) (car row)))) budgets)))
+          (should b)
+          (should (eql (nth 2 b) (cadr row)))
+          (should (equal (plist-get (nthcdr 3 b) :known)
+                         (and (memq w '(popup-typing popup-churn)) (equal (car row) '(:compose :compose-ms :p95))
+                              'GL-POPUP-CHURN-FULL-1)))
+          (when (plist-get (nthcdr 3 b) :known) (should (eql (plist-get (nthcdr 3 b) :fails-above) 4.42))))))
+    (should-not (assq 'scroll-full-window budgets))))
+
 (ert-deftest drgnx-perf/ab-env-needs-two-values ()
   (dolist (bad '("DRGNX_PERF_GLITNIR=on" "DRGNX_PERF_GLITNIR=on," "=on,off" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_GLITNIR=on,off,x"))
     (should-error (drgnx-perf-ab-env-parse bad)))

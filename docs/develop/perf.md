@@ -263,6 +263,18 @@ one build. The first value is the **judged** side (the tool's "work tree" role),
 samples a side) is what makes p95 non-null; `--n` only exists to shorten a trial run. Verdicts, exit codes and the
 lease are those of `--ab`.
 
+**The P1 budget rows** (spec §9.2, `test/perf/budgets.eld`). `popup-typing`, `popup-churn` and `scroll-under-popup`
+each have `(:compose :compose-ms :p95)` 2 ms, `(:compose :compose-ms :max)` 8 ms and `(:input :p95)` 16 ms, judged on
+the Glitnir-on side of the A/B above; `scroll-full-window` is measured only. A row may carry `:known ID :fails-above
+CEILING`: a known failure whose value above the row's limit is printed as `KNOWN … (ID; fails above CEILING)` and
+fails the run only above CEILING. The `popup-typing` and `popup-churn` compose p95 rows are known that way,
+GL-POPUP-CHURN-FULL-1 (GTK repaints the whole root when a child frame maps or unmaps, until MP-3's widget-less child
+frames), with spike (i)'s 4.42 ms as the ceiling. The run that judges them, on the Glitnir build at 2880×1800 scale 2:
+
+```sh
+DRGNX_UI_SIZE=2880x1800 DRGNX_UI_SCALE=2 bin/drgnx test --perf --ab-env DRGNX_PERF_GLITNIR=on,off < /dev/null
+```
+
 ## The audit's per-command hook time
 
 `--audit` times every function on the busy hooks (`drgnx-perf-busy-hooks`, `window-state-change-functions` among
