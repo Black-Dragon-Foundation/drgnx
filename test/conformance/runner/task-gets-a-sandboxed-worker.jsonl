@@ -1,0 +1,18 @@
+{"scenario": "runner/task-gets-a-sandboxed-worker", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 16a: an approved job's ready task gets a worker: a worktree <repo>/.claude/worktrees/<job>-<n> on job/<job>-<n>, a session on the task's profile with the role worker, job and task set, started in that tree (its lock and sandbox as any worker's), the task claimed by the session and the first base kept. A blocked task gets none; the second task waits for the first."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-routes ((implement . \"mock-claude\") (review . \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Worker\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n\n### Task 2: Check the thing\n\n**Role:** review\n**Depends:** Task 1\n\nCheck it.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md", "auto": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "running"}}, "within_ms": 10000}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "expect_silent", "conn": "q", "for_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": {"$contains": [{"id": "$string", "profile": "mock-claude", "role": "worker", "job": "$job"}]}}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tasks": [{"n": 1, "status": "claimed", "agent": "$capture:sid"}, {"n": 2, "status": "pending"}], "agents": [{"id": "$sid"}]}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/repo/.claude/worktrees/$job-1", "exists": true}
+{"do": "sql_expect", "sql": "select id, kind, branch = 'job/$job-1' from agent", "rows": [["$sid", "job", 1]]}

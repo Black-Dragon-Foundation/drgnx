@@ -1,0 +1,22 @@
+{"scenario": "runner/propose-from-a-graph-plan", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 16a: job/propose reads a plan and makes the job in the hub itself (three front writes: the job, the proposal's message and card), as drgnx-job-summary has it: tasks ready/pending by their dependencies, the run order, an estimate, one proposal card with its actions; a plan entity id is not served before Task 21; a plan with a cycle is refused; job/stop rejects the proposal and the job event reaches the subscriber."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Seam\n\n**Repo:** $ROOT/repo\n**Won't build:** a thing\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n\n### Task 2: Check the thing\n\n**Role:** review\n**Depends:** Task 1\n\nCheck it.\n"}
+{"do": "write_file", "path": "$ROOT/cycle.md", "text": "# Cycle\n\n**Repo:** $ROOT/repo\n\n### Task 1: A\n\n**Depends:** Task 2\n\n### Task 2: B\n\n**Depends:** Task 1\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "title": "Seam", "status": "proposed", "tasks": [{"n": 1, "status": "ready", "role": "implement"}, {"n": 2, "status": "pending", "role": "review", "deps": ["$string"]}], "order": [1, 2], "estimate": {"tokens": 330000}, "cards": [{"kind": "proposal", "actions": [["approve", "Approve"], ["reject", "Reject"]]}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/status", "params": {"id": "$job", "decisions": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$job", "decisions": [{"kind": "wont-build", "subject": "a thing", "author": "user"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/propose", "params": {"plan": "$ROOT/cycle.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "job/propose", "params": {"plan": "plan:x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "job/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"status": "stopped", "cards": []}}}
+{"do": "expect", "conn": "e", "json": {"event": "events", "data": {"events": {"$contains": [{"kind": "job", "data": {"status": "stopped"}}]}}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select kind, state, choice from card", "rows": [["proposal", "settled", "reject"]]}

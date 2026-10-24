@@ -192,6 +192,14 @@ impl Hub {
         Ok(self.find(id)?.transcript())
     }
 
+    /// Every session the hub holds, as snapshots, oldest first (the plan runner's view: no shaping, no copy of the
+    /// entries).
+    pub fn snapshots(&self) -> Vec<runstav::methods::agents::Snapshot> {
+        let mut all: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();
+        all.sort_by(|a, b| a.started.total_cmp(&b.started).then(a.id.cmp(&b.id)));
+        all.iter().map(|s| s.snapshot()).collect()
+    }
+
     /// The sessions as CALLER may see them ([`crate::shape::result`]): the shaped JSON itself, since a summary read
     /// back into a `Snapshot` would gain its empty lists again.
     pub fn list(&self, caller: &Caller) -> serde_json::Value {
