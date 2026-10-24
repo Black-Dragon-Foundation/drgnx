@@ -1,0 +1,20 @@
+{"scenario": "move/claude-to-gemini-continues", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 26: agents/move stops a Claude session after its turn, starts the Gemini profile in the same directory and prompts it with the summary handoff (the plan names Codex; Codex stays refused until CODEX_LOCK_PROVEN, so the mock's Gemini personality stands in). The old session leaves the list, the new one is idle in the same cwd, and the Gemini agent's log shows the handoff as its first prompt."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")) (\"mock-gemini\" :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--log\" \"$ROOT/gem.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:old", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$old", "text": "hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$old", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/move", "params": {"id": "$old", "profile": "mock-gemini"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:new", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/gem.log", "contains": "Handoff", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sessions": {"$contains": [{"id": "$new", "profile": "mock-gemini", "cwd": "$ROOT/work"}]}}}}
