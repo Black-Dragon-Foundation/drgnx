@@ -516,7 +516,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **Tags** (`requires`): `v0` (any hub), `v1` (hello v1: Ratatoskr), `fake-backend`, `lisp-backend`, `sudo` (euid 0, or
 `sudo -n true` succeeds), `test-hooks` (the binary's `version --json` says `"test_hooks": true`), `linux`, `macos`,
-`perf`. A row whose requirement is missing is skipped (with `--target lisp`, rows without `v0` are not selected at all).
+`perf`, `podman` (`podman` is on the PATH; an excused skip otherwise). A row whose requirement is missing is skipped (with `--target lisp`, rows without `v0` are not selected at all).
 
 **Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): on Ratatoskr the
 row runs, and a failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a

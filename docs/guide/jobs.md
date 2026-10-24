@@ -19,7 +19,22 @@ it does not depend on the agent that started it or on the editor, and it survive
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
   waits at no cost and is woken by the end.
 - **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call); agents use
-  the `job_*` tools. Container jobs come with Task 11b.
+  the `job_*` tools.
+
+### Container jobs
+
+A job of kind `container` runs a command inside an image you allowed, with `podman`. The agent names an image (a name
+on `agents-container-images`) and a command; the hub builds the whole `podman run` line from a fixed spec, so the
+agent can add no option. The container has no capabilities and cannot gain privileges, its root is read-only (with a
+tmpfs `/tmp`), and the only folder it sees is the job's worktree, at `/work`. It has a process limit, and
+`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. It has **no network** (a granted network is
+meant to reach the world only through the proxy; that network is not built yet, so a job is never given one).
+
+The image is the allow-list's reference pinned by digest; the hub pulls it before the job starts and the job never
+pulls (`--pull=never`). A name that is not on the list is refused. A starting agent needs the matrix's `job.container`
+(Cautious asks, Balanced and Autonomous allow). Without `podman` on the PATH when the hub starts, container jobs are
+refused and the message points at `drgnx doctor`. Otherwise a container job is a job like any other: unit, log, exit,
+summary, time box and restart behaviour.
 
 ## Plan runs
 
