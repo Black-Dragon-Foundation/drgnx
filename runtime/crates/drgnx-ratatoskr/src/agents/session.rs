@@ -1077,6 +1077,7 @@ async fn write_steps(
         backend: false,
     };
     let mut local = 0u64;
+    let mut turn_start = true;
     while let Some(c) = rx.recv().await {
         local += 1;
         let class_name = serde_json::to_value(c.open.class)
@@ -1130,7 +1131,18 @@ async fn write_steps(
                 (0, local as i64, None)
             }
         };
-        let snapshot = anchor(&sink, &ctx, &caller, id, seq, c.turn_id.as_deref(), &c.open).await;
+        let snapshot = anchor(
+            &sink,
+            &ctx,
+            &caller,
+            id,
+            seq,
+            c.turn_id.as_deref(),
+            &c.open,
+            turn_start,
+        )
+        .await;
+        turn_start = c.turn_id.is_some();
         let step = Step {
             id,
             session: ctx.session.clone(),
@@ -1166,7 +1178,7 @@ async fn write_steps(
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
-/// last), and after a completed edit a snapshot of the worktree.  Best effort.
+/// last), and a snapshot of the worktree after a completed edit and at the turn's first step.  Best effort.
 async fn anchor(
     sink: &StepSink,
     ctx: &StepCtx,
@@ -1175,13 +1187,14 @@ async fn anchor(
     seq: i64,
     turn: Option<&str>,
     open: &OpenStep,
+    turn_start: bool,
 ) -> Option<String> {
     if id == 0 {
         return None;
     }
     let edit = open.class == StepClass::Tool
         && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
-    let snapshot = match (&sink.snap, edit) {
+    let snapshot = match (&sink.snap, edit || turn_start) {
         (Some(s), true) => {
             s.after_edit(&ctx.session, &ctx.cwd, seq as u64, &sink.editors)
                 .await
@@ -2308,8 +2321,8 @@ mod tests {
             assert_eq!(s.turn_id.as_deref(), Some("turn-1"), "{s:?}");
             assert_eq!(s.log_version, Some(0), "{s:?}");
         }
-        // a snapshot after the completed edit only
-        assert!(steps[0].snapshot.is_none() && steps[2].snapshot.is_none());
+        // a snapshot at the turn's first step and after the completed edit, not after the last think
+        assert!(steps[0].snapshot.is_some() && steps[2].snapshot.is_none());
         let tree = steps[1].snapshot.clone().expect("the edit's snapshot");
         let repo =
             crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &dir.path().join("wt"));

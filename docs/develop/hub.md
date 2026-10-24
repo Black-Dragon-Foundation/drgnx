@@ -1458,7 +1458,7 @@ Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so 
 message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
 decision log's version when the step closed) and `snapshot`.
 
-A **step snapshot** is a tree of the session's worktree, written after each completed edit (`edit`, `delete`, `move`
+A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
 tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
 session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
 sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
