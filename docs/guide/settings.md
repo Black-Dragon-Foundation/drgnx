@@ -514,6 +514,31 @@ information.
 
 ## Packages' settings (Task 31)
 
+The Settings page lists the options of every installed package, **before the package is loaded**. `drgnx sync` reads
+each package's `.el` files as text (nothing is loaded or run) and writes `settings-index.eld` in the cache folder:
+every `defcustom` with its group, file, line, documentation and, when it is written out literally, its type. Group
+**Packages** shows them by package; **Emacs** shows the built-in ones. Editing one stores the value; it takes effect
+when the package loads. An option whose type the file only computes gets the Lisp editor until the package is loaded.
+
+Plain variables (`defvar`) are settings only when they are *described*. drgnx ships descriptions for common packages
+(`settings/described/*.eld`); you add your own in `described.el` in your config folder:
+
+```elisp
+(drgnx-described
+ (my-package-limit :type integer :doc "How many." :group my-package)
+ (eglot-server-programs :workspace code :merge alist))
+```
+
+A description is `(VARIABLE :type TYPE :doc "…" :group GROUP :scope … :workspace … :merge …)`. It is read as data,
+never run; yours wins over a shipped one. It also refines options the package declares: `:workspace code` marks one
+that holds a program (a workspace file cannot set it), `:merge alist` one that modules and you extend.
+A described variable behaves like any other setting; drgnx sets it with `set-default` after recording it, and taking
+the value away puts back what it was.
+
+**Other tools** (Workspace group): the files other tools keep in the folder (`.editorconfig`, `.prettierrc*`,
+`pyproject.toml`, `.clang-format`, `.clangd`, `rust-analyzer.toml`, `tsconfig.json`, `.eslintrc*`, `biome.json`,
+`.golangci.yml`, `.ruff.toml`), each with [Open]. They stay theirs: nothing is imported or written.
+
 ## Moving from the old files
 
 Before `settings.el`, drgnx kept its own settings in six files of the config dir: `agents.eld`, `ai.eld`, `keys.eld`,

@@ -20,6 +20,7 @@
 (require 'subr-x)
 (require 'drgnx-setting)
 (require 'drgnx-settings-file)
+(require 'drgnx-settings-described)
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
@@ -133,7 +134,13 @@ losing store: Emacs would move the entry to the front, over your Lisp."
     ;; (`custom-theme-set-variables'; design R3): its `defvar' alone has no standard value to decide by.
     (unless (or (get var 'standard-value) (memq (get var 'custom-autoload) '(nil noset)))
       (custom-load-symbol var))
-    (cond ((not (drgnx-settings-winner-p var))
+    (cond ((drgnx-settings-described-defvar-p var)   ; no `:set' and no standard value: drgnx's entry, then `set-default'
+           (unless (get var 'drgnx-described-original)
+             (put var 'drgnx-described-original (list (default-value var))))
+           (drgnx-settings--store var value)
+           (set-default var value)
+           'applied)
+          ((not (drgnx-settings-winner-p var))
            (drgnx-settings--store var value)
            'stored)
           ((and (default-boundp var) (equal (default-value var) value))
@@ -158,7 +165,10 @@ Its entry leaves `theme-value' (`custom-push-theme' with `reset'); the variable 
         (custom-push-theme 'theme-value var drgnx-settings-theme 'reset)
         (unless (get var 'theme-value) (put var 'saved-value nil))   ; no stale value for a later `defcustom'
         (when (and (default-boundp var) (equal (default-value var) ours))
-          (custom-theme-recalc-variable var))
+          (if-let* ((orig (get var 'drgnx-described-original)))   ; a described `defvar': back to what it was
+              (set-default var (car orig))
+            (custom-theme-recalc-variable var)))
+        (put var 'drgnx-described-original nil)
         t))))
 
 (defun drgnx-settings-let-go (var)

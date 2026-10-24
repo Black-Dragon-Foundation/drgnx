@@ -36,7 +36,7 @@
 (defun drgnx-settings-editors-kind (var)
   "The editor kind of VAR: `toggle', `number', `text', `file', `directory', `choice', `completion', `shortcuts',
 `widget' (a composite type) or `lisp' (`sexp', a computed or unknown type)."
-  (let* ((type (get var 'custom-type)) (h (drgnx-settings-editors--head type)))
+  (let* ((type (drgnx-setting-type var)) (h (drgnx-settings-editors--head type)))
     (cond ((memq h '(boolean)) 'toggle)
           ((memq h '(integer natnum number float)) 'number)
           ((memq h '(string regexp)) 'text)
@@ -54,7 +54,7 @@
 
 (defun drgnx-settings-editors-bounds (var)
   "(MIN . MAX) of a numeric VAR from its type's or schema's `:min' and `:max' (either may be nil)."
-  (let* ((type (get var 'custom-type))
+  (let* ((type (drgnx-setting-type var))
          (schema (plist-get (drgnx-setting-meta var) :schema))
          (opts (or (and (consp type) (memq (car type) '(integer number natnum float)) (cdr type))
                    (and (consp schema) (memq (car schema) '(integer number)) (cdr schema)))))
@@ -118,7 +118,7 @@
     ('directory (read-directory-name (format "%s: " var) nil nil nil (and (stringp current) current)))
     ('choice (let ((pick (completing-read
                           (format "%s: " var)
-                          (mapcar #'prin1-to-string (drgnx-settings-editors--consts (get var 'custom-type)))
+                          (mapcar #'prin1-to-string (drgnx-settings-editors--consts (drgnx-setting-type var)))
                           nil t (prin1-to-string current))))
                (car (read-from-string pick))))
     ('completion (intern (completing-read (format "%s: " var) (mapcar #'symbol-name (and (symbolp current) (list current)))
@@ -146,7 +146,7 @@
       (let ((inhibit-read-only t)) (erase-buffer))
       (remove-overlays)
       (widget-insert (format "%s\n\n" var))
-      (let ((w (widget-create (widget-convert (get var 'custom-type)) :tag (symbol-name var) :value value)))
+      (let ((w (widget-create (widget-convert (drgnx-setting-type var)) :tag (symbol-name var) :value value)))
         (setq drgnx-settings-editors--pane (list var tab root w)))
       (widget-insert "\n")
       (widget-create 'push-button :notify (lambda (&rest _) (drgnx-settings-editors-pane-apply)) "Apply")

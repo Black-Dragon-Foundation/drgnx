@@ -150,6 +150,16 @@ symbol; a new declaration of VAR clears it."
         (puthash var (cons stamp meta) drgnx-setting--cache)
         meta))))
 
+(declare-function drgnx-settings-described-type "drgnx-settings-described" (var))
+(declare-function drgnx-settings-index-type "drgnx-settings-index" (var))
+
+(defun drgnx-setting-type (var)
+  "The widget type of VAR: its `defcustom' type, else a description's, else the settings index's literal one.
+nil (a computed type, or an unknown variable) means the Lisp editor."
+  (or (get var 'custom-type)
+      (and (fboundp 'drgnx-settings-described-type) (drgnx-settings-described-type var))
+      (and (fboundp 'drgnx-settings-index-type) (drgnx-settings-index-type var))))
+
 ;;;; Checking
 
 (defun drgnx-setting-check (var value)
@@ -157,7 +167,7 @@ symbol; a new declaration of VAR clears it."
 A `:schema' goes to `drgnx-schema-check'; otherwise the `:type' of the `defcustom' must match."
   (if-let* ((schema (plist-get (drgnx-setting-meta var) :schema)))
       (drgnx-schema-check schema value)
-    (when-let* ((type (get var 'custom-type)))
+    (when-let* ((type (drgnx-setting-type var)))
       (require 'wid-edit)
       (unless (widget-apply (widget-convert type) :match value)
         (cons nil (format "%S does not match the type %S" value type))))))

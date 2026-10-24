@@ -24,6 +24,8 @@
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-workspace)
 (require 'drgnx-settings-trust)
+(require 'drgnx-settings-index)
+(require 'drgnx-settings-described)
 
 (declare-function drgnx-settings-history-list "drgnx-settings-history" (&rest args))
 (declare-function drgnx-settings-undo "drgnx-settings-history" (id))
@@ -70,7 +72,8 @@ package or a built-in group, `workspace' lists what waits for trust or review."
       (let (out)
         (mapatoms (lambda (s) (when (and (get s 'standard-value) (not (get s 'byte-obsolete-variable)))
                                 (push s out))))
-        (setq drgnx-settings-page--all (sort out (lambda (a b) (string< (symbol-name a) (symbol-name b))))))))
+        (setq out (append (drgnx-settings-described-vars) out))
+        (setq drgnx-settings-page--all (sort (delete-dups out) (lambda (a b) (string< (symbol-name a) (symbol-name b))))))))
 
 (defun drgnx-settings-page--page-of (var)
   "The page id (`keys', `modules') of drgnx variable VAR, or nil."
@@ -100,6 +103,8 @@ package or a built-in group, `workspace' lists what waits for trust or review."
                         ('custom-variable (push (car m) out))
                         ('custom-group (walk (car m))))))))
       (walk group))
+    ;; Settings of packages not loaded yet (the sync-time index) and described `defvar's.
+    (setq out (append (drgnx-settings-index-group-members group) (drgnx-settings-described-group-vars group) out))
     (sort (delete-dups out) (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
 
 (defun drgnx-settings-page-top-groups (builtin)
@@ -111,7 +116,8 @@ package or a built-in group, `workspace' lists what waits for trust or review."
                            (eq (and builtin t)
                                (and (drgnx-settings-page--lisp-file-p (ignore-errors (symbol-file s 'defgroup))) t)))
                   (push s out))))
-    (sort out (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
+    (dolist (g (drgnx-settings-index-top-groups builtin)) (push g out))
+    (sort (delete-dups out) (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
 
 (defun drgnx-settings-page--entries-of-root (root)
   "The variables with a top-level entry in ROOT's private or shared file."
@@ -207,7 +213,9 @@ package or a built-in group, `workspace' lists what waits for trust or review."
 
 (defun drgnx-settings-page--first-sentence (var)
   "The first sentence of VAR's documentation, one line."
-  (let* ((doc (or (ignore-errors (documentation-property var 'variable-documentation t)) ""))
+  (let* ((doc (or (ignore-errors (documentation-property var 'variable-documentation t))
+                  (plist-get (drgnx-settings-described var) :doc)
+                  (drgnx-settings-index-doc var) ""))
          (doc (replace-regexp-in-string "\\`\\*" "" doc))
          (doc (replace-regexp-in-string "[ \t\n]+" " " (string-trim doc)))
          (end (and (string-match "[.!?]\\(?: \\|\\'\\)" doc) (match-end 0)))
@@ -504,6 +512,16 @@ Ends with a blank line."
     ('workspace "Workspace")
     (_ (format "%s" group))))
 
+(defun drgnx-settings-page--other-tools-text (root)
+  "The Other tools block for ROOT: the files of other tools there, each with [Open]; nothing is imported."
+  (when-let* ((files (drgnx-settings-index-other-tools-in root)))
+    (concat (propertize "Other tools (their own files; nothing imported)\n" 'face 'bold)
+            (mapconcat (lambda (f)
+                         (concat "  " (file-name-nondirectory f) "  "
+                                 (drgnx-settings-page--button "Open" (lambda () (find-file f)) (format "Open %s" f))))
+                       files "\n")
+            "\n\n")))
+
 (defun drgnx-settings-page--header ()
   "The text above the rows."
   (let* ((root drgnx-settings-page--root)
@@ -534,6 +552,7 @@ Ends with a blank line."
             "\n"
             (when-let* ((n (drgnx-settings-page-tab-note (or drgnx-settings-page--tab 'workspace))))
               (when (memq drgnx-settings-page--tab '(workspace shared)) (propertize (concat n "\n") 'face 'warning)))
+            (when (eq drgnx-settings-page--group 'workspace) (drgnx-settings-page--other-tools-text root))
             (format "%d settings%s\n\n" (length drgnx-settings-page--keys)
                     (if (and root (memq drgnx-settings-page--tab '(workspace shared)))
                         (format ", workspace %s" (abbreviate-file-name root)) "")))))

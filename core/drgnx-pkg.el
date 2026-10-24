@@ -1276,6 +1276,15 @@ ExecStart= line after the check and before anything is written.  Never restarts 
 (defconst drgnx-pkg--restart-note
   "restart drgnx to use them (a running daemon keeps what it loaded): systemctl --user restart drgnx")
 
+(declare-function drgnx-settings-index-build "drgnx-settings-index" (&optional sources file))
+
+(defun drgnx-pkg--index-settings ()
+  "Write the settings index of the installed packages (static reads, nothing loaded); a failure is only said."
+  (condition-case err
+      (progn (require 'drgnx-settings-index)
+             (drgnx-pkg--print "settings index: %d entries" (drgnx-settings-index-build)))
+    (error (drgnx-pkg--print "WARNING settings index not written: %s" (error-message-string err)))))
+
 (defun drgnx-pkg--report (r)
   (when (plist-get r :installed)
     (drgnx-pkg--print "installed: %s" (mapconcat #'symbol-name (plist-get r :installed) " ")))
@@ -1308,6 +1317,7 @@ ExecStart= line after the check and before anything is written.  Never restarts 
                  0)
              (let ((r (let ((drgnx-pkg-verbose t)) (apply #'drgnx-pkg-sync opts))))
                (drgnx-pkg--report r)
+               (when (plist-get r :ok) (drgnx-pkg--index-settings))
                (if (plist-get r :ok) 0 1)))))
         (`("upgrade")
          (let ((r (let ((drgnx-pkg-verbose t)) (drgnx-pkg-upgrade))))
