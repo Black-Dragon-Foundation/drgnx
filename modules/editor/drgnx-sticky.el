@@ -16,8 +16,11 @@
 (require 'drgnx-registry)
 (require 'drgnx-memo)
 (require 'drgnx-large-file)
+(require 'drgnx-timer)
 
 (defvar drgnx-chrome-header-tail)
+(declare-function nidhogg-treesit-parser-ready-p "nidhogg-treesit-bg.c" (parser))
+(declare-function treesit-parser-p "treesit.c")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function treesit-parser-list "treesit.c")
 (declare-function treesit-node-at "treesit")
@@ -82,11 +85,33 @@ level (not a walk over every line), at most `drgnx-sticky-scan-chars' back."
             (setq indent i))))
       out)))
 
+(defun drgnx-sticky--parse-pending-p ()
+  "Non-nil when this buffer's tree-sitter tree is not ready: on Nidhogg (`nidhogg-treesit-parser-ready-p') a parse job,
+a large file's first parse, may still run, and reading a node now would wait for it in the header's `:eval'."
+  (and (fboundp 'nidhogg-treesit-parser-ready-p)
+       (let ((p (or (bound-and-true-p treesit-primary-parser) (car (treesit-parser-list)))))
+         (and (treesit-parser-p p) (not (nidhogg-treesit-parser-ready-p p))))))
+
+(defun drgnx-sticky--parse-landed (buffer)
+  "The poll `drgnx-sticky-scopes' starts: once BUFFER's tree is ready, raise its `sticky' epoch and redraw the headers
+once, so the scopes come from tree-sitter again.  Non-nil ends the poll."
+  (or (not (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (unless (drgnx-sticky--parse-pending-p)
+          (drgnx-epoch-bump 'sticky buffer)
+          (force-mode-line-update t)
+          t))))
+
 (defun drgnx-sticky-scopes (pos)
-  "Line starts of the scopes that enclose POS's line and start above it, outermost first."
-  (if (and (fboundp 'treesit-parser-list) (treesit-parser-list))
-      (drgnx-sticky--treesit-scopes pos)
-    (drgnx-sticky--indent-scopes pos)))
+  "Line starts of the scopes that enclose POS's line and start above it, outermost first.  From tree-sitter when the
+buffer has a parser and its tree is ready; until then (a parse job runs) from indentation, never waiting for the parse,
+and a poll redraws the header once the tree is there."
+  (cond ((not (and (fboundp 'treesit-parser-list) (treesit-parser-list))) (drgnx-sticky--indent-scopes pos))
+        ((drgnx-sticky--parse-pending-p)
+         (drgnx-timer-poll (cons 'sticky-parse (current-buffer)) 0.05 #'drgnx-sticky--parse-landed
+                           :deadline 30 :args (list (current-buffer)) :owner 'editor/sticky)
+         (drgnx-sticky--indent-scopes pos))
+        (t (drgnx-sticky--treesit-scopes pos))))
 
 (defun drgnx-sticky--text (start)
   "The line at START, as the buffer shows it, trimmed."
