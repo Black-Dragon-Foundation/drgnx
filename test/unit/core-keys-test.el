@@ -959,7 +959,10 @@ The commands of modules that need no installed package are in it, the later stag
                               quick-help quick-help-close             ; M12f's quick help
                               close-pane                              ; M12f's Esc and q in a pane
                               settings-lisp-files-open           ; settings Task 28: RET on the Lisp files page
-                              settings-lisp-files-toggle settings-add-lisp-file))   ; settings Task 29: t and a there
+                              settings-lisp-files-toggle settings-add-lisp-file   ; settings Task 29: t and a there
+                              ;; settings Task 26: the Settings page's own keys
+                              preferences-settings settings-page-tab settings-page-group settings-page-search
+                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

@@ -310,6 +310,38 @@ Settings shows the same counts: settings (values that wait for trust) and code (
 
 ## Settings the runtime reads (Task 22)
 
+## The Settings page
+
+**Preferences: Settings** (the palette, the Options menu; `C-,` in the VS Code profile, `s-,` on a Mac) lists every
+setting on one page. The rows are a drgnx view: only the rows in the window are drawn first, the rest in slices.
+
+- **Scope tabs: User · Workspace · Shared.** User is `settings.el`, Workspace is your private file for this project,
+  Shared is the project's `.drgnx/settings.el`. A row shows the value at the tab and the effective value. By default
+  each row opens on its own scope: Workspace for a buffer or project setting when you opened the page from a project,
+  else User. `T` cycles the tab. A setting that is global (one value for all of Emacs) has no workspace tabs and says
+  "one value for all of Emacs". With `enable-local-variables` nil the workspace tabs say they are off.
+- **Groups.** drgnx's areas (Editor, Workbench, Agents, AI, Search, Files, Look), Keys (the Keyboard Shortcuts) and
+  Modules (Preferences: Modules) as pages, Packages (each package's `defgroup` tree), Emacs (built-in groups),
+  Workspace (what waits for trust or review, and what the project's files set), Lisp files and History. `G` chooses.
+- **Search** (`/`) matches the name, title, documentation and value, across all settings. Filters: `@modified`,
+  `@overridden` (a lower layer was set, a higher one wins), `@source:lisp|customize|settings|workspace|module`,
+  `@package:NAME`, `@runtime`, `@needs-trust`, `@needs-review`, `@lang:MODE`.
+- **A row** shows the title, the first sentence of the documentation, the editor (until the editors arrive it shows
+  the plain value), "Modified in:" chips (User, Workspace, Shared, your Lisp, Customize, module), the effective value
+  with where it comes from at file:line (a button; "line unknown" when the file is known but the line is not),
+  **Reset** (`r`: removes this scope's entry from the tab's file; a language or directory entry stays) and the row's
+  **History** (`h`). `RET` opens the source of the value.
+- **When your Lisp wins.** A setting you changed on the page that your Lisp (or Customize) also sets keeps the Lisp's
+  value. The row says so: "Your Lisp sets this (config.el:31: `(setq-default fill-column 80)`), so 80 stays in effect.
+  Your change (100) is saved in Settings and applies if you remove that line", with [Open config.el:31] and [Move into
+  Settings] (for Customize: [Move from custom.el into Settings]).
+- **Convert to .drgnx/settings.el** (`C`, Shared tab): writes a project's old `.drgnx/search.eld`, `ai.eld` and
+  `large-files.eld` as entries of `.drgnx/settings.el` and moves the old files to `.drgnx/migrated-DATE/`.
+- **Settings: Undo** (palette; `u` is not bound) puts the previous value of the row's setting back, or asks which of
+  the recent changes.
+
+The page only reads data; it works in safe mode too.
+
 ## History and undo
 
 drgnx keeps a history of your settings: who changed which setting, when, to what. Your settings files stay the
