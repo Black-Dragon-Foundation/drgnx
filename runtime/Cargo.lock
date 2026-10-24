@@ -814,11 +814,13 @@ name = "hermod"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol-schema",
+ "bytes",
  "draugr",
  "runstav",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

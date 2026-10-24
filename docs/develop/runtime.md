@@ -133,6 +133,36 @@ compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptes
 random pieces, through the codec and `parse_strict` never panic, and the codec never holds more than one line's limit
 plus the read that went past it.
 
+## hermod: the ACP client
+
+hermod speaks the Agent Client Protocol to one agent process (Claude Code's or Codex's ACP adapter, `gemini --acp`).
+It is generic (no drgnx type) and sits on `agent-client-protocol-schema` (the types), runstav's `jsonrpc` and `line`
+(the codec: lines of at most 1 MiB, a longer one is dropped) and draugr's `spawn` (own process group, bounded stderr
+tail). There is no SDK role framework.
+
+- **Tasks.** A connection is one child, a writer task (lines to its stdin), a reader task (lines from its stdout) and
+  a watchdog that waits for the child. `Conn::spawn(spec, ConnOpts { deadline, stderr_tail })` returns the `Conn`
+  (cheap to clone; dropping every clone closes the child's stdin) and the event receiver, which the owner drains
+  (1024 events buffer).
+- **Calls.** `initialize` (always without the `terminal` capability; `terminal/*` requests from an agent get -32601),
+  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork`. Every
+  call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
+  connection keeps working. A `prompt` ends by the agent's answer, `cancel`, or the child's exit (`Error::Closed`).
+  `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
+- **Fork.** `fork(sid, Some(ForkPoint { message_id }))` sends `session/fork` with
+  `_meta.jetbrains.air.fork {version: 1, messageId}`; without a point, a plain fork. The new session starts in the
+  directory of the session it forks (the connection remembers the `cwd` of every session it opened or loaded).
+- **Events.** `Update { at, sid, update, message_id }`: `at` is the receipt time in seconds since the epoch, taken
+  when the line is read and never going backwards; `message_id` is the `messageId` of a message or thought chunk.
+  `Request(Incoming)`: `Permission`, `ReadFile` or `WriteFile`, each with a `Responder`. A responder dropped
+  unanswered answers -32800 "cancelled"; once the child has exited, `respond` fails with `Error::Closed` and
+  `is_cancelled()` is true. `Exit { code, signal, stderr }` comes exactly once, after every update the child wrote
+  (the reader gets two seconds to drain), with the last `stderr_tail` characters of stderr; calls still waiting fail
+  with `Error::Closed`.
+- Unknown notifications are ignored; unknown requests get -32601.
+- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children; the mock agent is
+  `ratatoskr-mock acp`.
+
 ## eitri: no-link file access
 
 `crates/eitri` is how the runtime touches a path someone else can change (an agent's tree, a candidate program):
