@@ -226,6 +226,11 @@ provider's environment variable (`OPENROUTER_API_KEY`, …). It never prompts th
 `.gpg` file. When it finds none, a notice says "agents need your PROVIDER key in the drgnx hub: run AI: Load Keys";
 run it (it may ask, since you ran it).
 
+Your Emacs also reconnects to a restarted hub by itself: it tries again after 1 second, then 2, 4 and so on up to every
+30 seconds, and starts nothing, so a hub you stopped stays stopped. After ten minutes without a hub it stops trying
+and tells you once; run Hub: Restart Now to bring the hub back. Stopping the hub from your Emacs (or disconnecting)
+does not start the retries.
+
 ### When drgnx was updated
 
 A running hub keeps the program it started from. After `drgnx update` it notices the new one and drgnx shows a warning:

@@ -574,6 +574,16 @@ back again. `drgnx-hub-call-sync` (commands and the CLI only) waits for the same
    and tells the user (a `fail` notice of source `hub`, id `unproven`). A refused hello, or a cap this Emacs cannot
    read, closes it the same way (without the notice). A hello answered `no method hello` is `legacy`.
 
+**The subscription is redialled (HUB-RESUBSCRIBE-1).** When the subscribed connection closes and the editor did not
+ask for it, the sentinel forgets the editor token (`drgnx-hub--editor` nil) and the held keys (`drgnx-hub--keys-held`
+`:unknown`), says so to `drgnx-hub-disconnect-functions`, and `drgnx-hub--resubscribe-schedule` arms the layer timer
+`hub-resubscribe`: `drgnx-hub-connect` after 1 s, then 2, 4 … up to 30 s between tries (a dial that fails at once, a
+socket that is gone, arms the next one). The hand-over (settings, keys, token) runs on the new subscription as on
+any other. After `drgnx-hub-resubscribe-give-up` (600 s) from the first loss it stops and posts one notice (id
+`resubscribe-gave-up`) naming Hub: Restart Now. It **never runs `ensure`**: a hub the user stopped stays stopped.
+Asked ends do not redial: `drgnx-hub-disconnect` and a `shutdown` call this editor sent set
+`drgnx-hub--asked-disconnect` (cleared by the next `drgnx-hub-connect`) and cancel the timer.
+
 **Keys go only to a hub that proved itself** (or this Emacs's own): on any other connection, a `legacy` one or a
 service one, `gateway/keys` is never written (its callback gets "keys go only to a hub that proved itself") and
 `gateway/register` goes without its `keys`. A legacy hub otherwise gets every call as before.
