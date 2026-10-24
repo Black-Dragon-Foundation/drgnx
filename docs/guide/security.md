@@ -335,8 +335,8 @@ that is allowed to write in a folder still cannot change what your Emacs loads a
 - **Your config files are closed by their true paths.** `settings.el`, `config.el`, `custom.el`, `described.el`,
   `workspaces/` and every file in `drgnx-user-lisp-files` are closed wherever they really live: when `settings.el` is
   a link into your dotfiles (GNU Stow, a dotfiles checkout), the sandbox closes the dotfiles file, and a job asked to
-  write in the dotfiles folder is refused, in every tier. A link whose target does not exist yet closes the place it
-  points at.
+  write in the dotfiles folder is refused, in every tier. So is each file in `workspaces/` that is a link of its own.
+  A link whose target does not exist yet closes the place it points at.
 - **A job's folders keep their settings files read-only.** In each folder a job may write, an existing
   `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx/` are pinned read-only: the job can neither change nor replace
   them. One that does not exist is not pinned (the job may create it), and one that is a link is pinned where it

@@ -87,14 +87,13 @@ fn scope_of(text: &str) -> Result<SettingScope, String> {
         .ok_or_else(|| format!("scope: global, private or shared, not {text:?}"))
 }
 
-/// NAME as a setting's name: 1 to 256 characters, no whitespace or control character.
+/// NAME as a setting's name: 1 to 256 characters, shaped as a variable's ([`deny::is_not_a_name`]: no keyword, `nil`
+/// or `t`, no whitespace, control character or one of [`deny::CHARACTERS`]), as the editor checks it.
 fn check_name(path: &str, name: &str) -> Result<(), String> {
-    if name.is_empty()
-        || name.len() > MAX_NAME
-        || name.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
+    if name.is_empty() || name.len() > MAX_NAME || deny::is_not_a_name(name) {
         return Err(format!(
-            "{path}: a variable's name, 1 to {MAX_NAME} characters, no spaces"
+            "{path}: a variable's name, 1 to {MAX_NAME} characters: not a keyword, nil or t, no spaces or any of {}",
+            deny::CHARACTERS
         ));
     }
     Ok(())
@@ -210,16 +209,20 @@ fn put_value(
 }
 
 /// CHANGE as CALLER's proposed tx (tool [`PROPOSED_TOOL`], the reason its note; the store's rule checks the grant
-/// again), then `settings/proposed` to the editor, its answer waited for at most WAIT. The tx and the answer.
+/// again), then `settings/proposed` to the editor, its answer waited for at most WAIT. REQ is the tx's request key
+/// (the hub's proposal of a settings card's change: [`options::card_req`], which a card's "Allow once" grant
+/// covers). The tx and the answer.
 pub async fn propose(
     coord: &Coord,
     caller: &Caller,
     change: &Change,
+    req: Option<String>,
     wait: Duration,
 ) -> Result<(i64, EditorAnswer), String> {
     let mut meta = caller.tx_meta(PROPOSED_TOOL);
     meta.state = TxState::Proposed;
     meta.note = Some(change.reason.clone());
+    meta.req = req;
     let (c, ch) = (caller.clone(), change.clone());
     let tx = coord
         .db()
@@ -428,7 +431,7 @@ async fn settings_change(coord: &Coord, who: &Identity, a: ChangeArgs) -> Result
         }
         Err(e) => return Err(CoordError::from(e).to_string()),
     }
-    let (tx, answer) = propose(coord, &caller, &change, CONFIRM_WAIT).await?;
+    let (tx, answer) = propose(coord, &caller, &change, None, CONFIRM_WAIT).await?;
     let name = &change.name;
     Ok(match answer {
         EditorAnswer::Confirmed { ok: true, .. } => Answer {
@@ -858,11 +861,114 @@ mod tests {
             reason: "r".into(),
             root: None,
         };
-        let e = propose(&w.coord, &caller, &change, Duration::ZERO)
+        let e = propose(&w.coord, &caller, &change, None, Duration::ZERO)
             .await
             .unwrap_err();
         assert_eq!(e, options::DENIED);
+        // a name no variable has (a keyword, nil, the editor's refused characters): the store's rule refuses it as
+        // deny-listed too (the tool refuses it as no name: `value_is_parsed_as_data`), so no grant or card carries it
+        for name in [
+            ":eval",
+            ":mode",
+            ":dir",
+            "nil",
+            "t",
+            "fill(column",
+            "a;b",
+            "a#b",
+            "a[b",
+        ] {
+            assert!(
+                check_change(name, "nil", "r")
+                    .unwrap_err()
+                    .starts_with("name: a variable's name"),
+                "{name}"
+            );
+            let change = Change {
+                name: name.into(),
+                ..change.clone()
+            };
+            let e = propose(&w.coord, &caller, &change, Duration::ZERO)
+                .await
+                .unwrap_err();
+            assert_eq!(e, options::DENIED, "{name}");
+        }
         untouched(&w);
+    }
+
+    /// R3: a card's "Allow once" grant covers only the hub's proposal of that card's change (its request key), once;
+    /// the agent's own change while it lives, with a second value, gets a card of its own.
+    #[tokio::test]
+    async fn a_once_grant_covers_only_its_cards_proposal() {
+        let w = World::new(editor(ok())).await;
+        w.db.write(TxMeta::new("user", Class::User, "test"), |tx| {
+            grants::create_options_once(
+                tx,
+                Who::Session("s1".into()),
+                What::OptionsGlobal,
+                "fill-column".into(),
+                7,
+                None,
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let me = w.agent("s1");
+        let out = w
+            .call(
+                &me,
+                "settings_change",
+                change("global", "fill-column", "999"),
+            )
+            .await;
+        assert!(!out.err, "{}", out.text);
+        assert!(out.structured["card"].as_i64().is_some(), "{}", out.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'option'"),
+            0
+        );
+        let caller = Caller {
+            class: Class::Agent,
+            actor: "agent:s1".into(),
+            session: Some("s1".into()),
+            profile: None,
+            job: None,
+            project: None,
+            backend: false,
+        };
+        let ch = |value: &str| Change {
+            scope: SettingScope::Global,
+            name: "fill-column".into(),
+            value: value.into(),
+            reason: "r".into(),
+            root: None,
+        };
+        // the store's rule too: no key, or another card's, is not covered
+        for req in [None, Some(options::card_req(8))] {
+            let e = propose(&w.coord, &caller, &ch("999"), req, Duration::ZERO)
+                .await
+                .unwrap_err();
+            assert_eq!(e, options::NO_GRANT);
+        }
+        propose(
+            &w.coord,
+            &caller,
+            &ch("100"),
+            Some(options::card_req(7)),
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        let value: String = w
+            .conn()
+            .query_row(
+                "select json_extract(data, '$.value') from entity where id = 'option:global:fill-column'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "100");
     }
 
     #[tokio::test]
@@ -1327,11 +1433,37 @@ mod tests {
             assert_eq!(w.hub.proposed.lock().unwrap().last().unwrap().value, value);
         }
         // a name that would read as a section, or is no name
-        for name in ["mode/c-mode:fill-column", "dir/src/:x", "fill column", ""] {
+        for name in [
+            "mode/c-mode:fill-column",
+            "dir/src/:x",
+            "fill column",
+            "",
+            ":eval",
+            "nil",
+            "t",
+            "a\"b",
+            "a'b",
+            "a`b",
+            "a,b",
+            "a)b",
+            "a]b",
+            "a\\b",
+        ] {
             let out = w
                 .call(&me, "settings_change", change("global", name, "1"))
                 .await;
             assert!(out.err, "{name:?}");
+        }
+        // the shape refusals are the tool's own, before any grant or card
+        for name in [":eval", "nil", "t", "a\"b", "a)b", "a]b", "a\\b"] {
+            let out = w
+                .call(&me, "settings_change", change("global", name, "1"))
+                .await;
+            assert!(
+                out.text.starts_with("name: a variable's name"),
+                "{name:?}: {}",
+                out.text
+            );
         }
         let out = w
             .call(&me, "settings_change", change("everywhere", "x", "1"))

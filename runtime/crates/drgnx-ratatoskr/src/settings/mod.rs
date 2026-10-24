@@ -310,7 +310,7 @@ pub struct Settings {
     /// The editor's sets (`config/settings`).
     overrides: Mutex<overrides::Overrides>,
     overrides_loaded: AtomicBool,
-    /// One read at a time.
+    /// One read, or one set of overrides, at a time.
     reading: tokio::sync::Mutex<()>,
     /// The config folder and `runtime.db`, once the server opened it.
     store: OnceLock<(PathBuf, urdr::Handle)>,
@@ -367,10 +367,11 @@ impl Settings {
         self.store.get().is_some()
     }
 
-    /// Put the global overrides over the file's values: what is in effect now.
+    /// Put the global overrides over the file's values: what is in effect now. The file is copied under the overrides'
+    /// lock, which is held until the result is published.
     fn compose(&self) {
-        let file = self.file.lock().expect("settings").clone();
         let overrides = self.overrides.lock().expect("settings");
+        let file = self.file.lock().expect("settings").clone();
         let current = match overrides.scope(None) {
             None | Some([]) => file,
             Some(list) => {
@@ -409,7 +410,8 @@ impl Settings {
     }
 
     /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that
-    /// is not a runtime setting or a value that does not fit its type is refused with its path, and nothing changes.
+    /// is not a runtime setting, a global one in a project's set ([`overrides::PER_PROJECT`]) or a value that does
+    /// not fit its type is refused with its path, and nothing changes.
     pub async fn set_overrides(
         &self,
         project: Option<&str>,
@@ -422,13 +424,16 @@ impl Settings {
                 path: Some("project".into()),
             });
         }
-        if let Err((i, why)) = overrides::validate(&list) {
+        if let Err((i, why)) = overrides::validate(&list, project.is_some()) {
             return Err(runstav::wire::Error {
                 code: runstav::wire::ErrorCode::InvalidParams,
                 message: why.message,
                 path: Some(format!("overrides[{i}].{}", why.path)),
             });
         }
+        // one at a time with refresh and each other: the kv row and memory hold the same last set, and compose
+        // never publishes a file copy older than the one refresh put
+        let _one = self.reading.lock().await;
         if let Some((_, db)) = self.store.get() {
             crate::gateway::kv_set(db, &overrides::kv_key(project), &overrides::to_text(&list))
                 .await;

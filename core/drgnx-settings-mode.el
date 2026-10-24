@@ -24,8 +24,18 @@
 (defvar drgnx-settings-mode--problems nil
   "Alist (VAR . TEXT): the one problem said per variable this session.")
 
+(defvar drgnx-settings-mode--tick nil "The `drgnx-setting-tick' at which settings.el's stamp was last checked.")
+
 (defun drgnx-settings-mode--table ()
-  "The `(:mode …)' entries of the global settings.el as an alist (MODE . ((VAR VALUE LINE)…)), cached per stamp."
+  "The `(:mode …)' entries of the global settings.el as an alist (MODE . ((VAR VALUE LINE)…)), cached per stamp.
+The stamp is checked once per command (`drgnx-setting-tick')."
+  (let ((tick (drgnx-setting-tick)))
+    (unless (and drgnx-settings-mode--cache tick (eql tick drgnx-settings-mode--tick))
+      (setq drgnx-settings-mode--tick tick)
+      (drgnx-settings-mode--refresh)))
+  (cdr drgnx-settings-mode--cache))
+
+(defun drgnx-settings-mode--refresh ()
   (let* ((file (drgnx-config-file 'settings))
          (stamp (cons file (drgnx-file-stamp file))))
     (unless (equal (car drgnx-settings-mode--cache) stamp)
@@ -74,16 +84,18 @@ arguments, else `setq-local'.  Never `setopt-local'; nothing is loaded."
 (defun drgnx-settings-mode--apply-mode-overrides ()
   "Set the current buffer's language overrides.  Run on `change-major-mode-after-body-hook'; never signals.
 In safe mode and while package settings are off (`drgnx-settings-own-only-p'), only drgnx's own settings' overrides
-apply; a buffer opened before Turn Off keeps the values it got."
-  (condition-case err
-      (let ((own-only (drgnx-settings-own-only-p)))
-        (dolist (mode (drgnx-settings-mode--modes))
-          (dolist (item (cdr (assq mode (drgnx-settings-mode--table))))
-            (when (or (not own-only) (drgnx-setting-own-p (car item)))
-              (condition-case err
-                  (drgnx-settings-mode--set (car item) (copy-tree (cadr item)))
-                (error (drgnx-settings-mode--problem (car item) err)))))))
-    (error (drgnx-settings-mode--problem 'settings.el err))))
+apply; a buffer opened before Turn Off keeps the values it got.  A temp buffer (no file, its name starting with a
+space: fontification and conversion buffers) gets none."
+  (unless (and (not buffer-file-name) (string-prefix-p " " (buffer-name)))
+    (condition-case err
+        (let ((own-only (drgnx-settings-own-only-p)))
+          (dolist (mode (drgnx-settings-mode--modes))
+            (dolist (item (cdr (assq mode (drgnx-settings-mode--table))))
+              (when (or (not own-only) (drgnx-setting-own-p (car item)))
+                (condition-case err
+                    (drgnx-settings-mode--set (car item) (copy-tree (cadr item)))
+                  (error (drgnx-settings-mode--problem (car item) err)))))))
+      (error (drgnx-settings-mode--problem 'settings.el err)))))
 
 (defalias 'drgnx-settings--apply-mode-overrides #'drgnx-settings-mode--apply-mode-overrides)
 

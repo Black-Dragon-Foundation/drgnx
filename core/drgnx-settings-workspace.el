@@ -21,7 +21,7 @@
 ;; - In safe mode and while package settings are off (`drgnx-settings-own-only-p'), only entries of drgnx's own
 ;;   settings apply from W1 and W2, and no `:eval' runs.
 ;; - Today's `.drgnx/{search,ai,large-files}.eld' are read as W1 entries for `drgnx-setting-for-root' (the shim):
-;;   the large-file sizes as `:merge lower-only'.
+;;   the large-file sizes as `:merge lower-only'; ai.eld's roles through the same filter as .drgnx/settings.el.
 ;; - `drgnx-settings-workspace-rehack' applies a root's values again in its open buffers, without their major mode;
 ;;   `drgnx-settings-workspace-sync' is what `drgnx-settings-live-sync' calls for a workspace file.
 ;; Nothing here prompts, and a hook function never signals.
@@ -359,17 +359,22 @@ saved.  Every other call, and every call under `:safe' or nil, is Emacs's own (d
 
 (defun drgnx-settings-workspace--old-entries (root)
   "Today's .drgnx/{search,ai,large-files}.eld of ROOT as W1 entries (the shim, `drgnx-settings-workspace-old-files'),
-each read through the config layer while its definition exists."
+each read through the config layer while its definition exists.  ai.eld's entries (roles: where your code goes) pass
+`drgnx-settings-workspace-filter-function' as .drgnx/settings.el's do."
   (let ((out nil))
     (pcase-dolist (`(,name . ,keys) drgnx-settings-workspace-old-files)
       (when (drgnx-config-defined-p name)
-        (let ((data (ignore-errors (drgnx-config-get name nil root))))
+        (let ((data (ignore-errors (drgnx-config-get name nil root))) (es nil))
           (when (proper-list-p data)
             (dolist (k keys)                    ; (KEY VAR [MERGE])
               (when (plist-member data (car k))
                 (push (make-drgnx-settings-entry :var (nth 1 k) :value (plist-get data (car k)) :merge (nth 2 k))
-                      out)))))))
-    (nreverse out)))
+                      es)))
+            (setq es (nreverse es))
+            (when (and es (eq name 'ai-project))
+              (setq es (funcall drgnx-settings-workspace-filter-function root (drgnx-config-file name root) es)))
+            (setq out (append out es))))))
+    out))
 
 (defun drgnx-settings-workspace--merge (var entry lower)
   "ENTRY's value for VAR over LOWER, by the entry's `:merge', else the setting's: `replace' (the default),

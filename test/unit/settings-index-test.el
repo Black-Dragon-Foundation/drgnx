@@ -129,6 +129,21 @@
       (insert "(drgnx-described (tab-width :scope workspace :merge alist))   "))
     (should (eq 'alist (plist-get (drgnx-setting-meta 'tab-width) :merge)))))
 
+(ert-deftest drgnx-settings-index/description-files-are-checked-once-per-command ()
+  ;; interactive: a meta lookup (even a hit) looks at the description files once per command, by
+  ;; `drgnx-file-stamp' (never the access time)
+  (drgnx-settings-index-test--with-described "(drgnx-described (tab-width :scope global))"
+    (let ((noninteractive nil) (num-input-keys 100) (drgnx-settings-described--tick nil) (looks 0)
+          (files (symbol-function 'drgnx-settings-described-files)))
+      (cl-letf (((symbol-function 'drgnx-settings-described-files) (lambda () (cl-incf looks) (funcall files))))
+        (dotimes (_ 3) (should (eq 'global (plist-get (drgnx-setting-meta 'tab-width) :scope))))
+        (should (= looks 1))
+        (should (equal (car drgnx-settings-described--cache)
+                       (mapcar (lambda (f) (cons f (drgnx-file-stamp f))) (funcall files))))
+        (setq num-input-keys 101)
+        (drgnx-setting-meta 'tab-width)
+        (should (= looks 2))))))
+
 (ert-deftest drgnx-settings-index/descriptions-refine-defcustoms ()
   (drgnx-settings-index-test--with-described
       "(drgnx-described (fill-column :workspace never :merge alist) (tab-width :scope global))"

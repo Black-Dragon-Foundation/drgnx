@@ -752,8 +752,10 @@ answers with two methods.
   `{card: N}`.
 - **The card** (`cards/settle`, `drgnx-ratatoskr/src/graph.rs`): `once` and `session` (the user's only: the backend's
   connection only refuses) check the request again and make, in the settle's tx, an `options` grant of the card's one
-  setting for its session (`session`: a day; `once`: 60 s, revoked as soon as the change is proposed); then the change
-  is proposed as above without waiting (the editor that settled the card answers it). A name holding `*` is refused
+  setting for its session (`session`: a day; `once`: 60 s, revoked as soon as the change is proposed, and bound to the
+  card: it covers only the tx whose request key is `settings-card:CARD`, the hub's proposal of the card's value, so
+  the agent's own next `settings_change` gets a card of its own); then the change is proposed as above without
+  waiting (the editor that settled the card answers it). A name holding `*` is refused
   (a grant would read it as a glob).
 - **`settings_get {scope, names?}`**: an `options` grant of the scope or a `read` grant covering it (`*`; its own
   project for `private` and `shared`; `norn::options::may_read`). The event **`settings/explain {req, scope, names?,
@@ -1280,9 +1282,12 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   user class; `settings/overrides.rs`). The editor sends the values its Lisp and its workspaces hold: `name` is one of
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
-  global); an empty list clears it (the project still counts as having sent). A name that is not a runtime setting or a
-  value that does not fit is `invalid-params` at `overrides[N].name` or `overrides[N].value[.PATH]`, and nothing
-  changes. Each set is kept as last good in `kv` (`settings-override:global`, `settings-override:<project>`) and read
+  global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`); every other runtime setting is
+  global and security-bearing (profiles and their commands, providers and their URLs,
+  `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
+  in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or
+  `overrides[N].value[.PATH]`, and nothing changes. Each set is kept as last good in `kv` (`settings-override:global`, `settings-override:<project>`) and read
   again at start, so a hub with no editor connected still has them. In effect, for a setting and a project
   (`Settings::effective(name, project) -> (value, seen)`): the project's override, else the global one, else
   `settings.el`, else the shipped default; `seen` is false when the project never sent a set. The global overrides are

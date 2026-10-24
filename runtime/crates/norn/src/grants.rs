@@ -228,6 +228,8 @@ pub struct Grant {
     pub expires: Option<f64>,
     /// `active` or `revoked`.
     pub status: String,
+    /// A settings card's "Allow once" ([`create_options_once`]): the card whose change alone it covers.
+    pub card: Option<i64>,
 }
 
 impl Grant {
@@ -318,6 +320,10 @@ fn parse(n: i64, id: String, status: Option<String>, data: &str) -> Option<Grant
             Some(list)
         }
     };
+    let card = match data.get("card") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_i64()?),
+    };
     Some(Grant {
         n,
         id,
@@ -327,6 +333,7 @@ fn parse(n: i64, id: String, status: Option<String>, data: &str) -> Option<Grant
         names,
         expires,
         status: status?,
+        card,
     })
 }
 
@@ -349,7 +356,7 @@ pub fn create(
     access: Access,
     expires: Option<f64>,
 ) -> Result<Grant, WriteError> {
-    create_with(tx, who, what, access, None, expires)
+    create_with(tx, who, what, access, None, expires, None)
 }
 
 /// A new `options` grant (Urdr Task 10b; the guard refuses it from any class but `User`): WHAT is
@@ -362,7 +369,29 @@ pub fn create_options(
     names: Option<Vec<String>>,
     expires: Option<f64>,
 ) -> Result<Grant, WriteError> {
-    create_with(tx, who, what, Access::Options, names, expires)
+    create_with(tx, who, what, Access::Options, names, expires, None)
+}
+
+/// A settings card's "Allow once": an `options` grant of NAME, as [`create_options`], that covers only the tx
+/// whose request key is [`crate::options::card_req`] of CARD (the hub's proposal of the card's change), so the
+/// agent's own next change, of any value, is not covered while it lives.
+pub fn create_options_once(
+    tx: &mut Tx<'_>,
+    who: Who,
+    what: What,
+    name: String,
+    card: i64,
+    expires: Option<f64>,
+) -> Result<Grant, WriteError> {
+    create_with(
+        tx,
+        who,
+        what,
+        Access::Options,
+        Some(vec![name]),
+        expires,
+        Some(card),
+    )
 }
 
 fn create_with(
@@ -372,6 +401,7 @@ fn create_with(
     access: Access,
     names: Option<Vec<String>>,
     expires: Option<f64>,
+    card: Option<i64>,
 ) -> Result<Grant, WriteError> {
     guard::check(tx.guard(), tx.meta(), "grant")?;
     if !fits(access, &what) {
@@ -423,6 +453,9 @@ fn create_with(
     if let Some(list) = &names {
         data["names"] = json!(list);
     }
+    if let Some(c) = card {
+        data["card"] = json!(c);
+    }
     let title = match &names {
         Some(list) => format!("{who} may change settings {what} ({})", list.join(", ")),
         None if access == Access::Options => format!("{who} may change settings {what}"),
@@ -469,6 +502,7 @@ fn create_with(
         names,
         expires,
         status: "active".into(),
+        card,
     })
 }
 
@@ -1508,7 +1542,7 @@ mod tests {
         for (what, access, names) in bad {
             let label = format!("{what} {} {names:?}", access.as_str());
             let got = write(&mut conn, user(), |tx| {
-                create_with(tx, Who::Project(a), what, access, names, None)
+                create_with(tx, Who::Project(a), what, access, names, None, None)
             });
             assert!(matches!(got, Err(WriteError::Refused(_))), "{label}");
         }

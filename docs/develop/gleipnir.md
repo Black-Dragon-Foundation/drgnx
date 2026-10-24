@@ -87,11 +87,12 @@ this returns.
     `config.el`, `custom.el`, `described.el` and `workspaces/` in the config dir and of each user Lisp file (a
     relative one in the config dir). Each name is taken as Emacs loads it: `..` collapsed first, as
     `expand-file-name` does, then every link followed as the kernel does, a dangling one too (a stow link whose target
-    is not there yet names the place it would be made), 40 links at most (more: left out). The config dir itself is
-    closed already; these entries close the places links lead to, so a write root that holds one is refused as
-    `ExposesUser` in every tier. `read_user_lisp_files(config_dir, home)` reads the paths from `settings.el`'s global
-    `drgnx-user-lisp-files` entry as data (`user_lisp_files` on a parsed `SettingsFile`): `FILE` or `(FILE . PLIST)`,
-    on or off, `~/` in the home; a file that does not read gives none.
+    is not there yet names the place it would be made), 40 links at most (more: left out). Each entry of
+    `workspaces/` that is a link adds its target too (an unfolded stow tree links the files one by one). The config
+    dir itself is closed already; these entries close the places links lead to, so a write root that holds one is
+    refused as `ExposesUser` in every tier. `read_user_lisp_files(config_dir, home)` reads the paths from
+    `settings.el`'s global `drgnx-user-lisp-files` entry as data (`user_lisp_files` on a parsed `SettingsFile`):
+    `FILE` or `(FILE . PLIST)`, on or off, `~/` in the home; a file that does not read gives none.
   - **The pins.** `settings_pins(write_roots)` is `Bind { mode: Ro, source: p, dest: p }` for each existing
     `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx` at the top of each write root, once each. bwrap binds them after
     the roots (read-only mounts over the writable root: a write is EROFS, an unlink or rename EBUSY); Seatbelt denies

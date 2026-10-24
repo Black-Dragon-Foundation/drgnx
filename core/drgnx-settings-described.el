@@ -29,10 +29,20 @@
                (directory-files (expand-file-name "settings/described" drgnx-dir) t "\\.eld\\'"))
           (list (expand-file-name "described.el" (drgnx-user-dir)))))
 
+(defvar drgnx-settings-described--tick nil "The `drgnx-setting-tick' at which the files' stamps were last checked.")
+
 (defun drgnx-settings-described--table ()
-  "Variable -> description plist, from every file; read again when a file's stamp changed."
+  "Variable -> description plist, from every file; read again when a file's stamp (`drgnx-file-stamp': inode, mtime,
+size, never the access time) changed.  The stamps are checked once per command (`drgnx-setting-tick')."
+  (let ((tick (drgnx-setting-tick)))
+    (if (and drgnx-settings-described--cache tick (eql tick drgnx-settings-described--tick))
+        (cdr drgnx-settings-described--cache)
+      (setq drgnx-settings-described--tick tick)
+      (drgnx-settings-described--table-1))))
+
+(defun drgnx-settings-described--table-1 ()
   (let* ((files (drgnx-settings-described-files))
-         (stamps (mapcar (lambda (f) (cons f (ignore-errors (file-attributes f)))) files)))
+         (stamps (mapcar (lambda (f) (cons f (ignore-errors (drgnx-file-stamp f)))) files)))
     (if (and drgnx-settings-described--cache (equal (car drgnx-settings-described--cache) stamps))
         (cdr drgnx-settings-described--cache)
       (let ((table (make-hash-table :test 'eq)))
