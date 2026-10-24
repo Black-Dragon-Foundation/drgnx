@@ -123,19 +123,36 @@
 
 (defvar child-frame-chrome)
 
+(defun drgnx-look-test--before ()
+  "The value of `child-frame-chrome' the Glitnir tests start from.  On a stock build a marker (a plain variable,
+which ui/look sets directly); on a Glitnir build the option's standard value: a value of its own there is the
+user's, which ui/look's claim leaves alone (`drgnx-module-set', `drgnx-settings-winner-p')."
+  (let ((sv (get 'child-frame-chrome 'standard-value)))
+    (if sv (eval (car sv) t) '((corner-radius . 1)))))
+
+(defun drgnx-look-test--call-from-before (fn)
+  "Call FN with `child-frame-chrome' at `drgnx-look-test--before'.  On a stock build it is `let'-bound; on a Glitnir
+build it is the option, not `let'-bound (its top-level value, the standard one): theme `drgnx''s write reaches the
+top-level value, which a `let' would hide and then keep."
+  (if (get 'child-frame-chrome 'standard-value)
+      (progn (should (equal child-frame-chrome (drgnx-look-test--before))) (funcall fn))
+    (let ((child-frame-chrome (drgnx-look-test--before))) (funcall fn))))
+
 (defmacro drgnx-look-test--with-glitnir (refreshes &rest body)
-  "BODY with `child-frame-chrome' bound to a marker value, ui/look set up again under a stubbed `glitnir' feature;
-each `glitnir-refresh' pushes the option's value at that moment onto REFRESHES."
+  "BODY with `child-frame-chrome' at `drgnx-look-test--before', ui/look set up again under a stubbed `glitnir'
+feature; each `glitnir-refresh' pushes the option's value at that moment onto REFRESHES."
   (declare (indent 1))
-  `(let ((child-frame-chrome '((corner-radius . 1))) (,refreshes nil))
-     (cl-letf (((symbol-function 'featurep)
-                (let ((orig (symbol-function 'featurep))) (lambda (f &rest r) (or (eq f 'glitnir) (apply orig f r)))))
-               ((symbol-function 'glitnir-refresh) (lambda (&rest _) (push child-frame-chrome ,refreshes))))
-       (drgnx-test-with-modules '(ui/look) :strict t
-                                (drgnx-module-teardown 'ui/look)
-                                (setq ,refreshes nil)
-                                (drgnx-modules--run-one 'ui/look (alist-get 'ui/look drgnx-modules--table) 'startup)
-                                ,@body))))
+  `(let ((,refreshes nil))
+     (drgnx-look-test--call-from-before
+      (lambda ()
+        (cl-letf (((symbol-function 'featurep)
+                   (let ((orig (symbol-function 'featurep))) (lambda (f &rest r) (or (eq f 'glitnir) (apply orig f r)))))
+                  ((symbol-function 'glitnir-refresh) (lambda (&rest _) (push child-frame-chrome ,refreshes))))
+          (drgnx-test-with-modules '(ui/look) :strict t
+                                   (drgnx-module-teardown 'ui/look)
+                                   (setq ,refreshes nil)
+                                   (drgnx-modules--run-one 'ui/look (alist-get 'ui/look drgnx-modules--table) 'startup)
+                                   ,@body))))))
 
 (ert-deftest drgnx-look/chrome-on-with-glitnir ()
   (drgnx-look-test--with-glitnir refreshes
@@ -145,8 +162,8 @@ each `glitnir-refresh' pushes the option's value at that moment onto REFRESHES."
 (ert-deftest drgnx-look/teardown-restores-chrome ()
   (drgnx-look-test--with-glitnir refreshes
     (drgnx-module-teardown 'ui/look)
-    (should (equal child-frame-chrome '((corner-radius . 1))))
-    (should (equal (car refreshes) '((corner-radius . 1))))))        ; refreshed after the old value is back
+    (should (equal child-frame-chrome (drgnx-look-test--before)))
+    (should (equal (car refreshes) (drgnx-look-test--before)))))     ; refreshed after the old value is back
 
 (ert-deftest drgnx-look/no-glitnir-no-chrome ()
   (let ((child-frame-chrome '((corner-radius . 1))) (called nil))
