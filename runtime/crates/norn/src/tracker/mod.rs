@@ -42,6 +42,7 @@ pub const ONLY_USER_CLOSES: &str = "setting:only-user-closes";
 pub const STATUSES: &[&str] = &[
     "open",
     "running",
+    "waiting",
     "needs-input",
     "in-review",
     "blocked",
@@ -50,6 +51,32 @@ pub const STATUSES: &[&str] = &[
 ];
 /// The statuses that close a task: its `blocks` and its parent's wait end.
 pub const CLOSED: &[&str] = &["done", "dropped"];
+
+/// A column of the board (agent system part 1, Calls made 17).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Column {
+    Queued,
+    Running,
+    Waiting,
+    NeedsYou,
+    Review,
+    Done,
+}
+
+/// The board column of a task with STATUS: `open`, `blocked` and the computed `ready` are queued, `claimed` and
+/// `running` running, `waiting` (on a job, a machine or another agent) waiting, `needs-input` needs you,
+/// `in-review` review, `done` and `dropped` done.  A status this list does not know is queued.
+pub fn board_column(status: &str) -> Column {
+    match status {
+        "claimed" | "running" => Column::Running,
+        "waiting" => Column::Waiting,
+        "needs-input" => Column::NeedsYou,
+        "in-review" => Column::Review,
+        "done" | "dropped" => Column::Done,
+        _ => Column::Queued,
+    }
+}
 
 /// One tracker operation (`task_write`'s ops; `tasks/write`).
 #[derive(Clone, Debug, PartialEq)]

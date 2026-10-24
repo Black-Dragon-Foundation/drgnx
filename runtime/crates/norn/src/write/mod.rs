@@ -10,14 +10,17 @@ pub mod agents;
 pub mod cards;
 pub mod decisions;
 pub mod event;
+pub mod exec;
 pub mod jobs;
 pub mod messages;
 pub mod meta;
 pub mod notices;
 pub mod options;
 pub mod prune;
+pub mod reports;
 pub mod review;
 pub mod spend;
+pub mod steps;
 pub mod tasks;
 
 /// A coordination writer's error as the graph writer's.

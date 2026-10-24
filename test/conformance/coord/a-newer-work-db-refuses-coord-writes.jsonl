@@ -7,6 +7,6 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "schema"}}}
 {"do": "expect_silent", "conn": "c", "for_ms": 2600}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "messages/send", "params": {"recipient": "user", "text": "x"}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "schema", "message": "work.db is schema 9, newer than this hub's 7: update drgnx"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "schema", "message": "work.db is schema 9, newer than this hub's 8: update drgnx"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"read_only": 9, "store": {"schema": 9, "writer": "read-only", "writes": 0}}}}

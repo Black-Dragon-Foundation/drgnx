@@ -13,10 +13,13 @@ pub struct LinkKind {
 }
 
 /// The entity kinds of storage §5.3 (its table, plus `worktree`, the end of `in_worktree`), plus `project`, plus
-/// `option` (a setting's history: Urdr Task 10b, unified-settings design §12).
+/// `option` (a setting's history: Urdr Task 10b, unified-settings design §12), plus schema 8's `exec` (a job: a
+/// command the hub runs), `report` (what an agent ends a task with) and `proposal` (a generated view's edit, as a
+/// proposal the user decides: agent system part 1, Tasks 4 and 14b).
 pub const ENTITY_KINDS: &[&str] = &[
     "task", "decision", "note", "grant", "agent", "session", "commit", "branch", "file", "symbol",
-    "spec", "plan", "step", "ruling", "todo", "worktree", "project", "option",
+    "spec", "plan", "step", "ruling", "todo", "worktree", "project", "option", "exec", "report",
+    "proposal",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -45,7 +48,12 @@ pub const LINKS: &[LinkKind] = &[
     link("relates", ANY, ANY, false),
     link("duplicates", ANY, ANY, false),
     link("derives", &["plan"], &["spec"], false),
-    link("implements", &["commit"], &["task", "step", "todo"], false),
+    link(
+        "implements",
+        &["commit"],
+        &["task", "step", "todo", "decision"],
+        false,
+    ),
     link(
         "on_branch",
         &["commit", "plan", "session"],
@@ -76,6 +84,16 @@ pub const LINKS: &[LinkKind] = &[
     link("references", &["file", "symbol"], &["symbol"], false),
     link("imports", &["file", "symbol"], &["symbol"], false),
     link("calls", &["file", "symbol"], &["symbol"], false),
+    // schema 8
+    link("waits_on", &["session", "task"], &["exec"], false),
+    link("report_of", &["report"], TASK, false),
+    link(
+        "proposes",
+        &["proposal"],
+        &["plan", "task", "note", "report"],
+        false,
+    ),
+    link("narrows", &["grant"], &["grant"], false),
 ];
 
 /// Whether KIND is one of [`ENTITY_KINDS`].
@@ -108,7 +126,7 @@ mod tests {
             [
                 "task", "decision", "note", "grant", "agent", "session", "commit", "branch",
                 "file", "symbol", "spec", "plan", "step", "ruling", "todo", "worktree", "project",
-                "option"
+                "option", "exec", "report", "proposal"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS
@@ -131,7 +149,7 @@ mod tests {
             (
                 "implements",
                 vec!["commit"],
-                vec!["task", "step", "todo"],
+                vec!["task", "step", "todo", "decision"],
                 false,
             ),
             (
@@ -164,6 +182,15 @@ mod tests {
             ("references", vec!["file", "symbol"], vec!["symbol"], false),
             ("imports", vec!["file", "symbol"], vec!["symbol"], false),
             ("calls", vec!["file", "symbol"], vec!["symbol"], false),
+            ("waits_on", vec!["session", "task"], vec!["exec"], false),
+            ("report_of", vec!["report"], vec!["task"], false),
+            (
+                "proposes",
+                vec!["proposal"],
+                vec!["plan", "task", "note", "report"],
+                false,
+            ),
+            ("narrows", vec!["grant"], vec!["grant"], false),
         ];
         assert_eq!(rows, expect);
         // Every named end is an entity kind, and only the two readiness links affect ready.
@@ -178,6 +205,15 @@ mod tests {
             .map(|l| l.name)
             .collect();
         assert_eq!(ready, ["blocks", "parent_of"]);
+    }
+
+    #[test]
+    fn implements_reaches_a_decision() {
+        assert!(link_allowed("implements", "commit", "decision"));
+        assert!(!link_allowed("implements", "task", "decision"));
+        assert!(link_allowed("narrows", "grant", "grant"));
+        assert!(link_allowed("proposes", "proposal", "report"));
+        assert!(!link_allowed("report_of", "report", "plan"));
     }
 
     #[test]
