@@ -1,0 +1,46 @@
+{"scenario": "system/cost-matches-records", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Exit criterion 6. Time and tokens: after two turns of a subscription Claude mock the session's rollup (timeline/get) equals the step table summed in SQL (tokens in and out, and the seconds of the think class to a millisecond). Cost, subscription side: the mock reports its cumulative cost (0.01 after turn one, 0.02 after turn two), the budget spends the reported total, not the sum of totals, so a 1.0 usd-est worker limit has 0.99 and then 0.98 left (a hub that adds each report to the last leaves 0.97 and fails here). Cost, gateway side: two priced requests through the gateway (200 in and 50 out at 1000 and 2000 USD per million: 0.3 each) are two request events of 0.3, two spend rows summing to 0.6 USD, 400 in and 100 out, the same figures `spend` answers for the job and two requests in the gateway status. Per-task and per-plan sums are in system/mixed-providers-lease-clash-review-spend, which runs a plan."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg-1\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 200, \"output_tokens\": 50}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "budget/set", "params": {"scope": {"worker": "$sid"}, "limits": [{"amount": 1.0, "unit": "usd-est"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"remaining": [{"amount": 1.0, "unit": "usd-est"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "first"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1", "class": "think"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "budget/get", "params": {"scope": {"worker": "$sid"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"remaining": [{"amount": 0.99, "unit": "usd-est"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t2", "class": "think"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "budget/get", "params": {"scope": {"worker": "$sid"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"remaining": [{"amount": 0.98, "unit": "usd-est"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "timeline/get", "params": {"scope": "session", "id": "$sid", "rollup": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"rollup": {"secs": {"$contains": [{"class": "think", "secs": "$capture:thinksecs"}]}, "tokens": {"in": "$capture:tin", "out": "$capture:tout"}}}}}
+{"do": "sql_expect", "sql": "select sum(tokens_in) = $tin, sum(tokens_out) = $tout, sum(tokens_in) > 0, abs(sum(end - start) - $thinksecs) < 0.002 from step where session = 'session:$sid' and class = 'think'", "rows": [[1, 1, 1, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"a": {"kind": "anthropic", "url": "http://127.0.0.1:$port", "caps": ["chat"], "messages": true, "price": [1000, 2000]}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "gateway/register", "params": {"chain": [["a", null]], "job": "j1", "task": "j1#1", "agent": "a1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"gateway": {"port": "$capture:gw", "requests": 0}}}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "e", "json": {"event": "request", "data": {"agent": "a1", "job": "j1", "task": "j1#1", "input": 200, "output": 50, "status": 200, "cost": 0.3}}, "within_ms": 10000}
+{"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"again\"}]}"}
+{"do": "expect_http", "conn": "g2", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "e", "json": {"event": "request", "data": {"agent": "a1", "job": "j1", "task": "j1#1", "input": 200, "output": 50, "status": 200, "cost": 0.3}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*), sum(input), sum(output), round(sum(cost), 6) from spend where job = 'j1'", "rows": [[2, 400, 100, 0.6]]}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "spend", "params": {"job": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"input": 400, "output": 100, "requests": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 12, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 12, "result": {"gateway": {"requests": 2, "errors": 0}}}}
