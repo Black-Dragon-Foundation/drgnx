@@ -694,8 +694,8 @@ A notification to the hub (`coord/notify`) carries no id and gets no answer: the
 ### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
 
 Since Task 16a the hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
-`drgnx-job-summary` shapes, so the cockpit and `bin/drgnx job` read them unchanged. (`job/{card,reply,dismiss,
-reassign,resume}` are Task 16b's.) The Lisp runner (`core/drgnx-job*.el`) is frozen and is the oracle for each rule.
+`drgnx-job-summary` shapes, so the cockpit and `bin/drgnx job` read them unchanged; Task 16b added `job/{card,reply,
+dismiss,reassign,resume}` and the review hand-off below. The Lisp runner (`core/drgnx-job*.el`) is frozen and is the oracle for each rule.
 
 - **State:** a job is a `job` row, its tasks `jtask` rows, plus the JSON in `job.data`: `plan`, `hash`, `repo`, `tasks`
   (the plan's text per task), `routes`, `estimate`, `budget`, `gate`, and by task id `blocked`, `profiles`, `bases`,
@@ -718,8 +718,52 @@ reassign,resume}` are Task 16b's.) The Lisp runner (`core/drgnx-job*.el`) is fro
   raises the task's `agent` card. `BasicGit` makes worktrees until Task 17's `HubGit` is set with `Runs::set_git`.
 - **Order, block:** `job/order` moves a task among the open tasks; `job/block` keeps a task from getting an agent
   (reason: one line, control and bidi characters replaced, 500 characters); `job/unblock` lets it run again.
-- **Hooks:** `Runs::set_hooks` takes the `Hooks` of Task 16b (reviews, the merge gate, fallback, the budget pause),
-  called after each running job's step and when a job stops.
+- **Hooks:** `Runs::set_hooks` takes the `Hooks` (`runner::review::PlanHooks`, set by the server), called after each
+  running job's step (and clash scan), when clashes were carded and when a job stops. They keep only what is cheap to
+  lose in memory (the reviewer of a task, the gate card a merge waits on, which turns were read); the rest is in the
+  job's data (`fails`, `nudged`, `passed`, `waiting`, `review-restarts`, `merge-tries`) and the cards.
+
+#### Review, merge, fallback, budget (Task 16b)
+
+- **Review hand-off.** A task that calls `complete_task` is `in-review`. Once its worker's turn is over (the worker
+  ends; a turn that goes on 10 minutes after it is a `stalled` card) a task of its own looks at the task's changes in
+  the trusted repository (`RunGit::prepare` writes a snapshot task's `<task folder>.bundle`, then `diffs`): none is a
+  `review` card ("finished with no commits"); `clash::before_review` may hold the review (a new against-decision clash
+  is carded and its reviewer started, `clash::start_reviewers`; an open clash card about the task holds it too).
+  Then a session of the first profile of the `review` route (any provider; role worker, the task's tree, no claim)
+  gets "[drgnx review ID] title ... VERDICT: pass, or VERDICT: fail: what to change". The verdict is the last
+  non-empty line of the agent's last message without Markdown marks (`review::verdict`). **Pass:** the task is marked
+  `passed` and merges. **Fail:** the reasons are the task's `notes`, the task is `ready` for a new worker (whose prompt
+  carries them); the third failure is a `review` card. **No verdict:** a `review` card. A reviewer that is lost (the job
+  stopped, the hub restarted) is started again, three times.
+- **Merge.** One merge at a time per job, in a task of its own (the task shows `merging`). The job's branch is checked
+  out in `<runs root>/<job>/_job`. The reviewer's pass is written as `accepted` review marks for every changed file at
+  its current diff hash (unless the job's gate is `review+accept`: then only the user's marks count and the task waits).
+  `RunGit::merge_gate` answers: `Allow` merges exactly the checked tip (`merge_into`: `merge --no-ff`); `Never` is a
+  `review` card; `Ask(card)` (CI or build files changed) waits for the matrix card: answered yes, the next tick
+  re-checks it (`MatrixGate::recheck`), clears the branch (`clear_gate`) and merges. A conflict is aborted and is a
+  `merge-conflict` card; a failure without one is retried once, then a `merge-failed` card. Merged: the task is `done`
+  (its dependents start), its worker session counts as finished for the checkpoint cap.
+- **Stalled nudge, needs-input.** A worker whose turn ended with the task open (and is not paused by a budget) gets
+  one reminder, then a `stalled` card. A task `needs-input` without a card of ours remembers who waits (`waiting`);
+  when that agent is gone the task goes back to `running`.
+- **Fallback.** A worker whose turn failed with a provider limit (a 429, rate limit, overloaded, quota, too many
+  requests) goes to the next profile of its role's route in the same tree, with a handover (its last commit and last
+  words); a `fallback` event says so; with none left, a `fallback` card. A reviewer at its limit starts again on the
+  next profile of the `review` route, else a `review` card.
+- **Budget pause.** The job's USD budget (`job/approve`) is a `usd` limit on its plan scope (`budget/set` can limit
+  any scope below it). A limit reached below a plan run pauses the sessions below it (Task 20), sets the job `paused`
+  and makes the job's `budget` card (the job's card replaces the unscoped one). `job/resume` (a new USD budget
+  optional) sets it `running`, settles the card and lets the held sessions go on.
+- **Cards.** `job/card {card, action, arg}` runs one of the card kind's actions once (`approve`, `reject`, `retry`,
+  `merge`/`accept` = merge as it is, `review`, `drop`, `resume`, `stop`, a clash's `accept`, `pick-a`, `pick-b`;
+  `open`, `edits` and `discuss` leave the card open). A clash pick records the user's decision (`contradiction`,
+  `proposed`, `against-decision`); reviewers of clash cards answer `RECOMMEND: A|B|neither: why`, kept on the card.
+  `job/reply`, `job/dismiss` answer or acknowledge a job's message; `job/reassign` sets a task's profile and gives it
+  a new agent. Not here: answering an agent's permission request from its card (the agent's request is answered in
+  its transcript).
+- **Clash lines.** `RunGit::diffs` gives each changed path its diff hash and its changed line ranges (`git diff -U0`);
+  two tasks in review that change one file make an `overlap` clash.
 
 ### Jobs as tools, waking instead of polling (Ratatoskr)
 

@@ -500,6 +500,17 @@ impl Budgets {
             .collect()
     }
 
+    /// The gateway jobs bound at or below SCOPE.
+    pub fn jobs_under(&self, scope: &BudgetScope) -> Vec<String> {
+        let st = self.st();
+        let k = key(scope);
+        st.jobs
+            .iter()
+            .filter(|(_, jk)| chain(&st, jk).contains(&k))
+            .map(|(j, _)| j.clone())
+            .collect()
+    }
+
     /// The gateway job of session SID, if bound.
     pub fn job_of(&self, sid: &str) -> Vec<String> {
         let st = self.st();
@@ -674,6 +685,17 @@ async fn reached_limit(f: &Front, h: &Hit) {
         unit.as_str().unwrap_or("?"),
         if h.estimate() { " (estimate)" } else { "" }
     );
+    // below a plan run: the run pauses and the card is the job's
+    let jobs = f.core.budgets.jobs_under(&h.scope);
+    if !jobs.is_empty() {
+        for j in jobs {
+            if let Some(id) = crate::runner::fallback::pause_job(f, &j, &title, data.clone()).await
+            {
+                f.broadcast("budget-limit", json!({"card": id, "data": data}));
+            }
+        }
+        return;
+    }
     let card = norn::write::cards::NewCard {
         job: None,
         task: None,

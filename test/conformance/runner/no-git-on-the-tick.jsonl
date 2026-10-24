@@ -1,8 +1,9 @@
-{"scenario": "runner/no-git-on-the-tick", "requires": ["v1", "fake-backend", "test-hooks", "linux"], "doc": "Task 16a: the step never waits for git. With a git that takes 2 s per call, job/approve and job/status answer at once and show the task as starting (its worktree is being made by a task of its own); the worker arrives afterwards."}
+{"scenario": "runner/no-git-on-the-tick", "requires": ["v1", "fake-backend", "test-hooks", "linux"], "doc": "Task 16a: the step never waits for git. With a git that takes 2 s per call, job/approve and job/status answer at once and show the task as starting (its worktree is being made by a task of its own); the worker arrives afterwards. The worker's mock never ends its turn (silent), so the hooks of Task 16b do not remind it or card it."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo $ROOT/slowbin && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init && printf '#!/bin/sh\\ncase \"$*\" in *worktree*) sleep 3;; esac\\nexec /usr/bin/git \"$@\"\\n' > $ROOT/slowbin/git && chmod +x $ROOT/slowbin/git"], "expect_code": 0}
-{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-routes ((implement . \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "silent 600\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\")))) (drgnx-agents-routes ((implement . \"mock-claude\"))))\n"}
 {"do": "write_file", "path": "$ROOT/plan.md", "text": "# Slow\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n"}
 {"do": "start", "hub": "h", "env": {"PATH": "$ROOT/slowbin:/usr/bin:/bin"}}
 {"do": "connect", "conn": "c", "hub": "h"}

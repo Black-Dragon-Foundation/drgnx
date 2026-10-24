@@ -1,0 +1,20 @@
+{"scenario": "runner/fallback-when-the-worker-exits-at-a-limit", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 16b: a worker whose process dies with its provider's limit on stderr (429, rate limit) is not freed for a retry on the same profile: the step classifies the exit and the task goes to the next profile of its route with a handover; no agent card is made."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-a\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/a.txt\" \"--log\" \"$ROOT/a.log\")) (\"mock-b\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/b.txt\" \"--log\" \"$ROOT/b.log\")))) (drgnx-agents-routes ((implement \"mock-a\" \"mock-b\") (review \"mock-b\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/a.txt", "text": "crash 429 rate limit exceeded\n"}
+{"do": "write_file", "path": "$ROOT/b.txt", "text": "tool:edit note.txt\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "fallback", "data": {"job": "$job", "from": "mock-a", "to": "mock-b"}}, "within_ms": 90000}
+{"do": "file", "path": "$ROOT/b.log", "contains": "You are continuing this task", "within_ms": 60000}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'agent'", "rows": [[0]]}

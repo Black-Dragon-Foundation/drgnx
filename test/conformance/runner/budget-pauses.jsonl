@@ -1,0 +1,31 @@
+{"scenario": "runner/budget-pauses", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 16b: a budget limit reached below a plan run (here the worker's own usd-est limit, 0.005; the mock Claude reports 0.01 after its first turn) pauses every session below it after its tool call (Task 20) and, for the run, the job itself: job/status says paused and the job has one open budget card (also a card event). job/resume with a budget sets the run going again and settles the card."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/w.log", "contains": "\"prompt\"", "within_ms": 90000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"agents": [{"id": "$capture:sid"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "budget/set", "params": {"scope": {"worker": "$sid"}, "limits": [{"amount": 0.005, "unit": "usd-est"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"scope": {"worker": "$sid"}}}}
+{"do": "expect", "conn": "e", "json": {"event": "budget-limit", "data": {"data": {"unit": "usd-est", "estimate": true, "sessions": ["$sid"]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"job": "$job", "kind": "budget"}}, "within_ms": 5000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$job", "status": "paused"}}, "within_ms": 5000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": {"paused": true}}}}
+{"do": "sql_expect", "sql": "select count(*), min(state) from card where job = '$job' and kind = 'budget'", "rows": [[1, "open"]]}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "job/resume", "params": {"id": "$job", "budget": 50}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$job", "status": "running"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*), min(state) from card where job = '$job' and kind = 'budget'", "rows": [[1, "settled"]]}

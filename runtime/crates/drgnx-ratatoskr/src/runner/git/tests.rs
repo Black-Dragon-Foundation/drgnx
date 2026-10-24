@@ -312,3 +312,126 @@ async fn no_plain_git_in_a_ledger_folder() {
         .await
         .unwrap();
 }
+
+#[test]
+fn hunks_give_the_lines_a_diff_touches() {
+    let text = "diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -2 +2,2 @@\n-two\n+2\n+2b\n\
+                @@ -9,2 +10,0 @@\n--- not a header\n-a\n-b\n\
+                diff --git a/gone.rs b/gone.rs\n--- a/gone.rs\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-a\n-b\n-c\n";
+    let r = parse_ranges(text);
+    assert_eq!(r["x.txt"], vec![(2, 4), (9, 11)]);
+    assert_eq!(r["gone.rs"], vec![(1, 4)]);
+}
+
+#[tokio::test]
+async fn two_tasks_in_review_on_one_file_clash_with_their_lines() {
+    use crate::runner::clash::{self, Rule};
+    let e = env();
+    let h = hub(&e, TreeMode::Worktree, Policy::default(), None);
+    let b = base(&e);
+    let t1 = h.task_worktree(&e.repo, "r1", "t1", &b).await.unwrap();
+    let t2 = h.task_worktree(&e.repo, "r1", "t2", &b).await.unwrap();
+    commit(&e, &t1, "x.txt", "one\n2 by t1\nthree\n");
+    commit(&e, &t2, "x.txt", "one\n2 by t2\nthree\nfour\n");
+    let d1 = h.diffs(&e.repo, &t1).await.unwrap();
+    let d2 = h.diffs(&e.repo, &t2).await.unwrap();
+    assert_eq!(d1["x.txt"].ranges, vec![(2, 3)]);
+    assert_eq!(d2["x.txt"].ranges, vec![(2, 3), (4, 5)]);
+    let task = |id: &str, n: i64| clash::RunTask {
+        id: id.into(),
+        n,
+        status: "in-review".into(),
+        agent: None,
+        head: Some(format!("h{n}")),
+    };
+    let run = clash::RunState {
+        status: "running".into(),
+        tasks: vec![task("t1", 1), task("t2", 2)],
+        sessions: vec![],
+        carded: Default::default(),
+        settled_subjects: Default::default(),
+        open_clash_tasks: Default::default(),
+    };
+    let mut index = clash::DiffIndex::new();
+    index.insert("t1".into(), d1);
+    index.insert("t2".into(), d2);
+    let found = clash::scan(&run, &[], &index);
+    assert!(
+        found.iter().any(|c| c.rule == Rule::Overlap
+            && c.key == "overlap:1:2"
+            && c.files == vec!["x.txt".to_string()]),
+        "{found:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_ci_card_answered_yes_clears_and_merges_and_unanswered_does_not() {
+    let e = env();
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = CoordDb::spawn(dbdir.path().join("work.db"));
+    let (h, p) = shared(
+        &e,
+        TreeMode::Worktree,
+        Policy {
+            ci: Some((db, MatrixGate::default())),
+            ..Policy::default()
+        },
+        None,
+    );
+    let b = base(&e);
+    let yes = h.task_worktree(&e.repo, "r1", "t1", &b).await.unwrap();
+    commit(&e, &yes, ".github/workflows/ci.yml", "on: push\n");
+    accept_all(&h, &e, &yes, &p.marks).await;
+    assert!(matches!(
+        h.merge_gate(&e.repo, &yes).await.unwrap(),
+        Gate::Ask(_)
+    ));
+    // the card is still open: nothing merges
+    let r = RunGit::merge_into(&h, &e.repo, &yes).await.unwrap_err();
+    assert!(r.stderr.contains("not cleared"), "{r:?}");
+    assert!(!e.repo.join(".github/workflows/ci.yml").exists());
+    // answered yes: the branch is cleared and exactly that tip merges
+    RunGit::clear_gate(&h, &yes.branch);
+    assert_eq!(
+        RunGit::merge_into(&h, &e.repo, &yes).await.unwrap(),
+        MergeOutcome::Merged
+    );
+    assert!(e.repo.join(".github/workflows/ci.yml").exists());
+    // another task whose card is answered no (never cleared) does not merge, however often it is tried
+    let no = h.task_worktree(&e.repo, "r1", "t2", &b).await.unwrap();
+    commit(&e, &no, "Makefile", "all:\n");
+    accept_all(&h, &e, &no, &p.marks).await;
+    assert!(matches!(
+        h.merge_gate(&e.repo, &no).await.unwrap(),
+        Gate::Ask(_)
+    ));
+    for _ in 0..2 {
+        assert!(RunGit::merge_into(&h, &e.repo, &no).await.is_err());
+    }
+    assert!(!e.repo.join("Makefile").exists());
+}
+
+#[tokio::test]
+async fn prepare_writes_a_snapshot_tasks_bundle_and_only_that() {
+    let e = env();
+    let h = hub(&e, TreeMode::Snapshot, Policy::default(), None);
+    let b = base(&e);
+    let t = h.task_worktree(&e.repo, "r1", "t1", &b).await.unwrap();
+    commit(&e, &t, "src/a.rs", "fn a() {}\n");
+    let bundle = HubGit::bundle_path(&t);
+    assert!(bundle.to_string_lossy().ends_with("1.bundle"), "{bundle:?}");
+    assert!(!bundle.exists());
+    RunGit::prepare(&h, &t).await.unwrap();
+    assert!(bundle.exists());
+    // the trusted repository verifies it: its prerequisite is there
+    sh(
+        &e.home,
+        &e.repo,
+        &["bundle", "verify", "-q", &bundle.to_string_lossy()],
+    );
+    // a worktree-mode task has no bundle
+    let h2 = hub(&e, TreeMode::Worktree, Policy::default(), None);
+    let w = h2.task_worktree(&e.repo, "r2", "t1", &b).await.unwrap();
+    RunGit::prepare(&h2, &w).await.unwrap();
+    assert!(!HubGit::bundle_path(&w).exists());
+}

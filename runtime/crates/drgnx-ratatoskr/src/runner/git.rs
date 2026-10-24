@@ -7,6 +7,7 @@
 //! into the trusted repository (verified, fsck'd, ref written compare-and-swap) and everything is read there.
 //! Every git call has a deadline and none runs on the runner's tick.
 
+use super::clash::FileDiff;
 use super::{GitError, GitFuture, RunGit, TaskTree, TreeMode, TrialResult};
 use crate::agents::lock::PROTECTED_RO;
 use crate::matrix_gate::Gate;
@@ -383,6 +384,45 @@ impl HubGit {
             .collect())
     }
 
+    /// The changed paths with the hash of each diff and the lines it touches (against the task's base): what the
+    /// clash rules read.
+    pub async fn diff_files(
+        &self,
+        repo: &Path,
+        tree: &TaskTree,
+    ) -> Result<BTreeMap<String, FileDiff>, GitError> {
+        let ins = self.inspect(repo, tree).await?;
+        let text = self
+            .git_in(
+                repo,
+                &[
+                    "diff",
+                    "-U0",
+                    "--no-renames",
+                    "--no-color",
+                    "--no-ext-diff",
+                    &tree.base,
+                    &ins.tip,
+                ],
+            )
+            .await?;
+        let mut ranges = parse_ranges(&text);
+        Ok(ins
+            .changed
+            .into_iter()
+            .map(|c| {
+                let r = ranges.remove(&c.path).unwrap_or_default();
+                (
+                    c.path,
+                    FileDiff {
+                        hash: c.hash,
+                        ranges: r,
+                    },
+                )
+            })
+            .collect())
+    }
+
     /// The gate's answer.  Protected paths are refused; a path not accepted against its current diff hash waits
     /// (Never, with the count); CI and build files ask; otherwise Allow, and the tip checked is remembered.
     async fn gate(&self, repo: &Path, tree: &TaskTree) -> Result<Gate, GitError> {
@@ -701,13 +741,72 @@ impl RunGit for HubGit {
         &'a self,
         repo: &'a Path,
         tree: &'a TaskTree,
-    ) -> GitFuture<'a, BTreeMap<String, String>> {
-        Box::pin(self.diff_hashes(repo, tree))
+    ) -> GitFuture<'a, BTreeMap<String, FileDiff>> {
+        Box::pin(self.diff_files(repo, tree))
     }
 
     fn touched<'a>(&'a self, folder: &'a Path) -> GitFuture<'a, ()> {
         Box::pin(self.touch(folder))
     }
+
+    fn prepare<'a>(&'a self, tree: &'a TaskTree) -> GitFuture<'a, ()> {
+        Box::pin(async move {
+            if tree.mode == TreeMode::Snapshot {
+                self.write_bundle(tree, true).await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn clear_gate(&self, branch: &str) {
+        self.clear(branch);
+    }
+
+    fn merge_into<'a>(
+        &'a self,
+        job_tree: &'a Path,
+        tree: &'a TaskTree,
+    ) -> GitFuture<'a, MergeOutcome> {
+        Box::pin(HubGit::merge(self, job_tree, tree))
+    }
+}
+
+/// The changed line ranges of each path of a `git diff -U0` text: the new side of a hunk, or, when it only deletes,
+/// the old side (inclusive start, exclusive end).
+fn parse_ranges(text: &str) -> BTreeMap<String, Vec<(u32, u32)>> {
+    fn hunk(l: &str) -> Option<(u32, u32)> {
+        let mut it = l.split_whitespace();
+        it.next()?;
+        let old = it.next()?.strip_prefix('-')?;
+        let new = it.next()?.strip_prefix('+')?;
+        let pair = |s: &str| {
+            let (a, b) = s.split_once(',').unwrap_or((s, "1"));
+            Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))
+        };
+        let ((oa, ob), (na, nb)) = (pair(old)?, pair(new)?);
+        Some(if nb > 0 {
+            (na, na + nb)
+        } else {
+            (oa, oa + ob.max(1))
+        })
+    }
+    let mut out: BTreeMap<String, Vec<(u32, u32)>> = BTreeMap::new();
+    let (mut file, mut old, mut header) = (None::<String>, None::<String>, false);
+    for l in text.lines() {
+        if l.starts_with("diff --git ") {
+            header = true;
+        } else if header && let Some(p) = l.strip_prefix("--- ") {
+            old = p.strip_prefix("a/").map(str::to_owned);
+        } else if header && let Some(p) = l.strip_prefix("+++ ") {
+            file = p.strip_prefix("b/").map(str::to_owned).or(old.take());
+        } else if l.starts_with("@@ ") {
+            header = false;
+            if let (Some(f), Some(r)) = (&file, hunk(l)) {
+                out.entry(f.clone()).or_default().push(r);
+            }
+        }
+    }
+    out
 }
 
 /// The hub's [`GatePolicy`]: the acceptance marks of the task's worker session (`review_mark`, found by the worktree

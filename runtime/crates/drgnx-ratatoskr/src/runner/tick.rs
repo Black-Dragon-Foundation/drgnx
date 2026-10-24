@@ -6,8 +6,8 @@
 
 use super::{
     GitError, GitFuture, MAX_AGENTS, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, changed,
-    clash, data_for, data_of, internal, load, ordered, profile_of, put_in, raise_card, service,
-    settle_cards, update_data, user,
+    clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in, raise_card,
+    service, settle_cards, update_data, user,
 };
 use crate::agents::Origin;
 use crate::coord::fail;
@@ -104,6 +104,28 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
             .is_some_and(|a| live.iter().any(|s| &s.id == a));
         // its agent died or the hub restarted: the task is free (its worktree stays) - a few times, then the user
         if matches!(status, "claimed" | "running") && !alive {
+            // it died of its provider's limit: the task goes to the next profile of its route, not back to the queue
+            if let Some(a) = &t.row.agent
+                && let Some(snap) = front
+                    .core
+                    .agents
+                    .snapshots()
+                    .into_iter()
+                    .find(|s| s.id == *a)
+            {
+                let tr = front.core.agents.get(a).ok();
+                if let (Some(why), Some(tr)) = (fallback::exit_limit(&snap, tr.as_ref()), tr) {
+                    runs.set_busy(&tid, Some("starting"));
+                    let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = fallback::worker(&f, &job, &task, &snap, &tr, &why).await {
+                            tracing::warn!("plan run {job}: fallback: {}", e.message);
+                        }
+                        f.core.runs.set_busy(&task.row.id, None);
+                    });
+                    continue;
+                }
+            }
             if let Some(a) = &t.row.agent {
                 runs.session_finished(front, a);
             }
@@ -163,7 +185,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
             runs.set_busy(&t.row.id, Some("starting"));
             let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
             tokio::spawn(async move {
-                if let Err(e) = start(&f, &job, &task, None).await {
+                if let Err(e) = start(&f, &job, &task, None, None).await {
                     tracing::warn!(
                         "plan run {job}: task {} did not start: {}",
                         task.row.id,
@@ -349,27 +371,27 @@ pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::
             base: base.to_owned(),
             mode: TreeMode::Worktree,
         };
-        if let Ok(hashes) = git.diffs(&repo, &tree).await {
-            diffs.insert(
-                t.row.id.clone(),
-                hashes
-                    .into_iter()
-                    .map(|(p, hash)| {
-                        (
-                            p,
-                            clash::FileDiff {
-                                hash,
-                                ranges: Vec::new(),
-                            },
-                        )
-                    })
-                    .collect(),
-            );
+        if let Ok(files) = git.diffs(&repo, &tree).await {
+            diffs.insert(t.row.id.clone(), files);
         }
     }
     let run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
-    let decisions: Vec<runstav::methods::coord::Decision> = l
-        .decisions
+    let decisions = decisions_of(&l);
+    let found = clash::scan(&run, &decisions, &diffs);
+    for c in &found {
+        card_clash(front, id, c).await?;
+    }
+    if !found.is_empty()
+        && let Some(h) = front.core.runs.hooks()
+    {
+        h.carded(front, id, found).await;
+    }
+    Ok(())
+}
+
+/// The decisions of L as the clash rules read them.
+pub(crate) fn decisions_of(l: &super::Loaded) -> Vec<runstav::methods::coord::Decision> {
+    l.decisions
         .iter()
         .map(|d| runstav::methods::coord::Decision {
             n: d.n,
@@ -385,45 +407,50 @@ pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::
             at: d.at,
             ver: d.ver,
         })
-        .collect();
-    let found = clash::scan(&run, &decisions, &diffs);
+        .collect()
+}
+
+/// Card clash C of job ID once: its key is kept in the job's data (`clashes`).
+pub(crate) async fn card_clash(
+    front: &Arc<Front>,
+    id: &str,
+    c: &clash::Clash,
+) -> Result<(), crate::runner::Error> {
     let svc = service();
-    for c in found {
-        let kind = match c.rule {
-            clash::Rule::Stale => "stalled",
-            clash::Rule::Overlap => "overlap",
-            _ => "clash",
-        };
-        raise_card(
-            front,
-            &svc,
-            id,
-            c.task.as_deref(),
-            kind,
-            &c.title,
-            json!({
-                "key": c.key, "rule": c.rule, "subject": c.subject, "sides": c.sides, "files": c.files,
-                "lines": c.lines, "size": c.size, "blocks_review": c.blocks_review,
-            }),
-        )
-        .await?;
-        let key = c.key.clone();
-        update_data(front, &svc, id, move |d| {
-            put_in(d, "clashes", &key, Some(json!(true)));
-        })
-        .await?;
-    }
-    Ok(())
+    let kind = match c.rule {
+        clash::Rule::Stale => "stalled",
+        clash::Rule::Overlap => "overlap",
+        _ => "clash",
+    };
+    raise_card(
+        front,
+        &svc,
+        id,
+        c.task.as_deref(),
+        kind,
+        &c.title,
+        json!({
+            "key": c.key, "rule": c.rule, "subject": c.subject, "sides": c.sides, "files": c.files,
+            "lines": c.lines, "size": c.size, "blocks_review": c.blocks_review,
+        }),
+    )
+    .await?;
+    let key = c.key.clone();
+    update_data(front, &svc, id, move |d| {
+        put_in(d, "clashes", &key, Some(json!(true)));
+    })
+    .await
 }
 
 /// Give TASK of job JOB its worker: a tree of its own (git, off the tick), a session of the task's profile with the
 /// role Worker in it, the task claimed by that session, and its prompt.  A failure raises the task's `agent` card.
-/// HANDOVER: what the agent before it left.
+/// HANDOVER: what the agent before it left; ON: the profile to use instead of the task's (a fallback).
 pub async fn start(
     front: &Arc<Front>,
     job: &str,
     task: &Task,
     handover: Option<&str>,
+    on: Option<&str>,
 ) -> Result<(), crate::runner::Error> {
     let runs = &front.core.runs;
     let svc = service();
@@ -433,7 +460,7 @@ pub async fn start(
     };
     let data = data_of(&l.job);
     let repo = PathBuf::from(l.job.repo.clone().unwrap_or_default());
-    let profile = profile_of(front, &data, task);
+    let profile = on.map_or_else(|| profile_of(front, &data, task), str::to_owned);
     // the job's branch is made from HEAD when absent; the task's tree starts from the commit it is at now
     let base = format!("job/{job}");
     let base = match git(&repo, &["rev-parse", "--verify", "-q", &base]).await {
@@ -615,7 +642,7 @@ pub async fn start(
 /// absent).  The merge gate and trial merges are Task 17's.
 pub struct BasicGit;
 
-async fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
+pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
     let what = format!("git {}", args.join(" "));
     let mut cmd = tokio::process::Command::new("git");
     cmd.arg("-C")
