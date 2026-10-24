@@ -325,3 +325,78 @@ proptest! {
         prop_assert!(narrow(&parent, &Effective::default()).is_ok());
     }
 }
+
+#[test]
+fn who_from_the_wire_keeps_every_column() {
+    let w = WhoParam {
+        role: Some(Role::Worker),
+        agent: Some(Bounded("a".to_string())),
+        provider: Some(Bounded("p".to_string())),
+    };
+    assert_eq!(
+        Who::from(&w),
+        Who {
+            role: Some(Role::Worker),
+            agent: Some("a".into()),
+            provider: Some("p".into()),
+        }
+    );
+}
+
+#[test]
+fn meet_is_the_tighter_cell_at_every_action() {
+    let x = Effective {
+        cells: [(Action::CodeEdit, cell(Verdict::Allow))].into(),
+    };
+    let y = Effective {
+        cells: [
+            (Action::CodeEdit, cell(Verdict::Ask)),
+            (Action::CodeRead, cell(Verdict::Allow)),
+        ]
+        .into(),
+    };
+    let m = meet(&x, &y);
+    assert_eq!(m.cell(Action::CodeEdit).verdict, Verdict::Ask);
+    // an action one side lacks is Never there, so Never in the meet
+    assert_eq!(m.cell(Action::CodeRead).verdict, Verdict::Never);
+    assert_eq!(m.cells.len(), Action::ALL.len());
+}
+
+#[test]
+fn a_never_row_stays_never_in_a_cell_that_says_allow() {
+    // `decide` guards the rows itself, whatever the cells it is handed say
+    let e = Effective {
+        cells: [
+            (Action::Unsandboxed, cell(Verdict::Allow)),
+            (Action::UserPrivate, cell(Verdict::Ask)),
+        ]
+        .into(),
+    };
+    assert_eq!(decide(&e, Action::Unsandboxed, None), Verdict::Never);
+    assert_eq!(decide(&e, Action::UserPrivate, None), Verdict::Never);
+}
+
+#[test]
+fn an_equal_from_and_to_is_an_empty_range() {
+    let t = [TimePreset {
+        when: When::Between(9 * 60, 9 * 60),
+        preset: Preset::Cautious,
+    }];
+    for minute in [0, 9 * 60 - 1, 9 * 60, 9 * 60 + 1, 23 * 60] {
+        assert_eq!(
+            active(Preset::Balanced, &t, false, minute),
+            Preset::Balanced
+        );
+    }
+}
+
+#[test]
+fn a_widening_names_the_action() {
+    let w = Widening {
+        action: Action::PushMain,
+    };
+    assert_eq!(
+        w.to_string(),
+        format!("{} is wider than the parent allows", Action::PushMain.id())
+    );
+}

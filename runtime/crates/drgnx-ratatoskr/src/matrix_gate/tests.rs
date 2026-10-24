@@ -416,3 +416,385 @@ async fn an_override_counts_by_the_writer_of_its_own_field() {
         .unwrap();
     assert_eq!(r, (Verdict::Never, Verdict::Allow, Verdict::Never));
 }
+
+// The gate's seams the tests above reach only through the hub: the session's scope, the front's settings, the
+// editors' event, the written card's time, the reasons and titles a card or a refusal shows.
+
+fn front(dir: &std::path::Path) -> Front {
+    Front::new(
+        runstav::proof::Cap::generate().unwrap(),
+        dir.join("hub-x.sock"),
+        crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
+        CoordDb::spawn(dir.join("work.db")),
+        Arc::new(crate::dispatch::NoBackend),
+    )
+}
+
+async fn set_matrix(f: &Front, v: Value) {
+    f.settings
+        .set_overrides(
+            None,
+            vec![crate::settings::overrides::Override {
+                name: "drgnx-agents-matrix".into(),
+                value: v,
+                source: "test".into(),
+            }],
+        )
+        .await
+        .unwrap();
+}
+
+fn caller() -> Caller {
+    Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 1,
+        backend: false,
+    }
+}
+
+/// Entity ID of KIND whose `matrix` field the user wrote: CELLS (action, role) are Never.
+async fn never_override(
+    db: &CoordDb,
+    id: &'static str,
+    kind: &'static str,
+    cells: &[(&str, &str)],
+) {
+    let rows: Vec<Value> = cells
+        .iter()
+        .map(|(a, r)| json!({"action": a, "column": {"role": r}, "verdict": "never"}))
+        .collect();
+    db.write(meta(Class::User), move |tx| {
+        entity::create(
+            tx,
+            EntityNew {
+                id: id.into(),
+                kind: kind.into(),
+                project: None,
+                title: Some("e".into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({ "matrix": rows }),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn a_session_acts_in_the_plan_and_project_of_its_scope() {
+    let runs = crate::runner::Runs::default();
+    runs.set_scope("s1", "plan:p".into(), Some("project:q".into()));
+    let c = ActionCtx::of_session(&runs.scopes(), "s1");
+    assert_eq!(
+        (
+            c.plan.as_deref(),
+            c.project.as_deref(),
+            c.session.as_deref()
+        ),
+        (Some("plan:p"), Some("project:q"), Some("s1"))
+    );
+    let none = ActionCtx::of_session(&runs.scopes(), "s2");
+    assert_eq!(
+        (none.plan, none.project, none.session.as_deref()),
+        (None, None, Some("s2"))
+    );
+}
+
+#[tokio::test]
+async fn the_time_presets_follow_the_local_minute_of_the_clock() {
+    let g = MatrixGate::default();
+    // a minute that is not midnight's, so a clock read as 0 does not fall in the range
+    let now = (0..)
+        .map(|k| 1_700_000_000.0 + f64::from(k) * 60.0)
+        .find(|t| minute(*t) != 0)
+        .unwrap();
+    let m = minute(now);
+    assert_eq!(m as u32, local(now as u64).minute);
+    g.apply_setting(&json!({"preset": "cautious", "time": [
+        {"when": {"between": [m, m + 1]}, "preset": "autonomous"}]}))
+        .unwrap();
+    assert_eq!(g.active_preset(now), Preset::Autonomous);
+    assert_eq!(g.active_preset(now + 120.0), Preset::Cautious);
+}
+
+#[tokio::test]
+async fn a_card_title_names_the_path_or_the_diff_when_there_is_no_command() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&ask_commit("cautious", "ask")).unwrap();
+    let hash = "ab".repeat(32);
+    let facts = [
+        json!({"paths": ["/w/a.rs", "/w/b.rs"]}),
+        json!({"diff_hash": hash.clone()}),
+    ];
+    let titles = db
+        .write(meta(Class::System), move |tx| {
+            for (i, f) in facts.into_iter().enumerate() {
+                let c = ActionCtx {
+                    facts: serde_json::from_value(f).unwrap(),
+                    ..ActionCtx::default()
+                };
+                g.check(tx, &who(Role::Worker), Action::Commit, &c, i as f64)?;
+            }
+            let mut q = tx
+                .sql()
+                .prepare("select title from card where kind = 'matrix' order by id")?;
+            Ok(q.query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        titles,
+        [
+            "commit: /w/a.rs".to_string(),
+            format!("commit: diff {hash}")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_says_why_and_an_allowance_says_nothing() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    let (never, allowed, over) = db
+        .read(move |c| {
+            let w = who(Role::Worker);
+            let x = ActionCtx::default();
+            let spend = ActionCtx {
+                amount: Some(11.0),
+                ..ActionCtx::default()
+            };
+            Ok((
+                g.dry(c, &w, Action::Unsandboxed, &x, 1.0),
+                g.dry(c, &w, Action::CodeRead, &x, 1.0),
+                g.dry(c, &w, Action::Spend, &spend, 1.0),
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(never.verdict, Verdict::Never);
+    assert_eq!(
+        never.why.as_deref(),
+        Some("unsandboxed is never allowed here")
+    );
+    assert_eq!((allowed.verdict, allowed.why), (Verdict::Allow, None));
+    assert_eq!(over.verdict, Verdict::Never);
+    assert!(over.why.unwrap().contains("over its limit"));
+}
+
+#[tokio::test]
+async fn a_declined_card_refuses_and_an_open_one_follows_the_matrix_now() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&ask_commit("cautious", "ask")).unwrap();
+    let g2 = g.clone();
+    let (open, declined) = db
+        .write(meta(Class::System), move |tx| {
+            let mut ask = |cmd: &str, t: f64| match g2.check(
+                tx,
+                &who(Role::Worker),
+                Action::Commit,
+                &ctx(cmd),
+                t,
+            )? {
+                Gate::Ask(id) => Ok::<i64, CoordError>(id),
+                other => panic!("asked, got {other:?}"),
+            };
+            let open = ask("one", 1.0)?;
+            let declined = ask("two", 2.0)?;
+            card_settle(tx, declined, "deny", 3.0)?;
+            Ok((open, declined))
+        })
+        .await
+        .unwrap();
+    let at = |g: &MatrixGate, id| {
+        let g = g.clone();
+        let db = &db;
+        async move { db.read(move |c| Ok(g.recheck(c, id, 4.0))).await.unwrap() }
+    };
+    assert_eq!(at(&g, open).await, Gate::Ask(open));
+    assert_eq!(
+        at(&g, declined).await,
+        Gate::Never("the user declined".into())
+    );
+    // the matrix now allows what the open card asked: no answer is needed
+    g.apply_setting(&ask_commit("cautious", "allow")).unwrap();
+    assert_eq!(at(&g, open).await, Gate::Allow);
+    assert_eq!(
+        at(&g, declined).await,
+        Gate::Never("the user declined".into())
+    );
+}
+
+#[test]
+fn a_dropped_delegation_is_gone() {
+    let g = MatrixGate::default();
+    g.set_delegated("w1", Delegation::default());
+    g.set_delegated("w2", Delegation::default());
+    assert!(g.delegated_to("w1").is_some());
+    g.drop_delegation("w1");
+    assert!(g.delegated_to("w1").is_none());
+    assert!(g.delegated_to("w2").is_some());
+}
+
+#[tokio::test]
+async fn a_workers_manager_binds_it_in_the_managers_project_and_plan() {
+    let (_d, db) = db();
+    never_override(&db, "project:q", "project", &[("commit", "manager")]).await;
+    never_override(&db, "plan:p", "plan", &[("code.edit", "manager")]).await;
+    let g = MatrixGate::default();
+    let manager = who(Role::Manager);
+    // the manager handed its worker everything an Autonomous manager has; only its own cells narrow that
+    let all = effective(&[&preset(Preset::Autonomous)], &manager);
+    let delegation = |project: Option<&str>, plan: Option<&str>| Delegation {
+        cells: all.clone(),
+        manager: Some(Manager {
+            who: manager.clone(),
+            project: project.map(str::to_owned),
+            plan: plan.map(str::to_owned),
+        }),
+    };
+    g.set_delegated("in-project", delegation(Some("project:q"), None));
+    g.set_delegated("in-plan", delegation(None, Some("plan:p")));
+    g.set_delegated("elsewhere", delegation(None, None));
+    let verdicts = db
+        .read(move |c| {
+            let at = |sid: &str, a| {
+                let x = ActionCtx {
+                    session: Some(sid.into()),
+                    ..ActionCtx::default()
+                };
+                g.dry(c, &who(Role::Worker), a, &x, 1.0).verdict
+            };
+            Ok([
+                at("in-project", Action::Commit),
+                at("in-plan", Action::CodeEdit),
+                at("elsewhere", Action::Commit),
+                at("elsewhere", Action::CodeEdit),
+            ])
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        verdicts,
+        [
+            Verdict::Never,
+            Verdict::Never,
+            Verdict::Allow,
+            Verdict::Allow
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_view_shows_the_project_and_the_plan_overrides() {
+    let (_d, db) = db();
+    never_override(&db, "project:q", "project", &[("commit", "manager")]).await;
+    never_override(&db, "plan:p", "plan", &[("code.edit", "manager")]).await;
+    let g = MatrixGate::default();
+    let p: GetParams =
+        serde_json::from_value(json!({"project": "project:q", "plan": "plan:p"})).unwrap();
+    let v = db.read(move |c| Ok(g.view(c, &p, 1.0))).await.unwrap();
+    let cell = |a| {
+        v.cells
+            .iter()
+            .find(|r| r.action == a && r.column == Column::Role(Role::Manager))
+            .map(|r| r.verdict)
+    };
+    assert_eq!(cell(Action::Commit), Some(Verdict::Never));
+    assert_eq!(cell(Action::CodeEdit), Some(Verdict::Never));
+}
+
+#[tokio::test]
+async fn the_gate_reads_the_front_settings_and_announces_a_new_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = front(dir.path());
+    set_matrix(&f, ask_commit("cautious", "ask")).await;
+    // refresh and refresh_from take the setting the front holds
+    let (a, b) = (MatrixGate::default(), MatrixGate::default());
+    a.refresh(&f);
+    b.refresh_from(&f.settings);
+    assert_eq!(a.active_preset(0.0), Preset::Cautious);
+    assert_eq!(b.active_preset(0.0), Preset::Cautious);
+    // the effective cells now are the setting's, not an empty set
+    let e = f
+        .core
+        .matrix
+        .effective_now(
+            &f.settings,
+            &f.writer,
+            who(Role::Worker),
+            ActionCtx::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(e.cell(Action::Commit).verdict, Verdict::Ask);
+    assert_eq!(e.cell(Action::CodeRead).verdict, Verdict::Allow);
+    // a new matrix card is written with the clock's time and announced to the editors
+    let out = Arc::new(crate::conn::Outbox::new(1));
+    f.editors.subscribe(1, out.clone());
+    let before = now_secs();
+    let gate = f
+        .core
+        .matrix
+        .decide(
+            &f.settings,
+            &f.writer,
+            who(Role::Worker),
+            Action::Commit,
+            ctx("git commit"),
+        )
+        .await;
+    let Gate::Ask(id) = gate else {
+        panic!("asked, got {gate:?}")
+    };
+    assert!(id > 0);
+    let at: f64 = f
+        .writer
+        .db
+        .read(move |c| Ok(c.query_row("select at from card where id = ?1", [id], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert!((before..=now_secs()).contains(&at), "{at} vs {before}");
+    let lines = out.take_lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let ev: Value = serde_json::from_str(lines[0].trim()).unwrap();
+    assert_eq!(ev["event"], "card", "{ev}");
+    assert_eq!(ev["data"]["id"], id);
+    assert_eq!(ev["data"]["kind"], "matrix");
+    assert_eq!(ev["data"]["title"], "commit: git commit");
+}
+
+#[tokio::test]
+async fn presence_sets_the_away_flag_and_answers_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = front(dir.path());
+    f.core
+        .matrix
+        .apply_setting(
+            &json!({"preset": "balanced", "time": [{"when": "away", "preset": "cautious"}]}),
+        )
+        .unwrap();
+    let c = caller();
+    assert!(
+        presence(&f, &c, PresenceParams { away: true })
+            .await
+            .unwrap()
+    );
+    assert_eq!(f.core.matrix.active_preset(0.0), Preset::Cautious);
+    assert!(
+        !presence(&f, &c, PresenceParams { away: false })
+            .await
+            .unwrap()
+    );
+    assert_eq!(f.core.matrix.active_preset(0.0), Preset::Balanced);
+}
