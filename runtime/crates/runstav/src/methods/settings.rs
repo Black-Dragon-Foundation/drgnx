@@ -19,7 +19,8 @@ pub type OptionIdText = Bounded<String, 1024>;
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct OptionChange {
     pub id: OptionIdText,
-    /// The new value as printed Lisp; `null` when the setting was removed.
+    /// The new value as printed Lisp; `null` when the setting was removed. One that looks like a secret is recorded
+    /// as a change with no value (`redacted`).
     #[serde(default)]
     pub value: Option<Text>,
     /// The file it is in (`settings.el`, a workspace file).
@@ -93,7 +94,7 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![method!(
         "settings/record", SettingsRecord(RecordParams) -> RecordAnswer,
         classes: [User], writes: true, home: Front,
-        doc: "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
+        doc: "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed; a value that looks like a secret is never stored: no value, redacted true), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
         check: check_record,
     )]
 }

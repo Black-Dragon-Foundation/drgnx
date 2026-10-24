@@ -7,6 +7,9 @@
 //!   (one project per call: [`project_of`]).
 //! - **Each change** makes its entity (`data {value, file, line}`, origin `recorded`) or gives it a new version; a
 //!   removed setting's `data` has no `value` (it reads as `null`). A retired entity (one the scan saw go) comes back.
+//! - **A secret is never stored:** a value [`runstav::secrets::looks_like_secret`] flags is recorded with no `value`
+//!   and `redacted: true` (the change shows in the history, the secret does not; the next value in the clear drops
+//!   the flag). Two secrets in a row are one version, as the same value twice is.
 //! - The store's rule for kind `option` ([`crate::options::rule`]) holds as for every write: the user writes any
 //!   well-formed id.
 
@@ -68,14 +71,27 @@ pub fn meta(mut base: TxMeta, p: &RecordParams, project: Option<i64>) -> TxMeta 
     base
 }
 
-/// CHANGE's `data`: `value`, `file` and `line`, each left out when it has none (merged, a `null` removes it).
+/// CHANGE's `data`: `value`, `file` and `line`, each left out when it has none (merged, a `null` removes it). A value
+/// that looks like a secret ([`runstav::secrets::looks_like_secret`]) is never stored: the version has no `value` and
+/// `redacted: true` instead, so the history shows that the setting changed but never what the secret was.
 fn data_of(c: &OptionChange) -> Map<String, Value> {
     let mut m = Map::new();
+    let value = c.value.as_ref().map(|v| v.as_str());
+    let redacted = value.is_some_and(|v| runstav::secrets::looks_like_secret(v).is_some());
     m.insert(
         "value".into(),
-        c.value
-            .as_ref()
-            .map_or(Value::Null, |v| Value::String(v.as_str().into())),
+        match value {
+            Some(v) if !redacted => Value::String(v.into()),
+            _ => Value::Null,
+        },
+    );
+    m.insert(
+        "redacted".into(),
+        if redacted {
+            Value::Bool(true)
+        } else {
+            Value::Null
+        },
     );
     m.insert("file".into(), Value::String(c.file.to_string()));
     m.insert("line".into(), c.line.map_or(Value::Null, Value::from));
@@ -450,6 +466,74 @@ mod tests {
             data(&conn, id),
             json!({"value": "80", "file": "/c/settings.el", "line": 3})
         );
+    }
+
+    /// Every case of the shared secret table, as the printed Lisp string the editor sends: a value that looks like a
+    /// secret is recorded as a change (a new version, `redacted: true`) with no value, and its text is nowhere in the
+    /// store; any other value is kept as it is. A redacted value set again in the clear drops the flag.
+    #[test]
+    fn a_secret_is_never_stored() {
+        let (_d, _p, mut conn) = db();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../test/fixtures/secret-cases.json");
+        let table: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cases = table["cases"].as_array().unwrap();
+        assert!(cases.len() > 30);
+        let id = "option:global:my-key";
+        let mut wrong = Vec::new();
+        for (i, case) in cases.iter().enumerate() {
+            // From a plain value each time, so each case is a change (two secrets in a row are one version).
+            let plain = params(json!({"changes": [change(id, Some("1"), Some(1))],
+                                      "tool": "ui:settings", "req": format!("p{i}")}));
+            rec(&mut conn, &plain).unwrap();
+            assert_eq!(
+                data(&conn, id),
+                json!({"value": "1", "file": "/c/settings.el", "line": 1})
+            );
+            let text: String = match &case["text"] {
+                Value::String(s) => s.clone(),
+                Value::Array(parts) => parts.iter().map(|p| p.as_str().unwrap()).collect(),
+                other => panic!("text: {other}"),
+            };
+            let printed = format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
+            let secret = case["rule"].is_string();
+            if secret != runstav::secrets::looks_like_secret(&printed).is_some() {
+                wrong.push(format!("{}: printed, the rule differs", case["name"]));
+                continue;
+            }
+            let ver = entity::by_id(&conn, id).unwrap().unwrap().ver;
+            let p = params(json!({"changes": [change(id, Some(&printed), Some(1))],
+                                  "tool": "ui:settings", "req": format!("r{}", i + 1)}));
+            rec(&mut conn, &p).unwrap();
+            let e = entity::by_id(&conn, id).unwrap().unwrap();
+            let want = if secret {
+                json!({"redacted": true, "file": "/c/settings.el", "line": 1})
+            } else {
+                json!({"value": printed, "file": "/c/settings.el", "line": 1})
+            };
+            if e.data != want || e.ver != ver + 1 {
+                wrong.push(format!("{}: {} at ver {}", case["name"], e.data, e.ver));
+            }
+            if secret {
+                let needle = case["text"]
+                    .as_array()
+                    .map_or(text.clone(), |parts| parts.last().unwrap().as_str().unwrap().into());
+                let found: i64 = conn
+                    .query_row(
+                        "select (select count(*) from entity where instr(data, ?1) > 0) \
+                         + (select count(*) from entity_hist where instr(data, ?1) > 0) \
+                         + (select count(*) from tx where instr(coalesce(answer, '') || coalesce(note, '') \
+                            || coalesce(req, ''), ?1) > 0)",
+                        [&needle],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                if found != 0 {
+                    wrong.push(format!("{}: its text is in the store", case["name"]));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     #[test]

@@ -550,15 +550,18 @@ stays the truth for a setting; the store records its history as entities of kind
   [hub.md](hub.md#settings-history)): one call is one tx of the editor's, its `tool` the call's, its `req`
   `settings <req>`, `reverts` the tx it undoes (which must exist), and `project` the ids' (one project per call; a
   project the store does not know is refused). Each change makes its entity (origin `recorded`, `data {value, file,
-  line}`), brings back a retired one, or gives it a new version; a removed setting's `data` has no `value`.
+  line}`), brings back a retired one, or gives it a new version; a removed setting's `data` has no `value`. A value
+  `runstav::secrets::looks_like_secret` flags is never stored: that version's `data` has no `value` and
+  `redacted: true` (the next value in the clear drops the flag).
 - Tests: `options::tests::{id_grammar, project_is_the_ids_project, deny_table, globs_match_star_only}`,
   `grants::tests::{every_agent_reachable_write_is_refused, an_options_grant_allows_its_names_only,
   project_grant_covers_private_and_shared, options_grants_are_well_formed_and_open_no_reads}`,
   `write::options::tests::{one_tx_per_call, a_tx_of_another_project_is_refused_in_the_write,
   the_project_is_the_ids_live_project, a_retry_is_one_tx,
-  removed_is_null, reverts_is_recorded, a_retired_option_comes_back}`, `norn/tests/parsed.rs`
+  removed_is_null, a_secret_is_never_stored, reverts_is_recorded, a_retired_option_comes_back}`, `norn/tests/parsed.rs`
   `a_repositorys_settings_file_brings_its_shared_options`, `urdr::graph::guard::tests::{a_rule_decides_from_the_target,
-  a_rule_sees_a_creates_origin_only}`; rows `history/*`.
+  a_rule_sees_a_creates_origin_only, every_entity_write_runs_the_rule}`,
+  `urdr::graph::export::tests::an_import_runs_the_rule_on_both_paths`; rows `history/*`.
 
 ## Trust (Task 10)
 

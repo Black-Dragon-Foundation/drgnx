@@ -712,7 +712,9 @@ truth: the hub never writes one, and nothing it records applies a value.
     [store.md](store.md#settings-history-and-grants-urdr-task-10b)); a malformed one is `invalid-params` at
     `changes[N].id`;
   - `value` is the printed Lisp, or `null` when the setting was removed (its entity's `data` then has no `value`);
-    `file` and `line` say where it is;
+    `file` and `line` say where it is. A value that looks like a secret (`runstav::secrets::looks_like_secret`, the
+    rules of `test/fixtures/secret-cases.json`) is never stored: its version has no `value` and `redacted: true`, so
+    the history shows that the setting changed, never the secret;
   - `tool` is the tx's tool and tells the doors apart: `ui:settings` (Settings), `file:<name>` (a change drgnx did
     not make: a hand edit, a pull, another program) or `lisp:<file>` (your Lisp's effect); anything else is
     `invalid-params`;
