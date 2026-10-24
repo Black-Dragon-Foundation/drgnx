@@ -224,6 +224,10 @@ pub async fn run(args: ServeArgs) -> Exit {
         tokio::spawn(async move { f.core.agents.resume_all(&f).await });
     }
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept
+    front.core.budgets.open_store(runtime.clone()).await;
+    if let Some(notes) = front.core.budgets.take_notes() {
+        tokio::spawn(crate::budget::run(front.clone(), notes));
+    }
     front.gate.open_store(runtime);
     match front.gate.listen(gateway_port).await {
         Ok(events) => {

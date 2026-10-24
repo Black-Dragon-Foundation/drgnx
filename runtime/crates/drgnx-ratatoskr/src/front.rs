@@ -139,6 +139,8 @@ impl Front {
             None => coord,
         });
         let gate = Gate::new(coord_db.clone());
+        let budgets = crate::budget::Budgets::default();
+        gate.attach_budgets(budgets.clone());
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         Front {
             cap,
@@ -157,7 +159,10 @@ impl Front {
             editors,
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
-            core: crate::agent_core::Core::default(),
+            core: crate::agent_core::Core {
+                budgets,
+                ..Default::default()
+            },
             tools,
             tool_list,
             forward,

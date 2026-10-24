@@ -378,6 +378,10 @@ async fn handle(
         Message::Error { id: None, .. } => {}
         Message::Notification { method, params } => {
             if method != "session/update" {
+                if method.starts_with('_') {
+                    let params = params.unwrap_or(Value::Null);
+                    let _ = etx.send(Event::Ext { method, params }).await;
+                }
                 return;
             }
             let Some(n) =

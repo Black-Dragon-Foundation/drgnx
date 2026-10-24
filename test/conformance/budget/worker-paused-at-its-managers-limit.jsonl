@@ -1,0 +1,21 @@
+{"scenario": "budget/worker-paused-at-its-managers-limit", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 20: a session that reaches a limit is paused after its turn (held) and a budget card is made. The worker here carries the limit itself (usd-est 0.005, the mock Claude reports 0.01 after its first turn); a manager-level limit is the same code through the link a manager makes (Task 25), tested as nested_minimum."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "budget/set", "params": {"scope": {"worker": "$sid"}, "limits": [{"amount": 0.005, "unit": "usd-est"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"remaining": [{"amount": 0.005, "unit": "usd-est"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "first"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "budget-limit", "data": {"data": {"unit": "usd-est", "estimate": true, "sessions": ["$sid"]}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "budget/get", "params": {"scope": {"worker": "$sid"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"remaining": [{"amount": 0.0, "unit": "usd-est"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": {"paused": true}}}}

@@ -1,0 +1,20 @@
+{"scenario": "budget/gateway-refuses-over-plan", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 20: the gateway admits usd against the nested minimum. A gateway-profile session's registration carries job spend + what remains of the least usd limit above it: a worker limit of 2.5 USD is the registration's budget, lowering it to 0 makes the budget 0 (every request is refused), and clearing the limit leaves the budget at its last value. The plan and project levels are linked by the plan runner (Task 16a); the nesting itself is the unit test nested_minimum."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-gw\" :ai claude-openrouter :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"openrouter":{"kind":"openai","url":"https://openrouter.ai/api/v1","caps":["chat"],"messages":true,"key_env":"KEY"}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "k"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-gw", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*), min(budget is null) from registration", "rows": [[1, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "budget/set", "params": {"scope": {"worker": "$sid"}, "limits": [{"amount": 2.5, "unit": "usd"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"limits": [{"amount": 2.5, "unit": "usd"}], "remaining": [{"amount": 2.5, "unit": "usd"}]}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select budget from registration", "rows": [[2.5]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "budget/set", "params": {"scope": {"worker": "$sid"}, "limits": [{"amount": 0, "unit": "usd"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"remaining": [{"amount": 0.0, "unit": "usd"}]}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select budget from registration", "rows": [[0.0]]}
