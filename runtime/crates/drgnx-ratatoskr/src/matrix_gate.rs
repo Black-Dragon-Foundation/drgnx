@@ -356,7 +356,7 @@ impl MatrixGate {
     }
 
     /// Read the setting from the front's settings (none until the setting is declared: Balanced).
-    fn refresh(&self, f: &Front) {
+    pub(crate) fn refresh(&self, f: &Front) {
         self.refresh_from(&f.settings);
     }
 

@@ -28,6 +28,10 @@ pub struct OrgDoc {
     pub items: Vec<OrgItem>,
 }
 
+pub(crate) fn is_default_keyword(w: &str) -> bool {
+    DEFAULT_KEYWORDS.contains(&w)
+}
+
 const DEFAULT_KEYWORDS: &[&str] = &[
     "TODO",
     "DONE",

@@ -96,6 +96,17 @@ pub trait Hub: Send + Sync {
         Box::pin(async { None })
     }
 
+    /// A view proposal (Task 14b): ID read (`accept` none) or decided; SESSION is the agent asking.  The answer is
+    /// the tool's text.  A hub with no records: an error.
+    fn proposal(
+        &self,
+        _id: String,
+        _accept: Option<bool>,
+        _session: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("this hub has no records".to_string()) })
+    }
+
     /// The runtime settings the hub read itself (`settings.el`, the shipped defaults, the editor's overrides) as rows
     /// `{name, value, source}`: NAMES only, or all.
     fn known_settings(&self, _names: Option<&[String]>) -> Vec<serde_json::Value> {

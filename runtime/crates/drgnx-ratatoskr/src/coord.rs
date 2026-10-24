@@ -44,12 +44,25 @@ pub struct Signals {
     events: Notify,
     notify: Notify,
     writes: AtomicU64,
+    /// A write the record views may follow ([`crate::records::follow`]).
+    pub records: Notify,
+    /// What the proposal tools ask of the records (set once the hub's front is built).
+    pub records_tool: std::sync::OnceLock<RecordsTool>,
 }
+
+/// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
+/// and the session asking (always an agent: the user decides through `records/decide`); the answer is the tool's text.
+pub type RecordsTool = Arc<
+    dyn Fn(String, Option<bool>, Option<String>) -> BoxFuture<'static, Result<String, String>>
+        + Send
+        + Sync,
+>;
 
 impl Signals {
     /// A transaction of the front's methods committed: counted, and its events go out.
     pub fn wrote(&self) {
         self.writes.fetch_add(1, Ordering::Relaxed);
+        self.records.notify_one();
         self.events_soon();
     }
 
@@ -620,6 +633,18 @@ impl Hub for ToolHub {
                 .ok()
                 .map(|s| s.sessions)
         })
+    }
+
+    fn proposal(
+        &self,
+        id: String,
+        accept: Option<bool>,
+        session: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        match self.signals.records_tool.get() {
+            Some(f) => f(id, accept, session),
+            None => Box::pin(async { Err("the records are not open".to_string()) }),
+        }
     }
 
     fn notify(&self) {

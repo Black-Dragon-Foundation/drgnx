@@ -13,6 +13,7 @@ const CASES: [(&str, &str); 5] = [
 fn pieces(doc: &AnyDoc, p: &Path) -> ViewModel {
     ViewModel {
         parts: ops(doc, p).into_iter().map(|o| o.body).collect(),
+        ..Default::default()
     }
 }
 
