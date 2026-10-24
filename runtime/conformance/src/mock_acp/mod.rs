@@ -14,9 +14,11 @@
 //! | `sleep-loop` | asks permission (execute) to run `sleep 30; pgrep -f ratatoskr-mock-sleep-loop`, runs it when allowed |
 //! | `silent N` | N seconds with no output (a `session/cancel` ends the turn, `cancelled`) |
 //! | `crash` | exits 3, "mock crashed" on stderr |
+//! | `say TEXT` | says TEXT and a line break (a reviewer's `VERDICT: pass` is its last line) |
+//! | `error CODE TEXT` | the turn ends with the JSON-RPC error CODE, TEXT (a provider at its limit: `error 429 rate limit`) |
 //! | anything else | "You said: ..." in two chunks |
 //!
-//! `--script FILE`: its non-empty lines are programs; the n-th prompt of the process runs line n (a prompt after
+//! `--script FILE`: its non-empty lines are programs (a literal `\n` in a line is a line break: several words); the n-th prompt of the process runs line n (a prompt after
 //! the last line runs its own words).  `--log FILE`: JSONL of `{"initialize"|"session/new"|"session/fork"|
 //! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
 //! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
@@ -67,6 +69,8 @@ struct Agent {
     llm: Option<String>,
     script: Vec<String>,
     prompts: usize,
+    /// Set by the `error` word: the turn answers this JSON-RPC error instead of a result.
+    fail: Option<(i64, String)>,
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -93,7 +97,7 @@ pub fn run(args: &[String]) -> ! {
                 .lines()
                 .map(str::trim)
                 .filter(|l| !l.is_empty())
-                .map(String::from)
+                .map(|l| l.replace("\\n", "\n"))
                 .collect()
         })
         .unwrap_or_default();
@@ -128,6 +132,7 @@ pub fn run(args: &[String]) -> ! {
         llm: flag(args, "--llm"),
         script,
         prompts: 0,
+        fail: None,
     };
     a.serve();
     std::process::exit(0)
@@ -478,6 +483,9 @@ impl Agent {
         for (method, p) in extras {
             send(&json!({"jsonrpc": "2.0", "method": method, "params": p}));
         }
+        if let Some((code, message)) = self.fail.take() {
+            return rpc_error(id, code, &message);
+        }
         send(
             &json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": stop,
             "usage": {"inputTokens": 10 * turn, "outputTokens": 5 * turn, "totalTokens": 15 * turn},
@@ -608,6 +616,11 @@ impl Agent {
             "silent" => {
                 let n: f64 = rest.parse().unwrap_or(1.0);
                 return self.sleep(sid, Duration::from_secs_f64(n));
+            }
+            "say" => self.say(sid, turn, &format!("{rest}\n")),
+            "error" => {
+                let (code, message) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                self.fail = Some((code.parse().unwrap_or(-32000), message.trim().to_owned()));
             }
             "crash" => {
                 eprintln!("mock crashed");

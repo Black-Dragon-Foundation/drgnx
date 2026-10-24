@@ -1,21 +1,22 @@
-{"scenario": "gateway/budget-pauses-a-lisp-job", "requires": ["v1", "lisp-backend"], "doc": "Task 24, gate row: a job approved with a budget and registered with the gateway. One priced request (200 input and 50 output tokens at 1000 and 2000 USD per million: 0.3 USD) passes the budget of 0.000001 USD; within 5 s a card event of kind budget arrives and job/status says paused (a budget card in work.db says spent), and the next request is 429 budget_exceeded."}
+{"scenario": "gateway/budget-pauses-a-lisp-job", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24 gate row, for the hub's own plan runs (Task 16b): a job approved with a budget (its plan's usd limit) and registered with the gateway. One priced request (200 input and 50 output tokens at 1000 and 2000 USD per million: 0.3 USD) passes the budget of 0.000001 USD; within 5 s a card event of kind budget arrives for the job and job/status says paused (the job's budget card names the usd limit), and the next request is 429 budget_exceeded."}
 {"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg-1\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 200, \"output_tokens\": 50}}"}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
 {"do": "start", "hub": "h"}
-{"do": "write_file", "path": "$CONFIG/settings.el", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"claude\" :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\")))))\n"}
 {"do": "run", "bin": "/usr/bin/git", "args": ["init", "-q", "-b", "main", "$ROOT/repo"], "expect_code": 0}
 {"do": "run", "bin": "/usr/bin/git", "args": ["-C", "$ROOT/repo", "-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "--allow-empty", "-m", "start"], "expect_code": 0}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": true}, "within_ms": 30000}
-{"do":"send","conn":"c","json":{"id":2,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"a":{"kind":"anthropic","url":"http://127.0.0.1:$port","caps":["chat"],"messages":true,"price":[1000,2000]}}}]}}}
-{"do":"expect","conn":"c","json":{"id":2,"result":{"applied":1}}}
-{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/propose", "params": {"plan": "$SCENARIOS/fixtures/plan-budget.md", "repo": "$ROOT/repo", "budget": 0.000001}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"a": {"kind": "anthropic", "url": "http://127.0.0.1:$port", "caps": ["chat"], "messages": true, "price": [1000, 2000]}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/propose", "params": {"plan": "$SCENARIOS/fixtures/plan-budget.md", "repo": "$ROOT/repo", "budget": 1e-06}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 30000}
-{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/approve", "params": {"id": "$job", "budget": 0.000001}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/approve", "params": {"id": "$job", "budget": 1e-06}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job"}}, "within_ms": 30000}
-{"do": "send", "conn": "c", "json": {"id": 5, "method": "gateway/register", "params": {"chain": [["a", null]], "job": "$job", "agent": "a1", "budget": 0.000001, "owner": "$HARNESS_PID"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "gateway/register", "params": {"chain": [["a", null]], "job": "$job", "agent": "a1", "budget": 1e-06, "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": {"token": "$capture:tok"}}}
 {"do": "send", "conn": "c", "json": {"id": 6, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 6, "result": {"gateway": {"port": "$capture:gw"}}}}
@@ -24,7 +25,7 @@
 {"do": "expect", "conn": "c", "json": {"event": "card", "data": {"job": "$job", "kind": "budget"}}, "within_ms": 5000}
 {"do": "send", "conn": "c", "json": {"id": 7, "method": "job/status", "params": {"id": "$job"}}}
 {"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$job", "status": "paused"}}, "within_ms": 5000}
-{"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'budget' and title like 'spent%'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'budget' and title like '% reached its usd limit'", "rows": [[1]]}
 {"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"again\"}]}"}
 {"do": "expect_http", "conn": "g2", "status": 429, "body_json": {"error": {"type": "budget_exceeded"}}}
 {"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1}

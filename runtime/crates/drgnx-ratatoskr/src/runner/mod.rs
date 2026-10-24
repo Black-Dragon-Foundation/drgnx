@@ -17,8 +17,10 @@
 
 pub mod clash;
 pub mod effects;
+pub mod fallback;
 pub mod git;
 pub mod plan;
+pub mod review;
 pub mod tick;
 
 use crate::agent_core::not_yet;
@@ -69,6 +71,15 @@ pub trait Hooks: std::marker::Send + Sync {
     fn tick<'a>(&'a self, front: &'a Arc<Front>, job: &'a str) -> HookFuture<'a>;
     /// JOB was stopped.
     fn stopped<'a>(&'a self, front: &'a Arc<Front>, job: &'a str) -> HookFuture<'a>;
+    /// CLASHES were just carded in JOB: their reviewers start (Task 18's `ReviewerHook`).
+    fn carded<'a>(
+        &'a self,
+        _front: &'a Arc<Front>,
+        _job: &'a str,
+        _clashes: Vec<clash::Clash>,
+    ) -> HookFuture<'a> {
+        Box::pin(async {})
+    }
 }
 
 /// What a [`Hooks`] call answers.
@@ -238,14 +249,33 @@ pub trait RunGit: std::marker::Send + Sync {
         repo: &'a Path,
         branches: &'a [String],
     ) -> GitFuture<'a, TrialResult>;
-    /// The changed paths of TREE's task and the hash of each diff (the clash rules' input; none for a git that cannot
-    /// tell).
+    /// The changed paths of TREE's task, the hash of each diff and the lines it touches (the clash rules' input;
+    /// none for a git that cannot tell).
     fn diffs<'a>(
         &'a self,
         _repo: &'a Path,
         _tree: &'a TaskTree,
-    ) -> GitFuture<'a, std::collections::BTreeMap<String, String>> {
+    ) -> GitFuture<'a, std::collections::BTreeMap<String, clash::FileDiff>> {
         Box::pin(async { Ok(Default::default()) })
+    }
+    /// TREE's work is done: a snapshot task's bundle is written to `<task folder>.bundle` for the gate to import.
+    fn prepare<'a>(&'a self, _tree: &'a TaskTree) -> GitFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    /// The gate's card for BRANCH was answered yes: its checked tip may merge.
+    fn clear_gate(&self, _branch: &str) {}
+    /// Merge exactly the tip the gate checked into the job's tree (`merge --no-ff`).
+    fn merge_into<'a>(
+        &'a self,
+        _job_tree: &'a Path,
+        _tree: &'a TaskTree,
+    ) -> GitFuture<'a, git::MergeOutcome> {
+        Box::pin(async {
+            Err(GitError {
+                what: "merge".into(),
+                stderr: "this git cannot merge".into(),
+            })
+        })
     }
     /// A sandboxed session started in FOLDER: plain git never runs there again (the touched-folder ledger).
     fn touched<'a>(&'a self, _folder: &'a Path) -> GitFuture<'a, ()> {
@@ -1105,6 +1135,10 @@ async fn approve_job(
     if let Some(b) = budget {
         data.insert("budget".into(), json!(b));
     }
+    // the job's USD budget is its plan's limit: reaching it pauses the run (Task 16b)
+    if let Some(b) = data.get("budget").and_then(Value::as_f64) {
+        fallback::set_budget(front, &l.job, b, true);
+    }
     let jid = id.to_owned();
     front
         .writer
@@ -1305,24 +1339,29 @@ pub async fn order(front: &Front, caller: &Caller, p: OrderParams) -> Result<Job
     summary(front, &job, false).await
 }
 
-// ---- Task 16b ---------------------------------------------------------------------------------------------------
+// ---- Task 16b: cards, replies, reassigning, resuming (the review hand-off and the pauses are [`review`] and
+// [`fallback`]) ---------------------------------------------------------------------------------------------------
 
-pub async fn card(_: &Front, _: &Caller, _: CardParams) -> Result<JobSummary, Error> {
-    Err(not_yet("job/card", "16b"))
+pub async fn card(front: &Front, caller: &Caller, p: CardParams) -> Result<JobSummary, Error> {
+    review::card_act(front, caller, p).await
 }
 
-pub async fn reply(_: &Front, _: &Caller, _: ReplyParams) -> Result<bool, Error> {
-    Err(not_yet("job/reply", "16b"))
+pub async fn reply(front: &Front, caller: &Caller, p: ReplyParams) -> Result<bool, Error> {
+    review::reply(front, caller, p).await
 }
 
-pub async fn dismiss(_: &Front, _: &Caller, _: ByMessage) -> Result<bool, Error> {
-    Err(not_yet("job/dismiss", "16b"))
+pub async fn dismiss(front: &Front, caller: &Caller, p: ByMessage) -> Result<bool, Error> {
+    review::dismiss(front, caller, p).await
 }
 
-pub async fn reassign(_: &Front, _: &Caller, _: ReassignParams) -> Result<JobSummary, Error> {
-    Err(not_yet("job/reassign", "16b"))
+pub async fn reassign(
+    front: &Front,
+    caller: &Caller,
+    p: ReassignParams,
+) -> Result<JobSummary, Error> {
+    review::reassign(front, caller, p).await
 }
 
-pub async fn resume(_: &Front, _: &Caller, _: WithBudget) -> Result<JobSummary, Error> {
-    Err(not_yet("job/resume", "16b"))
+pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<JobSummary, Error> {
+    fallback::resume(front, caller, p).await
 }

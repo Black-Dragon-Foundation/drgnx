@@ -266,6 +266,10 @@ pub async fn run(args: ServeArgs) -> Exit {
             Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
             Some(runtime.clone()),
         )));
+    front
+        .core
+        .runs
+        .set_hooks(Arc::new(crate::runner::review::PlanHooks::default()));
     tokio::spawn(crate::runner::tick::run(front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());
     #[cfg(feature = "test-hooks")]

@@ -944,8 +944,9 @@ async fn bridge(
     let socket = match front.mcp.socket_of(sid) {
         Some(path) => path,
         None => {
+            // the tools act as the session id: the id a plan run claims its task for (`runner::tick::start`)
             let params = serde_json::from_value(json!({
-                "agent": profile.name,
+                "agent": sid,
                 "sid": sid,
                 "cwd": cwd,
                 "owner": std::process::id(),
