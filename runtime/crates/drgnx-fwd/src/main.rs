@@ -67,8 +67,10 @@ fn main() {
             std::process::exit(1);
         }
         0 => {
-            // SAFETY: plain syscalls.
+            // SAFETY: plain syscalls.  The death signal is Linux's (a container job's forwarder is a Linux binary);
+            // elsewhere the forwarder only builds, for the workspace's tests, and the parent check below stays.
             unsafe {
+                #[cfg(target_os = "linux")]
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
                 if libc::getppid() == 1 {
                     libc::_exit(0);
