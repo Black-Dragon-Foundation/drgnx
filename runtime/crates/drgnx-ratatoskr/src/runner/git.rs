@@ -69,6 +69,9 @@ pub struct HubGit {
     deadline: Duration,
     env: Vec<(String, String)>,
     checked: Mutex<HashMap<String, Checked>>,
+    /// Held while a run store is cloned, fetched or copied: a run's tasks start at once, and two clones (or a fetch
+    /// into a half-made clone) of one store fail.
+    stores: tokio::sync::Mutex<()>,
 }
 
 fn err(what: impl Into<String>, stderr: impl Into<String>) -> GitError {
@@ -122,6 +125,7 @@ impl HubGit {
             deadline: Duration::from_secs(120),
             env: Vec::new(),
             checked: Mutex::new(HashMap::new()),
+            stores: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -141,6 +145,15 @@ impl HubGit {
     }
 
     async fn run(&self, dir: Option<&Path>, args: &[&str]) -> Result<String, GitError> {
+        self.run_env(dir, args, &[]).await
+    }
+
+    async fn run_env(
+        &self,
+        dir: Option<&Path>,
+        args: &[&str],
+        extra: &[(&str, &str)],
+    ) -> Result<String, GitError> {
         let what = format!("git {}", args.join(" "));
         let mut c = Command::new("git");
         c.args(args)
@@ -150,6 +163,9 @@ impl HubGit {
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true);
         for (k, v) in &self.env {
+            c.env(k, v);
+        }
+        for (k, v) in extra {
             c.env(k, v);
         }
         if let Some(d) = dir {
@@ -551,6 +567,24 @@ impl HubGit {
 
     // ---- trees ----
 
+    /// RUN's store, cloned from REPO or fetched from it so its branches are REPO's now (the caller holds `stores`).
+    async fn fresh_store(&self, repo: &Path, run: &str) -> Result<PathBuf, GitError> {
+        let store = self.root.join(format!("{run}.git"));
+        let r = repo.to_string_lossy().into_owned();
+        if store.exists() {
+            self.git_in(
+                &store,
+                &["fetch", "-q", "--no-tags", &r, "+refs/heads/*:refs/heads/*"],
+            )
+            .await?;
+        } else {
+            let s = store.to_string_lossy().into_owned();
+            self.run(None, &["clone", "-q", "--bare", "--no-hardlinks", &r, &s])
+                .await?;
+        }
+        Ok(store)
+    }
+
     async fn make_tree(
         &self,
         repo: &Path,
@@ -608,24 +642,16 @@ impl HubGit {
                     .await?;
             }
             TreeMode::Snapshot => {
-                let store = self.root.join(format!("{run}.git"));
-                let s = store.to_string_lossy().into_owned();
-                let r = repo.to_string_lossy().into_owned();
-                if store.exists() {
-                    self.git_in(
-                        &store,
-                        &["fetch", "-q", "--no-tags", &r, "+refs/heads/*:refs/heads/*"],
-                    )
-                    .await?;
-                } else {
-                    self.run(None, &["clone", "-q", "--bare", "--no-hardlinks", &r, &s])
-                        .await?;
-                }
-                self.git_in(&store, &["cat-file", "-e", &format!("{base}^{{commit}}")])
-                    .await?;
-                std::fs::create_dir_all(&path).map_err(|e| err("task_worktree", e.to_string()))?;
                 let dot_git = path.join(".git").to_string_lossy().into_owned();
-                reflink_copy(&s, &dot_git).await?;
+                {
+                    let _one = self.stores.lock().await;
+                    let store = self.fresh_store(repo, run).await?;
+                    self.git_in(&store, &["cat-file", "-e", &format!("{base}^{{commit}}")])
+                        .await?;
+                    std::fs::create_dir_all(&path)
+                        .map_err(|e| err("task_worktree", e.to_string()))?;
+                    reflink_copy(&store.to_string_lossy(), &dot_git).await?;
+                }
                 let g = format!("--git-dir={dot_git}");
                 self.run(None, &[&g, "config", "core.bare", "false"])
                     .await?;
@@ -705,6 +731,24 @@ impl HubGit {
     }
 }
 
+/// BRANCH's tip in the snapshot tree at PATH, from its ref files (the agent writes that `.git`: no git runs there).
+fn snapshot_tip(path: &Path, branch: &str) -> Option<String> {
+    let dot = path.join(".git");
+    let is_sha = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let loose = std::fs::read_to_string(dot.join("refs/heads").join(branch))
+        .ok()
+        .map(|t| t.trim().to_owned());
+    let packed = || {
+        let t = std::fs::read_to_string(dot.join("packed-refs")).ok()?;
+        let name = format!("refs/heads/{branch}");
+        t.lines().find_map(|l| match l.split_once(' ') {
+            Some((sha, n)) if n == name => Some(sha.to_owned()),
+            _ => None,
+        })
+    };
+    loose.or_else(packed).filter(|s| is_sha(s))
+}
+
 /// Copy a bare store to a task's `.git`, sharing blocks where the filesystem can (APFS, btrfs, XFS).
 async fn reflink_copy(from: &str, to: &str) -> Result<(), GitError> {
     for flags in [["-a", "--reflink=auto"], ["-a", "-c"], ["-a", "-a"]] {
@@ -777,6 +821,44 @@ impl RunGit for HubGit {
 
     fn mode(&self) -> TreeMode {
         self.mode
+    }
+
+    fn rebuilt_base<'a>(
+        &'a self,
+        repo: &'a Path,
+        path: &'a Path,
+        branch: &'a str,
+        upstream: &'a str,
+    ) -> GitFuture<'a, String> {
+        Box::pin(async move {
+            if self.mode == TreeMode::Worktree {
+                let b = self.git_in(path, &["merge-base", branch, upstream]).await?;
+                return Ok(b.trim().to_owned());
+            }
+            // the tree's own `.git` has the upstream branch as the store had it when the tree was made: the
+            // merge-base is read in the store, fetched from REPO now, with the tree's objects lent to it
+            let run = path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|n| n.to_str())
+                .filter(|n| name_ok(n))
+                .ok_or_else(|| err("rebuilt_base", "not a task folder of a run"))?;
+            let tip = snapshot_tip(path, branch)
+                .ok_or_else(|| err("rebuilt_base", format!("no branch {branch} in the tree")))?;
+            let store = {
+                let _one = self.stores.lock().await;
+                self.fresh_store(repo, run).await?
+            };
+            let objects = path.join(".git/objects").to_string_lossy().into_owned();
+            let b = self
+                .run_env(
+                    Some(&store),
+                    &["merge-base", &tip, &format!("refs/heads/{upstream}")],
+                    &[("GIT_ALTERNATE_OBJECT_DIRECTORIES", &objects)],
+                )
+                .await?;
+            Ok(b.trim().to_owned())
+        })
     }
 
     fn import<'a>(&'a self, repo: &'a Path, tree: &'a TaskTree) -> GitFuture<'a, ()> {

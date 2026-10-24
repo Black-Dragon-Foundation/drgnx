@@ -1032,7 +1032,12 @@ async fn tree_of(f: &Front, manager: &str, w: &Session) -> Result<TaskTree, Stri
         .ok_or("no worktree name")?
         .to_owned();
     let branch = format!("job/{manager}-{name}");
-    let base = runner::tick::git(w.cwd(), &["merge-base", &branch, &integration(manager)])
+    let me = f.core.agents.find(manager).map_err(|e| e.message)?;
+    let base = f
+        .core
+        .runs
+        .git()
+        .rebuilt_base(me.cwd(), w.cwd(), &branch, &integration(manager))
         .await
         .map_err(|e| e.stderr)?;
     Ok(TaskTree {

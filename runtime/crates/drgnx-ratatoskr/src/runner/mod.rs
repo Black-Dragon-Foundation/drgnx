@@ -310,6 +310,18 @@ pub trait RunGit: std::marker::Send + Sync {
     fn import<'a>(&'a self, _repo: &'a Path, _tree: &'a TaskTree) -> GitFuture<'a, ()> {
         Box::pin(async { Ok(()) })
     }
+    /// The base of the tree at PATH when its `TaskTree` is made again (after a restart): the merge-base of its
+    /// BRANCH and REPO's UPSTREAM branch as REPO has it now.  A worktree shares REPO's refs; a snapshot's run store
+    /// is fetched from REPO first (AS1-SNAP-STALE-1).
+    fn rebuilt_base<'a>(
+        &'a self,
+        _repo: &'a Path,
+        path: &'a Path,
+        branch: &'a str,
+        upstream: &'a str,
+    ) -> GitFuture<'a, String> {
+        Box::pin(async move { tick::git(path, &["merge-base", branch, upstream]).await })
+    }
     /// The gate's card for BRANCH was answered yes: its checked tip may merge.
     fn clear_gate(&self, _branch: &str) {}
     /// Merge exactly the tip the gate checked into the job's tree (`merge --no-ff`).

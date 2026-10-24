@@ -920,7 +920,10 @@ Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
 
 - **Trees.** Worktree mode: `git worktree add -b job/<run>-<task>` under `<root>/<run>/<task>`. Snapshot mode: one
   bare store per run (`<root>/<run>.git`), copied (reflink where the filesystem can) into the task's `.git`, the task's
-  work comes back as a bundle (`<task>.bundle`).
+  work comes back as a bundle (`<task>.bundle`). The store is cloned, or fetched from the repository, before every
+  tree is made from it, one store operation at a time (a run's tasks start together). A manager worker's tree that is made again
+  after a restart reads its base in the store, fetched first (its own `.git` holds the integration branch as it was
+  when the tree was made), with the tree's objects lent to it; no git runs in the tree.
 - **The gate reads the trusted repository only** (never a task folder; this removes the VC-guard refusals of the Lisp
   gate in snapshot mode). A snapshot bundle is first imported: `git bundle verify`, `fetch` with
   `fetch.fsckObjects`/`transfer.fsckObjects`, a branch that descends from the task's base, and the ref written

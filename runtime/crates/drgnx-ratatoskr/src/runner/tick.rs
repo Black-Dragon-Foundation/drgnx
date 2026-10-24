@@ -462,16 +462,7 @@ pub async fn start(
     let repo = PathBuf::from(l.job.repo.clone().unwrap_or_default());
     let profile = on.map_or_else(|| profile_of(front, &data, task), str::to_owned);
     // the job's branch is made from HEAD when absent; the task's tree starts from the commit it is at now
-    let base = format!("job/{job}");
-    let base = match git(&repo, &["rev-parse", "--verify", "-q", &base]).await {
-        Ok(sha) => sha,
-        Err(_) => match git(&repo, &["branch", &base, "HEAD"]).await {
-            Ok(_) => git(&repo, &["rev-parse", "--verify", &base])
-                .await
-                .unwrap_or(base),
-            Err(_) => base,
-        },
-    };
+    let base = branch_tip(&repo, &format!("job/{job}")).await;
     let tree = match runs
         .git()
         .task_worktree(&repo, job, &n.to_string(), &base)
@@ -669,6 +660,18 @@ pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
     }
 }
 
+/// The commit branch NAME of REPO is at, the branch made from `HEAD` when absent.  A run's tasks start together: when
+/// another one made the branch first, its tip is read too, never the branch's name (a name is a base that moves).
+async fn branch_tip(repo: &Path, name: &str) -> String {
+    if let Ok(sha) = git(repo, &["rev-parse", "--verify", "-q", name]).await {
+        return sha;
+    }
+    let _ = git(repo, &["branch", name, "HEAD"]).await;
+    git(repo, &["rev-parse", "--verify", "-q", name])
+        .await
+        .unwrap_or_else(|_| name.to_owned())
+}
+
 impl RunGit for BasicGit {
     fn task_worktree<'a>(
         &'a self,
@@ -769,6 +772,52 @@ mod tests {
         assert_eq!(
             scopes.get("a1"),
             Some(("plan:p".into(), Some("project:q".into())))
+        );
+    }
+
+    #[tokio::test]
+    async fn tasks_starting_together_all_get_the_job_branchs_commit() {
+        // the task that lost the race to make the branch took the branch's name as its base, which moved when the
+        // first task merged: its own merge was refused ever after
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let ok = std::process::Command::new("git")
+            .current_dir(repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", repo)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+            && std::process::Command::new("git")
+                .current_dir(repo)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", repo)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "i",
+                ])
+                .status()
+                .unwrap()
+                .success();
+        assert!(ok);
+        let head = git(repo, &["rev-parse", "HEAD"]).await.unwrap();
+        let (a, b, c, d) = tokio::join!(
+            branch_tip(repo, "job/j"),
+            branch_tip(repo, "job/j"),
+            branch_tip(repo, "job/j"),
+            branch_tip(repo, "job/j"),
+        );
+        assert_eq!(
+            [a, b, c, d],
+            [head.clone(), head.clone(), head.clone(), head]
         );
     }
 }

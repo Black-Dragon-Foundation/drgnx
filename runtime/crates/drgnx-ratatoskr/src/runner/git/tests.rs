@@ -247,6 +247,52 @@ async fn a_snapshot_task_is_not_remade_and_its_branch_is_imported_for_a_trial() 
 }
 
 #[tokio::test]
+async fn a_runs_tasks_made_at_once_share_one_store() {
+    // the runner starts a run's ready tasks together: the first ones each cloned the store, and all but one failed
+    let e = env();
+    let (h, _) = shared(&e, TreeMode::Snapshot, Policy::default(), None);
+    let b = base(&e);
+    let (t1, t2, t3) = tokio::join!(
+        h.task_worktree(&e.repo, "r1", "1", &b),
+        h.task_worktree(&e.repo, "r1", "2", &b),
+        h.task_worktree(&e.repo, "r1", "3", &b),
+    );
+    for t in [t1, t2, t3] {
+        let t = t.unwrap();
+        assert!(t.path.join("x.txt").is_file(), "{t:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_rebuilt_snapshot_trees_base_is_read_against_the_repository_now() {
+    let e = env();
+    sh(&e.home, &e.repo, &["branch", "integ", "HEAD"]);
+    let (h, _) = shared(&e, TreeMode::Snapshot, Policy::default(), None);
+    let w = h
+        .task_worktree(&e.repo, "m1", "w1", &base(&e))
+        .await
+        .unwrap();
+    commit(&e, &w, "a.txt", "A\n");
+    let tip = sh(&e.home, &w.path, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    // the manager merged the worker: the repository's integration branch is at the worker's tip
+    h.import(&e.repo, &w).await.unwrap();
+    sh(&e.home, &e.repo, &["branch", "-f", "integ", &w.branch]);
+    // the tree's own copy of the integration branch is where it was: a merge-base read there is stale
+    let stale = super::super::tick::git(&w.path, &["merge-base", &w.branch, "integ"])
+        .await
+        .unwrap();
+    assert_eq!(stale, base(&e));
+    let got = h
+        .rebuilt_base(&e.repo, &w.path, &w.branch, "integ")
+        .await
+        .unwrap();
+    assert_eq!(got, tip);
+    assert_eq!(sh(&e.home, &e.repo, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
 async fn tip_moved_after_check_refused() {
     let e = env();
     let (h, p) = shared(&e, TreeMode::Worktree, Policy::default(), None);
