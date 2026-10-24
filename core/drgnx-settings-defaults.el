@@ -63,7 +63,8 @@ agents' profiles and routes and the AI providers and roles are the user's.  Neve
   "Set VAR to VALUE in the user's settings.el and apply it at once; VALUE.
 Only that entry changes (comments and the rest stay).  A settings.el with a mistake, or a value that is not data,
 is a `drgnx-settings-refused' and nothing is written."
-  (let ((file (drgnx-config-file 'settings)))
+  (let ((file (drgnx-config-file 'settings))
+        (drgnx-settings-file-tool "default:settings"))
     (drgnx-settings-file-put file 'drgnx-settings nil var value)
     (when (or (featurep 'drgnx-settings-live) (require 'drgnx-settings-live nil t))
       (drgnx-settings-live-sync file))

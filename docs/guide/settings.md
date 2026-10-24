@@ -353,7 +353,8 @@ The page only reads data; it works in safe mode too.
 drgnx keeps a history of your settings: who changed which setting, when, to what. Your settings files stay the
 truth; the history only remembers. Three kinds of change are recorded:
 
-- **Changes made in Settings** (and by anything else that writes through drgnx): recorded as `ui:settings`.
+- **Changes made in Settings** (and by anything else that writes through drgnx): recorded as `ui:settings`; the move
+  from the old files is recorded as `migrate:settings` and the saves of the shipped defaults as `default:settings`.
 - **Changes made outside drgnx**: a hand edit, a pull, another program. drgnx notices them when it reads the file
   again and records them as `file:settings.el` (or the name of the file). A change to a repository's
   `.drgnx/settings.el` is read from the repository the way the project scan reads it.

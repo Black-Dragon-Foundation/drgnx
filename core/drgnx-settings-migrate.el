@@ -600,7 +600,8 @@ value differs from it stays, and is still named."
           (dolist (e (and conv (not (plist-get conv :why)) (plist-get conv :entries)))
             (unless (drgnx-settings-area-has-entry-p (car e))
               (push (cons (car e) (nth 1 e)) changes))))))
-    (cons (and changes (drgnx-settings-area-set (nreverse changes)))
+    (cons (and changes (let ((drgnx-settings-file-tool "migrate:settings"))
+                         (drgnx-settings-area-set (nreverse changes))))
           (drgnx-settings-migrate-move-away))))
 
 (defun drgnx-settings-migrate-move-away ()

@@ -50,6 +50,10 @@
   "Functions called with (FILE BEFORE AFTER) after drgnx wrote settings file FILE: BEFORE and AFTER are its
 `drgnx-settings-doc's.  They run with `inhibit-interaction' t; an error is one notice.")
 
+(defvar drgnx-settings-file-tool "ui:settings"
+  "The tool the history records a write of the settings writer under.  Migrations bind it to `migrate:settings',
+the shipped defaults' saves to `default:settings'; everything else is the Settings UI.")
+
 (defconst drgnx-settings-file-global-header
   ";;; settings.el --- your settings  -*- lexical-binding: t; mode: lisp-data -*-
 ;; Written by drgnx Settings and by you. Kept sorted; a comment above an entry stays with it.

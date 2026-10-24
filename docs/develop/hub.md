@@ -715,7 +715,7 @@ truth: the hub never writes one, and nothing it records applies a value.
     `file` and `line` say where it is. A value that looks like a secret (`runstav::secrets::looks_like_secret`, the
     rules of `test/fixtures/secret-cases.json`) is never stored: its version has no `value` and `redacted: true`, so
     the history shows that the setting changed, never the secret;
-  - `tool` is the tx's tool and tells the doors apart: `ui:settings` (Settings), `file:<name>` (a change drgnx did
+  - `tool` is the tx's tool and tells the doors apart: `ui:settings` (Settings), `migrate:settings` (the move from the old files), `default:settings` (a shipped default saved), `file:<name>` (a change drgnx did
     not make: a hand edit, a pull, another program) or `lisp:<file>` (your Lisp's effect); anything else is
     `invalid-params`;
   - `req` keys the call (a hash of the file's stamp): a repeat answers the first `{tx}` and writes nothing. It is

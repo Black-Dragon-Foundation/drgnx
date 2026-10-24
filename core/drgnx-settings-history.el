@@ -211,7 +211,7 @@
   (when-let* ((changes (drgnx-settings-history--diff file before after)))
     (if drgnx-settings-history--pending
         (setcar drgnx-settings-history--pending (append (car drgnx-settings-history--pending) changes))
-      (drgnx-settings-history--record "ui:settings" changes nil (gethash file drgnx-settings-history--ours)))))
+      (drgnx-settings-history--record drgnx-settings-file-tool changes nil (gethash file drgnx-settings-history--ours)))))
 
 ;;;; What changed outside
 

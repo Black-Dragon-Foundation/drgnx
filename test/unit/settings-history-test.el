@@ -7,16 +7,18 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (require 'drgnx-settings-history)
+(require 'drgnx-settings-defaults)
 (require 'drgnx-notice)                 ; loaded now, so the fake `drgnx-notify' below is not replaced by a late load
 
 (defvar drgnx-sht--sent nil "(METHOD PARAMS) the fake hub took, newest first.")
 (defvar drgnx-sht--down nil "Non-nil: the hub is away (`drgnx-hub-call' signals).")
 (defvar drgnx-sht--model nil "Option id -> versions, oldest first: plists (:ver :tx :tool :actor :data).")
+(defvar drgnx-sht--rows nil "What the fake `graph/sql' answers: the rows.")
 (defvar drgnx-sht--said nil "The notices said: (TEXT . PLIST).")
 
 (defmacro drgnx-sht--with (&rest body)
   (declare (indent 0))
-  `(let ((drgnx-sht--sent nil) (drgnx-sht--down nil) (drgnx-sht--model nil) (drgnx-sht--said nil)
+  `(let ((drgnx-sht--sent nil) (drgnx-sht--rows nil) (drgnx-sht--down nil) (drgnx-sht--model nil) (drgnx-sht--said nil)
          (drgnx-settings-history--ours (make-hash-table :test 'equal))
          (drgnx-settings-history--lisp-done nil) (drgnx-settings-history--warned nil)
          (drgnx-settings-history--reverts nil) (drgnx-settings-history--pending nil)
@@ -36,8 +38,10 @@
 
 (defun drgnx-sht--answer (method params)
   (pcase method
+    ("graph/sql" (list :rows drgnx-sht--rows))
     ("graph/history" (list :versions (mapcar (lambda (v) (cl-remove-if (lambda (x) (eq x :data)) v) )
-                                             (drgnx-sht--versions (plist-get params :id)))))
+                                             (cl-remove-if (lambda (v) (< (plist-get v :tx) (or (plist-get params :since) 0)))
+                                                           (drgnx-sht--versions (plist-get params :id))))))
     ("graph/entity"
      (let ((v (car (last (cl-remove-if (lambda (v) (> (plist-get v :tx) (plist-get params :as_of)))
                                        (drgnx-sht--versions (plist-get params :id)))))))
@@ -207,6 +211,50 @@
       (let ((n (cl-find-if (lambda (s) (string-match-p "\\[Open\\]" (car s))) drgnx-sht--said)))
         (should n)
         (should (equal (plist-get (cdr n) :command) '(drgnx-settings-history-open "/x/config.el" 5)))))))
+
+;; US-T25-ACTOR-1: migrations and shipped defaults have their own tool
+(ert-deftest drgnx-settings-history/migrations-and-defaults-have-their-own-tool ()
+  (drgnx-sht--with
+    (let ((drgnx-settings-file-tool "migrate:settings")) (drgnx-sht--put 'fill-column 80))
+    (drgnx-settings-defaults-save 'tab-width 4)
+    (drgnx-sht--put 'fill-column 90)
+    (should (equal (mapcar (lambda (r) (plist-get (cadr r) :tool)) (drgnx-sht--records))
+                   '("migrate:settings" "default:settings" "ui:settings")))))
+
+(ert-deftest drgnx-settings-history/undo-tx-takes-back-every-setting-of-a-tx ()
+  (drgnx-sht--with
+    (drgnx-sht--put 'fill-column 100)
+    (drgnx-sht--put 'tab-width 4)
+    (let ((file (expand-file-name (drgnx-sht--file))))
+      (setq drgnx-sht--sent nil
+            drgnx-sht--rows '(("option:global:fill-column") ("option:global:tab-width"))
+            drgnx-sht--model
+            (list (cons "option:global:fill-column"
+                        (list (list :ver 1 :tx 1 :tool "ui:settings" :actor "user" :data (list :value "80" :file file))
+                              (list :ver 2 :tx 5 :tool "ui:settings" :actor "user" :data (list :value "100" :file file))))
+                  (cons "option:global:tab-width"
+                        (list (list :ver 1 :tx 5 :tool "ui:settings" :actor "user" :data (list :value "4" :file file))))))
+      (should (drgnx-settings-undo-tx 5))
+      (should (equal (drgnx-settings-doc-entries-values) '((fill-column . 80))))
+      (let ((recs (drgnx-sht--records)))
+        (should (= 1 (length recs)))
+        (should (= 5 (plist-get (cadr (car recs)) :reverts)))
+        (should (= 2 (length (plist-get (cadr (car recs)) :changes)))))
+      ;; a tx that changed nothing is refused
+      (setq drgnx-sht--rows nil)
+      (should-error (drgnx-settings-undo-tx 9) :type 'user-error))))
+
+(ert-deftest drgnx-settings-history/list-filters-by-since-and-agent ()
+  (drgnx-sht--with
+    (setq drgnx-sht--model
+          (list (cons "option:global:fill-column"
+                      (list (list :ver 1 :tx 2 :tool "ui:settings" :actor "user" :data nil)
+                            (list :ver 2 :tx 6 :tool "agent" :actor "claude" :data nil)
+                            (list :ver 3 :tx 9 :tool "ui:settings" :actor "user" :data nil)))))
+    (should (equal (mapcar (lambda (v) (plist-get v :tx)) (drgnx-settings-history-list :name "fill-column")) '(9 6 2)))
+    (should (equal (mapcar (lambda (v) (plist-get v :tx)) (drgnx-settings-history-list :name "fill-column" :since 6)) '(9 6)))
+    (should (equal (mapcar (lambda (v) (plist-get v :tx)) (drgnx-settings-history-list :name "fill-column" :agent "claude")) '(6)))
+    (should-not (drgnx-settings-history-list :name "fill-column" :agent "nobody"))))
 
 (provide 'settings-history-test)
 ;;; settings-history-test.el ends here
