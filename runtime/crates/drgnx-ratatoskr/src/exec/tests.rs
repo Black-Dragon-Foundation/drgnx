@@ -207,6 +207,15 @@ async fn exec_runs_in_the_starters_sandbox() {
     let d = tempfile::tempdir_in("/tmp").unwrap();
     let wt = d.path().join("wt");
     std::fs::create_dir_all(&wt).unwrap();
+    // the hub's dirs (state, runtime, tmp) are the tempdir's, never $HOME's; the session dir is made the way a
+    // session start makes it. Only this test runs under `--ignored`, so nothing reads the environment meanwhile.
+    unsafe {
+        std::env::set_var("XDG_STATE_HOME", d.path().join("state"));
+        std::env::set_var("TMPDIR", d.path());
+        std::env::remove_var("XDG_RUNTIME_DIR");
+    }
+    let env = runstav::paths::Env::process();
+    runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), "s1").unwrap();
     let r = open(d.path());
     let id = r
         .start(spec(

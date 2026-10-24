@@ -846,7 +846,7 @@ mod tests {
         )
         .await;
         f.line(&mut s, &out, r#"{"method":"ping"}"#).await;
-        // the agent core's methods are the front's: each answers "not yet" until its task fills it
+        // the agent core's methods are the front's: job/status is answered here, not forwarded (Task 16a)
         f.line(&mut s, &out, r#"{"id":5,"method":"job/status"}"#)
             .await;
         assert_eq!(
@@ -855,8 +855,7 @@ mod tests {
                 json!({"id": 1, "result": {"pid": std::process::id()}}),
                 json!({"id": 2, "result": {"since": 3, "last": 3, "events": []}}),
                 json!({"id": 3, "error": {"code": "internal", "message": "backend not running"}}),
-                json!({"id": 5, "error": {"code": "internal",
-                       "message": "job/status: not yet (agent system part 1, Task 16a)"}}),
+                json!({"id": 5, "result": {"jobs": []}}),
             ]
         );
         // shutdown: answered, then the hub is asked to stop
