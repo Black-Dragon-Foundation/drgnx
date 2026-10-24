@@ -154,12 +154,7 @@ The true path is the truename with no trailing slash, so two clones with the sam
   (let ((file (drgnx-settings-history--journal-file)))
     (if (null records)
         (when (file-exists-p file) (delete-file file))
-      (make-directory (file-name-directory file) t)
-      (let ((tmp (concat file ".new")))
-        (with-temp-file tmp
-          (set-buffer-multibyte t) (setq buffer-file-coding-system 'utf-8-unix)
-          (dolist (r records) (insert (drgnx-settings-history--line r))))
-        (rename-file tmp file t)))))
+      (drgnx-file-write-text file (mapconcat #'drgnx-settings-history--line records "")))))
 
 (defconst drgnx-settings-history--redacted (concat "\"-----BEGIN REDACTED PRIVATE KEY" "-----\"")
   "What the journal keeps for a value that looks like a secret: a printed string the shared secret table's first rule
@@ -322,10 +317,8 @@ the options' data of `graph/put-parsed'): the journal is plain text in drgnx's s
 (defun drgnx-settings-history--lisp-seen-file () (expand-file-name "settings-lisp-seen.eld" (drgnx-state-dir)))
 
 (defun drgnx-settings-history--lisp-seen ()
-  (when (file-readable-p (drgnx-settings-history--lisp-seen-file))
-    (ignore-errors (with-temp-buffer
-                     (insert-file-contents (drgnx-settings-history--lisp-seen-file))
-                     (let ((read-eval nil)) (read (current-buffer)))))))
+  (let ((r (drgnx-file-read (drgnx-settings-history--lisp-seen-file))))
+    (and (eq (plist-get r :status) 'ok) (plist-get r :data))))
 
 (defun drgnx-settings-history-record-lisp ()
   "Once per start: report the settings your Lisp decides whose value differs from the last report (`lisp:<file>').
@@ -349,9 +342,7 @@ Returns the number of changes sent.  Never signals."
             (cl-incf n (length changes))
             (drgnx-settings-history--record (concat "lisp:" (file-name-nondirectory file)) changes))
           (when by-file
-            (make-directory (file-name-directory (drgnx-settings-history--lisp-seen-file)) t)
-            (with-temp-file (drgnx-settings-history--lisp-seen-file)
-              (let ((print-length nil) (print-level nil) (print-escape-newlines t)) (prin1 seen (current-buffer)))))
+            (drgnx-file-write (drgnx-settings-history--lisp-seen-file) seen))
           n)
       (error nil))))
 

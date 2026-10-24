@@ -125,16 +125,11 @@ recorded (default FILE's base name).  A file that cannot be read gives what was 
 `drgnx-settings-index-file'), atomically; the number of entries.  Reads files as text, loads nothing."
   (let* ((file (or file (drgnx-settings-index-file)))
          (entries (cl-loop for (dir . package) in (or sources (drgnx-settings-index-sources))
-                           append (drgnx-settings-index--scan-tree dir package)))
-         (tmp (concat file ".tmp")))
-    (make-directory (file-name-directory file) t)
-    (let ((coding-system-for-write 'utf-8-unix) (print-length nil) (print-level nil)
-          (print-escape-newlines t))
-      (with-temp-file tmp
-        (insert ";; Written by `drgnx sync': the settings of every installed package, read without loading them.\n")
-        (prin1 (cons drgnx-settings-index-head (cons :version (cons 1 entries))) (current-buffer))
-        (insert "\n")))
-    (rename-file tmp file t)
+                           append (drgnx-settings-index--scan-tree dir package))))
+    ;; the reader's limit (`drgnx-settings-index--tables')
+    (drgnx-file-write file (cons drgnx-settings-index-head (cons :version (cons 1 entries)))
+                      :header ";; Written by `drgnx sync': the settings of every installed package, read without loading them."
+                      :max-bytes (* 64 1024 1024))
     (setq drgnx-settings-index--cache nil)
     (length entries)))
 
