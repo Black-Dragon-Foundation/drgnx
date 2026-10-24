@@ -1243,7 +1243,8 @@ Asynchronous; safe to call again, also before the hub has answered (one subscrip
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
-      (drgnx-hub-send-settings))))
+      (drgnx-hub-send-settings)
+      (when (fboundp 'drgnx-settings-history-connected) (drgnx-settings-history-connected)))))
 
 (defun drgnx-hub--subscribed (conn result)
   "The hub answered CONN's `subscribe' with RESULT: CONN is the subscribed connection, and the hub gets the provider

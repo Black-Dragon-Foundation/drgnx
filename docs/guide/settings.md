@@ -310,7 +310,32 @@ Settings shows the same counts: settings (values that wait for trust) and code (
 
 ## Settings the runtime reads (Task 22)
 
-## History and undo (Task 25)
+## History and undo
+
+drgnx keeps a history of your settings: who changed which setting, when, to what. Your settings files stay the
+truth; the history only remembers. Three kinds of change are recorded:
+
+- **Changes made in Settings** (and by anything else that writes through drgnx): recorded as `ui:settings`.
+- **Changes made outside drgnx**: a hand edit, a pull, another program. drgnx notices them when it reads the file
+  again and records them as `file:settings.el` (or the name of the file). A change to a repository's
+  `.drgnx/settings.el` is read from the repository the way the project scan reads it.
+- **What your Lisp decides**: once per start, a setting whose value comes from your `config.el` is recorded as
+  `lisp:config.el` when the value differs from the last one recorded.
+
+A setting that agents may never change (`:agents never`) and that changed outside drgnx also posts a notice,
+"NAME changed outside drgnx [Undo]".
+
+**Undo** puts a setting's previous value back by writing it to its file, then records the undo (it names the change
+it takes back). `drgnx-settings-undo` takes an option id such as `option:global:fill-column`;
+`drgnx-settings-undo-tx` undoes everything one change touched, as one record. A setting your Lisp set cannot be
+undone from here: the notice offers Open at the line in your Lisp instead. A value that looked like a secret is
+never kept, so its earlier value cannot be restored either.
+
+`drgnx-settings-history-list` (`:name`, `:scope`, `:agent`, `:since`) returns the recorded changes, newest first,
+for the timeline.
+
+When the hub is not running, records wait in `settings-journal.eld` in drgnx's state folder (at most 1 MiB; the
+oldest go first, with one notice) and are sent when the editor connects.
 
 ## Your Lisp files
 

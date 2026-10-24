@@ -48,6 +48,7 @@
 (require 'drgnx-settings-workspace)       ; workspace layers W1, W2: `drgnx-settings-workspace-enable' runs at load,
                                         ; so the first file visited (before `drgnx-init' too) gets them
 (require 'drgnx-settings-live)
+(require 'drgnx-settings-history)         ; reports every settings change to the hub (hooks added at load)
 (require 'drgnx-lisp-index)
 (require 'drgnx-settings-lisp-page)       ; told of every load of your Lisp; its keymap is there for the keys apply
                                         ; (a map of a library not loaded yet waits in an after-load entry per apply)
