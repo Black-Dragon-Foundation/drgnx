@@ -202,5 +202,80 @@
   (should (equal (drgnx-records-encode '(map integer) '(:a 1)) "{\"a\":1}"))
   (should-error (drgnx-records-decode '(alist string integer) "{\"a\":\"x\"}") :type 'drgnx-records-invalid))
 
+;;;; Reviewing a hand edit (Task 14c): a real Ratatoskr, a view edited by hand in a temp org folder
+
+(require 'drgnx-records-review)
+(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(defconst records-test--deferred
+  "# Deferred items: Orchard\n\n| # | Area | Item | Status |\n|---|---|---|---|\n| M1-1 | harness | A timer | open |\n| M1-2 | sync | Retry budget is hard-coded | open |\n"
+  "A DEFERRED.md for the hub to import.")
+
+(defmacro records-test--with-proposal (&rest body)
+  "BODY with Ratatoskr serving, subscribed, an org folder imported and its DEFERRED.md edited by hand; once the
+`view-proposal' notice is there, `id' is the proposal's id."
+  (declare (indent 0))
+  `(drgnx-notice-test-with-model
+     (drgnx-hub-client-test--with-ratatoskr
+       (drgnx-hub-client-test--backend-up)
+       (drgnx-hub-connect)
+       (drgnx-hub-client-test--wait (lambda () (and (processp drgnx-hub--events) (process-get drgnx-hub--events :drgnx-proven))) "the event connection proves itself")
+       (let* ((org (file-name-as-directory (make-temp-file "drgnx-org" t)))
+              (file (concat org "DEFERRED.md")) id)
+         (unwind-protect
+             (progn
+               (write-region records-test--deferred nil file nil 'silent)
+               (drgnx-hub-call-sync "records/import" (list :root (directory-file-name org)) 20)
+               ;; inside the follower's debounce: the next flush finds a hand edit
+               (write-region (string-replace "Retry budget is hard-coded | open" "Retry budget is hard-coded | fixed in M2"
+                                             (with-temp-buffer (insert-file-contents file) (buffer-string)))
+                             nil file nil 'silent)
+               (drgnx-hub-client-test--wait (lambda () (drgnx-notices :source 'hub)) "the proposal notice")
+               (setq id (plist-get (car (plist-get (drgnx-hub-call-sync "records/proposals" nil 10) :proposals)) :id))
+               ,@body)
+           (delete-directory org t)
+           (dolist (b (buffer-list)) (when (buffer-local-value 'drgnx-records-review--id b) (kill-buffer b))))))))
+
+(ert-deftest drgnx-records/notice-on-proposal ()
+  (records-test--with-proposal
+    (should (stringp id))
+    (let ((n (car (drgnx-notices :source 'hub))))
+      (should (equal (plist-get n :command) (list 'drgnx-records-review id)))
+      (should (string-match-p "DEFERRED.md" (plist-get n :text))))))
+
+(ert-deftest drgnx-records/review-shows-the-diff ()
+  (records-test--with-proposal
+    (drgnx-records-review id)
+    (with-current-buffer (get-buffer "*drgnx proposal: DEFERRED.md*")
+      (should (derived-mode-p 'diff-mode))
+      (should (equal drgnx-records-review--id id))
+      (should (string-match-p "fixed in M2" (buffer-string))))))
+
+(ert-deftest drgnx-records/accept-calls-decide ()
+  (records-test--with-proposal
+    (drgnx-records-review id)
+    (with-current-buffer (get-buffer "*drgnx proposal: DEFERRED.md*")
+      (let ((result (drgnx-records-review-accept)))
+        (should (equal (plist-get result :status) "accepted"))))
+    (should-not (get-buffer "*drgnx proposal: DEFERRED.md*"))
+    (should-not (drgnx-notices :source 'hub))))
+
+(ert-deftest drgnx-records/no-prompt-from-the-event ()
+  (drgnx-notice-test-with-model
+    (let ((conn (make-pipe-process :name "records-test" :noquery t)) (calls 0))
+      (unwind-protect
+          (progn
+            (process-put conn :drgnx-proven t)
+            (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (error "prompted")))
+                      ((symbol-function 'completing-read) (lambda (&rest _) (error "prompted")))
+                      ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "prompted")))
+                      ((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (cl-incf calls) nil)))
+              (let ((inhibit-interaction t) (drgnx-hub--event-conn conn))
+                (drgnx-records-review--event "view-proposal" '(:id "proposal:x" :path "/o/DEFERRED.md"))))
+            (should (= calls 0))
+            (should (drgnx-notices :source 'hub)))
+        (delete-process conn)))))
+
 (provide 'records-test)
 ;;; records-test.el ends here

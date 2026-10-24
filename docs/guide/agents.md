@@ -648,3 +648,13 @@ its `session/new` or `session/load` got, `mode`: the mode `session/set_mode` set
 `MOCK_ACP_SET_MODE_SLOW=SECS` make it refuse or answer late). Tests start it through
 `test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
 a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.
+
+## Reviewing a hand edit to a plan file
+
+The hub writes the org folder's plans, ledgers and DEFERRED file as views of its graph. If you edit one by hand, the
+hub does not overwrite it: the edit becomes a proposal and you get a notice ("A hand edit to … is waiting for
+review"). The notice only tells you; nothing asks. **Records: Review Proposal** (from the notice, or the palette) shows
+the proposal as a diff, with a line saying how many operations it would apply. In that buffer `C-c C-a` accepts (the
+hub applies the operations if the records did not change meanwhile, then rewrites the file) and `C-c C-r` rejects (your
+edited file is kept in the hub's records backup, then the file is rewritten). A proposal that went stale stays open:
+review it again. Also available as **Records: Accept Proposal** and **Records: Reject Proposal**.
