@@ -346,6 +346,51 @@ fn proc_strings(_pid: u32, _environ: bool) -> R<Vec<String>> {
     Err("reading a process's argv or environment is not implemented on this system".into())
 }
 
+/// Is `/proc/PID/environ` refused (EACCES) to a process of the same user without `CAP_SYS_PTRACE`?  That is what a
+/// non-dumpable process looks like from outside (`PR_SET_DUMPABLE 0`).  Where the harness has the capability (root on
+/// a CI host), which sees through it, `cat` reads under `setpriv` without it, as `run`'s `drop_ptrace` does.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn environ_refused(pid: u32) -> R {
+    let path = format!("/proc/{pid}/environ");
+    let read = if crate::scenario::ptrace_effective() {
+        let out = Command::new("setpriv")
+            .args([
+                "--inh-caps=-sys_ptrace",
+                "--bounding-set=-sys_ptrace",
+                "--",
+                "cat",
+                &path,
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("cannot run setpriv: {e}"))?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if out.status.success() {
+            Ok(())
+        } else if stderr.contains("Permission denied") {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        } else {
+            Err(std::io::Error::other(stderr.trim().to_string()))
+        }
+    } else {
+        std::fs::read(&path).map(drop)
+    };
+    match read {
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Ok(()),
+        Ok(()) => Err(format!(
+            "{path} reads without CAP_SYS_PTRACE: pid {pid} is dumpable"
+        )),
+        Err(e) => Err(format!("{path}: {e}")),
+    }
+}
+
+/// macOS's protection is `PT_DENY_ATTACH`, which only an attach would show (and it signals the attacher): nothing is
+/// checked here; a hub that could not deny it refuses keys and says so (`server::harden`).
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn environ_refused(_pid: u32) -> R {
+    Ok(())
+}
+
 /// `kern.procargs2`'s buffer: argc (a native-endian i32), the executable's path, NUL padding, argc arguments, then the
 /// environment up to the first empty string.
 #[cfg(any(test, target_os = "macos"))]
@@ -1608,19 +1653,40 @@ impl Runner<'_> {
         Ok(())
     }
 
-    /// A process's argv or the environment it started with (`proc_strings`): `contains` / `lacks` a string.
+    /// A process's argv or the environment it started with (`proc_strings`): `contains` / `lacks` a string, where
+    /// `except_var` NAME exempts the entry `NAME=…` from `lacks`.  `launch_env` is the environment this harness gave
+    /// the hub with that pid at exec (`Hub::start`: exactly those variables, nothing inherited).  `refused` (with
+    /// `environ`): the read is refused to a process of the same user without `CAP_SYS_PTRACE` (`environ_refused`).
     fn proc(&mut self, step: &Step) -> R {
         let idx = self.hub_index(None).ok();
         let pid_text = self.text(idx, step, "pid")?;
         let pid: u32 = pid_text
             .parse()
             .map_err(|_| format!("\"pid\" is not a pid: {pid_text:?}"))?;
-        let (part, environ) = match str_of(&step.obj, "part") {
-            Some("argv") => ("argv", false),
-            Some("environ") => ("environ", true),
-            _ => return Err("\"part\" is \"argv\" or \"environ\"".into()),
+        let part = str_of(&step.obj, "part");
+        if step.obj.get("refused").and_then(Value::as_bool) == Some(true) {
+            if part != Some("environ") {
+                return Err("\"refused\" goes with \"part\": \"environ\"".into());
+            }
+            return environ_refused(pid);
+        }
+        let (part, strings) = match part {
+            Some("argv") => ("argv", proc_strings(pid, false)?),
+            Some("environ") => ("environ", proc_strings(pid, true)?),
+            Some("launch_env") => (
+                "launch_env",
+                self.hubs
+                    .iter()
+                    .rfind(|h| h.pid == pid)
+                    .ok_or_else(|| format!("pid {pid} is not a hub this row started"))?
+                    .env
+                    .vars
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect(),
+            ),
+            _ => return Err("\"part\" is \"argv\", \"environ\" or \"launch_env\"".into()),
         };
-        let strings = proc_strings(pid, environ)?;
         // nothing read would pass any `lacks`
         if strings.is_empty() {
             return Err(format!("pid {pid} shows an empty {part}"));
@@ -1633,7 +1699,11 @@ impl Runner<'_> {
         }
         if step.obj.contains_key("lacks") {
             let text = self.text(idx, step, "lacks")?;
-            if strings.iter().any(|s| s.contains(&text)) {
+            let own = str_of(&step.obj, "except_var").map(|n| format!("{n}="));
+            if strings
+                .iter()
+                .any(|s| s.contains(&text) && !own.as_ref().is_some_and(|o| s.starts_with(o)))
+            {
                 return Err(format!("the {part} of pid {pid} contains {text:?}"));
             }
         }
@@ -2088,5 +2158,13 @@ mod tests {
         let env = proc_strings(std::process::id(), true).unwrap();
         let path = std::env::var("PATH").unwrap();
         assert!(env.contains(&format!("PATH={path}")), "{env:?}");
+    }
+
+    /// `refused` fails on a dumpable process (this one): its environment reads without `CAP_SYS_PTRACE`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn a_dumpable_process_is_not_refused() {
+        let e = environ_refused(std::process::id()).unwrap_err();
+        assert!(e.contains("is dumpable"), "{e}");
     }
 }
