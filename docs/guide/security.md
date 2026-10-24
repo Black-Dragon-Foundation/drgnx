@@ -410,7 +410,7 @@ A session's project and plan are those of the task it works on (a plan run's, or
   a push needs credentials the sandbox does not give the agent.
 - **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
   builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
-  mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is fixed to the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
+  mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is the setting `agents-net-hosts`, by default the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
   command and nothing else (`exec/start` refuses any other field); the command is never read as a podman option. The hub pulls the image itself (600 s at most) and names the container `drgnx-job-<id>`, removing leftovers at start.
 
 ## Checking it

@@ -353,6 +353,7 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         }
         "drgnx-agents-job-memory" => values.agents_job_memory = default.agents_job_memory.clone(),
         "drgnx-agents-job-cpus" => values.agents_job_cpus = default.agents_job_cpus,
+        "drgnx-agents-net-hosts" => values.agents_net_hosts = default.agents_net_hosts.clone(),
         "drgnx-agents-container-images" => {
             values.agents_container_images = default.agents_container_images.clone();
         }

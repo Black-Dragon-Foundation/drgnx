@@ -25,6 +25,8 @@ pub enum ExecKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExecStatus {
+    /// Waiting for a machine slot (no process yet); it starts when one frees.
+    Queued,
     Running,
     /// Ended by itself (any exit code).
     Done,

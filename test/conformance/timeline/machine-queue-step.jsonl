@@ -1,4 +1,4 @@
-{"scenario": "timeline/machine-queue-step", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19 and 15: a job waiting for a free machine slot (one slot here) is a machine-queue step of the session that started it: the session says it waits for the machine, and the step closes when the job gets its slot."}
+{"scenario": "timeline/machine-queue-step", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 15, gate-F S6: a job started on a full machine (one slot here) is recorded as queued and the start answers at once, so the turn ends with both jobs running (one queued); when the first ends the queued one starts and the session is woken."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}
@@ -14,9 +14,8 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:job_start {\"argv\": [\"sh\", \"-c\", \"cat $ROOT/gate\"]}\ncall:job_start {\"argv\": [\"true\"]}"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "waiting-on": "machine"}}}, "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "waiting"}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/list", "params": {"session": "$sid", "running": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"jobs": [{"status": "queued"}, {"status": "running"}]}}}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "within_ms": 20000}
-{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "machine-queue"}}}, "within_ms": 20000}
-{"do": "send", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "$sid"}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"steps": {"$contains": [{"class": "machine-queue", "end": "$number"}]}}}}

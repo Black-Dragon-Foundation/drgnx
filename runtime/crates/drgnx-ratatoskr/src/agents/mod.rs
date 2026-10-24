@@ -31,6 +31,7 @@ use runstav::registry::Class;
 use runstav::wire::Error;
 use session::Session;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 /// A step as the hub announces it: a closed row of the `step` table (`agent-step` to the editors too).
@@ -86,6 +87,11 @@ impl Hub {
     /// Who the session SID is, for the matrix's columns (none for a session the hub does not hold).
     pub fn who(&self, sid: &str) -> Option<norn::matrix::Who> {
         lock(&self.sessions).get(sid).map(|s| s.who())
+    }
+
+    /// The worktree session SID works in (none for a session the hub does not hold).
+    pub fn worktree(&self, sid: &str) -> Option<PathBuf> {
+        lock(&self.sessions).get(sid).map(|s| s.worktree())
     }
 
     /// A session on PROFILE, started by CALLER (the user's connection), in the directory and role of P.

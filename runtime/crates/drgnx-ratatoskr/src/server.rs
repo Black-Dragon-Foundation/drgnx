@@ -275,8 +275,8 @@ pub async fn run(args: ServeArgs) -> Exit {
         .core
         .runs
         .set_git(Arc::new(crate::runner::git::HubGit::new(
-            hub_dir.join("runs"),
-            crate::runner::TreeMode::Worktree,
+            crate::sandbox::runs_root(&env),
+            crate::runner::TreeMode::Snapshot,
             Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
             Some(runtime.clone()),
         )));

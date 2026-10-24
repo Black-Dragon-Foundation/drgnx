@@ -126,6 +126,10 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-checkpoint-cap" => values.agents_checkpoint_cap = de(v)?,
         "drgnx-agents-job-memory" => values.agents_job_memory = de(v)?,
         "drgnx-agents-job-cpus" => values.agents_job_cpus = de(v)?,
+        "drgnx-agents-net-hosts" => {
+            let Alist(pairs) = de::<Alist<Vec<String>>>(v)?;
+            values.agents_net_hosts = pairs;
+        }
         "drgnx-agents-container-images" => {
             let Alist(pairs) = de::<Alist<String>>(v)?;
             values.agents_container_images = super::images(pairs);
@@ -192,6 +196,13 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-checkpoint-cap" => json!(values.agents_checkpoint_cap),
         "drgnx-agents-job-memory" => json!(values.agents_job_memory),
         "drgnx-agents-job-cpus" => json!(values.agents_job_cpus),
+        "drgnx-agents-net-hosts" => object(
+            values
+                .agents_net_hosts
+                .iter()
+                .map(|(k, h)| (k.as_str(), json!(h)))
+                .collect(),
+        ),
         "drgnx-agents-container-images" => object(
             values
                 .agents_container_images

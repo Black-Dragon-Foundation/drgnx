@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 /// The matrix's Network cell, as a launch needs it.  Provider-only and provider-and-packages both reach the world only
 /// through the session's proxy (its allowlist differs, which is the proxy owner's); `Open` shares the host network.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NetCell {
     ProviderOnly,
     ProviderAndPackages,
@@ -47,14 +47,25 @@ pub fn spawn(plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
         return Err(refusal("a chat has no worktree: use spawn_plain"));
     }
     let env = Env::process();
+    let (plan, shape) = worktree_launch(plan, req);
+    launch(&env, &plan, &shape)
+}
+
+/// The plan and shape of a worker's or manager's launch: its worktree writable, and the hooks and config of the git
+/// folder inside it pinned read-only next to the lock's protected paths ([`sandbox::git_access`]).  The user's
+/// repository is never writable: a plan run's or a manager worker's tree is a snapshot with a `.git` of its own.
+pub fn worktree_launch(plan: &LaunchPlan, req: &SandboxReq) -> (LaunchPlan, SessionShape) {
+    let mut plan = plan.clone();
+    plan.protected_ro.extend(sandbox::git_access(&req.worktree));
+    let write = vec![req.worktree.clone()];
     let shape = SessionShape {
         sid: req.sid.clone(),
         cwd: req.worktree.clone(),
-        write: vec![req.worktree.clone()],
+        write,
         read: req.read.clone(),
         net: req.net,
     };
-    launch(&env, plan, &shape)
+    (plan, shape)
 }
 
 /// A chat with no project, still in Gleipnir: its cwd is a scratch dir of its own (`scratch_dir`), nothing of the
@@ -72,8 +83,15 @@ pub fn spawn_plain(plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
     launch(&env, plan, &shape)
 }
 
-/// A session's scratch dir, `<tmp>/drgnx-scratch-UID/SID` (made private).  It is not in the session dir: that one is
+/// A session's scratch dir, `<tmp>/drgnx-scratch-UID/SID`.  It is not in the session dir: that one is
 /// bound read-only and nothing else may lie in it (Gleipnir's rule 5).
+pub fn scratch_path(env: &Env, sid: &str) -> PathBuf {
+    sandbox::tmp_dir(env)
+        .join(format!("drgnx-scratch-{}", env.uid))
+        .join(sid)
+}
+
+/// [`scratch_path`], made private (the session id is checked like the session dir's).
 pub fn scratch_dir(env: &Env, sid: &str) -> Result<PathBuf, Refusal> {
     // The same name check as the session dir's.
     paths::session_dir(env, &paths::socket_path(env), sid)

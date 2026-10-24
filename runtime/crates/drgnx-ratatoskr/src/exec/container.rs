@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 pub const WORK: &str = "/work";
 
 /// What the settings and the hub fix for every container job.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Caps {
     /// `agents-container-images`: the only images a job may name.
     pub images: Vec<ContainerImage>,
@@ -28,12 +28,14 @@ pub struct Caps {
     pub pids: u32,
     /// What a job that was granted network reaches the proxy through ([`Proxy`]); none: a grant is refused.
     pub proxy: Option<Proxy>,
+    /// `agents-net-hosts`: the hosts (`host:port`) a granted network reaches, by tier name.
+    pub net_hosts: Vec<(String, Vec<String>)>,
 }
 
 /// A granted network is not a network: the job keeps `--network=none`, and two files are bind-mounted read-only into
 /// it, the job's Gleipnir proxy socket and the forwarder ([`FORWARDER`]) that gives the job's own loopback a port in
 /// front of that socket.  The only route out is the proxy, by construction.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Proxy {
     /// The job's proxy socket on the host.
     pub socket: PathBuf,
@@ -60,6 +62,8 @@ pub struct ContainerReq {
     pub image: String,
     pub argv: Vec<String>,
     pub worktree: PathBuf,
+    /// The folder inside the worktree the command runs in (relative; empty: the worktree itself).
+    pub subdir: PathBuf,
     /// The job's id; the container is named [`name_of`] it, so the hub can find (and remove) what a dead client left.
     pub job: String,
     /// The matrix's Network cell, when it grants one; none: no network at all.
@@ -173,7 +177,11 @@ pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
     a.push("-v".into());
     a.push(format!("{source}:{WORK}:Z").into());
     a.push("-w".into());
-    a.push(WORK.into());
+    a.push(if req.subdir.as_os_str().is_empty() {
+        OsString::from(WORK)
+    } else {
+        Path::new(WORK).join(&req.subdir).into_os_string()
+    });
     if let Some((socket, forwarder)) = &proxy {
         // The socket is this job's alone (`Z`: private label); so is the forwarder, the job's own copy.
         a.push("-v".into());
@@ -227,7 +235,7 @@ pub fn socket_for(job: &str, run_dir: &Path) -> PathBuf {
 }
 
 /// Makes job JOB's proxy: its own copy of FORWARDER in DIR (the job's folder; the copy is what gets relabelled, never
-/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET.  An error means the job
+/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS.  An error means the job
 /// was granted a network it cannot be given.
 pub fn prepare_proxy(
     job: &str,
@@ -235,6 +243,7 @@ pub fn prepare_proxy(
     run_dir: &Path,
     forwarder: &Path,
     net: NetCell,
+    hosts: &[(String, Vec<String>)],
 ) -> Result<JobProxy, Refusal> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let copy = dir.join("fwd");
@@ -254,7 +263,7 @@ pub fn prepare_proxy(
             .create(parent)
             .map_err(|e| refuse(format!("{}: {e}", parent.display())))?;
     }
-    let handle = start_proxy(&socket, net)?;
+    let handle = start_proxy(&socket, net, hosts)?;
     Ok(JobProxy {
         _handle: handle,
         mounts: Proxy {
@@ -264,14 +273,15 @@ pub fn prepare_proxy(
     })
 }
 
-/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET.  Dropping the handle closes the
+/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET under HOSTS (`agents-net-hosts`).  Dropping the handle closes the
 /// listener and every connection.
 pub fn start_proxy(
     socket: &Path,
     net: NetCell,
+    hosts: &[(String, Vec<String>)],
 ) -> Result<gleipnir::net::proxy::ProxyHandle, Refusal> {
     use gleipnir::net::{host, proxy};
-    let allow = crate::sandbox::allowed_hosts(net)
+    let allow = crate::sandbox::allowed_hosts(net, hosts)
         .iter()
         .map(|h| host::parse_target(h))
         .collect::<Result<Vec<_>, _>>()
@@ -398,6 +408,10 @@ mod tests {
 
     const REF: &str = "registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    fn test_hosts() -> Vec<(String, Vec<String>)> {
+        vec![("packages".into(), vec!["crates.io:443".into()])]
+    }
+
     fn caps() -> Caps {
         Caps {
             images: vec![ContainerImage {
@@ -407,6 +421,7 @@ mod tests {
             memory: "4G".into(),
             cpus: 2,
             pids: PIDS,
+            net_hosts: test_hosts(),
             proxy: Some(Proxy {
                 socket: "/run/h/job.sock".into(),
                 forwarder: "/opt/drgnx-fwd".into(),
@@ -419,6 +434,7 @@ mod tests {
             image: "tools".into(),
             argv: argv.iter().map(|s| s.to_string()).collect(),
             worktree: "/work/tree".into(),
+            subdir: PathBuf::new(),
             job: "x1a".into(),
             net: None,
         }
@@ -619,6 +635,7 @@ mod tests {
             &run_dir,
             &installed,
             NetCell::ProviderAndPackages,
+            &test_hosts(),
         )
         .unwrap();
         // the socket path stays short; the copy is the job's own; the installed file is never a mount source
@@ -661,7 +678,8 @@ mod tests {
                 &job_dir,
                 &run_dir,
                 &d.path().join("none"),
-                NetCell::Open
+                NetCell::Open,
+                &test_hosts()
             )
             .is_err()
         );
@@ -678,7 +696,7 @@ mod tests {
     async fn the_job_proxy_listens_on_its_socket() {
         let d = tempfile::tempdir().unwrap();
         let sock = d.path().join("proxy.sock");
-        let handle = start_proxy(&sock, NetCell::ProviderAndPackages).unwrap();
+        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &test_hosts()).unwrap();
         // not on the allow-list: refused by the proxy itself
         let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -708,6 +726,40 @@ mod tests {
         v.agents_job_memory = "4G --privileged".into();
         let c = crate::settings::containers::caps(&v);
         assert!(argv(&req(&["ls"]), &c).is_err());
+    }
+
+    /// AS1-NET-HOSTS-1: the hosts a granted network reaches are the setting's, per tier; the shipped default is the
+    /// package registries.
+    #[test]
+    fn net_hosts_are_the_settings_per_tier() {
+        let d = crate::settings::defaults();
+        assert!(d.problems.is_empty(), "{:?}", d.problems);
+        let hosts =
+            crate::sandbox::allowed_hosts(NetCell::ProviderAndPackages, &d.values.agents_net_hosts);
+        assert_eq!(hosts.len(), 6);
+        assert!(
+            hosts.contains(&"crates.io:443".to_string())
+                && hosts.contains(&"pypi.org:443".to_string())
+        );
+        assert_eq!(
+            crate::sandbox::allowed_hosts(NetCell::Open, &d.values.agents_net_hosts),
+            hosts
+        );
+        assert!(
+            crate::sandbox::allowed_hosts(NetCell::ProviderOnly, &d.values.agents_net_hosts)
+                .is_empty()
+        );
+        // the user's list replaces it
+        let mine = vec![("packages".to_string(), vec!["example.org:443".to_string()])];
+        assert_eq!(
+            crate::sandbox::allowed_hosts(NetCell::ProviderAndPackages, &mine),
+            vec!["example.org:443".to_string()]
+        );
+        let v = crate::settings::RuntimeValues {
+            agents_net_hosts: mine.clone(),
+            ..Default::default()
+        };
+        assert_eq!(crate::settings::containers::caps(&v).net_hosts, mine);
     }
 
     #[test]

@@ -300,6 +300,16 @@ pub trait RunGit: std::marker::Send + Sync {
     fn prepare<'a>(&'a self, _tree: &'a TaskTree) -> GitFuture<'a, ()> {
         Box::pin(async { Ok(()) })
     }
+    /// How this git keeps its trees (a fake git has worktrees).
+    fn mode(&self) -> TreeMode {
+        TreeMode::Worktree
+    }
+    /// TREE's branch is made known to the trusted REPO (a snapshot task: its bundle is written and imported, fsck'd,
+    /// the branch written compare-and-swap), so branch names alone can be merged (`trial_merge`).  A worktree's
+    /// branch is there already.
+    fn import<'a>(&'a self, _repo: &'a Path, _tree: &'a TaskTree) -> GitFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
     /// The gate's card for BRANCH was answered yes: its checked tip may merge.
     fn clear_gate(&self, _branch: &str) {}
     /// Merge exactly the tip the gate checked into the job's tree (`merge --no-ff`).

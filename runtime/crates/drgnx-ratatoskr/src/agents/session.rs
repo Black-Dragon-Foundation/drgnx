@@ -1899,6 +1899,18 @@ impl Session {
         lock(&self.gateway).take()
     }
 
+    /// Remove the empty `.envrc`-style stubs the hub made in the worktree to pin them (see `sandbox::remove_stubs`).
+    fn remove_stubs(&self) {
+        let env = runstav::paths::Env::process();
+        let scratch = launch::scratch_path(&env, &self.id);
+        crate::sandbox::remove_stubs(&scratch, &self.cwd);
+    }
+
+    /// The folder the session works in.
+    pub(crate) fn worktree(&self) -> PathBuf {
+        self.cwd.clone()
+    }
+
     /// Who this session is, for the matrix's columns.
     pub(crate) fn who(&self) -> Who {
         Who {
@@ -2145,6 +2157,7 @@ impl Session {
                     signal,
                     stderr,
                 } => {
+                    self.remove_stubs();
                     if self.closed.load(Ordering::SeqCst) {
                         // closed on purpose while it waited on a job: still waiting; the wake resumes it
                         {

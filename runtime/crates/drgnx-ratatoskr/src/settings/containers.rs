@@ -12,5 +12,6 @@ pub fn caps(values: &RuntimeValues) -> Caps {
         cpus: values.agents_job_cpus,
         pids: PIDS,
         proxy: None,
+        net_hosts: values.agents_net_hosts.clone(),
     }
 }

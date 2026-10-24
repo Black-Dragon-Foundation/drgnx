@@ -1035,7 +1035,7 @@ async fn tree_of(f: &Front, manager: &str, w: &Session) -> Result<TaskTree, Stri
         path: w.cwd().to_path_buf(),
         branch,
         base,
-        mode: runner::TreeMode::Worktree,
+        mode: f.core.runs.git().mode(),
     })
 }
 
@@ -1065,6 +1065,11 @@ async fn trial_merge(
         }
     }
     gate(f, sid, who, Action::MergeIntegration, None, facts).await?;
+    // a snapshot worker's branch lives in its own folder: bring each wanted one into the trusted repository first
+    let git = f.core.runs.git();
+    for (_, t) in mine.iter().filter(|(_, t)| want.contains(&t.branch)) {
+        git.import(me.cwd(), t).await.map_err(|e| e.stderr)?;
+    }
     let r = f
         .core
         .runs

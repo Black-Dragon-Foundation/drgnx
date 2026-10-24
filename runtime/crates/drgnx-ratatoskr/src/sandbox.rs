@@ -39,7 +39,7 @@ pub const ENV_DENY: &[&str] = &[
 ///
 /// Each path is taken to its true name on disk: a link is resolved, and a path that does not exist keeps the true
 /// name of its deepest existing ancestor. One that cannot be named (not UTF-8, not absolute, a dangling link) is left
-/// out. `open_inside_closed` stays empty: a job's own dir is phase 6's.
+/// out. `open_inside_closed` is [`runs_root`] alone, where workers' worktrees are (a job's own dir is phase 6's).
 pub fn context(env: &Env) -> Context {
     let exe = idle_exe();
     context_for(env, exe.as_deref())
@@ -99,7 +99,7 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
     Context {
         home: true_name(&home).unwrap_or_else(|| PathBuf::from("/")),
         closed: true_names(closed),
-        open_inside_closed: vec![],
+        open_inside_closed: true_names([runs_root(env)]),
         user_sockets: true_names(user_sockets),
         run_parents: true_names(paths::session_parents(env, &socket)),
         program_dirs: true_names(program_dirs),
@@ -561,22 +561,197 @@ mod run {
 /// The proxy port inside a session whose network is the provider's only.
 pub const PROXY_PORT: u16 = 3128;
 
-/// The one allow-list of a job's proxy by its network cell (exact `host:port`): the hub starts no other proxy.
-/// Provider-only reaches none beyond the provider's own (a job has no provider); the packages cell reaches the package
-/// hosts of the toolchains drgnx uses.  `Open` shares the host's network for a session and gets the same list here.
-pub fn allowed_hosts(net: crate::agents::launch::NetCell) -> &'static [&'static str] {
+/// The one allow-list of a job's proxy by its network cell (exact `host:port`): the hub starts no other proxy.  The
+/// lists are the setting `agents-net-hosts` (HOSTS: tier name to hosts; shipped default: the package registries of
+/// crates.io, npm and PyPI under `packages`).  Provider-only has the `provider-only` list (shipped: none; a job has no
+/// provider); the packages cell reaches the `packages` list.  `Open` shares the host's network for a session and gets
+/// the packages list here.  A tier the setting does not name reaches nothing.
+pub fn allowed_hosts(
+    net: crate::agents::launch::NetCell,
+    hosts: &[(String, Vec<String>)],
+) -> Vec<String> {
     use crate::agents::launch::NetCell;
-    match net {
-        NetCell::ProviderOnly => &[],
-        NetCell::ProviderAndPackages | NetCell::Open => &[
-            "crates.io:443",
-            "index.crates.io:443",
-            "static.crates.io:443",
-            "registry.npmjs.org:443",
-            "pypi.org:443",
-            "files.pythonhosted.org:443",
-        ],
+    let tier = match net {
+        NetCell::ProviderOnly => "provider-only",
+        NetCell::ProviderAndPackages | NetCell::Open => "packages",
+    };
+    hosts
+        .iter()
+        .filter(|(t, _)| t == tier)
+        .flat_map(|(_, h)| h.iter().cloned())
+        .collect()
+}
+
+/// The protected paths of the lock, resolved against the session's worktree CWD (an absolute entry stays as it is) and
+/// made to exist, so a bind can pin them: a later-created `.envrc` or `.claude/settings.json` is read-only as well.
+/// A missing entry is created empty (a file for [`crate::agents::lock::PROTECTED_FILES`], else a folder) when its
+/// parent is a folder; one whose parent is none (`.git/hooks` in a linked worktree, where `.git` is a file; the hooks
+/// live outside the worktree, which is not writable) is left out.
+fn pin_protected(
+    cwd: &Path,
+    protected: &[PathBuf],
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Refusal> {
+    let (mut out, mut made_here) = (Vec::new(), Vec::new());
+    for rel in protected {
+        let p = cwd.join(rel);
+        if out.contains(&p) {
+            continue;
+        }
+        if p.symlink_metadata().is_err() {
+            if !p.parent().is_some_and(Path::is_dir) {
+                continue;
+            }
+            let is_file = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| crate::agents::lock::PROTECTED_FILES.contains(&n));
+            let made = if is_file {
+                std::fs::write(&p, b"")
+            } else {
+                std::fs::create_dir(&p)
+            };
+            made.map_err(|e| Refusal {
+                rule: Rule::Setup,
+                path: Some(p.clone()),
+                message: format!("{}: cannot pin it read-only: {e}", p.display()),
+            })?;
+            made_here.push(p.clone());
+        }
+        out.push(p);
     }
+    Ok((out, made_here))
+}
+
+/// Where the stubs [`pin_protected`] made for session SID are listed (in the hub's scratch, out of the agent's reach).
+fn stubs_file(scratch: &Path) -> PathBuf {
+    scratch.join("stubs")
+}
+
+/// Remove the stubs the hub made in a worktree for a session whose scratch is SCRATCH, when they are still empty and
+/// not in the git index (an agent's real file is never touched; a committed one is the merge gate's).  Called when
+/// the session ends, so an empty `.envrc` or `mise.toml` never lingers in a checkout.
+pub fn remove_stubs(scratch: &Path, worktree: &Path) {
+    let list = stubs_file(scratch);
+    let Ok(text) = std::fs::read_to_string(&list) else {
+        return;
+    };
+    let index = git_dirs(worktree)
+        .and_then(|g| std::fs::read(g.gitdir.join("index")).ok())
+        .unwrap_or_default();
+    for line in text.lines() {
+        let p = Path::new(line);
+        let Ok(rel) = p.strip_prefix(worktree) else {
+            continue;
+        };
+        let tracked = rel.to_str().is_some_and(|r| {
+            let r = r.as_bytes();
+            index.windows(r.len().max(1)).any(|w| w == r)
+        });
+        let Ok(m) = p.symlink_metadata() else {
+            continue;
+        };
+        if tracked {
+            continue;
+        }
+        let _ = if m.is_file() && m.len() == 0 {
+            std::fs::remove_file(p)
+        } else if m.is_dir() {
+            std::fs::remove_dir(p)
+        } else {
+            Ok(())
+        };
+    }
+    let _ = std::fs::remove_file(list);
+}
+
+/// A worktree's git folders: its own (`gitdir`; `.git` itself in a plain checkout) and the common one (`common`),
+/// which holds the hooks, the config, the objects and the refs of every worktree of the repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitDirs {
+    pub gitdir: PathBuf,
+    pub common: PathBuf,
+}
+
+/// The git folders of WORKTREE, as true names: `.git` is a folder (a plain checkout), or a file `gitdir: PATH` (a
+/// linked worktree) whose folder names the common one in `commondir`.  None: not a git worktree.
+pub fn git_dirs(worktree: &Path) -> Option<GitDirs> {
+    let dot = worktree.join(".git");
+    let meta = dot.symlink_metadata().ok()?;
+    if meta.is_dir() {
+        let d = std::fs::canonicalize(&dot).ok()?;
+        return Some(GitDirs {
+            gitdir: d.clone(),
+            common: d,
+        });
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let path = text.lines().next()?.strip_prefix("gitdir:")?.trim();
+    let gitdir = std::fs::canonicalize(worktree.join(path)).ok()?;
+    let common = match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(c) => std::fs::canonicalize(gitdir.join(c.trim())).ok()?,
+        Err(_) => gitdir.clone(),
+    };
+    Some(GitDirs { gitdir, common })
+}
+
+/// What a sandboxed agent must not write in the git folders of WORKTREE: git runs code it finds in `hooks`, in
+/// `config` and in `config.worktree` (the worktree's, and each submodule's folder under `modules/`), so the user's
+/// next git command would run what the agent left there.  Those are pinned read-only.  Only a git folder inside the
+/// worktree is the agent's to write (a snapshot task has its own `.git`, a copy of the run's store); the common folder
+/// of a linked worktree is the user's repository and is not given to a sandboxed agent at all (it could rewrite
+/// the user's branches), so nothing there is pinned or opened.  Every pin exists (a missing `hooks` folder is made).
+pub fn git_access(worktree: &Path) -> Vec<PathBuf> {
+    let (Some(g), Ok(real)) = (git_dirs(worktree), std::fs::canonicalize(worktree)) else {
+        return vec![];
+    };
+    if !g.gitdir.starts_with(&real) || !g.common.starts_with(&real) {
+        return vec![];
+    }
+    let mut pins: Vec<PathBuf> = Vec::new();
+    let mut add = |p: PathBuf| {
+        if p.symlink_metadata().is_ok() && !pins.contains(&p) {
+            pins.push(p);
+        }
+    };
+    // a repository always has a hooks folder; make it if it is gone, so a hook cannot be added later
+    let hooks = g.common.join("hooks");
+    if !hooks.exists() {
+        let _ = std::fs::create_dir(&hooks);
+    }
+    for dir in [&g.common, &g.gitdir] {
+        for n in ["hooks", "config", "config.worktree"] {
+            add(dir.join(n));
+        }
+    }
+    // each linked worktree's folder (one level) and each submodule's (nested, to a depth of four)
+    for kind in ["worktrees", "modules"] {
+        let mut todo = vec![(g.common.join(kind), 0usize)];
+        while let Some((dir, depth)) = todo.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let p = e.path();
+                if !p.is_dir() || p.is_symlink() {
+                    continue;
+                }
+                for n in ["hooks", "config", "config.worktree"] {
+                    add(p.join(n));
+                }
+                if kind == "modules" && depth < 4 {
+                    todo.push((p.join("modules"), depth + 1));
+                }
+            }
+        }
+    }
+    pins
+}
+
+/// Where the hub makes the worktrees of plan runs and manager-started workers (`<state>/hub/runs`).  It lies inside
+/// closed folders, so the context opens exactly this folder ([`context_for`]): a spec may name a tree in it (the
+/// hub builds each spec, and only for the session's own tree), nothing else of the state folder.
+pub fn runs_root(env: &Env) -> PathBuf {
+    paths::state_dir(env).join("hub").join("runs")
 }
 
 /// What a session's spec is built from (Task 10): its id, where it works, what else it reads and the network cell.
@@ -627,11 +802,23 @@ pub fn session_spec(
     // The CLI's own login dir, for it alone (its token refreshes in place); never the home.
     write.extend(plan.login_dir.iter().filter(|d| d.exists()).cloned());
     let mut read = shape.read.clone();
-    read.extend(plan.protected_ro.iter().filter(|p| p.exists()).cloned());
-    let binds = plan
-        .protected_ro
+    let (pinned, made_here) = pin_protected(&shape.cwd, &plan.protected_ro)?;
+    if !made_here.is_empty() {
+        use std::io::Write;
+        let record = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(stubs_file(scratch))
+            .and_then(|mut f| {
+                made_here
+                    .iter()
+                    .try_for_each(|p| writeln!(f, "{}", p.display()))
+            });
+        record.map_err(|e| malformed(format!("{}: {e}", scratch.display())))?;
+    }
+    read.extend(pinned.iter().cloned());
+    let binds = pinned
         .iter()
-        .filter(|p| p.exists())
         .map(|p| Bind {
             mode: Mode::Ro,
             source: p.clone(),

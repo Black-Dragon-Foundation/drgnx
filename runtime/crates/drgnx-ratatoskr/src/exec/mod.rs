@@ -28,7 +28,7 @@ use runstav::paths::Env;
 use runstav::wire::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,6 +80,8 @@ impl CheckKind {
 pub struct ExecSpec {
     pub starter: Starter,
     pub cwd: PathBuf,
+    /// The session's worktree (a session's job: its `cwd` must be this folder or inside it; a user's job: none).
+    pub worktree: Option<PathBuf>,
     pub argv: Vec<String>,
     pub timebox: Duration,
     pub kind: CheckKind,
@@ -88,14 +90,15 @@ pub struct ExecSpec {
 }
 
 /// What makes a job a container job: the allow-list name, the caps from settings, the network the matrix granted.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContainerJob {
     pub image: String,
     pub caps: container::Caps,
     pub net: Option<NetCell>,
 }
 
-/// What the hub hears of the jobs: a job waiting for a machine and getting one, and a job's end.
+/// What the hub hears of the jobs: a job's end.  (`Queued` and `Admitted` are no longer sent: a job that finds the
+/// machine full is recorded as queued and its starter told at once, so no turn waits in the queue.)
 #[derive(Clone, Debug)]
 pub enum JobEvent {
     /// The job ID of SESSION waits for a free machine slot.
@@ -186,7 +189,56 @@ struct Inner {
     live: Arc<Live>,
     events: tokio::sync::broadcast::Sender<JobEvent>,
     slots: Arc<tokio::sync::Semaphore>,
+    /// Jobs recorded as queued, oldest first; each starts when a slot frees ([`Inner::pump`]).
+    queue: Mutex<VecDeque<String>>,
 }
+
+/// What a queued job is started from, saved as `<dir>/pending.json` (the hub may restart before its turn).
+#[derive(Serialize, Deserialize)]
+struct Pending {
+    session: Option<String>,
+    cwd: PathBuf,
+    worktree: Option<PathBuf>,
+    argv: Vec<String>,
+    timebox_s: f64,
+    kind: String,
+    container: Option<ContainerJob>,
+}
+
+impl Pending {
+    fn of(spec: &ExecSpec) -> Pending {
+        Pending {
+            session: match &spec.starter {
+                Starter::Session(s) => Some(s.clone()),
+                Starter::User => None,
+            },
+            cwd: spec.cwd.clone(),
+            worktree: spec.worktree.clone(),
+            argv: spec.argv.clone(),
+            timebox_s: spec.timebox.as_secs_f64(),
+            kind: spec.kind.name().to_string(),
+            container: spec.container.clone(),
+        }
+    }
+
+    fn into_spec(self) -> ExecSpec {
+        ExecSpec {
+            starter: self.session.map_or(Starter::User, Starter::Session),
+            cwd: self.cwd,
+            worktree: self.worktree,
+            argv: self.argv,
+            timebox: Duration::from_secs_f64(self.timebox_s),
+            kind: CheckKind::from_name(&self.kind),
+            container: self.container,
+        }
+    }
+}
+
+/// Finished job folders kept: the newest this many, and none older than [`KEEP_DAYS`] (the graph row stays).  A job
+/// that ended in the last [`KEEP_GRACE_S`] is never pruned, so its wake can still read the result.
+const KEEP_JOBS: usize = 200;
+const KEEP_DAYS: f64 = 14.0;
+const KEEP_GRACE_S: f64 = 3600.0;
 
 /// The jobs the hub runs.
 pub struct Runner {
@@ -239,6 +291,7 @@ impl Runner {
                 slots: Arc::new(tokio::sync::Semaphore::new(hooks.slots.max(1))),
                 hooks,
                 seq: AtomicU64::new(0),
+                queue: Mutex::new(VecDeque::new()),
                 finishing: Mutex::new(HashSet::new()),
                 live: self.live.clone(),
                 events: self.events.clone(),
@@ -265,10 +318,19 @@ impl Runner {
             .ok_or_else(|| setup("jobs are not open yet"))
     }
 
-    /// Start a job; answers its id.  A session's job runs in that session's sandbox (its worktree is the CWD, writable;
-    /// no sandbox here is a refusal); the user's runs with the user's rights.
+    /// Start a job; answers its id.  A session's job runs in that session's sandbox (its worktree, writable, is the
+    /// only folder it writes; its CWD must be the worktree or inside it; no sandbox here is a refusal); the user's
+    /// runs with the user's rights.  On a full machine the job is recorded as queued and the id answered at once.
     pub async fn start(&self, spec: ExecSpec) -> Result<String, Refusal> {
         self.inner()?.clone().start(spec).await
+    }
+
+    /// Whether job ID waits for a machine slot.
+    pub fn is_queued(&self, id: &str) -> bool {
+        self.inner
+            .get()
+            .and_then(|i| i.meta(id))
+            .is_some_and(|m| m.queued)
     }
 
     pub fn get(&self, id: &str) -> Option<ExecRow> {
@@ -367,7 +429,14 @@ impl Inner {
             argv: m.argv,
             cwd: m.cwd,
             image: m.image,
-            status: end.as_ref().map_or(ExecStatus::Running, |e| e.status),
+            status: end.as_ref().map_or(
+                if m.queued {
+                    ExecStatus::Queued
+                } else {
+                    ExecStatus::Running
+                },
+                |e| e.status,
+            ),
             started: m.started,
             ended: end.as_ref().map(|e| e.ended),
             timebox_s: m.timebox_s,
@@ -384,7 +453,7 @@ impl Inner {
             .flatten()
             .filter_map(|e| self.row(&e.file_name().to_string_lossy()))
             .filter(|r| session.is_none_or(|s| r.session.as_deref() == Some(s)))
-            .filter(|r| !running || r.status == ExecStatus::Running)
+            .filter(|r| !running || matches!(r.status, ExecStatus::Running | ExecStatus::Queued))
             .collect();
         rows.sort_by(|a, b| b.started.total_cmp(&a.started));
         rows
@@ -395,45 +464,140 @@ impl Inner {
         format!("x{ms:x}{:x}", self.seq.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// The spec with its folders made true names, and a session's job confined: its CWD is the session's worktree or
+    /// inside it (a link out of it is resolved first), else refused.  A user's job works in the CWD it names.
+    fn confine(mut spec: ExecSpec) -> Result<ExecSpec, Refusal> {
+        let cwd = std::fs::canonicalize(&spec.cwd)
+            .ok()
+            .filter(|c| c.is_dir())
+            .ok_or_else(|| refusal(format!("{} is not a folder", spec.cwd.display())))?;
+        match (&spec.starter, spec.worktree.take()) {
+            (Starter::Session(_), Some(wt)) => {
+                let wt = std::fs::canonicalize(&wt)
+                    .map_err(|_| refusal(format!("{} is not a folder", wt.display())))?;
+                if !cwd.starts_with(&wt) {
+                    return Err(refusal(format!(
+                        "{} is outside your worktree {}: a job runs in your worktree or a folder inside it",
+                        spec.cwd.display(),
+                        wt.display()
+                    )));
+                }
+                spec.worktree = Some(wt);
+            }
+            (Starter::Session(_), None) => {
+                return Err(refusal("a session's job needs its worktree"));
+            }
+            (Starter::User, _) => spec.worktree = Some(cwd.clone()),
+        }
+        spec.cwd = cwd;
+        Ok(spec)
+    }
+
     async fn start(self: Arc<Self>, spec: ExecSpec) -> Result<String, Refusal> {
         if spec.argv.is_empty() || spec.argv[0].is_empty() {
             return Err(refusal("a job needs a command"));
         }
-        if !spec.cwd.is_dir() {
-            return Err(refusal(format!("{} is not a folder", spec.cwd.display())));
-        }
+        let spec = Self::confine(spec)?;
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
-        let session = match &spec.starter {
-            Starter::Session(s) => Some(s.clone()),
-            Starter::User => None,
-        };
-        let permit = match self.slots.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => {
-                let _ = self.events.send(JobEvent::Queued {
-                    session: session.clone(),
-                    id: id.clone(),
-                });
-                let p = self
-                    .slots
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| setup(format!("the machine's slots: {e}")))?;
-                let _ = self.events.send(JobEvent::Admitted {
-                    session: session.clone(),
-                    id: id.clone(),
-                });
-                p
+        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+            if let Err(e) = self.enqueue(&id, &dir, &spec) {
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(e);
             }
+            // a slot may have freed between the failed try and the queue entry
+            self.pump();
+            return Ok(id);
         };
         let r = self.clone().launch(&id, &dir, spec, permit).await;
         if r.is_err() {
             let _ = std::fs::remove_dir_all(&dir);
+            self.pump();
         }
         r.map(|()| id)
+    }
+
+    /// Record job ID as queued: what to start (`pending.json`), a meta saying it waits, a place in the queue.
+    fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
+        let write = |name: &str, bytes: Vec<u8>| {
+            let tmp = dir.join(format!("{name}.tmp"));
+            std::fs::write(&tmp, bytes)
+                .and_then(|()| std::fs::rename(&tmp, dir.join(name)))
+                .map_err(|e| setup(format!("{}: {e}", dir.display())))
+        };
+        write(
+            "pending.json",
+            serde_json::to_vec(&Pending::of(spec)).unwrap_or_default(),
+        )?;
+        let started = now();
+        let session = match &spec.starter {
+            Starter::Session(s) => Some(s.clone()),
+            Starter::User => None,
+        };
+        self.save_meta(&Meta {
+            id: id.to_string(),
+            session: session.clone(),
+            kind: spec.kind.name().to_string(),
+            argv: spec.argv.clone(),
+            cwd: spec.cwd.display().to_string(),
+            started,
+            timebox_s: spec.timebox.as_secs_f64().ceil() as u64,
+            deadline: started + spec.timebox.as_secs_f64(),
+            unit: None,
+            pid: None,
+            start_time: None,
+            entity: None,
+            image: spec.container.as_ref().map(|c| c.image.clone()),
+            queued: true,
+        })?;
+        self.live.add(id, session);
+        self.queue.lock().unwrap().push_back(id.to_string());
+        Ok(())
+    }
+
+    /// Start queued jobs while slots are free.
+    fn pump(self: &Arc<Self>) {
+        loop {
+            let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+                return;
+            };
+            let Some(id) = self.queue.lock().unwrap().pop_front() else {
+                return;
+            };
+            let me = self.clone();
+            tokio::spawn(async move { me.run_queued(id, permit).await });
+        }
+    }
+
+    /// A queued job got its slot: start it, or end it when it cannot start (stopped while it waited, its spec gone,
+    /// the launch refused); the reason is in its log and its end is the usual `exec-done`.
+    async fn run_queued(self: Arc<Self>, id: String, permit: tokio::sync::OwnedSemaphorePermit) {
+        let dir = self.dir(&id);
+        let pending = std::fs::read_to_string(dir.join("pending.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Pending>(&t).ok());
+        let mut permit = Some(permit);
+        let failed = if dir.join("why").exists() {
+            None
+        } else {
+            match pending {
+                None => Some("its start request is gone".to_string()),
+                Some(p) => {
+                    let slot = permit.take().expect("the slot");
+                    match self.clone().launch(&id, &dir, p.into_spec(), slot).await {
+                        Ok(()) => return,
+                        Err(e) => Some(e.message),
+                    }
+                }
+            }
+        };
+        drop(permit);
+        if let Some(why) = failed {
+            let _ = std::fs::write(dir.join("log"), format!("could not start: {why}\n"));
+        }
+        self.finish(&id).await;
+        self.pump();
     }
 
     /// The `podman run` of a container job.  The container is the sandbox, so the starter's Gleipnir spec is not used;
@@ -462,14 +626,22 @@ impl Inner {
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(std::env::temp_dir);
-            let jp = container::prepare_proxy(id, dir, &run_dir, &forwarder, n)?;
+            let jp = container::prepare_proxy(id, dir, &run_dir, &forwarder, n, &caps.net_hosts)?;
             caps.proxy = Some(jp.mounts.clone());
             proxy = Some(jp);
         }
+        // the mount is the session's worktree, never a folder the request names; the command runs in its CWD inside
+        let worktree = spec.worktree.clone().unwrap_or_else(|| spec.cwd.clone());
+        let subdir = spec
+            .cwd
+            .strip_prefix(&worktree)
+            .map(Path::to_path_buf)
+            .map_err(|_| refusal("the job's folder is outside its worktree"))?;
         let req = container::ContainerReq {
             image: job.image.clone(),
             argv: spec.argv.clone(),
-            worktree: spec.cwd.clone(),
+            worktree,
+            subdir,
             job: id.to_string(),
             net: job.net,
         };
@@ -519,18 +691,26 @@ impl Inner {
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
             Starter::Session(_) if unsandboxed_for_tests() => (plain_spec(&spec), None),
             Starter::Session(sid) => {
+                let worktree = spec
+                    .worktree
+                    .clone()
+                    .ok_or_else(|| refusal("a session's job needs its worktree"))?;
+                // the lock's protected files stay read-only for a job as for the session itself
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
                     env: tool_env(),
                     session_meta: None,
-                    protected_ro: vec![],
+                    protected_ro: crate::agents::lock::PROTECTED_RO
+                        .iter()
+                        .map(|p| worktree.join(p))
+                        .collect(),
                     login_dir: None,
                     enforced: Enforced::Yes,
                 };
                 let shape = SessionShape {
                     sid: sid.clone(),
                     cwd: spec.cwd.clone(),
-                    write: vec![spec.cwd.clone()],
+                    write: vec![worktree],
                     read: vec![],
                     net: NetCell::ProviderAndPackages,
                 };
@@ -588,6 +768,7 @@ impl Inner {
             start_time: draugr::start_time(pid).ok(),
             entity: None,
             image: spec.container.as_ref().map(|c| c.image.clone()),
+            queued: false,
         };
         self.save_meta(&meta)?;
         meta.entity = self.record_start(&meta).await;
@@ -599,8 +780,9 @@ impl Inner {
         tokio::spawn(async move {
             // a container job's proxy answers for as long as the job runs
             let _proxy = proxy;
-            me.watch(&id, Some(child)).await;
+            me.clone().watch(&id, Some(child)).await;
             drop(permit);
+            me.pump();
         });
         Ok(())
     }
@@ -648,25 +830,23 @@ impl Inner {
                     }
                 }
             }
-            None => loop {
-                let gone = match (meta.pid, meta.start_time) {
-                    (Some(p), Some(t)) => !unit::same_process(p, t),
-                    _ => true,
-                };
-                if gone || unit::read_exit(&dir).is_some() || self.end(id).is_some() {
-                    break;
-                }
-                if now() >= meta.deadline {
-                    let _ = std::fs::write(dir.join("why"), "timed-out");
-                    if let Some(p) = meta.pid {
-                        let _ =
-                            draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller)
-                                .await;
+            None => {
+                let gone = async {
+                    if let (Some(p), Some(t)) = (meta.pid, meta.start_time) {
+                        wait_gone(p, t).await;
                     }
-                    break;
+                };
+                tokio::select! {
+                    () = gone => {}
+                    () = tokio::time::sleep(left(&meta)) => {
+                        let _ = std::fs::write(dir.join("why"), "timed-out");
+                        if let Some(p) = meta.pid {
+                            let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller)
+                                .await;
+                        }
+                    }
                 }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            },
+            }
         }
         self.finish(id).await;
     }
@@ -738,10 +918,45 @@ impl Inner {
         }
         self.live.remove(id);
         let _ = self.events.send(JobEvent::Done(done));
+        self.prune();
+    }
+
+    /// Remove the folders of finished jobs past the retention ([`KEEP_JOBS`], [`KEEP_DAYS`]); the graph row stays.
+    fn prune(&self) {
+        let Ok(rd) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        let mut done: Vec<(f64, PathBuf)> = rd
+            .flatten()
+            .filter_map(|e| {
+                let t = std::fs::metadata(e.path().join("result.json"))
+                    .and_then(|m| m.modified())
+                    .ok()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs_f64();
+                Some((t, e.path()))
+            })
+            .collect();
+        done.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let now = now();
+        for (rank, (t, dir)) in done.iter().enumerate() {
+            let age = now - t;
+            if age > KEEP_GRACE_S && (rank >= KEEP_JOBS || age > KEEP_DAYS * 86400.0) {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
     }
 
     async fn stop(self: Arc<Self>, id: &str) -> Option<ExecRow> {
         let meta = self.meta(id)?;
+        if meta.queued && self.end(id).is_none() {
+            // still waiting for a slot: it never starts
+            let _ = std::fs::write(self.dir(id).join("why"), "stopped");
+            self.queue.lock().unwrap().retain(|q| q != id);
+            self.finish(id).await;
+            return self.row(id);
+        }
         if self.end(id).is_none() {
             let _ = std::fs::write(self.dir(id).join("why"), "stopped");
             if let (Some(p), Some(t)) = (meta.pid, meta.start_time)
@@ -765,21 +980,59 @@ impl Inner {
             return;
         };
         let mut running = HashSet::new();
+        let mut waiting: Vec<(f64, String)> = Vec::new();
         for e in rd.flatten() {
             let id = e.file_name().to_string_lossy().to_string();
             if let Some(m) = self.meta(&id)
                 && self.end(&id).is_none()
             {
-                self.live.add(&id, m.session);
+                self.live.add(&id, m.session.clone());
+                if m.queued {
+                    waiting.push((m.started, id));
+                    continue;
+                }
                 running.insert(id.clone());
                 let me = self.clone();
                 tokio::spawn(async move { me.watch(&id, None).await });
             }
         }
+        // jobs that waited for a slot when the last hub ended wait again, oldest first
+        waiting.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.queue
+            .lock()
+            .unwrap()
+            .extend(waiting.into_iter().map(|(_, id)| id));
+        self.pump();
+        self.prune();
         // a podman client that died with the last hub leaves its container: remove those no running job owns
         if let Some(podman) = self.hooks.podman.clone() {
             tokio::task::spawn_blocking(move || container::remove_leftovers(&podman, &running));
         }
+    }
+}
+
+/// Wait until the process PID that started at START_TIME is gone: on Linux for the pidfd's event (no polling), else (or
+/// where a pidfd cannot be had) by looking every 100 ms.
+async fn wait_gone(pid: i32, start_time: u64) {
+    #[cfg(target_os = "linux")]
+    if let Some(fd) = rustix::process::Pid::from_raw(pid)
+        .and_then(|p| rustix::process::pidfd_open(p, rustix::process::PidfdFlags::empty()).ok())
+    {
+        // checked once the descriptor is held, so a reused pid is never waited on
+        if !unit::same_process(pid, start_time) {
+            return;
+        }
+        // SAFETY: `fd` is an open pidfd that the `AsyncFd` now owns for as long as it lives.
+        let registered = unsafe {
+            tokio::io::unix::AsyncFd::register_with_interest(fd, tokio::io::Interest::READABLE)
+        };
+        if let Ok(a) = registered {
+            let _ = a.readable().await;
+            return;
+        }
+    }
+    while unit::same_process(pid, start_time) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -954,6 +1207,20 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .as_ref()
         .map(|c| PathBuf::from(c.as_str()))
         .ok_or_else(|| error(ErrorCode::InvalidParams, "cwd: the folder the job runs in"))?;
+    // A session's job works in the session's own worktree (or a folder inside it), whatever folder the request names.
+    let worktree = match &c.sid {
+        Some(sid) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
+            error(
+                ErrorCode::NotAllowed,
+                format!("session {sid} is not held by this hub"),
+            )
+        })?),
+        None => None,
+    };
+    let cwd = match &worktree {
+        Some(wt) => confined(&cwd, wt)?,
+        None => cwd,
+    };
     if let Some(sid) = &c.sid {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
@@ -998,19 +1265,50 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
     let spec = ExecSpec {
         starter: c.sid.clone().map_or(Starter::User, Starter::Session),
         cwd,
+        worktree,
         argv: p.argv.iter().map(|a| a.to_string()).collect(),
         timebox: Duration::from_secs(p.timebox_s.unwrap_or(3600)),
         kind,
         container,
     };
-    let id = runner(f)?
+    let r = runner(f)?;
+    let id = r
         .start(spec)
         .await
         .map_err(|r| error(ErrorCode::InvalidParams, r.message))?;
-    Ok(Started {
-        text: format!("job {id} runs: end your turn; you will be woken with the result"),
-        id,
-    })
+    let text = if r.is_queued(&id) {
+        format!(
+            "job {id} is queued (the machine is full); it starts when a slot frees: end your turn, you will be woken with the result"
+        )
+    } else {
+        format!("job {id} runs: end your turn; you will be woken with the result")
+    };
+    Ok(Started { text, id })
+}
+
+/// CWD (a true name) when it is WORKTREE or inside it, else a refusal that says so.
+fn confined(cwd: &Path, worktree: &Path) -> Result<PathBuf, Error> {
+    let real = |p: &Path| {
+        std::fs::canonicalize(p).map_err(|_| {
+            error(
+                ErrorCode::InvalidParams,
+                format!("{} is not a folder", p.display()),
+            )
+        })
+    };
+    let (c, w) = (real(cwd)?, real(worktree)?);
+    if c.starts_with(&w) {
+        Ok(c)
+    } else {
+        Err(error(
+            ErrorCode::NotAllowed,
+            format!(
+                "{} is outside your worktree {}: a job runs in your worktree or a folder inside it",
+                cwd.display(),
+                w.display()
+            ),
+        ))
+    }
 }
 
 fn no_job(id: &str) -> Error {
@@ -1052,7 +1350,7 @@ pub async fn log(f: &Front, _: &Caller, p: LogParams) -> Result<LogSlice, Error>
         from,
         next: more.then(|| from + n as u64),
         lines,
-        running: row.status == ExecStatus::Running,
+        running: matches!(row.status, ExecStatus::Running | ExecStatus::Queued),
     })
 }
 

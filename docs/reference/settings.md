@@ -194,6 +194,25 @@ The MCP servers agents get: `coordination' and `search'.
 | `:agents` | `never` |
 | `:schema` | `(list-of (enum coordination search))` |
 
+## drgnx-agents-net-hosts
+
+The hosts a job that was granted network may reach, per tier: an alist TIER → list of "host:port" strings.
+`packages' (the tier of a granted network) is the package registries of crates.io, npm and PyPI; `provider-only'
+reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `((packages "crates.io:443" "index.crates.io:443" "static.crates.io:443" "registry.npmjs.org:443" "pypi.org:443" "files.pythonhosted.org:443"))` |
+| Type | `sexp` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"NetHosts"` |
+| `:agents` | `never` |
+| `:schema` | `(alist symbol (list-of (string :match ":[0-9]+\\'")))` |
+
 ## drgnx-agents-no-progress-tokens
 
 Tokens per changed line of task work over which the supervisor pauses the session.
