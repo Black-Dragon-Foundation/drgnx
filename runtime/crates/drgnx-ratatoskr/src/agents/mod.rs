@@ -133,6 +133,19 @@ impl Hub {
         self.find(id)?.pause_after_tool()
     }
 
+    /// What the supervisor reads of every session the hub holds.
+    pub fn observations(&self) -> Vec<crate::supervisor::Obs> {
+        let all: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();
+        all.iter().map(|s| s.observe()).collect()
+    }
+
+    /// The supervisor found the session silent: its wait is a `stalled` step.
+    pub fn mark_stalled(&self, id: &str) {
+        if let Ok(s) = self.find(id) {
+            s.mark_stalled();
+        }
+    }
+
     /// Every step as it closes (the `step` row, written first).
     pub fn subscribe_steps(&self) -> tokio::sync::broadcast::Receiver<StepEvent> {
         self.steps.0.subscribe()

@@ -629,6 +629,24 @@ Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) a
 your login. `pace/get` gives, per meter, the share used, the rate per hour (linear over the last 24 hours of readings)
 and when the window would run out at that rate, unless it resets first. Its numbers are estimates.
 
+## The supervisor
+
+The hub looks at every session once a second (no model call) and pauses one that is stuck: the agent stops after
+the tool call it is running, the queue is held, and a `supervisor` card offers fixes (restart, raise the time box,
+kill the stray process, move to another model) and a `supervisor` event is sent. Each rule fires once until its
+condition clears. A silent session also gets a `stalled` step on the timeline.
+
+| Rule | Holds when | Setting |
+|---|---|---|
+| `silent` | no update for the time of its kind of work (chats are brainstorming) | `drgnx-agents-silent-after` (600 s task, 1800 s brainstorm) |
+| `repeat` | the same tool call this many times in one turn | `drgnx-agents-repeat-limit` (3) |
+| `no-progress` | task work only: tokens per changed line over the limit | `drgnx-agents-no-progress-tokens` (20000) |
+| `dead-wait` | the session waits for a job whose row or process is gone | |
+| `lease` | the task's lease is not renewed for two lease intervals | |
+| `refusals` | waits refused in one turn reach the limit | `drgnx-agents-wait-refusals` (3) |
+| `unrecorded` | its report names work it did not record | |
+| `manager-context` | a manager uses this share of its window; only a card, the manager is rotated | `drgnx-agents-manager-context` (0.7) |
+
 ## Tests
 
 - `test/unit/coord-test.el`, `coord-mcp-test.el`, `hub-agents-test.el`, `agents-mirror-test.el`, `coord-delivery-test.el`

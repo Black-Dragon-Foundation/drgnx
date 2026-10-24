@@ -268,6 +268,20 @@ impl Runner {
         self.inner.get()?.row(id)
     }
 
+    /// Whether the job's row says running but its process is gone (the supervisor's `dead-wait`).
+    pub fn process_gone(&self, id: &str) -> bool {
+        let Some(i) = self.inner.get() else {
+            return false;
+        };
+        match i.meta(id) {
+            Some(m) => match (m.pid, m.start_time) {
+                (Some(p), Some(t)) => i.end(id).is_none() && !unit::same_process(p, t),
+                _ => false,
+            },
+            None => true,
+        }
+    }
+
     /// The jobs, newest first; SESSION only that session's, RUNNING only those that run.
     pub fn list(&self, session: Option<&str>, running: bool) -> Vec<ExecRow> {
         self.inner
