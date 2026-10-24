@@ -190,6 +190,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         Some(graph),
         Arc::new(ToBackend(backend.clone())),
     ));
+    front.tool_hub.bind(&front);
     let _ = front.dirs.set(crate::graph::StoreDirs {
         home,
         config: paths::config_dir(&env),
@@ -212,6 +213,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.mcp.restore().await;
     front.core.agents.open_store(runtime.clone());
     tokio::spawn(sessions::watch(front.clone()));
+    // a job's end wakes the session that started it
+    tokio::spawn(crate::agents::wake::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings

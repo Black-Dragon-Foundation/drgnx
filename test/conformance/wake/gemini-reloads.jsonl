@@ -1,0 +1,23 @@
+{"scenario": "wake/gemini-reloads", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 15 (Calls made 10): Gemini can load a session but not close or resume one: idle past agents-close-idle-after the hub ends its process without a session/close, and the job's end starts it again with session/load, then prompts it with the result."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-gemini\" :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--log\" \"$ROOT/acp.log\" \"--llm\" \"http://127.0.0.1:$port/v1/messages\")))) (drgnx-agents-close-idle-after 1))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:job_start {\"argv\": [\"sh\", \"-c\", \"cat $ROOT/gate\"]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "waiting"}}}, "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "waiting", "exit": "$number"}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/load\"", "within_ms": 20000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "within_ms": 20000}
+{"do": "file", "path": "$ROOT/acp.log", "lacks": "\"session/close\""}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"initialize\"", "count": 2}

@@ -674,6 +674,29 @@ budget lists in its data (`:unpriced-budget`) the profiles of its routes whose g
 `:price`, and warns (the proposal card, `:warnings` in the summary): the gateway cannot count what they spend.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
 
+### Jobs as tools, waking instead of polling (Ratatoskr)
+
+`norn/src/tools/jobs.rs` has the four job tools. They reach `exec/*` through `norn::tools::Hub::exec` as the calling
+session (`ToolHub::exec` in `coord.rs` calls `agent_core::serve` with an agent caller carrying the session id; the hub's
+own `Front` is bound once it is in its `Arc`). `job_result` and `job_log` of a running job of the caller are refused and
+counted (`Hub::wait_refused` → `Session::refuse_wait`); the permission gate refuses `execute` tool calls that wait
+(`session::is_wait_loop`) while the session has a job running, and at `agents-wait-refusals` the turn is cancelled
+(`stop_turn`).
+
+The runner keeps the running jobs by starter (`exec::Live`) and sends `JobEvent`s (`Queued`, `Admitted`, `Done`) on a
+broadcast channel. A session whose turn ends while `Live` has a job of its own goes to `waiting` and a `job-wait` step
+instead of `idle`; a prompt or a hub wake takes it out of `waiting` like out of `idle`. `agents::wake::run` (spawned by
+the server) turns `Done` into `Hub::wake`, which resumes a session closed on a job first (`session::resume_closed`: the
+recorded row, `session/resume` or `session/load`, transcript and queue read back) and prompts it with `Origin::Hub`; a
+queued hub prompt un-pauses the queue after a cancel. `Queued` and `Admitted` open and close the starter's
+`machine-queue` step (`Hooks.slots`, 4; `DRGNX_TEST_JOB_SLOTS` in test-hooks builds). `agents-close-idle-after` closes
+an idle session with a timer in the session itself.
+
+A session the hub starts gets `mcpServers: [{name: "drgnx", command: ratatoskr, args: [mcp-bridge, --socket, PATH]}]` in
+`session/new` (and `resume`/`load`): `agents::session::bridge` mints the socket with `Sessions::open` (owner: the hub),
+reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run a session's jobs unsandboxed when
+`DRGNX_TEST_PLAIN_JOBS` is set (the conformance container has no sandbox helper).
+
 ## Clashes (`core/drgnx-job-clash.el`)
 
 Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment only inside the reviewer:

@@ -9,6 +9,7 @@
 //! - [`deliver`]: delivery and take-back (`messages/retract`) (Task 24).
 //! - [`lock`]: a provider's launch options that make its CLI obey the hub (Task 9).
 //! - [`launch`]: the session's Gleipnir spec (Task 10).
+//! - [`wake`]: a job's end prompts the session that started it; a queue wait is a step (Task 15).
 
 pub mod deliver;
 pub mod launch;
@@ -16,6 +17,7 @@ pub mod lock;
 pub mod queue;
 pub mod session;
 pub mod transcript;
+pub mod wake;
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -111,6 +113,14 @@ impl Hub {
     /// says).  It never cancels a turn.
     pub fn prompt(&self, id: &str, text: String, origin: Origin) -> Result<(), Error> {
         self.find(id)?.prompt(text, origin)
+    }
+
+    /// A job's result for session ID: resumes the session first when it was closed while it waited, then prompts it
+    /// (a plain `session/prompt` from the hub; a turn when it waits or idles, else queued).
+    pub async fn wake(&self, front: &Front, id: &str, text: String) -> Result<(), Error> {
+        session::resume_closed(self, front, id)
+            .await?
+            .prompt(text, Origin::Hub)
     }
 
     /// Pause: cancel the turn once the tool call running now completes, and hold the queue.

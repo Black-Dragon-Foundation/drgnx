@@ -1,16 +1,22 @@
-{"scenario": "timeline/machine-queue-step", "requires": ["v1", "fake-backend", "test-hooks"], "pending": "Task 15: the step is written by the task that owns the event", "doc": "Task 19: a job waiting for a machine is a machine-queue step on the timeline."}
+{"scenario": "timeline/machine-queue-step", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19 and 15: a job waiting for a free machine slot (one slot here) is a machine-queue step of the session that started it: the session says it waits for the machine, and the step closes when the job gets its slot."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
-{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
-{"do": "start", "hub": "h"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\" \"--llm\" \"http://127.0.0.1:$port/v1/messages\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1", "DRGNX_TEST_JOB_SLOTS": "1"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:job_start {\"argv\": [\"sh\", \"-c\", \"cat $ROOT/gate\"]}\ncall:job_start {\"argv\": [\"true\"]}"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "waiting-on": "machine"}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "machine-queue"}}}, "within_ms": 20000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "$sid"}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"steps": {"$contains": [{"class": "machine-queue"}]}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"steps": {"$contains": [{"class": "machine-queue", "end": "$number"}]}}}}

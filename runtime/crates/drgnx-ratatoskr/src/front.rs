@@ -69,6 +69,8 @@ pub struct Front {
     pub writer: Writer,
     /// The coordination tools' shared state, on the same writer (for the MCP hosting).
     pub tools: Arc<norn::tools::Coord>,
+    /// The tools' view of the hub; [`ToolHub::bind`] gives it the front once that is in its `Arc`.
+    pub tool_hub: Arc<ToolHub>,
     /// The coordination tools (`norn::tools::tools`).
     pub tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]>,
     /// The tools on the sessions' sockets and for outside bridges ([`crate::sessions`]).
@@ -131,7 +133,9 @@ impl Front {
             signals: signals.clone(),
             editors: editors.clone(),
             settings: settings.clone(),
+            front: std::sync::OnceLock::new(),
         });
+        let tool_hub = hub.clone();
         let uid = rustix::process::geteuid().as_raw();
         let coord = norn::tools::Coord::new(coord_db.clone(), hub);
         let tools = Arc::new(match graph {
@@ -159,6 +163,7 @@ impl Front {
             dirs: OnceLock::new(),
             core: crate::agent_core::Core::default(),
             tools,
+            tool_hub,
             tool_list,
             forward,
             refusals: Mutex::new(Refusals::default()),
