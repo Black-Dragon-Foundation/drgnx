@@ -1,0 +1,21 @@
+{"scenario": "history/a-ui-change-is-one-tx", "requires": ["v1", "fake-backend"], "doc": "settings/record (unified-settings Task 24; design §12): one write in Settings is one user-class tx of tool ui:settings on kind option, data {value, file, line}; the same req again answers the first tx and writes nothing; a removal leaves no value; an undo carries reverts."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-1", "changes": [{"id": "option:global:fill-column", "value": "80", "file": "$ROOT/config/settings.el", "line": 3}, {"id": "option:global:mode/c-mode:tab-width", "value": "4", "file": "$ROOT/config/settings.el", "line": 5}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"tx": "$capture:t1"}}}
+{"do": "sql_expect", "sql": "select count(*), count(distinct created_tx), min(origin) from entity where kind = 'option'", "rows": [[2, 1, "recorded"]]}
+{"do": "sql_expect", "sql": "select t.id, t.actor, t.class, t.tool, t.req, t.project from tx t where t.id = (select max(created_tx) from entity where kind = 'option')", "rows": [["$t1", "user", "user", "ui:settings", "settings stamp-1", null]]}
+{"do": "sql_expect", "sql": "select id, project, json_extract(data, '$.value'), json_extract(data, '$.file'), json_extract(data, '$.line') from entity where kind = 'option' order by id", "rows": [["option:global:fill-column", null, "80", "$ROOT/config/settings.el", 3], ["option:global:mode/c-mode:tab-width", null, "4", "$ROOT/config/settings.el", 5]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-1", "changes": [{"id": "option:global:fill-column", "value": "80", "file": "$ROOT/config/settings.el", "line": 3}, {"id": "option:global:mode/c-mode:tab-width", "value": "4", "file": "$ROOT/config/settings.el", "line": 5}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"tx": "$t1"}}}
+{"do": "sql_expect", "sql": "select count(*) from tx where tool = 'ui:settings'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-2", "changes": [{"id": "option:global:fill-column", "value": null, "file": "$ROOT/config/settings.el"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tx": "$number"}}}
+{"do": "sql_expect", "sql": "select json_type(data, '$.value'), ver from entity where id = 'option:global:fill-column'", "rows": [[null, 2]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-3", "reverts": "$t1", "changes": [{"id": "option:global:fill-column", "value": "80", "file": "$ROOT/config/settings.el", "line": 3}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"tx": "$number"}}}
+{"do": "sql_expect", "sql": "select reverts, (select json_extract(data, '$.value') from entity where id = 'option:global:fill-column') from tx where req = 'settings stamp-3'", "rows": [["$t1", "80"]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-4", "reverts": 99999, "changes": [{"id": "option:global:fill-column", "value": "1", "file": "$ROOT/config/settings.el"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params"}}}
+{"do": "sql_expect", "sql": "select count(*) from tx where req like 'settings %'", "rows": [[3]]}

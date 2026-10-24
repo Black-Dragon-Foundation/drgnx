@@ -62,7 +62,7 @@ pub struct SourceRef {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ParsedEntity {
     pub id: ParsedId,
-    /// spec, plan, task, step, ruling, todo, file, commit or branch.
+    /// spec, plan, task, step, ruling, todo, file, commit or branch; option from a repository's `.drgnx/settings.el`.
     pub kind: Bounded<String, 32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<Text>,

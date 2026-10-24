@@ -252,7 +252,7 @@ pub fn for_caller(
                 }
             }
             What::All => star = true,
-            What::Task(_) => continue,
+            What::Task(_) | What::OptionsGlobal | What::OptionsProject => continue,
         }
         if let Some(t) = g.expires {
             expires = Some(expires.map_or(t, |e: f64| e.min(t)));
@@ -318,19 +318,24 @@ pub(crate) mod testkit {
         TxMeta::new("user", Class::User, "test")
     }
 
-    /// The project SLUG (a made-up root commit), registered: its `n`.
-    pub(crate) fn project(conn: &mut Connection, slug: &str) -> i64 {
+    /// The project SLUG, as git would resolve it (a made-up root commit, the root `/nowhere/SLUG`).
+    pub(crate) fn project_ref(slug: &str) -> ProjectRef {
         let sha: String = Sha1::digest(slug.as_bytes())
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        let root = ProjectRef {
+        ProjectRef {
             id: format!("project:{}", &sha[..12]),
             root: PathBuf::from("/nowhere").join(slug),
             slug: slug.into(),
             root_commit: Some(sha.clone()),
             roots: vec![sha],
-        };
+        }
+    }
+
+    /// The project SLUG ([`project_ref`]), registered: its `n`.
+    pub(crate) fn project(conn: &mut Connection, slug: &str) -> i64 {
+        let root = project_ref(slug);
         write(conn, TxMeta::new("hub", Class::System, "test"), |tx| {
             project::register(tx, &root)
         })

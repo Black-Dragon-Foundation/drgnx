@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod messages;
 pub mod meta;
 pub mod notices;
+pub mod options;
 pub mod prune;
 pub mod review;
 pub mod spend;

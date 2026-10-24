@@ -109,6 +109,13 @@ the refusal text. Urdr knows no kind: norn registers drgnx's rules. `entity::{cr
 writer calls `guard::check_key`. An unregistered kind or key passes; a class other than the registered one gets
 `Refused(<text>)`.
 
+A kind may also carry a rule (`guard::register_rule(&mut guard, kind, rule)`) that decides from the write itself:
+`rule(conn, &meta, at, Target { id, project, origin })`, where `project` is the entity's project after the write (an
+update's new one) and `origin` the origin a create gives it (`None` for a write to a stored entity, which keeps its
+origin). Every entity write (`create`, `update`, `retire`, `unretire`, revert and restore, import) calls
+`guard::check_entity(tx, kind, target)`, which runs the kind's class check and then its rule. norn registers one
+rule, for kind `option` (below, "Settings history and grants").
+
 ## History (Task 3)
 
 `urdr::graph::hist` reads and rewrites the past. It is policy-free: the caller checks the class (user only).
@@ -491,6 +498,67 @@ arguments.
   are the user's"). `entity::{create, update, retire}` check it on every path, so a proposed tx, an import (class
   `system`), a parsed entity (class `system`) or any agent tool that names kind `grant` is refused;
   `grants::{create, revoke}` check it first too. Test: `grants::tests::every_agent_reachable_write_is_refused`.
+
+## Settings history and grants (Urdr Task 10b)
+
+Built in the unified-settings plan (its Task 23; design §12, §13), in `norn::options` and `norn::grants`. The file
+stays the truth for a setting; the store records its history as entities of kind `option`.
+
+- **Ids** (`options::parse_id(&str) -> Result<OptionId, BadId>`; `OptionId { scope, dir, mode, var }` prints back
+  as its id):
+  - `option:global:<var>` and `option:global:mode/<mode>:<var>` (`settings.el`);
+  - `option:private/<project>:[dir/<sub>/:][mode/<mode>:]<var>` (your private workspace file) and the same with
+    `shared/` (the repository's `.drgnx/settings.el`).
+  - `<project>` is the Urdr project id without `project:` (`[a-z0-9-]`), or `root-<12 hex of sha256(true root)>` for
+    a folder with no Urdr project. `OptionId::project()` gives `project:<project>`, or `None` for a global id and a
+    `root-` folder.
+  - A dir is relative, ends in `/`, and has no empty, `.` or `..` part; a mode has no `/`; the variable comes last,
+    is not empty and does not start with `dir/` or `mode/` (it may hold `/` and `:`). No part holds whitespace or a
+    control character, and an id is at most 1024 bytes.
+- **The `options` grant** is a grant (above) with `access: "options"`, `what: "options:global" | "options:project"`
+  and optional `names`: 1 to 64 globs, `*` the only wildcard, no `/`. `grants::create_options(tx, who, what, names,
+  expires)` makes one (user class only, as every grant). An `options` grant opens no reads, and a `read` or
+  `edit-user-tasks` grant never names an `options:` scope or carries names; a row that mixes them opens nothing.
+- **The rule** (`options::rule`, registered by `grants::register`), on every write of kind `option`:
+  - every class: the id parses;
+  - the user: passes;
+  - an agent (`Class::Agent`, a proposed tx included): the name is not on the deny-list (`DENIED`); for a private or
+    shared id, the agent's project is the id's project and the entity's `project` column is that project
+    (`NOT_ITS_PROJECT`); a global id has no project; and an active `options` grant whose `who` is the agent's
+    project, profile or session, whose `what` is the id's scope (`options:project` covers the agent's own project's
+    private and shared ids, never a `root-` folder) and whose `names` match (`NO_GRANT` otherwise);
+  - the tracker scan (class `system`, tool `scan`: `graph/put-parsed`; `options::scan_may_write`, unified-settings
+    Task 24): a repository's `.drgnx/settings.el` describes the repository, never your global or private settings,
+    so only a shared id ("settings are the user's" otherwise), made `parsed` by a create (a write to a stored one
+    keeps its origin: a shared setting's history holds your Settings changes and the repository's alike), in the
+    project the id names, live (`NOT_THE_REPOSITORYS`; a `root-` folder: no project). What it records applies
+    nothing: workspace trust decides what the file's values do;
+  - an outside agent, the hub and an import (`Class::Ext`, `Class::System` with another tool): refused ("settings
+    are the user's").
+  - `options::may_write(conn, &caller, target, now)` is the same check without a write (the hub's `settings_change`
+    asks it before it records a proposed tx).
+- **The deny-list's name half** (`options::deny::is_denied(name)`, call 9): the names, prefixes and suffixes of
+  `test/fixtures/settings-deny.json` (drgnx's and Emacs's security settings, `eval` and `mode`, `drgnx-trust-*`,
+  `safe-local-variable-*`, Emacs's risky endings and design §4.4's program endings, case folded). The test
+  `options::tests::deny_table` keeps the Rust lists equal to the file and runs its cases; the editor adds what only
+  Lisp knows (`:agents never`, `:workspace code`).
+- **`graph/put-parsed`** (Task 24) takes `option` entities from a `file` source whose path ends in
+  `/.drgnx/settings.el` only: each id a well-formed shared id, `data` only `value` (a text), `file` (the source's
+  path) and `line` (a number). Anything else refuses the source, which stores nothing (`norn::parsed`). The entity's
+  project is the repository's (the source's folder, resolved as for every parsed entity); the guard checks it again.
+- **`settings/record`** (Task 24; `norn::write::options::{project_of, meta, record}`; the method:
+  [hub.md](hub.md#settings-history)): one call is one tx of the editor's, its `tool` the call's, its `req`
+  `settings <req>`, `reverts` the tx it undoes (which must exist), and `project` the ids' (one project per call; a
+  project the store does not know is refused). Each change makes its entity (origin `recorded`, `data {value, file,
+  line}`), brings back a retired one, or gives it a new version; a removed setting's `data` has no `value`.
+- Tests: `options::tests::{id_grammar, project_is_the_ids_project, deny_table, globs_match_star_only}`,
+  `grants::tests::{every_agent_reachable_write_is_refused, an_options_grant_allows_its_names_only,
+  project_grant_covers_private_and_shared, options_grants_are_well_formed_and_open_no_reads}`,
+  `write::options::tests::{one_tx_per_call, a_tx_of_another_project_is_refused_in_the_write,
+  the_project_is_the_ids_live_project, a_retry_is_one_tx,
+  removed_is_null, reverts_is_recorded, a_retired_option_comes_back}`, `norn/tests/parsed.rs`
+  `a_repositorys_settings_file_brings_its_shared_options`, `urdr::graph::guard::tests::{a_rule_decides_from_the_target,
+  a_rule_sees_a_creates_origin_only}`; rows `history/*`.
 
 ## Trust (Task 10)
 

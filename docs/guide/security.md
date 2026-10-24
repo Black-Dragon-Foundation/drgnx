@@ -307,6 +307,26 @@ widens what it sees.
 - Text agents wrote is shown to other agents as data, not instructions, fenced with its author and project, even
   under a grant and even to the agent that wrote it.
 
+## Settings grants
+
+drgnx's store keeps the history of your settings (who changed what, and when). Only you change settings. An agent
+may change one only under a **settings grant** you gave, and the store checks it on every write, whatever path the
+write takes.
+
+- A settings grant is for a project, a profile or one session, like any grant, and opens either your **global
+  settings** (`settings.el`) or **its project's settings** (the agent's own project's private and shared workspace
+  files, never another project's). It may name the settings it covers, with `*` as a wildcard (`fill-column`,
+  `python-*`); without names it covers every setting the hard deny-list leaves. It may expire.
+- **The hard deny-list is never grantable.** No grant lets an agent change drgnx's security settings (agent
+  profiles, routes, OpenRouter limits, providers, the sandbox switches, keys, modules, `drgnx-trust-*`, your Lisp
+  files), Emacs's (`enable-local-variables`, `enable-local-eval`, `ignored-local-variables`, `safe-local-variable-*`,
+  `trusted-content`, `custom-file`, `load-path`, `package-archives`), or any setting whose name says it holds code or
+  a program (`…-hook`, `…-function`, `…-program`, `…-command`, `…-interpreter`, `…-executable`, `…-args`, and Emacs's
+  other risky endings).
+- A settings grant lets an agent read nothing it could not read before.
+- Outside agents (not started by drgnx) never change settings, even under a grant.
+- Only you make settings grants, as every grant.
+
 ## Secrets in the store
 
 An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store

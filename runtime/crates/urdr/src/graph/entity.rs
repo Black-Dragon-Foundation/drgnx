@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::guard;
+use super::guard::{self, Target};
 use super::search::fts_put;
 use super::tx::{Class, Tx};
 use super::writer::WriteError;
@@ -218,6 +218,15 @@ fn field_value(e: &Ent, field: &str) -> Value {
     }
 }
 
+/// What the guard is told of a write that leaves E's id and project as they are.
+fn target(e: &Ent) -> Target<'_> {
+    Target {
+        id: &e.id,
+        project: e.project,
+        origin: None,
+    }
+}
+
 /// Copy entity E's current row to `entity_hist`, valid until this tx: its fields, lease, origin and retirement.
 fn to_hist(tx: &Tx<'_>, e: &Ent) -> Result<(), WriteError> {
     tx.sql().execute(
@@ -251,7 +260,15 @@ fn to_hist(tx: &Tx<'_>, e: &Ent) -> Result<(), WriteError> {
 /// Insert a new entity at `ver = 1` with its `field_tx` and FTS row; a duplicate `id` is `Refused("id exists")`.
 /// The guard is checked first.
 pub fn create(tx: &mut Tx<'_>, new: EntityNew) -> Result<Ent, WriteError> {
-    guard::check(tx.guard(), tx.meta(), &new.kind)?;
+    guard::check_entity(
+        tx,
+        &new.kind,
+        Target {
+            id: &new.id,
+            project: new.project,
+            origin: Some(new.origin),
+        },
+    )?;
     if !new.data.is_object() {
         return Err(WriteError::Refused("data must be a JSON object".into()));
     }
@@ -375,7 +392,15 @@ pub fn update(
     changes: Changes,
 ) -> Result<Update, WriteError> {
     let cur = by_n(tx.sql(), n)?.ok_or_else(|| WriteError::Refused(format!("no entity {n}")))?;
-    guard::check(tx.guard(), tx.meta(), &cur.kind)?;
+    guard::check_entity(
+        tx,
+        &cur.kind,
+        Target {
+            id: &cur.id,
+            project: changes.project.unwrap_or(cur.project),
+            origin: None,
+        },
+    )?;
     if let Some(v) = expect_ver
         && v != cur.ver
     {
@@ -481,7 +506,7 @@ pub fn update(
 /// The guard is checked, as for [`update`].
 pub fn retire(tx: &mut Tx<'_>, n: i64) -> Result<(), WriteError> {
     let cur = by_n(tx.sql(), n)?.ok_or_else(|| WriteError::Refused(format!("no entity {n}")))?;
-    guard::check(tx.guard(), tx.meta(), &cur.kind)?;
+    guard::check_entity(tx, &cur.kind, target(&cur))?;
     if cur.retired_tx.is_some() {
         return Ok(());
     }
@@ -499,7 +524,7 @@ pub fn retire(tx: &mut Tx<'_>, n: i64) -> Result<(), WriteError> {
 pub fn unretire(tx: &mut Tx<'_>, n: i64) -> Result<bool, WriteError> {
     let cur = by_n(tx.sql(), n)?.ok_or_else(|| WriteError::Refused(format!("no entity {n}")))?;
     if cur.retired_tx.is_none() {
-        guard::check(tx.guard(), tx.meta(), &cur.kind)?;
+        guard::check_entity(tx, &cur.kind, target(&cur))?;
         return Ok(false);
     }
     set_version(tx, &cur, &Snap::of(&cur), Some(None))
@@ -541,7 +566,15 @@ pub(crate) fn set_version(
     snap: &Snap,
     retired: Option<Option<i64>>,
 ) -> Result<bool, WriteError> {
-    guard::check(tx.guard(), tx.meta(), &cur.kind)?;
+    guard::check_entity(
+        tx,
+        &cur.kind,
+        Target {
+            id: &cur.id,
+            project: snap.project,
+            origin: None,
+        },
+    )?;
     let old = Snap::of(cur);
     let mut changed: Vec<&str> = Vec::new();
     if snap.project != old.project {

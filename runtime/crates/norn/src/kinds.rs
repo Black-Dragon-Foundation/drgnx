@@ -12,10 +12,11 @@ pub struct LinkKind {
     pub affects_ready: bool,
 }
 
-/// The entity kinds of storage §5.3 (its table, plus `worktree`, the end of `in_worktree`), plus `project`.
+/// The entity kinds of storage §5.3 (its table, plus `worktree`, the end of `in_worktree`), plus `project`, plus
+/// `option` (a setting's history: Urdr Task 10b, unified-settings design §12).
 pub const ENTITY_KINDS: &[&str] = &[
     "task", "decision", "note", "grant", "agent", "session", "commit", "branch", "file", "symbol",
-    "spec", "plan", "step", "ruling", "todo", "worktree", "project",
+    "spec", "plan", "step", "ruling", "todo", "worktree", "project", "option",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -106,7 +107,8 @@ mod tests {
             ENTITY_KINDS,
             [
                 "task", "decision", "note", "grant", "agent", "session", "commit", "branch",
-                "file", "symbol", "spec", "plan", "step", "ruling", "todo", "worktree", "project"
+                "file", "symbol", "spec", "plan", "step", "ruling", "todo", "worktree", "project",
+                "option"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS

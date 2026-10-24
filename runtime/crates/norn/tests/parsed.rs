@@ -385,7 +385,140 @@ fn refuses_non_parsed_kinds() {
         json!({"sources": [{"source": {"kind": "commit"}, "entities": [{"id": "commit:/x/y", "kind": "commit"}]}]}),
     );
     assert_eq!(a.refused.len(), 1);
+    // a branch source holds branches named `branch:NAME`
+    let dir = Path::new(p).parent().unwrap().display().to_string();
+    for e in [
+        json!({"id": "branch:", "kind": "branch", "data": {"repo": dir}}),
+        json!({"id": "commit:aaaa1111", "kind": "commit", "data": {"repo": dir}}),
+    ] {
+        let a = put(
+            &mut c,
+            &f.deny,
+            json!({"sources": [{"source": {"kind": "branch"}, "entities": [e]}]}),
+        );
+        assert_eq!(a.refused.len(), 1, "{e}");
+    }
     assert_eq!(count(&c, "select count(*) from entity"), 0);
+    let a = put(
+        &mut c,
+        &f.deny,
+        json!({"sources": [{"source": {"kind": "branch"}, "entities": [{"id": "branch:main", "kind": "branch", "data": {"repo": dir}}]}]}),
+    );
+    assert_eq!((a.changed, a.refused.len()), (1, 0), "{a:?}");
+}
+
+/// A repository's `.drgnx/settings.el` (unified-settings Task 24): its shared settings come in as parsed options, the
+/// content compare and the retiring as for any file; a global or private id there, an option of another file, a
+/// malformed id or `data` beyond `value`, `file` and `line` refuses the source, which then stores nothing.
+#[test]
+fn a_repositorys_settings_file_brings_its_shared_options() {
+    let f = fx();
+    let mut c = db();
+    let file = "/w/a/.drgnx/settings.el";
+    let shared = "option:shared/root-0123456789ab:fill-column";
+    let source = |path: &str, id: &str, data: Value| {
+        json!({"sources": [{"source": {"kind": "file", "path": path}, "mtime": 1.0,
+                            "entities": [{"id": id, "kind": "option", "data": data}]}]})
+    };
+    let good = json!({"value": "80", "file": file, "line": 3});
+    let a = put(&mut c, &f.deny, source(file, shared, good.clone()));
+    assert_eq!((a.changed, a.refused.len()), (1, 0), "{a:?}");
+    let e = entity::by_id(&c, shared).unwrap().unwrap();
+    assert_eq!(
+        (e.kind.as_str(), e.origin, e.project, e.data.clone()),
+        ("option", Origin::Parsed, None, good.clone())
+    );
+    // The same file again writes nothing; a value only is enough; the file without it retires it.
+    let a = put(&mut c, &f.deny, source(file, shared, good.clone()));
+    assert_eq!((a.changed, a.retired), (0, 0));
+    let a = put(
+        &mut c,
+        &f.deny,
+        source(file, shared, json!({"value": "100"})),
+    );
+    assert_eq!((a.changed, a.refused.len()), (1, 0), "{a:?}");
+    let a = put(
+        &mut c,
+        &f.deny,
+        json!({"sources": [{"source": {"kind": "file", "path": file}, "entities": []}]}),
+    );
+    assert_eq!(a.retired, 1);
+    let before = count(&c, "select count(*) from entity");
+    for (path, id, data, why) in [
+        (
+            f.plan.as_str(),
+            shared,
+            good.clone(),
+            "options come only from a repository's .drgnx/settings.el",
+        ),
+        (
+            "/w/a/not.drgnx/settings.el",
+            shared,
+            good.clone(),
+            "options come only from",
+        ),
+        (
+            file,
+            "option:global:fill-column",
+            good.clone(),
+            "holds only shared settings",
+        ),
+        (
+            file,
+            "option:global:mode/c-mode:fill-column",
+            good.clone(),
+            "holds only shared settings",
+        ),
+        (
+            file,
+            "option:private/root-0123456789ab:fill-column",
+            good.clone(),
+            "holds only shared settings",
+        ),
+        (
+            file,
+            "option:shared/:fill-column",
+            good.clone(),
+            "not an option id",
+        ),
+        (
+            file,
+            shared,
+            json!({"value": "80", "repo": "/w/b"}),
+            "an option's data is",
+        ),
+        (
+            file,
+            shared,
+            json!({"value": "80", "path": file}),
+            "an option's data is",
+        ),
+        (
+            file,
+            shared,
+            json!({"value": "80", "file": "/w/b/.drgnx/settings.el"}),
+            "an option's data is",
+        ),
+        (file, shared, json!({"value": 80}), "an option's data is"),
+        (
+            file,
+            shared,
+            json!({"value": "80", "line": "3"}),
+            "an option's data is",
+        ),
+    ] {
+        let a = put(&mut c, &f.deny, source(path, id, data.clone()));
+        assert_eq!((a.changed, a.refused.len()), (0, 1), "{id} {data}");
+        assert!(a.refused[0].why.contains(why), "{id} {data}: {a:?}");
+    }
+    assert_eq!(count(&c, "select count(*) from entity"), before);
+    assert_eq!(
+        count(
+            &c,
+            "select count(*) from entity where kind = 'option' and retired_tx is null"
+        ),
+        0
+    );
 }
 
 #[test]

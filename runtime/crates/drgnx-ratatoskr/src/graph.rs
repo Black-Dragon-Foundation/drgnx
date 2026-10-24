@@ -10,6 +10,8 @@
 //!   editor (`tasks/*`). Every one is user class at the registry; the writes are the caller's tx (`coord::tx_meta`:
 //!   the editor's `user`, the backend's connection `backend` of class `system`), so the store's own class rules (grants
 //!   and `setting:*` keys are the user's) apply again, and the backend's connection is refused here first.
+//! - **The settings' history** (unified-settings Task 24): `settings/record`, the editor's report of a settings file's
+//!   write, one tx of kind `option` per call ([`norn::write::options`]).
 //! - **Cards** ([`settle`]): an `access` card settles into a grant (`session`, `project`, `profile`) or nothing
 //!   (`refuse`, `resolved`), a `close` card into done (`accept`, at the version the card names) or a notice
 //!   (`reject`, `resolved`); never a grant or a close from the backend's connection. The requester hears either way.
@@ -30,10 +32,12 @@ use norn::scope::{self, Caller as StoreCaller};
 use norn::store::{CoordError, WTx};
 use norn::tools::{Coord, GraphStore, ToolSets};
 use norn::tracker::{self, TaskAnswer, TaskOp};
+use norn::write::options as write_options;
 use norn::write::{cards, messages, notices};
 use runstav::methods::Params;
 use runstav::methods::coord::Settled;
 use runstav::methods::graph as api;
+use runstav::methods::settings as settings_api;
 use runstav::methods::tasks as tasks_api;
 use runstav::wire::{Error, ErrorCode};
 use serde::Serialize;
@@ -241,6 +245,7 @@ pub async fn serve(
         Params::GraphScrub(_) => scrub_of(w, caller).await,
         Params::GraphSettings(p) => settings(w, caller, p).await,
         Params::GraphPrivacy(p) => privacy(w, tools, dirs, caller, p).await,
+        Params::SettingsRecord(p) => settings_record(w, tools, caller, p).await,
         Params::TasksReady(p) => tasks_ready(w, p).await,
         Params::TasksFind(p) => tasks_find(w, p).await,
         Params::TasksWrite(p) => tasks_write(w, caller, p).await,
@@ -310,6 +315,48 @@ pub async fn record(
         w.signals.wrote();
     }
     Ok(json!(written.value))
+}
+
+/// `settings/record` (unified-settings Task 24; design §12): one write of a settings file as one tx of the editor's on
+/// kind `option` (`norn::write::options`), keyed by the call's `req`, in the project its ids name (read before the
+/// write, checked again in it). Never the backend's connection's.
+async fn settings_record(
+    w: &Writer,
+    tools: &Coord,
+    caller: &Caller,
+    p: settings_api::RecordParams,
+) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed(
+            "",
+            "only the editor records settings: the backend's connection never does",
+        ));
+    }
+    for (i, c) in p.changes.iter().enumerate() {
+        if let Err(e) = norn::options::parse_id(&c.id) {
+            return Err(invalid(
+                &format!("changes[{i}].id"),
+                format!("not an option id ({e})"),
+            ));
+        }
+    }
+    let (g, _) = store(tools)?;
+    let changes = p.changes.clone();
+    let project = g
+        .pool
+        .with(move |conn| write_options::project_of(conn, &changes))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(fail)?;
+    let meta = write_options::meta(coord::tx_meta(caller, "settings/record"), &p, project);
+    let written = write(&g.writer, meta, move |tx| {
+        write_options::record(tx, &p.changes)
+    })
+    .await?;
+    if !written.replayed {
+        w.signals.wrote();
+    }
+    Ok(json!(settings_api::RecordAnswer { tx: written.tx }))
 }
 
 /// The test seam between a put's or a record's resolve (git, seconds) and its write: a test holds one there.

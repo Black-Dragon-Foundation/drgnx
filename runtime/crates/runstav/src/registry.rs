@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 77, "{names:?}");
+        assert_eq!(names.len(), 78, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
-    const FRONT_WRITES: [&str; 27] = [
+    const FRONT_WRITES: [&str; 28] = [
         "cards/settle",
         "messages/send",
         "messages/mark",
@@ -451,6 +451,8 @@ mod tests {
         "graph/settings",
         "graph/privacy",
         "tasks/write",
+        // the settings' history (unified-settings Task 24)
+        "settings/record",
     ];
 
     /// The store's methods that read only (Urdr Task 15b), the front's too.
@@ -661,7 +663,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 50);
+        assert_eq!(with, 51);
     }
 
     #[test]

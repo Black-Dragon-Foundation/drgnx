@@ -6,12 +6,14 @@
 //! - [`read`]: the readers the writers and the tools need.
 //! - [`tools`]: the coordination tools, served by `mimir`.
 //! - Schema 7 (the Urdr plan): [`kinds`], [`deny`], [`scope`], [`grants`], [`trust`], [`project`] (the policy),
-//!   [`migrate7`] (6 → 7), [`parsed`] (the scan's door), [`privacy`] (the opt-in), [`tracker`] (tasks agents share).
+//!   [`migrate7`] (6 → 7), [`parsed`] (the scan's door), [`privacy`] (the opt-in), [`tracker`] (tasks agents share),
+//!   [`options`] (settings history: kind `option`, its ids, the settings deny-list, the `options` grant's rule).
 
 pub mod deny;
 pub mod grants;
 pub mod kinds;
 pub mod migrate7;
+pub mod options;
 pub mod parsed;
 pub mod privacy;
 pub mod project;

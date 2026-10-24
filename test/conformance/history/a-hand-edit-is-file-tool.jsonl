@@ -1,0 +1,20 @@
+{"scenario": "history/a-hand-edit-is-file-tool", "requires": ["v1", "fake-backend"], "doc": "settings/record (unified-settings Task 24; design §12): a change drgnx did not make is recorded with tool file:<name>, your Lisp's effect with lisp:<file>, both user class; any other tool, a malformed id, or one record across two projects is invalid-params and writes nothing."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "settings/record", "params": {"tool": "file:settings.el", "req": "stamp-a", "changes": [{"id": "option:global:fill-column", "value": "100", "file": "$ROOT/config/settings.el", "line": 7}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"tx": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "settings/record", "params": {"tool": "lisp:config.el", "req": "stamp-b", "changes": [{"id": "option:global:fill-column", "value": "72", "file": "$ROOT/config/config.el", "line": 2}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"tx": "$number"}}}
+{"do": "sql_expect", "sql": "select tool, class, actor from tx where req like 'settings %' order by id", "rows": [["file:settings.el", "user", "user"], ["lisp:config.el", "user", "user"]]}
+{"do": "sql_expect", "sql": "select ver, json_extract(data, '$.value'), json_extract(data, '$.file') from entity where id = 'option:global:fill-column'", "rows": [[2, "72", "$ROOT/config/config.el"]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "settings/record", "params": {"tool": "scan", "req": "stamp-c", "changes": [{"id": "option:global:x", "value": "1", "file": "$ROOT/config/settings.el"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "tool"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "settings/record", "params": {"tool": "mcp:settings_change", "req": "stamp-d", "changes": [{"id": "option:global:x", "value": "1", "file": "$ROOT/config/settings.el"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "path": "tool"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-e", "changes": [{"id": "option:global:x", "value": "1", "file": "$ROOT/config/settings.el"}, {"id": "setting:only-user-closes", "value": "t", "file": "$ROOT/config/settings.el"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "path": "changes[1].id"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-f", "changes": [{"id": "option:global:x", "value": "1", "file": "$ROOT/config/settings.el"}, {"id": "option:private/root-0123456789ab:x", "value": "1", "file": "$ROOT/config/workspaces/w.el"}, {"id": "option:shared/abc123def456:x", "value": "1", "file": "$ROOT/w/.drgnx/settings.el"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "invalid-params"}}}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'option'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from tx where req like 'settings %'", "rows": [[2]]}
