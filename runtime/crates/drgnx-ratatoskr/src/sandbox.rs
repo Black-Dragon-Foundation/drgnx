@@ -558,5 +558,126 @@ mod run {
     }
 }
 
+/// The proxy port inside a session whose network is the provider's only.
+pub const PROXY_PORT: u16 = 3128;
+
+/// What a session's spec is built from (Task 10): its id, where it works, what else it reads and the network cell.
+#[derive(Debug, Clone)]
+pub struct SessionShape {
+    pub sid: String,
+    pub cwd: PathBuf,
+    pub write: Vec<PathBuf>,
+    pub read: Vec<PathBuf>,
+    pub net: crate::agents::launch::NetCell,
+}
+
+/// The temporary directory `env` names (`TMPDIR`, `TMP`, `TEMP`, else `/tmp`).
+pub fn tmp_dir(env: &Env) -> PathBuf {
+    ["TMPDIR", "TMP", "TEMP"]
+        .iter()
+        .find_map(|n| env.vars.get(*n).filter(|v| !v.is_empty()))
+        .filter(|v| v.starts_with('/'))
+        .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
+}
+
+/// The Gleipnir spec of one agent session: only `shape.write` (and the CLI's login dir) writable, `shape.read` and
+/// the system readable, the lock's `protected_ro` pinned read-only, its session dir (`hub.sock`, and `proxy.sock`
+/// unless the network is open) read-only, the network the cell's: the proxy through the relay, or the host's.  The
+/// program's environment is a short base, the proxy's variables, and the lock's `env` last.  `scratch` is the
+/// session's private temp parent.  There is no unsandboxed spec: nothing here builds one.
+pub fn session_spec(
+    env: &Env,
+    ctx: &Context,
+    plan: &crate::agents::lock::LaunchPlan,
+    shape: &SessionShape,
+    scratch: &Path,
+    tier: gleipnir::Tier,
+    target: gleipnir::Target,
+) -> Result<gleipnir::Spec, Refusal> {
+    use crate::agents::launch::NetCell;
+    use gleipnir::{Bind, Layers, Mode, Net, RelayPort, Spec};
+    let malformed = |message: String| Refusal {
+        rule: Rule::Malformed,
+        path: None,
+        message,
+    };
+    let run = paths::session_dir(env, &paths::socket_path(env), &shape.sid)
+        .map_err(|e| malformed(format!("session id: {e}")))?;
+    let tmp = scratch.join("tmp");
+    paths::private_dir(&tmp).map_err(|e| malformed(format!("{}: {e}", tmp.display())))?;
+    let mut write = shape.write.clone();
+    // The CLI's own login dir, for it alone (its token refreshes in place); never the home.
+    write.extend(plan.login_dir.iter().filter(|d| d.exists()).cloned());
+    let mut read = shape.read.clone();
+    read.extend(plan.protected_ro.iter().filter(|p| p.exists()).cloned());
+    let binds = plan
+        .protected_ro
+        .iter()
+        .filter(|p| p.exists())
+        .map(|p| Bind {
+            mode: Mode::Ro,
+            source: p.clone(),
+            dest: p.clone(),
+        })
+        .collect();
+    let hub = run.join("hub.sock");
+    let proxy = run.join("proxy.sock");
+    let mut sockets = vec![hub];
+    let mut vars: Vec<(String, String)> = vec![
+        (
+            "PATH".into(),
+            env.vars
+                .get("PATH")
+                .cloned()
+                .unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
+        ),
+        ("HOME".into(), ctx.home.to_string_lossy().into_owned()),
+        ("TMPDIR".into(), tmp.to_string_lossy().into_owned()),
+    ];
+    let net = match shape.net {
+        NetCell::Open => Net::Shared,
+        NetCell::ProviderOnly | NetCell::ProviderAndPackages => {
+            let port = gleipnir::backend::relay_ports(tier, &[PROXY_PORT])
+                .map_err(|e| malformed(format!("no relay port: {e}")))?[0];
+            sockets.push(proxy.clone());
+            let url = format!("http://127.0.0.1:{port}");
+            for k in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+                vars.push((k.into(), url.clone()));
+            }
+            Net::Isolated {
+                relay: vec![RelayPort {
+                    port,
+                    socket: proxy,
+                }],
+                mac_tcp_ports: if target == gleipnir::Target::Macos {
+                    vec![port]
+                } else {
+                    vec![]
+                },
+            }
+        }
+    };
+    vars.extend(plan.env.iter().cloned());
+    Ok(Spec {
+        read,
+        write,
+        hide: vec![],
+        sockets,
+        binds,
+        home: None,
+        run: Some(Bind {
+            mode: Mode::Ro,
+            source: run.clone(),
+            dest: run,
+        }),
+        env: vars,
+        chdir: shape.cwd.clone(),
+        net,
+        tmp: Some(tmp),
+        layers: Layers::for_target(target),
+        extra_tcp_ports: vec![],
+    })
+}
+
 #[cfg(test)]
 mod tests;
