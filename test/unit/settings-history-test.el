@@ -120,6 +120,29 @@
               (should (equal (plist-get (plist-get o :data) :value) "80"))))
         (delete-directory root t)))))
 
+(ert-deftest drgnx-settings-history/two-clones-with-one-name-get-their-own-ids ()
+  ;; call 13: a folder with no Urdr project is root-<first 12 hex of sha256(true root)>, never its name
+  (let* ((top (make-temp-file "sht-clones" t))
+         (a (expand-file-name "one/app" top)) (b (expand-file-name "two/app" top))
+         (link (expand-file-name "link" top)))
+    (unwind-protect
+        (progn
+          (make-directory a t) (make-directory b t)
+          (make-symbolic-link a link)
+          (let* ((id (lambda (root) (drgnx-settings-history--id (expand-file-name ".drgnx/settings.el" root) nil nil
+                                                                'fill-column)))
+                 (ia (funcall id a)) (ib (funcall id b)))
+            (should (string-match-p "\\`option:shared/root-[0-9a-f]\\{12\\}:fill-column\\'" ia))
+            (should (equal ia (format "option:shared/root-%s:fill-column"
+                                      (substring (secure-hash 'sha256 (directory-file-name (file-truename a))) 0 12))))
+            (should-not (equal ia ib))
+            (should (equal ia (funcall id link)))          ; the true root: a link to clone A is clone A
+            ;; a private file names its root in :roots
+            (let ((doc (make-drgnx-settings-doc :meta (list :roots (list a)))))
+              (should (equal (drgnx-settings-history--id (expand-file-name "workspaces/app.el" top) doc nil 'fill-column)
+                             (replace-regexp-in-string "shared/" "private/" ia))))))
+      (delete-directory top t))))
+
 (ert-deftest drgnx-settings-history/the-journal-is-bounded-and-flushes ()
   (drgnx-sht--with
     (setq drgnx-sht--down t)

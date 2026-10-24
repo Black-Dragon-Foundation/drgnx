@@ -71,18 +71,27 @@
               (id (car p)))
     (drgnx-settings-history--sanitize (string-remove-prefix "project:" (format "%s" id)))))
 
+(defun drgnx-settings-history--root-part (root)
+  "The project part for a folder with no Urdr project (call 13): root-<first 12 hex of sha256(ROOT's true path)>.
+The true path is the truename with no trailing slash, so two clones with the same folder name never share an id."
+  (concat "root-" (substring (secure-hash 'sha256 (directory-file-name (file-truename (expand-file-name root))))
+                             0 12)))
+
 (defun drgnx-settings-history--scope-id (file doc)
   "FILE's part of an option id: global, private/PROJECT or shared/PROJECT."
   (cond ((drgnx-settings-history--global-p file) "global")
         ((drgnx-settings-history--shared-p file)
          (let ((root (drgnx-settings-history--shared-root file)))
            (concat "shared/" (or (drgnx-settings-history--project root)
-                                 (concat "root-" (drgnx-settings-history--sanitize
-                                                  (file-name-nondirectory (directory-file-name root))))))))
-        (t (concat "private/"
-                   (or (and doc (when-let* ((p (plist-get (drgnx-settings-doc-meta doc) :project)))
-                                  (drgnx-settings-history--sanitize (string-remove-prefix "project:" (format "%s" p)))))
-                       (concat "root-" (drgnx-settings-history--sanitize (file-name-base file))))))))
+                                 (drgnx-settings-history--root-part root)))))
+        (t (let ((meta (and doc (drgnx-settings-doc-meta doc))))
+             (concat "private/"
+                     (or (when-let* ((p (plist-get meta :project)))
+                           (drgnx-settings-history--sanitize (string-remove-prefix "project:" (format "%s" p))))
+                         (let ((roots (plist-get meta :roots)))
+                           (and (proper-list-p roots) (stringp (car roots))
+                                (drgnx-settings-history--root-part (car roots))))
+                         (drgnx-settings-history--root-part file)))))))
 
 (defun drgnx-settings-history--id (file doc scope var)
   "The option id of VAR in SCOPE (a scope path) of FILE."

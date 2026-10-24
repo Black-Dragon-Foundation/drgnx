@@ -378,7 +378,9 @@ A setting that agents may never change (`:agents never`) and that changed outsid
 "NAME changed outside drgnx [Undo]".
 
 **Undo** puts a setting's previous value back by writing it to its file, then records the undo (it names the change
-it takes back). `drgnx-settings-undo` takes an option id such as `option:global:fill-column`;
+it takes back). `drgnx-settings-undo` takes an option id such as `option:global:fill-column`
+(a workspace's ids name its project, `option:shared/<project>:fill-column`, or, for a folder that is no known project,
+`root-` and the first 12 hex digits of the SHA-256 of the folder's true path, so two clones with one name never mix);
 `drgnx-settings-undo-tx` undoes everything one change touched, as one record. A setting your Lisp set cannot be
 undone from here: the notice offers Open at the line in your Lisp instead. A value that looked like a secret is
 never kept, so its earlier value cannot be restored either.
