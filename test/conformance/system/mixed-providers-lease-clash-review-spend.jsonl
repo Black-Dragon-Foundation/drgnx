@@ -13,7 +13,7 @@
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
 {"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\\ncommit claude\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
-{"do": "write_file", "path": "$ROOT/g.txt", "text": "silent 3\\ntool:exec sed -i 1s/^/gemini-/ note.txt\\ncommit gemini\\ncall:complete_task {\"task\": \"$job#2\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/g.txt", "text": "silent 3\\ntool:exec printf gemini- > n.tmp && cat note.txt >> n.tmp && mv n.tmp note.txt\\ncommit gemini\\ncall:complete_task {\"task\": \"$job#2\", \"seen_version\": 0}\n"}
 {"do": "write_file", "path": "$ROOT/r.txt", "text": "silent 10\\nsay **VERDICT: pass**\n"}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
