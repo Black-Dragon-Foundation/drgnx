@@ -6,8 +6,8 @@
 
 use super::{
     GitError, GitFuture, MAX_AGENTS, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, changed,
-    clash, data_for, data_of, internal, load, ordered, profile_of, put_in, raise_card, service,
-    settle_cards, update_data, user,
+    clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in, raise_card,
+    service, settle_cards, update_data, user,
 };
 use crate::agents::Origin;
 use crate::coord::fail;
@@ -101,6 +101,28 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
             .is_some_and(|a| live.iter().any(|s| &s.id == a));
         // its agent died or the hub restarted: the task is free (its worktree stays) - a few times, then the user
         if matches!(status, "claimed" | "running") && !alive {
+            // it died of its provider's limit: the task goes to the next profile of its route, not back to the queue
+            if let Some(a) = &t.row.agent
+                && let Some(snap) = front
+                    .core
+                    .agents
+                    .snapshots()
+                    .into_iter()
+                    .find(|s| s.id == *a)
+            {
+                let tr = front.core.agents.get(a).ok();
+                if let (Some(why), Some(tr)) = (fallback::exit_limit(&snap, tr.as_ref()), tr) {
+                    runs.set_busy(&tid, Some("starting"));
+                    let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = fallback::worker(&f, &job, &task, &snap, &tr, &why).await {
+                            tracing::warn!("plan run {job}: fallback: {}", e.message);
+                        }
+                        f.core.runs.set_busy(&task.row.id, None);
+                    });
+                    continue;
+                }
+            }
             if let Some(a) = &t.row.agent {
                 runs.session_finished(front, a);
             }

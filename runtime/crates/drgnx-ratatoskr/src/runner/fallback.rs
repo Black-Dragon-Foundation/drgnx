@@ -88,6 +88,23 @@ fn text_of(e: &runstav::methods::agents::Entry) -> String {
         .to_owned()
 }
 
+/// The limit that ended worker session S, which has exited: its stderr or its last failed turn says its provider was at
+/// its limit (the text), else none.
+pub(crate) fn exit_limit(s: &Snapshot, t: Option<&Transcript>) -> Option<String> {
+    if s.status != Some(SessionStatus::Exited) {
+        return None;
+    }
+    let err = s.stderr.as_deref().unwrap_or("");
+    if provider_limit(err) {
+        let n = err.chars().count();
+        return Some(err.chars().skip(n.saturating_sub(300)).collect());
+    }
+    match t.and_then(ended) {
+        Some(Ended::Limit(why)) => Some(why),
+        _ => None,
+    }
+}
+
 /// What the agent said in its last turn (the `agent` entries after the last `user` one).
 pub(crate) fn said(t: &Transcript) -> String {
     let from = t

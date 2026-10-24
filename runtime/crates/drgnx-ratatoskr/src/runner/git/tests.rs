@@ -363,3 +363,75 @@ async fn two_tasks_in_review_on_one_file_clash_with_their_lines() {
         "{found:?}"
     );
 }
+
+#[tokio::test]
+async fn a_ci_card_answered_yes_clears_and_merges_and_unanswered_does_not() {
+    let e = env();
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = CoordDb::spawn(dbdir.path().join("work.db"));
+    let (h, p) = shared(
+        &e,
+        TreeMode::Worktree,
+        Policy {
+            ci: Some((db, MatrixGate::default())),
+            ..Policy::default()
+        },
+        None,
+    );
+    let b = base(&e);
+    let yes = h.task_worktree(&e.repo, "r1", "t1", &b).await.unwrap();
+    commit(&e, &yes, ".github/workflows/ci.yml", "on: push\n");
+    accept_all(&h, &e, &yes, &p.marks).await;
+    assert!(matches!(
+        h.merge_gate(&e.repo, &yes).await.unwrap(),
+        Gate::Ask(_)
+    ));
+    // the card is still open: nothing merges
+    let r = RunGit::merge_into(&h, &e.repo, &yes).await.unwrap_err();
+    assert!(r.stderr.contains("not cleared"), "{r:?}");
+    assert!(!e.repo.join(".github/workflows/ci.yml").exists());
+    // answered yes: the branch is cleared and exactly that tip merges
+    RunGit::clear_gate(&h, &yes.branch);
+    assert_eq!(
+        RunGit::merge_into(&h, &e.repo, &yes).await.unwrap(),
+        MergeOutcome::Merged
+    );
+    assert!(e.repo.join(".github/workflows/ci.yml").exists());
+    // another task whose card is answered no (never cleared) does not merge, however often it is tried
+    let no = h.task_worktree(&e.repo, "r1", "t2", &b).await.unwrap();
+    commit(&e, &no, "Makefile", "all:\n");
+    accept_all(&h, &e, &no, &p.marks).await;
+    assert!(matches!(
+        h.merge_gate(&e.repo, &no).await.unwrap(),
+        Gate::Ask(_)
+    ));
+    for _ in 0..2 {
+        assert!(RunGit::merge_into(&h, &e.repo, &no).await.is_err());
+    }
+    assert!(!e.repo.join("Makefile").exists());
+}
+
+#[tokio::test]
+async fn prepare_writes_a_snapshot_tasks_bundle_and_only_that() {
+    let e = env();
+    let h = hub(&e, TreeMode::Snapshot, Policy::default(), None);
+    let b = base(&e);
+    let t = h.task_worktree(&e.repo, "r1", "t1", &b).await.unwrap();
+    commit(&e, &t, "src/a.rs", "fn a() {}\n");
+    let bundle = HubGit::bundle_path(&t);
+    assert!(bundle.to_string_lossy().ends_with("1.bundle"), "{bundle:?}");
+    assert!(!bundle.exists());
+    RunGit::prepare(&h, &t).await.unwrap();
+    assert!(bundle.exists());
+    // the trusted repository verifies it: its prerequisite is there
+    sh(
+        &e.home,
+        &e.repo,
+        &["bundle", "verify", "-q", &bundle.to_string_lossy()],
+    );
+    // a worktree-mode task has no bundle
+    let h2 = hub(&e, TreeMode::Worktree, Policy::default(), None);
+    let w = h2.task_worktree(&e.repo, "r2", "t1", &b).await.unwrap();
+    RunGit::prepare(&h2, &w).await.unwrap();
+    assert!(!HubGit::bundle_path(&w).exists());
+}

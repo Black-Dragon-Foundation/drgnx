@@ -1727,6 +1727,21 @@ pub async fn dismiss(front: &Front, caller: &Caller, p: ByMessage) -> Result<boo
     Ok(true)
 }
 
+/// Why a task may not be reassigned to profile NAME (FOUND: what the settings have under it), or none.
+pub(crate) fn profile_refusal(
+    name: &str,
+    found: Option<&crate::settings::profiles::AgentProfile>,
+) -> Option<String> {
+    use crate::settings::profiles::Provider;
+    match found {
+        None => Some(format!("no agent profile {name:?}")),
+        Some(p) if p.provider() == Some(Provider::Codex) => Some(format!(
+            "{name} cannot run a job's agent: Codex's lock is not proven yet"
+        )),
+        Some(_) => None,
+    }
+}
+
 /// `job/reassign`: task TASK goes to an agent of PROFILE from now on; one working on it now (or a card it waits on)
 /// ends and the task is ready for a new agent.  A task in review is refused: its reviewer would answer about the
 /// next agent's work.
@@ -1736,6 +1751,13 @@ pub async fn reassign(
     p: ReassignParams,
 ) -> Result<JobSummary, Error> {
     let tid = p.task.as_str().to_owned();
+    front.refresh_settings().await;
+    if let Some(why) = profile_refusal(
+        p.profile.as_str(),
+        crate::agents::session::find_profile(front, p.profile.as_str()).as_ref(),
+    ) {
+        return Err(invalid(why));
+    }
     let (job, task) = super::open_task(front, &tid, true).await?;
     if let Some(what) = front.core.runs.busy_of(&tid) {
         return Err(invalid(format!(
@@ -1786,6 +1808,26 @@ mod tests {
         assert_eq!(verdict("VERDICT: pass\nbut see the notes"), None);
         assert_eq!(verdict("Answer with a last line VERDICT: pass"), None);
         assert_eq!(verdict(""), None);
+    }
+
+    #[test]
+    fn a_task_is_reassigned_only_to_a_profile_that_can_run_it() {
+        assert!(
+            profile_refusal("nope", None)
+                .unwrap()
+                .contains("no agent profile")
+        );
+        let profiles = crate::settings::defaults().profiles.clone();
+        let claude = profiles.iter().find(|p| p.name == "claude").unwrap();
+        assert_eq!(profile_refusal("claude", Some(claude)), None);
+        let mut codex = claude.clone();
+        codex.name = "codex".into();
+        codex.provider = Some(crate::settings::profiles::Provider::Codex);
+        assert!(
+            profile_refusal("codex", Some(&codex))
+                .unwrap()
+                .contains("Codex")
+        );
     }
 
     #[test]

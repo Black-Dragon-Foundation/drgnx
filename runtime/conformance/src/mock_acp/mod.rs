@@ -13,7 +13,7 @@
 //! | `commit MSG` | `git add -A && git commit -m MSG` in the cwd |
 //! | `sleep-loop` | asks permission (execute) to run `sleep 30; pgrep -f ratatoskr-mock-sleep-loop`, runs it when allowed |
 //! | `silent N` | N seconds with no output (a `session/cancel` ends the turn, `cancelled`) |
-//! | `crash` | exits 3, "mock crashed" on stderr |
+//! | `crash [TEXT]` | exits 3, "mock crashed[: TEXT]" on stderr (a provider at its limit: `crash 429 rate limit`) |
 //! | `say TEXT` | says TEXT and a line break (a reviewer's `VERDICT: pass` is its last line) |
 //! | `error CODE TEXT` | the turn ends with the JSON-RPC error CODE, TEXT (a provider at its limit: `error 429 rate limit`) |
 //! | anything else | "You said: ..." in two chunks |
@@ -623,7 +623,10 @@ impl Agent {
                 self.fail = Some((code.parse().unwrap_or(-32000), message.trim().to_owned()));
             }
             "crash" => {
-                eprintln!("mock crashed");
+                eprintln!(
+                    "mock crashed{}{rest}",
+                    if rest.is_empty() { "" } else { ": " }
+                );
                 std::process::exit(3);
             }
             _ if head.starts_with("call:") => {

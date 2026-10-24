@@ -574,7 +574,7 @@ impl Fence {
     }
 }
 
-fn find_profile(front: &Front, name: &str) -> Option<AgentProfile> {
+pub(crate) fn find_profile(front: &Front, name: &str) -> Option<AgentProfile> {
     let cur = front.settings.current();
     let v = &cur.loaded.values;
     v.agents_profiles
