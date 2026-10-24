@@ -206,7 +206,7 @@ Your settings, one entry per variable: written by the Settings page and by you, 
 
 Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
 
-Speed measurements you turn on (read at every start).
+Speed measurements you turn on (moved into settings.el).
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
