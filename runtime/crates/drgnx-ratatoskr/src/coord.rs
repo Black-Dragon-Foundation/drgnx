@@ -648,6 +648,8 @@ impl Hub for ToolHub {
     }
 
     fn notify(&self) {
+        // every tool write says so: the record views follow it too
+        self.signals.records.notify_one();
         self.signals.events_soon();
         self.signals.notify_soon();
     }
@@ -923,5 +925,21 @@ mod tests {
             .query_row("select count(*) from message", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn a_tool_write_reaches_the_view() {
+        let signals = Arc::new(Signals::default());
+        let hub = ToolHub {
+            forward: Arc::new(crate::dispatch::NoBackend),
+            signals: signals.clone(),
+            editors: Arc::new(Default::default()),
+            settings: Arc::new(crate::settings::Settings::new()),
+        };
+        // the tools call `notify` after each write: the records' follower wakes
+        hub.notify();
+        tokio::time::timeout(Duration::from_millis(500), signals.records.notified())
+            .await
+            .expect("the follower was not woken");
     }
 }

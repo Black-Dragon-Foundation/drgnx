@@ -938,11 +938,63 @@ impl Views {
         Ok(id)
     }
 
+    /// The hash the hub last wrote at PATH, from the store after a restart (`kv`, key `records-view:PATH`).
+    async fn seed(&self, db: &CoordDb, path: &Path) -> Result<(), Error> {
+        if lock(&self.state).written.contains_key(path) {
+            return Ok(());
+        }
+        let key = format!("records-view:{}", path.to_string_lossy());
+        let hash: Option<String> = db
+            .read(move |c| {
+                Ok(
+                    c.query_row("select value from kv where key = ?1", [&key], |r| r.get(0))
+                        .ok(),
+                )
+            })
+            .await
+            .map_err(fail)?;
+        if let Some(h) = hash {
+            lock(&self.state)
+                .written
+                .entry(path.to_path_buf())
+                .or_insert((h, 0.0));
+        }
+        Ok(())
+    }
+
+    /// HASH, which the hub wrote at PATH, kept in the store (only when it is not the one already kept).
+    async fn persist(
+        &self,
+        db: &CoordDb,
+        path: &Path,
+        prior: Option<String>,
+        hash: &str,
+    ) -> Result<(), Error> {
+        if prior.as_deref() == Some(hash) {
+            return Ok(());
+        }
+        let (key, hash) = (
+            format!("records-view:{}", path.to_string_lossy()),
+            hash.to_owned(),
+        );
+        db.write(meta(), move |tx| {
+            tx.sql().execute(
+                "insert or replace into kv (key, value) values (?1, ?2)",
+                (&key, &hash),
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(fail)
+    }
+
     /// The view at PATH rewritten from the graph now (its pieces' text first follows the graph's statuses), unless
     /// the file was changed by hand or a proposal on it is open: a hand edit becomes the proposal and the file stays
     /// (FORCE: after an import or a decision, when the file was just read and backed up or decided).
     pub async fn flush(&self, db: &CoordDb, path: &Path, force: bool) -> Result<Flush, Error> {
         sync_bodies(db, path).await?;
+        self.seed(db, path).await?;
+        let prior = lock(&self.state).written.get(path).map(|w| w.0.clone());
         let Some((_, _, m, vers)) = model_full(db, path).await? else {
             return Ok(Flush::Unchanged);
         };
@@ -962,6 +1014,7 @@ impl Views {
         }
         if current.as_deref() == Some(text.as_str()) {
             self.record(path, &hash, (m, vers));
+            self.persist(db, path, prior, &hash).await?;
             return Ok(Flush::Unchanged);
         }
         let known = lock(&self.state).written.contains_key(path);
@@ -986,6 +1039,7 @@ impl Views {
         }
         write_atomic(path, &text).map_err(|e| err(format!("{}: {e}", path.display())))?;
         self.record(path, &hash, (m, vers));
+        self.persist(db, path, prior, &hash).await?;
         Ok(Flush::Written(hash))
     }
 
@@ -1854,5 +1908,35 @@ mod tests {
         // the record stays, so the view has the row back
         let back = std::fs::read_to_string(&p).unwrap();
         assert!(back.contains("M2-1") && back.contains("reworded"));
+    }
+
+    #[tokio::test]
+    async fn a_hub_restart_does_not_turn_its_own_writes_into_proposals() {
+        let f = fix();
+        let p = imported(&f).await;
+        // the hub restarts (nothing in memory) and the graph changed while it was down
+        let restarted = Views::default();
+        set_row(
+            &f,
+            "M2-1%",
+            Changes {
+                status: Some(Some("open".into())),
+                ..Default::default()
+            },
+        )
+        .await;
+        let r = restarted.flush(&f.db, &p, false).await.unwrap();
+        assert!(matches!(r, Flush::Written(_)), "{r:?}");
+        assert_eq!(
+            proposals_core(&f.db, None).await.unwrap().proposals.len(),
+            0
+        );
+        // and a hand edit after the restart still is one
+        let again = Views::default();
+        edit(&p, "line | open |", "line | done |");
+        assert!(matches!(
+            again.flush(&f.db, &p, false).await.unwrap(),
+            Flush::Proposed(_)
+        ));
     }
 }
