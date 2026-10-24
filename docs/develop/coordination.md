@@ -795,7 +795,11 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   `plan_read` tool) returns the tasks with status, deps, steps, their reports and the latest report's interfaces;
   `plans/write` (`plan_write`) creates or changes a plan, its tasks (by number), steps and `blocks` in one
   transaction and is refused when `base_version` is behind. An agent's write needs the matrix's `graph.change`
-  (the worker column; an Ask makes a card and the write is refused until it is settled). `job/propose` takes the
+  (the worker column; an Ask makes a card and the write is refused until it is settled); a task written `done` also
+  needs `task.done` (never for a worker). An agent reaches its own project's plans, reports and tasks only (its
+  session's project: the plan run's, else the one its folder is in): `plans/get`, `plans/write`, `reports/get` and the
+  manager's `report_read` refuse another project's records, and a new plan lands in the agent's project (naming
+  another is refused); records of no project, such as a job's tasks, stay open. `job/propose` takes the
   entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job.
 - **Imported plans** get the same shape: `graph import-records` puts each `### Task N:` piece under the plan's head
   (`parent_of`), with `data.{number, role, model, interfaces, steps}`, `**Depends:** Task M` as `blocks` links and the

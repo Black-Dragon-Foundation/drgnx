@@ -34,6 +34,73 @@ fn refuse(msg: impl Into<String>) -> Error {
     }
 }
 
+// ---- who may reach what -----------------------------------------------------------------------------------------
+
+/// What a caller may reach in the graph.  The user and the hub reach everything; an agent reaches its own project's
+/// records only (its session's project: the plan run's, else the one its folder is in), so a worker in project A
+/// can neither read nor change project B's plans, reports or proposals (records of no project stay open).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Scope {
+    Anyone,
+    Project {
+        /// The project entity id (none: the session's folder is in no project).
+        id: Option<String>,
+        /// The project's git top-level (none: not known).
+        root: Option<PathBuf>,
+    },
+}
+
+impl Scope {
+    /// Whether a record of PROJECT (an entity id) is the caller's.
+    pub(crate) fn allows_project(&self, project: Option<&str>) -> Result<(), CoordError> {
+        match self {
+            // a record of no project (a job's tasks, which the hub writes) is nobody's in particular
+            Scope::Project { id, .. } if project.is_some() && id.as_deref() != project => Err(CoordError::Refused(
+                "that belongs to another project: an agent reaches its own project's records only".into(),
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Whether PATH (a file a record is about) lies in the caller's project.
+    pub(crate) fn allows_path(&self, path: &Path) -> Result<(), CoordError> {
+        match self {
+            Scope::Project { root, .. } if !root.as_deref().is_some_and(|r| path.starts_with(r)) => {
+                Err(CoordError::Refused(
+                    "that is about a file outside your project: an agent reaches its own project's records only"
+                        .into(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The scope of session SID.
+pub(crate) async fn scope_of_session(f: &Front, sid: &str) -> Result<Scope, Error> {
+    let cwd = f.core.agents.find(sid)?.cwd().to_path_buf();
+    let found = tokio::task::spawn_blocking(move || norn::project::resolve(&cwd))
+        .await
+        .ok()
+        .flatten();
+    let from_run = f.core.runs.scope_of(sid).and_then(|(_, project)| project);
+    Ok(Scope::Project {
+        id: from_run.or_else(|| found.as_ref().map(|p| p.id.clone())),
+        root: found.map(|p| p.root),
+    })
+}
+
+/// The scope of caller C: everything for the user and the hub, the session's project for an agent.
+pub(crate) async fn scope_of(f: &Front, c: &Caller) -> Result<Scope, Error> {
+    if c.class != Class::Agent {
+        return Ok(Scope::Anyone);
+    }
+    match &c.sid {
+        Some(sid) => scope_of_session(f, sid).await,
+        None => Err(refuse("an agent call without a session reaches no project")),
+    }
+}
+
 // ---- reading a plan ---------------------------------------------------------------------------------------------
 
 /// A plan as the graph has it, with what the job needs beyond the view.
@@ -158,11 +225,16 @@ fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
     })
 }
 
-pub async fn plans_get(f: &Front, _: &Caller, p: ByPlan) -> Result<PlanView, Error> {
+pub async fn plans_get(f: &Front, c: &Caller, p: ByPlan) -> Result<PlanView, Error> {
     let id = p.plan.as_str().to_owned();
+    let scope = scope_of(f, c).await?;
     f.writer
         .db
-        .read(move |c| Ok(load(c, &id)?.view))
+        .read(move |c| {
+            let view = load(c, &id)?.view;
+            scope.allows_project(view.project.as_deref())?;
+            Ok(view)
+        })
         .await
         .map_err(fail)
 }
@@ -272,12 +344,17 @@ fn task_by_number(conn: &Tx, plan: i64, number: &str) -> Result<Option<Ent>, Coo
     Ok(None)
 }
 
-fn write_plan(tx: &mut WTx<'_>, p: &WriteParams) -> Result<PlanWritten, CoordError> {
+fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWritten, CoordError> {
     let plan = match &p.plan {
         Some(id) => {
             let e = entity::by_id(tx.sql(), id.as_str())?
                 .filter(|e| e.kind == "plan" && e.retired_tx.is_none())
                 .ok_or_else(|| CoordError::Refused(format!("no plan {}", id.as_str())))?;
+            let owner = match e.project {
+                Some(n) => live(tx.sql(), n)?.map(|p| p.id),
+                None => None,
+            };
+            scope.allows_project(owner.as_deref())?;
             if let Some(base) = p.base_version {
                 let now = version(tx.sql(), e.n)?;
                 if now > base {
@@ -300,13 +377,27 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams) -> Result<PlanWritten, CoordErr
             e
         }
         None => {
-            let project = match &p.project {
-                Some(id) => Some(
-                    entity::by_id(tx.sql(), id.as_str())?
-                        .filter(|e| e.kind == "project" && e.retired_tx.is_none())
-                        .ok_or_else(|| CoordError::Refused(format!("no project {}", id.as_str())))?
-                        .n,
-                ),
+            // a new plan of an agent is in its own project (once that is in the graph); naming another is refused
+            let named = p.project.as_ref().map(|i| i.as_str().to_owned());
+            if named.is_some() {
+                scope.allows_project(named.as_deref())?;
+            }
+            let own = match scope {
+                Scope::Project { id, .. } => id.clone(),
+                Scope::Anyone => None,
+            };
+            let project = match named.as_ref().or(own.as_ref()) {
+                Some(id) => {
+                    let found = entity::by_id(tx.sql(), id)?
+                        .filter(|e| e.kind == "project" && e.retired_tx.is_none());
+                    match (found, &named) {
+                        (Some(e), _) => Some(e.n),
+                        (None, Some(_)) => {
+                            return Err(CoordError::Refused(format!("no project {id}")));
+                        }
+                        (None, None) => None,
+                    }
+                }
                 None => None,
             };
             let title = p.title.as_ref().map(|t| t.as_str().to_owned());
@@ -431,10 +522,58 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams) -> Result<PlanWritten, CoordErr
 
 pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWritten, Error> {
     may_change(f, c, p.plan.as_ref().map(|i| i.as_str().to_owned())).await?;
+    may_finish(f, c, &p).await?;
+    let scope = scope_of(f, c).await?;
     f.writer
-        .write(c, "plans/write", move |tx| write_plan(tx, &p))
+        .write(c, "plans/write", move |tx| write_plan(tx, &p, &scope))
         .await
         .map_err(fail)
+}
+
+/// A task an agent marks `done` is the matrix's `task.done` (never for a worker), not just `graph.change`: the
+/// status is the same fact the review and the user's own close write.
+async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error> {
+    use crate::matrix_gate::{ActionCtx, Gate};
+    if c.class != Class::Agent
+        || !p
+            .tasks
+            .0
+            .iter()
+            .any(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "done"))
+    {
+        return Ok(());
+    }
+    let who = c
+        .sid
+        .as_deref()
+        .and_then(|s| f.core.agents.who(s))
+        .unwrap_or(norn::matrix::Who {
+            role: Some(norn::matrix::Role::Worker),
+            ..Default::default()
+        });
+    let ctx = ActionCtx {
+        session: c.sid.clone(),
+        plan: p.plan.as_ref().map(|i| i.as_str().to_owned()),
+        ..Default::default()
+    };
+    match f
+        .core
+        .matrix
+        .decide(
+            &f.settings,
+            &f.writer,
+            who,
+            norn::matrix::Action::TaskDone,
+            ctx,
+        )
+        .await
+    {
+        Gate::Allow => Ok(()),
+        Gate::Ask(card) => Err(refuse(format!(
+            "marking a task done asks the user first (card {card}); write the plan again once it is settled"
+        ))),
+        Gate::Never(why) => Err(refuse(why)),
+    }
 }
 
 // ---- reports ----------------------------------------------------------------------------------------------------
@@ -476,14 +615,31 @@ pub(crate) fn report_of(conn: &Tx, e: &Ent) -> Result<Report, CoordError> {
     })
 }
 
-pub async fn reports_get(f: &Front, _: &Caller, p: ReportsParams) -> Result<Reports, Error> {
+pub async fn reports_get(f: &Front, c: &Caller, p: ReportsParams) -> Result<Reports, Error> {
+    let scope = scope_of(f, c).await?;
+    reports_get_in(f, scope, p).await
+}
+
+/// `reports/get` for a caller whose reach is SCOPE: a report or task of another project is refused.
+pub(crate) async fn reports_get_in(
+    f: &Front,
+    scope: Scope,
+    p: ReportsParams,
+) -> Result<Reports, Error> {
     f.writer
         .db
         .read(move |c| {
+            let owner = |e: &Ent| -> Result<Option<String>, CoordError> {
+                match e.project {
+                    Some(n) => Ok(live(c, n)?.map(|p| p.id)),
+                    None => Ok(None),
+                }
+            };
             let ents = match (&p.task, &p.id) {
                 (Some(t), _) => {
                     let t = entity::by_id(c, t.as_str())?
                         .ok_or_else(|| CoordError::Refused(format!("no task {}", t.as_str())))?;
+                    scope.allows_project(owner(&t)?.as_deref())?;
                     reports_of(c, t.n)?
                 }
                 (_, Some(id)) => vec![
@@ -493,6 +649,9 @@ pub async fn reports_get(f: &Front, _: &Caller, p: ReportsParams) -> Result<Repo
                 ],
                 _ => Vec::new(),
             };
+            for e in &ents {
+                scope.allows_project(owner(e)?.as_deref())?;
+            }
             let reports = ents
                 .iter()
                 .map(|e| report_of(c, e))
@@ -988,7 +1147,7 @@ mod tests {
         let p2 = p.clone();
         let (w, deps, ri, status, stale) = db
             .write(meta(), move |tx| {
-                let w = write_plan(tx, &p2)?;
+                let w = write_plan(tx, &p2, &Scope::Anyone)?;
                 let deps = load(tx.sql(), &w.plan)?.view.tasks[1].deps.clone();
                 // task 1 reports its interfaces; plan_read shows them beside task 1
                 let r: ReportSubmit =
@@ -1001,7 +1160,7 @@ mod tests {
                     base_version: Some(0),
                     ..p2.clone()
                 };
-                let stale = write_plan(tx, &stale).is_err();
+                let stale = write_plan(tx, &stale, &Scope::Anyone).is_err();
                 Ok((
                     w.clone(),
                     deps,
@@ -1017,6 +1176,111 @@ mod tests {
         assert_eq!(ri.as_deref(), Some("fn x()"));
         assert_eq!(status, "in-review");
         assert!(stale);
+    }
+
+    fn project_entity(tx: &mut WTx<'_>, id: &str) -> Result<(), CoordError> {
+        entity::create(
+            tx,
+            EntityNew {
+                id: id.into(),
+                kind: "project".into(),
+                project: None,
+                title: Some(id.into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// S4: an agent in project A neither reads, changes nor creates plans of project B.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_agent_reaches_its_own_projects_plans_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        db.write(meta(), move |tx| {
+            project_entity(tx, "project:a")?;
+            project_entity(tx, "project:b")?;
+            let plan_in = |project: &str| WriteParams {
+                plan: None,
+                project: Some(serde_json::from_value(json!(project)).unwrap()),
+                title: Some(serde_json::from_value(json!("P")).unwrap()),
+                tasks: Bounded(vec![write_task("1", &[])]),
+                base_version: None,
+            };
+            let theirs = write_plan(tx, &plan_in("project:b"), &Scope::Anyone)?;
+            let mine = Scope::Project {
+                id: Some("project:a".into()),
+                root: None,
+            };
+            // reads
+            let view = load(tx.sql(), &theirs.plan)?.view;
+            assert!(mine.allows_project(view.project.as_deref()).is_err());
+            assert!(
+                Scope::Anyone
+                    .allows_project(view.project.as_deref())
+                    .is_ok()
+            );
+            // changes, `done` included
+            let change = WriteParams {
+                plan: Some(serde_json::from_value(json!(theirs.plan)).unwrap()),
+                project: None,
+                title: None,
+                tasks: Bounded(vec![
+                    serde_json::from_value(json!({"number": "1", "status": "done"})).unwrap(),
+                ]),
+                base_version: None,
+            };
+            assert!(write_plan(tx, &change, &mine).is_err());
+            assert_eq!(
+                load(tx.sql(), &theirs.plan)?.view.tasks[0].status,
+                "open",
+                "the refused write changed nothing"
+            );
+            // creating one in B is refused; with no project it lands in A
+            assert!(write_plan(tx, &plan_in("project:b"), &mine).is_err());
+            let none = WriteParams {
+                project: None,
+                ..plan_in("project:a")
+            };
+            let own = write_plan(tx, &none, &mine)?;
+            assert_eq!(
+                load(tx.sql(), &own.plan)?.view.project.as_deref(),
+                Some("project:a")
+            );
+            // an agent in no project reaches no project's plan
+            let nowhere = Scope::Project {
+                id: None,
+                root: None,
+            };
+            assert!(write_plan(tx, &change, &nowhere).is_err());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    /// S4: a proposal is about a file; an agent reaches those under its own project's root.
+    #[test]
+    fn an_agent_reaches_proposals_about_its_own_projects_files_only() {
+        let mine = Scope::Project {
+            id: Some("project:a".into()),
+            root: Some("/work/a".into()),
+        };
+        assert!(mine.allows_path(Path::new("/work/a/docs/x.md")).is_ok());
+        assert!(mine.allows_path(Path::new("/work/b/docs/x.md")).is_err());
+        assert!(mine.allows_path(Path::new("/work/ab/x.md")).is_err());
+        let nowhere = Scope::Project {
+            id: None,
+            root: None,
+        };
+        assert!(nowhere.allows_path(Path::new("/work/a/x.md")).is_err());
+        assert!(Scope::Anyone.allows_path(Path::new("/work/b/x.md")).is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -68,6 +68,41 @@ pub fn guarded<T: CoordTool>(tool: T) -> Box<dyn Tool<Ctx>> {
 /// The text of the check's refusal of an identity name (the call's refusal is [`refuse_identity_args`]'s).
 pub const NO_IDENTITY_ARG: &str = "tools never take an identity";
 
+/// What `tools/list` carries once per tool, trimmed without losing a meaning: the root's own description (the tool's
+/// description says it), a scalar type's description (it restates the `pattern` / `maxLength` next to it) and an empty
+/// `default` list (an absent list is empty).  Only the advertised schema changes; [`Tool::check`] uses the type.
+fn compact_schema(schema: &mut Value) {
+    fn scalar_with_limits(def: &Value) -> bool {
+        def.get("type").is_some_and(Value::is_string)
+            && (def.get("pattern").is_some() || def.get("maxLength").is_some())
+    }
+    fn drop_empty_defaults(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                if m.get("default")
+                    .is_some_and(|d| d.as_array().is_some_and(Vec::is_empty))
+                {
+                    m.remove("default");
+                }
+                m.values_mut().for_each(drop_empty_defaults);
+            }
+            Value::Array(a) => a.iter_mut().for_each(drop_empty_defaults),
+            _ => {}
+        }
+    }
+    if let Some(root) = schema.as_object_mut() {
+        root.remove("description");
+        if let Some(Value::Object(defs)) = root.get_mut("$defs") {
+            for def in defs.values_mut() {
+                if scalar_with_limits(def) {
+                    def.as_object_mut().map(|d| d.remove("description"));
+                }
+            }
+        }
+    }
+    drop_empty_defaults(schema);
+}
+
 impl<T: CoordTool> Tool<Ctx> for Guarded<T> {
     fn name(&self) -> &'static str {
         T::NAME
@@ -78,7 +113,9 @@ impl<T: CoordTool> Tool<Ctx> for Guarded<T> {
     }
 
     fn input_schema(&self) -> Value {
-        typed::<T::Args>().schema()
+        let mut schema = typed::<T::Args>().schema();
+        compact_schema(&mut schema);
+        schema
     }
 
     fn check(&self, args: &Value) -> Result<(), ArgsError> {

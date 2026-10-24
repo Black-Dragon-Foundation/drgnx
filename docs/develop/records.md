@@ -79,7 +79,8 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
   (`records/status` shows it as `pending`); a second edit replaces the proposal. Detection happens at a flush (the
   follower, `records/proposals`, an import), there is no file watcher.
 - **Deciding.** `records/decide` (the user) or the tool `proposal_decide` (a manager or worker, under the matrix's
-  `graph.change`; `proposal_read` shows the diff and ops). Accept applies every op in one transaction if each touched
+  `graph.change`; `proposal_read` shows the diff and ops; an agent reads and decides only proposals about files under its own
+  project's root). Accept applies every op in one transaction if each touched
   record still has its base version, else the proposal is `stale` (nothing applied; the file is read again at the
   next flush into a new open proposal); unmapped parts become a `note` related to the record; then the view is
   rewritten. Reject copies the edited text to `<state>/hub/records-backup/<date>-rejected/` (the file's path

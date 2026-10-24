@@ -144,10 +144,16 @@ impl Hub {
 
     /// A job's result for session ID: resumes the session first when it was closed while it waited, then prompts it
     /// (a plain `session/prompt` from the hub; a turn when it waits or idles, else queued).
-    pub async fn wake(&self, front: &Front, id: &str, text: String) -> Result<(), Error> {
+    pub async fn wake(
+        &self,
+        front: &Front,
+        id: &str,
+        text: String,
+        key: String,
+    ) -> Result<(), Error> {
         session::resume_closed(self, front, id)
             .await?
-            .prompt(text, Origin::Hub)
+            .prompt_keyed(text, Origin::Hub, Some(key))
     }
 
     /// Pause: cancel the turn once the tool call running now completes, and hold the queue.

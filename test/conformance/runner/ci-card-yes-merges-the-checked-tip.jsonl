@@ -1,0 +1,31 @@
+{"scenario": "runner/ci-card-yes-merges-the-checked-tip", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Agent system part 1, S8: a task whose branch changes a CI file (.github/workflows/ci.yml) waits on the matrix's code.ci-config card (Ask for a worker under Balanced) after the reviewer's pass; the job does not merge it while the card is open. The user's `allow` on the card clears the branch and merges exactly the tip the gate checked: the merge commit's second parent is the task branch's tip, and the file reaches the job's tree. What makes it fail: a merge that ignores the card (the file is there before the answer), or a merge of anything but the checked tip."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:exec mkdir -p .github/workflows\\ntool:edit .github/workflows/ci.yml\\ncommit work\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say Looks fine.\\nsay **VERDICT: pass**\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/r.log", "contains": "[drgnx review $job#1]", "within_ms": 90000}
+{"do": "run", "bin": "/bin/sleep", "args": ["15"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select id, kind, state from card where kind = 'matrix'", "rows": [[2, "matrix", "open"]]}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "expect_silent", "conn": "q", "for_ms": 3000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test ! -e $STATE/hub/runs/$job/_job/.github/workflows/ci.yml"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "cards/settle", "params": {"card": 2, "choice": "allow"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}, "within_ms": 10000}
+{"do": "file", "path": "$STATE/hub/runs/$job/_job/.github/workflows/ci.yml", "contains": "edited by ratatoskr-mock", "within_ms": 60000}
+{"do": "expect_silent", "conn": "q", "for_ms": 3000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job", "status": "done", "tasks": [{"n": 1, "status": "done"}]}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(git -C $ROOT/repo rev-parse job/$job^2)\" = \"$(git -C $ROOT/repo rev-parse job/$job-1)\""], "expect_code": 0}
+{"do": "sql_expect", "sql": "select state, choice from card where kind = 'matrix'", "rows": [["settled", "allow"]]}

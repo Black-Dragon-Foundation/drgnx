@@ -1277,26 +1277,32 @@ before them."
 ;;;; The away signal (agent system part 1, Task 13)
 ;; The editor tells the hub when you are away (`presence/set'), so the matrix's time presets follow.  Never from an
 ;; agent.  An idle timer (key `hub-presence') fires once in every pause longer than `drgnx-agents-away-after'; while
-;; away a short wall poll (`hub-presence-back') notices the next input.  Only a change is sent.
+;; away, `drgnx-hub--presence-back' on `pre-command-hook' says "back" at your next command (no poll).  It reads one
+;; variable, removes itself when it fires, and `drgnx-hub--presence-stop' removes it too.  Only a change is sent.
 
 (defvar drgnx-hub--presence-sent :unknown
   "What the hub was last told: t (away), nil (back) or `:unknown' (nothing yet on this subscription).")
-
-(defconst drgnx-hub-presence-poll 5 "Seconds between looks for the return of input while away.")
 
 (defun drgnx-hub--presence-away-p ()
   "Non-nil when Emacs has been idle for `drgnx-agents-away-after' seconds or more."
   (let ((idle (drgnx-timer--idle-time)))
     (and idle (>= (float-time idle) drgnx-agents-away-after))))
 
+(defun drgnx-hub--presence-back ()
+  "`pre-command-hook' while away: your next command tells the hub you are back.  Cached state only; removes itself."
+  (remove-hook 'pre-command-hook #'drgnx-hub--presence-back)
+  (when (eq drgnx-hub--presence-sent t)
+    (setq drgnx-hub--presence-sent nil)
+    (when (process-live-p drgnx-hub--events)
+      (drgnx-hub-call "presence/set" (list :away :false) #'ignore))))
+
 (defun drgnx-hub--presence-tick ()
   "Send `presence/set' when away or back changed since the last time; never prompts, never blocks."
   (when (process-live-p drgnx-hub--events)
     (let ((away (and (drgnx-hub--presence-away-p) t)))
       (if away
-          (drgnx-timer-start 'hub-presence-back drgnx-hub-presence-poll #'drgnx-hub--presence-tick
-                             :repeat drgnx-hub-presence-poll :owner :core)
-        (drgnx-timer-cancel 'hub-presence-back))
+          (add-hook 'pre-command-hook #'drgnx-hub--presence-back)
+        (remove-hook 'pre-command-hook #'drgnx-hub--presence-back))
       (unless (eq away drgnx-hub--presence-sent)
         (setq drgnx-hub--presence-sent away)
         (drgnx-hub-call "presence/set" (list :away (if away t :false)) #'ignore)))))
@@ -1312,7 +1318,7 @@ timer.  A hub starts with you back, so nothing goes now unless you are away alre
 (defun drgnx-hub--presence-stop ()
   "Forget the presence timers."
   (drgnx-timer-cancel 'hub-presence)
-  (drgnx-timer-cancel 'hub-presence-back)
+  (remove-hook 'pre-command-hook #'drgnx-hub--presence-back)
   (setq drgnx-hub--presence-sent :unknown))
 
 (defun drgnx-hub--note-notice (event data)

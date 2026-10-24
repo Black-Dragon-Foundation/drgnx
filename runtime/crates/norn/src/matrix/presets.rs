@@ -1,6 +1,8 @@
 //! The three shipped presets.  Balanced is the design mockup's table (`permissions-matrix`); Cautious asks where
-//! Balanced allows work that reaches beyond the worktree; Autonomous allows what Balanced asks, except pushes to main,
-//! settings and the user's Emacs.  `unsandboxed` and `user.private` are Never in every column of every preset.
+//! Balanced allows work that reaches beyond the worktree; Autonomous allows most of what Balanced asks of the manager
+//! (a done task, the CI configuration, a larger spend and fleet), but still asks for pushes to main, settings and the
+//! user's Emacs, asks the worker for the CI configuration, and keeps `spend.over` Ask for the manager and chat.
+//! `unsandboxed` and `user.private` are Never in every column of every preset.
 
 use super::{Action, Cell, Column, Limit, Matrix, Preset, Role, Unit, Verdict};
 

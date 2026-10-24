@@ -2414,17 +2414,14 @@ impl Session {
             && !self.closed.load(Ordering::SeqCst)
     }
 
-    /// Does a prompt containing NEEDLE wait in the queue or stand in the transcript?  (A wake that was delivered
-    /// before a restart is not delivered again.)
-    pub(crate) fn holds_text(&self, needle: &str) -> bool {
+    /// Does the prompt the hub keyed KEY (`message:ID`, `wake:JOB`) wait in the queue or stand in the transcript?  (A
+    /// wake that was delivered before a restart is not delivered again.)  The key is set by the hub that delivers
+    /// the prompt, so a peer's message that quotes a header never matches.
+    pub(crate) fn holds_key(&self, key: &str) -> bool {
         let st = lock(&self.state);
-        st.queue.texts().iter().any(|t| t.contains(needle))
+        st.queue.has_key(key)
             || st.entries.iter().any(|e| {
-                e.kind == EntryType::User
-                    && e.rest
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .is_some_and(|t| t.contains(needle))
+                e.kind == EntryType::User && e.rest.get("key").and_then(Value::as_str) == Some(key)
             })
     }
 
@@ -2550,6 +2547,16 @@ impl Session {
     /// turn it waits in the queue (ahead of the ordinary ones when the profile's mode is `steer`).  It never
     /// cancels: `interrupt` mode queues too, and only Stop cancels.
     pub(crate) fn prompt(self: &Arc<Self>, text: String, origin: Origin) -> Result<(), Error> {
+        self.prompt_keyed(text, origin, None)
+    }
+
+    /// [`Session::prompt`] for a prompt the hub knows by KEY ([`Session::holds_key`]).
+    pub(crate) fn prompt_keyed(
+        self: &Arc<Self>,
+        text: String,
+        origin: Origin,
+        key: Option<String>,
+    ) -> Result<(), Error> {
         let idle = {
             let mut st = lock(&self.state);
             if st.status == SessionStatus::Exited {
@@ -2557,7 +2564,7 @@ impl Session {
             }
             let idle = matches!(st.status, SessionStatus::Idle | SessionStatus::Waiting);
             let steer = !idle && self.mode == Some(Mode::Steer);
-            st.queue.push(text, origin, steer);
+            st.queue.push_keyed(text, origin, steer, key);
             if idle {
                 st.paused = false;
             }
@@ -2593,6 +2600,9 @@ impl Session {
                 }
                 if item.steer {
                     e.rest.insert("steer".into(), json!(true));
+                }
+                if let Some(key) = &item.key {
+                    e.rest.insert("key".into(), json!(key));
                 }
             }
             st.open = None;

@@ -37,11 +37,17 @@ fn lisp_names() -> Vec<String> {
 fn tool_names_are_the_lisp_names() {
     let mut lisp = lisp_names();
     assert_eq!(lisp.len(), 16, "the Lisp defines 16 tools: {lisp:?}");
-    // the two settings tools are Rust's only (unified-settings Task 32; the Lisp server is frozen)
+    // the two settings tools (unified-settings Task 32), the job tools (Task 15), `report_submit` and the plan tools
+    // (Task 21) are Rust's only; the Lisp server is frozen
     let mut rust: Vec<String> = tools_for(ToolSets { tracker: false })
         .iter()
         .map(|t| t.name().to_owned())
-        .filter(|n| n != "settings_get" && n != "settings_change" && !n.starts_with("job_"))
+        .filter(|n| {
+            !matches!(
+                n.as_str(),
+                "settings_get" | "settings_change" | "report_submit" | "plan_read" | "plan_write"
+            ) && !n.starts_with("job_")
+        })
         .collect();
     lisp.sort();
     rust.sort();
@@ -76,32 +82,53 @@ const BUDGET_BYTES: usize = 17_121;
 const BUDGET_BYTES_16: usize = 9_823;
 /// The four job tools (agent system part 1, Task 15) on top of the 18; the whole list stays under 40,000 bytes.
 const BUDGET_JOBS: usize = 6_000;
+/// The three tools the rest of part 1 added for every worker (Task 21): `report_submit`, `plan_read`, `plan_write`.
+/// Their schemas come from the plan methods' types.  Measured after the schemas were trimmed (`guard::compact_schema`):
+/// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets).
+const BUDGET_PART1: usize = 4_105;
 const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS <= 40_000);
+
+const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
 
 #[test]
 fn the_tool_list_fits_the_budget() {
     let bytes = json!({"tools": listing(tools())}).to_string().len();
-    let bytes16 = json!({"tools": listing(tools_for(ToolSets { tracker: false }))})
+    let without_tracker = || tools_for(ToolSets { tracker: false });
+    let bytes16 = json!({"tools": listing(without_tracker())})
         .to_string()
         .len();
     let jobs = json!({"tools": listing(norn::tools::jobs::tools())})
         .to_string()
         .len();
+    let part1 = json!({"tools": listing(
+        without_tracker()
+            .into_iter()
+            .filter(|t| PART1_TOOLS.contains(&t.name()))
+            .collect()
+    )})
+    .to_string()
+    .len();
     assert!(
         jobs <= BUDGET_JOBS,
         "the job tools are {jobs} bytes, over {BUDGET_JOBS}"
     );
+    assert!(
+        part1 <= BUDGET_PART1,
+        "report_submit and the plan tools are {part1} bytes, over {BUDGET_PART1}"
+    );
     // the numbers go in the ledger
     eprintln!(
-        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18 and the jobs: {bytes16} (budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS})"
+        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18, the jobs and part 1's three: {bytes16} (the 18 alone: budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS} + the 3 part-1 tools {part1} of {BUDGET_PART1})"
     );
     assert!(
         bytes <= BUDGET_BYTES,
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
+    // the 18 alone: what the list weighs without the job tools and part 1's three
+    let base = bytes16 - jobs - part1;
     assert!(
-        bytes16 <= BUDGET_BYTES_16 + BUDGET_JOBS,
-        "tools/list without the tracker tools is {bytes16} bytes, over {BUDGET_BYTES_16}"
+        base <= BUDGET_BYTES_16,
+        "tools/list without the tracker, job and part-1 tools is {base} bytes, over {BUDGET_BYTES_16}"
     );
 }
 

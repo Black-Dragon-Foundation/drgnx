@@ -1378,13 +1378,26 @@ async fn tool_call(
 ) -> Result<String, Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
     let db = &f.writer.db;
+    // an agent reads and decides the proposals about its own project's files only; a session the hub does not
+    // hold (or one outside any project) reaches none
+    let scope = match session.as_deref() {
+        Some(s) => crate::runner::effects::scope_of_session(f, s).await.ok(),
+        None => None,
+    }
+    .unwrap_or(crate::runner::effects::Scope::Project {
+        id: None,
+        root: None,
+    });
+    let all = proposals_core(db, None).await?;
+    let p = all
+        .proposals
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| err(format!("no proposal {id}")))?;
+    scope
+        .allows_path(Path::new(&p.path))
+        .map_err(|e| refuse(e.to_string()))?;
     let Some(accept) = accept else {
-        let all = proposals_core(db, None).await?;
-        let p = all
-            .proposals
-            .into_iter()
-            .find(|p| p.id == id)
-            .ok_or_else(|| err(format!("no proposal {id}")))?;
         return Ok(json!(p).to_string());
     };
     f.core.matrix.refresh(f);

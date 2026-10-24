@@ -100,10 +100,15 @@ pub(crate) async fn gate(s: &Arc<Session>, tool: Option<&Value>) -> bool {
     true
 }
 
+/// What the session's prompt for message ID is keyed by.
+fn message_key(id: i64) -> String {
+    format!("message:{id}")
+}
+
 /// The hub's own writes to the store (actor `hub`, class system).
 fn hub_caller() -> Caller {
     Caller {
-        class: Class::User,
+        class: Class::Service,
         sid: None,
         job: None,
         conn_id: 0,
@@ -158,8 +163,12 @@ pub(crate) async fn pass(front: &Front, told: &mut HashMap<String, u64>) {
         if !matches!(moved, Ok(true)) {
             continue;
         }
-        if s.prompt(messages::message_prompt(&m, q.as_ref()), origin)
-            .is_err()
+        if s.prompt_keyed(
+            messages::message_prompt(&m, q.as_ref()),
+            origin,
+            Some(message_key(id)),
+        )
+        .is_err()
         {
             let _ = front
                 .writer
@@ -230,7 +239,7 @@ pub async fn recover(front: &Front) {
                     .into_iter()
                     .find(|s| s.is_for(r))
             })
-            .is_some_and(|s| s.holds_text(&format!("#{} \u{2014} ", m.id)));
+            .is_some_and(|s| s.holds_key(&message_key(m.id)));
         let (id, now) = (
             m.id,
             std::time::SystemTime::now()
