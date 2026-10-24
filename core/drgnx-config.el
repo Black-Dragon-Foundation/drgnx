@@ -989,12 +989,18 @@ Line), Move into Settings…, Move to My Lisp…, Undo Move, Tidy custom.el and 
 (autoload 'drgnx-settings-page-convert-old-files "drgnx-settings-page" "Convert old project files." t)
 (autoload 'drgnx-settings-page-undo "drgnx-settings-page" "Undo the latest change of a setting." t)
 
+;; here, not in the page's library: the keys apply binds into it at once (a keymap of a library not loaded yet waits
+;; in an after-load entry per apply)
+(defvar-keymap drgnx-settings-page-mode-map
+  :doc "The Settings page's keys: the key profiles bind its commands here (keys/*.eld)."
+  :parent special-mode-map)
+
 (defun drgnx-config-register-page-commands ()
   "Preferences: Settings and the Settings page's own commands, and Settings: Undo, in the registry."
   (drgnx-command-define 'preferences-settings :category "Preferences" :title "Settings"
                         :command #'drgnx-settings-page :menu '("Options")
                         :doc "Every setting in one page: scope tabs, groups, search and filters, where each value comes from")
-  (let ((map '(drgnx-settings-page . drgnx-settings-page-mode-map))
+  (let ((map 'drgnx-settings-page-mode-map)
         (when (lambda () (derived-mode-p 'drgnx-settings-page-mode))))
     (drgnx-command-define 'settings-page-tab :category "Settings" :title "Scope Tab" :command #'drgnx-settings-page-tab
                           :map map :when when :doc "Cycle the tab: each row's own, User, Workspace, Shared")
