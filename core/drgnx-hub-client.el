@@ -23,6 +23,7 @@
 (require 'drgnx-notice)
 (require 'drgnx-work-db)                ; `drgnx-work-db-schema-version', which the hello says
 
+(declare-function drgnx-settings-agents--event "drgnx-settings-agents")
 (declare-function drgnx-ai-providers "drgnx-ai")
 (declare-function drgnx-settings-runtime-send "drgnx-settings-runtime")
 (declare-function drgnx-ai-provider "drgnx-ai")
