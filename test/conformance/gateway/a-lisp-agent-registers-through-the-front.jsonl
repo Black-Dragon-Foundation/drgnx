@@ -1,18 +1,22 @@
-{"scenario": "gateway/a-lisp-agent-registers-through-the-front", "requires": ["v1", "lisp-backend"], "pending": "agent system part 1, no task yet (8a's seam, I1-F): agents/start is the hub's own and does not register a gateway profile's session with the gateway", "doc": "Task 23: an agent the Lisp backend starts on a gateway profile (:ai claude-openrouter) is registered by the front's gateway (gateway/register through the backend's front connection, owner the backend): status.gateway.registrations is 1, and the mock ACP agent's environment has ANTHROPIC_BASE_URL = the gateway's URL and a token, never the key (a canary the user connection handed over)."}
+{"scenario": "gateway/a-lisp-agent-registers-through-the-front", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 20: an agent the hub starts on a gateway profile (:ai claude-openrouter) is registered by the hub's gateway: status.gateway.registrations is 1, and the mock ACP agent's Claude options carry ANTHROPIC_BASE_URL = the gateway's URL and a token, never the key (a canary the user connection handed over)."}
 {"do": "root"}
-{"do": "write_file", "path": "$CONFIG/settings.el", "text": "(drgnx-settings :version 1 (drgnx-agents-mcp (coordination)) (drgnx-agents-profiles ((\"mock-acp\" :ai claude-openrouter :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\") :env (\"MOCK_ACP_LOG=$ROOT/acp.log\")))))\n"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-gw\" :ai claude-openrouter :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
 {"do": "start", "hub": "h"}
-{"do": "install_bin", "to": "$DATA/bin/ratatoskr"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"openrouter":{"kind":"openai","url":"https://openrouter.ai/api/v1","caps":["chat","fim","embed"],"messages":true,"key_env":"KEY"}}}]}}}
 {"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-key-lisp-agent"}}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
-{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-acp", "cwd": "$HOME"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-gw", "cwd": "$ROOT/work"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:agent"}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"gateway": {"port": "$capture:gw", "registrations": 1}}}}
-{"do": "file", "path": "$ROOT/acp.log", "contains": "env ANTHROPIC_BASE_URL=http://127.0.0.1:$gw ANTHROPIC_AUTH_TOKEN=", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"ANTHROPIC_BASE_URL\":\"http://127.0.0.1:$gw\"", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"ANTHROPIC_AUTH_TOKEN\":\"", "within_ms": 30000}
 {"do": "file", "path": "$ROOT/acp.log", "lacks": "canary"}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/kill", "params": {"id": "$agent"}}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": "$any"}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"gateway": {"registrations": 0}}}}

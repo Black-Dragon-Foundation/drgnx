@@ -27,7 +27,7 @@ use runstav::methods::agents::{
     AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
     RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript, Usage, Via,
 };
-use runstav::methods::matrix::Role;
+use runstav::methods::matrix::{Role, Unit};
 use runstav::methods::timeline::{AgentStep, Step, StepClass};
 use runstav::registry::Class;
 use runstav::types::RequestId;
@@ -442,6 +442,9 @@ pub struct Session {
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
     writer: crate::coord::Writer,
+    budgets: crate::budget::Budgets,
+    /// The token of the session's gateway registration (a gateway profile).
+    gateway: Mutex<Option<String>>,
     scheduled: AtomicBool,
     next_request: AtomicU64,
     state: Mutex<State>,
@@ -487,6 +490,8 @@ struct Launched {
     caps: Option<Value>,
     enforced: bool,
     enforced_why: Option<String>,
+    /// The token of the gateway registration this launch made (a gateway profile).
+    gateway: Option<String>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only.
@@ -573,6 +578,7 @@ struct Prepared {
     plan: plock::LaunchPlan,
     enforced: bool,
     enforced_why: Option<String>,
+    gateway: Option<String>,
 }
 
 /// WHO a session is, for the matrix's columns.
@@ -675,7 +681,18 @@ async fn prepare(
     role: Role,
     sid: &str,
     cwd: &Path,
+    job: Option<&str>,
 ) -> Result<Prepared, Error> {
+    // a gateway profile's agent reaches its provider only through the hub's gateway, with a token of its own
+    let (profile, gateway) = match gateway_env(front, profile, role, sid, job).await? {
+        Some((env, token)) => {
+            let mut p = profile.clone();
+            p.env.extend(env);
+            (p, Some(token))
+        }
+        None => (profile.clone(), None),
+    };
+    let profile = &profile;
     let who = who_of(role, profile);
     let eff = front
         .core
@@ -691,6 +708,19 @@ async fn prepare(
         plan = plan.with_claude_rules(deny, ask);
     }
     plan = plan.with_codex_untrusted(profile, cwd);
+    if gateway.is_some() {
+        // the process gets the same variables the Claude options carry
+        let extra: Vec<(String, String)> = profile
+            .env
+            .iter()
+            .filter(|e| e.starts_with("ANTHROPIC_"))
+            .filter_map(|e| {
+                e.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
+            .collect();
+        plan.env.extend(extra);
+    }
     let why = match plan.enforced {
         plock::Enforced::Yes => None,
         plock::Enforced::No(why) => Some(why),
@@ -712,7 +742,94 @@ async fn prepare(
         enforced: why.is_none() && unsandboxed.is_none(),
         enforced_why: unsandboxed.or(why).map(str::to_string),
         plan,
+        gateway,
     })
+}
+
+/// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
+/// `claude-openrouter` without a model follows the `agent` role.
+fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Option<String>)> {
+    let kind = p.ai.as_deref().unwrap_or_default();
+    let one = |id: &str, m: Option<String>| vec![(id.to_string(), m)];
+    match kind {
+        "claude-openrouter" if p.model.is_none() => {
+            let cur = front.settings.current();
+            let roles = &cur.loaded.values.ai_roles;
+            let defaults = &crate::settings::defaults().roles;
+            roles
+                .iter()
+                .chain(defaults.iter())
+                .find(|r| r.role == "agent")
+                .map(|r| {
+                    r.chain
+                        .iter()
+                        .map(|s| (s.provider.clone(), s.model.clone()))
+                        .collect()
+                })
+                .unwrap_or_else(|| one("openrouter", None))
+        }
+        "claude-openrouter" => one("openrouter", p.model.clone()),
+        "claude-ollama" => one("ollama", None),
+        "claude-anthropic" => one("anthropic", None),
+        "claude-moonshot" => one("moonshot", p.model.clone()),
+        "claude-deepseek" => one("deepseek", p.model.clone()),
+        _ => Vec::new(),
+    }
+}
+
+/// A gateway profile's environment: the gateway's URL and a token registered for this session (booked under JOB, else
+/// the session id), never a key.  None for a profile with no gateway.
+async fn gateway_env(
+    front: &Front,
+    profile: &AgentProfile,
+    role: Role,
+    sid: &str,
+    job: Option<&str>,
+) -> Result<Option<(Vec<String>, String)>, Error> {
+    if profile.ai.is_none() {
+        return Ok(None);
+    }
+    let chain = gateway_chain(front, profile);
+    if chain.is_empty() {
+        return Ok(None);
+    }
+    let scope = scope_of(role, sid);
+    let r = front
+        .gate
+        .register_session(chain, job.unwrap_or(sid), &profile.name, &scope, &front.mcp)
+        .await?;
+    let url = r
+        .url
+        .ok_or_else(|| internal("the gateway gave no loopback URL"))?;
+    let mut env = vec![
+        format!("ANTHROPIC_BASE_URL={url}"),
+        format!("ANTHROPIC_AUTH_TOKEN={}", r.token),
+        "ANTHROPIC_API_KEY=".to_string(),
+    ];
+    if let Some(m) = &profile.model {
+        env.extend(
+            [
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "CLAUDE_CODE_SUBAGENT_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            ]
+            .map(|n| format!("{n}={m}")),
+        );
+    }
+    Ok(Some((env, r.token)))
+}
+
+/// The budget scope of a session.
+pub(crate) fn scope_of(role: Role, sid: &str) -> runstav::methods::timeline::BudgetScope {
+    use runstav::methods::timeline::BudgetScope;
+    let id = runstav::types::Id::new(sid).expect("a session id is an id");
+    if role == Role::Manager {
+        BudgetScope::Manager(id)
+    } else {
+        BudgetScope::Worker(id)
+    }
 }
 
 pub(crate) async fn open(
@@ -760,7 +877,16 @@ pub(crate) async fn open(
         None => launch::scratch_dir(&runstav::paths::Env::process(), &sid)
             .map_err(|r| internal(format!("scratch directory: {}", r.message)))?,
     };
-    let (l, rx) = launch(front, &profile, role, &sid, &cwd, None).await?;
+    let (l, rx) = launch(
+        front,
+        &profile,
+        role,
+        &sid,
+        &cwd,
+        p.job.as_ref().map(|j| j.as_str()),
+        None,
+    )
+    .await?;
     let ident = Ident {
         id: sid.clone(),
         name: name.clone(),
@@ -797,9 +923,10 @@ async fn launch(
     role: Role,
     sid: &str,
     cwd: &Path,
+    job: Option<&str>,
     existing: Option<&str>,
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
-    let prep = prepare(front, profile, role, sid, cwd).await?;
+    let prep = prepare(front, profile, role, sid, cwd, job).await?;
     let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
@@ -872,6 +999,7 @@ async fn launch(
             caps: capabilities,
             enforced: prep.enforced,
             enforced_why: prep.enforced_why,
+            gateway: prep.gateway,
         },
         rx,
     ))
@@ -904,6 +1032,11 @@ fn assemble(
         },
         ctx,
     ));
+    let scope = scope_of(i.role, &i.id);
+    front.core.budgets.enroll(&scope);
+    if let Some(m) = &i.parent {
+        front.core.budgets.link(&scope, &scope_of(Role::Manager, m));
+    }
     let s = Arc::new(Session {
         id: i.id,
         started: i.started,
@@ -936,6 +1069,8 @@ fn assemble(
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
+        budgets: front.core.budgets.clone(),
+        gateway: Mutex::new(l.gateway.clone()),
         scheduled: AtomicBool::new(false),
         next_request: AtomicU64::new(1),
         state: Mutex::new(State::new()),
@@ -1023,6 +1158,7 @@ pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
             serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
             &sid,
             Path::new(&cwd),
+            ident.job.as_deref(),
             Some(&acp),
         )
         .await
@@ -1332,6 +1468,24 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
 }
 
 impl Session {
+    /// The budget scope of this session.
+    pub(crate) fn scope(&self) -> runstav::methods::timeline::BudgetScope {
+        scope_of(self.role, &self.id)
+    }
+
+    /// AMOUNTS spent by this session, in their units.
+    fn spend(&self, amounts: Vec<(Unit, f64)>) {
+        for (unit, amount) in amounts {
+            let hits = self.budgets.spend(&self.scope(), unit, amount);
+            self.budgets.notify(hits);
+        }
+    }
+
+    /// The token of the gateway registration, taken (the session is going).
+    pub(crate) fn take_gateway(&self) -> Option<String> {
+        lock(&self.gateway).take()
+    }
+
     /// Who this session is, for the matrix's columns.
     pub(crate) fn who(&self) -> Who {
         Who {
@@ -1496,8 +1650,31 @@ impl Session {
     async fn handle(self: &Arc<Self>, ev: Event) {
         {
             match ev {
+                Event::Ext { method, params } => {
+                    if let Some((provider, share, resets)) =
+                        crate::budget::meter_of(&method, &params)
+                    {
+                        let hits =
+                            self.budgets
+                                .reading(&self.scope(), provider, share, resets, now());
+                        self.budgets.notify(hits);
+                    }
+                }
                 Event::Update { update, .. } => {
                     if let Ok(v) = serde_json::to_value(&update) {
+                        if let Some(total) = v
+                            .pointer("/cost/amount")
+                            .and_then(Value::as_f64)
+                            .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
+                        {
+                            let hits = self.budgets.spend_total(
+                                &self.scope(),
+                                "usd-est",
+                                Unit::UsdEst,
+                                total,
+                            );
+                            self.budgets.notify(hits);
+                        }
                         let cancel = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
@@ -1889,6 +2066,10 @@ impl Session {
         {
             let mut st = lock(&self.state);
             st.open = None;
+            // a pause asked for during the turn (a budget limit) holds the queue though no tool call ended it
+            if st.hold && !st.ending {
+                st.paused = true;
+            }
             st.hold = false;
             let mut rest = Map::new();
             let mut used = TurnUse::default();
@@ -1900,6 +2081,8 @@ impl Session {
                         st.paused = true;
                     }
                     used = turn_use(o);
+                    let tokens = (used.tokens_in + used.tokens_out) as f64;
+                    self.spend(vec![(Unit::Tokens, tokens)]);
                 }
                 Err(hermod::Error::Closed) => {}
                 Err(e) => {
@@ -2052,11 +2235,35 @@ pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
 }
 
 pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
-    f.core.agents.stop(p.id.as_str()).await
+    // a stop with no turn running ends the session: its token goes with it
+    let ends = f
+        .core
+        .agents
+        .find(p.id.as_str())
+        .is_ok_and(|s| !matches!(s.status(), SessionStatus::Busy | SessionStatus::Starting));
+    let r = f.core.agents.stop(p.id.as_str()).await;
+    if r.is_ok() && ends {
+        gateway_gone(f, p.id.as_str()).await;
+    }
+    r
 }
 
 pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
-    f.core.agents.kill(p.id.as_str()).await
+    let r = f.core.agents.kill(p.id.as_str()).await;
+    if r.is_ok() {
+        gateway_gone(f, p.id.as_str()).await;
+    }
+    r
+}
+
+/// Session SID is gone: its gateway token no longer forwards and its jobs are no longer booked.
+async fn gateway_gone(f: &Front, sid: &str) {
+    for j in f.core.budgets.job_of(sid) {
+        f.core.budgets.unbind_job(&j);
+    }
+    if let Some(t) = f.core.agents.take_gateway(sid) {
+        let _ = f.gate.unregister(&t).await;
+    }
 }
 
 pub async fn permission(f: &Front, c: &Caller, p: PermissionParams) -> Result<bool, Error> {

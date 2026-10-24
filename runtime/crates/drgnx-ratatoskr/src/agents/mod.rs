@@ -75,6 +75,11 @@ impl Hub {
             .ok_or_else(|| session::no_session(id))
     }
 
+    /// Session ID's gateway registration token, taken (so it is unregistered once).
+    pub(crate) fn take_gateway(&self, id: &str) -> Option<String> {
+        self.find(id).ok()?.take_gateway()
+    }
+
     /// Who the session SID is, for the matrix's columns (none for a session the hub does not hold).
     pub fn who(&self, sid: &str) -> Option<norn::matrix::Who> {
         lock(&self.sessions).get(sid).map(|s| s.who())

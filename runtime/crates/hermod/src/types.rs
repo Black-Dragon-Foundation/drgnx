@@ -61,6 +61,12 @@ pub enum Event {
         message_id: Option<String>,
     },
     Request(Incoming),
+    /// A notification outside the schema whose method starts with `_` (an agent's own extension, e.g.
+    /// `_claude/rateLimit`, `_codex/rateLimits`); anything else the schema does not know is dropped.
+    Ext {
+        method: String,
+        params: Value,
+    },
     Exit {
         code: Option<i32>,
         signal: Option<i32>,

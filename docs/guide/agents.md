@@ -583,6 +583,27 @@ Plans, ledgers, `DEFERRED.md`, `BUILD-BOARD.md` (and `board.org`, only when you 
 graph: drgnx rewrites it when the records change, starts it with a one-line comment saying so, and never overwrites
 a file you edited by hand. drgnx never commits these files; that stays yours.
 
+## Budgets
+
+A budget is a limit with a unit, set on a project, a plan, a manager or a worker (`budget/set`, read back with
+`budget/get`). Units never mix: `usd` is what the gateway measured, `usd-est` what an agent reported at API prices,
+`tokens` and `count` are what they say, and `limit-share` is a share (0 to 1) of a subscription's usage window.
+`usd-est` and `limit-share` are estimates and are labelled so, in the budget card and in `pace/get`. A limit in one
+unit is only ever used up by spending in that unit.
+
+Budgets nest. What a worker spends counts against the worker, its manager, its plan and its project, and what it may
+still spend is the least remaining over that chain. The gateway admits `usd` against the same minimum: a session on a
+gateway profile gets a token whose budget is its spend so far plus what remains, kept current as its siblings spend, so
+a request over the limit is refused with `budget_exceeded`.
+
+Reaching a limit counts. Every session at or below the scope is paused after its current tool call (its queue is held;
+send a message to go on) and one `budget` card says which scope and unit, the limit and the spend. Raising the limit
+with `budget/set` reports again if it is still reached.
+
+Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) are read from the agent, never from
+your login. `pace/get` gives, per meter, the share used, the rate per hour (linear over the last 24 hours of readings)
+and when the window would run out at that rate, unless it resets first. Its numbers are estimates.
+
 ## Tests
 
 - `test/unit/coord-test.el`, `coord-mcp-test.el`, `hub-agents-test.el`, `agents-mirror-test.el`, `coord-delivery-test.el`
