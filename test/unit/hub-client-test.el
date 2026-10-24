@@ -950,13 +950,21 @@ without the binary."
           (progn
             (should (drgnx-hub-ensure))
             (drgnx-hub-connect)
-            (drgnx-hub-client-test--wait (lambda () (member "openrouter" (and (listp drgnx-hub--keys-held) drgnx-hub--keys-held)))
-                                         "the hub holds the key")
+            ;; subscribed too: the ensure's own hand-over fills the list first, and a restart asked before the
+            ;; subscription would leave nothing for the waits below to wait for
+            (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events)
+                                                         (member "openrouter" (and (listp drgnx-hub--keys-held) drgnx-hub--keys-held))))
+                                         "the editor subscribed, and the hub holds the key")
             (let ((first drgnx-hub--events))
               (drgnx-hub-restart-now)
-              (drgnx-hub-client-test--wait (lambda () (not (process-live-p first))) "the hub restarts"))
-            (drgnx-hub-client-test--wait (lambda () (ignore-errors (drgnx-hub-connect) (process-live-p drgnx-hub--events)))
-                                         "the editor subscribes again")
+              ;; the old hub gone: its subscription and the connection the restart went on (one it still answers proves
+              ;; nothing about the new hub)
+              (let ((old drgnx-hub--client))
+                (drgnx-hub-client-test--wait (lambda () (not (or (process-live-p first) (process-live-p old)))) "the hub restarts"))
+              (drgnx-hub-client-test--wait (lambda () (ignore-errors (drgnx-hub-connect)
+                                                                     (and (process-live-p drgnx-hub--events)
+                                                                          (not (eq drgnx-hub--events first)))))
+                                           "the editor subscribes again"))
             ;; the new hub's own answer, not the list this Emacs kept from before
             (drgnx-hub-client-test--wait
              (lambda () (member "openrouter" (append (plist-get (ignore-errors (drgnx-hub-call-sync "gateway/keys-held" nil 5))
