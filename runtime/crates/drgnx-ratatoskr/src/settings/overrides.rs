@@ -517,6 +517,53 @@ mod tests {
         assert!(s.effective("drgnx-no-such", None).is_none());
     }
 
+    /// R6: sets of one scope racing each other and refreshes of a changing file: the kv row, memory and what is
+    /// published end on the same last set, over the file's last read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_sets_and_refreshes_agree() {
+        let r = rig("(drgnx-agents-mcp (f0))");
+        let s = std::sync::Arc::new(settings(&r).await);
+        let file = r.dir.path().join("settings.el");
+        let mut tasks = Vec::new();
+        for i in 0..24 {
+            let s = s.clone();
+            let file = file.clone();
+            tasks.push(tokio::spawn(async move {
+                if i % 3 == 0 {
+                    std::fs::write(
+                        &file,
+                        format!(";;; settings.el\n(drgnx-settings\n :version 1\n(drgnx-agents-mcp (f{i})))\n"),
+                    )
+                    .unwrap();
+                    s.refresh().await;
+                } else {
+                    let v = json!(format!("v{i}"));
+                    s.set_overrides(None, vec![o("drgnx-agents-default", v)])
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+        s.refresh().await;
+        let mem = s.overrides.lock().unwrap().scope(None).unwrap().to_vec();
+        let kept = Overrides::load(&r.db).await;
+        assert_eq!(kept.scope(None), Some(mem.as_slice()), "kv and memory");
+        let cur = s.current();
+        assert_eq!(
+            cur.loaded.values.agents_default.as_deref(),
+            mem[0].value.as_str(),
+            "published"
+        );
+        assert_eq!(
+            cur.loaded.values.agents_mcp,
+            s.file.lock().unwrap().loaded.values.agents_mcp,
+            "over the file's last read"
+        );
+    }
+
     #[test]
     fn every_runtime_setting_round_trips() {
         let d = &crate::settings::defaults().values;
