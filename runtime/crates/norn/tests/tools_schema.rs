@@ -41,7 +41,7 @@ fn tool_names_are_the_lisp_names() {
     let mut rust: Vec<String> = tools_for(ToolSets { tracker: false })
         .iter()
         .map(|t| t.name().to_owned())
-        .filter(|n| n != "settings_get" && n != "settings_change")
+        .filter(|n| n != "settings_get" && n != "settings_change" && !n.starts_with("job_"))
         .collect();
     lisp.sort();
     rust.sort();
@@ -74,7 +74,9 @@ fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
 /// Task 32: 15,564 and 8,930 bytes) plus 10 %, at most 40,000 bytes (call 10).
 const BUDGET_BYTES: usize = 17_121;
 const BUDGET_BYTES_16: usize = 9_823;
-const _: () = assert!(BUDGET_BYTES <= 40_000 && BUDGET_BYTES_16 <= 40_000);
+/// The four job tools (agent system part 1, Task 15) on top of the 18; the whole list stays under 40,000 bytes.
+const BUDGET_JOBS: usize = 6_000;
+const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS <= 40_000);
 
 #[test]
 fn the_tool_list_fits_the_budget() {
@@ -82,16 +84,23 @@ fn the_tool_list_fits_the_budget() {
     let bytes16 = json!({"tools": listing(tools_for(ToolSets { tracker: false }))})
         .to_string()
         .len();
+    let jobs = json!({"tools": listing(norn::tools::jobs::tools())})
+        .to_string()
+        .len();
+    assert!(
+        jobs <= BUDGET_JOBS,
+        "the job tools are {jobs} bytes, over {BUDGET_JOBS}"
+    );
     // the numbers go in the ledger
     eprintln!(
-        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18: {bytes16} (budget {BUDGET_BYTES_16})"
+        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18 and the jobs: {bytes16} (budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS})"
     );
     assert!(
         bytes <= BUDGET_BYTES,
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
     assert!(
-        bytes16 <= BUDGET_BYTES_16,
+        bytes16 <= BUDGET_BYTES_16 + BUDGET_JOBS,
         "tools/list without the tracker tools is {bytes16} bytes, over {BUDGET_BYTES_16}"
     );
 }

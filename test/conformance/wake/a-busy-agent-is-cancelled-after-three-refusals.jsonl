@@ -1,0 +1,21 @@
+{"scenario": "wake/a-busy-agent-is-cancelled-after-three-refusals", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 15 (Calls made 9): an agent that starts a job and then waits on it in the same turn (three sleep loops, then a long silence) has each wait refused with the wake text; the third refusal cancels the turn, and the session waits with one model request spent."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\" \"--llm\" \"http://127.0.0.1:$port/v1/messages\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:job_start {\"argv\": [\"sh\", \"-c\", \"cat $ROOT/gate\"]}\nsleep-loop\nsleep-loop\nsleep-loop\nsilent 60"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "waiting"}}}, "within_ms": 20000}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "reject_once", "count": 3, "at_most": 3}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "within_ms": 15000}

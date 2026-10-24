@@ -35,7 +35,7 @@ use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -239,10 +239,15 @@ impl State {
 
     /// A permission request makes the step wait for the user; the step it interrupted comes back after.
     fn wait_begin(&mut self) {
+        self.stash_begin(StepClass::UserWait);
+    }
+
+    /// A wait of CLASS (user, machine queue) cuts into the step running; that step comes back after.
+    fn stash_begin(&mut self, class: StepClass) {
         if self.stash.is_none() {
             self.stash = self.cur.clone();
         }
-        self.step_begin(StepClass::UserWait, None);
+        self.step_begin(class, None);
     }
 
     fn wait_end(&mut self) {
@@ -447,6 +452,12 @@ pub struct Session {
     gateway: Mutex<Option<String>>,
     scheduled: AtomicBool,
     next_request: AtomicU64,
+    /// The hub's running jobs: a session whose turn ends while one of its own runs waits for it.
+    live: Arc<crate::exec::Live>,
+    /// Waits refused since the turn began (a running job's `job_result`/`job_log`, a sleep loop).
+    wait_refusals: AtomicU32,
+    /// Closed while idle on a job: its agent process is gone and the hub resumes it at the wake.
+    closed: AtomicBool,
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
@@ -885,8 +896,11 @@ pub(crate) async fn open(
         role,
         &sid,
         &cwd,
-        p.job.as_ref().map(|j| j.as_str()),
         None,
+        (
+            p.task.as_ref().map(|t| t.as_str()),
+            p.job.as_ref().map(|j| j.as_str()),
+        ),
     )
     .await?;
     let ident = Ident {
@@ -916,6 +930,58 @@ pub(crate) async fn open(
     Ok(Started { id: sid, name })
 }
 
+/// The `mcpServers` entry that gives the session SID the coordination tools (`job_start` among them): Ratatoskr's
+/// `mcp-bridge` to the session's own socket, minted here (or the one a closed session left).  None when the hub has no
+/// store yet (the unit tests): the session then has no tools.
+async fn bridge(
+    front: &Front,
+    profile: &AgentProfile,
+    sid: &str,
+    cwd: &Path,
+    task: Option<&str>,
+    job: Option<&str>,
+) -> Vec<hermod::McpServer> {
+    let socket = match front.mcp.socket_of(sid) {
+        Some(path) => path,
+        None => {
+            let params = serde_json::from_value(json!({
+                "agent": profile.name,
+                "sid": sid,
+                "cwd": cwd,
+                "owner": std::process::id(),
+                "profile": profile.name,
+                "task": task,
+                "job": job,
+            }));
+            let Ok(params) = params else {
+                return Vec::new();
+            };
+            match front.mcp.open(params).await {
+                Ok(a) => PathBuf::from(a.socket),
+                Err(e) => {
+                    tracing::warn!(sid, "no coordination tools for the session: {}", e.message);
+                    return Vec::new();
+                }
+            }
+        }
+    };
+    let env = runstav::paths::Env::process();
+    let installed = runstav::paths::data_dir(&env).join("bin").join("ratatoskr");
+    let command = if installed.exists() {
+        installed
+    } else {
+        std::env::current_exe().unwrap_or(installed)
+    };
+    serde_json::from_value(json!({
+        "name": "drgnx",
+        "command": command,
+        "args": ["mcp-bridge", "--socket", socket],
+        "env": [],
+    }))
+    .map(|m| vec![m])
+    .unwrap_or_default()
+}
+
 /// PROFILE's agent in CWD: started in its sandbox, initialized, on a session (a new one, or EXISTING by
 /// `session/resume`, else `session/load` when the agent can only load) and its lock verified: a lock that does not
 /// hold kills the session.
@@ -927,8 +993,10 @@ async fn launch(
     cwd: &Path,
     job: Option<&str>,
     existing: Option<&str>,
+    (task, job): (Option<&str>, Option<&str>),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     let prep = prepare(front, profile, role, sid, cwd, job).await?;
+    let mcp = bridge(front, profile, sid, cwd, task, job).await;
     let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
@@ -959,7 +1027,7 @@ async fn launch(
         let info = conn.initialize(caps).await?;
         let caps = serde_json::to_value(&info.caps).ok();
         let acp = match existing {
-            None => conn.new_session(cwd, Vec::new(), meta).await?,
+            None => conn.new_session(cwd, mcp.clone(), meta).await?,
             Some(id) => {
                 let sid = SessionId::new(id.to_string());
                 let can = |p: &str| {
@@ -968,9 +1036,9 @@ async fn launch(
                         .is_some_and(|v| !v.is_null() && *v != json!(false))
                 };
                 if can("/sessionCapabilities/resume") {
-                    conn.resume_session(&sid, cwd, Vec::new()).await?;
+                    conn.resume_session(&sid, cwd, mcp.clone()).await?;
                 } else if can("/loadSession") {
-                    conn.load_session(&sid, cwd, Vec::new()).await?;
+                    conn.load_session(&sid, cwd, mcp.clone()).await?;
                 } else {
                     return Err(hermod::Error::Decode(
                         "the agent can neither resume nor load a session".into(),
@@ -1076,6 +1144,9 @@ fn assemble(
         gateway: Mutex::new(l.gateway.clone()),
         scheduled: AtomicBool::new(false),
         next_request: AtomicU64::new(1),
+        live: front.core.exec.live(),
+        wait_refusals: AtomicU32::new(0),
+        closed: AtomicBool::new(false),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         steps,
@@ -1088,21 +1159,36 @@ fn assemble(
 /// transcript read back, the held queue restored and its first prompt delivered.  A session whose profile is gone,
 /// or whose agent will not resume, stays in the table for the next start.
 pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
-    let Some(db) = hub.db() else { return };
-    type Row = (
-        String,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        String,
-        Option<String>,
-        f64,
-    );
-    let rows: Vec<Row> = match db
-        .read(|c| {
+    for row in read_rows(hub, None).await {
+        if hub.find(&row.0).is_ok() {
+            continue;
+        }
+        resume_row(hub, front, row).await;
+    }
+}
+
+/// A recorded session: sid, name, profile, role, cwd, task, job, acp id, parent, started.
+type Row = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    f64,
+);
+
+/// The recorded sessions (only ONLY when given), oldest first.
+async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
+    let Some(db) = hub.db() else {
+        return Vec::new();
+    };
+    let only = only.map(str::to_string);
+    match db
+        .read(move |c| {
             let mut q = c.prepare(
                 "select sid, name, profile, role, cwd, task, job, acp, parent, at from asession order by at",
             )?;
@@ -1111,83 +1197,112 @@ pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
                     r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
                 ))
             })?;
-            it.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            let all = it.collect::<Result<Vec<Row>, _>>()?;
+            Ok(all
+                .into_iter()
+                .filter(|r| only.as_deref().is_none_or(|o| r.0 == o))
+                .collect::<Vec<_>>())
         })
         .await
     {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("cannot read the recorded sessions: {e}");
-            return;
+            Vec::new()
+        }
+    }
+}
+
+/// ROW as a running session again: `session/resume`, else `session/load`; its transcript and held queue read back
+/// and its first prompt delivered.  A session whose profile is gone or whose agent will not resume stays in the table.
+async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
+    let (sid, name, profile_name, role, cwd, task, job, acp, parent, at) = row;
+    let Some(profile) = find_profile(front, &profile_name) else {
+        tracing::warn!(
+            sid,
+            "session not resumed: no agent profile {profile_name:?}"
+        );
+        return false;
+    };
+    let store = front.dirs.get().map(|d| transcript::Store::new(&d.hub));
+    let meta = store
+        .as_ref()
+        .map(|s| s.load_meta(&sid))
+        .unwrap_or(Value::Null);
+    let ident = Ident {
+        id: sid.clone(),
+        name,
+        started: at,
+        role: serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
+        cwd: PathBuf::from(&cwd),
+        task: task.clone(),
+        job: job.clone(),
+        parent,
+        about: meta
+            .get("about")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        document: meta
+            .get("document")
+            .and_then(Value::as_str)
+            .map(PathBuf::from),
+    };
+    let (l, rx) = match launch(
+        front,
+        &profile,
+        serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
+        &sid,
+        Path::new(&cwd),
+        Some(&acp),
+        (task.as_deref(), job.as_deref()),
+    )
+    .await
+    {
+        Ok(x) => x,
+        Err(e) => {
+            tracing::warn!(sid, "session not resumed: {}", e.message);
+            return false;
         }
     };
-    for (sid, name, profile_name, role, cwd, task, job, acp, parent, at) in rows {
-        if hub.find(&sid).is_ok() {
-            continue;
-        }
-        let Some(profile) = find_profile(front, &profile_name) else {
-            tracing::warn!(
-                sid,
-                "session not resumed: no agent profile {profile_name:?}"
-            );
-            continue;
-        };
-        let store = front.dirs.get().map(|d| transcript::Store::new(&d.hub));
-        let meta = store
-            .as_ref()
-            .map(|s| s.load_meta(&sid))
-            .unwrap_or(Value::Null);
-        let ident = Ident {
-            id: sid.clone(),
-            name,
-            started: at,
-            role: serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
-            cwd: PathBuf::from(&cwd),
-            task,
-            job,
-            parent,
-            about: meta
-                .get("about")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            document: meta
-                .get("document")
-                .and_then(Value::as_str)
-                .map(PathBuf::from),
-        };
-        let (l, rx) = match launch(
-            front,
-            &profile,
-            serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
-            &sid,
-            Path::new(&cwd),
-            ident.job.as_deref(),
-            Some(&acp),
-        )
-        .await
-        {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(sid, "session not resumed: {}", e.message);
-                continue;
-            }
-        };
-        let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
-        if let Some(store) = &s.store {
-            let entries = store.load(&sid);
-            let (queue, paused) = store.load_queue(&sid);
-            let mut st = lock(&s.state);
-            st.flushed = entries.len();
-            st.entries = entries;
-            st.queue = queue;
-            st.paused = paused;
-        }
-        lock(&s.state).status = SessionStatus::Idle;
-        hub.insert(s.clone());
-        tokio::spawn(s.clone().run(rx, done));
-        s.changed();
-        s.next();
+    let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
+    if let Some(store) = &s.store {
+        let entries = store.load(&sid);
+        let (queue, paused) = store.load_queue(&sid);
+        let mut st = lock(&s.state);
+        st.flushed = entries.len();
+        st.entries = entries;
+        st.queue = queue;
+        st.paused = paused;
     }
+    lock(&s.state).status = SessionStatus::Idle;
+    hub.insert(s.clone());
+    tokio::spawn(s.clone().run(rx, done));
+    s.changed();
+    s.next();
+    true
+}
+
+/// The session SID if it was closed while it waited on a job: resumed now (its agent started again on the same
+/// ACP session) and the session in the hub is the new one.
+pub(crate) async fn resume_closed(
+    hub: &super::Hub,
+    front: &Front,
+    sid: &str,
+) -> Result<Arc<Session>, Error> {
+    let old = hub.find(sid)?;
+    if !old.is_closed() {
+        return Ok(old);
+    }
+    let rows = read_rows(hub, Some(sid)).await;
+    let Some(row) = rows.into_iter().next() else {
+        return Err(internal(format!(
+            "session {sid} is closed and not recorded"
+        )));
+    };
+    if !resume_row(hub, front, row).await {
+        return Err(internal(format!("session {sid} cannot be resumed")));
+    }
+    hub.find(sid)
 }
 
 /// What a session's step rows say of it.
@@ -1626,7 +1741,12 @@ impl Session {
             provider: self.provider.clone(),
             parent: self.parent.clone(),
             about: self.about.clone(),
-            waiting_on: None,
+            waiting_on: if st.cur.as_ref().map(|c| c.class) == Some(StepClass::MachineQueue) {
+                Some("machine".to_string())
+            } else {
+                Some(self.live.ids(&self.id).join(","))
+                    .filter(|j| st.status == SessionStatus::Waiting && !j.is_empty())
+            },
         }
     }
 
@@ -1751,6 +1871,19 @@ impl Session {
                     signal,
                     stderr,
                 } => {
+                    if self.closed.load(Ordering::SeqCst) {
+                        // closed on purpose while it waited on a job: still waiting; the wake resumes it
+                        {
+                            let mut st = lock(&self.state);
+                            st.exit = Some(code.map_or_else(
+                                || signal.map_or(-1, |s| 128 + i64::from(s)),
+                                i64::from,
+                            ));
+                            st.seq += 1;
+                        }
+                        self.schedule();
+                        return;
+                    }
                     {
                         let mut st = lock(&self.state);
                         st.status = runstav::methods::agents::SessionStatus::Exited;
@@ -1798,6 +1931,19 @@ impl Session {
         // The matrix decides first: allowed answers at once, never refuses at once, an ask waits for the user.
         let s = self.clone();
         tokio::spawn(async move {
+            if s.has_jobs() && is_wait_loop(req.get("toolCall")) {
+                let n = s.refuse_wait();
+                {
+                    let mut st = lock(&s.state);
+                    let mut rest = Map::new();
+                    rest.insert("text".into(), json!(WAIT_REFUSED));
+                    st.push(EntryType::Error, rest);
+                }
+                s.changed();
+                tracing::debug!(session = s.id, refusals = n, "a wait loop refused");
+                reply(resp, pick_reject(&options));
+                return;
+            }
             let (action, facts) = classify(req.get("toolCall"));
             let ctx = ActionCtx {
                 session: Some(s.id.clone()),
@@ -1986,6 +2132,77 @@ impl Session {
         lock(&self.state).status
     }
 
+    /// A job this session started runs: when its turn ends the session waits for it (no model request).
+    pub(crate) fn has_jobs(&self) -> bool {
+        !self.live.ids(&self.id).is_empty()
+    }
+
+    /// Closed while it waited on a job: the agent's process is gone.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    fn setting_u64(&self, name: &str, default: u64) -> u64 {
+        self.settings
+            .effective(name, None)
+            .and_then(|(v, _)| v.as_u64())
+            .unwrap_or(default)
+    }
+
+    /// The agent waited on a running job (a `job_result` or `job_log` of it, a sleep loop): refused.  After
+    /// `agents-wait-refusals` of them in one turn the turn is cancelled; the wake prompts the session again.
+    pub(crate) fn refuse_wait(self: &Arc<Self>) -> u32 {
+        let n = self.wait_refusals.fetch_add(1, Ordering::Relaxed) + 1;
+        if u64::from(n) >= self.setting_u64("drgnx-agents-wait-refusals", 3) {
+            self.stop_turn();
+        }
+        n
+    }
+
+    /// The session's job waits for a machine (ON), or got one.
+    pub(crate) fn queue_wait(self: &Arc<Self>, on: bool) {
+        {
+            let mut st = lock(&self.state);
+            if on {
+                if st.status == SessionStatus::Busy {
+                    st.stash_begin(StepClass::MachineQueue);
+                }
+            } else if st.cur.as_ref().map(|c| c.class) == Some(StepClass::MachineQueue) {
+                st.wait_end();
+            }
+        }
+        self.changed();
+    }
+
+    /// After `agents-close-idle-after` seconds of waiting on a job the agent's process ends (`session/close` where the
+    /// agent has it); the wake resumes the session.  0: never.
+    fn close_when_idle(self: &Arc<Self>) {
+        let after = self.setting_u64("drgnx-agents-close-idle-after", 1800);
+        if after == 0 {
+            return;
+        }
+        let me = self.clone();
+        let turn = lock(&self.state).turn;
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(after)).await;
+            let still = {
+                let st = lock(&me.state);
+                st.status == SessionStatus::Waiting && st.turn == turn
+            };
+            if still && me.has_jobs() {
+                me.close_now().await;
+            }
+        });
+    }
+
+    async fn close_now(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.flush_transcript();
+        self.persist_queue();
+        let _ = self.conn.close_session(&self.acp).await;
+        draugr::kill_group(self.conn.pid(), STOP_GRACE, &draugr::RealSignaller).await;
+    }
+
     async fn read_file(&self, req: &Value) -> Result<String, String> {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
         let real = self.fence().check(path, false)?;
@@ -2029,7 +2246,7 @@ impl Session {
             if st.status == SessionStatus::Exited {
                 return Err(invalid("id", "the session has exited"));
             }
-            let idle = st.status == SessionStatus::Idle;
+            let idle = matches!(st.status, SessionStatus::Idle | SessionStatus::Waiting);
             let steer = !idle && self.mode == Some(Mode::Steer);
             st.queue.push(text, origin, steer);
             if idle {
@@ -2049,10 +2266,11 @@ impl Session {
     fn next(self: &Arc<Self>) {
         let item = {
             let mut st = lock(&self.state);
-            if st.status != SessionStatus::Idle || st.paused {
+            if !matches!(st.status, SessionStatus::Idle | SessionStatus::Waiting) || st.paused {
                 return;
             }
             let Some(item) = st.queue.pop() else { return };
+            self.wait_refusals.store(0, Ordering::Relaxed);
             st.status = SessionStatus::Busy;
             st.turn += 1;
             st.open = None;
@@ -2087,6 +2305,7 @@ impl Session {
 
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
         let out = end.0;
+        let mut waiting = false;
         {
             let mut st = lock(&self.state);
             st.open = None;
@@ -2118,11 +2337,25 @@ impl Session {
             st.stash = None;
             st.step_close(now(), Some(used));
             if st.status == SessionStatus::Busy {
-                st.status = SessionStatus::Idle;
-                if st.paused {
-                    st.step_begin(StepClass::Paused, None);
+                if !self.has_jobs() {
+                    st.status = SessionStatus::Idle;
+                    if st.paused {
+                        st.step_begin(StepClass::Paused, None);
+                    }
+                } else {
+                    // no model request until the wake: the step is the wait
+                    st.status = SessionStatus::Waiting;
+                    st.step_begin(StepClass::JobWait, None);
+                    waiting = true;
                 }
             }
+            // a job's result is for the model even after a Stop or the refused waits
+            if st.queue.has_hub() {
+                st.paused = false;
+            }
+        }
+        if waiting {
+            self.close_when_idle();
         }
         if lock(&self.state).ending {
             self.drain_steps();
@@ -2161,6 +2394,33 @@ fn turn_use(o: &hermod::PromptOutcome) -> TurnUse {
         cache_write: n("cachedWriteTokens"),
         cost: None,
     }
+}
+
+/// What an agent is told when it waits on a job it started.
+pub(crate) const WAIT_REFUSED: &str =
+    "your job runs: end your turn, you are woken with its result (no waiting, polling or sleeping)";
+
+/// A shell command that waits or polls (`sleep`, `pgrep`, `watch`, `until`, `tail -f`), as an `execute` tool call.
+fn is_wait_loop(tool: Option<&Value>) -> bool {
+    let Some(t) = tool else { return false };
+    if t.get("kind").and_then(Value::as_str) != Some("execute") {
+        return false;
+    }
+    let command = t
+        .pointer("/rawInput/command")
+        .or_else(|| t.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let words: Vec<&str> = command
+        .split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    words
+        .iter()
+        .any(|w| matches!(*w, "sleep" | "pgrep" | "watch" | "until"))
+        || words
+            .windows(2)
+            .any(|p| p[0] == "tail" && matches!(p[1], "-f" | "-F" | "--follow"))
 }
 
 /// The reject option of OPTIONS (once preferred), else none (the answer is "cancelled").
@@ -2252,6 +2512,8 @@ pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
     if c.class != Class::User {
         return Err(refuse("only the user sends a message here"));
     }
+    // a session closed on a job is resumed first: the message must reach a running agent
+    resume_closed(&f.core.agents, f, p.id.as_str()).await?;
     f.core
         .agents
         .send(p.id.as_str(), p.text.as_str().to_string())?;
@@ -2259,15 +2521,16 @@ pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
 }
 
 pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
-    // a stop with no turn running ends the session: its token goes with it
+    // a turn running is cancelled (the session stays); an idle or starting session is ended: its token and socket go
     let ends = f
         .core
         .agents
         .find(p.id.as_str())
-        .is_ok_and(|s| !matches!(s.status(), SessionStatus::Busy | SessionStatus::Starting));
+        .is_ok_and(|s| s.status() != SessionStatus::Busy);
     let r = f.core.agents.stop(p.id.as_str()).await;
     if r.is_ok() && ends {
         gateway_gone(f, p.id.as_str()).await;
+        let _ = f.mcp.close(p.id.as_str()).await;
     }
     r
 }
@@ -2277,6 +2540,7 @@ pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     if r.is_ok() {
         gateway_gone(f, p.id.as_str()).await;
     }
+    let _ = f.mcp.close(p.id.as_str()).await;
     r
 }
 
@@ -2715,5 +2979,37 @@ mod tests {
         assert_eq!(pick_reject(&opts).as_deref(), Some("r"));
         assert_eq!(pick_reject(&opts[..2]).as_deref(), Some("ra"));
         assert_eq!(pick_reject(&opts[..1]), None);
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    fn exec(command: &str) -> Value {
+        json!({"kind": "execute", "title": command, "rawInput": {"command": command}})
+    }
+
+    #[test]
+    fn waits_and_polls_are_wait_loops_other_commands_are_not() {
+        for c in [
+            "sleep 30; pgrep -f x",
+            "until test -f done; do :; done",
+            "tail -f build.log",
+            "watch -n1 ls",
+            "cargo test && sleep 5",
+        ] {
+            assert!(is_wait_loop(Some(&exec(c))), "{c}");
+        }
+        for c in [
+            "cargo test",
+            "git status",
+            "tail -n 5 build.log",
+            "echo sleepy",
+        ] {
+            assert!(!is_wait_loop(Some(&exec(c))), "{c}");
+        }
+        let read = json!({"kind": "read", "title": "sleep.txt"});
+        assert!(!is_wait_loop(Some(&read)) && !is_wait_loop(None));
     }
 }

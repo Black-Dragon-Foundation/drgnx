@@ -57,6 +57,11 @@ impl Queue {
         self.items.is_empty()
     }
 
+    /// A prompt from the hub itself (a job's wake) waits.
+    pub fn has_hub(&self) -> bool {
+        self.items.iter().any(|i| i.origin == Origin::Hub)
+    }
+
     pub fn len(&self) -> usize {
         self.items.len()
     }

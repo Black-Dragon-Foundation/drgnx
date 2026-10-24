@@ -523,6 +523,15 @@ impl Sessions {
         );
     }
 
+    /// Session SID's `mcp.sock`, while it is bound.
+    pub fn socket_of(&self, sid: &str) -> Option<PathBuf> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .map(|l| l.path.clone())
+    }
+
     /// Whether session SID's socket is bound now.
     pub fn is_live(&self, sid: &str) -> bool {
         self.live.lock().expect("sessions").contains_key(sid)
