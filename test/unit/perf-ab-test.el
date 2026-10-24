@@ -348,10 +348,46 @@ typing and churn compose p95 rows known (GL-POPUP-CHURN-FULL-1) up to spike (i)'
           (should b)
           (should (eql (nth 2 b) (cadr row)))
           (should (equal (plist-get (nthcdr 3 b) :known)
-                         (and (memq w '(popup-typing popup-churn)) (equal (car row) '(:compose :compose-ms :p95))
-                              'GL-POPUP-CHURN-FULL-1)))
-          (when (plist-get (nthcdr 3 b) :known) (should (eql (plist-get (nthcdr 3 b) :fails-above) 4.42))))))
+                         (and (equal (car row) '(:compose :compose-ms :p95))
+                              (if (eq w 'scroll-under-popup) 'GL-SCROLL-PAGE-COPY-1 'GL-POPUP-CHURN-FULL-1))))
+          (when (plist-get (nthcdr 3 b) :known)
+            (if (eq w 'scroll-under-popup)
+                (progn (should (equal (plist-get (nthcdr 3 b) :fails-above-row) '(scrolling (:compose :compose-ms :p95))))
+                       (should (eql (plist-get (nthcdr 3 b) :by) 1)))
+              (should (eql (plist-get (nthcdr 3 b) :fails-above) 4.42)))))))
     (should-not (assq 'scroll-full-window budgets))))
+
+(ert-deftest drgnx-perf/known-row-against-another-row ()
+  "A row with `:fails-above-row (ROW PATH) :by B' is known up to ROW's value in the same A/B plus B, fails above it,
+and fails when ROW was not measured in the run."
+  (let ((budgets '((scroll-under-popup (:compose :compose-ms :p95) 2 :known GL-SCROLL-PAGE-COPY-1
+                                       :fails-above-row (scrolling (:compose :compose-ms :p95)) :by 1)))
+        (others '((scrolling . (:compose (:compose-ms (:p95 2.57)))))))
+    (cl-flet ((go (v others)
+                (drgnx-perf-ab--budget-fails 'scroll-under-popup '(:n 960) budgets
+                                             (list :compose (list :compose-ms (list :p95 v))) 326 others)))
+      (should-not (go 1.9 others))
+      (should (equal (go 2.26 others)
+                     '((:known "scroll-under-popup compose compose-ms p95 2.3 > 2 (GL-SCROLL-PAGE-COPY-1; fails above scrolling compose compose-ms p95 2.57 + 1)"))))
+      (should (equal (go 3.8 others)
+                     '("scroll-under-popup compose compose-ms p95 3.8 > 2 (GL-SCROLL-PAGE-COPY-1) and > scrolling compose compose-ms p95 2.57 + 1")))
+      (should (equal (go 2.26 nil)
+                     '("scroll-under-popup compose compose-ms p95 2.3 > 2 (GL-SCROLL-PAGE-COPY-1) and > scrolling compose compose-ms p95 + 1, not measured in this run"))))))
+
+(ert-deftest drgnx-perf-ab/sessions-outlive-the-default-cap ()
+  "The A/B's two sessions serve every workload: they start with DRGNX_UI_MAX_RUNTIME raised (unless it is set)."
+  (let (seen)
+    (drgnx-perf-ab-test--with-fake 0
+      (cl-letf (((symbol-function 'drgnx-perf-ab--start)
+                 (lambda (tree &optional _env) (push (getenv "DRGNX_UI_MAX_RUNTIME") seen) (list :name (if tree 'sess-a 'sess-b)))))
+        (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME" process-environment)))   ; unset
+          (with-output-to-string (drgnx-perf-ab "HEAD" :n 50)))
+        (should (equal seen (list (number-to-string drgnx-perf-ab-session-runtime)
+                                  (number-to-string drgnx-perf-ab-session-runtime))))
+        (setq seen nil)
+        (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME=99" process-environment)))
+          (with-output-to-string (drgnx-perf-ab "HEAD" :n 50)))
+        (should (equal seen '("99" "99")))))))
 
 (ert-deftest drgnx-perf/ab-env-needs-two-values ()
   (dolist (bad '("DRGNX_PERF_GLITNIR=on" "DRGNX_PERF_GLITNIR=on," "=on,off" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_GLITNIR=on,off,x"))

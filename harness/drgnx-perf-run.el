@@ -1249,12 +1249,14 @@ b then a…, so a fixed order bias (the side that runs second pays for the first
           :b (apply #'append (mapcar (lambda (r) (plist-get r :b)) rounds))
           :rounds rounds :order order)))
 
-(defun drgnx-perf-ab--budget-fails (workload stats budgets &optional run compose-n)
+(defun drgnx-perf-ab--budget-fails (workload stats budgets &optional run compose-n others)
   "The work tree's absolute wall-clock BUDGETS for WORKLOAD against STATS (of its samples), judged at n >= 100.
 `:compose' rows are read from RUN (the work tree's run, median-reduced over its rounds) and judged at COMPOSE-N
 (`(:compose :count)' summed over its rounds) >= 100.  A `:compose' row whose plist has `:known ID :fails-above
 CEILING' (a known failure, e.g. GL-POPUP-CHURN-FULL-1) is reported as (:known LINE) while its value is above LIMIT
-but at most CEILING, and fails only above CEILING."
+but at most CEILING, and fails only above CEILING.  With `:known ID :fails-above-row (ROW PATH) :by B' instead the
+ceiling is ROW's value at PATH in this A/B plus B: OTHERS is an alist (WORKLOAD . RUN) of the work tree's runs of the
+workloads judged before this one (e.g. scroll-under-popup against scrolling); a ROW not among them fails the row."
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,plist) b))
@@ -1265,20 +1267,31 @@ but at most CEILING, and fails only above CEILING."
             (when (and (>= (plist-get stats :n) 100) (numberp v) (> v limit))
               (push (format "%s input %s %s > %s" w (substring (symbol-name (cadr path)) 1) (drgnx-perf--round v) limit) out))))
          ((eq (car path) :compose)
-          (let ((v (drgnx-perf--path-value run path))
-                (known (plist-get plist :known)) (ceiling (plist-get plist :fails-above)))
+          (let* ((v (drgnx-perf--path-value run path))
+                 (known (plist-get plist :known)) (row (plist-get plist :fails-above-row))
+                 (ref (and row (drgnx-perf--path-value (cdr (assq (car row) others)) (cadr row))))
+                 (ceiling (if row (and (numberp ref) (+ ref (plist-get plist :by)))
+                            (plist-get plist :fails-above)))
+                 (what (if row
+                           (if (numberp ref)
+                               (format "%s %s %s + %s" (car row) (drgnx-perf--path-name (cadr row))
+                                       (drgnx-perf--round2 ref) (plist-get plist :by))
+                             (format "%s %s + %s, not measured in this run" (car row)
+                                     (drgnx-perf--path-name (cadr row)) (plist-get plist :by)))
+                         ceiling)))
             (when (and (>= (or compose-n 0) 100) (numberp v) (> v limit))
               (let ((line (format "%s %s %s > %s" w (drgnx-perf--path-name path) (drgnx-perf--round v) limit)))
                 (push (cond ((not known) line)
                             ((and (numberp ceiling) (<= v ceiling))
-                             (list :known (format "%s (%s; fails above %s)" line known ceiling)))
-                            (t (format "%s (%s) and > %s" line known ceiling)))
+                             (list :known (format "%s (%s; fails above %s)" line known what)))
+                            (t (format "%s (%s) and > %s" line known what)))
                       out))))))))
     (nreverse out)))
 
-(defun drgnx-perf-ab--workload (name spec sa sb n)
+(defun drgnx-perf-ab--workload (name spec sa sb n &optional others)
   "A/B workload NAME between sessions SA (the REF) and SB (the work tree): an entry plist, :status one of
-judged, not-comparable, error, not-judged."
+judged, not-comparable, error, not-judged.  OTHERS: the work tree's runs of the workloads judged before it, an alist
+(WORKLOAD . RUN), for budget rows judged against another row (`drgnx-perf-ab--budget-fails')."
   (let ((call (lambda (s f) (drgnx-perf-run--call s f 120))))
     (cond
      ((or (plist-get spec :daemon) (null (plist-get spec :actions)))
@@ -1320,7 +1333,8 @@ judged, not-comparable, error, not-judged."
                               (list :budget-fails
                                     (drgnx-perf-ab--budget-fails
                                      name sb-stats (drgnx-perf-run--budgets) (drgnx-perf-run--medians runs-b)
-                                     (apply #'+ (mapcar (lambda (x) (or (drgnx-perf--path-value x '(:compose :count)) 0)) runs-b)))))))
+                                     (apply #'+ (mapcar (lambda (x) (or (drgnx-perf--path-value x '(:compose :count)) 0)) runs-b))
+                                     others)))))
                   )
               (when (plist-get spec :teardown)
                 (ignore-errors (funcall call sa (plist-get spec :teardown)))
@@ -1363,6 +1377,11 @@ judged, not-comparable, error, not-judged."
             (and pa pb (format "\n%-13s key to present (ms, REF/tree): p50 %s/%s p90 %s/%s" ""
                                (plist-get pa :p50) (plist-get pb :p50) (plist-get pa :p90) (plist-get pb :p90))))))
 
+(defconst drgnx-perf-ab-session-runtime (* 4 3600)
+  "Seconds an A/B's two sessions may live ($DRGNX_UI_MAX_RUNTIME for them unless it is set): they serve every
+workload of the run, and a full tier at 2880x1800 took over 30 min, the default cap, which ended both sessions
+mid-run (\"can't find socket\").  The run stops them when it ends.")
+
 (cl-defun drgnx-perf-ab (ref &key (n 100) env)
   "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'
 and both trees are built; one session each; per workload one discarded warm-up run per side, then runs
@@ -1383,6 +1402,10 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
            (tmp (or (getenv "DRGNX_RUN_TMP") own-tmp)) (ref-tree (expand-file-name "ab-ref" tmp))
            (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
            (workloads (drgnx-perf-run--select (drgnx-perf-run--only (drgnx-perf-run--workloads))))
+           ;; the two sessions serve every workload: a full tier outlives a session's default 30 min cap
+           (process-environment (if (getenv "DRGNX_UI_MAX_RUNTIME") process-environment
+                                  (cons (format "DRGNX_UI_MAX_RUNTIME=%d" drgnx-perf-ab-session-runtime)
+                                        process-environment)))
            sa-name sb-name entries)
       (unwind-protect
           (progn
@@ -1399,7 +1422,10 @@ the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=
               (drgnx-perf-run--call sb drgnx-perf-ab--settle-form 200)
               (dolist (w workloads)
                 (message "perf ab: %s…" (car w))
-                (push (drgnx-perf-ab--workload (car w) (cdr w) sa sb n) entries))))
+                (push (drgnx-perf-ab--workload
+                       (car w) (cdr w) sa sb n
+                       (mapcar (lambda (e) (cons (plist-get e :name) (plist-get e :b-run))) entries))
+                      entries))))
         (when sa-name (ignore-errors (drgnx-ui-stop sa-name)))
         (when sb-name (ignore-errors (drgnx-ui-stop sb-name)))
         ;; the runner deletes its DRGNX_RUN_TMP; a directory made here is removed here

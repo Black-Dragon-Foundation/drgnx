@@ -279,7 +279,16 @@ the Glitnir-on side of the A/B above; `scroll-full-window` is measured only. A r
 CEILING`: a known failure whose value above the row's limit is printed as `KNOWN … (ID; fails above CEILING)` and
 fails the run only above CEILING. The `popup-typing` and `popup-churn` compose p95 rows are known that way,
 GL-POPUP-CHURN-FULL-1 (GTK repaints the whole root when a child frame maps or unmaps, until MP-3's widget-less child
-frames), with spike (i)'s 4.42 ms as the ceiling. The run that judges them, on the Glitnir build at 2880×1800 scale 2:
+frames), with spike (i)'s 4.42 ms as the ceiling. A row may instead carry `:known ID :fails-above-row (ROW PATH) :by
+B`: its ceiling is ROW's value at PATH in the same A/B, on the judged side, plus B (ROW must run earlier in the run; a
+ROW not measured in it fails the row). The `scroll-under-popup` compose p95 row is known that way, GL-SCROLL-PAGE-COPY-1,
+failing only above `scrolling`'s compose p95 + 1 ms: each `<next>`/`<prior>` repaints about 93 % of the root (4.8 M
+of 5.18 M device px at 2880×1800 scale 2), whose copy is 2.4–2.6 ms with or without the popup (per key 2.37 ms in
+`scrolling`, 2.61 ms under the eldoc-box: the popup adds 0.24 ms). The presenting thread, where a scroll is a
+layer-offset change (spec §9.2), removes it. The A/B's two sessions serve every workload, so it starts them with
+`DRGNX_UI_MAX_RUNTIME` = `drgnx-perf-ab-session-runtime` (4 h) unless that is set: a full tier at 2880×1800 outlived
+the default 30 min and lost both sessions mid-run ("can't find socket"). The run that judges them, on the Glitnir
+build at 2880×1800 scale 2:
 
 ```sh
 DRGNX_UI_SIZE=2880x1800 DRGNX_UI_SCALE=2 bin/drgnx test --perf --ab-env DRGNX_PERF_GLITNIR=on,off < /dev/null
