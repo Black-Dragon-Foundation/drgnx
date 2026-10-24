@@ -13,6 +13,7 @@ pub mod deny;
 pub mod grants;
 pub mod kinds;
 pub mod migrate7;
+pub mod migrate8;
 pub mod options;
 pub mod parsed;
 pub mod privacy;

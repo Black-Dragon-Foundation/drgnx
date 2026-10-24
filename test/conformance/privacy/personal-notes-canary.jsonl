@@ -28,7 +28,7 @@
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": "$any"}}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 8, "store": {"schema": 8, "writer": "ready"}}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/privacy", "params": {"reload": true}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"excised": 0}}}
 {"do": "sql_expect", "sql": "select count(*) from entity where id = 'plan:$HOME/proj/plans/old.md'", "rows": [[1]]}

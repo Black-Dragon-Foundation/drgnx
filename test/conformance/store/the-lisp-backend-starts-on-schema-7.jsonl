@@ -4,7 +4,7 @@
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready", "migrated_at": "$number"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 8, "store": {"schema": 8, "writer": "ready", "migrated_at": "$number"}}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "job/status", "params": {}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"jobs": [{"id": "j1", "status": "stopped", "tasks": [{"n": 1, "title": "the task", "status": "ready"}]}]}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
