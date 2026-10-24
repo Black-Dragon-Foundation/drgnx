@@ -1053,6 +1053,31 @@ connection. `search.sock` is unchanged.
 
 Tests: `test/unit/sandbox-mcp-test.el` (`drgnx-sandbox-mcp/`).
 
+## Sessions
+
+The hub holds agent sessions itself (`drgnx-ratatoskr/src/agents/`; agent system part 1, Task 8a). It is each
+session's ACP client (`hermod`): `agents/start` takes a profile (settings: `drgnx-agents-profiles`), starts the
+agent, runs `initialize` (with `fs` read and write offered, never `terminal`) and `session/new`, and answers the id
+and name. The session is recorded in `runtime.db` (`asession`, migration 5) and in the graph as a `session` entity
+(`run_by` its agent, `works_on` its task; a brainstorm's topic note and design document are in its `data`).
+
+- **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
+  mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
+  updates are one `tool` entry; a plan is replaced, not repeated. `agent` and `agent-entries` events come at most
+  once per session per 50 ms. `agents/list` for an `agent` or `service` caller is shaped by `shape::result`.
+- **Permissions.** A permission request of the agent waits in the snapshot's `permissions` until the user answers it
+  with `agents/permission` (an option the agent offered, or none to reject). Only the user's connection answers: no
+  peer's or manager's message is approval. The matrix (Task 12) is asked first; a `Never` rejects at once.
+- **Files.** `fs/read_text_file` and `fs/write_text_file` are served inside the session's directory only (symlinks
+  resolved first). A brainstorm session may read the project and write only its design document.
+- **Launch.** Until Task 10, only test builds (and `test-hooks`) start a session, unsandboxed; no shipped path
+  starts one outside Gleipnir.
+- **Stop and kill.** `agents/stop` cancels the turn and ends the agent's process group (SIGTERM, SIGKILL after 3 s);
+  `agents/kill` at once.
+
+Prompts that queue or steer, transcripts and the step stream are Task 8b's; until then `agents/send` starts a turn
+when the session is idle and refuses when it is busy.
+
 ## Sessions and their sockets
 
 Under Ratatoskr the coordination tools (`norn::tools`, served by `mimir`) run in the hub itself, with no server

@@ -210,6 +210,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         .mcp
         .open_store(env.clone(), socket.clone(), runtime.clone());
     front.mcp.restore().await;
+    front.core.agents.open_store(runtime.clone());
     tokio::spawn(sessions::watch(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front

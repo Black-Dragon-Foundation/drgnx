@@ -111,6 +111,11 @@ agent streams: the set is rebuilt only when a session's permissions or edits to 
 
 Each agent's own settings (its routes and billing, MCP servers, hooks and skills) are on its settings page: `,` on a session's row, or Agents: Settings ([agent-settings.md](agent-settings.md)).
 
+The hub holds your agent sessions itself: it starts the agent, keeps its transcript, and lists what it asks. A
+permission request stays on the session until you answer it; nothing another agent says counts as your answer. An
+agent reads and writes files inside its session's folder only, and a brainstorm session writes only its design
+document.
+
 ## Reviewing an agent's edits
 
 When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,

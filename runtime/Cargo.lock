@@ -535,6 +535,7 @@ dependencies = [
  "draugr",
  "eitri",
  "gleipnir",
+ "hermod",
  "huginn",
  "lexopt",
  "libc",
