@@ -181,14 +181,28 @@ pub fn apply(values: &mut RuntimeValues, list: &[Override]) {
     }
 }
 
-/// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], a value that
-/// does not fit the type).
-pub fn validate(list: &[Override]) -> Result<(), (usize, Refused)> {
+/// The runtime settings a project's set may hold: those the Lisp declares `:scope project` (a workspace sets them as
+/// data). Every other one is `:scope global :workspace never :agents never` (profiles and their commands, providers
+/// and their URLs, `drgnx-agents-allow-unsandboxed`, …): a project never changes it.
+pub const PER_PROJECT: &[&str] = &["drgnx-ai-roles"];
+
+/// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], one not in
+/// [`PER_PROJECT`] in a project's set (PROJECT true), a value that does not fit the type).
+pub fn validate(list: &[Override], project: bool) -> Result<(), (usize, Refused)> {
     for (i, o) in list.iter().enumerate() {
         if !RUNTIME_NAMES.contains(&o.name.as_str()) {
             return Err((
                 i,
                 refused("name", format!("{} is not a runtime setting", o.name)),
+            ));
+        }
+        if project && !PER_PROJECT.contains(&o.name.as_str()) {
+            return Err((
+                i,
+                refused(
+                    "name",
+                    format!("{} is a global setting: a project never changes it", o.name),
+                ),
             ));
         }
         from_json(&o.name, &o.value, &mut RuntimeValues::default()).map_err(|mut e| {
@@ -318,6 +332,15 @@ mod tests {
         s.effective("drgnx-agents-default", project).unwrap()
     }
 
+    fn roles(s: &Settings, project: Option<&str>) -> (Value, bool) {
+        s.effective("drgnx-ai-roles", project).unwrap()
+    }
+
+    /// A `drgnx-ai-roles` value: one role whose chain is PROVIDER's own model.
+    fn chain(provider: &str) -> Value {
+        json!([{"role": "chat", "chain": [{"provider": provider, "model": null}]}])
+    }
+
     #[tokio::test]
     async fn project_beats_global_beats_file_beats_default() {
         let bare = rig("");
@@ -326,16 +349,24 @@ mod tests {
         let s = settings(&r).await;
         assert_eq!(default(&s, None), (json!("file"), true));
         assert_eq!(default(&s, Some("p")), (json!("file"), false));
-        s.set_overrides(None, vec![o("drgnx-agents-default", json!("global"))])
-            .await
-            .unwrap();
-        s.set_overrides(Some("p"), vec![o("drgnx-agents-default", json!("proj"))])
+        s.set_overrides(
+            None,
+            vec![
+                o("drgnx-agents-default", json!("global")),
+                o("drgnx-ai-roles", chain("global")),
+            ],
+        )
+        .await
+        .unwrap();
+        s.set_overrides(Some("p"), vec![o("drgnx-ai-roles", chain("proj"))])
             .await
             .unwrap();
         assert_eq!(default(&s, None), (json!("global"), true));
-        assert_eq!(default(&s, Some("p")), (json!("proj"), true));
+        assert_eq!(roles(&s, None), (chain("global"), true));
+        assert_eq!(roles(&s, Some("p")), (chain("proj"), true));
+        assert_eq!(default(&s, Some("p")), (json!("global"), true));
         // another project has never sent: the global value, and it is told so
-        assert_eq!(default(&s, Some("q")), (json!("global"), false));
+        assert_eq!(roles(&s, Some("q")), (chain("global"), false));
         // what the gateway reads has the global value too
         assert_eq!(
             s.current().loaded.values.agents_default.as_deref(),
@@ -350,7 +381,7 @@ mod tests {
         s.set_overrides(None, vec![o("drgnx-agents-default", json!("g"))])
             .await
             .unwrap();
-        s.set_overrides(Some("p"), vec![o("drgnx-agents-default", json!("p"))])
+        s.set_overrides(Some("p"), vec![o("drgnx-ai-roles", chain("p"))])
             .await
             .unwrap();
         assert_eq!(s.set_overrides(None, vec![]).await.unwrap(), 0);
@@ -372,7 +403,7 @@ mod tests {
         s.set_overrides(None, vec![o("drgnx-ai-providers", providers.clone())])
             .await
             .unwrap();
-        s.set_overrides(Some("p"), vec![o("drgnx-agents-default", json!("proj"))])
+        s.set_overrides(Some("p"), vec![o("drgnx-ai-roles", chain("proj"))])
             .await
             .unwrap();
         drop(s);
@@ -390,8 +421,56 @@ mod tests {
             s2.effective("drgnx-ai-providers", None).unwrap().0["mine"]["url"],
             providers["mine"]["url"]
         );
-        assert_eq!(default(&s2, Some("p")), (json!("proj"), true));
+        assert_eq!(roles(&s2, Some("p")), (chain("proj"), true));
         assert!(!default(&s2, Some("q")).1);
+    }
+
+    /// R4: a project's set never holds a global (security) setting: profiles, providers, allow-unsandboxed, …; the
+    /// whole set is refused and nothing changes.
+    #[tokio::test]
+    async fn a_project_never_overrides_a_global_setting() {
+        let r = rig("");
+        let s = settings(&r).await;
+        let profiles = json!({"evil": {"command": ["sh", "-c", "x"]}});
+        for (name, value) in [
+            ("drgnx-agents-allow-unsandboxed", json!(true)),
+            ("drgnx-agents-profiles", profiles),
+            (
+                "drgnx-ai-providers",
+                json!({"x": {"kind": "openai", "url": "https://evil.example/v1"}}),
+            ),
+            ("drgnx-agents-default", json!("evil")),
+        ] {
+            assert!(!PER_PROJECT.contains(&name));
+            let e = s
+                .set_overrides(
+                    Some("p"),
+                    vec![o("drgnx-ai-roles", chain("p")), o(name, value)],
+                )
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{name} was taken"));
+            assert_eq!(e.path.as_deref(), Some("overrides[1].name"), "{name}");
+            assert!(
+                e.message.contains("a project never changes it"),
+                "{name}: {}",
+                e.message
+            );
+        }
+        // nothing was kept: the project has not sent, and the global values hold
+        assert!(!roles(&s, Some("p")).1);
+        assert!(!s.current().loaded.values.agents_allow_unsandboxed);
+        // every runtime setting but those the Lisp declares :scope project is global
+        let d = &crate::settings::defaults().values;
+        for name in RUNTIME_NAMES {
+            let one = [o(name, to_json(name, d).unwrap())];
+            assert_eq!(
+                validate(&one, true).is_ok(),
+                name == "drgnx-ai-roles",
+                "{name}"
+            );
+            assert!(validate(&one, false).is_ok(), "{name}");
+        }
     }
 
     #[tokio::test]
@@ -436,6 +515,53 @@ mod tests {
         let e = s.set_overrides(Some("global"), vec![]).await.err().unwrap();
         assert_eq!(e.path.as_deref(), Some("project"));
         assert!(s.effective("drgnx-no-such", None).is_none());
+    }
+
+    /// R6: sets of one scope racing each other and refreshes of a changing file: the kv row, memory and what is
+    /// published end on the same last set, over the file's last read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_sets_and_refreshes_agree() {
+        let r = rig("(drgnx-agents-mcp (f0))");
+        let s = std::sync::Arc::new(settings(&r).await);
+        let file = r.dir.path().join("settings.el");
+        let mut tasks = Vec::new();
+        for i in 0..24 {
+            let s = s.clone();
+            let file = file.clone();
+            tasks.push(tokio::spawn(async move {
+                if i % 3 == 0 {
+                    std::fs::write(
+                        &file,
+                        format!(";;; settings.el\n(drgnx-settings\n :version 1\n(drgnx-agents-mcp (f{i})))\n"),
+                    )
+                    .unwrap();
+                    s.refresh().await;
+                } else {
+                    let v = json!(format!("v{i}"));
+                    s.set_overrides(None, vec![o("drgnx-agents-default", v)])
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+        s.refresh().await;
+        let mem = s.overrides.lock().unwrap().scope(None).unwrap().to_vec();
+        let kept = Overrides::load(&r.db).await;
+        assert_eq!(kept.scope(None), Some(mem.as_slice()), "kv and memory");
+        let cur = s.current();
+        assert_eq!(
+            cur.loaded.values.agents_default.as_deref(),
+            mem[0].value.as_str(),
+            "published"
+        );
+        assert_eq!(
+            cur.loaded.values.agents_mcp,
+            s.file.lock().unwrap().loaded.values.agents_mcp,
+            "over the file's last read"
+        );
     }
 
     #[test]

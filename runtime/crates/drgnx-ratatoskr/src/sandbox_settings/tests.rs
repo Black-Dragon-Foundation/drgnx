@@ -136,6 +136,29 @@ fn forty_links_are_followed_and_no_more() {
     assert_eq!(lexical(Path::new("/a/./b/../c")), PathBuf::from("/a/c"));
 }
 
+/// R1: an unfolded stow tree links `workspaces/proj.el` alone; the folder holding its target is refused.
+#[test]
+fn a_per_file_workspace_link_is_closed() {
+    let fx = Fx::new();
+    fx.file("dot/ws/proj.el");
+    fx.file("config/workspaces/plain.el");
+    fx.link("config/workspaces/proj.el", "../../dot/ws/proj.el");
+    let got = closed_config_targets(&fx.p("config"), &[]);
+    assert!(got.contains(&fx.p("dot/ws/proj.el")), "{got:?}");
+    assert!(
+        !got.contains(&fx.p("config/workspaces/plain.el")),
+        "{got:?}"
+    );
+    let ctx = fx.ctx(got);
+    let r = validate(
+        spec(vec![fx.p("dot")], vec![], Target::LinuxBwrap),
+        &ctx,
+        Target::LinuxBwrap,
+    )
+    .unwrap_err();
+    assert_eq!(r.rule, Rule::ExposesUser, "{}", r.message);
+}
+
 #[test]
 fn a_write_root_holding_a_target_is_refused() {
     let fx = Fx::new();

@@ -30,6 +30,7 @@
 (declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-setting-meta "drgnx-setting" (var))
+(declare-function drgnx-secrets-looks-like "drgnx-secrets" (text))
 (declare-function drgnx-settings-explain "drgnx-settings-prov" (var &optional buffer))
 (declare-function drgnx-settings-prov--managed "drgnx-settings-prov" ())
 (declare-function drgnx-settings-workspace-project "drgnx-settings-workspace" (dir))
@@ -71,18 +72,27 @@
               (id (car p)))
     (drgnx-settings-history--sanitize (string-remove-prefix "project:" (format "%s" id)))))
 
+(defun drgnx-settings-history--root-part (root)
+  "The project part for a folder with no Urdr project (call 13): root-<first 12 hex of sha256(ROOT's true path)>.
+The true path is the truename with no trailing slash, so two clones with the same folder name never share an id."
+  (concat "root-" (substring (secure-hash 'sha256 (directory-file-name (file-truename (expand-file-name root))))
+                             0 12)))
+
 (defun drgnx-settings-history--scope-id (file doc)
   "FILE's part of an option id: global, private/PROJECT or shared/PROJECT."
   (cond ((drgnx-settings-history--global-p file) "global")
         ((drgnx-settings-history--shared-p file)
          (let ((root (drgnx-settings-history--shared-root file)))
            (concat "shared/" (or (drgnx-settings-history--project root)
-                                 (concat "root-" (drgnx-settings-history--sanitize
-                                                  (file-name-nondirectory (directory-file-name root))))))))
-        (t (concat "private/"
-                   (or (and doc (when-let* ((p (plist-get (drgnx-settings-doc-meta doc) :project)))
-                                  (drgnx-settings-history--sanitize (string-remove-prefix "project:" (format "%s" p)))))
-                       (concat "root-" (drgnx-settings-history--sanitize (file-name-base file))))))))
+                                 (drgnx-settings-history--root-part root)))))
+        (t (let ((meta (and doc (drgnx-settings-doc-meta doc))))
+             (concat "private/"
+                     (or (when-let* ((p (plist-get meta :project)))
+                           (drgnx-settings-history--sanitize (string-remove-prefix "project:" (format "%s" p))))
+                         (let ((roots (plist-get meta :roots)))
+                           (and (proper-list-p roots) (stringp (car roots))
+                                (drgnx-settings-history--root-part (car roots))))
+                         (drgnx-settings-history--root-part file)))))))
 
 (defun drgnx-settings-history--id (file doc scope var)
   "The option id of VAR in SCOPE (a scope path) of FILE."
@@ -151,9 +161,35 @@
           (dolist (r records) (insert (drgnx-settings-history--line r))))
         (rename-file tmp file t)))))
 
+(defconst drgnx-settings-history--redacted (concat "\"-----BEGIN REDACTED PRIVATE KEY" "-----\"")
+  "What the journal keeps for a value that looks like a secret: a printed string the shared secret table's first rule
+matches, so the hub, when the journal is sent, records the change as redacted (no value) as it would have.")
+
+(defun drgnx-settings-history--redact-value (v)
+  "V (a printed value), or `drgnx-settings-history--redacted' when it looks like a secret (escaped or not)."
+  (require 'drgnx-secrets)
+  (if (and (stringp v)
+           (or (drgnx-secrets-looks-like v)
+               (drgnx-secrets-looks-like (string-replace "\\\\" "\\" (string-replace "\\\"" "\"" v)))))
+      drgnx-settings-history--redacted
+    v))
+
+(defun drgnx-settings-history--redact (record)
+  "RECORD, (METHOD PARAMS), with every value that looks like a secret replaced (the changes of `settings/record',
+the options' data of `graph/put-parsed'): the journal is plain text in drgnx's state folder."
+  (let* ((params (copy-tree (cadr record)))
+         (fix (lambda (pl) (if (plist-member pl :value)
+                               (plist-put pl :value (drgnx-settings-history--redact-value (plist-get pl :value)))
+                             pl))))
+    (dolist (c (plist-get params :changes)) (funcall fix c))
+    (dolist (s (plist-get params :sources))
+      (dolist (e (plist-get s :entities)) (funcall fix (plist-get e :data))))
+    (list (car record) params)))
+
 (defun drgnx-settings-history--journal-add (record)
-  "Append RECORD, (METHOD PARAMS), to the journal; past the bound the oldest records go, with one notice."
-  (let* ((records (append (drgnx-settings-history--journal-read) (list record)))
+  "Append RECORD, (METHOD PARAMS), to the journal, values that look like secrets redacted
+\(`drgnx-settings-history--redact'); past the bound the oldest records go, with one notice."
+  (let* ((records (append (drgnx-settings-history--journal-read) (list (drgnx-settings-history--redact record))))
          (size (apply #'+ (mapcar (lambda (r) (string-bytes (drgnx-settings-history--line r))) records)))
          (dropped 0))
     (while (and (cdr records) (> size drgnx-settings-history-journal-max))
@@ -302,13 +338,13 @@ Returns the number of changes sent.  Never signals."
             (let* ((x (drgnx-settings-explain var))
                    (printed (and (memq (plist-get x :kind) '(lisp deferred))
                                  (ignore-errors (drgnx-settings-print (plist-get x :value) 0)))))
-              (when (and printed (not (equal printed (cdr (assq var seen)))))
+              (when (and printed (not (equal (secure-hash 'sha256 printed) (cdr (assq var seen)))))
                 (let ((file (or (plist-get x :file) "config.el")))
                   (setf (alist-get file by-file nil nil #'equal)
                         (append (alist-get file by-file nil nil #'equal)
                                 (list (append (list :id (format "option:global:%s" var) :value printed :file file)
                                               (and (plist-get x :line) (list :line (plist-get x :line)))))))
-                  (setf (alist-get var seen) printed)))))
+                  (setf (alist-get var seen) (secure-hash 'sha256 printed))))))   ; a hash: the file is plain text
           (pcase-dolist (`(,file . ,changes) by-file)
             (cl-incf n (length changes))
             (drgnx-settings-history--record (concat "lisp:" (file-name-nondirectory file)) changes))

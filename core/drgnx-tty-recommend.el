@@ -124,8 +124,9 @@ Never runs it."
 ;;;; Which are installed
 
 (defcustom drgnx-tty-mac-app-dirs '("/Applications" "~/Applications")
-  "The folders drgnx looks in for the capable terminals' macOS applications (on top of PATH)."
-  :type '(repeat directory) :group 'drgnx)
+  "The folders drgnx looks in for the capable terminals' macOS applications (on top of PATH).
+Risky: it says where the programs drgnx runs come from, so no workspace file and no agent sets it."
+  :type '(repeat directory) :group 'drgnx :risky t)
 
 (defun drgnx-tty--executable (terminal)
   "The file that runs TERMINAL: on PATH, else (macOS) inside its application bundle; nil when not installed."

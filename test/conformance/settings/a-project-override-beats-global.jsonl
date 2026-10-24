@@ -1,13 +1,15 @@
-{"scenario": "settings/a-project-override-beats-global", "requires": ["v1", "fake-backend"], "doc": "A project's set is its own: it is kept without touching the global table the gateway serves (precedence project over global over file over default is held by the unit tests), a bad value is refused with its path, an unknown name is refused, and nothing of a refused set is kept."}
+{"scenario": "settings/a-project-override-beats-global", "requires": ["v1", "fake-backend"], "doc": "A project's set is its own: it is kept without touching the global table the gateway serves (precedence project over global over file over default is held by the unit tests), it holds only :scope project settings (a global one, such as the providers, is refused at its name), a bad value is refused with its path, an unknown name is refused, and nothing of a refused set is kept."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-ai-providers", "source": "workspace", "value": {"alpha-llm": {"kind": "openai", "url": "https://alpha.example/v1", "caps": ["chat"]}}}, {"name": "drgnx-agents-default", "source": "workspace", "value": "claude"}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-ai-roles", "source": "workspace", "value": [{"role": "chat", "chain": [{"provider": "openrouter", "model": null}]}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"gateway": {"providers": 16}}}}
-{"do": "send", "conn": "c", "json": {"id": 3, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-agents-default", "source": "workspace", "value": "claude"}, {"name": "drgnx-agents-allow-unsandboxed", "source": "workspace", "value": "yes"}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "overrides[1].value"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-ai-providers", "source": "workspace", "value": {"alpha-llm": {"kind": "openai", "url": "https://alpha.example/v1", "caps": ["chat"]}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "path": "overrides[0].name"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-ai-roles", "source": "workspace", "value": "yes"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "overrides[0].value"}}}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-not-a-setting", "source": "x", "value": 1}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "path": "overrides[0].name"}}}

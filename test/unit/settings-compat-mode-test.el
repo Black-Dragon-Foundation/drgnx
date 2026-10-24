@@ -4,7 +4,7 @@
 
 ;; Each row runs in a child Emacs under a temp HOME with only `drgnx' required, as at start: the overrides apply
 ;; because drgnx.el loads drgnx-settings-mode.  `drgnx-settings-test-check-row' checks the value and the explained
-;; source in the buffer.
+;; source in the buffer.  The buffers have plain names: a temp buffer (leading space) gets no overrides.
 
 ;;; Code:
 (require 'ert)
@@ -34,15 +34,15 @@
   ;; settings-mode/dir-locals-win test).
   (let ((r (drgnx-settings-test-child
             (list drgnx-settings-compat-mode--setup
-                  `(with-temp-buffer (text-mode)
-                                     (list fill-column drgnx-c12-var (default-value 'drgnx-c12-var)
-                                           (drgnx-settings-test-check-row 'fill-column :value 66
-                                                                          :source ,drgnx-settings-compat-mode--source)
-                                           (drgnx-settings-test-check-row 'drgnx-c12-var :value 5
-                                                                          :source ,drgnx-settings-compat-mode--source)))
+                  `(with-current-buffer (generate-new-buffer "c") (text-mode)
+                                        (list fill-column drgnx-c12-var (default-value 'drgnx-c12-var)
+                                              (drgnx-settings-test-check-row 'fill-column :value 66
+                                                                             :source ,drgnx-settings-compat-mode--source)
+                                              (drgnx-settings-test-check-row 'drgnx-c12-var :value 5
+                                                                             :source ,drgnx-settings-compat-mode--source)))
                   '(let ((text-mode-hook (list (lambda () (setq-local fill-column 77)))))
-                     (with-temp-buffer (text-mode) (list fill-column (drgnx-settings-test-check-row 'fill-column
-                                                                                                    :value 77)))))
+                     (with-current-buffer (generate-new-buffer "c") (text-mode) (list fill-column (drgnx-settings-test-check-row 'fill-column
+                                                                                                                                 :value 77)))))
             :files drgnx-settings-compat-mode--files)))
     (should-not (plist-get r :error))
     (should (eq (nth 0 (plist-get r :values)) t))
@@ -53,13 +53,13 @@
   ;; three arguments: the setter runs with buffer-local; two: setq-local, the buffer opens, no error.
   (let ((r (drgnx-settings-test-child
             (list drgnx-settings-compat-mode--setup
-                  `(with-temp-buffer (text-mode)
-                                     (list drgnx-c21-three drgnx-c21-two (local-variable-p 'drgnx-c21-two)
-                                           (default-value 'drgnx-c21-two) drgnx-c21-log
-                                           (drgnx-settings-test-check-row 'drgnx-c21-three :value 8
-                                                                          :source ,drgnx-settings-compat-mode--source)
-                                           (drgnx-settings-test-check-row 'drgnx-c21-two :value 9
-                                                                          :source ,drgnx-settings-compat-mode--source))))
+                  `(with-current-buffer (generate-new-buffer "c") (text-mode)
+                                        (list drgnx-c21-three drgnx-c21-two (local-variable-p 'drgnx-c21-two)
+                                              (default-value 'drgnx-c21-two) drgnx-c21-log
+                                              (drgnx-settings-test-check-row 'drgnx-c21-three :value 8
+                                                                             :source ,drgnx-settings-compat-mode--source)
+                                              (drgnx-settings-test-check-row 'drgnx-c21-two :value 9
+                                                                             :source ,drgnx-settings-compat-mode--source))))
             :files drgnx-settings-compat-mode--files)))
     (should-not (plist-get r :error))
     (should (eq (nth 0 (plist-get r :values)) t))

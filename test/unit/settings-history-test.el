@@ -120,6 +120,29 @@
               (should (equal (plist-get (plist-get o :data) :value) "80"))))
         (delete-directory root t)))))
 
+(ert-deftest drgnx-settings-history/two-clones-with-one-name-get-their-own-ids ()
+  ;; call 13: a folder with no Urdr project is root-<first 12 hex of sha256(true root)>, never its name
+  (let* ((top (make-temp-file "sht-clones" t))
+         (a (expand-file-name "one/app" top)) (b (expand-file-name "two/app" top))
+         (link (expand-file-name "link" top)))
+    (unwind-protect
+        (progn
+          (make-directory a t) (make-directory b t)
+          (make-symbolic-link a link)
+          (let* ((id (lambda (root) (drgnx-settings-history--id (expand-file-name ".drgnx/settings.el" root) nil nil
+                                                                'fill-column)))
+                 (ia (funcall id a)) (ib (funcall id b)))
+            (should (string-match-p "\\`option:shared/root-[0-9a-f]\\{12\\}:fill-column\\'" ia))
+            (should (equal ia (format "option:shared/root-%s:fill-column"
+                                      (substring (secure-hash 'sha256 (directory-file-name (file-truename a))) 0 12))))
+            (should-not (equal ia ib))
+            (should (equal ia (funcall id link)))          ; the true root: a link to clone A is clone A
+            ;; a private file names its root in :roots
+            (let ((doc (make-drgnx-settings-doc :meta (list :roots (list a)))))
+              (should (equal (drgnx-settings-history--id (expand-file-name "workspaces/app.el" top) doc nil 'fill-column)
+                             (replace-regexp-in-string "shared/" "private/" ia))))))
+      (delete-directory top t))))
+
 (ert-deftest drgnx-settings-history/the-journal-is-bounded-and-flushes ()
   (drgnx-sht--with
     (setq drgnx-sht--down t)
@@ -135,6 +158,34 @@
         (drgnx-settings-history-flush)
         (should (= n (length (drgnx-sht--records))))
         (should-not (file-exists-p (drgnx-settings-history--journal-file)))))))
+
+(ert-deftest drgnx-settings-history/no-secret-in-the-journal-or-lisp-seen ()
+  (drgnx-sht--with
+    (let ((secret (concat "AKIA" "ABCDEFGHIJKLMNOP")))
+      (setq drgnx-sht--down t)
+      (drgnx-settings-history--record "ui:settings" (list (list :id "option:global:x" :value (format "%S" secret)
+                                                                :file "/c/settings.el")
+                                                          (list :id "option:global:y" :value "80" :file "/c/settings.el")))
+      (drgnx-settings-history--send "graph/put-parsed"
+                                    (list :root "/r" :sources (list (list :entities (list (list :id "o" :data (list :value (format "%S" secret))))))))
+      (let ((text (with-temp-buffer (insert-file-contents (drgnx-settings-history--journal-file)) (buffer-string))))
+        (should-not (string-search secret text))
+        (should (string-search "\"80\"" text)))
+      ;; sent later, the placeholder is one the hub's secret table redacts
+      (let ((v (plist-get (car (plist-get (cadr (car (drgnx-settings-history--journal-read))) :changes)) :value)))
+        (should (equal v drgnx-settings-history--redacted))
+        (should (drgnx-secrets-looks-like v)))
+      (setq drgnx-sht--down nil)
+      ;; what your Lisp set is remembered by a hash only
+      (cl-letf (((symbol-function 'drgnx-settings-prov--managed) (lambda () '(fill-column)))
+                ((symbol-function 'drgnx-settings-explain)
+                 (lambda (_var &optional _b) (list :kind 'lisp :value secret :file "/x/config.el" :line 4))))
+        (should (= 1 (drgnx-settings-history-record-lisp)))
+        (should-not (string-search secret (with-temp-buffer (insert-file-contents
+                                                             (drgnx-settings-history--lisp-seen-file))
+                                                            (buffer-string))))
+        (setq drgnx-settings-history--lisp-done nil)
+        (should (= 0 (drgnx-settings-history-record-lisp)))))))
 
 (ert-deftest drgnx-settings-history/lisp-effect-once-per-start ()
   (drgnx-sht--with

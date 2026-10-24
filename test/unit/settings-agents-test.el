@@ -7,6 +7,8 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (require 'drgnx-settings-agents)
+(require 'drgnx-settings-described)     ; the shipped descriptions (`shell-file-name' is code), as drgnx loads them
+(require 'drgnx-tty-recommend)          ; `drgnx-tty-mac-app-dirs'
 (require 'drgnx-hub-client)             ; `drgnx-hub--event-conn', bound below
 (require 'drgnx-notice)                ; loaded now, so the fake `drgnx-notify' below is not replaced by a late load
 
@@ -74,6 +76,9 @@
   (drgnx-sat--with
     (pcase-dolist (`(,name ,value ,why) '(("drgnx-sat-format-function" "ignore" "is code")
                                           ("drgnx-sat-secure" "t" "security setting")
+                                          ("shell-file-name" "\"./x\"" "is code")
+                                          ("explicit-shell-file-name" "\"./x\"" "is code")
+                                          ("drgnx-tty-mac-app-dirs" "(\"./x\")" "is code")
                                           ("enable-local-eval" "t" "security setting")
                                           ("safe-local-variable-values" "nil" "security setting")
                                           (":eval" "((delete-file \"x\"))" "not a setting")
@@ -177,6 +182,21 @@
         (should (equal (plist-get row :value) "120"))
         (should (equal (plist-get row :source) "your workspace file"))))))
 
+(defvar drgnx-sat-plain "hidden" "A test variable: no setting (no `defcustom', no description).")
+(defcustom drgnx-sat-api-token "sk-not-a-real-one" "A test setting: a secret-looking name." :type 'string :group 'drgnx)
+
+(ert-deftest drgnx-settings-agents/explain-never-shows-secrets-or-plain-variables ()
+  (drgnx-sat--with
+    (drgnx-settings-agents--event
+     "settings/explain" '(:req 6 :scope "global" :names ["drgnx-sat-plain" "drgnx-sat-api-token" "drgnx-sat-secure"
+                                                         "drgnx-sat-width"]))
+    (let ((rows (plist-get (cadr (drgnx-sat--sent-p "settings/explained")) :settings)))
+      (should (= (length rows) 4))
+      (dotimes (i 3)
+        (should-not (plist-member (aref rows i) :value))
+        (should (equal (plist-get (aref rows i) :source) "not shown to agents")))
+      (should (equal (plist-get (aref rows 3) :value) "80")))))
+
 ;;; settings-agents-test.el ends here
 
 (ert-deftest drgnx-settings-agents/hub-disconnect-removes-its-hook ()
@@ -186,3 +206,24 @@
     (should-not (memq #'drgnx-settings-agents--event drgnx-hub-event-functions))
     (drgnx-hub-disconnect)
     (should-not (memq #'drgnx-settings-agents--event drgnx-hub-event-functions))))
+
+(ert-deftest drgnx-settings-agents/the-shared-deny-table ()
+  "The editor's check refuses what test/fixtures/settings-deny.json denies, and takes the rest (the hub runs the same
+rows, norn's `deny_table')."
+  (require 'drgnx-agents)
+  (require 'drgnx-ai)
+  (require 'drgnx-user-lisp)
+  (let ((table (with-temp-buffer
+                 (insert-file-contents (expand-file-name "test/fixtures/settings-deny.json" drgnx-dir))
+                 (json-parse-buffer :false-object nil)))
+        (refused (lambda (name)
+                   (let ((var (drgnx-settings-agents--var name)))
+                     (or (null var) (and (drgnx-settings-agents--denied var) t))))))
+    (seq-doseq (row (gethash "cases" table))
+      (let ((name (aref row 0)))
+        (unless (equal name "")         ; no name: the editor refuses it, the hub's name check too
+          (should (equal (list name (funcall refused name)) (list name (aref row 1)))))))
+    (seq-doseq (c (gethash "characters" table))
+      (should (funcall refused (string ?f c ?x))))
+    (dolist (name '("nil" "t" ":eval" ":x" "a b" "a\tb"))
+      (should (funcall refused name)))))

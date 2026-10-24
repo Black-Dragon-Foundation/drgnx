@@ -124,6 +124,11 @@ ARGS are `defcustom' keywords and drgnx's: `:scope', `:workspace', `:merge', `:o
                     (if (memq workspace '(code never)) 'never 'grantable))
           :schema (plist-get own :schema))))
 
+(defun drgnx-setting-tick ()
+  "The command this call is part of, in an interactive session (`num-input-keys'): a file stamp checked once is
+remembered until the next command.  Nil in batch, where every call checks."
+  (and (not noninteractive) num-input-keys))
+
 (defun drgnx-setting--stamp (var)
   "What the metadata of VAR depends on; the cache entry is valid while every part is `eq'.
 A new `defcustom' of VAR makes fresh `standard-value' and `custom-type' objects, which clears the cache entry; so

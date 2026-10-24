@@ -552,9 +552,11 @@ the test runner's state, `~` or your drgnx (`test/settings-child.el`; its own te
 
 ## Language overrides (Task 10)
 
-`core/drgnx-settings-mode.el` reads the `(:mode M …)` entries of the global `settings.el` (cached per file stamp;
+`core/drgnx-settings-mode.el` reads the `(:mode M …)` entries of the global `settings.el` (cached per file stamp,
+the stamp looked at once per command, `drgnx-setting-tick`, as the description files' are;
 `(drgnx-settings-mode-entries MODE)` -> `((VAR . VALUE)…)`) and `drgnx-settings--apply-mode-overrides` sets them from
-`change-major-mode-after-body-hook`, the mode's parents first. A variable's `:set` is called with `buffer-local` as the
+`change-major-mode-after-body-hook`, the mode's parents first; a temp buffer (no file, a name starting with a space:
+fontification and conversion buffers) gets none. A variable's `:set` is called with `buffer-local` as the
 third argument only when it is loaded and its `func-arity` accepts three; otherwise `setq-local`. Never `setopt-local`,
 never a `load`. Each entry runs under `condition-case`: one message per variable per session. While
 `drgnx-settings-own-only-p` holds (safe mode, Turn Off Package Settings, `DRGNX_PACKAGE_SETTINGS=off`; the applier
@@ -742,7 +744,7 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
   own settings and no `:eval` (`drgnx-settings-workspace--held-p`, in the groups and in `drgnx-setting-for-root`), as
   L1 does (US-WORKSPACE-SAFE-MODE-1).
 - **`(drgnx-setting-for-root VAR ROOT)`**: the global value, then W1 (the old `.drgnx/{search,ai,large-files}.eld`
-  through the config layer, `drgnx-settings-workspace-old-files`, then `.drgnx/settings.el`'s filtered entries), then
+  through the config layer, `drgnx-settings-workspace-old-files`, ai.eld's roles through W1's filter, then `.drgnx/settings.el`'s filtered entries), then
   W2, each over the one below by its `:merge` (`replace`, `alist`, `append`, `lower-only`: the lower of two numbers,
   anything else keeps the lower layer). `drgnx-search-config` reads `drgnx-search-{include,exclude,off}` this way.
 - **`(drgnx-settings-workspace-file ROOT &optional CREATE)`**: by root, else by `:project` through
@@ -784,7 +786,8 @@ enable/disable call `drgnx-settings-trust-enable`/`-disable`; `drgnx-trust-mode`
   applies (`drgnx-settings-trust--decide`); `never` entries are dropped; waiting code is remembered per root for the
   session. A code entry's FILE is found by collecting each `.dir-locals*.el` of DIR alone (the `-2` file first).
 - **W1:** `drgnx-settings-trust-filter` is `drgnx-settings-workspace-filter-function`'s default, the same rule.
-- **Pairs:** `(FILE VAR VALUE)`, FILE relative to the root, kept in trusted-folders.eld version 2 (`drgnx-trust.el`:
+- **Pairs:** `(FILE VAR VALUE)`, FILE relative to the root (`drgnx-settings-trust--rel`: its folder's truename and its
+  own name, so a symlinked `.dir-locals.el` is named as written wherever a pair is made or matched), kept in trusted-folders.eld version 2 (`drgnx-trust.el`:
   `:allowed`/`:denied` `((ROOT (FILE VAR TEXT)…)…)`, `:untrusted` roots) with VALUE as its printed text (an `eval` form
   may hold a backquote, which the data reader refuses). `drgnx-trust-update FN` writes them under the file's lock; a
   version above 2 is a newer drgnx's, never changed. `(drgnx-settings-trust-allow ROOT PAIRS)`,
@@ -795,8 +798,9 @@ enable/disable call `drgnx-settings-trust-enable`/`-disable`; `drgnx-trust-mode`
 - **Commands:** the registry's `trust-folder` and `untrust-folder` run `drgnx-settings-trust-this-folder (ROOT SHOWN)`
   (interactively: shows the code, asks once, allows exactly that) and `drgnx-settings-trust-untrust (ROOT)` (forgets the
   pairs, records an exception below a location, re-hacks; the re-hack kills values the filter now rejects).
-- **Security settings:** `drgnx-settings-trust-security-settings` (own settings `:workspace never` or `:agents never`,
-  plus `drgnx-user-lisp-files`, `drgnx-trust-parents`) are put `risky-local-variable` and into the default value of
+- **Security settings:** `drgnx-settings-trust-security-settings` (own settings `:workspace never`, plus
+  `drgnx-user-lisp-files`, `drgnx-trust-parents`; an `:agents never` setting a workspace may set, such as
+  `drgnx-ai-roles`, is not one: it goes through the filter) are put `risky-local-variable` and into the default value of
   `ignored-local-variables` by `drgnx-settings-trust--guard`, which re-runs from a depth −100 hook function whenever
   the number of declared settings changed.
 - **Migration:** `drgnx-settings-trust-migrate` turns a version-1 file into version 2 once, recording each trusted

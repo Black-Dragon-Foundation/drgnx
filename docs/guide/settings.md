@@ -165,7 +165,7 @@ Those choices sit just above the package's default, below everything you set:
 ## Per language
 
 A `(:mode MODE ENTRY…)` section of `settings.el` sets variables only in buffers of that mode (and the modes derived
-from it):
+from it; never in the hidden temp buffers packages use for fontifying or converting text):
 
 ```elisp
 (:mode python-ts-mode
@@ -271,7 +271,9 @@ yours and always applies (only drgnx's security settings and global-only setting
 
 - **Code** is an `(:eval …)` section, an `eval:` or `mode:` entry of `.dir-locals.el` (a `mode:` entry turns on a
   minor mode, which can run anything), and any value of a setting that names a program, a function or a hook (Emacs's
-  risky variables, names ending in `-program`, `-executable`, `-args` …). **Data** is any other value Emacs does not
+  risky variables, names ending in `-program`, `-executable`, `-args` …, and the shell and Emacs that commands start:
+  `shell-file-name`, `explicit-shell-file-name`, `shell-command-switch`, `invocation-name`,
+  `invocation-directory`). **Data** is any other value Emacs does not
   mark safe. drgnx's security settings (`drgnx-trust-parents`, the agent and sandbox settings, the key settings) never
   apply from a workspace in any state: Emacs ignores them in every `.dir-locals.el` and `-*-` line.
 - **Trusted locations.** Set `drgnx-trust-parents` in Settings → User, for example
@@ -378,7 +380,9 @@ A setting that agents may never change (`:agents never`) and that changed outsid
 "NAME changed outside drgnx [Undo]".
 
 **Undo** puts a setting's previous value back by writing it to its file, then records the undo (it names the change
-it takes back). `drgnx-settings-undo` takes an option id such as `option:global:fill-column`;
+it takes back). `drgnx-settings-undo` takes an option id such as `option:global:fill-column`
+(a workspace's ids name its project, `option:shared/<project>:fill-column`, or, for a folder that is no known project,
+`root-` and the first 12 hex digits of the SHA-256 of the folder's true path, so two clones with one name never mix);
 `drgnx-settings-undo-tx` undoes everything one change touched, as one record. A setting your Lisp set cannot be
 undone from here: the notice offers Open at the line in your Lisp instead. A value that looked like a secret is
 never kept, so its earlier value cannot be restored either.
@@ -387,7 +391,9 @@ never kept, so its earlier value cannot be restored either.
 for the timeline.
 
 When the hub is not running, records wait in `settings-journal.eld` in drgnx's state folder (at most 1 MiB; the
-oldest go first, with one notice) and are sent when the editor connects.
+oldest go first, with one notice) and are sent when the editor connects. A value that looks like a secret is never
+written there: the journal keeps a placeholder, which the hub records as a redacted change. What your Lisp decided is
+remembered in `settings-lisp-seen.eld` as a hash of each value, never the value.
 
 ## Your Lisp files
 

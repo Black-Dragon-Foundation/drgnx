@@ -31,7 +31,7 @@
 
 (define-minor-mode drgnx-stt-minor-mode "A minor mode a `mode' entry turns on." :lighter nil)
 
-(defconst drgnx-stt--settings '(drgnx-stt--own drgnx-stt--secure)
+(defconst drgnx-stt--settings '(drgnx-stt--own drgnx-stt--secure drgnx-stt--routes)
   "The fixture settings, declared fresh by `drgnx-stt--with'.")
 
 (defun drgnx-stt--declare ()
@@ -39,7 +39,10 @@
            :safe #'integerp)
         t)
   (eval '(drgnx-defsetting drgnx-stt--secure nil "A security setting." :type 'boolean :group 'drgnx-stt
-           :agents 'never)
+           :workspace 'never :agents 'never)
+        t)
+  (eval '(drgnx-defsetting drgnx-stt--routes nil "Never an agent's, but a project's to set (like `drgnx-ai-roles')."
+           :type 'sexp :group 'drgnx-stt :scope 'project :workspace 'data :agents 'never)
         t))
 
 (defun drgnx-stt--undeclare ()
@@ -182,6 +185,23 @@
       (should-not drgnx-stt--prompts))
     (should-not (drgnx-settings-trust-waiting drgnx-stt--proj))))
 
+(ert-deftest drgnx-settings-trust/a-symlinked-dir-locals-is-allowed-by-its-written-name ()
+  ;; one path form: the open's split and Trust This Folder's pairs both name the link, never its target
+  (drgnx-stt--with (list (list drgnx-stt--ws))
+    (drgnx-stt--put "conf/dl.el" drgnx-stt--dl)
+    (make-symbolic-link (expand-file-name "conf/dl.el" drgnx-stt--proj) (expand-file-name ".dir-locals.el" drgnx-stt--proj))
+    (setq dir-locals-directory-cache nil)
+    (drgnx-stt--in "a.txt"
+      (should-not (local-variable-p 'drgnx-stt-risky-function))
+      (let ((waiting (drgnx-settings-trust-waiting drgnx-stt--proj)))
+        (should (equal (delete-dups (mapcar (lambda (i) (plist-get i :file)) waiting)) '(".dir-locals.el")))
+        (drgnx-settings-trust-allow drgnx-stt--proj waiting))
+      (should (eq drgnx-stt-risky-function 'ignore)))
+    (should-not (drgnx-settings-trust-waiting drgnx-stt--proj))
+    (with-current-buffer (drgnx-stt--reopen "a.txt")
+      (should (eq drgnx-stt-risky-function 'ignore))
+      (should-not drgnx-stt--prompts))))
+
 (ert-deftest drgnx-settings-trust/a-changed-pair-waits-again ()
   (drgnx-stt--with (list (list drgnx-stt--ws))
     (drgnx-stt--put ".dir-locals.el" drgnx-stt--dl)
@@ -215,6 +235,20 @@
     (should (equal (drgnx-stt--vars (drgnx-settings-trust-waiting drgnx-stt--proj)) '(mode)))
     (drgnx-settings-trust-allow drgnx-stt--proj (drgnx-settings-trust-waiting drgnx-stt--proj))
     (with-current-buffer (drgnx-stt--reopen "a.txt") (should drgnx-stt-minor-mode))))
+
+(ert-deftest drgnx-settings-trust/program-naming-settings-are-code ()
+  "The shell M-x compile and grep run, and the Emacs Flymake starts, wait for review even in a trusted location."
+  (drgnx-stt--with (list (list drgnx-stt--ws))
+    (dolist (v '(shell-file-name explicit-shell-file-name shell-command-switch invocation-name invocation-directory))
+      (should (eq (drgnx-settings-trust-class v "./x" 'shared) 'code))
+      (should (eq (drgnx-settings-trust-class v "./x" 'dir-locals) 'code)))
+    (drgnx-stt--put ".dir-locals.el" "((nil . ((shell-file-name . \"./x\") (fill-column . 66))))\n")
+    (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location))
+    (drgnx-stt--in "a.txt"
+      (should (= fill-column 66))
+      (should-not (local-variable-p 'shell-file-name))
+      (should-not drgnx-stt--prompts))
+    (should (equal (drgnx-stt--vars (drgnx-settings-trust-waiting drgnx-stt--proj)) '(shell-file-name)))))
 
 (ert-deftest drgnx-settings-trust/dir-locals-2-and-dir-sections-are-split-too ()
   (drgnx-stt--with (list (list drgnx-stt--ws))
@@ -381,6 +415,28 @@
       (should (memq v (default-value 'ignored-local-variables)))
       (should (get v 'risky-local-variable))
       (should (eq (drgnx-settings-trust-class v nil 'dir-locals) 'never)))))
+
+(ert-deftest drgnx-settings-trust/an-agents-never-project-setting-is-not-guarded ()
+  ;; `:agents never' alone (like `drgnx-ai-roles', `:workspace data') is a project's to set: not in
+  ;; `ignored-local-variables', so its W1 entry goes through the filter (applies when trusted, waits when not)
+  (drgnx-stt--with nil
+    (drgnx-settings-trust--guard)
+    (should-not (memq 'drgnx-stt--routes (default-value 'ignored-local-variables)))
+    (should (memq 'drgnx-stt--secure (default-value 'ignored-local-variables)))
+    (should (eq (drgnx-settings-trust-class 'drgnx-stt--routes '((chat x)) 'shared) 'data))
+    (drgnx-stt--put ".drgnx/settings.el" "(drgnx-workspace-settings\n :version 1\n (drgnx-stt--routes ((chat x))))\n")
+    (should-not (drgnx-setting-for-root 'drgnx-stt--routes drgnx-stt--proj))
+    (setq drgnx-trust-parents (list (list drgnx-stt--ws)) drgnx-settings-trust--data nil)
+    (should (equal (drgnx-setting-for-root 'drgnx-stt--routes drgnx-stt--proj) '((chat x))))))
+
+(ert-deftest drgnx-settings-trust/the-ai-eld-shim-goes-through-the-filter ()
+  (require 'drgnx-ai)
+  (drgnx-stt--with nil
+    (drgnx-stt--put ".drgnx/ai.eld" "(:version 1 :roles ((chat (ollama . \"m\"))))\n")
+    (let ((drgnx-ai-roles nil))
+      (should-not (drgnx-setting-for-root 'drgnx-ai-roles drgnx-stt--proj))   ; untrusted: the roles wait
+      (setq drgnx-trust-parents (list (list drgnx-stt--ws)) drgnx-settings-trust--data nil)
+      (should (equal (drgnx-setting-for-root 'drgnx-ai-roles drgnx-stt--proj) '((chat (ollama . "m"))))))))
 
 (ert-deftest drgnx-settings-trust/enable-local-eval-nil-still-blocks-eval ()
   (drgnx-stt--with (list (list drgnx-stt--ws :code t))

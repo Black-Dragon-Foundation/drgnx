@@ -1324,7 +1324,8 @@ pub(crate) struct Allowed {
 
 /// Settings access card CARD (its data D) settled with CHOICE (checked; unified-settings Task 32): `once` and
 /// `session` make, in this tx (the user's), an `options` grant of the card's one setting for its session (`once`
-/// lasting [`ONCE_GRANT_SECS`] and revoked once the change is proposed, `session` [`SESSION_GRANT_SECS`]); `refuse`
+/// bound to the card, so it covers only the hub's proposal of the card's value, lasting [`ONCE_GRANT_SECS`] and
+/// revoked once the change is proposed; `session` [`SESSION_GRANT_SECS`]); `refuse`
 /// and `resolved` nothing. The card's request is checked again first. A message tells the session either way. False
 /// when the card was not open.
 fn settle_setting(
@@ -1367,19 +1368,25 @@ fn settle_setting(
                 _ => What::OptionsProject,
             };
             let once = choice == "once";
-            let expires = now
-                + if once {
-                    ONCE_GRANT_SECS
-                } else {
-                    SESSION_GRANT_SECS
-                };
-            let g = grants::create_options(
-                tx,
-                Who::Session(session.clone()),
-                what,
-                Some(vec![change.name.clone()]),
-                Some(expires),
-            )?;
+            let who = Who::Session(session.clone());
+            let g = if once {
+                grants::create_options_once(
+                    tx,
+                    who,
+                    what,
+                    change.name.clone(),
+                    card,
+                    Some(now + ONCE_GRANT_SECS),
+                )?
+            } else {
+                grants::create_options(
+                    tx,
+                    who,
+                    what,
+                    Some(vec![change.name.clone()]),
+                    Some(now + SESSION_GRANT_SECS),
+                )?
+            };
             Some(Allowed {
                 caller,
                 change,
@@ -1418,8 +1425,10 @@ fn settle_setting(
 /// After a settings card's `once` or `session` (A): the agent's change proposed to the editor (not waited for: the
 /// editor that settled the card answers it), then a `once` grant revoked. A failure goes to the agent as a message.
 async fn allow(w: &Writer, tools: Option<&Coord>, caller: &Caller, a: Allowed, now: f64) {
+    // a `once` grant covers only this proposal (its request key), never the agent's own next change
+    let req = a.once.then(|| norn::options::card_req(a.card));
     let proposed = match tools {
-        Some(t) => norn::tools::settings::propose(t, &a.caller, &a.change, Duration::ZERO)
+        Some(t) => norn::tools::settings::propose(t, &a.caller, &a.change, req, Duration::ZERO)
             .await
             .map(drop),
         None => Err("the hub's tools are not open".to_string()),
