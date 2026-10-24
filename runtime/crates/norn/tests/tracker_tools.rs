@@ -1010,7 +1010,8 @@ mod tools {
 
     #[test]
     fn default_session_lists_23() {
-        assert_eq!(tools_for(ToolSets::default()).len(), 23);
+        // the 23 and the four job tools (Task 15)
+        assert_eq!(tools_for(ToolSets::default()).len(), 27);
         assert_eq!(tools().len(), 23);
     }
 
@@ -1018,7 +1019,7 @@ mod tools {
     #[test]
     fn tracker_off_lists_18() {
         let off = tools_for(ToolSets { tracker: false });
-        assert_eq!(off.len(), 18);
+        assert_eq!(off.len(), 22);
         for name in ["settings_get", "settings_change"] {
             assert!(off.iter().any(|t| t.name() == name), "{name}");
         }

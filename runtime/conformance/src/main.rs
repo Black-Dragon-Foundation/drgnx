@@ -4,6 +4,7 @@
 //!  [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]`, and the helper
 //! `domr connect-as --socket PATH` (the connection of another uid, relayed over stdio).
 
+mod container_escape;
 mod exec;
 mod http;
 mod hub;

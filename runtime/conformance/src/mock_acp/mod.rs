@@ -18,7 +18,7 @@
 //!
 //! `--script FILE`: its non-empty lines are programs; the n-th prompt of the process runs line n (a prompt after
 //! the last line runs its own words).  `--log FILE`: JSONL of `{"initialize"|"session/new"|"session/fork"|
-//! "prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
+//! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
 //! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
 //! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted.
 //!
@@ -293,6 +293,10 @@ impl Agent {
             }
             "session/load" if self.kind == Kind::Gemini => {
                 let sid = params["sessionId"].as_str().unwrap_or("s0").to_string();
+                self.log(
+                    "session/load",
+                    json!({"sessionId": sid, "mcpServers": params["mcpServers"]}),
+                );
                 let s = self.open(&params);
                 if let Some(v) = self.sessions.remove(&s) {
                     self.sessions.insert(sid, v);
@@ -310,6 +314,10 @@ impl Agent {
             }
             "session/resume" if self.kind != Kind::Gemini => {
                 let sid = params["sessionId"].as_str().unwrap_or("s0").to_string();
+                self.log(
+                    "session/resume",
+                    json!({"sessionId": sid, "mcpServers": params["mcpServers"]}),
+                );
                 if !self.sessions.contains_key(&sid) {
                     let s = self.open(&params);
                     let v = self.sessions.remove(&s).unwrap();
@@ -318,6 +326,7 @@ impl Agent {
                 reply(json!({}));
             }
             "session/close" if self.kind != Kind::Gemini => {
+                self.log("session/close", json!({"sessionId": params["sessionId"]}));
                 let gone = params["sessionId"]
                     .as_str()
                     .and_then(|s| self.sessions.remove(s));

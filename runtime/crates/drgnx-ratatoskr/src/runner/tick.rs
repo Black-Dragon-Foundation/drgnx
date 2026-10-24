@@ -6,7 +6,7 @@
 
 use super::{
     GitError, GitFuture, MAX_AGENTS, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, changed,
-    data_for, data_of, internal, load, ordered, profile_of, put_in, raise_card, service,
+    clash, data_for, data_of, internal, load, ordered, profile_of, put_in, raise_card, service,
     settle_cards, update_data, user,
 };
 use crate::agents::Origin;
@@ -60,6 +60,9 @@ pub async fn once(front: &Arc<Front>) {
     for id in ids {
         if let Err(e) = step(front, &id).await {
             tracing::warn!("plan run {id}: {}", e.message);
+        }
+        if let Err(e) = clashes(front, &id).await {
+            tracing::warn!("plan run {id}: clash scan: {}", e.message);
         }
         if let Some(h) = front.core.runs.hooks() {
             h.tick(front, &id).await;
@@ -207,6 +210,209 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
     Ok(())
 }
 
+/// What the clash rules see of a run (Task 18): its tasks and sessions, the keys already carded (the job data's
+/// `clashes`), the subjects of settled clash cards and the tasks with an open one.  A task's head is a digest of its
+/// diff, so a task that changed again is looked at again.
+pub(crate) fn run_state(
+    l: &super::Loaded,
+    data: &serde_json::Map<String, Value>,
+    sessions: &[runstav::methods::agents::Snapshot],
+    held: &std::collections::BTreeMap<String, u64>,
+    settled: &[norn::read::cards::Card],
+    diffs: &clash::DiffIndex,
+) -> clash::RunState {
+    use sha2::{Digest, Sha256};
+    let head = |tid: &str| {
+        let d = diffs.get(tid)?;
+        let all: String = d
+            .iter()
+            .map(|(p, f)| format!("{p}\t{}\n", f.hash))
+            .collect();
+        Some(
+            Sha256::digest(all.as_bytes())
+                .iter()
+                .take(8)
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+        )
+    };
+    let subject_of = |c: &norn::read::cards::Card| {
+        c.data
+            .as_ref()
+            .and_then(|d| d.get("subject"))
+            .and_then(Value::as_str)
+            .map(clash::subject)
+    };
+    clash::RunState {
+        status: l.job.status.clone().unwrap_or_default(),
+        tasks: l
+            .tasks
+            .iter()
+            .map(|t| clash::RunTask {
+                id: t.row.id.clone(),
+                n: t.row.n,
+                status: t.row.status.clone().unwrap_or_default(),
+                agent: t.row.agent.clone(),
+                head: head(&t.row.id),
+            })
+            .collect(),
+        sessions: sessions
+            .iter()
+            .map(|s| clash::RunSession {
+                id: s.id.clone(),
+                task: s.task.clone(),
+                exited: s.status == Some(SessionStatus::Exited),
+                held: held
+                    .get(&s.id)
+                    .copied()
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(u32::MAX),
+            })
+            .collect(),
+        carded: data
+            .get("clashes")
+            .and_then(Value::as_object)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default(),
+        settled_subjects: settled
+            .iter()
+            .filter(|c| c.kind.as_deref() == Some("clash"))
+            .filter_map(subject_of)
+            .collect(),
+        open_clash_tasks: l
+            .open_cards
+            .iter()
+            .filter(|c| c.kind.as_deref() == Some("clash"))
+            .filter_map(|c| c.task.clone())
+            .collect(),
+    }
+}
+
+/// Scan job ID for clashes and card each new one once; its key is kept in the job's data (`clashes`), so a restart
+/// does not card it again.  Reviewers for the cards are Task 16b's.
+pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Error> {
+    let Some(l) = load(front, id, true).await? else {
+        return Ok(());
+    };
+    if !matches!(l.job.status.as_deref(), Some("running" | "paused")) {
+        return Ok(());
+    }
+    let data = data_of(&l.job);
+    let sessions: Vec<_> = front
+        .core
+        .agents
+        .snapshots()
+        .into_iter()
+        .filter(|s| s.job.as_deref() == Some(id))
+        .collect();
+    let (jid, ids) = (
+        id.to_owned(),
+        sessions.iter().map(|s| s.id.clone()).collect::<Vec<_>>(),
+    );
+    let (held, settled) = front
+        .writer
+        .db
+        .read(move |c| {
+            let mut held = std::collections::BTreeMap::new();
+            for a in ids {
+                let n = norn::write::meta::held(c, &a)?;
+                held.insert(a, n);
+            }
+            Ok((held, norn::read::cards::cards(c, &jid, Some("settled"))?))
+        })
+        .await
+        .map_err(fail)?;
+    // the diffs of the tasks in review, from the trusted repository
+    let repo = PathBuf::from(l.job.repo.clone().unwrap_or_default());
+    let git = front.core.runs.git();
+    let mut diffs = clash::DiffIndex::new();
+    for t in l
+        .tasks
+        .iter()
+        .filter(|t| t.row.status.as_deref() == Some("in-review"))
+    {
+        let Some(base) = data_for(&data, "bases", &t.row.id).and_then(Value::as_str) else {
+            continue;
+        };
+        let tree = TaskTree {
+            path: sessions
+                .iter()
+                .find(|s| s.task.as_deref() == Some(t.row.id.as_str()))
+                .and_then(|s| s.cwd.clone())
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+            branch: format!("job/{id}-{}", t.row.n),
+            base: base.to_owned(),
+            mode: TreeMode::Worktree,
+        };
+        if let Ok(hashes) = git.diffs(&repo, &tree).await {
+            diffs.insert(
+                t.row.id.clone(),
+                hashes
+                    .into_iter()
+                    .map(|(p, hash)| {
+                        (
+                            p,
+                            clash::FileDiff {
+                                hash,
+                                ranges: Vec::new(),
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+        }
+    }
+    let run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
+    let decisions: Vec<runstav::methods::coord::Decision> = l
+        .decisions
+        .iter()
+        .map(|d| runstav::methods::coord::Decision {
+            n: d.n,
+            kind: d.kind.clone(),
+            subject: d.subject.clone(),
+            task: d.task.clone(),
+            paths: d.paths.clone(),
+            reason: d.reason.clone(),
+            author: d.author.clone(),
+            status: d.status.clone(),
+            job: d.job.clone(),
+            replaces: d.replaces,
+            at: d.at,
+            ver: d.ver,
+        })
+        .collect();
+    let found = clash::scan(&run, &decisions, &diffs);
+    let svc = service();
+    for c in found {
+        let kind = match c.rule {
+            clash::Rule::Stale => "stalled",
+            clash::Rule::Overlap => "overlap",
+            _ => "clash",
+        };
+        raise_card(
+            front,
+            &svc,
+            id,
+            c.task.as_deref(),
+            kind,
+            &c.title,
+            json!({
+                "key": c.key, "rule": c.rule, "subject": c.subject, "sides": c.sides, "files": c.files,
+                "lines": c.lines, "size": c.size, "blocks_review": c.blocks_review,
+            }),
+        )
+        .await?;
+        let key = c.key.clone();
+        update_data(front, &svc, id, move |d| {
+            put_in(d, "clashes", &key, Some(json!(true)));
+        })
+        .await?;
+    }
+    Ok(())
+}
+
 /// Give TASK of job JOB its worker: a tree of its own (git, off the tick), a session of the task's profile with the
 /// role Worker in it, the task claimed by that session, and its prompt.  A failure raises the task's `agent` card.
 /// HANDOVER: what the agent before it left.
@@ -225,7 +431,17 @@ pub async fn start(
     let data = data_of(&l.job);
     let repo = PathBuf::from(l.job.repo.clone().unwrap_or_default());
     let profile = profile_of(front, &data, task);
+    // the job's branch is made from HEAD when absent; the task's tree starts from the commit it is at now
     let base = format!("job/{job}");
+    let base = match git(&repo, &["rev-parse", "--verify", "-q", &base]).await {
+        Ok(sha) => sha,
+        Err(_) => match git(&repo, &["branch", &base, "HEAD"]).await {
+            Ok(_) => git(&repo, &["rev-parse", "--verify", &base])
+                .await
+                .unwrap_or(base),
+            Err(_) => base,
+        },
+    };
     let tree = match runs
         .git()
         .task_worktree(&repo, job, &n.to_string(), &base)
@@ -303,7 +519,6 @@ pub async fn start(
             return Ok(());
         }
     };
-    // Task 17's merge connects here: `HubGit::touch(&tree.path)` (a sandboxed session started in a run folder)
     // the session's steps are filed under its plan and project
     let plan = l
         .job
@@ -318,9 +533,28 @@ pub async fn start(
             .ok()
             .flatten()
     };
-    // Task 20's merge connects here: `Budgets::link(worker scope(sid) -> plan scope -> project scope)` and
-    // `Budgets::bind_job(&sid, job)`, with the plan and project ids below.
+    // spend counts toward the plan, and the plan toward its project; the gateway books the session's requests
+    // under the job
+    {
+        use runstav::methods::timeline::BudgetScope;
+        let b = &front.core.budgets;
+        let worker = crate::agents::session::scope_of(Role::Worker, &sid);
+        let plan_scope = BudgetScope::Plan(Bounded(plan.clone()));
+        match &project {
+            Some(p) => {
+                let project_scope = BudgetScope::Project(Bounded(p.clone()));
+                b.link(&plan_scope, &project_scope);
+            }
+            None => b.enroll(&plan_scope),
+        }
+        b.link(&worker, &plan_scope);
+        b.bind_job(job, &worker);
+    }
     runs.set_scope(&sid, plan, project);
+    // a run folder a sandboxed session worked in is never touched by plain git again
+    if let Err(e) = runs.git().touched(&tree.path).await {
+        tracing::warn!("run folder not marked touched: {}", e.stderr);
+    }
     let reg = AgentRegister {
         id: sid.clone(),
         kind: Some("job".into()),
@@ -457,5 +691,54 @@ impl RunGit for BasicGit {
                 stderr: "not yet (agent system part 1, Task 17)".into(),
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use norn::read::jobs::Job;
+
+    #[test]
+    fn the_run_state_remembers_carded_keys_from_the_job_data() {
+        let job = Job {
+            id: "j".into(),
+            title: None,
+            plan: None,
+            repo: None,
+            status: Some("running".into()),
+            created: None,
+            data: Some(json!({"clashes": {"contradiction:1:2": true}})),
+        };
+        let l = super::super::Loaded {
+            job,
+            tasks: Vec::new(),
+            open_cards: Vec::new(),
+            messages: Vec::new(),
+            decisions: Vec::new(),
+            spent: 0.0,
+        };
+        let data = data_of(&l.job);
+        let run = run_state(
+            &l,
+            &data,
+            &[],
+            &Default::default(),
+            &[],
+            &Default::default(),
+        );
+        assert_eq!(run.status, "running");
+        assert!(run.carded.contains("contradiction:1:2"));
+    }
+
+    #[test]
+    fn a_runs_scopes_are_shared_with_the_step_writers() {
+        let runs = super::super::Runs::default();
+        let scopes = runs.scopes();
+        runs.set_scope("a1", "plan:p".into(), Some("project:q".into()));
+        assert_eq!(
+            scopes.get("a1"),
+            Some(("plan:p".into(), Some("project:q".into())))
+        );
     }
 }

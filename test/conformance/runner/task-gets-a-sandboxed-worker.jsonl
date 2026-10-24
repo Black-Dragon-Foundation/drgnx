@@ -14,5 +14,5 @@
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": {"$contains": [{"id": "$string", "profile": "mock-claude", "role": "worker", "job": "$job"}]}}}, "within_ms": 60000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "job/status", "params": {"id": "$job"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tasks": [{"n": 1, "status": "claimed", "agent": "$capture:sid"}, {"n": 2, "status": "pending"}], "agents": [{"id": "$sid"}]}}, "within_ms": 10000}
-{"do": "file", "path": "$ROOT/repo/.claude/worktrees/$job-1", "exists": true}
+{"do": "file", "path": "$STATE/hub/runs/$job/1", "exists": true}
 {"do": "sql_expect", "sql": "select id, kind, branch = 'job/$job-1' from agent", "rows": [["$sid", "job", 1]]}

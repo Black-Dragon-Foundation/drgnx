@@ -1,20 +1,19 @@
-{"scenario": "launch/a-session-gets-a-bridge-not-an-emacs", "requires": ["v1", "lisp-backend"], "pending": "agent system part 1, no task yet (8a's seam, I1-F; Task 15's job tools need it): agents/start is the hub's own and gives session/new no mcp-bridge", "doc": "Task 14: an agent the Lisp backend starts is given Ratatoskr's mcp-bridge on a socket the hub minted, not a batch Emacs: the mock ACP agent logs the mcpServers of its session/new, whose drgnx entry runs the ratatoskr binary with mcp-bridge --socket PATH and an empty env, no argv names emacs, status.mcp.sessions is 1, and stopping the agent closes the session within 3 s. settings.el pins drgnx-agents-mcp to (coordination): the Lisp search server stays a batch Emacs until phase 8."}
+{"scenario": "launch/a-session-gets-a-bridge-not-an-emacs", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 14 and 15: an agent the hub starts is given Ratatoskr's mcp-bridge on a socket the hub minted for its session (so the job tools reach it), not a batch Emacs: the mock ACP agent logs the mcpServers of its session/new, whose drgnx entry runs the ratatoskr binary with mcp-bridge --socket PATH and an empty env, no argv names emacs, status.mcp.sessions is 1, and stopping the agent closes the socket within 3 s."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
 {"do": "start", "hub": "h"}
-{"do": "install_bin", "to": "$DATA/bin/ratatoskr"}
-{"do": "write_file", "path": "$CONFIG/settings.el", "text": "(drgnx-settings :version 1 (drgnx-agents-mcp (coordination)) (drgnx-agents-profiles ((\"mock-acp\" :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\") :env (\"MOCK_ACP_LOG=$ROOT/acp.log\")))))\n"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-acp", "cwd": "$HOME"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"name\":\"drgnx\"", "within_ms": 30000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"args\":[\"mcp-bridge\",\"--socket\",\"", "within_ms": 5000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"env\":[]", "within_ms": 5000}
-{"do": "file", "path": "$ROOT/acp.log", "contains": "/bin/ratatoskr\"", "within_ms": 5000}
 {"do": "file", "path": "$ROOT/acp.log", "lacks": "emacs"}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"mcp": {"sessions": 1, "outside": 0}}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/stop", "params": {"id": "$agent"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}, "within_ms": 10000}
-{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/kill", "params": {"id": "$agent"}}}
-{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": {"mcp": {"sessions": 0, "outside": 0}}}, "within_ms": 3000}

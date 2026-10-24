@@ -95,6 +95,45 @@ pub struct ContainerJob {
     pub net: Option<NetCell>,
 }
 
+/// What the hub hears of the jobs: a job waiting for a machine and getting one, and a job's end.
+#[derive(Clone, Debug)]
+pub enum JobEvent {
+    /// The job ID of SESSION waits for a free machine slot.
+    Queued { session: Option<String>, id: String },
+    /// ... and has one now.
+    Admitted { session: Option<String>, id: String },
+    /// The job ended (its result is written, and it no longer counts as running).
+    Done(ExecDone),
+}
+
+/// The jobs running now, by the session that started each (a session waits for its own, in the hub's memory).
+#[derive(Default)]
+pub struct Live(Mutex<std::collections::HashMap<String, Option<String>>>);
+
+impl Live {
+    fn add(&self, id: &str, session: Option<String>) {
+        self.0.lock().unwrap().insert(id.to_string(), session);
+    }
+
+    fn remove(&self, id: &str) {
+        self.0.lock().unwrap().remove(id);
+    }
+
+    /// The running jobs SESSION started.
+    pub fn ids(&self, session: &str) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, s)| s.as_deref() == Some(session))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+}
+
 /// What the runner reaches beyond its own folder: the store (a job is an entity), the subscribers (`exec-done`), the
 /// memory cap and whether a user systemd carries the units.
 #[derive(Clone)]
@@ -106,6 +145,8 @@ pub struct Hooks {
     pub systemd: bool,
     /// `podman`, found on the PATH when the hub started; none: container jobs are refused.
     pub podman: Option<PathBuf>,
+    /// Jobs running at once on this machine; the next waits for a slot (the session's step is a machine-queue wait).
+    pub slots: usize,
 }
 
 impl Default for Hooks {
@@ -116,6 +157,7 @@ impl Default for Hooks {
             memory: "4G".into(),
             systemd: unit::systemd_user(),
             podman: unit::find_on_path("podman"),
+            slots: 4,
         }
     }
 }
@@ -134,12 +176,26 @@ struct Inner {
     hooks: Hooks,
     seq: AtomicU64,
     finishing: Mutex<HashSet<String>>,
+    live: Arc<Live>,
+    events: tokio::sync::broadcast::Sender<JobEvent>,
+    slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// The jobs the hub runs.
-#[derive(Default)]
 pub struct Runner {
     inner: OnceLock<Arc<Inner>>,
+    live: Arc<Live>,
+    events: tokio::sync::broadcast::Sender<JobEvent>,
+}
+
+impl Default for Runner {
+    fn default() -> Runner {
+        Runner {
+            inner: OnceLock::new(),
+            live: Arc::default(),
+            events: tokio::sync::broadcast::channel(256).0,
+        }
+    }
 }
 
 fn now() -> f64 {
@@ -173,14 +229,27 @@ impl Runner {
             fresh = true;
             Arc::new(Inner {
                 root,
+                slots: Arc::new(tokio::sync::Semaphore::new(hooks.slots.max(1))),
                 hooks,
                 seq: AtomicU64::new(0),
                 finishing: Mutex::new(HashSet::new()),
+                live: self.live.clone(),
+                events: self.events.clone(),
             })
         });
         if fresh {
             inner.reattach();
         }
+    }
+
+    /// The running jobs, by starter.
+    pub fn live(&self) -> Arc<Live> {
+        self.live.clone()
+    }
+
+    /// Queue waits and ends, as they happen (a slow receiver lags; it never holds a job up).
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<JobEvent> {
+        self.events.subscribe()
     }
 
     fn inner(&self) -> Result<&Arc<Inner>, Refusal> {
@@ -302,7 +371,31 @@ impl Inner {
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
-        let r = self.clone().launch(&id, &dir, spec).await;
+        let session = match &spec.starter {
+            Starter::Session(s) => Some(s.clone()),
+            Starter::User => None,
+        };
+        let permit = match self.slots.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = self.events.send(JobEvent::Queued {
+                    session: session.clone(),
+                    id: id.clone(),
+                });
+                let p = self
+                    .slots
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| setup(format!("the machine's slots: {e}")))?;
+                let _ = self.events.send(JobEvent::Admitted {
+                    session: session.clone(),
+                    id: id.clone(),
+                });
+                p
+            }
+        };
+        let r = self.clone().launch(&id, &dir, spec, permit).await;
         if r.is_err() {
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -311,7 +404,7 @@ impl Inner {
 
     /// The `podman run` of a container job.  The container is the sandbox, so the starter's Gleipnir spec is not used;
     /// the hub pulls the image first, the job never does.
-    async fn container_spec(&self, spec: &ExecSpec) -> Result<draugr::Spec, Refusal> {
+    async fn container_spec(&self, id: &str, spec: &ExecSpec) -> Result<draugr::Spec, Refusal> {
         let job = spec.container.as_ref().expect("a container job");
         let podman = self
             .hooks
@@ -330,6 +423,7 @@ impl Inner {
             image: job.image.clone(),
             argv: spec.argv.clone(),
             worktree: spec.cwd.clone(),
+            job: id.to_string(),
             net: job.net,
         };
         let args = container::argv(&req, &caps)?;
@@ -337,9 +431,11 @@ impl Inner {
             podman.clone(),
             container::resolve(&caps, &job.image)?.to_string(),
         );
-        tokio::task::spawn_blocking(move || container::ensure_image(&p, &reference))
-            .await
-            .map_err(|e| setup(format!("pulling the image: {e}")))??;
+        tokio::task::spawn_blocking(move || {
+            container::ensure_image(&p, &reference, container::PULL_TIMEOUT)
+        })
+        .await
+        .map_err(|e| setup(format!("pulling the image: {e}")))??;
         Ok(draugr::Spec {
             program: podman,
             args,
@@ -355,10 +451,18 @@ impl Inner {
         })
     }
 
-    async fn launch(self: Arc<Self>, id: &str, dir: &Path, spec: ExecSpec) -> Result<(), Refusal> {
+    async fn launch(
+        self: Arc<Self>,
+        id: &str,
+        dir: &Path,
+        spec: ExecSpec,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<(), Refusal> {
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let (inner, status) = match &spec.starter {
-            _ if spec.container.is_some() => (self.container_spec(&spec).await?, None),
+            _ if spec.container.is_some() => (self.container_spec(id, &spec).await?, None),
+            // the conformance lane has no sandbox for a job: its jobs run as the user's do
+            Starter::Session(_) if unsandboxed_for_tests() => (plain_spec(&spec), None),
             Starter::Session(sid) => {
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
@@ -378,24 +482,7 @@ impl Inner {
                 let l = launch::launch(&Env::process(), &plan, &shape)?;
                 (l.spec, l.status)
             }
-            Starter::User => (
-                draugr::Spec {
-                    program: PathBuf::from(&spec.argv[0]),
-                    args: spec.argv[1..].iter().map(OsString::from).collect(),
-                    env: draugr::env::build(
-                        &[
-                            "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
-                        ],
-                        &["LC_", "CARGO", "RUST", "MISE_"],
-                        &[],
-                    ),
-                    cwd: Some(spec.cwd.clone()),
-                    stdin_null: true,
-                    pass_fds: vec![],
-                    new_session: false,
-                },
-                None,
-            ),
+            Starter::User => (plain_spec(&spec), None),
         };
         let wrapped = unit::wrap(
             inner,
@@ -452,7 +539,12 @@ impl Inner {
         self.save_meta(&meta)?;
         let me = self.clone();
         let id = id.to_string();
-        tokio::spawn(async move { me.watch(&id, Some(child)).await });
+        // counted as running before the starter hears of its id
+        self.live.add(&id, meta.session.clone());
+        tokio::spawn(async move {
+            me.watch(&id, Some(child)).await;
+            drop(permit);
+        });
         Ok(())
     }
 
@@ -577,16 +669,18 @@ impl Inner {
                 tracing::warn!("job {id}: end not recorded: {err}");
             }
         }
+        let done = ExecDone {
+            id: id.to_string(),
+            session: meta.session,
+            status,
+            exit,
+            summary: end.summary,
+        };
         if let Some(ed) = &self.hooks.editors {
-            let done = ExecDone {
-                id: id.to_string(),
-                session: meta.session,
-                status,
-                exit,
-                summary: end.summary,
-            };
             ed.broadcast("exec-done", json!(done));
         }
+        self.live.remove(id);
+        let _ = self.events.send(JobEvent::Done(done));
     }
 
     async fn stop(self: Arc<Self>, id: &str) -> Option<ExecRow> {
@@ -613,14 +707,47 @@ impl Inner {
         let Ok(rd) = std::fs::read_dir(&self.root) else {
             return;
         };
+        let mut running = HashSet::new();
         for e in rd.flatten() {
             let id = e.file_name().to_string_lossy().to_string();
-            if self.meta(&id).is_some() && self.end(&id).is_none() {
+            if let Some(m) = self.meta(&id)
+                && self.end(&id).is_none()
+            {
+                self.live.add(&id, m.session);
+                running.insert(id.clone());
                 let me = self.clone();
                 tokio::spawn(async move { me.watch(&id, None).await });
             }
         }
+        // a podman client that died with the last hub leaves its container: remove those no running job owns
+        if let Some(podman) = self.hooks.podman.clone() {
+            tokio::task::spawn_blocking(move || container::remove_leftovers(&podman, &running));
+        }
     }
+}
+
+/// A job run with the user's rights: the same for a user's job and (in the conformance lane) a session's.
+fn plain_spec(spec: &ExecSpec) -> draugr::Spec {
+    draugr::Spec {
+        program: PathBuf::from(&spec.argv[0]),
+        args: spec.argv[1..].iter().map(OsString::from).collect(),
+        env: draugr::env::build(
+            &[
+                "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
+            ],
+            &["LC_", "CARGO", "RUST", "MISE_"],
+            &[],
+        ),
+        cwd: Some(spec.cwd.clone()),
+        stdin_null: true,
+        pass_fds: vec![],
+        new_session: false,
+    }
+}
+
+/// Tests and `test-hooks` builds with `DRGNX_TEST_PLAIN_JOBS` set: the conformance container has no sandbox helper.
+fn unsandboxed_for_tests() -> bool {
+    cfg!(any(test, feature = "test-hooks")) && std::env::var_os("DRGNX_TEST_PLAIN_JOBS").is_some()
 }
 
 /// The last megabyte of a log, as text.
@@ -672,6 +799,13 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             f.settings.effective("drgnx-agents-job-memory", None)
         {
             hooks.memory = m;
+        }
+        #[cfg(feature = "test-hooks")]
+        if let Some(n) = std::env::var("DRGNX_TEST_JOB_SLOTS")
+            .ok()
+            .and_then(|n| n.parse().ok())
+        {
+            hooks.slots = n;
         }
         r.open(dirs.hub.join("exec"), hooks);
     }
@@ -778,9 +912,7 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .await
         .map_err(|r| error(ErrorCode::InvalidParams, r.message))?;
     Ok(Started {
-        text: format!(
-            "job {id} runs; its end wakes you with the summary (job_result {id} for the rest)"
-        ),
+        text: format!("job {id} runs: end your turn; you will be woken with the result"),
         id,
     })
 }

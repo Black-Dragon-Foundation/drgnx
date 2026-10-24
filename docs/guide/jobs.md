@@ -36,6 +36,29 @@ pulls (`--pull=never`). A name that is not on the list is refused. A starting ag
 refused and the message points at `drgnx doctor`. Otherwise a container job is a job like any other: unit, log, exit,
 summary, time box and restart behaviour.
 
+### An agent starts a job and is woken
+
+An agent that runs on the hub has the job tools (`job_start`, `job_result`, `job_log`, `job_stop`). `job_start` answers
+the job's id and "end your turn; you will be woken": the agent finishes its turn, the session shows **waiting** (and
+names the job), and **no model request is made until the job ends**. The job's end is a plain prompt to the same
+session: `[job ID finished — exit N]`, the failing tests, the log lines of the summary and the log's path. The prompt
+goes to the same ACP session, so the provider's prompt cache stays warm (a worker's Claude profile asks for a one-hour
+cache for this).
+
+- **No waiting.** While one of its own jobs runs, an agent's `job_result` and `job_log` of it, and shell loops that wait
+  (`sleep`, `pgrep`, `watch`, `until`, `tail -f`), are refused with the text above. After `agents-wait-refusals`
+  refusals (default 3) in one turn the hub cancels the turn; the wake prompts the agent again. A finished job, and a
+  job of someone else, can be read at any time.
+- **Idle on a job.** A session waiting longer than `agents-close-idle-after` seconds (default 1800; 0 never) is closed:
+  the agent's process ends (`session/close` first, for the CLIs that have it). The job's end, or your next message,
+  resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with
+  `session/load`).
+- **Machine slots.** This machine runs four jobs at once. A fifth waits for a slot: its starter's timeline shows a
+  `machine-queue` step and the session says it waits for the machine; the job starts when a slot frees. Waiting for a
+  job is a `job-wait` step.
+- **Tools in a hub-started session.** An agent the hub starts gets the coordination tools (including the job tools)
+  through `ratatoskr mcp-bridge` on a socket the hub made for that session; the socket goes when the session ends.
+
 ## Plan runs
 
 The rest of this page is about **plan runs**: a plan's tasks dispatched to agents, which keep the `job/*` methods and

@@ -25,7 +25,7 @@ mod tests;
 pub trait GatePolicy: Send + Sync {
     /// The paths of TREE's task the user accepted, each with the diff hash it was accepted against
     /// (see [`HubGit::diff_hashes`]).
-    fn accepted(&self, tree: &TaskTree) -> BTreeMap<String, String>;
+    fn accepted<'a>(&'a self, tree: &'a TaskTree) -> GitFuture<'a, BTreeMap<String, String>>;
     /// The matrix's answer for a change to CI or build files (Ask under Balanced: one card from FACTS).
     fn ci_config<'a>(&'a self, tree: &'a TaskTree, facts: Facts) -> GitFuture<'a, Gate>;
 }
@@ -402,7 +402,7 @@ impl HubGit {
                 protected.join(", ")
             )));
         }
-        let marks = self.policy.accepted(tree);
+        let marks = self.policy.accepted(tree).await?;
         let accepted = ins
             .changed
             .iter()
@@ -695,5 +695,104 @@ impl RunGit for HubGit {
         branches: &'a [String],
     ) -> GitFuture<'a, TrialResult> {
         Box::pin(self.trial(repo, branches))
+    }
+
+    fn diffs<'a>(
+        &'a self,
+        repo: &'a Path,
+        tree: &'a TaskTree,
+    ) -> GitFuture<'a, BTreeMap<String, String>> {
+        Box::pin(self.diff_hashes(repo, tree))
+    }
+
+    fn touched<'a>(&'a self, folder: &'a Path) -> GitFuture<'a, ()> {
+        Box::pin(self.touch(folder))
+    }
+}
+
+/// The hub's [`GatePolicy`]: the acceptance marks of the task's worker session (`review_mark`, found by the worktree
+/// the session registered) and `code.ci-config` through the matrix.  Holds the front weakly: the front owns the git.
+pub struct HubPolicy(pub std::sync::Weak<crate::front::Front>);
+
+impl HubPolicy {
+    fn front(&self) -> Result<std::sync::Arc<crate::front::Front>, GitError> {
+        self.0
+            .upgrade()
+            .ok_or_else(|| err("policy", "the hub is stopping"))
+    }
+
+    async fn session_of(
+        front: &crate::front::Front,
+        tree: &TaskTree,
+    ) -> Result<Option<String>, GitError> {
+        let path = tree.path.to_string_lossy().into_owned();
+        front
+            .writer
+            .db
+            .read(move |c| {
+                Ok(c.query_row(
+                    "select id from agent where worktree = ?1 order by started desc limit 1",
+                    [path],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok())
+            })
+            .await
+            .map_err(|e| err("agent lookup", format!("{e:?}")))
+    }
+}
+
+impl GatePolicy for HubPolicy {
+    fn accepted<'a>(&'a self, tree: &'a TaskTree) -> GitFuture<'a, BTreeMap<String, String>> {
+        Box::pin(async move {
+            let front = self.front()?;
+            let Some(sid) = Self::session_of(&front, tree).await? else {
+                return Ok(BTreeMap::new());
+            };
+            let marks = front
+                .writer
+                .db
+                .read(move |c| norn::read::review::review_marks(c, &sid))
+                .await
+                .map_err(|e| err("review marks", format!("{e:?}")))?;
+            Ok(marks
+                .into_iter()
+                .filter(|m| m.state == "accepted")
+                .filter_map(|m| m.hash.map(|h| (m.path, h)))
+                .collect())
+        })
+    }
+
+    fn ci_config<'a>(&'a self, tree: &'a TaskTree, facts: Facts) -> GitFuture<'a, Gate> {
+        Box::pin(async move {
+            let front = self.front()?;
+            let session = Self::session_of(&front, tree).await?;
+            let (plan, project) = session
+                .as_deref()
+                .and_then(|s| front.core.runs.scope_of(s))
+                .map_or((None, None), |(p, j)| (Some(p), j));
+            let who = norn::matrix::Who {
+                role: Some(norn::matrix::Role::Worker),
+                ..Default::default()
+            };
+            let ctx = crate::matrix_gate::ActionCtx {
+                project,
+                plan,
+                session,
+                amount: None,
+                facts,
+            };
+            Ok(front
+                .core
+                .matrix
+                .decide(
+                    &front.settings,
+                    &front.writer,
+                    who,
+                    norn::matrix::Action::CodeCiConfig,
+                    ctx,
+                )
+                .await)
+        })
     }
 }

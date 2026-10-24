@@ -611,6 +611,15 @@ pub struct ToolHub {
     pub editors: Arc<crate::settings::agents::Editors>,
     /// What the hub read of `settings.el`, for a `settings_get` with no editor.
     pub settings: Arc<crate::settings::Settings>,
+    /// The front the job tools call (set once the front is in its `Arc`: [`ToolHub::bind`]).
+    pub front: std::sync::OnceLock<std::sync::Weak<Front>>,
+}
+
+impl ToolHub {
+    /// The front the job tools reach `exec/*` through.
+    pub fn bind(&self, front: &Arc<Front>) {
+        let _ = self.front.set(Arc::downgrade(front));
+    }
 }
 
 impl Hub for ToolHub {
@@ -652,6 +661,43 @@ impl Hub for ToolHub {
         self.signals.records.notify_one();
         self.signals.events_soon();
         self.signals.notify_soon();
+    }
+
+    fn exec(
+        &self,
+        sid: &str,
+        method: &'static str,
+        params: Value,
+    ) -> BoxFuture<'_, Result<Value, String>> {
+        let sid = sid.to_string();
+        Box::pin(async move {
+            let front = self
+                .front
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .ok_or("jobs are not ready: the hub is starting")?;
+            let m = registry::find(method).ok_or_else(|| format!("no method {method}"))?;
+            let (params, _) = (m.decode)(&params).map_err(|e| e.message)?;
+            let caller = Caller {
+                class: Class::Agent,
+                sid: Some(sid),
+                job: None,
+                conn_id: 0,
+                backend: false,
+            };
+            match crate::agent_core::serve(&front, &caller, params).await {
+                Ok(answer) => answer.map_err(|e| e.message),
+                Err(_) => Err(format!("{method} is not a job method")),
+            }
+        })
+    }
+
+    fn wait_refused(&self, sid: &str) {
+        if let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade)
+            && let Ok(s) = front.core.agents.find(sid)
+        {
+            s.refuse_wait();
+        }
     }
 
     fn propose(
@@ -935,6 +981,7 @@ mod tests {
             signals: signals.clone(),
             editors: Arc::new(Default::default()),
             settings: Arc::new(crate::settings::Settings::new()),
+            front: Default::default(),
         };
         // the tools call `notify` after each write: the records' follower wakes
         hub.notify();

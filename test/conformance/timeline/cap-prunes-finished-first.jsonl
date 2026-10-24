@@ -1,4 +1,4 @@
-{"scenario": "timeline/cap-prunes-finished-first", "requires": ["v1", "fake-backend", "test-hooks"], "pending": "Task 16a: nothing yet calls Timeline::session_finished when a task finishes (assigned by the manager, 2026-10-24)", "doc": "Task 19: over the cap, a finished task's oldest snapshot refs go before anything else and the repository is collected."}
+{"scenario": "timeline/cap-prunes-finished-first", "requires": ["v1", "fake-backend", "test-hooks"], "pending": "B1-W: Timeline::session_finished is wired (Runs::session_finished), but this row starts a plain agents/start session and never finishes a task, so nothing marks it finished and its one ref stays; the row needs a plan-run task that ends (or a rewrite) - the manager decides", "doc": "Task 19: over the cap, a finished task's oldest snapshot refs go before anything else and the repository is collected."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

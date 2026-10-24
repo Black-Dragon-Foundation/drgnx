@@ -107,6 +107,20 @@ pub trait Hub: Send + Sync {
         Box::pin(async { Err("this hub has no records".to_string()) })
     }
 
+    /// The hub's `exec/METHOD` (a job) called as the session SID: its result, or the refusal's text.  The default (no
+    /// hub): no jobs.
+    fn exec(
+        &self,
+        _sid: &str,
+        _method: &'static str,
+        _params: serde_json::Value,
+    ) -> BoxFuture<'_, Result<serde_json::Value, String>> {
+        Box::pin(async { Err("jobs are the hub's: none here".to_string()) })
+    }
+
+    /// The session SID waited on a job that runs (refused): the hub counts it and cancels the turn at the limit.
+    fn wait_refused(&self, _sid: &str) {}
+
     /// The runtime settings the hub read itself (`settings.el`, the shipped defaults, the editor's overrides) as rows
     /// `{name, value, source}`: NAMES only, or all.
     fn known_settings(&self, _names: Option<&[String]>) -> Vec<serde_json::Value> {
@@ -214,8 +228,8 @@ pub fn tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
 }
 
 /// The agent core's tools every worker gets (agent system part 1): jobs (Task 15), the structured report and the
-/// plan tools (Task 21), view proposals (Task 14b).  Not yet in [`tools`] or [`tools_for`]: Task 15 adds them to
-/// `tools_for` (and the `tools/list` budget) once its job tools are filled; until then each answers "not yet".
+/// plan tools (Task 21), view proposals (Task 14b).  The job tools are in [`tools_for`] (Task 15); the others answer
+/// "not yet" and are not served until their tasks fill them.
 pub const CORE_TOOLS: [&str; 9] = [
     "job_start",
     "job_result",
@@ -326,12 +340,12 @@ mod core_tests {
             home: dir.path().to_path_buf(),
         };
         let all = core_tools();
-        let stop = all.iter().find(|t| t.name() == "job_stop").unwrap();
-        let args = serde_json::json!({"id": "x1"});
+        let stop = all.iter().find(|t| t.name() == "plan_read").unwrap();
+        let args = serde_json::json!({"plan": "plan:x1"});
         stop.check(&args).unwrap();
         match stop.call(&(coord, who), args).await {
             ToolResult::Err(text) => {
-                assert_eq!(text, "job_stop: not yet (agent system part 1, Task 15)")
+                assert_eq!(text, "plan_read: not yet (agent system part 1, Task 21)")
             }
             _ => panic!("a stub answered"),
         }

@@ -168,3 +168,9 @@ path = "fuzz_targets/gateway_admit.rs"
 test = false
 doc = false
 bench = false
+[[bin]]
+name = "container_req"
+path = "fuzz_targets/container_req.rs"
+test = false
+doc = false
+bench = false
