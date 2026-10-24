@@ -13,7 +13,12 @@
 //! - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
 //!   tunnelled, anything else gets 405 (logged as `{"refused": "METHOD TARGET"}`).
 //!
+//! - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]` is a scripted ACP agent on stdio (src/mock_acp/mod.rs).
+//!
 //! `llm` ends when `--parent` is gone.
+
+#[path = "../mock_acp/mod.rs"]
+mod mock_acp;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_json::{Value, json};
@@ -24,7 +29,7 @@ use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-fn die(why: &str) -> ! {
+pub(crate) fn die(why: &str) -> ! {
     eprintln!("ratatoskr-mock: {why}");
     std::process::exit(1)
 }
@@ -34,8 +39,9 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("llm") => llm(&args[1..]),
         Some("proxy") => proxy(&args[1..]),
+        Some("acp") => mock_acp::run(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE]",
+            "usage: ratatoskr-mock llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]",
         ),
     }
 }
