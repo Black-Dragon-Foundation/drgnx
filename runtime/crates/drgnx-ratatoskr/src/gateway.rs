@@ -1086,7 +1086,8 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<(String, Row)>> {
     .await
 }
 
-async fn kv_get(db: &urdr::Handle, key: &'static str) -> Option<String> {
+/// KEY's value in `runtime.db`'s `kv` (the settings' last good values too); none when it has none or does not read.
+pub(crate) async fn kv_get(db: &urdr::Handle, key: &'static str) -> Option<String> {
     let got = db
         .read(move |c| {
             match c.query_row("select value from kv where key = ?1", [key], |r| r.get(0)) {
@@ -1105,7 +1106,7 @@ async fn kv_get(db: &urdr::Handle, key: &'static str) -> Option<String> {
     }
 }
 
-async fn kv_set(db: &urdr::Handle, key: &'static str, value: &str) {
+pub(crate) async fn kv_set(db: &urdr::Handle, key: &'static str, value: &str) {
     let v = value.to_owned();
     if let Err(e) = db
         .write(move |c| {

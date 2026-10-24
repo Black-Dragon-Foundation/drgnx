@@ -1,0 +1,8 @@
+{"scenario": "settings/the-hub-reads-settings-el", "requires": ["v1", "fake-backend"], "doc": "With no editor connected, the hub reads <config>/settings.el itself (data only, through huginn): a profile of the user's joins the 7 built-in ones, a provider of the user's joins the 16 presets, and status.settings says so. A comment, a :mode section and a package's entry change nothing."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": ";;; settings.el --- your settings  -*- mode: lisp-data -*-\n(drgnx-settings\n :version 1\n ;; my review agent\n (drgnx-agents-profiles ((\"review\" :command (\"claude-agent-acp\") :mode queue :model \"opus\" :doc \"Reviews\")))\n (drgnx-ai-providers ((work :kind openai :url \"https://llm.example/v1\" :key-env \"WORK_KEY\" :caps (chat))))\n (fill-column 100)\n (:mode python-ts-mode (fill-column 88)))\n"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"settings": {"file": "ok", "problems": 0, "presets": 17, "profiles": 8}}}}

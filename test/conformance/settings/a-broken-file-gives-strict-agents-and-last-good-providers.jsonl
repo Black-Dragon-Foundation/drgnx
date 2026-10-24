@@ -1,0 +1,26 @@
+{"scenario": "settings/a-broken-file-gives-strict-agents-and-last-good-providers", "requires": ["v1", "fake-backend"], "doc": "A good settings.el gives the user's profile and provider, and the provider is kept in runtime.db's kv as its last good value. The file then breaks (an unbalanced paren); the next session start reads it again: the agents' settings take their shipped defaults (strict: the user's profile is gone), the providers keep their last good value, and one notice says why. A hub started on the broken file says the same: the last good value survives a restart."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings\n :version 1\n (drgnx-agents-profiles ((\"review\" :command (\"claude-agent-acp\"))))\n (drgnx-agents-allow-unsandboxed t)\n (drgnx-ai-providers ((work :kind openai :url \"https://llm.example/v1\"))))\n"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settings": {"file": "ok", "problems": 0, "presets": 17, "profiles": 8}}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select value like '%llm.example%' from kv where key = 'settings-last-good'", "rows": [[1]]}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings\n :version 1\n (drgnx-agents-profiles ((\"review\" :command (\"claude-agent-acp\"))))\n (drgnx-ai-providers ((other :kind openai :url \"https://other.example/v1\")))\n"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"event": "notice", "data": {"source": "hub", "severity": "warn", "id": "settings-file", "life": "event", "text": "$string"}}, "within_ms": 5000}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sid": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"settings": {"file": "failed", "problems": 1, "presets": 17, "profiles": 7}}}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": true}}
+{"do": "expect", "conn": "c2", "json": {"event": "notice", "data": {"id": "settings-file", "text": "$string"}}, "within_ms": 5000}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"settings": {"file": "failed", "problems": 1, "presets": 17, "profiles": 7}}}}

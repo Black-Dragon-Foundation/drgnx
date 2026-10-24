@@ -75,6 +75,8 @@ pub struct Front {
     pub mcp: Sessions,
     /// The gateway ([`crate::gateway`]).
     pub gate: Gate,
+    /// What the hub read of `settings.el` and the shipped defaults ([`crate::settings`]).
+    pub settings: crate::settings::Settings,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -144,6 +146,7 @@ impl Front {
             },
             mcp: Sessions::new(uid, tools.clone(), tool_list.clone()),
             gate,
+            settings: crate::settings::Settings::new(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             tools,
@@ -285,6 +288,15 @@ impl Front {
             gateway: Some(self.gate.status()),
             gateway_port: None,
             registrations: None,
+            settings: Some(self.settings.current().status()),
+        }
+    }
+
+    /// `settings.el` read again when its stamp changed (at start, and when a session starts); the problems the last
+    /// read did not have go to the subscribers as notices.
+    pub async fn refresh_settings(&self) {
+        for n in self.settings.refresh().await {
+            self.broadcast("notice", n);
         }
     }
 
@@ -439,8 +451,9 @@ impl Front {
         caller.backend = backend;
         let mut stop = false;
         let mut restart = false;
-        // a new subscriber hears which keys kept registrations need, after its answer
+        // a new subscriber hears which keys kept registrations need, and the settings' problems, after its answer
         let mut need_keys = None;
+        let mut settings_notices = Vec::new();
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
@@ -456,6 +469,7 @@ impl Front {
                     .expect("subscribers")
                     .insert(s.conn, out.clone());
                 need_keys = self.gate.pending_need_keys();
+                settings_notices = self.settings.current().notices();
                 Ok(json!(true))
             }
             Params::Shutdown(_) => {
@@ -479,7 +493,11 @@ impl Front {
                 }
                 Ok(json!(true))
             }
-            Params::McpSession(p) => self.mcp.open(p).await.map(|a| json!(a)),
+            // a session starts on the settings as the file says now
+            Params::McpSession(p) => {
+                self.refresh_settings().await;
+                self.mcp.open(p).await.map(|a| json!(a))
+            }
             Params::McpSessionClose(p) => self.mcp.close(p.sid.as_str()).await.map(|b| json!(b)),
             // the answer goes out first; the connection loop then hands the connection to MCP
             Params::McpAttach(p) => sessions::outside(s, p.kind.as_str()).map(|who| {
@@ -544,6 +562,12 @@ impl Front {
             out.push(answer_line(s.conn, id, result, ignored));
         }
         if let Some(line) = need_keys.and_then(|data| event_line("gateway/need-keys", data)) {
+            out.push(line);
+        }
+        for line in settings_notices
+            .into_iter()
+            .filter_map(|data| event_line("notice", data))
+        {
             out.push(line);
         }
         if stop || restart {

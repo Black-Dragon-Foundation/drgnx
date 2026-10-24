@@ -37,6 +37,8 @@
 //! - [`forward`]: what goes to the backend (re-encoded typed params with the caller) and what comes back (checked).
 //! - [`relay`]: the backend's events, checked against the registry, to the front's subscribers.
 //! - [`sandbox`]: Gleipnir as Ratatoskr uses it: the context of closed paths, the helper, the spawn, `sandbox run`.
+//! - [`settings`]: `settings.el` and the shipped `runtime-defaults.el`, read as data with `huginn`: the runtime
+//!   settings only, their fallbacks, `status.settings`.
 //! - [`shape`]: what a caller of each class may ask and see of a forwarded method.
 //! - [`version`]: what `version --json` says.
 
@@ -65,6 +67,7 @@ pub mod runtime_db;
 pub mod sandbox;
 pub mod server;
 pub mod sessions;
+pub mod settings;
 pub mod shape;
 pub mod store;
 pub mod store_cli;
