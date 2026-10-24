@@ -2815,6 +2815,52 @@ pub async fn move_to(f: &Front, c: &Caller, p: MoveParams) -> Result<Started, Er
     move_session(f, c, p.id.as_str(), p.profile.as_str()).await
 }
 
+/// What is keyed by a worker's session id follows it to NEW: the runner's scope (plan, project) for timeline steps, the
+/// budget chain and the gateway's job binding, and the task claim (so the runner sees a live agent on the task and
+/// starts no second worker).  The gateway registration itself is made by the new session's launch (an `:ai` profile).
+/// Called with both sessions running, before the old one stops.
+pub(crate) async fn rekey(front: &Front, old: &Session, new: &str) {
+    let scope = front.core.runs.scope_of(&old.id);
+    if let Some((plan, project)) = &scope {
+        front
+            .core
+            .runs
+            .set_scope(new, plan.clone(), project.clone());
+    }
+    let worker = scope_of(old.role, new);
+    if let Some((plan, _)) = &scope {
+        let plan_scope =
+            runstav::methods::timeline::BudgetScope::Plan(runstav::types::Bounded(plan.clone()));
+        front.core.budgets.link(&worker, &plan_scope);
+    }
+    if let Some(job) = &old.job {
+        front.core.budgets.bind_job(job, &worker);
+    }
+    if let Some(task) = old.task.clone() {
+        let (tid, new) = (task, new.to_owned());
+        let r = front
+            .writer
+            .write(&crate::runner::service(), "agents/move", move |tx| {
+                use norn::write::tasks::{entity_id, force_status};
+                let missing =
+                    |e: urdr::SqliteError| norn::store::CoordError::Refused(e.to_string());
+                let status = urdr::graph::entity::by_id(tx.sql(), &entity_id(&tid))
+                    .map_err(missing)?
+                    .and_then(|e| e.status);
+                match status.as_deref() {
+                    Some(st @ ("claimed" | "running" | "needs-input")) => {
+                        force_status(tx, &tid, st, Some(&new), now()).map(|_| ())
+                    }
+                    _ => Ok(()),
+                }
+            })
+            .await;
+        if let Err(e) = r {
+            tracing::warn!(sid = old.id, "task claim not moved: {e}");
+        }
+    }
+}
+
 /// Session ID continues on PROFILE (Task 26): the old one stops after the tool running now, a new one starts in the
 /// same worktree and is prompted with the summary handoff, the old one's entity `relates` to the new one and the
 /// old one ends.  Who may call it is the caller's to decide (the user's `agents/move`; a manager's `agent_move`
@@ -2860,6 +2906,7 @@ pub async fn move_session(
     };
     let started = open(hub, front, start, &user).await?;
     hub.prompt(&started.id, text, Origin::Hub)?;
+    rekey(front, &old, &started.id).await;
     let (from, to) = (format!("session:{id}"), format!("session:{}", started.id));
     let linked = front
         .writer
