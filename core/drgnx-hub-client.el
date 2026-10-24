@@ -21,6 +21,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-file)
 (require 'drgnx-notice)
+(require 'drgnx-agents-matrix)          ; `drgnx-agents-away-after'
 (require 'drgnx-work-db)                ; `drgnx-work-db-schema-version', which the hello says
 
 (declare-function drgnx-settings-agents--event "drgnx-settings-agents")
@@ -510,7 +511,7 @@ forgotten and the subscription is redialled with a backoff (`drgnx-hub--resubscr
     (when (process-get conn :drgnx-events)
       (let ((lost (or (eq drgnx-hub--events conn) drgnx-hub--resubscribe-since))
             (asked (or drgnx-hub--asked-disconnect (process-get conn :drgnx-asked))))
-        (when (eq drgnx-hub--events conn) (setq drgnx-hub--events nil))
+        (when (eq drgnx-hub--events conn) (setq drgnx-hub--events nil) (drgnx-hub--presence-stop))
         (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
         (when (and lost (not asked))
           (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
@@ -875,6 +876,7 @@ closes it when this Emacs dies."
       (drgnx-hub--fail-conn c "disconnected from the drgnx hub"))
     (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
+  (drgnx-hub--presence-stop)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
@@ -1263,8 +1265,50 @@ before them."
     (setq drgnx-hub--events conn)
     (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
     (drgnx-hub--resubscribe-stop)
+    (drgnx-hub--presence-start)
     (drgnx-notice-clear 'hub 'resubscribe-gave-up)
     (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--hand-over))))
+
+;;;; The away signal (agent system part 1, Task 13)
+;; The editor tells the hub when you are away (`presence/set'), so the matrix's time presets follow.  Never from an
+;; agent.  An idle timer (key `hub-presence') fires once in every pause longer than `drgnx-agents-away-after'; while
+;; away a short wall poll (`hub-presence-back') notices the next input.  Only a change is sent.
+
+(defvar drgnx-hub--presence-sent :unknown
+  "What the hub was last told: t (away), nil (back) or `:unknown' (nothing yet on this subscription).")
+
+(defconst drgnx-hub-presence-poll 5 "Seconds between looks for the return of input while away.")
+
+(defun drgnx-hub--presence-away-p ()
+  "Non-nil when Emacs has been idle for `drgnx-agents-away-after' seconds or more."
+  (let ((idle (drgnx-timer--idle-time)))
+    (and idle (>= (float-time idle) drgnx-agents-away-after))))
+
+(defun drgnx-hub--presence-tick ()
+  "Send `presence/set' when away or back changed since the last time; never prompts, never blocks."
+  (when (process-live-p drgnx-hub--events)
+    (let ((away (and (drgnx-hub--presence-away-p) t)))
+      (if away
+          (drgnx-timer-start 'hub-presence-back drgnx-hub-presence-poll #'drgnx-hub--presence-tick
+                             :repeat drgnx-hub-presence-poll :owner :core)
+        (drgnx-timer-cancel 'hub-presence-back))
+      (unless (eq away drgnx-hub--presence-sent)
+        (setq drgnx-hub--presence-sent away)
+        (drgnx-hub-call "presence/set" (list :away (if away t :false)) #'ignore)))))
+
+(defun drgnx-hub--presence-start ()
+  "A new subscription: the hub's idea of you is unknown, so the next change is sent whatever it is; arm the idle
+timer.  A hub starts with you back, so nothing goes now unless you are away already."
+  (setq drgnx-hub--presence-sent :unknown)
+  (drgnx-timer-start 'hub-presence drgnx-agents-away-after #'drgnx-hub--presence-tick
+                     :idle t :repeat t :owner :core)
+  (when (drgnx-hub--presence-away-p) (drgnx-hub--presence-tick)))
+
+(defun drgnx-hub--presence-stop ()
+  "Forget the presence timers."
+  (drgnx-timer-cancel 'hub-presence)
+  (drgnx-timer-cancel 'hub-presence-back)
+  (setq drgnx-hub--presence-sent :unknown))
 
 (defun drgnx-hub--note-notice (event data)
   "In an editor: a `notice' the hub sent (it is not the version on disk any more) becomes a notice of source `hub', with
