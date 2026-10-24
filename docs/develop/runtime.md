@@ -721,8 +721,8 @@ budgets (a recorded baseline, not a regression gate); the `agents-*` rows check 
 |---|---|---|
 | `start` | starting the hub to its first answered `ping` on a proven connection | 1 |
 | `hello-round-trip` | `ping` and its answer on a proven connection | 100 |
-| `a-1-mib-request-line` | an `agents/send` line of about 1 MiB read, re-encoded, forwarded to the fake backend and answered | 20 |
-| `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
+| `a-1-mib-request-line` | an `env/set` line of about 1 MiB read and decoded: its 16 values of 32 KiB re-encoded, forwarded to the fake backend and answered, a 500 KB unknown key dropped (`env/set` is the one method the backend still serves; `agents/*` are the hub's own) | 20 |
+| `a-4-mb-snapshot` | an answer of about 4 MB from the fake backend (an `env/set` result), checked and written to the client | 10 |
 | `mcp-tool-call` | `tools/call read_inbox` over a session socket (initialized, `hello` called once before) | 100 |
 | `coord-write` | `events/add` through the main socket, answered with the new id | 100 |
 | `gateway-added-latency` | an agent's `POST /v1/messages` to the mock provider, head read: `direct-first-byte` against the mock, `gateway-first-byte` through the gateway with an agent token (the difference is the gateway's) | 50 each |
