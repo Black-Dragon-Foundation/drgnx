@@ -152,9 +152,11 @@ for agents, the Live view open, the blank-frame count, and the session functions
       (load ,(expand-file-name "test/fixtures/mock-cdp" drgnx-ui-repo-dir) nil t)
       (require 'drgnx-live)
       (require 'drgnx-jobs)
-      (defvar drgnx-perf--live-jpeg nil "The frames' bytes, base64.")
       (defvar drgnx-perf--live-timer nil "Sends the frames.")
-      (defvar drgnx-perf--live-message nil "A frame's message, as the browser sends it: an encoded websocket frame.")
+      (defvar drgnx-perf--live-message nil
+        "Two frames' messages, as the browser sends them: encoded websocket frames, sent in turn.  Two, because a page's
+frames differ: the view's last frame stays in the image cache while the next one decodes (its stand-in); identical
+frames would share one cache entry, and flushing the old frame would flush the new one.")
       (setq drgnx-perf--live-message nil)
       (defvar drgnx-perf--live-width nil "The frames' width.")
       (setq drgnx-perf--live-width nil)
@@ -162,15 +164,16 @@ for agents, the Live view open, the blank-frame count, and the session functions
       (setq drgnx-perf--live-sent 0)
       (defvar drgnx-perf--live-drawn 0 "Frames drawn when the typing began.")
       (defvar drgnx-perf--jobs-get nil "The real `drgnx-jobs-get'.")
-      (defun drgnx-perf--live-make-jpeg (width)
-        "A real JPEG WIDTH pixels wide, as Chrome sends at the view's maxWidth (ImageMagick's built-in logo, a
-1280×800 page scaled); without ImageMagick nil: the frames are then a few bytes no decoder accepts, cheaper to draw."
+      (defun drgnx-perf--live-make-jpeg (width quality)
+        "A real JPEG WIDTH pixels wide at QUALITY, base64, as Chrome sends at the view's maxWidth (ImageMagick's
+built-in logo, a 1280×800 page scaled); without ImageMagick nil: the frames are then a few bytes no decoder accepts,
+cheaper to draw."
         (when-let* ((magick (or (executable-find "magick") (executable-find "convert"))))
           (with-temp-buffer
             (set-buffer-multibyte nil)
-            (and (eq 0 (call-process magick nil t nil "logo:" "-resize" (format "%dx%d!" width (round (* width 0.625))) "jpeg:-"))
+            (and (eq 0 (call-process magick nil t nil "logo:" "-resize" (format "%dx%d!" width (round (* width 0.625)))
+                                     "-quality" (number-to-string quality) "jpeg:-"))
                  (base64-encode-string (buffer-string) t)))))
-      (setq drgnx-perf--live-jpeg nil)
       (setq drgnx-perf--jobs-get (symbol-function 'drgnx-jobs-get))
       (fset 'drgnx-jobs-get (lambda (id) (if (equal id "job-perf-live") (list :id id :status 'running) (funcall drgnx-perf--jobs-get id))))
       (let ((port (drgnx-mock-cdp-start)))
@@ -187,20 +190,25 @@ for agents, the Live view open, the blank-frame count, and the session functions
                            1280)))
             (unless (eql width drgnx-perf--live-width) (setq drgnx-perf--live-message nil drgnx-perf--live-width width)))
           (unless drgnx-perf--live-message
-            (setq drgnx-perf--live-jpeg (drgnx-perf--live-make-jpeg drgnx-perf--live-width))
             (setq drgnx-perf--live-message
-                  (websocket-encode-frame
-                   (make-websocket-frame
-                    :opcode 'text :completep t
-                    :payload (encode-coding-string
-                              (json-serialize
-                               (list :method "Page.screencastFrame" :sessionId "S-T1"
-                                     :params (list :data (or drgnx-perf--live-jpeg (base64-encode-string "frame")) :sessionId 1
-                                                   :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
-                                                                   :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))))
-                              'raw-text))
-                   nil)))
-          (dolist (ws (drgnx-mock-cdp-clients)) (process-send-string (websocket-conn ws) drgnx-perf--live-message))))
+                  (mapcar (lambda (quality)
+                            (websocket-encode-frame
+                             (make-websocket-frame
+                              :opcode 'text :completep t
+                              :payload (encode-coding-string
+                                        (json-serialize
+                                         (list :method "Page.screencastFrame" :sessionId "S-T1"
+                                               :params (list :data (or (drgnx-perf--live-make-jpeg drgnx-perf--live-width quality)
+                                                                       (base64-encode-string (format "frame %d" quality)))
+                                                             :sessionId 1
+                                                             :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
+                                                                             :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))))
+                                        'raw-text))
+                             nil))
+                          '(60 61))))
+          (let ((msg (car drgnx-perf--live-message)))
+            (setq drgnx-perf--live-message (append (cdr drgnx-perf--live-message) (list msg)))
+            (dolist (ws (drgnx-mock-cdp-clients)) (process-send-string (websocket-conn ws) msg)))))
       (defun drgnx-perf--live-arm ()
         "The Live view beside the file, frames arriving."
         (let* ((editor (selected-window)) (file (window-buffer editor)))
@@ -215,6 +223,7 @@ for agents, the Live view open, the blank-frame count, and the session functions
         (setq drgnx-perf--live-drawn (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)))
         (setq drgnx-perf--live-blank 0
               drgnx-perf--live-seen (plist-get (drgnx-perf--live-images) :deferred))
+        (when (fboundp 'nidhogg-workers--test-image-timing) (nidhogg-workers--test-image-timing t))
         (add-hook 'pre-redisplay-functions #'drgnx-perf--live-blank-sample)
         (advice-add 'drgnx-live--draw-frame :before #'drgnx-perf--live-blank-sample))
       ;; "No blank frame" (off-the-main-thread design §17.6): with Nidhogg's image worker a frame's decode may outlast
@@ -236,7 +245,9 @@ for agents, the Live view open, the blank-frame count, and the session functions
         (let ((i (drgnx-perf--live-images)))
           (list :live (list :blank drgnx-perf--live-blank
                             :frames (- (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)) drgnx-perf--live-drawn)
-                            :deferred (or (plist-get i :deferred) 0)))))
+                            :deferred (or (plist-get i :deferred) 0)
+                            :timing (and (fboundp 'nidhogg-workers--test-image-timing)
+                                         (nidhogg-workers--test-image-timing))))))
       (defun drgnx-perf--live-check ()
         "Frames were drawn while the keys were typed."
         (and (>= (- (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)) drgnx-perf--live-drawn) 5) t))
