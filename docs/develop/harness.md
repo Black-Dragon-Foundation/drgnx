@@ -1066,6 +1066,34 @@ snapshots in device pixels: inside a popup away from its corners equals the Glit
 the no-popup picture, 4 px outside the right edge is darker than the no-popup picture, and after the hide the popup
 plus its shadow margin equals the no-popup picture; the verifier must report no violations.
 
+The same file holds the rest of the design's §3.4 package matrix, as `drgnx-ui-chrome/<package>-<check>`, each at
+scale 1 and 2 with the verifier on:
+
+- posframe: move, border colour following the `child-frame-border` face, reuse after hide, `delete-frame` mid-show,
+  and the resize row (`posframe-resize-draw-count`: GTK's draws of the root per
+  `set-frame-size-and-position-pixelwise`, the number that decides whether MP-23 is built);
+- which-key-posframe and transient-posframe (centred), and the which-key and transient defaults (pixels equal Glitnir
+  off's);
+- corfu: typing 200 characters, first and last row highlighted under the corners, popupinfo's z order, the right
+  edge, click and wheel;
+- eldoc-box: at point, top right, scrolling under it, theme switch; company-box: candidates and documentation, scroll,
+  delete while visible;
+- vertico-posframe and mini-frame: typing and the cursor blinking under the corners; `display-buffer-in-child-frame`;
+- generic: geometry parity right after each call, focus, parent resize and fullscreen, and a decorated or `alpha`
+  child frame equal to Glitnir off.
+
+A cut corner is a pixel that is not the popup's square corner and not lighter than the picture beneath (the popup's
+own shadow may darken it). The child-frame packages' dependencies (company, dash, frame-local, vertico) come from the
+same `DRGNX_CHILDFRAME_ELPA` directory. Two rows are not green on Task 34's build: `generic-decorated-child-is-off-pixels`
+(Glitnir does not look at `undecorated`, so a "decorated" child still gets chrome) and the skipped
+`company-box-delete-while-visible` (pgtk crashes in `pgtk_clear_frame_selections` when company-box kills the buffer
+of a deleted frame). `DRGNX_UI_TEST_TIMEOUT` must be raised for a whole run (the matrix takes about 15 minutes at one
+scale).
+
+Besides the chrome probes, each shown-popup check compares everything outside the popups and their shadow margin with
+the Glitnir-off picture. The chrome checks fail on a build without Glitnir's chrome; the geometry, focus and
+off-pixel checks hold on any build.
+
 ## Modal tests
 
 Loading evil cannot be undone in a process (its hooks and advice stay), and ERT runs tests by name, so the tests that

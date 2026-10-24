@@ -20,7 +20,7 @@ jobs:
   ui:
     name: GUI tests (Emacs 31.1 pgtk, headless mutter)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90          # the Glitnir child-frame matrix (test/ui/childframe-chrome-test.el) runs here once Nidhogg ships it
     permissions:
       contents: read
       packages: read
@@ -40,6 +40,7 @@ jobs:
         env:
           DRGNX_CONTAINER: podman
           DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_UI_TEST_TIMEOUT: "3000"
         run: bin/drgnx test --container --ui
 
   scenario:

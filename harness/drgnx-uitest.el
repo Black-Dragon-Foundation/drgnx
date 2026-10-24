@@ -1011,7 +1011,11 @@ unset or lacks one (tests then `skip-unless', as with $DRGNX_MODAL_ELPA).  The d
     (let ((dirs (mapcar (lambda (p) (expand-file-name (format "%s-%s" (car p) (cadr p)) dir))
                         (drgnx-uitest--childframe-pins))))
       (when (seq-every-p #'file-directory-p dirs)
-        (dolist (d dirs) (add-to-list 'load-path d))
+        ;; the pins and what they need (company, dash, frame-local, vertico: the directories the install made)
+        (dolist (d (append dirs (seq-filter (lambda (f) (and (file-directory-p f) (not (string-prefix-p "." (file-name-nondirectory f)))
+                                                             (not (member (file-name-nondirectory f) '("archives" "gnupg")))))
+                                            (directory-files dir t nil t))))
+          (add-to-list 'load-path d))
         (mapcar #'car (drgnx-uitest--childframe-pins))))))
 
 (provide 'drgnx-uitest)
