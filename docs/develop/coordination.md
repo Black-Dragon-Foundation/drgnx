@@ -704,6 +704,16 @@ decision; for work against a decision, the task back to an agent told which file
 replaced and the review going on (B) — and the log's delivery tells every agent of the job.
 `drgnx-job-clash-auto-accept` (nil): a short clash's recommendation accepted without the user.
 
+In the hub the rules are `runner::clash` (`runtime/crates/drgnx-ratatoskr/src/runner/clash.rs`), pure functions over
+the run's state: `scan(&RunState, &[Decision], &DiffIndex) -> Vec<Clash>` returns the clashes whose key is not in
+`RunState::carded` (the runner remembers each key it cards); `user_wins(&[Decision])` lists the agent decisions a
+user's decision replaces at once (no card). `DiffIndex` is task id → path → `FileDiff { hash, ranges }`, built from
+`HubGit::diff_hashes`; the against-decision and overlap rules look at tasks `in-review`, overlap at any open task.
+The runner's hooks: `before_review(run, decisions, diffs, task) -> ReviewGate { clashes, wait }` (the review waits
+for a new against-decision clash or an open clash card about the task) and `ReviewerHook::start(clash, long)` via
+`start_reviewers` (not for `stale` and `overlap`). A stale card's key includes the held count, so the runner
+clears the count after carding, as the Lisp does.
+
 ## The permissions matrix
 
 `norn::matrix` (`runtime/crates/norn/src/matrix/`) is the policy on the wire's vocabulary
