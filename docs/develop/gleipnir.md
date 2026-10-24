@@ -76,6 +76,20 @@ this returns.
     DRGNX_HUB_SERVE_SECRET`.
 - `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
+- Agent sessions (`agents/launch.rs`, `sandbox::session_spec`; Task 10): `launch::spawn(plan, req)` for a worker or
+  manager and `launch::spawn_plain(plan, sid)` for a chat with no project return a `Launch { spec, status, layers }`:
+  the `draugr::Spec` of the lock's argv inside Gleipnir, and the status pipe the caller reads with
+  `gleipnir::read_status` after spawning (an unread status means the start is unknown: kill the session). No path
+  starts a session unsandboxed. The spec:
+  - writable: the worktree (a chat: its scratch dir `<tmp>/drgnx-scratch-UID/SID`, not in the session dir, which is
+    read-only and takes nothing else) and the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone); no
+    home, no other login dir; `HOME` is told but unreadable beyond it;
+  - the lock's `protected_ro` paths are read-only binds (a pin inside the writable root: the full tier only, as for
+    [your settings files](#ratatoskrs-side));
+  - network from the matrix's Network cell: `ProviderOnly` and `ProviderAndPackages` are isolated with the relay to
+    `<session dir>/proxy.sock` and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set (the proxy's allowlist is what differs);
+    `Open` shares the host network. A chat is always provider-only;
+  - the full tier when bwrap is usable, else the reduced tier; neither: refused.
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
 - `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`
   spawns its probe, and `sandbox::check_blocking` gives it a runtime of its own. On the reduced tier both add
