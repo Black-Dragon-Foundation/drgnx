@@ -50,4 +50,7 @@ sha2.workspace = true  # the merge gate's diff hashes
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
 
 [dev-dependencies]
+# `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
+# other crate turning it on)
+urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 tempfile.workspace = true
