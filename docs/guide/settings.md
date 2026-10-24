@@ -165,7 +165,7 @@ Those choices sit just above the package's default, below everything you set:
 ## Per language
 
 A `(:mode MODE ENTRY…)` section of `settings.el` sets variables only in buffers of that mode (and the modes derived
-from it):
+from it; never in the hidden temp buffers packages use for fontifying or converting text):
 
 ```elisp
 (:mode python-ts-mode

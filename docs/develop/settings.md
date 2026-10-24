@@ -552,9 +552,11 @@ the test runner's state, `~` or your drgnx (`test/settings-child.el`; its own te
 
 ## Language overrides (Task 10)
 
-`core/drgnx-settings-mode.el` reads the `(:mode M …)` entries of the global `settings.el` (cached per file stamp;
+`core/drgnx-settings-mode.el` reads the `(:mode M …)` entries of the global `settings.el` (cached per file stamp,
+the stamp looked at once per command, `drgnx-setting-tick`, as the description files' are;
 `(drgnx-settings-mode-entries MODE)` -> `((VAR . VALUE)…)`) and `drgnx-settings--apply-mode-overrides` sets them from
-`change-major-mode-after-body-hook`, the mode's parents first. A variable's `:set` is called with `buffer-local` as the
+`change-major-mode-after-body-hook`, the mode's parents first; a temp buffer (no file, a name starting with a space:
+fontification and conversion buffers) gets none. A variable's `:set` is called with `buffer-local` as the
 third argument only when it is loaded and its `func-arity` accepts three; otherwise `setq-local`. Never `setopt-local`,
 never a `load`. Each entry runs under `condition-case`: one message per variable per session. While
 `drgnx-settings-own-only-p` holds (safe mode, Turn Off Package Settings, `DRGNX_PACKAGE_SETTINGS=off`; the applier
