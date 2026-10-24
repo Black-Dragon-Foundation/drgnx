@@ -11,6 +11,7 @@
 (require 'drgnx-agents-mirror)
 (require 'drgnx-coord-mcp)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)   ; seeding as the hub's stand-in
 (require 'drgnx-ai)
 (require 'drgnx-settings-prov)
 (require 'auth-source)                  ; its variables are let-bound below
@@ -213,10 +214,11 @@ without the binary."
                 (drgnx-job-ui-status)
                 (drgnx-job-ui-stop second))
               ;; a card of the CLI's job, and the cockpit's parts: every job, then the job with its decisions
-              (let ((db (sqlite-open (concat root "data/work.db"))))
-                (sqlite-execute db "insert into card (job, task, kind, title, data, state, at) values (?, null, 'note', 'a note', '{}', 'open', 1.5)"
-                                (list job))
-                (sqlite-close db))
+              (drgnx-work-fixture-as-hub
+                (let ((db (sqlite-open (concat root "data/work.db"))))
+                  (sqlite-execute db "insert into card (job, task, kind, title, data, state, at) values (?, null, 'note', 'a note', '{}', 'open', 1.5)"
+                                  (list job))
+                  (sqlite-close db)))
               (drgnx-cockpit-cards-refresh)
               (setq filter job)
               (drgnx-cockpit-cards-refresh)

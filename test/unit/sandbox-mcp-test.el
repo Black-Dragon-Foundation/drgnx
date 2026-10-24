@@ -10,6 +10,8 @@
 (require 'drgnx-coord)
 (require 'drgnx-coord-mcp)
 (require 'drgnx-work)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)   ; seeding as the hub's stand-in
 
 (defvar drgnx-sandbox-mcp-test--id 0)
 
@@ -32,7 +34,7 @@ after."
          (progn
            (dolist (d '("/home" "/run" "/data" "/state" "/config")) (make-directory (concat root d) t))
            (make-directory tree t)
-           (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one") (:n 2 :title "two")))
+           (drgnx-work-fixture-as-hub (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one") (:n 2 :title "two"))))
            ,@body)
        (drgnx-sandbox-mcp-close a)
        (drgnx-sandbox-mcp-close b)
