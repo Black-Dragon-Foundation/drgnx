@@ -90,6 +90,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "DRGNX_UI_NAME=drgnx-ui-5-00000a" env))
       (should (member "DRGNX_NO_LANGUAGE_SERVERS=1" env))      ; no pyright per fixture project (a test opts in)
       (should (member "DRGNX_NO_SHELL_ENV=1" env))             ; never the login shell's PATH
+      (should (member "GTK_IM_MODULE=gtk-im-context-simple" env)) ; GTK's own input method, never the host's
       (should (member (concat "EMACS_SOCKET_NAME=" (plist-get s :socket)) env))
       (should (equal (drgnx-ui-env-argv '("A=1")) '("env" "-i" "A=1"))))))
 
@@ -949,3 +950,102 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
         (should (string-prefix-p "unix:path=/nonexistent"
                                  (drgnx-ui-test--env-value (drgnx-ui-session-env s) "DBUS_SESSION_BUS_ADDRESS")))
         (drgnx-ui-stop "drgnx-ui-1-00000a")))))
+
+;;;; Scales and sizes (Glitnir plan Task 7)
+
+(ert-deftest drgnx-ui/scale-argv-mutter ()
+  ;; mutter: gdctl sets one logical monitor per virtual monitor (Meta-N) before the session's Emacs is exec'd
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-7-00000a" nil "2880x1800" root nil 2 "mutter" '(1.25 2)))
+           (argv (drgnx-ui-compositor-argv s))
+           (script (nth (1+ (cl-position "-c" argv :test #'equal)) argv)))
+      (should (equal (append (plist-get s :scales) nil) '(1.25 2)))
+      (should (string-match-p "gdctl set" script))
+      (should (string-match-p "--monitor Meta-0 --scale 1.25 --x 0" script))
+      ;; the second monitor starts at the first's logical width: 2880 / 1.25
+      (should (string-match-p "--monitor Meta-1 --scale 2 --x 2304" script))
+      (should (string-match-p "exec \"\\$@\"" script))
+      (should (member "--init-directory" argv)))
+    ;; scale 1 everywhere: untouched argv, no gdctl
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-8-00000a" nil "1600x900" root))
+           (argv (drgnx-ui-compositor-argv s)))
+      (should-not (plist-get s :scales))
+      (should-not (member "sh" argv)))))
+
+(ert-deftest drgnx-ui/scale-gdctl-failure-is-loud ()
+  ;; UI-SCALE-1: the image lacked gdctl's python3-gobject; every `gdctl set' failed, the loop gave up silently and
+  ;; Emacs started at scale 1.  Now the last error is printed and the session's command never runs.
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-7-00000b" nil "2880x1800" root nil 1 "mutter" 2))
+           (argv (drgnx-ui-compositor-argv s))
+           (script (nth (1+ (cl-position "-c" argv :test #'equal)) argv))
+           (bin (expand-file-name "fake-bin" root)))
+      (make-directory bin t)
+      ;; a `sleep' that returns at once: the 50 tries take no time
+      (dolist (f '(("sleep" . "exit 0")
+                   ("gdctl" . "echo 'Traceback (most recent call last):' >&2; echo \"ModuleNotFoundError: No module named 'gi'\" >&2; exit 1")))
+        (with-temp-file (expand-file-name (car f) bin) (insert "#!/bin/sh\n" (cdr f) "\n"))
+        (set-file-modes (expand-file-name (car f) bin) #o755))
+      (let ((process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+        (with-temp-buffer
+          (should-not (eq 0 (call-process "sh" nil t nil "-c" script "sh" "echo" "EMACS-RAN")))
+          (should (string-match-p "scale not applied: gdctl set failed .*No module named 'gi'" (buffer-string)))
+          (should-not (string-search "EMACS-RAN" (buffer-string))))
+        ;; gdctl works: the session's command runs
+        (with-temp-file (expand-file-name "gdctl" bin) (insert "#!/bin/sh\nexit 0\n"))
+        (with-temp-buffer
+          (should (eq 0 (call-process "sh" nil t nil "-c" script "sh" "echo" "EMACS-RAN")))
+          (should (string-search "EMACS-RAN" (buffer-string))))))))
+
+(ert-deftest drgnx-ui/scale-sway-conf ()
+  (drgnx-ui-test--with-state
+    (cl-letf (((symbol-function 'drgnx-ui--check-compositor) #'ignore))
+      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-9-00000a" nil "1920x1080" root nil 2 "sway" '(2 1.25)))
+             (conf (drgnx-ui-test--slurp (expand-file-name "sway.conf" (plist-get s :run)))))
+        (should (string-match-p "^output HEADLESS-1 resolution 1920x1080 position 0 0$" conf))
+        (should (string-match-p "^output HEADLESS-1 scale 2$" conf))
+        (should (string-match-p "^output HEADLESS-2 scale 1.25$" conf))
+        ;; the second output starts at the first's logical width: 1920 / 2
+        (should (string-match-p "^output HEADLESS-2 resolution 1920x1080 position 960 0$" conf))))))
+
+(ert-deftest drgnx-ui/scales-need-one-per-monitor ()
+  (drgnx-ui-test--with-state
+    (should-error (drgnx-ui-prepare-run "drgnx-ui-10-00000a" nil "1600x900" root nil 2 "mutter" '(1 2 3))
+                  :type 'drgnx-ui-error)
+    (should-error (drgnx-ui-prepare-run "drgnx-ui-11-00000a" nil "1600x900" root nil 1 "mutter" '(0))
+                  :type 'drgnx-ui-error)
+    ;; DRGNX_UI_SCALES: one per monitor; DRGNX_UI_SCALE: the same for all
+    (let ((process-environment (cons "DRGNX_UI_SCALES=1 2" process-environment)))
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-12-00000a" nil "1600x900" root nil 2) :scales) [1 2]))
+      (should-error (drgnx-ui-prepare-run "drgnx-ui-13-00000a" nil "1600x900" root nil 3) :type 'drgnx-ui-error))
+    (let ((process-environment (cons "DRGNX_UI_SCALE=2" process-environment)))
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-14-00000a" nil "1600x900" root nil 2) :scales) [2 2])))
+    ;; DRGNX_UI_MONITORS: the monitors of a session that names none (a whole test tier's), so "1 2" fits it
+    (let ((process-environment (append '("DRGNX_UI_MONITORS=2" "DRGNX_UI_SCALES=1 2") process-environment)))
+      (let ((s (drgnx-ui-prepare-run "drgnx-ui-16-00000a" nil "1600x900" root)))
+        (should (equal (plist-get s :monitors) 2))
+        (should (equal (plist-get s :scales) [1 2])))
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-17-00000a" nil "1600x900" root nil 3 nil 1) :monitors) 3)))
+    (let ((process-environment (cons "DRGNX_UI_MONITORS=two" process-environment)))
+      (should-error (drgnx-ui-prepare-run "drgnx-ui-18-00000a" nil "1600x900" root) :type 'drgnx-ui-error))
+    ;; x11 has no monitor scale
+    (should-error (drgnx-ui-prepare-run "drgnx-ui-15-00000a" nil "1600x900" root nil 1 "x11" '(2))
+                  :type 'drgnx-ui-error)))
+
+(ert-deftest drgnx-ui/size-from-env ()
+  (drgnx-ui-test--with-state
+    (let ((process-environment (cons "DRGNX_UI_SIZE=3840x2160" process-environment)))
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-16-00000a" nil nil root) :size) "3840x2160"))
+      ;; a size given to start wins
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-17-00000a" nil "1024x768" root) :size) "1024x768")))
+    (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-18-00000a" nil nil root) :size) "1600x900"))))
+
+(ert-deftest drgnx-ui/fractional-scale-wait-condition ()
+  ;; integer: the frame's factor is the scale
+  (should (drgnx-uitest-scale-ready-p 2 "1600x900" 2 '(0 0 800 450)))
+  (should-not (drgnx-uitest-scale-ready-p 2 "1600x900" 1 '(0 0 1600 900)))
+  ;; fractional: GTK3 reports ceil(S) and a geometry of (WxH / S) * ceil(S): 2880x1800 at 1.25 -> 4608x2880
+  (should (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 2 '(0 0 4608 2880)))
+  (should-not (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1 '(0 0 2880 1800)))
+  (should-not (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 2 '(0 0 2880 1800)))
+  (should (drgnx-uitest-scale-ready-p 1.5 "1920x1080" 2 '(0 0 2560 1440))))

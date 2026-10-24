@@ -124,9 +124,25 @@ and driven (the initial frame exists by now)."
   (drgnx-ui--start-server)              ; again, in case the configuration stopped it
   (setq drgnx-ui--ready-timer (run-with-timer 0 0.05 #'drgnx-ui--when-visible)))
 
+(defvar drgnx-ui--scale-deadline nil "`float-time' after which a scale that is not applied is reported.")
+
+(defun drgnx-ui--scale-state ()
+  "The session's scale wait: nil when it has none or the root frame shows it, `timeout' after 10 s, else `wait'.
+The scale is the first of DRGNX_UI_SESSION_SCALES (set by the controller; empty at scale 1) and the size is
+DRGNX_UI_SESSION_SIZE.  GTK 3 gets a scale from the compositor after the frame exists, so a session is not ready
+(and no test starts) before the root frame shows it."
+  (let ((scale (string-to-number (or (car (split-string (or (getenv "DRGNX_UI_SESSION_SCALES") "") " " t)) "0"))))
+    (when (and (> scale 0) (not (daemonp)))
+      (let ((f (drgnx-uitest-root-frame)))
+        (unless (drgnx-uitest-scale-ready-p scale (getenv "DRGNX_UI_SESSION_SIZE") (frame-scale-factor f)
+                                            (alist-get 'geometry (car (display-monitor-attributes-list f))))
+          (unless drgnx-ui--scale-deadline (setq drgnx-ui--scale-deadline (+ (float-time) 10)))
+          (if (> (float-time) drgnx-ui--scale-deadline) 'timeout 'wait))))))
+
 (defun drgnx-ui--when-visible ()
-  "Once the root frame is mapped: write ready.json; in test mode, run the suite."
-  (when (or (daemonp) (frame-visible-p (drgnx-uitest-root-frame)))   ; a daemon has no frame yet
+  "Once the root frame is mapped (and shows its scale): write ready.json; in test mode, run the suite."
+  (when (and (or (daemonp) (frame-visible-p (drgnx-uitest-root-frame)))   ; a daemon has no frame yet
+             (not (eq (drgnx-ui--scale-state) 'wait)))
     (cancel-timer drgnx-ui--ready-timer)
     (let ((tmp (expand-file-name "ready.json.tmp" drgnx-ui-run)))
       (with-temp-file tmp
@@ -136,7 +152,13 @@ and driven (the initial frame exists by now)."
                        :socket (expand-file-name server-name server-socket-dir)
                        :emacs emacs-version
                        :init_error (if init-file-had-error t :false)
-                       :server_error (or drgnx-ui--server-error :false)))))
+                       :server_error (or drgnx-ui--server-error :false)
+                       :scale_error (if (eq (drgnx-ui--scale-state) 'timeout)
+                                        (format "frame-scale-factor %s, monitors %S"
+                                                (frame-scale-factor (drgnx-uitest-root-frame))
+                                                (mapcar (lambda (m) (alist-get 'geometry m))
+                                                        (display-monitor-attributes-list)))
+                                      :false)))))
       (rename-file tmp (expand-file-name "ready.json" drgnx-ui-run) t))
     (when (getenv "DRGNX_UI_TEST")
       (run-with-timer 0.2 nil #'drgnx-ui--run-tests))))

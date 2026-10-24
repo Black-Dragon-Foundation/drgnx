@@ -4,7 +4,8 @@
 
 (defconst drgnx-quickhelp-ui-test--repo                     ; the session runs the repository's test/ui
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
-(add-to-list 'load-path (expand-file-name "core" drgnx-quickhelp-ui-test--repo))
+(dolist (d '("core" "wb"))                ; ui/face needs wb's drgnx-chrome, ui/look its drgnx-wb
+  (add-to-list 'load-path (expand-file-name d drgnx-quickhelp-ui-test--repo)))
 (dolist (m '("ui/drgnx-face" "ui/drgnx-quickhelp"))
   (load (expand-file-name (concat "modules/" m) drgnx-quickhelp-ui-test--repo) nil t))
 
@@ -54,12 +55,14 @@
                 (should (>= (nth 0 e) l)) (should (<= (nth 2 e) (+ r 2)))
                 (should (>= (nth 1 e) top)) (should (<= (nth 3 e) (+ b 2)))))
             (let ((shot (drgnx-uitest-capture dir)))
-              (should (= (length (plist-get shot :children)) 1))
               (copy-file (plist-get shot :root) (expand-file-name "quickhelp-root.png" temporary-file-directory) t)
-              (copy-file (plist-get (aref (plist-get shot :children) 0) :path)
-                         (expand-file-name "quickhelp-card.png" temporary-file-directory) t)
-              (message "quick help screenshot: %s (card at %S)" (expand-file-name "quickhelp-root.png" temporary-file-directory)
-                       (list (plist-get (aref (plist-get shot :children) 0) :x) (plist-get (aref (plist-get shot :children) 0) :y))))
+              ;; under Glitnir the card is inside the root's picture: capture reports no children
+              (unless (drgnx-uitest-glitnir-p)
+                (should (= (length (plist-get shot :children)) 1))
+                (copy-file (plist-get (aref (plist-get shot :children) 0) :path)
+                           (expand-file-name "quickhelp-card.png" temporary-file-directory) t)
+                (message "quick help screenshot: %s (card at %S)" (expand-file-name "quickhelp-root.png" temporary-file-directory)
+                         (list (plist-get (aref (plist-get shot :children) 0) :x) (plist-get (aref (plist-get shot :children) 0) :y)))))
             ;; typing puts it away
             (drgnx-uitest-run (list ?a))
             (should-not (drgnx-quickhelp-shown-p))
@@ -111,6 +114,50 @@
                 (should-not (drgnx-quickhelp-shown-p))
                 (should (eq (selected-window) editor))
                 (should (= (point) pt))))))
+      (drgnx-quickhelp-hide)
+      (drgnx-quickhelp--unmap)
+      (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf)))))
+
+(ert-deftest drgnx-ui-quickhelp/card-has-chrome ()
+  ;; Under Glitnir the card is rounded and shadowed: the corner pixel is what lies beneath, the shadow darkens the
+  ;; root beside the card, and the border ring keeps the card's border colour.
+  (skip-unless (drgnx-uitest-glitnir-p))
+  (load (expand-file-name "modules/ui/drgnx-look" drgnx-quickhelp-ui-test--repo) nil t)
+  (let* ((root (drgnx-uitest-root-frame)) (buf (generate-new-buffer "quickhelp-chrome.el")) none)
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (switch-to-buffer buf)
+          (dotimes (i 60) (insert (format "(defun fixture-%d (x) \"A function.\" (car (cdr x)))\n" i)))
+          (emacs-lisp-mode)
+          (goto-char (point-min)) (forward-line 20) (search-forward "(car ") (backward-char 4)
+          (recenter 10)
+          (redisplay t) (sit-for 0.3)
+          (setq none (drgnx-uitest-snapshot root))
+          (when (frame-live-p drgnx-quickhelp--frame)  ; an earlier test's card was made without the chrome
+            (delete-frame drgnx-quickhelp--frame) (setq drgnx-quickhelp--frame nil drgnx-quickhelp--card-up nil))
+          (call-interactively #'drgnx-quickhelp-show)
+          (let ((deadline (+ (float-time) 3)))
+            (while (and (not (drgnx-quickhelp-shown-p)) (< (float-time) deadline)) (sit-for 0.05)))
+          (redisplay t) (sit-for 0.3)
+          (should (drgnx-quickhelp-shown-p))
+          (let* ((card drgnx-quickhelp--frame) (s (frame-scale-factor root))
+                 (e (frame-edges card 'outer-edges)) (p (frame-edges root 'native-edges))
+                 (l (round (* s (- (nth 0 e) (nth 0 p))))) (tp (round (* s (- (nth 1 e) (nth 1 p)))))
+                 (r (round (* s (- (nth 2 e) (nth 0 p))))) (b (round (* s (- (nth 3 e) (nth 1 p)))))
+                 (snap (drgnx-uitest-snapshot root))
+                 (border (cdr (drgnx-quickhelp-colors root))))
+            ;; rounded: the corner pixel is what lies beneath (the picture without the card, at most darkened by the
+            ;; shadow's faint edge), not the card's border; a few pixels in along the diagonal the border is drawn
+            (let ((c (nth 2 (drgnx-uitest-pixel snap l tp))) (n (nth 2 (drgnx-uitest-pixel none l tp)))
+                  (in (cl-loop for i from 0 to (* 8 (ceiling s))
+                               minimize (nth 2 (drgnx-uitest-pixel snap (+ l i) (+ tp i))))))
+              (should (<= (- n 24) c n))
+              (should (> c (+ in 40))))
+            (should (drgnx-uitest-darker-p snap none (+ r 3) (/ (+ tp b) 2)))
+            (let ((px (drgnx-uitest-pixel snap (/ (+ l r) 2) tp))
+                  (want (mapcar (lambda (c) (/ c 256)) (color-values border))))
+              (should (equal (cdr px) want)))))
       (drgnx-quickhelp-hide)
       (drgnx-quickhelp--unmap)
       (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf)))))

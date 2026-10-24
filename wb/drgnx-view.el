@@ -808,7 +808,8 @@ was removed.  A RENDER, GROW, SYNC or PATCHED that signals is recorded (`drgnx-v
 (defun drgnx-view--draw-buffer (buffer)
   "The timer function of BUFFER's view (keys `(drgnx-view . BUFFER)' and `(drgnx-view-more . BUFFER)').
 Hidden: mark it stale, count a `:stale-skips', draw and allocate nothing.  Shown: draw one slice (a type with SLICE)
-or everything; work left re-arms `(drgnx-view-more . BUFFER)' at 0; when no view has work left, `drgnx-gc-gap'."
+or everything; work left re-arms `(drgnx-view-more . BUFFER)' at `drgnx-timer-chain-delay' (0, or later while
+input is pending); when no view has work left, `drgnx-gc-gap'."
   (let ((view (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view buffer))))
     (when (drgnx-view-p view)
       (cond ((not (drgnx-view-shown-p view))
@@ -824,7 +825,8 @@ or everything; work left re-arms `(drgnx-view-more . BUFFER)' at 0; when no view
                (if (drgnx-view--cut view)
                    (progn
                      (drgnx-timer-cancel (cons 'drgnx-view buffer))   ; a mark made during this draw: the chain takes it
-                     (drgnx-timer-start (cons 'drgnx-view-more buffer) 0 #'drgnx-view--draw-buffer
+                     (drgnx-timer-start (cons 'drgnx-view-more buffer) (drgnx-timer-chain-delay)
+                                        #'drgnx-view--draw-buffer
                                         :args (list buffer) :owner buffer))
                  (drgnx-view--pass-over))))))))
 

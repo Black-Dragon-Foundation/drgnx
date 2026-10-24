@@ -27,6 +27,18 @@
 
 ;;;; Frames and windows
 
+(defun drgnx-uitest-scale-ready-p (scale size factor geometry)
+  "Non-nil when a root frame on a monitor of SIZE (\"WxH\", device pixels) at SCALE shows FACTOR (its
+`frame-scale-factor') and GEOMETRY (the monitor's (X Y W H)).  GTK 3 knows only integer scales: a fractional
+SCALE reaches Emacs as (ceiling SCALE), and the geometry is (W / SCALE) * (ceiling SCALE) (2880x1800 at 1.25:
+4608x2880), within one logical pixel."
+  (let ((c (ceiling scale)))
+    (and (= factor c)
+         (or (= scale c)
+             (let ((px (mapcar #'string-to-number (split-string size "x"))))
+               (and (<= (abs (- (nth 2 geometry) (* c (round (/ (float (nth 0 px)) scale))))) c)
+                    (<= (abs (- (nth 3 geometry) (* c (round (/ (float (nth 1 px)) scale))))) c)))))))
+
 (defun drgnx-uitest-root-frame ()
   "The session's root frame: the first visible graphical frame that is not a child frame.
 Falls back to the selected frame (a daemon's terminal frame, or batch)."
@@ -619,10 +631,126 @@ Never signals."
                        dir)
                  t))))
 
+;;;; Snapshots and pixel probes
+;; A snapshot is (W H BYTES): BYTES holds W*H ARGB32 pixels, rows tightly packed, each pixel a 32-bit word in the
+;; machine's byte order (little-endian: B G R A), the layout of `glitnir-snapshot' with FORMAT `raw'.
+
+(defun drgnx-uitest-glitnir-p ()
+  "Non-nil when Glitnir (the compositor) draws this session's frames, so its snapshot is the whole picture."
+  (and (fboundp 'glitnir-active-p) (fboundp 'glitnir-snapshot) (glitnir-active-p)))
+
+(defun drgnx-uitest--png-raw (png)
+  "Decode PNG (a unibyte string: 8-bit RGB or RGBA, not interlaced, as cairo writes) into a snapshot."
+  (unless (and (> (length png) 8) (string-prefix-p "\x89PNG" png)) (error "drgnx-uitest: not a PNG"))
+  (unless (and (fboundp 'zlib-available-p) (zlib-available-p)) (error "drgnx-uitest: this Emacs has no zlib"))
+  (let ((pos 8) w h ctype (idat nil))
+    (while (< pos (length png))
+      (let* ((len (+ (ash (aref png pos) 24) (ash (aref png (+ pos 1)) 16) (ash (aref png (+ pos 2)) 8) (aref png (+ pos 3))))
+             (type (substring png (+ pos 4) (+ pos 8)))
+             (data (+ pos 8)))
+        (cond ((equal type "IHDR")
+               (setq w (+ (ash (aref png data) 24) (ash (aref png (+ data 1)) 16) (ash (aref png (+ data 2)) 8) (aref png (+ data 3)))
+                     h (+ (ash (aref png (+ data 4)) 24) (ash (aref png (+ data 5)) 16) (ash (aref png (+ data 6)) 8) (aref png (+ data 7)))
+                     ctype (aref png (+ data 9)))
+               (unless (and (= (aref png (+ data 8)) 8) (memq ctype '(2 6)) (= (aref png (+ data 12)) 0))
+                 (error "drgnx-uitest: unsupported PNG (need 8-bit RGB/RGBA, not interlaced)")))
+              ((equal type "IDAT") (push (substring png data (+ data len)) idat)))
+        (setq pos (+ data len 4))))
+    (let* ((bpp (if (= ctype 6) 4 3))
+           (stride (* w bpp))
+           (z (with-temp-buffer
+                (set-buffer-multibyte nil)
+                (apply #'insert (nreverse idat))
+                (unless (zlib-decompress-region (point-min) (point-max)) (error "drgnx-uitest: bad PNG data"))
+                (buffer-string)))
+           (out (make-string (* w h 4) 0))  ; an ASCII fill makes a unibyte string; every byte is set below
+           (le (eq (byteorder) ?l))
+           (prev (make-string stride 0))
+           (cur (make-string stride 0)))
+      (dotimes (y h)
+        (let ((base (* y (1+ stride))) (ft (aref z (* y (1+ stride)))))
+          (dotimes (i stride)
+            (let* ((x (aref z (+ base 1 i)))
+                   (a (if (>= i bpp) (aref cur (- i bpp)) 0))
+                   (b (aref prev i))
+                   (c (if (>= i bpp) (aref prev (- i bpp)) 0)))
+              (aset cur i
+                    (logand 255
+                            (+ x (pcase ft
+                                   (0 0) (1 a) (2 b) (3 (ash (+ a b) -1))
+                                   (4 (let* ((p (- (+ a b) c)) (pa (abs (- p a))) (pb (abs (- p b))) (pc (abs (- p c))))
+                                        (cond ((and (<= pa pb) (<= pa pc)) a) ((<= pb pc) b) (t c))))
+                                   (_ (error "drgnx-uitest: bad PNG filter"))))))))
+          (dotimes (px w)
+            (let ((s (* px bpp)) (d (* 4 (+ (* y w) px))))
+              (if le
+                  (progn (aset out d (aref cur (+ s 2))) (aset out (+ d 1) (aref cur (+ s 1)))
+                         (aset out (+ d 2) (aref cur s)) (aset out (+ d 3) (if (= bpp 4) (aref cur (+ s 3)) 255)))
+                (aset out d (if (= bpp 4) (aref cur (+ s 3)) 255)) (aset out (+ d 1) (aref cur s))
+                (aset out (+ d 2) (aref cur (+ s 1))) (aset out (+ d 3) (aref cur (+ s 2)))))))
+        (let ((tmp prev)) (setq prev cur cur tmp)))
+      (list w h out))))
+
+(defun drgnx-uitest-export (&optional frame)
+  "FRAME's (default: the root frame's) `x-export-frames' composite as a snapshot.
+It is the logical-pixel (1x) picture of FRAME and its child frames, whatever the display scale."
+  (let ((f (or frame (drgnx-uitest-root-frame))))
+    (redisplay t)
+    (drgnx-uitest--png-raw (x-export-frames f 'png))))
+
+(defun drgnx-uitest-snapshot (&optional frame)
+  "FRAME's (default: the root frame's) picture as a snapshot (W H BYTES), in device pixels.
+Glitnir's raw snapshot (the buffer GTK last committed) when `glitnir-snapshot' exists, else `drgnx-uitest-export'."
+  (let ((f (or frame (drgnx-uitest-root-frame))))
+    (if (fboundp 'glitnir-snapshot)
+        (progn (redisplay t) (glitnir-snapshot f 'raw))
+      (drgnx-uitest-export f))))
+
+(defun drgnx-uitest-pixel (snap x y)
+  "The pixel of SNAP at device pixel X, Y as (A R G B)."
+  (pcase-let* ((`(,w ,h ,bytes) snap))
+    (unless (and (<= 0 x) (< x w) (<= 0 y) (< y h)) (error "drgnx-uitest: pixel %d,%d outside %dx%d" x y w h))
+    (let ((o (* 4 (+ (* y w) x))))
+      (if (eq (byteorder) ?l)
+          (list (aref bytes (+ o 3)) (aref bytes (+ o 2)) (aref bytes (+ o 1)) (aref bytes o))
+        (list (aref bytes o) (aref bytes (+ o 1)) (aref bytes (+ o 2)) (aref bytes (+ o 3)))))))
+
+(cl-defun drgnx-uitest-region-equal-p (a b rect &key (tolerance 0) ignore-alpha)
+  "Non-nil when snapshots A and B agree on RECT (L T R B, device pixels, R and B exclusive).
+Every channel may differ by TOLERANCE; IGNORE-ALPHA leaves the alpha channel out.  Differing sizes: nil."
+  (pcase-let ((`(,l ,tp ,r ,bt) rect))
+    (when (and (equal (seq-take a 2) (seq-take b 2)))
+      (let ((w (nth 0 a)) (ba (nth 2 a)) (bb (nth 2 b)) (ok t)
+            (alpha (if (eq (byteorder) ?l) 3 0)) (y tp))
+        (while (and ok (< y bt))
+          (let ((s (* 4 (+ (* y w) l))) (e (* 4 (+ (* y w) r))))
+            (unless (and (= tolerance 0) (not ignore-alpha) (string= (substring ba s e) (substring bb s e)))
+              (let ((i s))
+                (while (and ok (< i e))
+                  (unless (and ignore-alpha (= (% (- i s) 4) alpha))
+                    (when (> (abs (- (aref ba i) (aref bb i))) tolerance) (setq ok nil)))
+                  (setq i (1+ i))))))
+          (setq y (1+ y)))
+        ok))))
+
+(defun drgnx-uitest-darker-p (a b x y)
+  "Non-nil when snapshot A's pixel at X, Y has a lower luma than B's."
+  (cl-flet ((luma (p) (+ (* 0.2126 (nth 1 p)) (* 0.7152 (nth 2 p)) (* 0.0722 (nth 3 p)))))
+    (< (luma (drgnx-uitest-pixel a x y)) (luma (drgnx-uitest-pixel b x y)))))
+
+(defun drgnx-uitest-bare-frame ()
+  "Scroll bars, tool bar, menu bar and the blinking cursor off for the selected frame."
+  (blink-cursor-mode -1)
+  (modify-frame-parameters nil '((vertical-scroll-bars) (horizontal-scroll-bars) (tool-bar-lines . 0) (menu-bar-lines . 0)))
+  (redisplay t)
+  nil)
+
 (defun drgnx-uitest-capture (dir)
   "Export the root frame and its visible child frames as PNGs into DIR.
 `x-export-frames' cannot put several frames in one PNG, so each child comes with its
-offset (parent-relative native edges) for compositing."
+offset (parent-relative native edges) for compositing.  When Glitnir draws the frames
+(`drgnx-uitest-glitnir-p') its snapshot already holds the children: root.png is that
+snapshot (device pixels) and there are no children."
   (unless (display-graphic-p (drgnx-uitest-root-frame))
     (error "drgnx-uitest: no graphical frame to capture (a daemon session without a client frame? open one with ui_frame)"))
   (redisplay t)
@@ -630,15 +758,21 @@ offset (parent-relative native edges) for compositing."
   (let* ((f (drgnx-uitest-root-frame))
          (root (expand-file-name "root.png" dir))
          (i -1))
-    (drgnx-uitest--export f root)
+    (if (drgnx-uitest-glitnir-p)
+        (let ((coding-system-for-write 'binary))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert (glitnir-snapshot f 'png))
+            (write-region nil nil root nil 'silent)))
+      (drgnx-uitest--export f root))
     (list :root root :width (frame-pixel-width f) :height (frame-pixel-height f)
-          :children (vconcat
-                     (mapcar (lambda (c)
-                               (let ((file (expand-file-name (format "child-%d.png" (cl-incf i)) dir))
-                                     (e (frame-edges c 'native-edges)))
-                                 (drgnx-uitest--export c file)
-                                 (list :path file :x (nth 0 e) :y (nth 1 e))))
-                             (drgnx-uitest-child-frames f))))))
+          :children (vconcat (and (not (drgnx-uitest-glitnir-p))
+                                  (mapcar (lambda (c)
+                                            (let ((file (expand-file-name (format "child-%d.png" (cl-incf i)) dir))
+                                                  (e (frame-edges c 'native-edges)))
+                                              (drgnx-uitest--export c file)
+                                              (list :path file :x (nth 0 e) :y (nth 1 e))))
+                                          (drgnx-uitest-child-frames f)))))))
 
 ;;;; JSON API (for emacsclient; see harness/drgnx-ui.el)
 
@@ -801,6 +935,104 @@ Removes the timing advice: it must not stay and slow down what is measured later
                                                    :window (plist-get g :window)
                                                    :timer (plist-get g :timer)))
                                  (plist-get r :guard)))))))
+
+;;;; The child-frame packages (posframe, corfu, …): pinned, installed once, read-only in tests
+
+(defvar drgnx-pkg-native-compile)
+(defvar drgnx-pkg-shipped-lock)
+(defvar drgnx-pkg-default-archives)
+(declare-function drgnx-pkg-sync "drgnx-pkg")
+(declare-function drgnx-pkg-write-lock "drgnx-pkg")
+(declare-function drgnx-pkg--desc-entry "drgnx-pkg")
+(declare-function drgnx-pkg--file "drgnx-pkg")
+(defvar package-gnupghome-dir)
+(declare-function drgnx-elpa-dir "drgnx-paths")
+
+(defconst drgnx-uitest--childframe-pins-file
+  (expand-file-name "../test/fixtures/childframe-packages.eld"
+                    (file-name-directory (or load-file-name buffer-file-name default-directory)))
+  "The pins: (NAME VERSION :archive ARCHIVE :sha256 HASH), the file's only form.")
+
+(defun drgnx-uitest--childframe-pins ()
+  "The pins; $DRGNX_CHILDFRAME_PINS names another file (the tests' own)."
+  (with-temp-buffer
+    (insert-file-contents (or (getenv "DRGNX_CHILDFRAME_PINS") drgnx-uitest--childframe-pins-file))
+    (read (current-buffer))))
+
+(defun drgnx-uitest--childframe-archives ()
+  "The archives: $DRGNX_CHILDFRAME_ARCHIVES (\"NAME=URL-or-DIR,…\", the tests' local ones), else drgnx's."
+  (if-let* ((env (getenv "DRGNX_CHILDFRAME_ARCHIVES")))
+      (mapcar (lambda (s) (let ((i (string-search "=" s))) (cons (substring s 0 i) (file-name-as-directory (substring s (1+ i))))))
+              (split-string env "," t))
+    drgnx-pkg-default-archives))
+
+(defun drgnx-uitest-childframe-install (dir)
+  "Install the pinned packages (and what they need) into the new directory DIR, as `drgnx sync' does, in a private
+data directory: the files' hashes are checked against the pins and the archives' signatures where they sign.  A hash
+that differs, or any package that cannot be had, is an error and leaves DIR alone."
+  (require 'drgnx-pkg)
+  (let* ((pins (drgnx-uitest--childframe-pins))
+         (root (file-name-as-directory (make-temp-file "drgnx-childframe" t)))
+         (process-environment (append (mapcar (lambda (kv) (concat (car kv) "=" root (cdr kv)))
+                                              '(("DRGNX_DATA_DIR" . "data") ("DRGNX_CONFIG_DIR" . "config")
+                                                ("XDG_CACHE_HOME" . "cache") ("XDG_STATE_HOME" . "state")))
+                                      process-environment))
+         (drgnx-pkg-native-compile nil)
+         (drgnx-pkg-shipped-lock (concat root "no-shipped.lock.eld")))
+    (unwind-protect
+        (progn
+          (make-directory (concat root "config") t)
+          (make-directory (concat root "mods") t)
+          (with-temp-file (expand-file-name "packages.eld" (concat root "config"))
+            (prin1 (list :packages (mapcar #'car pins)) (current-buffer)))
+          ;; the lock: each pin as the archive describes it (kind, file, requirements, so what a package needs is
+          ;; installed too) with the pin's hash, which the sync then enforces
+          (let ((package-archives (drgnx-uitest--childframe-archives))
+                (package-user-dir (concat root "refresh")) (package-alist nil) (package-archive-contents nil)
+                (package--initialized t) (package-gnupghome-dir (concat root "data/gnupg"))
+                (package-quickstart nil))
+            (package-refresh-contents)
+            (drgnx-pkg-write-lock
+             (mapcar (lambda (p)
+                       (pcase-let* ((`(,name ,version . ,plist) p)
+                                    (desc (seq-find (lambda (d) (and (equal (package-desc-archive d) (plist-get plist :archive))
+                                                                     (equal (package-version-join (package-desc-version d)) version)))
+                                                    (alist-get name package-archive-contents))))
+                         (unless desc (error "%s %s: archive %s does not serve it" name version (plist-get plist :archive)))
+                         (drgnx-pkg--desc-entry desc (drgnx-pkg--file desc) (plist-get plist :sha256))))
+                     pins)))
+          (let ((r (drgnx-pkg-sync :archives (drgnx-uitest--childframe-archives) :modules-dir (concat root "mods"))))
+            (unless (plist-get r :ok)
+              (error "%s" (mapconcat (lambda (m) (format "%s: %s" (car m) (cdr m))) (plist-get r :missing) "; ")))
+            (copy-directory (drgnx-elpa-dir) dir nil t t)))
+      (delete-directory root t))))
+
+(defun drgnx-uitest-childframe-cli ()
+  "`drgnx childframe-elpa DIR': the arguments after --."
+  (let ((args (cdr (member "--" command-line-args-left))))
+    (setq command-line-args-left nil)
+    (kill-emacs
+     (condition-case err
+         (progn
+           (unless (and (= (length args) 1) (not (file-exists-p (car args))))
+             (error "usage: drgnx childframe-elpa DIR   (DIR must not exist yet)"))
+           (drgnx-uitest-childframe-install (expand-file-name (car args)))
+           0)
+       (error (message "drgnx: childframe-elpa: %s" (error-message-string err)) 1)))))
+
+(defun drgnx-uitest-childframe-packages ()
+  "Put the pinned child-frame packages from $DRGNX_CHILDFRAME_ELPA on `load-path'; their names, or nil when that is
+unset or lacks one (tests then `skip-unless', as with $DRGNX_MODAL_ELPA).  The directory is only read."
+  (when-let* ((dir (getenv "DRGNX_CHILDFRAME_ELPA")) ((file-directory-p dir)))
+    (let ((dirs (mapcar (lambda (p) (expand-file-name (format "%s-%s" (car p) (cadr p)) dir))
+                        (drgnx-uitest--childframe-pins))))
+      (when (seq-every-p #'file-directory-p dirs)
+        ;; the pins and what they need (company, dash, frame-local, vertico: the directories the install made)
+        (dolist (d (append dirs (seq-filter (lambda (f) (and (file-directory-p f) (not (string-prefix-p "." (file-name-nondirectory f)))
+                                                             (not (member (file-name-nondirectory f) '("archives" "gnupg")))))
+                                            (directory-files dir t nil t))))
+          (add-to-list 'load-path d))
+        (mapcar #'car (drgnx-uitest--childframe-pins))))))
 
 (provide 'drgnx-uitest)
 ;;; drgnx-uitest.el ends here

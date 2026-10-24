@@ -991,7 +991,9 @@ macOS (no /proc there)."
   ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (vars '("DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_TEST_JOBS=4" "DRGNX_TEST_RERUN=1" "DRGNX_TEST_NO_TIMING=1"
-                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3")))
+                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3"
+                 ;; UI-SCALE-1: the sessions' size and scale (without them a container run was silently 1600x900 at 1)
+                 "DRGNX_UI_SIZE=2880x1800" "DRGNX_UI_SCALE=1.5" "DRGNX_UI_SCALES=1 2")))
     (unwind-protect
         (progn
           (let ((args (drgnx-bin-test--container-argv
@@ -1005,9 +1007,9 @@ macOS (no /proc there)."
           (let ((args (drgnx-bin-test--container-argv   ; unset in the environment: a bare NAME removes it
                        dir '("DRGNX_TEST_SELECTOR" "DRGNX_TEST_JOBS" "DRGNX_TEST_RERUN" "DRGNX_TEST_NO_TIMING"
                              "DRGNX_PERF_RESULTS" "DRGNX_PERF_CPU_FACTOR" "DRGNX_PERF_WORKLOADS"
-                             "DRGNX_UITEST_SETTLE_SCALE"))))
+                             "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UI_SIZE" "DRGNX_UI_SCALE" "DRGNX_UI_SCALES"))))
             (should (member "DRGNX_LEASE=off" args))
-            (should-not (seq-find (lambda (a) (string-match-p "\\`DRGNX_\\(TEST_\\|PERF_\\|UITEST_\\)[A-Z_]+=" a)) args))
+            (should-not (seq-find (lambda (a) (string-match-p "\\`DRGNX_\\(TEST_\\|PERF_\\|UITEST_\\|UI_S\\)[A-Z_]+=" a)) args))
             (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
       (delete-directory dir t))))
 
@@ -1530,3 +1532,36 @@ while :; do wait; done" job job job job job)))
       (set-file-modes fake #o755)
       (drgnx-bin-test--call bin env "onboard" "--non-interactive" "--step" "ai")
       (should (member "ensure --timeout 5" (split-string (drgnx-bin-test--slurp log) "\n" t))))))
+
+;;;; drgnx childframe-elpa — the pinned child-frame packages (test/fixtures/childframe-packages.eld)
+
+(defun drgnx-bin-test--childframe-run (hash)
+  "Run `drgnx childframe-elpa' on a local archive of two packages whose pins say HASH for corfu (nil: its real hash);
+return (EXIT OUTPUT INSTALLED-DIRECTORY-NAMES)."
+  (load (expand-file-name "test/fixtures/pkg-fixture" drgnx-bin-test--root) nil t)
+  (drgnx-bin-test--with-setup ((emacs (expand-file-name invocation-name invocation-directory)))
+    (let* ((arch (expand-file-name "arch" dir)) (out (expand-file-name "out" dir)) (pins (expand-file-name "pins.eld" dir))
+           (sha (lambda (f) (secure-hash 'sha256 (drgnx-pkg-test--bytes (expand-file-name f arch))))))
+      (drgnx-pkg-test--archive arch '((posframe "1.5.3") (corfu "2.16")))
+      (with-temp-file pins
+        (prin1 `((posframe "1.5.3" :archive "fx" :sha256 ,(funcall sha "posframe-1.5.3.el"))
+                 (corfu "2.16" :archive "fx" :sha256 ,(or hash (funcall sha "corfu-2.16.el"))))
+               (current-buffer)))
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin
+                                     (append env (list (concat "DRGNX_EMACS=" emacs) (concat "DRGNX_CHILDFRAME_PINS=" pins)
+                                                       (concat "DRGNX_CHILDFRAME_ARCHIVES=fx=" arch)))
+                                     "childframe-elpa" out)))
+        (list (car r) (cdr r)
+              (and (file-directory-p out) (seq-remove (lambda (f) (string-prefix-p "." f)) (directory-files out))))))))
+
+(ert-deftest drgnx-bin/childframe-elpa-installs-the-pins ()
+  (pcase-let ((`(,exit ,output ,dirs) (drgnx-bin-test--childframe-run nil)))
+    (ert-info (output) (should (eql 0 exit)))
+    (should (member "posframe-1.5.3" dirs))
+    (should (member "corfu-2.16" dirs))))
+
+(ert-deftest drgnx-bin/childframe-elpa-refuses-a-bad-hash ()
+  (pcase-let ((`(,exit ,output ,dirs) (drgnx-bin-test--childframe-run (make-string 64 ?0))))
+    (should-not (eql exit 0))
+    (should (string-match-p "sha256" output))
+    (should-not (member "corfu-2.16" dirs))))

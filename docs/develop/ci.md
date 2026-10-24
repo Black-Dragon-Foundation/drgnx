@@ -133,7 +133,8 @@ bin/drgnx test --bootstrap          # the weekly second-machine exit test (fedor
 ```
 
 `bin/drgnx test --container` passes the run-control variables (`DRGNX_TEST_SELECTOR`, `_JOBS`, `_RERUN`, `_NO_TIMING`,
-`DRGNX_PERF_RESULTS` through a mount, `_CPU_FACTOR`, `_WORKLOADS`, `DRGNX_UITEST_SETTLE_SCALE`) into the container and
+`DRGNX_PERF_RESULTS` through a mount, `_CPU_FACTOR`, `_WORKLOADS`, `DRGNX_UITEST_SETTLE_SCALE`, and the sessions'
+`DRGNX_UI_SIZE`, `DRGNX_UI_MONITORS`, `DRGNX_UI_SCALE` and `DRGNX_UI_SCALES`) into the container and
 always sets `DRGNX_LEASE=off`. Run from a git worktree (where `.git` is a file naming a host path), it also mounts the
 repository's common git dir (`git rev-parse --git-common-dir`) read-only at the same absolute path, so git inside the
 container works; the tests only read it.

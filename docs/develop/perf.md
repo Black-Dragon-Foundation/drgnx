@@ -15,6 +15,8 @@ DRGNX_PERF_RESULTS=FILE     write the results as JSON: every metric (wall clock 
                             the Emacs version and the commit
 DRGNX_PERF_ONLY=REGEXP      run only the workloads whose name matches (an Emacs regexp: `\|` for alternation): judged
                             against their own budgets, the history is not written
+DRGNX_UI_SIZE=WxH           the perf sessions' monitor size (default 1400x800); DRGNX_UI_SCALE=S their scale (a session
+                            that cannot apply it fails to start: exit 1, nothing measured)
 DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the three evil workloads
 ```
 
@@ -165,6 +167,16 @@ the allocation. So the budget follows the larger of the two CI-image measurement
 laptop's number; the other allocation rows, whose commands do not wait on a stream, agree to a few percent between
 machines and keep their seeds. A row of this kind that moves again is judged by `--ab` first, not by re-seeding.
 
+The keys also used to arrive in bursts. The harness types onto `unread-command-events`, and while the view's slices and
+the search's parse ran as zero-delay timer chains, Emacs's wait for input ran them back to back and never returned to
+read those keys (it leaves its timers for keyboard input only): up to ten keys queued, then ran with no redisplay
+between them, and each key's 0 s probe timer ran inside the previous one's `redisplay`, so its latency counted every
+redisplay after its own. With Glitnir (the compositor) on, 178 of 198 keys came in such bursts (input p50 58 ms, keys
+alone 7.8 ms) against 101 of 198 off (21.6 / 16.2 ms): the A/B judged that "regressed" by +27.8 ms, an artefact of the
+timing. Both chains now yield to pending input (`drgnx-timer-chain-delay`, core.md "A chain yields to input"): 192 of
+198 keys alone on (a traced run), and the A/B judges the median improved, -19.6 ms [-26.8, -11.3] (input p50 7.3
+on against 21.2 ms off, 2880x1800 at scale 2, n=176/172).
+
 ## Waiting for a view inside a workload (`replace-retype`)
 
 A workload step that waits for a view to finish drawing (`drgnx-perf--replace-idle`: the arm, the measure and the
@@ -202,10 +214,85 @@ has no per-command samples (frames, startup, memory), is reported "not comparabl
 Exit: 0 judged, no regression, budgets hold; 1 regressed or a wall budget fails; 3 not judged (a loaded calibration,
 a busy host, an inconclusive interval). `DRGNX_PERF_RESULTS` gets the verdicts and both sides' stats.
 
+**p95 and probe verdicts.** The median verdict above cannot see a tail that moves while the median stays, and the
+gate is "at most +1 ms **p95**". `drgnx-perf-bootstrap-rounds` and `drgnx-perf-ab-verdict` therefore take
+`:stat p95`: the same pairs of rounds are resampled with replacement, each side's samples of the drawn pairs are pooled
+and the statistic is the nearest-rank p95 of the work tree minus that of REF (`:diff` is the same over all samples).
+`:threshold` overrides T. A verdict `improved` (the whole interval below 0) also counts as no regression. The
+`:compose` rows are wall clock too (reported by `--perf`, never gated), so a probe value gets its own verdict,
+`drgnx-perf-ab-probe-verdict ROUNDS PATH`: each round carries both sides' run results, the statistic per round is the
+value at PATH (e.g. `(:compose :draw-ms :p95)`) of the work tree minus REF's, pairs and bootstrap as for the median,
+T = max(1 ms, 10 % of REF's median value); `not comparable` when a side lacks the number.
+
+`--ab REF` still judges the median only and also prints the p95 verdict (T = 1 ms). `--ab-env` prints, per workload,
+the median verdict, the p95 verdict at T = 1 ms and, when the runs carry it, the probe verdict on
+`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3. It also judges the judged
+side's `:compose` budget rows (the median of the value over its rounds) at n >= 100, n being `(:compose :count)` summed
+over its rounds.
+
 **Fresh builds and the eln cache (PERF-ELN-1).** A tree that was just built has no native-compiled files yet: its
 session compiles them in the background while it runs, and the first runs cost several times more. Both sessions
 therefore wait until their native compilation has drained, and both run a discarded warm-up before the samples; the
 report prints each side's warm-up p50 next to the measured one.
+
+## Glitnir (the compositor): popups, the `compose` probe, A/B by environment
+
+**The `compose` probe.** When `glitnir-stats` is bound, `drgnx-perf-begin` resets it and `drgnx-perf-end` stores its
+plist under `:compose` (`(:compose :compose-ms :p95)`, `(:compose :draw-ms :p95)`, `(:compose :painted-px)`,
+`(:compose :count)`, ...), median-reduced over the three runs like every other number. On a build without Glitnir, or
+when the stats are nil (an inactive root), there is no `:compose` row and nothing fails.
+
+**Key to present.** `:input` ends at the redisplay after the command, but the picture reaches the compositor at the
+frame clock's after-paint, which may come later, and when it comes differs between Glitnir on and off. On a build
+whose `glitnir--last-paint` has `:present-ns` (that after-paint's time), each command also records the time from its
+start to the first after-paint that sent a paint, waiting for it (100 ms at most) after the command's own numbers are
+taken; a run stores them as `:present` (stats, as for `:input`), on both sides of an A/B. The A/B prints them as
+`key to present (ms, REF/tree): p50 …/… p90 …/…` under each judged workload: reported, not judged.
+
+`DRGNX_PERF_GLITNIR=on|off`
+sets `glitnir-enable` in the session when recording begins (any other value leaves it alone); `drgnx test --perf`
+passes it on to the session.
+
+**The P1 workloads.** `popup-typing` (corfu open, 200+ characters), `popup-churn` (a posframe shown, moved and
+hidden 200 times; the hides are measured), `scroll-under-popup` (an eldoc-box at point, 60 `<next>` then 60
+`<prior>`: 120 samples, above the 100 that make p95 non-null) and `scroll-full-window` (one window filling the frame,
+`<down>` 300 times (C-n is File > New)). The first three need the pinned child-frame packages: set `DRGNX_CHILDFRAME_ELPA`
+([harness.md](harness.md), "Child-frame packages"); without it `--perf` prints `perf: popup workloads skipped` and
+runs the rest (`scroll-full-window` needs no package).
+
+**Glitnir A/B.**
+
+```sh
+DRGNX_PERF_WORKLOADS=popup-typing bin/drgnx test --perf --ab-env DRGNX_PERF_GLITNIR=on,off
+```
+
+`--ab-env VAR=JUDGED,REF` is the interleaved A/B of the section above on **one** tree: two sessions, no export and
+one build. The first value is the **judged** side (the tool's "work tree" role), the second the **reference**, so
+"regressed" means the judged value (Glitnir on) is slower. Without the comma it is a usage error (exit 2). Only
+`DRGNX_PERF_GLITNIR` can be set this way. **Do not pass `--n`** in a gate run: the default (at least 100 per-command
+samples a side) is what makes p95 non-null; `--n` only exists to shorten a trial run. Verdicts, exit codes and the
+lease are those of `--ab`.
+
+**The P1 budget rows** (spec §9.2, `test/perf/budgets.eld`). `popup-typing`, `popup-churn` and `scroll-under-popup`
+each have `(:compose :compose-ms :p95)` 2 ms, `(:compose :compose-ms :max)` 8 ms and `(:input :p95)` 16 ms, judged on
+the Glitnir-on side of the A/B above; `scroll-full-window` is measured only. A row may carry `:known ID :fails-above
+CEILING`: a known failure whose value above the row's limit is printed as `KNOWN … (ID; fails above CEILING)` and
+fails the run only above CEILING. The `popup-typing` and `popup-churn` compose p95 rows are known that way,
+GL-POPUP-CHURN-FULL-1 (GTK repaints the whole root when a child frame maps or unmaps, until MP-3's widget-less child
+frames), with spike (i)'s 4.42 ms as the ceiling. A row may instead carry `:known ID :fails-above-row (ROW PATH) :by
+B`: its ceiling is ROW's value at PATH in the same A/B, on the judged side, plus B (ROW must run earlier in the run; a
+ROW not measured in it fails the row). The `scroll-under-popup` compose p95 row is known that way, GL-SCROLL-PAGE-COPY-1,
+failing only above `scrolling`'s compose p95 + 1 ms: each `<next>`/`<prior>` repaints about 93 % of the root (4.8 M
+of 5.18 M device px at 2880×1800 scale 2), whose copy is 2.4–2.6 ms with or without the popup (per key 2.37 ms in
+`scrolling`, 2.61 ms under the eldoc-box: the popup adds 0.24 ms). The presenting thread, where a scroll is a
+layer-offset change (spec §9.2), removes it. The A/B's two sessions serve every workload, so it starts them with
+`DRGNX_UI_MAX_RUNTIME` = `drgnx-perf-ab-session-runtime` (4 h) unless that is set: a full tier at 2880×1800 outlived
+the default 30 min and lost both sessions mid-run ("can't find socket"). The run that judges them, on the Glitnir
+build at 2880×1800 scale 2:
+
+```sh
+DRGNX_UI_SIZE=2880x1800 DRGNX_UI_SCALE=2 bin/drgnx test --perf --ab-env DRGNX_PERF_GLITNIR=on,off < /dev/null
+```
 
 ## The audit's per-command hook time
 

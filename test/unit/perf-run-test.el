@@ -193,7 +193,8 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
             (should (seq-every-p #'identity rows))))))))
 
 (ert-deftest drgnx-perf-run/the-unseeded-list-names-workloads-and-reasons ()
-  (let ((process-environment (cons "DRGNX_MODAL_ELPA=/tmp/drgnx-elpa-x" process-environment)))   ; the evil workloads exist with it
+  (let ((process-environment (append '("DRGNX_MODAL_ELPA=/tmp/drgnx-elpa-x" "DRGNX_CHILDFRAME_ELPA=/tmp/drgnx-cf-x")
+                                     process-environment)))   ; the evil and popup workloads exist with them
     (dolist (u drgnx-perf-run-unseeded)
       (should (assq (car u) (drgnx-perf-run--workloads)))
       (should (stringp (cdr u))))))

@@ -49,6 +49,27 @@
  ;; the length of eat's output batches (20-60 ms under load), not from GC: DEFERRED M12e-5-1.  See docs/develop/perf.md.
  (terminal-typing (:input :p95) 7) (terminal-typing (:input :max) 13)
  (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50)
+ ;; Glitnir (the compositor) P1, spec §9.2: the popup rows, judged by `--ab-env DRGNX_PERF_GLITNIR=on,off' on the judged
+ ;; (Glitnir on) side at n >= 100 (`:compose' n = `(:compose :count)' over its rounds); hides included in popup-churn.
+ ;; The popup-typing and popup-churn compose p95 rows are a known failure, GL-POPUP-CHURN-FULL-1 (GTK repaints the whole
+ ;; root when a child frame maps or unmaps; fixed by MP-3): reported above 2 ms, failing only above spike (i)'s 4.42 ms
+ ;; (popup-typing at 2880x1800 scale 2; the user's call, 2026-10-24).
+ ;; The scroll-under-popup compose p95 row is a known failure too, GL-SCROLL-PAGE-COPY-1: each <next>/<prior> repaints
+ ;; ~93 % of the root (4.8 M of 5.18 M device px at 2880x1800 scale 2), and that copy is 2.4-2.6 ms with or without the
+ ;; popup (per key: 2.37 ms in scrolling, 2.61 with the eldoc-box; the popup adds 0.24 ms); the presenting thread,
+ ;; where a scroll is a layer-offset change (design §9.2), removes it.  It fails only above the same A/B's scrolling
+ ;; compose p95 + 1 ms (`:fails-above-row'; scrolling runs earlier in the run; the user's call, 2026-10-24).
+ ;; scroll-full-window: measured only, no gate.  Stock input p95 / draw p95 (ms, 2026-10-21): 1080p s1 15.9/1.62,
+ ;; 2880x1800 s2 21.2/3.47, 4K s1 35.1/5.78, 4K s2 26.7/5.37, 2880x1800 s1.5 26.9/5.91, 2560x1440 s1.25 26.8/5.56,
+ ;; 1920x1080 s1.25 19.2/3.22.
+ (popup-typing (:compose :compose-ms :p95) 2 :known GL-POPUP-CHURN-FULL-1 :fails-above 4.42)
+ (popup-typing (:compose :compose-ms :max) 8) (popup-typing (:input :p95) 16)
+ (popup-churn (:compose :compose-ms :p95) 2 :known GL-POPUP-CHURN-FULL-1 :fails-above 4.42)
+ (popup-churn (:compose :compose-ms :max) 8) (popup-churn (:input :p95) 16)
+ (scroll-under-popup (:compose :compose-ms :p95) 2 :known GL-SCROLL-PAGE-COPY-1
+                     :fails-above-row (scrolling (:compose :compose-ms :p95)) :by 1)
+ (scroll-under-popup (:compose :compose-ms :max) 8)
+ (scroll-under-popup (:input :p95) 16)
 ;; Gated budgets (Task 16 of the determinism plan), seeded 2026-10-20 from two runs of the perf tier in the Emacs 31.1 GUI
 ;; container (source, not built: compiled code allocates less): :alloc :p50 = the larger of the runs x 1.25, rounded up;
 ;; :rows = exact (equal in both runs); :cpu_ms :p90 = the larger of the runs' p90 x 2 (scaled by DRGNX_PERF_CPU_FACTOR; 2

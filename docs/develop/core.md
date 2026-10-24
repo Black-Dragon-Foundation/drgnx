@@ -1223,7 +1223,8 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
   owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
-  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` owned by the search's stderr
+  (64) lines at a time, the rest by `drgnx-timer-soon` `(replace-parse . PROCESS)` at `(drgnx-timer-chain-delay)`
+  (a chain that yields to input: The primitives) owned by the search's stderr
   buffer (killed when the search ends; `drgnx-replace-cancel` also cancels the key, since that buffer runs no
   kill hook). A line that does not parse is left out, and the first such error reaches the callback as `(:error
   REASON)`; a partial line's pieces are joined once, at its newline. And an Ask's search limit
@@ -1344,6 +1345,14 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
   an aborted step counts as input and runs again in the next pause (leave it off for steps that are unsafe to
   abort). A step that signals ends its firing with no chain; the failure limit stops the key with no ON-DONE
   (`drgnx-timer-errors` and the doctor's `timers` check show it). Drawing never uses idle steps.
+- **A chain yields to input.** A timer that re-arms itself at 0 to carry on its work (a live view's slices, the
+  Search's parse of a search's output) takes its delay from `(drgnx-timer-chain-delay)`: 0, or
+  `drgnx-timer-chain-yield` (16 ms) while input is pending. Emacs's wait for input runs ripe timers back to back and
+  leaves them only for keyboard input (`wait_reading_process_output` checks the keyboard buffer, not
+  `unread-command-events`), so a chain at 0 starved input queued there (a key read again, the harness's typing)
+  until the chain ended: the keys then ran in one burst with no redisplay between them. One link's wait lets the
+  wait find no ripe timer and return, and the command loop reads the input first
+  (`drgnx-timer-prim/a-chain-yields-to-pending-input`; the `replace-typing` workload measured it, perf.md).
 
 All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
 `test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
@@ -1661,7 +1670,8 @@ a `:full-draws`.
 **The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
 (list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
 DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. A slice that leaves work re-arms a second key,
-`(drgnx-timer-start (cons 'drgnx-view-more BUFFER) 0 …)`, so the throttle never delays the next slice. A mark made
+`(drgnx-timer-start (cons 'drgnx-view-more BUFFER) (drgnx-timer-chain-delay) …)` (0, or 16 ms while input is
+pending: "A chain yields to input" under Timers), so the throttle never delays the next slice. A mark made
 during a chain arms nothing (`--arm` returns while the continuation is pending): the next slice takes it, so one
 view never draws two slices in one gap; re-arming the continuation also cancels a throttle armed during that draw.
 A chain broken by hiding leaves no timer, and showing the view arms it again. Both keys are owned by the buffer

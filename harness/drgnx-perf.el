@@ -69,17 +69,37 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   "This process's CPU time in ms (`current-cpu-time': (TICKS . HZ))."
   (let ((c (current-cpu-time))) (/ (* 1000.0 (car c)) (cdr c))))
 
+(defvar drgnx-perf--presents nil
+  "Per command, on a Glitnir build: ms from its start to the frame clock's after-paint that sent the next paint to
+the compositor (`wl_surface.commit'), on either side of an A/B.")
+
+(declare-function glitnir--now-ns "nidhogg-glitnir.c")
+(declare-function glitnir--last-paint "nidhogg-glitnir.c")
+
+(defun drgnx-perf--present-ns ()
+  "Glitnir's monotonic ns now (no allocation), or nil on a build without the present time."
+  (and (fboundp 'glitnir--last-paint) (plist-member (glitnir--last-paint) :present-ns) (glitnir--now-ns)))
+
 (defun drgnx-perf--pre ()
   (drgnx-perf--hooks-flush)
-  (setq drgnx-perf--t0 (list (float-time) (drgnx-perf--cpu-ms) (drgnx-perf--alloc-sum))))   ; allocation last
+  (let ((ns (drgnx-perf--present-ns)))
+    (setq drgnx-perf--t0 (list (float-time) (drgnx-perf--cpu-ms) (drgnx-perf--alloc-sum) ns))))   ; allocation last
+
+(defun drgnx-perf--await-present (ns)
+  "Wait (100 ms at most) for the first paint sent to the compositor after NS; push its delay, if it came."
+  (let ((end (+ (float-time) 0.1)) (p 0))
+    (while (and (< (setq p (plist-get (glitnir--last-paint) :present-ns)) ns) (< (float-time) end))
+      (accept-process-output nil 0.001))
+    (when (>= p ns) (push (/ (- p ns) 1e6) drgnx-perf--presents))))
 
 (defun drgnx-perf--finish (t0)
-  "The 0 s timer: the screen shows the command; record its wall, CPU and allocation."
+  "The 0 s timer: the screen shows the command; record its wall, CPU and allocation, then (Glitnir) its present."
   (redisplay)                           ; the screen showing the command is part of its latency
   (let ((alloc (drgnx-perf--alloc-sum)))
     (push (- alloc (nth 2 t0) 7) drgnx-perf--allocs)           ; less the first reading's own 7 conses
     (push (- (drgnx-perf--cpu-ms) (nth 1 t0)) drgnx-perf--cpus)
-    (push (* 1000 (- (float-time) (car t0))) drgnx-perf--latencies)))
+    (push (* 1000 (- (float-time) (car t0))) drgnx-perf--latencies))
+  (when (nth 3 t0) (drgnx-perf--await-present (nth 3 t0))))
 
 (defun drgnx-perf--post ()
   (when drgnx-perf--t0
@@ -92,9 +112,24 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   (push (* 1000 (- gc-elapsed drgnx-perf--gc-last)) drgnx-perf--gc-pauses)
   (setq drgnx-perf--gc-last gc-elapsed))
 
+(defvar glitnir-enable)
+(declare-function glitnir-stats "glitnir")
+
+(defun drgnx-perf--glitnir-env ()
+  "Apply $DRGNX_PERF_GLITNIR (on or off) to `glitnir-enable' in this session; anything else leaves it alone."
+  (when-let* ((v (getenv "DRGNX_PERF_GLITNIR")) ((member v '("on" "off"))) ((boundp 'glitnir-enable)))
+    (setq glitnir-enable (equal v "on"))))
+
+(defun drgnx-perf--compose-stats (&optional reset)
+  "Glitnir's frame-time record (`glitnir-stats'; RESET clears it), or nil on a build or a root without it."
+  (and (fboundp 'glitnir-stats) (glitnir-stats nil reset)))
+
 (defun drgnx-perf-begin ()
-  "Start recording: every command's latency, every GC pause, memory."
-  (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil
+  "Start recording: every command's latency, every GC pause, memory, and Glitnir's frame-time record (the
+compose probe: reset here, read by `drgnx-perf-end' under :compose)."
+  (drgnx-perf--glitnir-env)
+  (drgnx-perf--compose-stats t)
+  (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil drgnx-perf--presents nil
         drgnx-perf--gc-pauses nil drgnx-perf--gc-last gc-elapsed
         drgnx-perf--start (list gcs-done gc-elapsed (drgnx-perf-rss-kb) (drgnx-perf--rows)))
   (add-hook 'pre-command-hook #'drgnx-perf--pre -100)
@@ -105,18 +140,24 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   "Stop recording: (:input STATS :alloc STATS :cpu_ms STATS :rows N :gc_count N :gc_ms MS :gc_pause STATS
 :rss_kb KB :rss_start_kb KB).  :input is wall ms, :alloc objects, :cpu_ms CPU ms, per command (pre-command-hook
 to the redisplay after it); :rows the growth of `drgnx-perf-row-counters'.  Allocation, CPU and rows do not move
-with the load on the machine; wall clock does."
+with the load on the machine; wall clock does.  :compose is Glitnir's record since `drgnx-perf-begin' and
+:present the commands' key-to-present ms (both absent without Glitnir)."
   (remove-hook 'pre-command-hook #'drgnx-perf--pre)
   (remove-hook 'post-command-hook #'drgnx-perf--post)
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
-  (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start))
-    (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
-          :alloc (drgnx-perf-stats drgnx-perf--allocs)
-          :cpu_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--cpus))
-          :rows (- (drgnx-perf--rows) rows)
-          :gc_count (- gcs-done gcs) :gc_ms (drgnx-perf--round (* 1000 (- gc-elapsed elapsed)))
-          :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--gc-pauses))
-          :rss_kb (drgnx-perf-rss-kb) :rss_start_kb rss)))
+  (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start)
+              (compose (drgnx-perf--compose-stats)))
+    (append
+     (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
+           :alloc (drgnx-perf-stats drgnx-perf--allocs)
+           :cpu_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--cpus))
+           :rows (- (drgnx-perf--rows) rows)
+           :gc_count (- gcs-done gcs) :gc_ms (drgnx-perf--round (* 1000 (- gc-elapsed elapsed)))
+           :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--gc-pauses))
+           :rss_kb (drgnx-perf-rss-kb) :rss_start_kb rss)
+     (and drgnx-perf--presents
+          (list :present (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--presents))))
+     (and compose (list :compose compose)))))
 
 ;;;; Redisplay and frames
 
@@ -397,34 +438,89 @@ from the global `random' state: the same samples and SEED give the same interval
       (list :diff (- (drgnx-perf--median vb) (drgnx-perf--median va))
             :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))))
 
-(cl-defun drgnx-perf-bootstrap-rounds (rounds &key (iterations 2000) (seed 1))
-  "(:diff D :lo L :hi H) from ROUNDS, a list of (:a SAMPLES :b SAMPLES): the unit is the round (a run of each side),
-not the sample, because samples within a run share a spike, a GC and a cache state.  Per round the statistic is
-the median of B minus the median of A; consecutive rounds run in opposite order (`drgnx-perf-ab-rounds'), so
-the unit is a pair of them, the mean of its two differences.  D is the median of those and the 95% interval
-resamples the pairs with replacement.  Its own seeded generator, like `drgnx-perf-bootstrap-diff'."
-  (let* ((per-round (mapcar (lambda (r) (- (drgnx-perf--median (plist-get r :b)) (drgnx-perf--median (plist-get r :a)))) rounds))
-         ;; the unit is a pair of rounds (ABBA, the order reversed in the second): an order bias cancels inside it
-         (diffs (vconcat (cl-loop while per-round
-                                  collect (if (cdr per-round) (/ (+ (pop per-round) (pop per-round)) 2.0) (pop per-round)))))
-         (n (length diffs)) (state (max 1 (mod seed 2147483647))) out)
-    (dotimes (_ iterations)
-      (push (drgnx-perf--median (cl-loop repeat n collect (progn (setq state (mod (* state 48271) 2147483647)) (aref diffs (mod state n)))))
-            out))
-    (let ((d (vconcat (sort out #'<))))
-      (list :diff (drgnx-perf--median diffs)
-            :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))))
+(defun drgnx-perf--p95 (values)
+  "The nearest-rank 95th percentile of the list or vector VALUES."
+  (let ((v (vconcat (sort (append values nil) #'<))))
+    (aref v (1- (ceiling (* 0.95 (length v)))))))
 
-(defun drgnx-perf-ab-verdict (a b &optional rounds)
+(defun drgnx-perf--pairs (list)
+  "LIST in consecutive pairs (the last may be alone): the unit of the round bootstrap (ABBA, the order reversed in
+the second round of a pair, so an order bias cancels inside it)."
+  (cl-loop while list collect (if (cdr list) (list (pop list) (pop list)) (list (pop list)))))
+
+(defun drgnx-perf--resample (items iterations seed stat)
+  "The sorted vector of ITERATIONS values of STAT (a function of a list of ITEMS) over draws of (length ITEMS)
+items with replacement, from its own MINSTD generator seeded with SEED."
+  (let* ((v (vconcat items)) (n (length v)) (state (max 1 (mod seed 2147483647))) out)
+    (dotimes (_ iterations)
+      (push (funcall stat (cl-loop repeat n collect (progn (setq state (mod (* state 48271) 2147483647)) (aref v (mod state n)))))
+            out))
+    (vconcat (sort out #'<))))
+
+(defun drgnx-perf--interval (d diff iterations)
+  "(:diff DIFF :lo L :hi H): the 95% interval of the sorted vector D of ITERATIONS resampled statistics."
+  (list :diff diff :lo (aref d (floor (* 0.025 iterations))) :hi (aref d (min (1- iterations) (floor (* 0.975 iterations))))))
+
+(defun drgnx-perf--bootstrap-per-round (per-round iterations seed)
+  "(:diff D :lo L :hi H) from PER-ROUND, one difference (B minus A) per round: the unit is a pair of rounds, the mean
+of its two differences; D is the median of those and the interval resamples the pairs with replacement."
+  (let ((diffs (mapcar (lambda (p) (/ (apply #'+ p) (float (length p)))) (drgnx-perf--pairs per-round))))
+    (drgnx-perf--interval (drgnx-perf--resample diffs iterations seed #'drgnx-perf--median) (drgnx-perf--median diffs) iterations)))
+
+(cl-defun drgnx-perf-bootstrap-rounds (rounds &key (iterations 2000) (seed 1) (stat 'median))
+  "(:diff D :lo L :hi H) from ROUNDS, a list of (:a SAMPLES :b SAMPLES): the unit is the round (a run of each side),
+not the sample, because samples within a run share a spike, a GC and a cache state.  Consecutive rounds run in
+opposite order (`drgnx-perf-ab-rounds'), so the unit is a pair of them.  STAT `median' (default): per round the
+median of B minus the median of A, a pair's statistic is the mean of its two; D is the median of those and the 95%
+interval resamples the pairs with replacement.  STAT `p95': the pairs are resampled with replacement, each side's
+samples of the drawn pairs are pooled and the statistic is the nearest-rank p95 of B minus that of A; D is the same
+over all samples.  Its own seeded generator, like `drgnx-perf-bootstrap-diff'."
+  (pcase stat
+    ('median (drgnx-perf--bootstrap-per-round
+              (mapcar (lambda (r) (- (drgnx-perf--median (plist-get r :b)) (drgnx-perf--median (plist-get r :a)))) rounds)
+              iterations seed))
+    ('p95 (let ((pool (lambda (rs key) (apply #'append (mapcar (lambda (r) (plist-get r key)) rs)))))
+            (cl-flet ((diff (pairs) (let ((rs (apply #'append pairs)))
+                                      (- (drgnx-perf--p95 (funcall pool rs :b)) (drgnx-perf--p95 (funcall pool rs :a))))))
+              (drgnx-perf--interval (drgnx-perf--resample (drgnx-perf--pairs rounds) iterations seed #'diff)
+                                    (diff (list rounds)) iterations))))
+    (_ (error "perf: unknown statistic %S" stat))))
+
+(defun drgnx-perf--classify (ci th)
+  "The verdict symbol for the interval CI against the threshold TH: regressed (all above TH), improved (all below
+0; it counts as no regression), no-regression (all at or below TH), else inconclusive."
+  (cond ((> (plist-get ci :lo) th) 'regressed)
+        ((< (plist-get ci :hi) 0) 'improved)
+        ((<= (plist-get ci :hi) th) 'no-regression)
+        (t 'inconclusive)))
+
+(cl-defun drgnx-perf-ab-verdict (a b &optional rounds &key (stat 'median) threshold)
   "(:verdict V :diff :lo :hi :threshold T) for the wall-clock samples A (the REF) and B (the work tree): T is
-max(1 ms, 10% of A's median).  regressed: the whole interval is above T; no-regression: all of it at or below T;
-inconclusive: T is inside it.  With ROUNDS (see `drgnx-perf-bootstrap-rounds') the interval is over the
-rounds, not the pooled samples A and B (which then only give the median T is taken from)."
-  (let* ((ci (if rounds (drgnx-perf-bootstrap-rounds rounds) (drgnx-perf-bootstrap-diff a b))) (th (max 1.0 (* 0.10 (drgnx-perf--median a)))))
-    (append (list :verdict (cond ((> (plist-get ci :lo) th) 'regressed)
-                                 ((<= (plist-get ci :hi) th) 'no-regression)
-                                 (t 'inconclusive)))
-            ci (list :threshold th))))
+THRESHOLD, else max(1 ms, 10% of A's median).  regressed: the whole interval is above T; improved: all of it below
+0; no-regression: all of it at or below T; inconclusive: T is inside it.  With ROUNDS (see
+`drgnx-perf-bootstrap-rounds') the interval is over the rounds, not the pooled samples A and B (which then only
+give the median T is taken from).  STAT `p95' needs ROUNDS."
+  (let* ((ci (cond (rounds (drgnx-perf-bootstrap-rounds rounds :stat stat))
+                   ((eq stat 'median) (drgnx-perf-bootstrap-diff a b))
+                   (t (error "perf: the %s verdict needs rounds" stat))))
+         (th (or threshold (max 1.0 (* 0.10 (drgnx-perf--median a))))))
+    (append (list :verdict (drgnx-perf--classify ci th)) ci (list :threshold th))))
+
+(defun drgnx-perf-ab-probe-verdict (rounds path)
+  "The verdict on a probe value: ROUNDS is a list of (:a PLIST :b PLIST), both sides' probe plists of a round (a
+run's result); PATH, e.g. (:compose :draw-ms :p95), is read from each.  Per round B minus A; pairs and bootstrap as
+the median statistic; T = max(1 ms, 10% of A's median value).  (:verdict not-comparable) when a side of a round
+lacks a number at PATH."
+  (let ((as (mapcar (lambda (r) (drgnx-perf--path-value (plist-get r :a) path)) rounds))
+        (bs (mapcar (lambda (r) (drgnx-perf--path-value (plist-get r :b) path)) rounds)))
+    (if (or (null rounds) (not (seq-every-p #'numberp as)) (not (seq-every-p #'numberp bs)))
+        (list :verdict 'not-comparable)
+      (let ((ci (drgnx-perf--bootstrap-per-round (cl-mapcar #'- bs as) 2000 1)) (th (max 1.0 (* 0.10 (drgnx-perf--median as)))))
+        (append (list :verdict (drgnx-perf--classify ci th)) ci (list :threshold th))))))
+
+(defun drgnx-perf--path-value (plist path)
+  "The value at PATH (a list of keys) in the nested PLIST."
+  (dolist (k path plist) (setq plist (and (consp plist) (plist-get plist k)))))
 
 ;;;; Calibration: how much of a wall-clock number is the machine's
 

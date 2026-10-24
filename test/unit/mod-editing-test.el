@@ -121,6 +121,42 @@
         (should (equal custom-enabled-themes '(modus-operandi))))
     (mapc #'disable-theme custom-enabled-themes)))
 
+(defvar child-frame-chrome)
+
+(defmacro drgnx-look-test--with-glitnir (refreshes &rest body)
+  "BODY with `child-frame-chrome' bound to a marker value, ui/look set up again under a stubbed `glitnir' feature;
+each `glitnir-refresh' pushes the option's value at that moment onto REFRESHES."
+  (declare (indent 1))
+  `(let ((child-frame-chrome '((corner-radius . 1))) (,refreshes nil))
+     (cl-letf (((symbol-function 'featurep)
+                (let ((orig (symbol-function 'featurep))) (lambda (f &rest r) (or (eq f 'glitnir) (apply orig f r)))))
+               ((symbol-function 'glitnir-refresh) (lambda (&rest _) (push child-frame-chrome ,refreshes))))
+       (drgnx-test-with-modules '(ui/look) :strict t
+                                (drgnx-module-teardown 'ui/look)
+                                (setq ,refreshes nil)
+                                (drgnx-modules--run-one 'ui/look (alist-get 'ui/look drgnx-modules--table) 'startup)
+                                ,@body))))
+
+(ert-deftest drgnx-look/chrome-on-with-glitnir ()
+  (drgnx-look-test--with-glitnir refreshes
+    (should (equal child-frame-chrome drgnx-look-chrome))
+    (should (equal (car refreshes) drgnx-look-chrome))))             ; refreshed at once, with the chrome set
+
+(ert-deftest drgnx-look/teardown-restores-chrome ()
+  (drgnx-look-test--with-glitnir refreshes
+    (drgnx-module-teardown 'ui/look)
+    (should (equal child-frame-chrome '((corner-radius . 1))))
+    (should (equal (car refreshes) '((corner-radius . 1))))))        ; refreshed after the old value is back
+
+(ert-deftest drgnx-look/no-glitnir-no-chrome ()
+  (let ((child-frame-chrome '((corner-radius . 1))) (called nil))
+    (cl-letf (((symbol-function 'glitnir-refresh) (lambda (&rest _) (setq called t))))
+      (drgnx-test-with-modules '(ui/look) :strict t
+                               (drgnx-module-teardown 'ui/look)
+                               (drgnx-modules--run-one 'ui/look (alist-get 'ui/look drgnx-modules--table) 'startup)
+                               (should (equal child-frame-chrome '((corner-radius . 1))))
+                               (should-not called)))))
+
 (ert-deftest drgnx-look/turning-it-off-leaves-a-theme-someone-else-enabled ()
   (unwind-protect
       (progn
