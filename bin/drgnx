@@ -238,10 +238,10 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   fi
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
-  # the sessions' monitor size and scales
+  # the sessions' monitor size, count and scales
   local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE
-                DRGNX_UI_SIZE DRGNX_UI_SCALE DRGNX_UI_SCALES)
+                DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
     if [ -n "${!v:-}" ]; then args+=(-e "$v=${!v}"); fi
@@ -1448,7 +1448,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                run; prints the runs that failed and how often each test did (heavy lease)
        drgnx test --ui [--compositor mutter|sway|x11|i3|kwin|niri]
                                GUI tests in a headless session (mutter; or sway, Xvfb, Xvfb with i3, KWin, niri)
-                               (sessions: DRGNX_UI_SIZE=WxH, DRGNX_UI_SCALE=S or DRGNX_UI_SCALES="S1 S2"; mutter/sway/kwin)
+                               (sessions: DRGNX_UI_SIZE=WxH, DRGNX_UI_MONITORS=N, DRGNX_UI_SCALE=S or
+                                DRGNX_UI_SCALES="S1 S2"; mutter/sway/kwin)
        drgnx test --tty        terminal tests: Emacs in private tmux servers (needs tmux; docs/develop/harness.md)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]]

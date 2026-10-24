@@ -268,6 +268,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   for every compositor, so nothing (fontconfig, Mesa's shader cache) is written to `~/.cache`; they are rebuilt every start.
 - No language servers: `DRGNX_NO_LANGUAGE_SERVERS=1`, so a scenario's fixture projects do not each start one (a run
   once had 12 pyrights); a test that needs a server sets it to "" in its session.
+- GTK's own input method: `GTK_IM_MODULE=gtk-im-context-simple`, never the host's IM or the compositor's text-input,
+  so keys compose the same in every session (the IME preedit test types through it).
 - Not the login shell's environment: `DRGNX_NO_SHELL_ENV=1`, so a session keeps the `PATH` it was given
   ([shell.md](../guide/shell.md#your-path-in-drgnx)); a test that wants it sets it to "" in its session.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
@@ -618,7 +620,8 @@ process group) with the same caps (`MemoryMax=3G`, `RuntimeMaxSec`) and the same
 ### Size and scale
 
 `DRGNX_UI_SIZE=3840x2160` sets the monitor size in device pixels (a size given to `ui start --size` or `ui_start`
-wins; default 1600x900). `DRGNX_UI_SCALE=2` puts every monitor at that scale, `DRGNX_UI_SCALES="1 2"` gives one scale
+wins; default 1600x900). `DRGNX_UI_MONITORS=2` gives a session that names no monitor count (a whole test tier's) that
+many monitors. `DRGNX_UI_SCALE=2` puts every monitor at that scale, `DRGNX_UI_SCALES="1 2"` gives one scale
 per monitor (a count other than the monitors' fails with "scales need one per monitor"); in Lisp,
 `(drgnx-ui-start nil size nil nil monitors compositor SCALES)`. Scale 1 is the default and changes nothing. The
 scale is applied before Emacs starts, and `ui start` then waits up to 10 s for the root frame to show the first
@@ -628,7 +631,7 @@ monitor's scale, else stops the session and fails with `scale S not applied`.
 |---|---|
 | `mutter` | `gdctl set --logical-monitor [--primary] --monitor Meta-k --scale S --x X --y 0` per monitor, run (retried) in front of Emacs; X is the sum of the monitors' logical widths (W / S). mutter 50 takes fractional scales on its headless virtual monitor. `gdctl` is a Python script that needs `python3-gobject-base` (in `Containerfile.gui`); when all 50 tries (10 s) fail, the session's log gets `scale not applied: gdctl set failed 50 times: ERROR` and Emacs never starts, so `ui start` fails with it |
 | `sway` | `output HEADLESS-k scale S` in `sway.conf`, positions in logical pixels |
-| `kwin` | `kwin_wayland --scale S` when every scale is the same and the binary has the flag, else `kscreen-doctor output.k.scale.S` per output, run by `RUN/kwin-session.sh` in front of Emacs (not exercised on the dev host: no KWin there) |
+| `kwin` | `kscreen-doctor output.k.scale.S` per output, run (retried) by `RUN/kwin-session.sh` in front of Emacs; never `kwin_wayland --scale`, the windowed mode's scale, which on the virtual backend multiplies the outputs' size and leaves their scale at 1 (KWin 6.7) |
 | `x11`, `i3`, `niri` | refused: they have no monitor scale |
 
 The wait condition: GTK 3 knows only integer scales. At an integer S the root's `(frame-scale-factor)` is S; at a
@@ -1093,6 +1096,23 @@ scale).
 Besides the chrome probes, each shown-popup check compares everything outside the popups and their shadow margin with
 the Glitnir-off picture. The chrome checks fail on a build without Glitnir's chrome; the geometry, focus and
 off-pixel checks hold on any build.
+
+`test/ui/childframe-extra-test.el` holds the design's §10.3 additions, with the matrix's helpers. Some need a session
+of their own kind and skip in any other, so the file runs once per kind (`DRGNX_TEST_SELECTOR` narrowed to the test):
+
+| Test | Session |
+|---|---|
+| `fractional-1-5`: the core rows (the four scenarios above) at 1.5, with the root's scale checked as GTK 3 shows it | `DRGNX_UI_SCALE=1.5` (e.g. `DRGNX_UI_SIZE=2880x1800`) |
+| `fractional-1-25-u1` … `-u5`: the core rows at the 125 % setups | `DRGNX_UI_SCALE=1.25` and `DRGNX_UI_SIZE` 2560x1440, 1920x1080, 2560x1600, 2880x1800, 3840x2160 |
+| `kwin-core-rows`: the core rows under KWin | `--compositor kwin` (the window managers' image), scales 1 and 2 |
+| `mixed-dpi-move`: the root moved to a monitor of another scale with a popup shown: gdctl takes the first monitor out of mutter's layout, so mutter moves the root; after 1.5 s the picture outside the popup is the stock one (full damage), the popup equals one shown afresh at the new scale, and `:scale-mismatch` counts no paint after the wait | `DRGNX_UI_MONITORS=2 DRGNX_UI_SCALES="1 2"` (mutter) |
+| `nested-make-frame-visible`, `focus-taking-child` (vertico-posframe, mini-frame), `ime-preedit-in-child`, `shadow-beside-scroll-bars-and-tool-bar`, `xwidget-under-popup` (skipped: Nidhogg builds no xwidgets yet) | any mutter session; run at scales 1 and 2 |
+
+The IME test types through mutter's RemoteDesktop service (`NotifyKeyboardKeysym` on the session bus), so the keys go
+through GTK's input method like a keyboard's. Mutter's built-in keymap is "us", which has no dead keys, so the composed
+sequence is `gtk-im-context-simple`'s own: Control+Shift+U, `e9`, Space gives "é", with the preedit shown in
+mini-frame's child frame meanwhile (pgtk passes key presses, not releases, to the input method, so the modifiers stay
+held until the Space).
 
 ## Modal tests
 

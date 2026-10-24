@@ -347,6 +347,14 @@ logical pixels (a monitor at scale S is W / S logical pixels wide)."
              collect (list x w h)
              do (cl-incf x (drgnx-ui--logical-width w (drgnx-ui--monitor-scale sess k))))))
 
+(defun drgnx-ui--env-monitors ()
+  "$DRGNX_UI_MONITORS as a number of monitors (a whole test tier's sessions get that many), or nil when unset."
+  (let ((e (getenv "DRGNX_UI_MONITORS")))
+    (unless (member e '(nil ""))
+      (unless (string-match-p "\\`[1-9][0-9]?\\'" e)
+        (drgnx-ui--fail "DRGNX_UI_MONITORS must be a number of monitors, got %S" e))
+      (string-to-number e))))
+
 (defun drgnx-ui--scales (monitors scales)
   "The per-monitor scales of a session with MONITORS monitors: SCALES (a number for all, or a list, one per
 monitor), else $DRGNX_UI_SCALES (\"1 2\"), else $DRGNX_UI_SCALE.  A list of MONITORS numbers, or nil when every
@@ -426,16 +434,11 @@ Nothing is included (no ~/.config/niri)."
           "niri msg action quit --skip-confirmation\n"
           "exit $rc\n"))
 
-(defun drgnx-ui--kwin-scale-flag (sess)
-  "KWin's `--scale S' for SESS when its scales are one value and this kwin_wayland has the flag, else nil."
-  (let ((scales (append (plist-get sess :scales) nil)))
-    (and scales (apply #'= scales)
-         (string-match-p "--scale" (cdr (drgnx-ui--run "kwin_wayland" "--help")))
-         (number-to-string (car scales)))))
-
 (defun drgnx-ui--kwin-needs-script-p (sess)
-  "Non-nil when SESS's scales reach KWin through `kscreen-doctor' in RUN/kwin-session.sh."
-  (and (plist-get sess :scales) (not (drgnx-ui--kwin-scale-flag sess))))
+  "Non-nil when SESS has scales: they reach KWin through `kscreen-doctor' in RUN/kwin-session.sh.  Never
+`kwin_wayland --scale', the windowed mode's: on the virtual backend it multiplies the outputs' size and leaves their
+scale at 1 (KWin 6.7: at 1600x900 and 2 the root saw a 3200x1800 monitor at scale 1)."
+  (and (plist-get sess :scales) t))
 
 (defun drgnx-ui-kwin-session-script (sess)
   "The shell script of a kwin session whose scales `kscreen-doctor' sets (output.N.scale.S, N from 1), after
@@ -585,6 +588,7 @@ RUN/sway.conf, x11 and i3 a free X display, i3 also RUN/i3.conf, niri (one monit
 RUN/niri.kdl and RUN/niri-session.sh."
   (let* ((size (or size (let ((e (getenv "DRGNX_UI_SIZE"))) (and (not (member e '(nil ""))) e)) "1600x900"))
          (compositor (or compositor (drgnx-ui-default-compositor)))
+         (monitors (or monitors (drgnx-ui--env-monitors)))
          (scales (drgnx-ui--scales monitors scales)))
     (unless (string-match-p "\\`[0-9]+x[0-9]+\\'" size)
       (drgnx-ui--fail "size must be WxH, got %S" size))
@@ -702,6 +706,9 @@ of the same name."
                  ;; one sets this to "" in its session
                  "DRGNX_NO_LANGUAGE_SERVERS=1"
                  "DRGNX_NO_SHELL_ENV=1"     ; the session's PATH, never the login shell's (a test clears it)
+                 ;; GTK's own input method, never the host's IM or the compositor's text-input: keys compose the
+                 ;; same in every session (the IME preedit test, test/ui/childframe-extra-test.el)
+                 "GTK_IM_MODULE=gtk-im-context-simple"
                  ;; drgnx's own config and state stay in the run dir: a session never reads the
                  ;; user's ~/.config/drgnx or writes ~/.local/state.
                  (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get sess :run)))
@@ -776,8 +783,7 @@ its log (UI-SCALE-1: an image without gdctl's python3-gobject started every sess
               (append
                (list "dbus-run-session" "--" "kwin_wayland" "--virtual" "--width" (car size) "--height" (cadr size)
                      "--output-count" (number-to-string (or (plist-get sess :monitors) 1)))
-               ;; scales kwin_wayland has no flag for are set by RUN/kwin-session.sh (kscreen-doctor)
-               (if-let* ((s (drgnx-ui--kwin-scale-flag sess))) (list "--scale" s))
+               ;; the scales are set by RUN/kwin-session.sh (kscreen-doctor)
                (list "--socket" "wayland-1" "--no-lockscreen" "--no-global-shortcuts"
                      "--exit-with-session" (drgnx-ui-kwin-session-command sess)))))
     ((or "x11" "i3") (list "dbus-run-session" "--" "sh" "-c" (drgnx-ui--x11-script sess)))

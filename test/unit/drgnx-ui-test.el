@@ -90,6 +90,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "DRGNX_UI_NAME=drgnx-ui-5-00000a" env))
       (should (member "DRGNX_NO_LANGUAGE_SERVERS=1" env))      ; no pyright per fixture project (a test opts in)
       (should (member "DRGNX_NO_SHELL_ENV=1" env))             ; never the login shell's PATH
+      (should (member "GTK_IM_MODULE=gtk-im-context-simple" env)) ; GTK's own input method, never the host's
       (should (member (concat "EMACS_SOCKET_NAME=" (plist-get s :socket)) env))
       (should (equal (drgnx-ui-env-argv '("A=1")) '("env" "-i" "A=1"))))))
 
@@ -1019,6 +1020,14 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-error (drgnx-ui-prepare-run "drgnx-ui-13-00000a" nil "1600x900" root nil 3) :type 'drgnx-ui-error))
     (let ((process-environment (cons "DRGNX_UI_SCALE=2" process-environment)))
       (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-14-00000a" nil "1600x900" root nil 2) :scales) [2 2])))
+    ;; DRGNX_UI_MONITORS: the monitors of a session that names none (a whole test tier's), so "1 2" fits it
+    (let ((process-environment (append '("DRGNX_UI_MONITORS=2" "DRGNX_UI_SCALES=1 2") process-environment)))
+      (let ((s (drgnx-ui-prepare-run "drgnx-ui-16-00000a" nil "1600x900" root)))
+        (should (equal (plist-get s :monitors) 2))
+        (should (equal (plist-get s :scales) [1 2])))
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-17-00000a" nil "1600x900" root nil 3 nil 1) :monitors) 3)))
+    (let ((process-environment (cons "DRGNX_UI_MONITORS=two" process-environment)))
+      (should-error (drgnx-ui-prepare-run "drgnx-ui-18-00000a" nil "1600x900" root) :type 'drgnx-ui-error))
     ;; x11 has no monitor scale
     (should-error (drgnx-ui-prepare-run "drgnx-ui-15-00000a" nil "1600x900" root nil 1 "x11" '(2))
                   :type 'drgnx-ui-error)))
