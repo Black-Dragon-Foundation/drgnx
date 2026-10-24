@@ -35,8 +35,9 @@ pub const REDUCED_CANNOT_PIN: &str = "the reduced tier cannot pin .dir-locals.el
 /// each of `user_lisp_files` (a relative one is in `config_dir`), for `Context.closed`: a write root that holds one
 /// is refused (`Rule::ExposesUser`) in every tier. Each name is taken as Emacs loads it: `..` first collapsed as
 /// `expand-file-name` does, then every link followed as the kernel does, a dangling one too (a stow link whose target
-/// is not there yet still names the place it would be made); a part that does not exist is kept as written. One that
-/// cannot be named (not UTF-8, a loop) is left out. Sorted, once each.
+/// is not there yet still names the place it would be made); a part that does not exist is kept as written. Each
+/// entry of `workspaces/` that is a link adds its target (a per-file stow link). One that cannot be named (not UTF-8,
+/// a loop) is left out. Sorted, once each.
 pub fn closed_config_targets(config_dir: &Path, user_lisp_files: &[PathBuf]) -> Vec<PathBuf> {
     let names = CONFIG_FILES
         .iter()
@@ -45,6 +46,17 @@ pub fn closed_config_targets(config_dir: &Path, user_lisp_files: &[PathBuf]) -> 
     let mut out: Vec<PathBuf> = names
         .filter_map(|p| followed(&lexical(&p), &mut 0))
         .collect();
+    // Each entry of `workspaces/` too: an unfolded stow tree links its files one by one, out of the folder.
+    if let Some(ws) = followed(&lexical(&config_dir.join("workspaces")), &mut 0)
+        && let Ok(entries) = std::fs::read_dir(&ws)
+    {
+        out.extend(
+            entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_symlink()))
+                .filter_map(|e| followed(&e.path(), &mut 0)),
+        );
+    }
     out.sort();
     out.dedup();
     out
