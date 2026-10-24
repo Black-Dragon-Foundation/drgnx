@@ -74,6 +74,19 @@ pub trait Hooks: std::marker::Send + Sync {
 /// What a [`Hooks`] call answers.
 pub type HookFuture<'a> = Pin<Box<dyn Future<Output = ()> + std::marker::Send + 'a>>;
 
+/// Session id → (its plan's entity id, its project's entity id); shared with the step writers.
+#[derive(Clone, Default)]
+pub struct Scopes(Arc<Mutex<HashMap<String, Scope>>>);
+
+/// A plan's entity id and its project's.
+type Scope = (String, Option<String>);
+
+impl Scopes {
+    pub fn get(&self, sid: &str) -> Option<Scope> {
+        lock(&self.0).get(sid).cloned()
+    }
+}
+
 /// The plan runs the hub holds: the git behind them, the hooks of 16b, the worktrees being made and what each job
 /// last showed its subscribers.
 #[derive(Default)]
@@ -86,7 +99,7 @@ pub struct Runs {
     seen: Mutex<HashMap<String, String>>,
     /// Session id → (its plan's entity id, its project's entity id): what the step writer files the session's steps
     /// under (`step.plan`, `step.project`).
-    scopes: Mutex<HashMap<String, (String, Option<String>)>>,
+    scopes: Scopes,
     wake: Notify,
 }
 
@@ -126,21 +139,25 @@ impl Runs {
 
     /// Session SID works for PLAN (an entity id) in PROJECT: the step writer reads it ([`Runs::scope_of`]).
     pub fn set_scope(&self, sid: &str, plan: String, project: Option<String>) {
-        lock(&self.scopes).insert(sid.to_owned(), (plan, project));
+        lock(&self.scopes.0).insert(sid.to_owned(), (plan, project));
     }
 
     /// The (plan, project) entity ids a plan run's session works under: what `step.plan` and `step.project` hold.
-    /// Task 19's step writer calls this where it builds a `StepNew` (`plan: None, project: None` today), per step:
-    /// the scope is set just after the session starts, so a `StepCtx` made at the start cannot hold it.
+    /// The step writer reads it per step (through [`Runs::scopes`]): the scope is set just after the session starts,
+    /// so a `StepCtx` made at the start cannot hold it.
     pub fn scope_of(&self, sid: &str) -> Option<(String, Option<String>)> {
-        lock(&self.scopes).get(sid).cloned()
+        self.scopes.get(sid)
+    }
+
+    /// The shared scope table, for the step writers.
+    pub fn scopes(&self) -> Scopes {
+        self.scopes.clone()
     }
 
     /// The task session SID ended (its task done, dropped, or its agent failed): the checkpoint cap may prune its
-    /// snapshots first.  The one line that connects it is here: Task 19 adds `Timeline::session_finished`, so the
-    /// merge replaces the body by `front.core.timeline.session_finished(sid)`.
+    /// snapshots first.
     pub fn session_finished(&self, front: &Front, sid: &str) {
-        let _ = (front, sid);
+        front.core.timeline.session_finished(sid);
     }
 
     pub fn busy_of(&self, task: &str) -> Option<&'static str> {
@@ -221,6 +238,19 @@ pub trait RunGit: std::marker::Send + Sync {
         repo: &'a Path,
         branches: &'a [String],
     ) -> GitFuture<'a, TrialResult>;
+    /// The changed paths of TREE's task and the hash of each diff (the clash rules' input; none for a git that cannot
+    /// tell).
+    fn diffs<'a>(
+        &'a self,
+        _repo: &'a Path,
+        _tree: &'a TaskTree,
+    ) -> GitFuture<'a, std::collections::BTreeMap<String, String>> {
+        Box::pin(async { Ok(Default::default()) })
+    }
+    /// A sandboxed session started in FOLDER: plain git never runs there again (the touched-folder ledger).
+    fn touched<'a>(&'a self, _folder: &'a Path) -> GitFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 // ---- small helpers ------------------------------------------------------------------------------------------

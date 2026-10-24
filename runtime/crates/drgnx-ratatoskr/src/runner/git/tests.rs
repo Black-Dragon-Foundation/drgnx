@@ -71,8 +71,8 @@ struct Policy {
 }
 
 impl GatePolicy for Policy {
-    fn accepted(&self, _: &TaskTree) -> BTreeMap<String, String> {
-        self.marks.lock().unwrap().clone()
+    fn accepted<'a>(&'a self, _: &'a TaskTree) -> GitFuture<'a, BTreeMap<String, String>> {
+        Box::pin(async move { Ok(self.marks.lock().unwrap().clone()) })
     }
     fn ci_config<'a>(&'a self, _: &'a TaskTree, facts: Facts) -> GitFuture<'a, Gate> {
         Box::pin(async move {
@@ -107,7 +107,7 @@ async fn accept_all(h: &HubGit, e: &Env, t: &TaskTree, marks: &Mutex<BTreeMap<St
 // Policies must be shared with the test to set marks: wrap in Arc through a small adapter.
 struct Shared(std::sync::Arc<Policy>);
 impl GatePolicy for Shared {
-    fn accepted(&self, t: &TaskTree) -> BTreeMap<String, String> {
+    fn accepted<'a>(&'a self, t: &'a TaskTree) -> GitFuture<'a, BTreeMap<String, String>> {
         self.0.accepted(t)
     }
     fn ci_config<'a>(&'a self, t: &'a TaskTree, f: Facts) -> GitFuture<'a, Gate> {

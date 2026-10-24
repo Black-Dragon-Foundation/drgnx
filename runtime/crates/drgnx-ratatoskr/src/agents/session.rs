@@ -467,6 +467,8 @@ pub(crate) struct StepSink {
     pub bus: tokio::sync::broadcast::Sender<AgentStep>,
     /// Step snapshots (none: the hub has no state folder, or a test).
     pub snap: Option<crate::timeline::Snap>,
+    /// The plan and project a plan run's session works under (none: not a plan run, or a test).
+    pub scopes: Option<crate::runner::Scopes>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -1029,6 +1031,7 @@ fn assemble(
             editors: front.editors.clone(),
             bus,
             snap: crate::timeline::Snap::of(front),
+            scopes: Some(front.core.runs.scopes()),
         },
         ctx,
     ));
@@ -1220,11 +1223,16 @@ async fn write_steps(
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default();
+        let (plan, project) = sink
+            .scopes
+            .as_ref()
+            .and_then(|s| s.get(&ctx.session))
+            .map_or((None, None), |(p, j)| (Some(p), j));
         let new = table::StepNew {
             session: format!("session:{}", ctx.session),
             task: ctx.task.clone(),
-            plan: None,
-            project: None,
+            plan,
+            project,
             agent: Some(format!("agent:{}", ctx.agent)),
             provider: ctx.provider.clone(),
             class: table::StepClass::parse(&class_name).unwrap_or(table::StepClass::Think),
@@ -1315,6 +1323,7 @@ async fn write_steps(
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
 /// last), and a snapshot of the worktree after a completed edit and at the turn's first step.  Best effort.
+#[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
     ctx: &StepCtx,
@@ -1416,6 +1425,8 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
         s.profile.clone(),
         s.task.clone(),
     );
+    // the `start` event the Lisp backend wrote, for `events/since`
+    let (job, started_name) = (s.job.clone(), name.clone());
     let data = json!({
         "profile": s.profile, "role": format!("{:?}", s.role).to_lowercase(), "cwd": s.cwd,
         "job": s.job, "about": s.about, "brainstorm": s.document.is_some(),
@@ -1436,6 +1447,19 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
     let r = front
         .writer
         .write(caller, "agents/start", move |tx| {
+            norn::write::event::event(
+                tx,
+                norn::write::event::Event {
+                    at: now(),
+                    agent: Some(sid.clone()),
+                    job: job.clone(),
+                    task: task.clone(),
+                    kind: norn::write::event::EventKind::Start,
+                    summary: format!("started {started_name}"),
+                    data: None,
+                    turn: false,
+                },
+            )?;
             let refused =
                 |e: urdr::graph::WriteError| norn::store::CoordError::Refused(e.to_string());
             let agent_id = format!("agent:{profile}");
@@ -2392,6 +2416,7 @@ mod tests {
             editors,
             bus,
             snap: None,
+            scopes: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -2473,6 +2498,7 @@ mod tests {
             editors: Arc::new(crate::settings::agents::Editors::default()),
             bus: tokio::sync::broadcast::channel(16).0,
             snap: Some(crate::timeline::Snap::for_test(dir.join("cp"), settings)),
+            scopes: None,
         };
         let ctx = StepCtx {
             session: "a1".into(),

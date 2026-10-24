@@ -228,7 +228,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     if let Some(notes) = front.core.budgets.take_notes() {
         tokio::spawn(crate::budget::run(front.clone(), notes));
     }
-    front.gate.open_store(runtime);
+    front.gate.open_store(runtime.clone());
     match front.gate.listen(gateway_port).await {
         Ok(events) => {
             front.gate.restore(&front.mcp).await;
@@ -254,6 +254,15 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::records::install_tool(&front);
     tokio::spawn(crate::records::follow(front.clone()));
     tokio::spawn(coord::notify_backend(front.clone()));
+    front
+        .core
+        .runs
+        .set_git(Arc::new(crate::runner::git::HubGit::new(
+            hub_dir.join("runs"),
+            crate::runner::TreeMode::Worktree,
+            Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
+            Some(runtime.clone()),
+        )));
     tokio::spawn(crate::runner::tick::run(front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());
     #[cfg(feature = "test-hooks")]
