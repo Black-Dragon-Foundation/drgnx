@@ -1381,13 +1381,15 @@ mod tests {
             tx.commit_for_test().unwrap();
         }
         let mut tx = Tx::for_test(&mut conn, import, Arc::new(g));
-        let never = |got: Result<Outcome, WriteError>| {
-            matches!(got, Err(WriteError::Refused(t)) if t == "never")
-        };
+        let never = |got: Result<Outcome, WriteError>| matches!(got, Err(WriteError::Refused(t)) if t == "never");
         assert!(never(import_entity(&mut tx, &line("option:global:b", 1))));
         assert!(never(import_entity(&mut tx, &line("option:global:a", 2))));
         let a = entity::by_id(tx.sql(), "option:global:a").unwrap().unwrap();
         assert_eq!(a.ver, 1);
-        assert!(entity::by_id(tx.sql(), "option:global:b").unwrap().is_none());
+        assert!(
+            entity::by_id(tx.sql(), "option:global:b")
+                .unwrap()
+                .is_none()
+        );
     }
 }

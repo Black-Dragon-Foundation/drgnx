@@ -499,7 +499,8 @@ custom.el entries Tidy could move (design §14)."
   "Settings: Migrate Old Files: move agents.eld, ai.eld, keys.eld, modules.eld, large-files.eld, session.eld and
 speed.eld into settings.el now, as the first start does, while settings.el does not exist.  Once it exists, an old
 file that stayed and now reads cleanly gets its values added for the settings settings.el has no entry for, and
-moves away when settings.el holds them all (`drgnx-settings-migrate--fold-stayed'): then (:status folded :added VARS :files MOVED)."
+moves away when settings.el holds them all (`drgnx-settings-migrate--fold-stayed'):
+then (:status folded :added VARS :files MOVED)."
   (interactive)
   (if (drgnx-settings-migrate--settings-there-p)
       (pcase-let ((`(,added . ,moved) (drgnx-settings-migrate--fold-stayed)))

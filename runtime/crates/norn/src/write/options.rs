@@ -77,7 +77,12 @@ pub fn meta(mut base: TxMeta, p: &RecordParams, project: Option<i64>) -> TxMeta 
 fn data_of(c: &OptionChange) -> Map<String, Value> {
     let mut m = Map::new();
     let value = c.value.as_ref().map(|v| v.as_str());
-    let redacted = value.is_some_and(|v| runstav::secrets::looks_like_secret(v).is_some());
+    // The printed form escapes `"` and `\`, which hides a `"api_key": "…"` inside a string: look at the text as well.
+    let redacted = value.is_some_and(|v| {
+        runstav::secrets::looks_like_secret(v).is_some()
+            || runstav::secrets::looks_like_secret(&v.replace("\\\"", "\"").replace("\\\\", "\\"))
+                .is_some()
+    });
     m.insert(
         "value".into(),
         match value {
@@ -497,7 +502,7 @@ mod tests {
             };
             let printed = format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
             let secret = case["rule"].is_string();
-            if secret != runstav::secrets::looks_like_secret(&printed).is_some() {
+            if secret != runstav::secrets::looks_like_secret(&text).is_some() {
                 wrong.push(format!("{}: printed, the rule differs", case["name"]));
                 continue;
             }
@@ -515,9 +520,9 @@ mod tests {
                 wrong.push(format!("{}: {} at ver {}", case["name"], e.data, e.ver));
             }
             if secret {
-                let needle = case["text"]
-                    .as_array()
-                    .map_or(text.clone(), |parts| parts.last().unwrap().as_str().unwrap().into());
+                let needle = case["text"].as_array().map_or(text.clone(), |parts| {
+                    parts.last().unwrap().as_str().unwrap().into()
+                });
                 let found: i64 = conn
                     .query_row(
                         "select (select count(*) from entity where instr(data, ?1) > 0) \

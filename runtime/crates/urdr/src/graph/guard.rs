@@ -273,7 +273,10 @@ mod tests {
             title: Some(Some("t3".into())),
             ..Changes::default()
         };
-        assert_eq!(entity::update(&mut tx, n, None, titled).unwrap_err(), never());
+        assert_eq!(
+            entity::update(&mut tx, n, None, titled).unwrap_err(),
+            never()
+        );
         assert_eq!(entity::retire(&mut tx, n).unwrap_err(), never());
         assert_eq!(entity::unretire(&mut tx, retired).unwrap_err(), never());
         assert_eq!(

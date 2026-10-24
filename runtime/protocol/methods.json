@@ -8605,7 +8605,7 @@
       "classes": [
         "user"
       ],
-      "doc": "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
+      "doc": "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed; a value that looks like a secret is never stored: no value, redacted true), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
       "home": "front",
       "name": "settings/record",
       "params": {
@@ -8641,7 +8641,7 @@
                   }
                 ],
                 "default": null,
-                "description": "The new value as printed Lisp; `null` when the setting was removed."
+                "description": "The new value as printed Lisp; `null` when the setting was removed. One that looks like a secret is recorded\nas a change with no value (`redacted`)."
               }
             },
             "required": [
