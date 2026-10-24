@@ -575,6 +575,21 @@ TODO is under, wherever it was refiled). Projects: Sync Plans and Board TODOs ma
 checkbox (`- [x]`) in the plan; a ticked checkbox marks its TODO DONE. It writes only what changed, only when you
 run it, with the plan's own encoding and line endings — and leaves alone a plan open in Emacs with unsaved edits.
 
+## Briefs
+
+When a plan run starts a task, its worker gets a brief built from the graph: the task's section of the plan (found
+by its number in the plan file), the AGENTS.md at the run's repository root, the permissions matrix as it applies to
+a worker (one line for every action that is not Never), the base branch, the interfaces that the reports of the
+tasks it waits on list, the check to run (the plan's own line when it names one) and, for an agent without drgnx's
+tools, the plan file's path and the `drgnx-report` block to end with. A part with nothing to say is left empty.
+
+A brief is at most 16 KiB. Over that, the plan section is cut at a heading and a note says where; AGENTS.md and the
+interfaces have smaller caps of their own.
+
+`brief/build` shows a task's brief. `brief/set` saves your edited text as a note labelled `brief` on the task
+(setting it again replaces it); from then on `brief/build` answers it and the runner sends it at dispatch instead
+of the built one.
+
 ## Plans and records
 
 Plans, ledgers, `DEFERRED.md`, `BUILD-BOARD.md` (and `board.org`, only when you name it) can move into the graph:

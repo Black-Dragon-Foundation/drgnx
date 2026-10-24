@@ -353,6 +353,9 @@ pub async fn start(
         })
         .and_then(|t| t.get("body").and_then(Value::as_str))
         .unwrap_or("");
+    let body = crate::brief::for_dispatch(front, tid)
+        .await
+        .unwrap_or_else(|| body.to_owned());
     let prompt = format!(
         "[drgnx task {tid}] {}\n\n{body}\n\n{}{}First call read_decisions (the job's decision log). Work only in this \
          directory (a git worktree of your own). Commit your work. Then call complete_task.",
