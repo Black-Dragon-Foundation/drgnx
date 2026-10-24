@@ -76,7 +76,7 @@ pub(crate) fn ended(t: &Transcript) -> Option<Ended> {
         })
         .or_else(|| {
             let err = t.entries.last().filter(|e| e.kind == EntryType::Error)?;
-            Some(Ended::Stopped).filter(|_| !provider_limit(&text_of(err)))
+            (!provider_limit(&text_of(err))).then_some(Ended::Stopped)
         })
 }
 

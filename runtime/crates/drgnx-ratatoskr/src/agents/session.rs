@@ -2440,7 +2440,7 @@ impl Session {
             }
             st.paused = true;
             st.hold = false;
-            let pending: Vec<Pending> = st.permissions.drain(..).collect();
+            let pending: Vec<Pending> = std::mem::take(&mut st.permissions);
             st.wait_end();
             (st.turn, pending)
         };

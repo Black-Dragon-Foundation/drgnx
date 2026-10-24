@@ -205,7 +205,7 @@ pub(crate) fn reports_of(conn: &Tx, task: i64) -> Result<Vec<Ent>, CoordError> {
     for n in srcs(conn, task, "report_of")? {
         out.extend(live(conn, n)?.filter(|e| e.kind == "report"));
     }
-    out.sort_by(|a, b| b.n.cmp(&a.n));
+    out.sort_by_key(|a| std::cmp::Reverse(a.n));
     Ok(out)
 }
 
