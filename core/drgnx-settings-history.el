@@ -23,6 +23,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-file)
+(require 'drgnx-secrets-scan)           ; at start: a lazy load inside a module's setup would be the module's
 (require 'drgnx-config)
 (require 'drgnx-settings-file)
 
@@ -30,7 +31,6 @@
 (declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-setting-meta "drgnx-setting" (var))
-(declare-function drgnx-secrets-looks-like "drgnx-secrets" (text))
 (declare-function drgnx-settings-explain "drgnx-settings-prov" (var &optional buffer))
 (declare-function drgnx-settings-prov--managed "drgnx-settings-prov" ())
 (declare-function drgnx-settings-workspace-project "drgnx-settings-workspace" (dir))
@@ -162,7 +162,6 @@ matches, so the hub, when the journal is sent, records the change as redacted (n
 
 (defun drgnx-settings-history--redact-value (v)
   "V (a printed value), or `drgnx-settings-history--redacted' when it looks like a secret (escaped or not)."
-  (require 'drgnx-secrets)
   (if (and (stringp v)
            (or (drgnx-secrets-looks-like v)
                (drgnx-secrets-looks-like (string-replace "\\\\" "\\" (string-replace "\\\"" "\"" v)))))
