@@ -225,6 +225,62 @@ form and a digest, and a setup form that reads."
           (should (equal modes-before (list electric-pair-mode show-paren-mode which-function-mode)))))
     (drgnx-perf-w-ts-open-teardown)))
 
+(defvar nidhogg-workers-treesit--pending)
+(defvar jit-lock-context-unfontify-pos)
+
+(ert-deftest drgnx-perf-workers/ts-digest-waits-for-settled-colour ()
+  "ts-typing completes, and so reads its digest, only once every key's command ran and the colour has settled: no
+parse job and no deferred region for the buffer, and jit-lock's contextual refontification after the last key done."
+  (perf-workers-test--session)
+  (let ((buf (generate-new-buffer " perf-ts-settle")) busy (drgnx-perf-w--ts-commands 0))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buf)
+          (with-current-buffer buf
+            (insert "int x;\n")
+            (cl-letf (((symbol-function 'drgnx-perf-w--colored-p) (lambda (&optional _window) t))
+                      ((symbol-function 'nidhogg-workers--treesit-busy-p) (lambda (_buffer) busy)))
+              (setq-local jit-lock-context-unfontify-pos (point-max))
+              ;; coloured before the keys (the lab polls from before them): not done until all 3 have run
+              (should-not (drgnx-perf-w-ts-edit-done 3))
+              (dotimes (_ 3) (drgnx-perf-w--ts-count-command))
+              (should (drgnx-perf-w-ts-edit-done 3))
+              ;; a parse job runs for the buffer
+              (setq busy t)
+              (should-not (drgnx-perf-w-ts-edit-done 3))
+              (setq busy nil)
+              ;; a region waits for the parse (deferral)
+              (setq-local nidhogg-workers-treesit--pending (list (cons 1 2)))
+              (should-not (drgnx-perf-w-ts-edit-done 3))
+              (setq-local nidhogg-workers-treesit--pending nil)
+              ;; jit-lock has not refontified after the last edit yet; reading does not do it for jit-lock
+              (setq-local jit-lock-context-unfontify-pos 3)
+              (should-not (drgnx-perf-w-ts-edit-done 3))
+              (should (= jit-lock-context-unfontify-pos 3))
+              (setq-local jit-lock-context-unfontify-pos (point-max))
+              (should (drgnx-perf-w-ts-edit-done 3))
+              (setq-local jit-lock-context-unfontify-pos nil)
+              (should (drgnx-perf-w-ts-edit-done 3)))))
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-perf-workers/completion-polls-while-idle ()
+  "The completion poll is a repeating wall timer that polls only while Emacs is idle: an idle timer runs once per idle
+period, so work finishing later in the pause after the keys was never seen."
+  (let (started (polls 0) (idle nil) (drgnx-perf--complete nil))
+    (cl-letf (((symbol-function 'drgnx-timer-start) (lambda (&rest args) (setq started args)))
+              ((symbol-function 'drgnx-timer-cancel) #'ignore)
+              ((symbol-function 'current-idle-time) (lambda () idle)))
+      (drgnx-perf-complete-begin (lambda () (cl-incf polls) nil))
+      (should-not (plist-get (nthcdr 3 started) :idle))
+      (should (equal (plist-get (nthcdr 3 started) :repeat) 0.01))
+      (funcall (nth 2 started))         ; inside a command: no poll
+      (should (= polls 0))
+      (setq idle '(0 1 0 0))
+      (funcall (nth 2 started))
+      (funcall (nth 2 started))         ; and again in the same idle period
+      (should (= polls 2))
+      (drgnx-perf-complete-end))))
+
 (ert-deftest drgnx-perf-workers/autosave-digest-is-the-files-content ()
   "autosave-typing's digest hashes the saved file, less what was typed first; it is real, and moves when the file does."
   (perf-workers-test--session)

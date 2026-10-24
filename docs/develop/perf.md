@@ -509,8 +509,10 @@ worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. Th
 `:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
 `DRGNX_PERF_WATCHDOG=16`, the threshold the gates' A/Bs run with, or `on`).
 
-**Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it at idle
-through `drgnx-timer-*` and records `:complete-ms`. The work can outlast the keys (a compile flood, the reparse after a
+**Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it every
+10 ms while the session is idle (a repeating `drgnx-timer-*` timer, not an idle timer: that runs once per idle period,
+and the lab's own calls do not end one) and records `:complete-ms`. Polling starts before the keys, so a form that is
+already true then (an unedited buffer is coloured) must also count the work. The work can outlast the keys (a compile flood, the reparse after a
 paste), so after the actions the lab waits for the form to hold (at most 60 s, `drgnx-perf-run-complete-wait`, the
 session idle meanwhile) before it reads `:complete-ms`, the digest and the check; the input rows cover the keys only.
 `:digest FORM` returns a string (buffer text plus the visible faces, filter-call arguments or the message sequence) kept
@@ -579,7 +581,7 @@ only after `DRGNX_PERF_LANDED` names its step.
 | `lsp-typing` | the same servers flood 300 recorded diagnostics and progress messages a second | input p95 16, max 50 (ot4) |
 | `ts-open` | 1 and 2 MB files in `c-ts-mode`, `typescript-ts-mode`, `python-ts-mode`, opened one after the other in a second window | `:ts :draw_ms` 16 (first draw), `:ts :colored_ms` 500, no 100 ms stall (ot2) |
 | `ts-paste` | `C-y` of 500 KB into a 1 MB C file, then typing (a p95 needs 100 commands over the repeats; every repeat starts from the file on disk) (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
-| `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file | input p95 16 (ot2) |
+| `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file; complete (and the digest read) once every typed character's command has run and the colour has settled: no parse job or deferred region for the buffer, and jit-lock's contextual refontification after the last key done | input p95 16 (ot2) |
 | `compile-flood` | `compile` (comint, a pty) of a generated 200k-line log; the digest is the count and md5 of the log lines that arrived, checked against the file | input p95 16, p99 50, max 50 (ot3) |
 | `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html`; every repeat clears the image cache first (or only the warm-up decodes), and `:preview_drawn_ms` waits until no decode is pending on Nidhogg's image worker | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
 | `explorer-expand` | `big/` of 5,000 files expanded, listing cache cleared (the bench's operation) | `:expand_ms` 80, no 16 ms stall (ot8) |

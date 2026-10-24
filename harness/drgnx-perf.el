@@ -255,18 +255,23 @@ Nidhogg reports `worker-wait' by reason (a plist): the probe gives its total as 
 (defvar drgnx-perf--complete nil "While recording: (PREDICATE START-S DONE-MS) of the workload's completion metric.")
 
 (defun drgnx-perf-complete-poll ()
-  "Idle-timer function: when the predicate holds, note the ms since `drgnx-perf-complete-begin' (once)."
+  "When the predicate holds, note the ms since `drgnx-perf-complete-begin' (once)."
   (when (and drgnx-perf--complete (null (nth 2 drgnx-perf--complete)) (funcall (nth 0 drgnx-perf--complete)))
     (require 'drgnx-timer)
     (setf (nth 2 drgnx-perf--complete) (drgnx-perf--round (* 1000 (- (drgnx-timer-now) (nth 1 drgnx-perf--complete)))))
     (drgnx-timer-cancel 'perf-complete)))
 
+(defun drgnx-perf--complete-tick ()
+  "The completion timer: poll while Emacs is idle, not inside a command."
+  (when (current-idle-time) (drgnx-perf-complete-poll)))
+
 (defun drgnx-perf-complete-begin (predicate)
-  "Start timing until PREDICATE (a function of no arguments, the workload's `:complete-when') holds, polled at idle
-through the timer layer."
+  "Start timing until PREDICATE (a function of no arguments, the workload's `:complete-when') holds, polled every
+10 ms while Emacs is idle, through the timer layer.  Not an idle timer: that runs once per idle period, and the lab's
+own calls after the keys do not end one, so work that finished later in the pause was never seen."
   (require 'drgnx-timer)
   (setq drgnx-perf--complete (list predicate (drgnx-timer-now) nil))
-  (drgnx-timer-start 'perf-complete 0.01 #'drgnx-perf-complete-poll :idle t :repeat t :owner :core))
+  (drgnx-timer-start 'perf-complete 0.01 #'drgnx-perf--complete-tick :repeat 0.01 :owner :core))
 
 (defun drgnx-perf-complete-end ()
   "(:complete-ms MS) since `drgnx-perf-complete-begin', or (:complete-ms nil) when it never held; stops the polling."

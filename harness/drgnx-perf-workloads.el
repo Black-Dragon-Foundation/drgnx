@@ -61,7 +61,11 @@ whatever they found)."
                            (funcall type "for (int i = 0; i < 10; i++ { ")
                            (funcall type "h(\"unterminated, ( ")
                            (funcall type "while (1 { ")
-                           (funcall type "x = [1, 2, (3 "))))
+                           (funcall type "x = [1, 2, (3 ")))
+         ;; ts-typing's completion: every typed character's command has run, then the colour settled
+         (edit-done (lambda (acts)
+                      (format "(drgnx-perf-w-ts-edit-done %d)"
+                              (apply #'+ (mapcar (lambda (a) (length (plist-get a :type))) acts))))))
     (drgnx-perf-workers--checked
      `(;; recorded rust-analyzer, clangd and tsserver traffic through jsonrpc: completion answers of 0.5, 1 and 3 MB
        (lsp-burst
@@ -109,18 +113,18 @@ whatever they found)."
         :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-ts-setup '(1))")
         :each "(drgnx-perf-w-ts-edit-each)"
         :actions ,c-typing
-        :complete-when "(drgnx-perf-w-ts-edit-done)"
+        :complete-when ,(funcall edit-done c-typing)
         :digest "(drgnx-perf-w-ts-edit-digest)"
-        :check "(drgnx-perf-w-ts-edit-done)"
+        :check ,(funcall edit-done c-typing)
         :teardown "(drgnx-perf-w-ts-edit-teardown)")
        ;; the same with openers typed and nothing closed: a tree full of errors
        (ts-typing-unclosed
         :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-ts-setup '(1))")
         :each "(drgnx-perf-w-ts-edit-each)"
         :actions ,c-unclosed
-        :complete-when "(drgnx-perf-w-ts-edit-done)"
+        :complete-when ,(funcall edit-done c-unclosed)
         :digest "(drgnx-perf-w-ts-edit-digest)"
-        :check "(drgnx-perf-w-ts-edit-done)"
+        :check ,(funcall edit-done c-unclosed)
         :teardown "(drgnx-perf-w-ts-edit-teardown)")
        ;; a 200k-line log through a pty (compile in comint mode) while the harness types
        (compile-flood

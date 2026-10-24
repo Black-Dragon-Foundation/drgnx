@@ -166,6 +166,11 @@
 
 (defvar drgnx-perf-w--ts-base 0 "The buffer size when the keys began.")
 (defvar drgnx-perf-w--ts-modes nil "((SYMBOL . WAS)…): the global modes `drgnx-perf-w-ts-edit-each' turned on.")
+(defvar drgnx-perf-w--ts-commands 0 "The commands run since `drgnx-perf-w-ts-edit-each': one per typed character.")
+
+(defun drgnx-perf-w--ts-count-command ()
+  "`post-command-hook' while an edit workload runs: count the command."
+  (setq drgnx-perf-w--ts-commands (1+ drgnx-perf-w--ts-commands)))
 
 (defun drgnx-perf-w-ts-edit-each (&optional paste)
   "The 1 MB C file shown in the selected window, point mid-file; with PASTE a 500 kB text in the kill ring.
@@ -181,15 +186,39 @@ Every call starts from the file on disk: the buffer an earlier repeat edited (ne
       (setq drgnx-perf-w--ts-base (buffer-size)))
     (when paste (kill-new (drgnx-perf-w-gen-source 'c 500000)))
     (redisplay t)
+    (setq drgnx-perf-w--ts-commands 0)
+    (add-hook 'post-command-hook #'drgnx-perf-w--ts-count-command)
     t))
 
 ;; the edited buffer is the selected window's: the lab's calls run in the server's buffer, not that one
 (defun drgnx-perf-w-ts-paste-done ()
   (and (> (buffer-size (window-buffer)) (+ drgnx-perf-w--ts-base 400000)) (drgnx-perf-w--colored-p)))
-(defun drgnx-perf-w-ts-edit-done () (drgnx-perf-w--colored-p))
+
+(defun drgnx-perf-w-ts-edit-done (keys)
+  "KEYS typed characters' commands have run and the colour has settled (`drgnx-perf-w--ts-settled-p').  The lab
+starts polling before the keys, when the unedited file is already coloured: the count keeps it from holding then."
+  (and (>= drgnx-perf-w--ts-commands keys) (drgnx-perf-w--ts-settled-p)))
+
+(defvar jit-lock-context-unfontify-pos)
+(defvar nidhogg-workers-treesit--pending)
+(declare-function nidhogg-workers--treesit-busy-p "nidhogg-treesit-bg.c" (buffer))
+
+(defun drgnx-perf-w--ts-settled-p (&optional window)
+  "WINDOW's region is coloured and its colour has settled, so a digest of it does not depend on when it is read: no
+parse job runs for the buffer and no region waits for one (the workers' deferral), and jit-lock's contextual
+refontification after the last edit has run (its idle timer, 0.5 s; up to `jit-lock-antiblink-grace' after an
+unterminated string)."
+  (let* ((window (or window (selected-window))) (buf (window-buffer window)))
+    (and (drgnx-perf-w--colored-p window)
+         (with-current-buffer buf
+           (and (null (bound-and-true-p nidhogg-workers-treesit--pending))
+                (not (and (fboundp 'nidhogg-workers--treesit-busy-p) (nidhogg-workers--treesit-busy-p buf)))
+                (let ((pos (bound-and-true-p jit-lock-context-unfontify-pos)))
+                  (or (null pos) (>= pos (point-max)))))))))
 (defun drgnx-perf-w-ts-edit-digest () (format "%d %s" (buffer-size (window-buffer)) (drgnx-perf-w--visible-digest)))
 
 (defun drgnx-perf-w-ts-edit-teardown ()
+  (remove-hook 'post-command-hook #'drgnx-perf-w--ts-count-command)
   (pcase-dolist (`(,m . ,was) drgnx-perf-w--ts-modes) (funcall m (if was 1 -1)))
   (setq drgnx-perf-w--ts-modes nil)
   (drgnx-perf-w--kill-visiting (or drgnx-perf-w--tmp "/nonexistent/"))
