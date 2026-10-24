@@ -7,6 +7,8 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (require 'drgnx-settings-agents)
+(require 'drgnx-settings-described)     ; the shipped descriptions (`shell-file-name' is code), as drgnx loads them
+(require 'drgnx-tty-recommend)          ; `drgnx-tty-mac-app-dirs'
 (require 'drgnx-hub-client)             ; `drgnx-hub--event-conn', bound below
 (require 'drgnx-notice)                ; loaded now, so the fake `drgnx-notify' below is not replaced by a late load
 
@@ -74,6 +76,9 @@
   (drgnx-sat--with
     (pcase-dolist (`(,name ,value ,why) '(("drgnx-sat-format-function" "ignore" "is code")
                                           ("drgnx-sat-secure" "t" "security setting")
+                                          ("shell-file-name" "\"./x\"" "is code")
+                                          ("explicit-shell-file-name" "\"./x\"" "is code")
+                                          ("drgnx-tty-mac-app-dirs" "(\"./x\")" "is code")
                                           ("enable-local-eval" "t" "security setting")
                                           ("safe-local-variable-values" "nil" "security setting")
                                           (":eval" "((delete-file \"x\"))" "not a setting")

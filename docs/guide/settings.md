@@ -271,7 +271,9 @@ yours and always applies (only drgnx's security settings and global-only setting
 
 - **Code** is an `(:eval …)` section, an `eval:` or `mode:` entry of `.dir-locals.el` (a `mode:` entry turns on a
   minor mode, which can run anything), and any value of a setting that names a program, a function or a hook (Emacs's
-  risky variables, names ending in `-program`, `-executable`, `-args` …). **Data** is any other value Emacs does not
+  risky variables, names ending in `-program`, `-executable`, `-args` …, and the shell and Emacs that commands start:
+  `shell-file-name`, `explicit-shell-file-name`, `shell-command-switch`, `invocation-name`,
+  `invocation-directory`). **Data** is any other value Emacs does not
   mark safe. drgnx's security settings (`drgnx-trust-parents`, the agent and sandbox settings, the key settings) never
   apply from a workspace in any state: Emacs ignores them in every `.dir-locals.el` and `-*-` line.
 - **Trusted locations.** Set `drgnx-trust-parents` in Settings → User, for example

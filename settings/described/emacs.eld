@@ -8,4 +8,11 @@
  (interpreter-mode-alist :merge alist)
  (magic-mode-alist :merge alist)
  (process-environment :workspace never)
- (exec-path :workspace code))
+ (exec-path :workspace code)
+ ;; Programs drgnx and Emacs run, by names Emacs does not mark risky: the shell of M-x compile, grep, shell-command
+ ;; and project-find-regexp, its switch, and the Emacs that Flymake's byte-compile backend and package.el start.
+ (shell-file-name :workspace code)
+ (explicit-shell-file-name :workspace code)
+ (shell-command-switch :workspace code)
+ (invocation-name :workspace code)
+ (invocation-directory :workspace code))

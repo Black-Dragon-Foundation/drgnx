@@ -216,6 +216,20 @@
     (drgnx-settings-trust-allow drgnx-stt--proj (drgnx-settings-trust-waiting drgnx-stt--proj))
     (with-current-buffer (drgnx-stt--reopen "a.txt") (should drgnx-stt-minor-mode))))
 
+(ert-deftest drgnx-settings-trust/program-naming-settings-are-code ()
+  "The shell M-x compile and grep run, and the Emacs Flymake starts, wait for review even in a trusted location."
+  (drgnx-stt--with (list (list drgnx-stt--ws))
+    (dolist (v '(shell-file-name explicit-shell-file-name shell-command-switch invocation-name invocation-directory))
+      (should (eq (drgnx-settings-trust-class v "./x" 'shared) 'code))
+      (should (eq (drgnx-settings-trust-class v "./x" 'dir-locals) 'code)))
+    (drgnx-stt--put ".dir-locals.el" "((nil . ((shell-file-name . \"./x\") (fill-column . 66))))\n")
+    (should (eq (drgnx-settings-trust-state drgnx-stt--proj) 'location))
+    (drgnx-stt--in "a.txt"
+      (should (= fill-column 66))
+      (should-not (local-variable-p 'shell-file-name))
+      (should-not drgnx-stt--prompts))
+    (should (equal (drgnx-stt--vars (drgnx-settings-trust-waiting drgnx-stt--proj)) '(shell-file-name)))))
+
 (ert-deftest drgnx-settings-trust/dir-locals-2-and-dir-sections-are-split-too ()
   (drgnx-stt--with (list (list drgnx-stt--ws))
     (drgnx-stt--put ".dir-locals.el" "((\"src/\" . ((nil . ((eval . (push 'src drgnx-stt--evals)) (fill-column . 55))))))\n")
