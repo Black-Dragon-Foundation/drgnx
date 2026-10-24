@@ -445,6 +445,35 @@ Grants open reading only: agents still write only into their own project. Whatev
 agent marked as that agent's text, as data rather than instructions. More in
 [security.md](security.md#grants).
 
+## What agents may do: the matrix setting
+
+`drgnx-agents-matrix` in `settings.el` says what agents may do without asking. The shipped value is the Balanced
+preset; `(:preset cautious)` and `(:preset autonomous)` are the other two. Beyond the preset:
+
+```elisp
+(drgnx-agents-matrix
+ (:preset balanced
+  :time ((:when away :preset cautious)                    ; while you are away
+         (:when (between 1320 420) :preset autonomous))   ; 22:00 to 07:00, local time (minutes of the day)
+  :cells ((:action push.main :column (:role worker) :verdict never)
+          (:action spend :column (:agent "claude") :verdict ask :limit (:amount 2 :unit usd)))))
+```
+
+An action is one of the matrix's rows (`commit`, `push.main`, `spend`, `network`, …: the hub's ids, listed in
+`drgnx-agents-matrix-actions`); a column is `(:role manager|worker|chat)`, `(:agent NAME)` or `(:provider NAME)`; a
+verdict is `allow`, `ask` or `never`; a limit's unit is `count`, `usd`, `usd-est`, `tokens` or `limit-share`. The most
+restrictive matching column wins.
+
+The editor tells the hub when you are **away**: after `drgnx-agents-away-after` seconds (600) without input it sends
+`presence/set`, and again on your next input. The time presets follow from the next action. An agent never sends it.
+
+Only you set these: they are `:workspace never` (a repository's `.drgnx/settings.el` and `.dir-locals.el` are refused
+with the line) and `:agents never` (the `settings_change` tool refuses them). They are `drgnx-agents-matrix`,
+`-away-after`, `-wait-refusals` (3), `-close-idle-after` (1800 s), `-checkpoint-cap` (2 GiB), `-job-memory` ("4G"),
+`-job-cpus` (2), `-container-images` (name → digest-pinned image), and the supervisor's `-silent-after`
+(task 600 s, brainstorm 1800 s), `-repeat-limit` (3), `-no-progress-tokens` (20000) and `-manager-context` (0.7).
+The hub reads them from `settings.el`.
+
 ## Changing settings
 
 Every agent has two settings tools. Your settings stay yours: an agent changes one only under your grant, the editor

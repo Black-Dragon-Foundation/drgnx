@@ -54,6 +54,7 @@ agents' profiles and routes and the AI providers and roles are the user's.  Neve
   (condition-case err
       (when (and (require 'drgnx-settings-apply nil t)
                  (require 'drgnx-agents nil t)    ; their settings are declared once loaded
+                 (require 'drgnx-agents-matrix nil t)
                  (require 'drgnx-ai nil t))
         (drgnx-settings-apply-global :owned-only t)
         t)
