@@ -1716,6 +1716,11 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
     ;; whatever is left in the scope (a server whose shell was killed) goes with it
     (when scope (drgnx-ui--run "systemctl" "--user" "stop" (concat name ".scope")))
     (drgnx-ui--run "pkill" "-KILL" "-f" "--" (drgnx-ui--name-pattern name))   ; belt and braces
+    ;; a KILLed mutter still names its display until it has exited: its socket would be kept as in use
+    (let ((deadline (+ (float-time) 2)))
+      (while (and (or (drgnx-ui--display-in-use-p name) (drgnx-ui--serving-p (drgnx-ui--name-pattern name)))
+                  (< (float-time) deadline))
+        (sleep-for 0.05)))
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (delete-directory (drgnx-ui-socket-dir name) t)
