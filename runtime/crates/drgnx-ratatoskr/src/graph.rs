@@ -2747,6 +2747,55 @@ mod tests {
         assert_eq!(title, "first");
     }
 
+    /// URDR-EXCISE-OF-MUTANTS-1: the answer of `graph/excise` reports each count of what the excise did (pinned
+    /// field by field, so a dropped field fails here).
+    #[tokio::test]
+    async fn the_excise_answer_reports_each_count() {
+        let (_dir, w, _, _) = fixture().await;
+        let made = task_write(
+            &w,
+            json!({"op": "create", "title": "first title of the task", "project": MINE}),
+        )
+        .await;
+        let id = made["id"].as_str().unwrap().to_owned();
+        task_write(
+            &w,
+            json!({"op": "update", "id": id, "ver": made["ver"], "title": "second title of the task", "project": MINE}),
+        )
+        .await;
+        // a third tx whose note quotes the title: it is blanked too
+        let n = count(&w, "select n from entity where kind = 'task'").await;
+        let mut noted = TxMeta::new("agent:s1", TxClass::Agent, "test");
+        noted.note = Some("because first title of the task".into());
+        w.db.graph_writer()
+            .unwrap()
+            .write(noted, move |tx| {
+                urdr::graph::entity::update(
+                    tx,
+                    n,
+                    None,
+                    urdr::graph::entity::Changes {
+                        body: Some(Some("a body".into())),
+                        ..Default::default()
+                    },
+                )
+                .map(|_| ())
+            })
+            .await
+            .unwrap();
+        let before = count(&w, "select max(id) from tx").await;
+        let p: api::ExciseParams =
+            serde_json::from_value(json!({"target": id, "reason": "r"})).unwrap();
+        let a = excise_of(&w, None, &user(false), p).await.unwrap();
+        let after = count(&w, "select max(id) from tx").await;
+        assert_eq!(after, before + 1, "the excise is one tx");
+        assert_eq!(a["tx"], json!(after), "{a}");
+        assert_eq!(a["entities"], json!(1), "{a}");
+        assert_eq!(a["versions"], json!(3), "{a}");
+        assert_eq!(a["txs_blanked"], json!(1), "{a}");
+        assert_eq!(a["blanked"], json!(2), "{a}");
+    }
+
     /// The user's `graph/revert`: `cascade` only says what a tx's revert or a version put back would do (nothing is
     /// written); without it the entity is put back to the version.
     #[tokio::test]
