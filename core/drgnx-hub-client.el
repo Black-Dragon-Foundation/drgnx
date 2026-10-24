@@ -25,6 +25,7 @@
 (require 'drgnx-work-db)                ; `drgnx-work-db-schema-version', which the hello says
 
 (declare-function drgnx-settings-agents--event "drgnx-settings-agents")
+(declare-function drgnx-records-review--event "drgnx-records-review")
 (declare-function drgnx-ai-providers "drgnx-ai")
 (declare-function drgnx-settings-runtime-send "drgnx-settings-runtime")
 (declare-function drgnx-ai-provider "drgnx-ai")
@@ -881,6 +882,7 @@ closes it when this Emacs dies."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event)
   (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
   (let (ids)
     (maphash (lambda (id _) (push id ids)) drgnx-hub--pending)
@@ -1253,6 +1255,7 @@ Asynchronous; safe to call again, also before the hub has answered (one subscrip
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
       (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
+      (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
       (drgnx-hub-send-settings)
       (when (fboundp 'drgnx-settings-history-connected) (drgnx-settings-history-connected)))))
 

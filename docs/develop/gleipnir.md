@@ -1208,3 +1208,26 @@ and each has a DEFERRED row:
   as it can the cap file (the same trust boundary as the user). The git runner's `check_trusted_repo` checks paths:
   phase 6 must keep `.git` pinned while agents run. The proxy says one `Denied` per new target, with no cap (phase 6's
   cards).
+
+## Container jobs (Tasks 11b, 11c)
+
+A container job is not run by Gleipnir: the container is its sandbox (`exec/container.rs`, `docs/guide/jobs.md`). The
+hub builds the one `podman run` line from a fixed spec: `--rm`, `--name drgnx-job-<job id>`, `--pull=never`,
+`--userns=keep-id`, `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the process,
+memory and CPU limits, `--network=none`, the worktree as the only `-v`, `-w /work`, the digest-pinned image, then the
+agent's command, which podman never reads as options. The request has no field that adds anything; extra fields are
+ignored.
+
+- **Name and leftovers.** The name lets the hub find what a killed podman client left: at hub start it removes every
+  `drgnx-job-*` container whose job is not running (through the same podman path; other names are never touched).
+- **Pull timeout.** The hub pulls the image before the job (`container::PULL_TIMEOUT`, 10 minutes); a pull that takes
+  longer is killed and the job is refused with that reason.
+- **No network yet.** A granted network needs a podman network whose only route is the Gleipnir proxy. Gleipnir's proxy
+  can listen on TCP (`net::proxy::Listener::Tcp`), but nothing routes a podman network to a host listener: a rootless
+  internal network lives in podman's own network namespace, where the hub's loopback and the per-session proxy sockets
+  are not reachable. Until that is designed (a proxy listener on an address the network can reach, owned by the hub),
+  a job is never given a network and a grant is refused.
+- **Escape rows.** `test/conformance/container-escape/*.jsonl` (15 rows, `requires: podman`) each run a probe inside the
+  container: extra mounts, `-v` in argv, a privileged or cap-add field, devices, host network, no network (only `lo`),
+  no podman socket, no home, a symlink out of the worktree, the memory cap, the process cap, the git common dir. The
+  fuzz target `container_req` feeds arbitrary requests to the builder and checks the fixed flags.

@@ -11,6 +11,7 @@ use crate::settings::ContainerImage;
 use gleipnir::{Refusal, Rule};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Where the worktree appears inside the container.
 pub const WORK: &str = "/work";
@@ -38,6 +39,8 @@ pub struct ContainerReq {
     pub image: String,
     pub argv: Vec<String>,
     pub worktree: PathBuf,
+    /// The job's id; the container is named [`name_of`] it, so the hub can find (and remove) what a dead client left.
+    pub job: String,
     /// The matrix's Network cell, when it grants one; none: no network at all.
     pub net: Option<NetCell>,
 }
@@ -48,6 +51,20 @@ fn refuse(message: impl Into<String>) -> Refusal {
         path: None,
         message: message.into(),
     }
+}
+
+/// What every hub-owned container is named before its job id.
+pub const NAME_PREFIX: &str = "drgnx-job-";
+
+/// How long the hub waits for an image pull before refusing the job.
+pub const PULL_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The container name of job ID (an id of `[a-z0-9]`, as the runner makes them).
+pub fn name_of(id: &str) -> Result<String, Refusal> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(refuse("a container job's id is letters and digits"));
+    }
+    Ok(format!("{NAME_PREFIX}{id}"))
 }
 
 /// The reference pinned by digest that the allow-list holds for NAME.
@@ -112,6 +129,8 @@ pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
     let mut a: Vec<OsString> = [
         "run",
         "--rm",
+        "--name",
+        &name_of(&req.job)?,
         "--pull=never",
         "--userns=keep-id",
         "--cap-drop=all",
@@ -157,27 +176,57 @@ pub fn proxy_network(_sid: &str) -> Result<String, Refusal> {
     ))
 }
 
-/// Make sure REF (an image pinned by digest) is in the local store: the hub pulls it, a job never does.
-pub fn ensure_image(podman: &Path, reference: &str) -> Result<(), Refusal> {
-    let run = |args: &[&str]| {
-        std::process::Command::new(podman)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .output()
-    };
-    let out = |e: std::io::Error| Refusal {
+/// Run `podman ARGS`; kill it and say so when it outlives LIMIT.
+fn run_limited(
+    podman: &Path,
+    args: &[&str],
+    limit: Duration,
+) -> Result<std::process::Output, Refusal> {
+    let setup = |m: String| Refusal {
         rule: Rule::Setup,
         path: None,
-        message: format!("podman: {e}"),
+        message: m,
     };
-    if run(&["image", "exists", reference])
-        .map_err(out)?
+    let mut child = std::process::Command::new(podman)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| setup(format!("podman: {e}")))?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|e| setup(format!("podman: {e}")));
+            }
+            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(setup(format!(
+                    "podman {} took longer than {}s; the job is refused",
+                    args.first().copied().unwrap_or(""),
+                    limit.as_secs()
+                )));
+            }
+            Err(e) => return Err(setup(format!("podman: {e}"))),
+        }
+    }
+}
+
+/// Make sure REF (an image pinned by digest) is in the local store: the hub pulls it, a job never does.  A pull that
+/// takes longer than LIMIT ([`PULL_TIMEOUT`]) refuses the job.
+pub fn ensure_image(podman: &Path, reference: &str, limit: Duration) -> Result<(), Refusal> {
+    if run_limited(podman, &["image", "exists", reference], limit)?
         .status
         .success()
     {
         return Ok(());
     }
-    let pull = run(&["pull", "--quiet", reference]).map_err(out)?;
+    let pull = run_limited(podman, &["pull", "--quiet", reference], limit)?;
     if pull.status.success() {
         return Ok(());
     }
@@ -189,6 +238,40 @@ pub fn ensure_image(podman: &Path, reference: &str) -> Result<(), Refusal> {
             String::from_utf8_lossy(&pull.stderr).trim()
         ),
     })
+}
+
+/// At hub start: remove the `drgnx-job-*` containers whose job is not in RUNNING (a podman client killed with the
+/// hub leaves its container behind).  Only names under [`NAME_PREFIX`] are looked at; answers how many it removed.
+pub fn remove_leftovers(podman: &Path, running: &std::collections::HashSet<String>) -> usize {
+    let limit = Duration::from_secs(30);
+    let Ok(list) = run_limited(
+        podman,
+        &[
+            "ps",
+            "-a",
+            "--filter",
+            "name=drgnx-job-",
+            "--format",
+            "{{.Names}}",
+        ],
+        limit,
+    ) else {
+        return 0;
+    };
+    let mut n = 0;
+    for name in String::from_utf8_lossy(&list.stdout).lines() {
+        let name = name.trim();
+        let Some(id) = name.strip_prefix(NAME_PREFIX) else {
+            continue;
+        };
+        if running.contains(id) || name_of(id).is_err() {
+            continue;
+        }
+        if run_limited(podman, &["rm", "-f", name], limit).is_ok_and(|o| o.status.success()) {
+            n += 1;
+        }
+    }
+    n
 }
 
 #[cfg(test)]
@@ -215,6 +298,7 @@ mod tests {
             image: "tools".into(),
             argv: argv.iter().map(|s| s.to_string()).collect(),
             worktree: "/work/tree".into(),
+            job: "x1a".into(),
             net: None,
         }
     }
@@ -231,6 +315,8 @@ mod tests {
         let want: Vec<String> = [
             "run",
             "--rm",
+            "--name",
+            "drgnx-job-x1a",
             "--pull=never",
             "--userns=keep-id",
             "--cap-drop=all",
@@ -369,5 +455,57 @@ mod tests {
     #[test]
     fn podman_absent_is_refused_with_a_doctor_hint() {
         assert!(podman_missing().message.contains("drgnx doctor"));
+    }
+}
+
+#[cfg(test)]
+mod name_and_pull_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn script(dir: &Path, body: &str) -> PathBuf {
+        let p = dir.join("podman");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[test]
+    fn the_name_is_the_prefix_and_a_plain_id() {
+        assert_eq!(name_of("x1a2").unwrap(), "drgnx-job-x1a2");
+        for bad in ["", "a b", "a/b", "-rm", "a,b"] {
+            assert!(name_of(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_pull_past_the_timeout_refuses_the_job() {
+        let d = tempfile::tempdir().unwrap();
+        let p = script(
+            d.path(),
+            "if [ \"$1\" = image ]; then exit 1; fi\nexec sleep 30",
+        );
+        let t = Instant::now();
+        let e = ensure_image(&p, "r@sha256:0", Duration::from_millis(300)).unwrap_err();
+        assert!(e.message.contains("longer than"), "{}", e.message);
+        assert!(t.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn leftovers_removal_touches_only_dead_hub_names() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("log");
+        let p = script(
+            d.path(),
+            &format!(
+                "echo \"$@\" >> {}\nif [ \"$1\" = ps ]; then printf 'drgnx-job-dead\\ndrgnx-job-live\\nother\\n'; fi",
+                log.display()
+            ),
+        );
+        let running = ["live".to_string()].into_iter().collect();
+        assert_eq!(remove_leftovers(&p, &running), 1);
+        let said = std::fs::read_to_string(&log).unwrap();
+        assert!(said.contains("rm -f drgnx-job-dead"), "{said}");
+        assert!(!said.contains("rm -f drgnx-job-live") && !said.contains("rm -f other"));
     }
 }
