@@ -2,8 +2,7 @@
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
-caller's); drgnx's policy, the migration and the tracker are in `norn`. This page is being written: each section
-below is filled with the change that builds it.
+caller's); drgnx's policy, the migration and the tracker are in `norn`.
 
 ## Tables (Task 2)
 

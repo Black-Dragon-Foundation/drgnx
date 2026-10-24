@@ -329,7 +329,7 @@ write takes.
 
 ## Agents and your settings files
 
-A job agent's sandbox (once jobs run in it, phase 6) keeps your settings files out of the agent's reach, so an agent
+A job agent's sandbox keeps your settings files out of the agent's reach, so an agent
 that is allowed to write in a folder still cannot change what your Emacs loads as you:
 
 - **Your config files are closed by their true paths.** `settings.el`, `config.el`, `custom.el`, `described.el`,
@@ -389,12 +389,13 @@ restrictive wins, and a more specific column never widens. `unsandboxed` and `us
   hub checks again: if the matrix has since become Never for it, it is refused whatever you answered.
 - **Away:** when you are away the matrix can switch to a stricter (or looser) preset on its own; it applies from the
   next action.
-- **Managers** may hand a worker less than they have, never more.
+- **Managers** may hand a worker less than they have, never more. What a manager delegated is kept across a hub
+  restart and when the worker is moved to another model; a worker whose grants are gone gets nothing.
 - A plan's override counts only when you wrote it; an agent's write of it is ignored.
 - **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
   builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
-  mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket, nothing else), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
-  command and nothing else; the command is never read as a podman option.
+  mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is fixed to the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
+  command and nothing else (`exec/start` refuses any other field); the command is never read as a podman option. The hub pulls the image itself (600 s at most) and names the container `drgnx-job-<id>`, removing leftovers at start.
 
 ## Checking it
 

@@ -32,14 +32,16 @@ tmpfs `/tmp`), and the only folder it sees is the job's worktree, at `/work`. It
 job gets the one route there is: the job's own allow-list proxy, a Unix socket the hub mounts read-only into the
 container, and a small forwarder (`drgnx-fwd`, mounted read-only, next to the hub) that listens on `127.0.0.1:3128`
 inside the job and runs the command in its place. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
-package hosts on the allow-list are reached. A job you start yourself asks with `network: true`; without `drgnx-fwd`, or if the socket cannot be made, a job that was allowed a network is refused. An Ask on the Network cell refuses the start with the matrix card. The request has no
+package hosts on the allow-list are reached (fixed, not a setting: `crates.io`, `index.crates.io`, `static.crates.io`,
+`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443). A job you start yourself asks with `network: true`; without `drgnx-fwd`, or if the socket cannot be made, a job that was allowed a network is refused. An Ask on the Network cell refuses the start with the matrix card. The request has no
 other fields: `exec/start` refuses a field it does not know (a `mounts` or `privileged` is an `invalid-params` error,
 not ignored).
 
 The image is the allow-list's reference pinned by digest; the hub pulls it before the job starts and the job never
-pulls (`--pull=never`). A name that is not on the list is refused. A starting agent needs the matrix's `job.container`
+pulls (`--pull=never`); a pull that takes longer than 600 s refuses the job. A name that is not on the list is refused. A starting agent needs the matrix's `job.container`
 (Cautious asks, Balanced and Autonomous allow). Without `podman` on the PATH when the hub starts, container jobs are
-refused and the message points at `drgnx doctor`. Otherwise a container job is a job like any other: unit, log, exit,
+refused and the message points at `drgnx doctor`. The hub names each container `drgnx-job-<id>`, and at start removes any such container whose job is not running (a hub
+that was killed leaves none behind). Otherwise a container job is a job like any other: unit, log, exit,
 summary, time box and restart behaviour.
 
 ### An agent starts a job and is woken
