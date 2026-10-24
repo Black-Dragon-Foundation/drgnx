@@ -1419,3 +1419,15 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `test/conformance/settings/*.jsonl` (`fake-backend`): `the-hub-reads-settings-el`,
   `no-editor-still-has-presets-and-profiles`, `a-package-entry-never-stops-the-hub`,
   `a-broken-file-gives-strict-agents-and-last-good-providers`.
+
+## Jobs (`exec/*`)
+
+`drgnx-ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice}`. A job's folder
+`<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
+(`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
+`result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
+read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
+and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
+command stays the hub's child. `Runner::open` re-attaches every folder without a result. The graph record is
+`norn::write::exec`. The `exec/runs-in-the-starters-sandbox` row (`exec::tests::exec_runs_in_the_starters_sandbox`) is
+`#[ignore]`d where bwrap is missing (build containers): run it on the desktop or in CI with `-- --ignored`.

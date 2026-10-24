@@ -1,0 +1,5 @@
+{"scenario": "exec/remote-machine-refused", "requires": ["v1"], "doc": "Task 11: part 1 runs jobs on this machine only; exec/start naming any machine but local is refused with invalid-params (Calls made 3), before anything starts."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["true"], "cwd": "/", "machine": "desktop"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params"}}, "within_ms": 5000}

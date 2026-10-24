@@ -1,4 +1,31 @@
-# Jobs: agents working through a plan
+# Jobs: commands the hub runs, and plan runs
+
+## Command jobs
+
+A **job** is long work an agent or you start: a build, the tests, a loop, CI. The hub runs it as a unit of its own, so
+it does not depend on the agent that started it or on the editor, and it survives a hub restart.
+
+- **Where it runs.** In the starter's sandbox: an agent's job gets that agent's Gleipnir rules (its worktree is the only
+  project folder it can write; the network its matrix grants). Your own jobs run with your rights. On Linux the job is
+  a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G); without a user systemd it
+  has a session and process group of its own. A job on another machine is refused: part 1 runs jobs on this machine.
+- **Its files.** `<state>/hub/exec/<id>/` holds the log, the exit code and the result. The hub reads the same files
+  after a restart: a job still running is picked up again (by its process and start time, not just its pid), one that
+  ended meanwhile gets its result, one that vanished without an exit is marked lost.
+- **Time box.** 1 to 86400 seconds (default 3600). At the end the job's process group gets SIGTERM, then SIGKILL, and
+  its status is `timed-out`. `exec/stop` ends it by hand (`stopped`).
+- **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
+  `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
+  (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
+  waits at no cost and is woken by the end.
+- **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call); agents use
+  the `job_*` tools. Container jobs come with Task 11b.
+
+## Plan runs
+
+The rest of this page is about **plan runs**: a plan's tasks dispatched to agents, which keep the `job/*` methods and
+`drgnx job`. (In the text below, "job" means a plan run.)
+
 
 You hand drgnx a plan; drgnx proposes a **job** — the plan's tasks, what waits on what, which agent profile takes
 each role, an estimate — and nothing starts until you approve it. Then the hub runs one agent per ready task, each
