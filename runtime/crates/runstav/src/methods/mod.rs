@@ -1,7 +1,7 @@
 //! Every method of the hub protocol, one definition each, grouped as the hub's parts are: the hub itself
 //! ([`hub`]), the gateway, its provider table and spend ([`gateway`]), agent sessions ([`agents`]), jobs ([`jobs`]), coordination
-//! ([`coord`]), the graph store ([`graph`]), the tracker for the editor ([`tasks`]) and the coordination tools' sockets
-//! ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
+//! ([`coord`]), the graph store ([`graph`]), the settings' history ([`settings`]), the tracker for the editor
+//! ([`tasks`]) and the coordination tools' sockets ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod coord;
@@ -10,6 +10,7 @@ pub mod graph;
 pub mod hub;
 pub mod jobs;
 pub mod mcp;
+pub mod settings;
 pub mod tasks;
 
 use crate::registry::Method;
@@ -124,6 +125,7 @@ params! {
     GraphScrub(Empty),
     GraphSettings(graph::SettingsParams),
     GraphPrivacy(graph::PrivacyParams),
+    SettingsRecord(settings::RecordParams),
     TasksReady(tasks::ReadyParams),
     TasksFind(tasks::FindParams),
     TasksWrite(tasks::WriteParams),
@@ -166,6 +168,7 @@ pub(crate) fn all() -> Vec<Method> {
     let mut v = hub::methods();
     v.extend(coord::methods());
     v.extend(graph::methods());
+    v.extend(settings::methods());
     v.extend(tasks::methods());
     v.extend(mcp::methods());
     v.extend(gateway::methods());

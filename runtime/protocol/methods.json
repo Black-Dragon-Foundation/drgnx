@@ -5184,7 +5184,7 @@
                 "type": "string"
               },
               "kind": {
-                "description": "spec, plan, task, step, ruling, todo, file, commit or branch.",
+                "description": "spec, plan, task, step, ruling, todo, file, commit or branch; option from a repository's `.drgnx/settings.el`.",
                 "maxLength": 32,
                 "type": "string"
               },
@@ -8598,6 +8598,117 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
+      "home": "front",
+      "name": "settings/record",
+      "params": {
+        "$defs": {
+          "OptionChange": {
+            "description": "One setting's change.",
+            "properties": {
+              "file": {
+                "description": "The file it is in (`settings.el`, a workspace file).",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              "line": {
+                "description": "Its line there (none for a removed setting).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The new value as printed Lisp; `null` when the setting was removed."
+              }
+            },
+            "required": [
+              "id",
+              "file"
+            ],
+            "type": "object"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "changes": {
+            "description": "The changes of one write of one file (one project: the ids').",
+            "items": {
+              "$ref": "#/$defs/OptionChange"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "req": {
+            "description": "The request's key (a hash of the file's stamp): a repeat answers the first answer and writes nothing.",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "reverts": {
+            "description": "The tx this change undoes (per-setting undo).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tool": {
+            "description": "`ui:settings`, `file:<name>` (a change drgnx did not make) or `lisp:<file>` (your Lisp's effect).",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "changes",
+          "tool",
+          "req"
+        ],
+        "title": "RecordParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`settings/record`'s answer: the transaction.",
+        "properties": {
+          "tx": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tx"
+        ],
+        "title": "RecordAnswer",
+        "type": "object"
       },
       "writes": true
     },

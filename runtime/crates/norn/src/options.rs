@@ -9,13 +9,14 @@
 //! The rule ([`rule`], registered by [`crate::grants::register`]): every class writes only well-formed ids; the user
 //! writes any; an agent only under an active `options` grant whose `who` is its project, profile or session, whose
 //! `what` covers the id's scope (`options:global`, or `options:project` for its own project's private and shared
-//! ids), whose `names` match, and never a name of [`deny`]. Every other class (ext, the hub, imports, the scan) is
-//! refused.
+//! ids), whose `names` match, and never a name of [`deny`]; the tracker scan (`graph/put-parsed`, unified-settings
+//! Task 24) only the shared ids of the repository's own project, made parsed ([`scan_may_write`]). Every other class
+//! (ext, the hub, imports) is refused.
 
 use std::fmt;
 
 use urdr::Connection;
-use urdr::graph::entity;
+use urdr::graph::entity::{self, Origin};
 use urdr::graph::guard::Target;
 use urdr::graph::{Class, TxMeta, WriteError};
 
@@ -30,6 +31,11 @@ pub const NO_GRANT: &str = "settings are the user's: no options grant covers thi
 pub const DENIED: &str = "this setting is never an agent's to change";
 /// The refusal of an agent's write of another project's settings, or of an entity whose project is not its id's.
 pub const NOT_ITS_PROJECT: &str = "an agent changes only its own project's settings";
+/// The refusal of the scan's write of a shared id whose project is not the entity's (the repository's).
+pub const NOT_THE_REPOSITORYS: &str = "a repository records only its own project's shared settings";
+
+/// The tool of the tracker scan's txs (`graph/put-parsed`: actor `scan:<root>`, class `system`).
+pub const SCAN_TOOL: &str = "scan";
 
 /// The longest id accepted.
 const MAX_ID: usize = 1024;
@@ -359,13 +365,42 @@ fn refused(text: &str) -> WriteError {
     WriteError::Refused(text.into())
 }
 
-/// The guard's rule for kind `option` ([`urdr::graph::guard::register_rule`]): [`may_write`] for the tx's author.
+/// Whether the tracker scan (`graph/put-parsed`) may write the option entity TARGET (the manager's ruling for
+/// unified-settings Task 24). A repository's `.drgnx/settings.el` describes the repository, never your global or
+/// private settings, so: a well-formed shared id; a create makes it `parsed` (a write to a stored entity keeps its
+/// origin, since a shared setting's history holds your Settings changes and the repository's alike); and the entity
+/// is in the project the id names (no project for a `root-` folder). What the scan records applies nothing by
+/// itself: workspace trust decides what the file's values do.
+pub fn scan_may_write(conn: &Connection, target: Target<'_>) -> Result<(), WriteError> {
+    let id = parse_id(target.id)
+        .map_err(|e| WriteError::Refused(format!("not an option id ({e}): {}", target.id)))?;
+    if !matches!(id.scope, Scope::Shared(_)) || target.origin.is_some_and(|o| o != Origin::Parsed) {
+        return Err(refused(SETTINGS_ARE_THE_USERS));
+    }
+    let its_own = match (id.project(), target.project) {
+        (None, None) => true,
+        (Some(want), Some(n)) => entity::by_n(conn, n)?
+            .is_some_and(|e| e.kind == "project" && e.retired_tx.is_none() && e.id == want),
+        _ => false,
+    };
+    if its_own {
+        Ok(())
+    } else {
+        Err(refused(NOT_THE_REPOSITORYS))
+    }
+}
+
+/// The guard's rule for kind `option` ([`urdr::graph::guard::register_rule`]): [`scan_may_write`] for the scan's tx
+/// (class `system`, tool `scan`), else [`may_write`] for the tx's author.
 pub fn rule(
     conn: &Connection,
     meta: &TxMeta,
     at: f64,
     target: Target<'_>,
 ) -> Result<(), WriteError> {
+    if meta.class == Class::System && meta.tool == SCAN_TOOL {
+        return scan_may_write(conn, target);
+    }
     let caller = Caller {
         class: meta.class,
         actor: meta.actor.clone(),

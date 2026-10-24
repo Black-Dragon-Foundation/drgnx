@@ -69,6 +69,7 @@
   "ping": ["user", "agent", "service"],
   "restart": ["user"],
   "review/mark": ["user"],
+  "settings/record": ["user"],
   "shutdown": ["user"],
   "spend": ["user", "agent", "service"],
   "status": ["user", "agent", "service"],

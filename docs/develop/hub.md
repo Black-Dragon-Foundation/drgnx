@@ -699,6 +699,33 @@ can only refuse and reject. `mcp/session` takes the session's `profile` and its 
 the session socket lists 21 tools, or 16 without the tracker tools (the task's setting first, then the profile's, else
 on). Each method's shape: [store.md](store.md#the-stores-methods-task-15b).
 
+## Settings history
+
+The front also records the history of your settings (unified settings design §12; the code is
+`runtime/crates/norn/src/write/options.rs`, served from `drgnx-ratatoskr/src/graph.rs`). The settings files stay the
+truth: the hub never writes one, and nothing it records applies a value.
+
+- **`settings/record {changes: [{id, value, file, line?}], tool, req, reverts?}` → `{tx}`** (user class; the
+  backend's connection is `not-allowed`). The editor sends it after each write of a settings file, and after it reads
+  a file another program changed. One call is one transaction of the editor's (`user`), whatever it holds:
+  - `id` is an option id (`option:global:<var>`, `option:private/<project>:…`, `option:shared/<project>:…`;
+    [store.md](store.md#settings-history-and-grants-urdr-task-10b)); a malformed one is `invalid-params` at
+    `changes[N].id`;
+  - `value` is the printed Lisp, or `null` when the setting was removed (its entity's `data` then has no `value`);
+    `file` and `line` say where it is;
+  - `tool` is the tx's tool and tells the doors apart: `ui:settings` (Settings), `file:<name>` (a change drgnx did
+    not make: a hand edit, a pull, another program) or `lisp:<file>` (your Lisp's effect); anything else is
+    `invalid-params`;
+  - `req` keys the call (a hash of the file's stamp): a repeat answers the first `{tx}` and writes nothing. It is
+    kept as `settings <req>`, apart from the user's other keyed writes;
+  - `reverts` names the tx an undo takes back (it must exist);
+  - the tx's `project` is the ids' project: every id of one call names the same project (global ids and `root-`
+    folders: none), which the store must know; otherwise the call is `invalid-params` and writes nothing.
+- **A repository's `.drgnx/settings.el`** comes in through `graph/put-parsed` instead, as a `file` source of the
+  scan (`scan:<root>`, class `system`, tool `scan`): its shared settings become parsed entities of the repository's
+  project. A global or private id there, an option of any other file, or `data` beyond `value`, `file` and `line`
+  refuses the source. Workspace trust still decides what the file's values do.
+
 ## Records 2
 
 What crosses the socket is JSON shaped by the record schemas of `core/drgnx-records.el` (docs/develop/core.md,
@@ -807,6 +834,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |
 | `restart` | user | `{}` | `boolean` | no | front |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes | front |
+| `settings/record` | user | `{changes: [{file: string, id: string, line?: natnum, value?: Text}], req: string, reverts?: natnum, tool: string}` | `{tx: integer}` | yes | front |
 | `shutdown` | user | `{}` | `boolean` | no | front |
 | `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | front |
 | `status` | user, agent, service | `{}` | `HubStatus` | no | front |

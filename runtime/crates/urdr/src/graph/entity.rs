@@ -223,6 +223,7 @@ fn target(e: &Ent) -> Target<'_> {
     Target {
         id: &e.id,
         project: e.project,
+        origin: None,
     }
 }
 
@@ -265,6 +266,7 @@ pub fn create(tx: &mut Tx<'_>, new: EntityNew) -> Result<Ent, WriteError> {
         Target {
             id: &new.id,
             project: new.project,
+            origin: Some(new.origin),
         },
     )?;
     if !new.data.is_object() {
@@ -396,6 +398,7 @@ pub fn update(
         Target {
             id: &cur.id,
             project: changes.project.unwrap_or(cur.project),
+            origin: None,
         },
     )?;
     if let Some(v) = expect_ver
@@ -569,6 +572,7 @@ pub(crate) fn set_version(
         Target {
             id: &cur.id,
             project: snap.project,
+            origin: None,
         },
     )?;
     let old = Snap::of(cur);

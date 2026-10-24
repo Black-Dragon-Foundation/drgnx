@@ -1,0 +1,13 @@
+{"scenario": "history/an-agent-cannot-record", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "settings/record is the user's (unified-settings Task 24): an agent's connection is not-allowed and nothing is recorded; the user's own record of the same change is."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-1", "changes": [{"id": "option:global:fill-column", "value": "80", "file": "$ROOT/config/settings.el", "line": 1}]}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/sql", "params": {"sql": "select count(*) from entity where kind = 'option'"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"rows": [[0]]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "settings/record", "params": {"tool": "ui:settings", "req": "stamp-1", "changes": [{"id": "option:global:fill-column", "value": "80", "file": "$ROOT/config/settings.el", "line": 1}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tx": "$number"}}}
+{"do": "sql_expect", "sql": "select count(*), min(t.class) from entity e join tx t on t.id = e.created_tx where e.kind = 'option'", "rows": [[1, "user"]]}

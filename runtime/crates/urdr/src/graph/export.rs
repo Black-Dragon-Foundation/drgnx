@@ -620,6 +620,7 @@ fn import_entity(tx: &mut Tx<'_>, rec: &EntLine) -> Result<Outcome, WriteError> 
         guard::Target {
             id: &cur.id,
             project: rec.project,
+            origin: None,
         },
     )?;
     let id = tx.id();

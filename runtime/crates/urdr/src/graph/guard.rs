@@ -9,14 +9,17 @@ use std::collections::BTreeMap;
 
 use rusqlite::Connection;
 
+use super::entity::Origin;
 use super::tx::{Class, Tx, TxMeta};
 use super::writer::WriteError;
 
-/// The entity a write is about: its id, and its project after the write.
+/// The entity a write is about: its id, its project after the write, and the origin a create gives it (`None` for a
+/// write to a stored entity, which keeps its origin).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target<'a> {
     pub id: &'a str,
     pub project: Option<i64>,
+    pub origin: Option<Origin>,
 }
 
 /// A kind's rule: given the tx's connection, its metadata, its time and the entity written, `Ok` or a refusal.
@@ -184,6 +187,46 @@ mod tests {
         let mut ok = new_grant();
         ok.id = "grant:ok".into();
         assert!(entity::create(&mut tx, ok).is_err());
+    }
+
+    /// A rule sees the origin a create gives the entity, and none for a write to a stored one (it keeps its own).
+    #[test]
+    fn a_rule_sees_a_creates_origin_only() {
+        fn says(_: &Connection, _: &TxMeta, _: f64, t: Target<'_>) -> Result<(), WriteError> {
+            Err(WriteError::Refused(format!("{:?}", t.origin)))
+        }
+        let mut g = Guard::default();
+        register_rule(&mut g, "grant", says);
+        let g = Arc::new(g);
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(GRAPH_DDL).unwrap();
+        let user = TxMeta::new("user", Class::User, "cli:test");
+        let n = {
+            let mut tx = Tx::for_test(&mut conn, user.clone(), Arc::new(Guard::default()));
+            let n = entity::create(&mut tx, new_grant()).unwrap().n;
+            tx.commit_for_test().unwrap();
+            n
+        };
+        let mut tx = Tx::for_test(&mut conn, user, g);
+        let mut parsed = new_grant();
+        parsed.id = "grant:p".into();
+        parsed.origin = Origin::Parsed;
+        assert_eq!(
+            entity::create(&mut tx, parsed).unwrap_err(),
+            WriteError::Refused("Some(Parsed)".into())
+        );
+        let titled = Changes {
+            title: Some(Some("t".into())),
+            ..Changes::default()
+        };
+        assert_eq!(
+            entity::update(&mut tx, n, None, titled).unwrap_err(),
+            WriteError::Refused("None".into())
+        );
+        assert_eq!(
+            entity::retire(&mut tx, n).unwrap_err(),
+            WriteError::Refused("None".into())
+        );
     }
 
     #[test]

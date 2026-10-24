@@ -844,6 +844,28 @@ mod tests {
                 entity::create(tx, option(&id, p)).map(drop)
             })
         };
+        let origin_at = |id: String, p: Option<i64>, origin: Origin| -> Op {
+            Box::new(move |tx: &mut Tx<'_>, _: Origin, _: usize| {
+                let mut e = option(&id, p);
+                e.origin = origin;
+                entity::create(tx, e).map(drop)
+            })
+        };
+        let parsed_at = |id: String, p: Option<i64>| origin_at(id, p, Origin::Parsed);
+        let scan = || TxMeta::new("scan:/w/a", Class::System, options::SCAN_TOOL);
+        let agent_tool = |s: &str, p: Option<i64>, tool: &str| agent(p, s, None).tx_meta(tool);
+        let mut ext_scan = TxMeta::new("ext:claude:1-ab", Class::Ext, options::SCAN_TOOL);
+        ext_scan.project = Some(a);
+        // A global setting you recorded, a task (an `n` that is no project) and a retired project.
+        let global = write(&mut conn, user(), |tx| {
+            entity::create(tx, option("option:global:indent-tabs-mode", None))
+        })
+        .unwrap()
+        .n;
+        let not_a_project = crate::scope::testkit::task(&mut conn, user(), a, "t");
+        let r = project(&mut conn, "r");
+        let pr = bare(&conn, r);
+        write(&mut conn, user(), |tx| entity::retire(tx, r)).unwrap();
         let rows: Vec<(&str, TxMeta, Op, Result<(), &str>)> = vec![
             (
                 "no grant: global",
@@ -1008,10 +1030,163 @@ mod tests {
                 Err(options::SETTINGS_ARE_THE_USERS),
             ),
             (
-                "put-parsed",
-                TxMeta::new("scan:/w/a", Class::System, "scan"),
+                "the hub, a repository's shared id made parsed",
+                TxMeta::new("hub", Class::System, "proto:coord/x"),
+                parsed_at(format!("option:shared/{pa}:fill-column"), Some(a)),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "an import, a repository's shared id made parsed",
+                TxMeta::new("import", Class::System, "import"),
+                parsed_at(format!("option:shared/{pa}:fill-column"), Some(a)),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            // The scan (Task 24, the manager's ruling): a repository's shared settings only, made parsed, in the
+            // repository's own project; never your global or private settings.
+            (
+                "put-parsed: a global id",
+                scan(),
+                parsed_at("option:global:fill-column".into(), None),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: a global mode id",
+                scan(),
+                parsed_at("option:global:mode/c-mode:fill-column".into(), None),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: a private id",
+                scan(),
+                parsed_at(format!("option:private/{pa}:fill-column"), Some(a)),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: a private root- id",
+                scan(),
+                parsed_at("option:private/root-0123456789ab:fill-column".into(), None),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: a shared id made recorded",
+                scan(),
                 new_at(format!("option:shared/{pa}:fill-column"), Some(a)),
                 Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: a shared id made imported",
+                scan(),
+                origin_at(
+                    format!("option:shared/{pa}:fill-column"),
+                    Some(a),
+                    Origin::Imported,
+                ),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: another project's shared id",
+                scan(),
+                parsed_at(format!("option:shared/{pb}:fill-column"), Some(a)),
+                Err(options::NOT_THE_REPOSITORYS),
+            ),
+            (
+                "put-parsed: its shared id under another project",
+                scan(),
+                parsed_at(format!("option:shared/{pa}:fill-column"), Some(b)),
+                Err(options::NOT_THE_REPOSITORYS),
+            ),
+            (
+                "put-parsed: its shared id under no project",
+                scan(),
+                parsed_at(format!("option:shared/{pa}:fill-column"), None),
+                Err(options::NOT_THE_REPOSITORYS),
+            ),
+            (
+                "put-parsed: a root- shared id under a project",
+                scan(),
+                parsed_at(
+                    "option:shared/root-0123456789ab:fill-column".into(),
+                    Some(a),
+                ),
+                Err(options::NOT_THE_REPOSITORYS),
+            ),
+            (
+                "put-parsed: a shared id under a task, not a project",
+                scan(),
+                parsed_at(
+                    format!("option:shared/{pa}:fill-column"),
+                    Some(not_a_project),
+                ),
+                Err(options::NOT_THE_REPOSITORYS),
+            ),
+            (
+                "put-parsed: a shared id of a retired project",
+                scan(),
+                parsed_at(format!("option:shared/{pr}:fill-column"), Some(r)),
+                Err(options::NOT_THE_REPOSITORYS),
+            ),
+            (
+                "put-parsed: a new version of a global setting",
+                scan(),
+                Box::new(move |tx: &mut Tx<'_>, _: Origin, _: usize| {
+                    let patch = Changes {
+                        data_patch: Some(json!({"value": "8"})),
+                        ..Changes::default()
+                    };
+                    entity::update(tx, global, None, patch).map(drop)
+                }),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: a global setting retired",
+                scan(),
+                Box::new(move |tx: &mut Tx<'_>, _: Origin, _: usize| entity::retire(tx, global)),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "put-parsed: a malformed id",
+                scan(),
+                parsed_at("option:shared/:x".into(), Some(a)),
+                Err(""),
+            ),
+            (
+                "an agent's tx with the scan's tool",
+                agent_tool("s5", Some(a), options::SCAN_TOOL),
+                parsed_at(format!("option:shared/{pa}:fill-column"), Some(a)),
+                Err(options::NO_GRANT),
+            ),
+            (
+                "an outside agent's tx with the scan's tool",
+                ext_scan,
+                parsed_at(format!("option:shared/{pa}:fill-column"), Some(a)),
+                Err(options::SETTINGS_ARE_THE_USERS),
+            ),
+            (
+                "control: put-parsed, its shared id",
+                scan(),
+                parsed_at(
+                    format!("option:shared/{pa}:dir/src/:mode/c-mode:c-basic-offset"),
+                    Some(a),
+                ),
+                Ok(()),
+            ),
+            (
+                "control: put-parsed, a root- folder's shared id",
+                scan(),
+                parsed_at("option:shared/root-0123456789ab:tab-width".into(), None),
+                Ok(()),
+            ),
+            (
+                "control: put-parsed, a new version of a shared setting you recorded",
+                scan(),
+                Box::new(move |tx: &mut Tx<'_>, _: Origin, _: usize| {
+                    let patch = Changes {
+                        data_patch: Some(json!({"value": "8"})),
+                        ..Changes::default()
+                    };
+                    entity::update(tx, mine, None, patch).map(drop)
+                }),
+                Ok(()),
             ),
             (
                 "a malformed id, even the user's",
@@ -1065,7 +1240,8 @@ mod tests {
                 Err(text) => assert_eq!(got, Err(WriteError::Refused((*text).into())), "{what}"),
             }
         }
-        // put-parsed itself holds no option (a `file` source holds parsed kinds only), and stores nothing of it.
+        // put-parsed itself: a repository's `.drgnx/settings.el` brings its shared settings in as parsed entities of
+        // the repository's project; a global or private id there, or an option of any other file, refuses its source.
         conn.execute_batch(
             "create table if not exists parsed_file (path text primary key, mtime real);
              create table if not exists kv (key text primary key, value text);",
@@ -1074,27 +1250,67 @@ mod tests {
         let home = _d.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let deny = crate::deny::DenyList::load(&home, &_d.path().join("config"));
-        let req: crate::parsed::PutParsed = serde_json::from_value(json!({"sources": [{
-            "source": {"kind": "file", "path": "/w/a/.drgnx/settings.el"}, "mtime": 1.0,
-            "entities": [{"id": format!("option:shared/{pa}:fill-column"), "kind": "option",
-                          "data": {"value": "80", "file": "/w/a/.drgnx/settings.el", "line": 1}}]
-        }]}))
+        let file = "/w/a/.drgnx/settings.el";
+        let opt = |id: String| json!({"id": id, "kind": "option", "data": {"value": "80", "file": file, "line": 1}});
+        let shared = format!("option:shared/{pa}:fill-column");
+        let req: crate::parsed::PutParsed = serde_json::from_value(json!({"sources": [
+            {"source": {"kind": "file", "path": file}, "mtime": 1.0, "entities": [opt(shared.clone())]},
+            {"source": {"kind": "file", "path": "/w/a/.drgnx/global.el"},
+             "entities": [opt("option:global:fill-column".into())]},
+            {"source": {"kind": "file", "path": "/w/b/.drgnx/settings.el"},
+             "entities": [opt("option:global:tab-width".into())]},
+            {"source": {"kind": "file", "path": "/w/c/.drgnx/settings.el"},
+             "entities": [opt(format!("option:private/{pa}:tab-width"))]},
+        ]}))
         .unwrap();
-        let answer = write(
-            &mut conn,
-            TxMeta::new("scan:/w/a", Class::System, "scan"),
-            |tx| crate::parsed::put(tx, &deny, req),
-        )
+        let mut projects = crate::project::ProjectCache::default();
+        projects.insert(
+            "/w/a/.drgnx".into(),
+            Some(crate::scope::testkit::project_ref("a")),
+        );
+        let answer = write(&mut conn, scan(), |tx| {
+            crate::parsed::put_with(tx, &deny, &mut projects, req)
+        })
         .unwrap();
-        assert_eq!((answer.changed, answer.refused.len()), (0, 1));
-        let stored: i64 = conn
+        assert_eq!((answer.changed, answer.refused.len()), (1, 3));
+        let e = entity::by_id(&conn, &shared).unwrap().unwrap();
+        assert_eq!(
+            (e.origin, e.project, e.source.as_deref()),
+            (Origin::Parsed, Some(a), Some(file))
+        );
+        let by: (String, String, String) = conn
             .query_row(
-                "select count(*) from entity where kind = 'option'",
-                [],
-                |r| r.get(0),
+                "select actor, class, tool from tx where id = ?1",
+                [e.created_tx],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!(stored, 1, "only the user's");
+        assert_eq!(by, ("scan:/w/a".into(), "system".into(), "scan".into()));
+        let stored: Vec<String> = conn
+            .prepare("select id from entity where kind = 'option' order by id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            stored,
+            [
+                "option:global:indent-tabs-mode".to_string(),
+                shared,
+                format!("option:shared/{pa}:tab-width"),
+            ],
+            "the user's two and the repository's one"
+        );
+    }
+
+    /// The guard's target for a write to the stored option ID in PROJECT.
+    fn at(id: &str, project: Option<i64>) -> Target<'_> {
+        Target {
+            id,
+            project,
+            origin: None,
+        }
     }
 
     fn sid(s: &str) -> Who {
@@ -1146,15 +1362,7 @@ mod tests {
         let me = agent(Some(a), "s1", Some("review"));
         let may = |conn: &Connection, caller: &Caller, var: &str| {
             let id = format!("option:global:{var}");
-            options::may_write(
-                conn,
-                caller,
-                Target {
-                    id: &id,
-                    project: None,
-                },
-                NOW,
-            )
+            options::may_write(conn, caller, at(&id, None), NOW)
         };
         for var in ["fill-column", "python-indent-offset", "python-"] {
             assert_eq!(may(&conn, &me, var), Ok(()), "{var}");
@@ -1179,10 +1387,7 @@ mod tests {
         );
         // A mode section is still the global scope.
         let id = "option:global:mode/python-mode:python-indent-offset";
-        assert_eq!(
-            options::may_write(&conn, &me, Target { id, project: None }, NOW),
-            Ok(())
-        );
+        assert_eq!(options::may_write(&conn, &me, at(id, None), NOW), Ok(()));
         // An expired grant is gone (NOW lies after it).
         let soon = write(&mut conn, user(), |tx| {
             let t = tx.at() + 60.0;
@@ -1193,11 +1398,11 @@ mod tests {
         let s3 = agent(Some(a), "s3", None);
         let id = "option:global:tab-width";
         assert_eq!(
-            options::may_write(&conn, &s3, Target { id, project: None }, later - 61.0),
+            options::may_write(&conn, &s3, at(id, None), later - 61.0),
             Ok(())
         );
         assert_eq!(
-            options::may_write(&conn, &s3, Target { id, project: None }, later),
+            options::may_write(&conn, &s3, at(id, None), later),
             Err(WriteError::Refused(options::NO_GRANT.into()))
         );
     }
@@ -1219,10 +1424,7 @@ mod tests {
                 format!("option:shared/{pa}:fill-column"),
                 format!("option:shared/{pa}:dir/src/:mode/c-mode:c-basic-offset"),
             ] {
-                let t = Target {
-                    id: &id,
-                    project: Some(a),
-                };
+                let t = at(&id, Some(a));
                 assert_eq!(options::may_write(&conn, &me, t, NOW), Ok(()), "{id}");
             }
             // Not project b's, not the global file.
@@ -1238,10 +1440,7 @@ mod tests {
                     options::NO_GRANT,
                 ),
             ] {
-                let t = Target {
-                    id: &id,
-                    project: p,
-                };
+                let t = at(&id, p);
                 assert_eq!(
                     options::may_write(&conn, &me, t, NOW),
                     Err(WriteError::Refused(why.into())),
@@ -1253,15 +1452,7 @@ mod tests {
         let them = agent(Some(b), "s9", None);
         let id = format!("option:private/{pb}:fill-column");
         assert_eq!(
-            options::may_write(
-                &conn,
-                &them,
-                Target {
-                    id: &id,
-                    project: Some(b)
-                },
-                NOW
-            ),
+            options::may_write(&conn, &them, at(&id, Some(b)), NOW),
             Err(WriteError::Refused(options::NO_GRANT.into()))
         );
         // A retired project is no project: its agents' project grants cover nothing.
@@ -1273,10 +1464,7 @@ mod tests {
         .unwrap();
         let old = agent(Some(c), "s8", None);
         let id = format!("option:private/{pc}:fill-column");
-        let t = Target {
-            id: &id,
-            project: Some(c),
-        };
+        let t = at(&id, Some(c));
         assert_eq!(options::may_write(&conn, &old, t, NOW), Ok(()));
         write(&mut conn, user(), |tx| entity::retire(tx, c)).unwrap();
         assert_eq!(

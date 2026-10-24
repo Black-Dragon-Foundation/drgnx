@@ -7,7 +7,8 @@
 //!   `data.parent`, and the ids at both ends of each link. One denied path refuses the whole source, which then
 //!   stores nothing (not even its file's time).
 //! - **Consistency.** A `file` source holds plans, tasks, steps, rulings, todos and its `file:` entity, each carrying
-//!   the source's path; a `spec` source is one `spec:PATH`; a `commit` or `branch` source holds commits or branches,
+//!   the source's path, and a repository's `.drgnx/settings.el` its shared settings (`option:shared/…`, unified-settings
+//!   Task 24); a `spec` source is one `spec:PATH`; a `commit` or `branch` source holds commits or branches,
 //!   whose ids carry no path. Anything else refuses the source (a plan whose `**Spec:**` names another file sends that
 //!   spec as its own source, and its `derives` link is checked at both ends).
 //! - **Content compare.** An entity whose fields are as stored is untouched; a changed one gets a new version (its
@@ -67,8 +68,12 @@ pub const PATCH_KEYS: &[&str] = &[
 const FLAG_KEYS: &[&str] = &["gone", "stale", "range-stale", "merged"];
 const PATH_KEYS: &[&str] = &["worktree", "repo"];
 
-/// The kinds a `file` source holds.
-const FILE_KINDS: &[&str] = &["plan", "task", "step", "ruling", "todo", "file"];
+/// The kinds a `file` source holds (`option` only from a repository's `.drgnx/settings.el`: [`check_option`]).
+const FILE_KINDS: &[&str] = &["plan", "task", "step", "ruling", "todo", "file", "option"];
+/// The end of a repository's shared settings file's path, the only file whose source holds options.
+const SHARED_SETTINGS: &str = "/.drgnx/settings.el";
+/// The `data` keys an option of a scan carries (design §12: its printed value, its file and line).
+const OPTION_KEYS: &[&str] = &["value", "file", "line"];
 /// The kinds whose id is `KIND:PATH#SUFFIX` (the others of a file are `KIND:PATH`).
 const SUFFIXED: &[&str] = &["task", "step", "ruling", "todo"];
 /// The kinds the scan makes (Names: "parsed").
@@ -203,6 +208,43 @@ fn id_carries(id: &str, kind: &str, path: &str) -> bool {
                 .is_some_and(|tail| tail.starts_with('#')))
 }
 
+/// An option entity E of the file source PATH (unified-settings Task 24; the guard's rule holds it again,
+/// [`crate::options::scan_may_write`]): the file is a repository's `.drgnx/settings.el`, the id a well-formed shared
+/// id (that file never holds your global or private settings), and `data` only `value` (printed Lisp), `file` (the
+/// source's path) and `line`.
+fn check_option(path: &str, e: &api::ParsedEntity) -> Result<(), String> {
+    let id = e.id.as_str();
+    if !path.ends_with(SHARED_SETTINGS) {
+        return Err(format!(
+            "{id}: options come only from a repository's .drgnx/settings.el"
+        ));
+    }
+    match crate::options::parse_id(id) {
+        Ok(o) if matches!(o.scope, crate::options::Scope::Shared(_)) => {}
+        Ok(_) => {
+            return Err(format!(
+                "{id}: a repository's .drgnx/settings.el holds only shared settings"
+            ));
+        }
+        Err(why) => return Err(format!("{id}: not an option id ({why})")),
+    }
+    let data = data_of(e);
+    let fits = data.iter().all(|(k, v)| match k.as_str() {
+        "value" => v.is_string(),
+        "file" => v.as_str() == Some(path),
+        "line" => v.is_u64(),
+        _ => false,
+    });
+    if fits {
+        Ok(())
+    } else {
+        Err(format!(
+            "{id}: an option's data is {} only (value a text, file its source's path, line a number)",
+            OPTION_KEYS.join(", ")
+        ))
+    }
+}
+
 /// The source S's shape (after door 1): what it may hold, and that every entity carries its path. Reads TX for ids
 /// stored as another kind.
 fn check_shape(tx: &Tx<'_>, s: &ParsedSource) -> Result<(), String> {
@@ -225,6 +267,7 @@ fn check_shape(tx: &Tx<'_>, s: &ParsedSource) -> Result<(), String> {
             ));
         }
         match (&path, s.source.kind) {
+            (Some(p), SourceKind::File) if kind == "option" => check_option(p, e)?,
             (Some(p), SourceKind::File | SourceKind::Spec) => {
                 if !id_carries(id, kind, p) {
                     return Err(format!(
