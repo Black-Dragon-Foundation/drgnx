@@ -1021,7 +1021,6 @@ exit 0 or 1."
   ;; Absolute paths before HOME changes: "~/…" would then mean the temp home.
   (setq default-directory (expand-file-name default-directory)
         load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
-  (drgnx-run-ert--gate-enable)
   (let* ((args (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
          (dir (if (and (= (length args) 1) (file-directory-p (car args))) (car args) args))
          ;; each test file in an Emacs of its own, unless DRGNX_TEST_ONE_PROCESS=1 (`bin/drgnx test --one-process')
@@ -1048,6 +1047,9 @@ exit 0 or 1."
          (temporary-file-directory (file-name-as-directory tmp))
          (_ (when own (add-hook 'kill-emacs-hook (lambda () (ignore-errors (drgnx-run-ert--delete-run-dir own))))))
          (eln (drgnx-run-ert--use-eln-dir eln (expand-file-name "eln/" tmp) user-eln))
+         ;; the gate's advice of `sqlite-open' compiles that primitive's trampoline: after the line above, so it lands
+         ;; in the run's eln directory, not the eln-cache of the home this Emacs started with
+         (_ (drgnx-run-ert--gate-enable))
          ;; …nor anything else under ~ (HOME is a temp dir; the user's ELPA stays readable for the
          ;; tests that load packages from it, read-only, through DRGNX_USER_ELPA)
          (elpa (expand-file-name "~/.config/emacs/elpa"))
