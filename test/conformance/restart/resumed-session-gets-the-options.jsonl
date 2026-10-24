@@ -1,0 +1,15 @@
+{"scenario": "restart/resumed-session-gets-the-options", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 24 (found at A2-W): a Claude session resumed after a hub restart is given the same _meta.claudeCode.options (the lock: managedSettings) as a new one, so it obeys the hub as before. The mock logs the options of the session it opens, once at session/new and once at session/resume."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "managedSettings", "within_ms": 30000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/resume\"", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "managedSettings", "count": 2, "at_most": 2, "within_ms": 10000}

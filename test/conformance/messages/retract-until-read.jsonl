@@ -1,0 +1,30 @@
+{"scenario": "messages/retract-until-read", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: messages/retract takes the user's message back only while it is queued. A message sent to a busy session waits; retracted it is never delivered (the answer is retracted: true, state retracted). A message delivered once the session is free is read; retracting it answers retracted: false with the state it has. An unknown id is an error."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-agent\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-agent", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "silent 4"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy"}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "messages/send", "params": {"recipient": "$sid", "text": "first thought"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"ok": true, "id": "$capture:m1", "state": "queued"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "messages/retract", "params": {"id": "$m1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"retracted": true, "status": "retracted"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "messages/send", "params": {"recipient": "$sid", "text": "second thought"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"ok": true, "id": "$capture:m2", "state": "queued"}}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "second thought", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "lacks": "first thought"}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "expect_silent", "conn": "q", "for_ms": 2000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "messages/retract", "params": {"id": "$m2"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"retracted": false, "status": "read"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "messages/retract", "params": {"id": 9999}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "invalid-params", "message": "$string"}}}
+{"do": "sql_expect", "sql": "select id, state from message order by id", "rows": [["$m1", "retracted"], ["$m2", "read"]]}

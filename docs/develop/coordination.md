@@ -626,6 +626,23 @@ that can be steered is held this way (its snapshot says `:enforced t`); one that
 hold and turn-end delivery only (`:enforced nil`, which the job window shows). Reviewers are never gated (they read).
 A task's prompt asks for `read_decisions` first.
 
+### Delivery in Ratatoskr (`drgnx-ratatoskr/src/agents/deliver.rs`, Task 24)
+
+The same rules, run by the hub for the sessions it holds: `deliver::run` makes a pass whenever a write may have added a
+message (`Signals::deliver`) and every second. A queued message goes to its recipient session (its id or its name)
+when `Session::is_free` (idle, not held by a Stop, nothing queued): the prompt is `message_prompt`'s, it is queued in the
+session first and the message is marked `delivered` and `read` after, so a restart in between delivers it twice
+rather than never. A peer's prompt keeps its header (`Origin::Peer`'s own framing is skipped for text that starts `[message from `).
+An agent of a job whose `seen` is behind the log gets the `[decision log vN — job J]` notice once per version
+when free. **The gate** (`deliver::gate`, called at the permission seam before the matrix): an `edit`, `delete`, `move`
+or `execute` request of a job agent behind the log is refused (its `reject_once`), and once per version the notice
+plus "Your last tool call was refused because you had not read these." goes to the front of its queue (hermod cannot
+inject into a running turn, so it is read at the next turn). Reading is never held; sessions without a job never are.
+
+**Take-back:** `messages/retract {id}` (user only) sets a `queued` message to `retracted`, and answers
+`{retracted: true, status: "retracted"}`; once it is `delivered`, `read` or `acted` (or `held`) it answers
+`{retracted: false, status}`; an unknown id is `invalid-params`. A retracted message is never delivered.
+
 ## Jobs
 
 `core/drgnx-job.el` runs in the hub (user docs: [jobs.md](../guide/jobs.md)). `drgnx-job-propose` reads the plan

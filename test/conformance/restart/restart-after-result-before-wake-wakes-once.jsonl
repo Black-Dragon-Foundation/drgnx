@@ -1,0 +1,17 @@
+{"scenario": "restart/restart-after-result-before-wake-wakes-once", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: the hub dies (test hook) after a session job's result is recorded and before the wake row is written. At the next start the finished job with no row and no wake in the session is found and the session is woken exactly once."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1", "DRGNX_TEST_DIE_AT": "before-wake-row"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:job_start {\"argv\": [\"sh\", \"-c\", \"echo hi\"]}"}}}
+{"do": "expect_exit", "hub": "h", "code": 9, "within_ms": 30000}
+{"do": "start", "hub": "h2", "same_root_as": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "within_ms": 30000}
+{"do": "connect", "conn": "q", "hub": "h2"}
+{"do": "expect_silent", "conn": "q", "for_ms": 5000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "count": 1, "at_most": 1}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select state from wake", "rows": [["done"]]}

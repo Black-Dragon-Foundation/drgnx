@@ -45,6 +45,9 @@ pub async fn run(front: Arc<Front>) {
 
 /// One pass over the running jobs.
 pub async fn once(front: &Arc<Front>) {
+    if front.core.runs.recovering() {
+        return;
+    }
     let ids = match front
         .writer
         .db

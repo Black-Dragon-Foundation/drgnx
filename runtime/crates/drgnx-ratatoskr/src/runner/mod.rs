@@ -101,6 +101,9 @@ pub struct Runs {
     /// under (`step.plan`, `step.project`).
     scopes: Scopes,
     wake: Notify,
+    /// The hub is resuming the sessions it held (Task 24): a task whose agent is not back yet is not a dead one, so
+    /// the tick waits.
+    recovering: std::sync::atomic::AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -108,6 +111,20 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Runs {
+    /// The sessions of a hub before this one are being resumed (ON) or are back: the runs go on from the store, with
+    /// the same workers, once they are.
+    pub fn set_recovering(&self, on: bool) {
+        self.recovering
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+        if !on {
+            self.wake.notify_one();
+        }
+    }
+
+    pub fn recovering(&self) -> bool {
+        self.recovering.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The git of the runner (Task 17 gives `HubGit`); until then [`tick::BasicGit`] makes worktrees only.
     pub fn set_git(&self, git: Arc<dyn RunGit>) {
         let _ = self.git.set(git);

@@ -1,0 +1,29 @@
+{"scenario": "restart/sessions-resume-or-load", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: after a hub restart each recorded session is brought back on the same agent session: session/resume where the agent has it (Claude), else session/load (Gemini loads only). Both are listed again on the same profile and directory and their earlier turns are still in the transcript."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-resume\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/resume.log\")) (\"mock-load\" :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--log\" \"$ROOT/load.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-resume", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:r", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-load", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:l", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$r", "text": "hello resume"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$l", "text": "hello load"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "file", "path": "$ROOT/resume.log", "contains": "hello resume", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/load.log", "contains": "hello load", "within_ms": 15000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "file", "path": "$ROOT/resume.log", "contains": "\"session/resume\"", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/load.log", "contains": "\"session/load\"", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/resume.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/load.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "agents/list"}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$r", "profile": "mock-resume", "cwd": "$ROOT/work"}, {"id": "$l", "profile": "mock-load", "cwd": "$ROOT/work"}]}}}, "within_ms": 30000}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "agents/get", "params": {"id": "$r"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"session": {"id": "$r"}, "seq": "$number", "entries": {"$contains": [{"type": "user", "text": "hello resume"}]}}}}

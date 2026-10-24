@@ -1,0 +1,25 @@
+{"scenario": "restart/queued-message-survives", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: a message queued for a session that is busy stays in the store when the hub restarts (TERM, then a start on the same root); once the session is resumed and free it is delivered as a new turn and marked read."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-agent\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-agent", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "silent 60"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy"}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "messages/send", "params": {"recipient": "$sid", "text": "remember the plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"ok": true, "id": "$capture:m", "state": "queued"}}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "sql_expect", "sql": "select state from message where id = $m", "rows": [["queued"]]}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "remember the plan", "within_ms": 30000}
+{"do": "connect", "conn": "q", "hub": "h2"}
+{"do": "expect_silent", "conn": "q", "for_ms": 2000}
+{"do": "sql_expect", "sql": "select state from message where id = $m", "rows": [["read"]]}

@@ -13,7 +13,7 @@ pub const QUEUE_LIMIT: i64 = 20;
 /// Messages from one agent to another per minute (`drgnx-coord-pair-rate`).
 pub const PAIR_RATE: i64 = 6;
 /// Message states in order; `held` stands apart (`drgnx-coord--states`).
-const STATES: [&str; 4] = ["queued", "delivered", "read", "acted"];
+const STATES: [&str; 5] = ["queued", "sending", "delivered", "read", "acted"];
 
 /// What `drgnx-coord-send` takes.  `sender` `None` is the user's own Emacs.
 #[derive(Debug, Clone, Default)]
@@ -159,6 +159,47 @@ pub fn mark(tx: &mut WTx<'_>, id: i64, state: &str, now: f64) -> Result<bool, Co
             Ok(true)
         }
         _ => Ok(false),
+    }
+}
+
+/// Message `id` is being given to its session (Task 24): `queued` to `sending` before the prompt is queued, so a hub that
+/// dies in between can tell at the next start whether the session got it.  Whether it moved.
+pub fn sending(tx: &mut WTx<'_>, id: i64) -> Result<bool, CoordError> {
+    let by = tx.id();
+    Ok(tx.sql().execute(
+        "update message set state = 'sending', tx = ?2 where id = ?1 and state = 'queued'",
+        (id, by),
+    )? > 0)
+}
+
+/// A `sending` message goes back to `queued` (its prompt never reached the session).
+pub fn unsend(tx: &mut WTx<'_>, id: i64) -> Result<(), CoordError> {
+    tx.sql().execute(
+        "update message set state = 'queued' where id = ?1 and state = 'sending'",
+        [id],
+    )?;
+    Ok(())
+}
+
+/// Take message `id` back (Task 24): only while it is `queued` (nobody was given it yet); it becomes `retracted` and
+/// is never delivered.  `(whether it was taken back, the state it has now)`, or `None` for no such message.
+pub fn retract(tx: &mut WTx<'_>, id: i64) -> Result<Option<(bool, String)>, CoordError> {
+    let by = tx.id();
+    let n = tx.sql().execute(
+        "update message set state = 'retracted', tx = ?2 where id = ?1 and state = 'queued'",
+        (id, by),
+    )?;
+    if n > 0 {
+        return Ok(Some((true, "retracted".into())));
+    }
+    match tx
+        .sql()
+        .query_row("select state from message where id = ?1", [id], |r| {
+            r.get(0)
+        }) {
+        Ok(s) => Ok(Some((false, s))),
+        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -335,6 +376,47 @@ mod tests {
             .execute("update message set state = 'held' where id = ?1", [id])
             .unwrap();
         assert!(!mark(&mut tx, id, "acted", 4.0).unwrap());
+    }
+
+    #[test]
+    fn retract_succeeds_only_while_queued() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let SendResult::Ok { id, .. } = send(&mut tx, msg("a", "b", "x"), 1.0).unwrap() else {
+            panic!("held")
+        };
+        assert_eq!(
+            retract(&mut tx, id).unwrap(),
+            Some((true, "retracted".into()))
+        );
+        assert_eq!(
+            retract(&mut tx, id).unwrap(),
+            Some((false, "retracted".into()))
+        );
+        let SendResult::Ok { id: id2, .. } = send(&mut tx, msg("a", "b", "y"), 2.0).unwrap() else {
+            panic!("held")
+        };
+        assert!(sending(&mut tx, id2).unwrap());
+        assert!(!sending(&mut tx, id2).unwrap());
+        assert_eq!(
+            retract(&mut tx, id2).unwrap(),
+            Some((false, "sending".into()))
+        );
+        assert!(mark(&mut tx, id2, "delivered", 3.0).unwrap());
+        assert_eq!(
+            retract(&mut tx, id2).unwrap(),
+            Some((false, "delivered".into()))
+        );
+        assert_eq!(retract(&mut tx, 99).unwrap(), None);
+        let queued: i64 = tx
+            .sql()
+            .query_row(
+                "select count(*) from message where state = 'queued'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued, 0);
     }
 
     #[test]
