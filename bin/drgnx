@@ -337,6 +337,9 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
     # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
     local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
+    # an --ab-env A/B runs two sessions side by side, so it gets two sessions' room (6g): at 3g the kernel's OOM killer
+    # took one of them in every compile-flood A/B (each session peaks near 1.8 GB), and the harness lost it
+    if [ -n "$abenv" ]; then mem="${DRGNX_TEST_GUI_MEMORY:-6g}"; fi
     # the synthetic day keeps a long session, more than a GUI test needs: DRGNX_TEST_DAY_MEMORY (default 6g, a desktop
     # size; a laptop sets 4g or less); the results name this host, not the container's id
     if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi
@@ -1668,8 +1671,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
        drgnx test --container [--ui [--compositor C]]
-                               the same inside a fedora:45 / Nidhogg 31.1 container (GUI: capped at 3 GB, no swap;
-                               DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
+                               the same inside a fedora:45 / Nidhogg 31.1 container (GUI: capped at 3 GB, no swap,
+                               6 GB for --perf --ab-env's two sessions; DRGNX_TEST_GUI_MEMORY overrides; image builds 3 GB, DRGNX_TEST_BUILD_MEMORY)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides); also --perf [--ab-env VAR=JUDGED,REF [--n N]]
                                and --soak [MIN] and --day [MIN] (capped at DRGNX_TEST_DAY_MEMORY, 6g); DRGNX_CONTAINER_NIDHOGG=PREFIX runs an unpacked Nidhogg instead of the image's
        drgnx test --container --tty [--fedora 45]
