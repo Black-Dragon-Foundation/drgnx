@@ -5,8 +5,8 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h", "env": {"HTTP_PROXY": "http://127.0.0.1:$pport", "HTTPS_PROXY": "http://127.0.0.1:$pport", "NO_PROXY": "localhost"}}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "direct", "kind": "anthropic", "base": "http://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}, {"id": "proxied", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"direct":{"kind":"anthropic","url":"http://localhost:$port","caps":["chat"],"messages":true},"proxied":{"kind":"anthropic","url":"http://127.0.0.1:$port","caps":["chat"],"messages":true}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["direct", null]], "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok_direct"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["proxied", null]], "owner": "$HARNESS_PID"}}}

@@ -2,8 +2,8 @@
 {"do": "start", "hub": "h"}
 {"do": "spawn", "capture": "P", "argv": ["sleep", "60"]}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "local", "kind": "anthropic", "base": "http://127.0.0.1:9", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"local":{"kind":"anthropic","url":"http://127.0.0.1:9","caps":["chat"],"messages":true}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["local", null]], "owner": "$P"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$string"}}}
 {"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select owner, owner_start is not null from registration", "rows": [["$P", 1]]}

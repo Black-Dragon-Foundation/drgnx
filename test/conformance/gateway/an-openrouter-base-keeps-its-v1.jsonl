@@ -5,8 +5,8 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "http://127.0.0.1:$port/api/v1", "auth": "none", "messages": false, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"openrouter":{"kind":"openai","url":"http://127.0.0.1:$port/api/v1","caps":["chat"],"messages":false}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}

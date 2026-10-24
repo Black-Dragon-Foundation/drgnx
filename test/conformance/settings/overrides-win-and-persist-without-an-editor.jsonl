@@ -1,0 +1,21 @@
+{"scenario": "settings/overrides-win-and-persist-without-an-editor", "requires": ["v1", "fake-backend"], "doc": "config/settings (unified-settings Task 21) with a global drgnx-ai-providers override: the gateway's table is the 16 presets plus the editor's provider at once, the answer counts the overrides, and after a restart with no editor connected the table is the same (the set is kept as last good in runtime.db). An empty list clears it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"gateway": {"providers": 16}, "settings": {"presets": 16}}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "lisp:init.el", "value": {"mine": {"kind": "openai", "url": "https://llm.example/v1", "key_env": "MINE_KEY", "caps": ["chat"]}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"providers": 17}, "settings": {"presets": 17}}}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"gateway": {"providers": 17}, "settings": {"presets": 17}}}}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "config/settings", "params": {"overrides": []}}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"applied": 0}}}
+{"do": "send", "conn": "c2", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c2", "json": {"id": 3, "result": {"gateway": {"providers": 16}, "settings": {"presets": 16}}}}

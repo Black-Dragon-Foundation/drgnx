@@ -202,7 +202,7 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
 
 Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the gateway, never by the store itself.
 
-- **Provider.** The first provider of kind `tei` with the `embed` cap in `config/providers`. Texts (`title`, a blank
+- **Provider.** The first provider of kind `tei` with the `embed` cap in the settings' provider table. Texts (`title`, a blank
   line, `body`, at most 8000 characters) go to the gateway's own loopback listener as the editor's
   `POST /p/PROVIDER/embed`, with an in-memory editor token (never stored). The request is counted in `spend` like
   any other. The model name is `tei:PROVIDER`. The hub never starts the provider.

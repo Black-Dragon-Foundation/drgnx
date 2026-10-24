@@ -1,0 +1,9 @@
+{"scenario": "settings/config-providers-is-gone", "requires": ["v1", "fake-backend"], "doc": "config/providers is removed, with no alias (design §11.1): the method is unknown. config/changed (a stamp check now) answers true."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "no-method", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/changed"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}

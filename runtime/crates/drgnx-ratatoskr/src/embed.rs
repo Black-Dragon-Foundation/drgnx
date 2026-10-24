@@ -1,6 +1,6 @@
 //! Entity vectors through the gateway (Urdr Task 12b; storage §5.2, §5.6 door 4; call 13).
 //!
-//! - **The provider** is the one of kind `tei` in `config/providers` ([`crate::gateway::Gate::embedder`]).  Texts go
+//! - **The provider** is the one of kind `tei` in the settings' provider table ([`crate::gateway::Gate::embedder`]).  Texts go
 //!   to the hub's own loopback listener as the editor's `POST /p/PROVIDER/embed` (an in-memory editor token, no key),
 //!   so the gateway counts the request in `spend` like any other.  The hub **never starts** the provider: one that
 //!   does not answer stops the round.
@@ -433,7 +433,7 @@ pub async fn run(db: &CoordDb, e: &dyn Embedder, deny: &DenyList, probe: bool) -
 mod tests {
     use super::*;
     use crate::gateway::Gate;
-    use runstav::methods::gateway::ProvidersParams;
+    use runstav::methods::gateway::ProviderConfig;
     use std::io::{BufRead, BufReader};
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
@@ -534,12 +534,11 @@ mod tests {
     /// A gateway listening, with the `tei` provider at PORT; and its embedder.
     async fn tei(dir: &Path, port: u16) -> (Gate, Tei) {
         let gate = Gate::new(CoordDb::spawn(dir.join("gw.db")));
-        let p: ProvidersParams = runstav::decode::typed(&json!({"providers": [
+        let table: Vec<ProviderConfig> = serde_json::from_value(json!([
             {"id": "tei", "kind": "tei", "base": format!("http://127.0.0.1:{port}"), "auth": "none",
-             "messages": false, "caps": ["embed"]}]}))
-        .unwrap()
-        .0;
-        gate.config_providers(p).await.unwrap();
+             "messages": false, "caps": ["embed"]}]))
+        .unwrap();
+        gate.apply(&table).unwrap();
         gate.listen(None).await.unwrap();
         let e = gate.embedder().unwrap().expect("a tei provider");
         (gate, e)

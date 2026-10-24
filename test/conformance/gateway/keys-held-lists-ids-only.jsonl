@@ -14,8 +14,8 @@
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-held-key-2"}}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
 {"do": "expect_silent", "conn": "w", "for_ms": 500}
-{"do": "send", "conn": "c", "json": {"id": 5, "method": "config/providers", "params": {"providers": [{"id": "anthropic", "kind": "anthropic", "base": "https://api.anthropic.com", "auth": "x-api-key", "messages": true, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":5,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"anthropic":{"kind":"anthropic","url":"https://api.anthropic.com","caps":["chat"],"messages":true,"key_env":"KEY","auth":"x-api-key"}}}]}}}
+{"do":"expect","conn":"c","json":{"id":5,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 6, "method": "gateway/register", "params": {"chain": [["anthropic", null]], "keys": {"anthropic": "canary-held-key-3"}}}}
 {"do": "expect", "conn": "c", "json": {"id": 6, "result": {"token": "$string"}}}
 {"do": "expect", "conn": "w", "json": {"event": "gateway/keys-changed", "data": {"providers": ["anthropic", "openrouter"]}}}

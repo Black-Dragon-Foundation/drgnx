@@ -196,11 +196,7 @@ pub fn load(config_dir: &Path, kv: &Kv) -> Loaded {
     };
     let d = defaults();
     let (providers, skipped) = providers::table(&d.presets, &r.values.ai_providers);
-    r.problems.extend(skipped.into_iter().map(|text| Problem {
-        setting: Some("drgnx-ai-providers"),
-        line: None,
-        text: format!("drgnx-ai-providers: {text}; that provider is left out"),
-    }));
+    r.problems.extend(skipped_problems(skipped));
     Loaded {
         file,
         values: r.values,
@@ -208,6 +204,15 @@ pub fn load(config_dir: &Path, kv: &Kv) -> Loaded {
         problems: r.problems,
         kv: r.kept,
     }
+}
+
+/// The problems of the providers [`providers::table`] left out (SKIPPED: each with why).
+pub(crate) fn skipped_problems(skipped: Vec<String>) -> impl Iterator<Item = Problem> {
+    skipped.into_iter().map(|text| Problem {
+        setting: Some("drgnx-ai-providers"),
+        line: None,
+        text: format!("drgnx-ai-providers: {text}; that provider is left out"),
+    })
 }
 
 /// One read in progress.

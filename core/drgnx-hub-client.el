@@ -24,6 +24,7 @@
 (require 'drgnx-work-db)                ; `drgnx-work-db-schema-version', which the hello says
 
 (declare-function drgnx-ai-providers "drgnx-ai")
+(declare-function drgnx-settings-runtime-send "drgnx-settings-runtime")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
 (defvar drgnx-hub--server)              ; drgnx-hub.el: this Emacs's hub socket, when it is the hub
@@ -913,54 +914,6 @@ that follows takes them.  Signals when no hub can be had (Ratatoskr not built, s
 
 ;;;; The provider table, and keys the hub asks for again
 
-(defconst drgnx-hub--provider-kinds '(openai ollama llamacpp tei anthropic) "The provider kinds `config/providers' takes.")
-
-(defun drgnx-hub--provider-json (id p)
-  "Provider ID (its entry P) as `config/providers' takes it — (:id :kind :base :auth :messages :caps [:price]), never
-a key — or nil when it cannot be one (no URL, a kind the hub does not know).  AUTH is \"none\" without a `:key-env',
-\"x-api-key\" for `:auth x-api-key', else \"bearer\"; CAPS are the known ones of `:caps'; PRICE from `:price' (IN . OUT)."
-  (let ((kind (plist-get p :kind)) (url (plist-get p :url)) (price (plist-get p :price)))
-    (when (and (memq kind drgnx-hub--provider-kinds) (stringp url))
-      (append (list :id (symbol-name id) :kind (symbol-name kind) :base url
-                    :auth (cond ((not (plist-get p :key-env)) "none") ((eq (plist-get p :auth) 'x-api-key) "x-api-key") (t "bearer"))
-                    :messages (if (plist-get p :messages) t :false)
-                    :caps (vconcat (mapcar #'symbol-name (cl-remove-if-not (lambda (c) (memq c '(chat fim embed)))
-                                                                           (delete-dups (copy-sequence (plist-get p :caps)))))))
-              (and (consp price) (numberp (car price)) (numberp (cdr price))
-                   (list :price (list :input (car price) :output (cdr price))))))))
-
-(defun drgnx-hub--providers-table ()
-  "The provider table the hub gets: the effective one, the presets and the user's own as `drgnx-ai-providers'
-resolves them, each as `drgnx-hub--provider-json' has it."
-  (require 'drgnx-ai)
-  (vconcat (delq nil (mapcar (lambda (e) (drgnx-hub--provider-json (car e) (cdr e))) (drgnx-ai-providers)))))
-
-(defvar drgnx-hub--clear-text-told nil
-  "The providers (ids, strings) whose clear-text warning this Emacs has shown: each once per Emacs session.")
-
-(defun drgnx-hub--providers-applied (result _err)
-  "The hub's answer to `config/providers': each of its `warnings' (a provider whose key would travel in clear text, at
-an http:// address off this machine) becomes a notice, once per provider per Emacs session."
-  (when (consp result)
-    (dolist (w (plist-get result :warnings))
-      (let ((provider (plist-get w :provider)) (text (plist-get w :text)))
-        (when (and (stringp provider) (stringp text) (not (member provider drgnx-hub--clear-text-told)))
-          (push provider drgnx-hub--clear-text-told)
-          (drgnx-notify 'hub 'warn text :id (intern (concat "clear-text-" provider))))))))
-
-(defun drgnx-hub--send-providers ()
-  "Hand the hub the provider table (`drgnx-hub--providers-table'): which providers the gateway may route to, their kinds
-and what they take.  It carries no key.  Sent on every proven connection, beside the keys, and when the providers change
-\(`drgnx-hub-resend-providers').  The call's id."
-  (drgnx-hub-call "config/providers" (list :providers (drgnx-hub--providers-table)) #'drgnx-hub--providers-applied))
-
-(defun drgnx-hub-resend-providers ()
-  "The providers changed (`drgnx-ai-providers' in settings.el, or ai.eld; listeners in drgnx-ai.el): an editor
-subscribed to a hub that proved itself sends the provider table again.  Anywhere else nothing: the next connection
-sends it."
-  (when (and (not drgnx-hub--behind-front) (process-live-p drgnx-hub--events) (process-get drgnx-hub--events :drgnx-proven))
-    (drgnx-hub--send-providers)))
-
 (defun drgnx-hub--need-keys (event data)
   "`gateway/need-keys' (DATA (:providers [ID…])): agents need the keys of these providers and the hub holds none (it
 restarted; keys live in its memory only).  Only for a hub that proved itself (`:drgnx-proven' of the connection the
@@ -1087,10 +1040,11 @@ drops it (`drgnx-hub--drop-keys')."
     (cl-pushnew (symbol-name id) drgnx-hub--keys-held :test #'equal)))
 
 (defun drgnx-hub--hand-over ()
-  "Hand the hub the provider table (`drgnx-hub--send-providers') and the keys this Emacs holds
+  "Hand the hub the runtime settings your Lisp holds (`drgnx-settings-runtime-send') and the keys this Emacs holds
 \(`drgnx-hub--send-keys'), and ask it for the editor token and the keys it holds (`drgnx-hub--fetch-editor'): the ids
 of the calls made."
-  (delq nil (append (list (drgnx-hub--send-providers) (drgnx-hub--send-keys)) (drgnx-hub--fetch-editor))))
+  (require 'drgnx-settings-runtime)     ; the sender needs the settings layers; a client that never hands over does not load them
+  (delq nil (append (list (drgnx-settings-runtime-send) (drgnx-hub--send-keys)) (drgnx-hub--fetch-editor))))
 
 (defun drgnx-hub--wait-for-keys ()
   "Hand the hub the provider table and the keys this Emacs holds (`drgnx-hub--hand-over') and wait (up to 5 s) for it

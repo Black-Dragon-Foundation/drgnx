@@ -1909,178 +1909,107 @@
       "classes": [
         "user"
       ],
-      "doc": "the gateway's provider table (no keys), replaced; a keyed provider over clear text is warned about",
+      "doc": "settings.el may have changed: its stamp is checked now",
       "home": "front",
-      "name": "config/providers",
+      "name": "config/changed",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's runtime settings values per project (or global), each set kept as last good; a bad value is refused with its path; replaces config/providers",
+      "home": "front",
+      "name": "config/settings",
       "params": {
         "$defs": {
-          "Id": {
-            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
-            "type": "string"
-          },
-          "ProviderAuth": {
-            "description": "How a provider takes its key; `none` is a keyless (local) provider.",
-            "enum": [
-              "bearer",
-              "x-api-key",
-              "none"
-            ],
-            "type": "string"
-          },
-          "ProviderCap": {
-            "enum": [
-              "chat",
-              "fim",
-              "embed"
-            ],
-            "type": "string"
-          },
-          "ProviderConfig": {
-            "description": "One provider of the table the editor hands over (no key: keys come by `gateway/keys`).",
+          "SettingOverride": {
+            "description": "One runtime setting's value.",
             "properties": {
-              "auth": {
-                "$ref": "#/$defs/ProviderAuth"
+              "name": {
+                "description": "A runtime setting's name (`drgnx-ai-providers`, …); another name is refused.",
+                "maxLength": 128,
+                "type": "string"
               },
-              "base": {
-                "$ref": "#/$defs/ProviderUrl"
+              "source": {
+                "description": "Where it comes from (a file, `lisp:<file>`, a workspace).",
+                "maxLength": 256,
+                "type": "string"
               },
-              "caps": {
-                "items": {
-                  "$ref": "#/$defs/ProviderCap"
-                },
-                "maxItems": 3,
-                "type": "array"
-              },
-              "id": {
-                "$ref": "#/$defs/Id"
-              },
-              "kind": {
-                "$ref": "#/$defs/ProviderKind"
-              },
-              "messages": {
-                "description": "It speaks Anthropic's Messages API, so an agent's chain may use it.",
-                "type": "boolean"
-              },
-              "price": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ProviderPrice"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "value": {
+                "$ref": "#/$defs/SettingValue",
+                "description": "The value as JSON of the setting's runtime type (an alist is an object, a plist an object)."
               }
             },
             "required": [
-              "id",
-              "kind",
-              "base",
-              "auth",
-              "messages",
-              "caps"
+              "name",
+              "value",
+              "source"
             ],
             "type": "object"
           },
-          "ProviderKind": {
-            "description": "A provider's API family: it decides the paths an editor token reaches (`/p/PROVIDER/…`).",
-            "enum": [
-              "openai",
-              "ollama",
-              "llamacpp",
-              "tei",
-              "anthropic"
-            ],
-            "type": "string"
-          },
-          "ProviderPrice": {
-            "description": "A provider's price, US dollars per million tokens.",
-            "properties": {
-              "input": {
-                "$ref": "#/$defs/Usd"
-              },
-              "output": {
-                "$ref": "#/$defs/Usd"
-              }
-            },
-            "required": [
-              "input",
-              "output"
-            ],
-            "type": "object"
-          },
-          "ProviderUrl": {
-            "description": "a provider's base URL: https, or http for any host (clear text off loopback)",
-            "maxLength": 2048,
-            "type": "string"
-          },
-          "Usd": {
-            "description": "an amount of US dollars",
-            "maximum": 1000000,
-            "minimum": 0,
-            "type": "number"
+          "SettingValue": {
+            "description": "JSON of the setting's runtime type (an alist is an object): at most 64 KiB (65536 bytes as JSON)",
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "providers": {
-            "description": "The whole table: it replaces the one before.",
+          "overrides": {
+            "description": "The whole set for that project (it replaces the one before; an empty list clears it).",
             "items": {
-              "$ref": "#/$defs/ProviderConfig"
+              "$ref": "#/$defs/SettingOverride"
             },
             "maxItems": 64,
             "type": "array"
+          },
+          "project": {
+            "description": "The project these values are for; none for the global ones.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "providers"
+          "overrides"
         ],
-        "title": "ProvidersParams",
+        "title": "SettingsParams",
         "type": "object"
       },
       "result": {
-        "$defs": {
-          "ProviderWarning": {
-            "additionalProperties": false,
-            "description": "A warning about one provider (a keyed one whose key travels in clear text).",
-            "properties": {
-              "provider": {
-                "type": "string"
-              },
-              "text": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "provider",
-              "text"
-            ],
-            "type": "object"
-          }
-        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`config/providers`' answer: how many providers the table now has, and the warnings.",
         "properties": {
           "applied": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "warnings": {
-            "default": [],
-            "items": {
-              "$ref": "#/$defs/ProviderWarning"
-            },
-            "type": "array"
           }
         },
         "required": [
           "applied"
         ],
-        "title": "ProvidersApplied",
+        "title": "SettingsApplied",
         "type": "object"
       },
       "writes": false

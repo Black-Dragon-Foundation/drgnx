@@ -4,6 +4,7 @@
 //! ([`tasks`]) and the coordination tools' sockets ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
+pub mod config;
 pub mod coord;
 pub mod gateway;
 pub mod graph;
@@ -137,7 +138,8 @@ params! {
     GatewayUnregister(gateway::UnregisterParams),
     GatewayKeys(gateway::KeysParams),
     GatewaySetBudget(gateway::SetBudgetParams),
-    ConfigProviders(gateway::ProvidersParams),
+    ConfigSettings(config::SettingsParams),
+    ConfigChanged(Empty),
     GatewayEditorToken(Empty),
     GatewayKeysHeld(Empty),
     AgentsList(Empty),
@@ -169,6 +171,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(coord::methods());
     v.extend(graph::methods());
     v.extend(settings::methods());
+    v.extend(config::methods());
     v.extend(tasks::methods());
     v.extend(mcp::methods());
     v.extend(gateway::methods());

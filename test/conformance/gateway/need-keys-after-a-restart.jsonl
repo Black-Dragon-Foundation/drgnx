@@ -1,8 +1,8 @@
 {"scenario": "gateway/need-keys-after-a-restart", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: keys live in the hub's memory only. A registration that needs `openrouter` is kept across a TERM and a start on the same root, but the key is not: the new hub holds none (gateway/keys-held is empty) and a subscriber is sent gateway/need-keys {providers: [openrouter]}; the editor's job is to hand the key over again."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "https://openrouter.ai/api/v1", "auth": "bearer", "messages": true, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"openrouter":{"kind":"openai","url":"https://openrouter.ai/api/v1","caps":["chat"],"messages":true,"key_env":"KEY"}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-key-restart"}}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["openrouter", null]], "agent": "a1", "owner": "$HARNESS_PID"}}}

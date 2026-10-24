@@ -141,32 +141,6 @@ project's ai.eld never adds or changes one: a cloned repository must not choose 
 
 (defun drgnx-ai-provider (id) (alist-get id (drgnx-ai-providers)))
 
-(declare-function drgnx-hub-resend-providers "drgnx-hub-client")
-
-(defun drgnx-ai--config-changed (name)
-  "A listener on `drgnx-config-changed-functions': when ai.eld changed, the hub gets the provider table again
-\(`drgnx-hub-resend-providers': only from an editor connected to it).  A key never goes with it."
-  (when (and (eq name 'ai) (fboundp 'drgnx-hub-resend-providers))
-    (drgnx-hub-resend-providers)))
-
-(add-hook 'drgnx-config-changed-functions #'drgnx-ai--config-changed)
-
-(defun drgnx-ai--settings-changed (_file changes)
-  "A listener on `drgnx-settings-changed-functions': when CHANGES name `drgnx-ai-providers' (the providers live in
-settings.el now), the hub gets the provider table again, as for ai.eld (`drgnx-hub-resend-providers').  Unified
-settings Task 22's sender replaces both listeners."
-  (when (and (fboundp 'drgnx-hub-resend-providers)
-             (cl-some (lambda (c) (eq (nth 1 c) 'drgnx-ai-providers)) changes))
-    (drgnx-hub-resend-providers)))
-
-(add-hook 'drgnx-settings-changed-functions #'drgnx-ai--settings-changed)
-
-(defun drgnx-ai-unload-function ()
-  "Remove the provider listeners (`unload-feature'); nil, so the feature unloads as usual."
-  (remove-hook 'drgnx-config-changed-functions #'drgnx-ai--config-changed)
-  (remove-hook 'drgnx-settings-changed-functions #'drgnx-ai--settings-changed)
-  nil)
-
 ;; A project's role may name a provider that is not on this machine (paid calls on every pause, your code sent
 ;; away).  The user confirms that once per project, from a command they ran; until then (and after a no) only the
 ;; local steps of the project's chain are used.

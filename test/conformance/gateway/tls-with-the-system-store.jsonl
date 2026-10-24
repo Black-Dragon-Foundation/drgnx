@@ -4,8 +4,8 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "https://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"a":{"kind":"anthropic","url":"https://localhost:$port","caps":["chat"],"messages":true}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
@@ -17,8 +17,8 @@
 {"do": "expect_exit", "hub": "h", "code": 0}
 {"do": "start", "hub": "h2", "same_root_as": "h", "env": {"SSL_CERT_FILE": "$ROOT/ca.pem"}}
 {"do": "connect", "conn": "c2", "hub": "h2"}
-{"do": "send", "conn": "c2", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "https://localhost:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c2","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"a":{"kind":"anthropic","url":"https://localhost:$port","caps":["chat"],"messages":true}}}]}}}
+{"do":"expect","conn":"c2","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c2", "json": {"id": 2, "method": "status"}}
 {"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"gateway": {"port": "$capture:gw2", "registrations": 1}}}}
 {"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw2", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw2", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}

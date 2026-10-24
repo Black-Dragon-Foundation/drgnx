@@ -243,27 +243,12 @@ pub struct ProviderConfig {
     pub price: Option<ProviderPrice>,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct ProvidersParams {
-    /// The whole table: it replaces the one before.
-    pub providers: Bounded<Vec<ProviderConfig>, 64>,
-}
-
 /// A warning about one provider (a keyed one whose key travels in clear text).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWarning {
     pub provider: String,
     pub text: String,
-}
-
-/// `config/providers`' answer: how many providers the table now has, and the warnings.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ProvidersApplied {
-    pub applied: u64,
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub warnings: Vec<ProviderWarning>,
 }
 
 pub(crate) fn methods() -> Vec<Method> {
@@ -294,11 +279,6 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "seam: every registration of the job gets the budget (drgnx-gateway-set-budget)",
         ),
         method!(
-            "config/providers", ConfigProviders(ProvidersParams) -> ProvidersApplied,
-            classes: [User], writes: false, home: Front,
-            doc: "the gateway's provider table (no keys), replaced; a keyed provider over clear text is warned about",
-        ),
-        method!(
             "gateway/editor-token", GatewayEditorToken(Empty) -> EditorToken,
             classes: [User], writes: false, home: Front,
             doc: "the caller's editor token (loopback only, the /p/PROVIDER/… paths; one per owner, kept across a restart)",
@@ -317,11 +297,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn a_bad_provider_url_is_refused_with_its_path() {
-        let m = find("config/providers").unwrap();
+    fn a_bad_provider_url_is_refused() {
         let one = |base: &str| {
-            json!({"providers": [{"id": "p", "kind": "openai", "base": base, "auth": "bearer",
-                                  "messages": false, "caps": ["chat"]}]})
+            serde_json::from_value::<super::ProviderConfig>(
+                json!({"id": "p", "kind": "openai", "base": base, "auth": "bearer",
+                       "messages": false, "caps": ["chat"]}),
+            )
         };
         for bad in [
             "ftp://example.com",
@@ -329,15 +310,14 @@ mod tests {
             "https://h/x#f",
             "/srv/x",
         ] {
-            let e = (m.decode)(&one(bad)).err().unwrap();
-            assert_eq!(e.path.as_deref(), Some("providers[0].base"), "{bad}: {e:?}");
+            assert!(one(bad).is_err(), "{bad}");
         }
         for good in [
             "https://openrouter.ai/api/v1",
             "http://127.0.0.1:11434",
             "http://192.0.2.10:8080",
         ] {
-            assert!((m.decode)(&one(good)).is_ok(), "{good}");
+            assert!(one(good).is_ok(), "{good}");
         }
     }
 

@@ -95,7 +95,7 @@ this Emacs connected: it holds the editor token and the hub holds a's key.  Skip
           (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
           (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
           (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil) (drgnx-hub-skew-functions nil)
-          (drgnx-hub--clear-text-told nil) (drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (drgnx-hub--keys-had nil))
+          (drgnx-hub--editor nil) (drgnx-hub--keys-held :unknown) (drgnx-hub--keys-had nil))
      (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
      (unwind-protect
          (progn

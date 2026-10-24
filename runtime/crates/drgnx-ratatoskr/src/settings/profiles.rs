@@ -161,7 +161,7 @@ pub fn openrouter(node: &Node) -> Result<Option<OpenRouterRestrictions>, Bad> {
     Ok(r)
 }
 
-fn slug(s: &str) -> bool {
+pub(crate) fn slug(s: &str) -> bool {
     let mut chars = s.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))

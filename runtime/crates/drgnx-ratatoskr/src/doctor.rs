@@ -9,7 +9,7 @@
 //! {opted_in, warnings}`, `copies: {pre7, schema5}` and `warnings` (a WAL above 64 MiB, a backup older than 48 h or
 //! one that failed its check, the opt-in file's problems).
 //! `gateway` is the running hub's (its `status`): `keys_held` names providers only,
-//! `warnings` are its clear-text providers (`config/providers`), and `keys_refused` (only when there is one) says why
+//! `warnings` are its clear-text providers (the settings' provider table), and `keys_refused` (only when there is one) says why
 //! the hub takes no key: it could not keep other processes out of its memory (on macOS, started under a debugger). `sandbox` is the job sandbox's check
 //! (`gleipnir::check`), `in_use` false until phase 6.
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet

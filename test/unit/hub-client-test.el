@@ -12,6 +12,7 @@
 (require 'drgnx-coord-mcp)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (require 'drgnx-ai)
+(require 'drgnx-settings-prov)
 (require 'auth-source)                  ; its variables are let-bound below
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
@@ -33,7 +34,7 @@
           (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
           (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
           (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil) (drgnx-hub-skew-functions nil)
-          (drgnx-hub--clear-text-told nil) (drgnx-hub--keys-had nil))
+          (drgnx-hub--keys-had nil))
      (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
      (unwind-protect (progn ,@body)
        (drgnx-hub-disconnect)
@@ -784,76 +785,59 @@ without the binary."
   (seq-filter (lambda (l) (equal (plist-get l :method) method)) (drgnx-fake-hub-lines hub)))
 
 (defun drgnx-hub-client-test--provider (line id)
-  "Provider ID's entry in LINE, a `config/providers' request (as the fake hub read it)."
-  (seq-find (lambda (p) (equal (plist-get p :id) id)) (plist-get (plist-get line :params) :providers)))
+  "Provider ID's override value in LINE, a `config/settings' request (as the fake hub read it)."
+  (let ((o (seq-find (lambda (o) (equal (plist-get o :name) "drgnx-ai-providers")) (plist-get (plist-get line :params) :overrides))))
+    (plist-get (plist-get o :value) (intern (concat ":" id)))))
 
 (defun drgnx-hub-client-test--no-keys-env ()
   "`process-environment' with every provider's key variable unset: this Emacs holds no key."
   (append (delq nil (mapcar (lambda (p) (plist-get (cdr p) :key-env)) (drgnx-ai-providers))) process-environment))
 
+(defmacro drgnx-hub-client-test--with-lisp-providers (providers &rest body)
+  "BODY with `drgnx-ai-providers' set to PROVIDERS as if your Lisp had set it (so the editor sends it)."
+  (declare (indent 1))
+  `(let ((old (default-value 'drgnx-ai-providers)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-settings-explain) (lambda (&rest _) '(:kind lisp :file "/c/config.el"))))
+           (set-default 'drgnx-ai-providers ,providers)
+           ,@body)
+       (set-default 'drgnx-ai-providers old))))
+
 (defun drgnx-hub-client-test--subscribed (hub)
-  "Wait until this Emacs is subscribed to the fake HUB and has handed it the provider table."
-  (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (drgnx-hub-client-test--sent hub "config/providers")))
-                               "the subscription and the table"))
+  "Wait until this Emacs is subscribed to the fake HUB and has handed it its runtime settings."
+  (drgnx-hub-client-test--wait (lambda () (and (process-live-p drgnx-hub--events) (drgnx-hub-client-test--sent hub "config/settings")))
+                               "the subscription and the settings"))
 
 (ert-deftest drgnx-hub-client/providers-sent-on-connect-and-on-change ()
-  ;; the resolved table (the presets and `drgnx-ai-providers', with kinds and caps) goes once the subscription is
-  ;; answered, and again when settings.el's providers change
-  (drgnx-test-with-runtime-settings
+  ;; your Lisp's providers go as a config/settings override once the subscription is answered, and again when
+  ;; settings change; the presets are the hub's own
+  (drgnx-hub-client-test--with-lisp-providers
+      '((lan :name "LAN" :kind openai :url "http://192.0.2.10:8080/v1" :key-env "LAN_KEY" :caps (chat chat) :price (1 . 2)))
     (drgnx-hub-client-test--with-fake ()
       (drgnx-hub-connect)
       (drgnx-hub-client-test--subscribed hub)
-      (let ((first (car (drgnx-hub-client-test--sent hub "config/providers"))))
-        (should (equal (drgnx-hub-client-test--provider first "openrouter")
-                       '(:id "openrouter" :kind "openai" :base "https://openrouter.ai/api/v1" :auth "bearer" :messages t
-                             :caps ("chat" "fim" "embed"))))
-        (should (equal (drgnx-hub-client-test--provider first "anthropic")
-                       '(:id "anthropic" :kind "anthropic" :base "https://api.anthropic.com/v1" :auth "x-api-key"
-                             :messages t :caps nil)))
-        (should (equal (drgnx-hub-client-test--provider first "ollama")
-                       '(:id "ollama" :kind "ollama" :base "http://127.0.0.1:11434" :auth "none" :messages t
-                             :caps ("chat" "fim" "embed"))))
-        (should (equal (plist-get (drgnx-hub-client-test--provider first "lmstudio") :messages) :false))
-        (should-not (drgnx-hub-client-test--provider first "lan")))
-      (drgnx-test-config-put 'settings (concat "(drgnx-settings :version 1 (drgnx-ai-providers ((lan :name \"LAN\" :kind openai"
-                                               " :url \"http://192.0.2.10:8080/v1\" :key-env \"LAN_KEY\" :caps (chat) :price (1 . 2)))))\n"))
-      (require 'drgnx-settings-live)
-      (drgnx-settings-live-sync (drgnx-config-file 'settings))
-      (let ((again (drgnx-hub-client-test--wait
-                    (lambda () (seq-find (lambda (l) (drgnx-hub-client-test--provider l "lan"))
-                                         (drgnx-hub-client-test--sent hub "config/providers")))
-                    "the table again, with settings.el's provider")))
-        (should (equal (drgnx-hub-client-test--provider again "lan")
-                       '(:id "lan" :kind "openai" :base "http://192.0.2.10:8080/v1" :auth "bearer" :messages :false
-                             :caps ("chat") :price (:input 1 :output 2))))
-        (should (drgnx-hub-client-test--provider again "openrouter"))))))
+      (let ((first (car (drgnx-hub-client-test--sent hub "config/settings"))))
+        (should (equal (drgnx-hub-client-test--provider first "lan")
+                       '(:name "LAN" :kind "openai" :url "http://192.0.2.10:8080/v1" :key_env "LAN_KEY" :caps ("chat")
+                               :price (1 2))))
+        (should-not (drgnx-hub-client-test--provider first "openrouter")))
+      (let ((n (length (drgnx-hub-client-test--sent hub "config/settings"))))
+        (run-hook-with-args 'drgnx-settings-changed-functions "x" nil)
+        (drgnx-hub-client-test--wait (lambda () (> (length (drgnx-hub-client-test--sent hub "config/settings")) n))
+                                     "the settings again")))))
 
 (ert-deftest drgnx-hub-client/providers-carry-no-key ()
-  ;; a canary key in the environment: the keys carry it, the provider table never does
-  (drgnx-hub-client-test--with-fake ()
-    (let ((process-environment (cons "OPENROUTER_API_KEY=sk-canary-providers" process-environment)))
-      (drgnx-hub-connect)
-      (drgnx-hub-client-test--wait (lambda () (and (drgnx-hub-client-test--sent hub "config/providers")
-                                                   (drgnx-hub-client-test--sent hub "gateway/keys")))
-                                   "the table and the keys")
-      (should (string-search "sk-canary-providers" (prin1-to-string (drgnx-hub-client-test--sent hub "gateway/keys"))))
-      (should-not (string-search "sk-canary-providers"
-                                 (prin1-to-string (drgnx-hub-client-test--sent hub "config/providers"))))
-      (should-not (string-search "sk-canary-providers" (prin1-to-string (drgnx-hub--providers-table)))))))
-
-(ert-deftest drgnx-hub-client/a-clear-text-warning-is-shown-once-per-provider ()
-  ;; two answers to config/providers with the same warning (user's answer 4): one notice, posted once
-  (drgnx-notice-test-with-model
-    (drgnx-hub-client-test--with-fake
-        (:results (list (cons "config/providers"
-                              '(:applied 1 :warnings [(:provider "lan" :text "lan's key travels in clear text over http://192.0.2.10:8080; use https")]))))
-      (let ((ids (list (drgnx-hub--send-providers) (drgnx-hub--send-providers))))
-        (drgnx-hub-client-test--wait (lambda () (not (seq-some (lambda (id) (gethash id drgnx-hub--pending)) ids)))
-                                     "both answers")
-        (let ((n (gethash '(hub . clear-text-lan) drgnx-notice--table)))
-          (should n)
-          (should (equal (plist-get n :text) "lan's key travels in clear text over http://192.0.2.10:8080; use https"))
-          (should-not (plist-get n :count)))))))
+  ;; a canary key in the environment: the keys carry it, the settings never do
+  (drgnx-hub-client-test--with-lisp-providers '((openrouter :kind openai :url "https://openrouter.ai/api/v1" :key-env "OPENROUTER_API_KEY"))
+    (drgnx-hub-client-test--with-fake ()
+      (let ((process-environment (cons "OPENROUTER_API_KEY=sk-canary-providers" process-environment)))
+        (drgnx-hub-connect)
+        (drgnx-hub-client-test--wait (lambda () (and (drgnx-hub-client-test--sent hub "config/settings")
+                                                     (drgnx-hub-client-test--sent hub "gateway/keys")))
+                                     "the settings and the keys")
+        (should (string-search "sk-canary-providers" (prin1-to-string (drgnx-hub-client-test--sent hub "gateway/keys"))))
+        (should-not (string-search "sk-canary-providers"
+                                   (prin1-to-string (drgnx-hub-client-test--sent hub "config/settings"))))))))
 
 (ert-deftest drgnx-hub-client/need-keys-re-reads-the-environment ()
   ;; no key kept (`drgnx-ai--keys' empty) and none when the editor connected: the variable set since is read when the

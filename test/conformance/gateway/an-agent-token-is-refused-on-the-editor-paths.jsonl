@@ -4,8 +4,8 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "openai", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"mock":{"kind":"openai","url":"http://127.0.0.1:$port","caps":["chat"],"messages":true}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["mock", null]], "agent": "a1", "owner": "$HARNESS_PID"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}

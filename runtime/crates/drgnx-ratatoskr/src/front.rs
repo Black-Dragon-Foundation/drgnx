@@ -2,7 +2,7 @@
 //! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`] and
 //! the store's methods of [`crate::graph`] (`graph/*`, `tasks/*`), the
 //! MCP hosting of [`crate::sessions`] (`mcp/*`) and the gateway of [`crate::gateway`] (`gateway/*`,
-//! `config/providers`, `spend`).  Every other method goes to [`Forward`].
+//! `spend`) and the settings' (`config/settings`, `config/changed`).  Every other method goes to [`Forward`].
 //!
 //! [`Front::line`] is one line of one connection: [`dispatch::prelude_as`] (the connection is the backend's when its
 //! peer pid is the backend's), the refusal noted, the handler, the answer queued.  [`Front::start_line`] is the same
@@ -298,6 +298,41 @@ impl Front {
         for n in self.settings.refresh().await {
             self.broadcast("notice", n);
         }
+        // a front with no config folder (a test's) keeps the table it was given
+        if self.settings.is_open() {
+            self.apply_settings();
+        }
+    }
+
+    /// The provider table in effect (`settings.el` and the global overrides) is the gateway's.
+    pub fn apply_settings(&self) {
+        if let Err(e) = self.gate.apply(&self.settings.current().loaded.providers) {
+            tracing::warn!("the settings' provider table does not apply: {}", e.message);
+        }
+    }
+
+    /// `config/settings`: the editor's values of PROJECT (none: global) kept as last good and put to work.
+    async fn config_settings(
+        &self,
+        p: runstav::methods::config::SettingsParams,
+    ) -> Result<runstav::methods::config::SettingsApplied, Error> {
+        let list = p
+            .overrides
+            .into_inner()
+            .into_iter()
+            .map(|o| crate::settings::overrides::Override {
+                name: o.name.into_inner(),
+                value: o.value.0,
+                source: o.source.into_inner(),
+            })
+            .collect();
+        let project = p.project.map(|p| p.into_inner());
+        let applied = self
+            .settings
+            .set_overrides(project.as_deref(), list)
+            .await?;
+        self.apply_settings();
+        Ok(runstav::methods::config::SettingsApplied { applied })
     }
 
     /// `status.store`: with the hub's graph writer, its opening rule's last answer (a failed migration's reason in
@@ -527,7 +562,11 @@ impl Front {
             }
             Params::GatewayKeysHeld(_) => Ok(json!(self.gate.keys_held())),
             Params::GatewaySetBudget(p) => self.gate.set_budget(p).await.map(|b| json!(b)),
-            Params::ConfigProviders(p) => self.gate.config_providers(p).await.map(|r| json!(r)),
+            Params::ConfigSettings(p) => self.config_settings(p).await.map(|r| json!(r)),
+            Params::ConfigChanged(_) => {
+                self.refresh_settings().await;
+                Ok(json!(true))
+            }
             // the graph store's (`graph/*`, `tasks/*`), then the coordination writes
             other => match crate::graph::serve(
                 &self.writer,
