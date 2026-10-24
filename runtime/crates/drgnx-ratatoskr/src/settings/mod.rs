@@ -13,6 +13,7 @@
 
 pub mod agents;
 pub mod load;
+pub mod matrix;
 pub mod overrides;
 pub mod profiles;
 pub mod providers;

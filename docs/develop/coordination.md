@@ -731,6 +731,21 @@ limit (`amount` in a `Unit`).
 Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, combination, overrides, narrowing as a
 property test, units, time presets).
 
+### The matrix in the hub (`drgnx-ratatoskr/src/matrix_gate.rs`)
+
+`MatrixGate::check(tx, who, action, ctx, now)` is the one door: it builds the layers (the active preset, the
+`agents-matrix` setting decoded by `settings/matrix.rs`, the project's layer, the plan's) and answers `Allow`,
+`Ask(card)` or `Never(why)`. The preset in force is read at every call, so a switch (or `presence/set`) applies from
+the next action. An Ask writes one `matrix` card (`norn::write::cards::matrix_card`); the same open question is the
+same card. The card's title and data come from the hub's `Facts` (command, paths, diff hash) and ids, never from
+agent text. `recheck(card)` runs at execution: a matrix that now says Never refuses whatever the user answered; a
+declined card refuses; an open one is still a question. A plan's override is the `matrix` field of its entity's data
+and counts only when the user's tx wrote that data (an agent's write of it is ignored). `delegate` keeps a manager's
+grant to a worker session, which must be no wider than the manager's own (`narrow`); it replaces the worker's cells,
+so a delegated action needs no card. The grant lives in the hub, not as a `grant` entity (the guard makes grants the
+user's). The weekly-share check on a subscription is the budget gate's (Task 20), not the matrix's.
+Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
+
 ## Tests
 
 `test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio; outside

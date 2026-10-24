@@ -207,6 +207,78 @@ pub fn card_set(tx: &mut WTx<'_>, id: i64, set: CardSet, now: f64) -> Result<(),
     Ok(())
 }
 
+/// A `matrix` card (Task 12): the hub asks the user whether one action may go ahead.  Everything in it is derived by
+/// the hub (the action, who, the facts it computed), never an agent's text.
+#[derive(Debug, Clone)]
+pub struct MatrixAsk {
+    /// The card's title, built by the hub from the facts.
+    pub title: String,
+    /// The hub's record of the question: action id, who, session, project, plan, amount, facts.
+    pub data: Value,
+    pub job: Option<String>,
+}
+
+/// A new open `matrix` card for ASK; the same question already open is that card (one card per question).
+pub fn matrix_card(tx: &mut WTx<'_>, ask: MatrixAsk, now: f64) -> Result<i64, CoordError> {
+    let data = ask.data.to_string();
+    let open: Option<i64> = tx
+        .sql()
+        .query_row(
+            "select id from card where kind = 'matrix' and state = 'open' and data = ?1 order by id limit 1",
+            [&data],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(id) = open {
+        return Ok(id);
+    }
+    card_create(
+        tx,
+        NewCard {
+            job: ask.job,
+            task: None,
+            kind: Some("matrix".into()),
+            title: Some(ask.title),
+            data: Some(ask.data),
+        },
+        now,
+    )
+}
+
+/// A `matrix` card as stored: its state, the user's choice (`allow` or `deny`) and the hub's record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatrixCard {
+    pub state: String,
+    pub choice: Option<String>,
+    pub data: Value,
+}
+
+/// Card ID when it is a `matrix` card.
+pub fn matrix_card_get(conn: &urdr::Connection, id: i64) -> Result<Option<MatrixCard>, CoordError> {
+    let row = conn.query_row(
+        "select state, choice, data from card where id = ?1 and kind = 'matrix'",
+        [id],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        },
+    );
+    match row {
+        Ok((state, choice, data)) => Ok(Some(MatrixCard {
+            state,
+            choice,
+            data: data
+                .and_then(|d| serde_json::from_str(&d).ok())
+                .unwrap_or(Value::Null),
+        })),
+        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Blank the title and data of the cards an excise reached: those written (or last updated) by an excised tx, those
 /// about an excised entity (`card.entity`, an entity `n`) and those whose `data.task` is an excised task's id.  The
 /// title becomes the marker, `data` (when there was any) MARK.  How many.

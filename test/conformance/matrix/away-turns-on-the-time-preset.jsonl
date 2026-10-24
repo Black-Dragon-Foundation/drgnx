@@ -1,0 +1,14 @@
+{"scenario": "matrix/away-turns-on-the-time-preset", "requires": ["v1", "fake-backend"], "doc": "presence/set tells the hub the user is away: matrix/get says so from the next call, matrix/check answers from the matrix (Balanced: a worker may commit, no card is made, push.main is Ask for a manager). The time preset itself needs the agents-matrix setting (Task 13); until then the active preset stays the base."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "matrix/get", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"preset": "balanced", "active": "balanced", "away": false}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "presence/set", "params": {"away": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "matrix/get", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"away": true}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "matrix/check", "params": {"action": "push.main", "who": {"role": "manager"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"verdict": "ask"}}}
+{"do": "sql_expect", "sql": "select count(*) from card", "rows": [[0]]}
