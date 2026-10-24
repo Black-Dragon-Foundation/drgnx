@@ -64,7 +64,20 @@ an agent with a grant), it changes as little as it can:
 
 ## The Settings page (Task 26)
 
-## Editing a value (Task 27)
+## Editing a value
+
+Each row has an editor that fits its type:
+
+- **On/off** settings toggle in place; **numbers** ask for a value inside the setting's bounds (a value outside them
+  is refused and the message says which bound); **text**, **files** and **folders** ask with a picker; a fixed set of
+  choices is a drop-down; a **symbol** completes; **Shortcuts** record the keys you press.
+- **Lists and other structured values** open a pane with Customize's widgets and an Apply button.
+- **Anything else** (`sexp`, computed types) opens a Lisp editor. What you type is read as plain data, never run,
+  and must fit the setting's type.
+- A value that does not fit is refused with the setting's name and where it fails; nothing is written.
+- A **code** setting (marked "code": a hook, a function) can be saved in User or your Workspace file, never in Shared.
+- A value that looks like a **secret** (a key, a token, `password = ...`) is refused: "use your keyring". A key never
+  goes into a settings file or its history.
 
 ## Who wins
 

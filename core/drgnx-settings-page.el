@@ -751,5 +751,7 @@ ID it undoes the setting of the row at point; elsewhere it asks which of the rec
 
 (add-hook 'drgnx-settings-file-written-functions #'drgnx-settings-page--refresh-all)
 
+(require 'drgnx-settings-editors)
+
 (provide 'drgnx-settings-page)
 ;;; drgnx-settings-page.el ends here
