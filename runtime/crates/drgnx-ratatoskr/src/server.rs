@@ -248,6 +248,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     tokio::spawn(relay::run(events_rx, front.clone()));
     tokio::spawn(coord::broadcast_events(front.clone()));
     tokio::spawn(coord::notify_backend(front.clone()));
+    tokio::spawn(crate::runner::tick::run(front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());
     #[cfg(feature = "test-hooks")]
     let tick = args.idle_tick_ms.map_or(idle::TICK, Duration::from_millis);

@@ -1,12 +1,14 @@
-{"scenario": "store/the-lisp-backend-starts-on-schema-7", "requires": ["v1", "lisp-backend"], "pending": "Task 16a: job/status is the hub's own, not yet ported from the frozen Lisp", "doc": "Task 16b: a schema-6 work.db with a job; the hub migrates it to schema 7, then the Lisp backend starts on it and answers a Home::Backend method (the jobs list) through its read-only handle. It never opens work.db read-write (drgnx-work-db refuses outside the local writer mode), so the hub log has no \"newer than this drgnx\" nor a refused open, and the jobs list adds nothing to status.store.writes."}
+{"scenario": "store/the-lisp-backend-starts-on-schema-7", "requires": ["v1", "lisp-backend"], "doc": "Task 16b: a schema-6 work.db with a job; the hub migrates it to schema 7, then the Lisp backend starts on it and answers a Home::Backend method (the jobs list) through its read-only handle. It never opens work.db read-write (drgnx-work-db refuses outside the local writer mode), so the hub log has no \"newer than this drgnx\" nor a refused open, and the jobs list adds nothing to status.store.writes."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into job (id, title, plan, repo, status, created, data) values ('j1', 'One job', '/p.md', '/r', 'stopped', 1.5, null)", "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'the task', 'implement', 'ready')"]}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 8, "store": {"schema": 8, "writer": "ready", "migrated_at": "$number"}}}}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "env/set", "params": {"env": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": {"applied": []}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "job/status", "params": {}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"jobs": [{"id": "j1", "status": "stopped", "tasks": [{"n": 1, "title": "the task", "status": "ready"}]}]}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"jobs": [{"id": "j1", "status": "stopped", "tasks": [{"n": 1, "title": "the task", "status": "ready"}]}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"backend": {"state": "running"}, "store": {"writes": "$capture:writes"}}}}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status", "params": {"id": "j1"}}}

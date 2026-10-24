@@ -674,6 +674,36 @@ budget lists in its data (`:unpriced-budget`) the profiles of its routes whose g
 `:price`, and warns (the proposal card, `:warnings` in the summary): the gateway cannot count what they spend.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
 
+### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
+
+Since Task 16a the hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
+`drgnx-job-summary` shapes, so the cockpit and `bin/drgnx job` read them unchanged. (`job/{card,reply,dismiss,
+reassign,resume}` are Task 16b's.) The Lisp runner (`core/drgnx-job*.el`) is frozen and is the oracle for each rule.
+
+- **State:** a job is a `job` row, its tasks `jtask` rows, plus the JSON in `job.data`: `plan`, `hash`, `repo`, `tasks`
+  (the plan's text per task), `routes`, `estimate`, `budget`, `gate`, and by task id `blocked`, `profiles`, `bases`,
+  `exits`, `notes`, and the run `order`. Nothing else lives in memory except "a worktree is being made" (`starting`,
+  shown as the task's status). A hub restart loses nothing.
+- **Propose:** a plan file (an absolute path; a plan entity id answers "not yet, Task 21") is read like
+  `drgnx-job-read-plan` (`# title`, `**Repo:**`, `### Task N: title`, `**Role:**`, `**Depends:**`, `**Won't build:**`
+  lines become decisions); duplicates, missing dependencies and cycles are refused; the job starts `proposed` with
+  one `proposal` card and a message (three writes). `auto` approves at once; `job/start-task` proposes task N and the
+  tasks it needs. The estimate counts tokens only (150k in, 15k out per task); prices arrive with Task 20, so every
+  routed profile is listed as unpriced.
+- **Approve, stop:** approve settles the proposal card and sets `running` (and the budget); stop rejects it, ends the
+  job's sessions (worktrees stay) and sets `stopped`.
+- **The step** (every 2 s, and at once after an approval or an unblock; `runner::tick`): a task whose agent is gone is
+  `ready` again (the third time it raises an `agent` card); ready tasks that are not blocked get workers in the run
+  order, up to 3 at a time; cards of finished tasks resolve; the job is `done` when every task is done or dropped.
+  **No git runs on the step**: a ready task is marked `starting` and a task of its own makes the worktree through
+  `RunGit::task_worktree` (async, with a deadline), then starts the session (role `worker`, the task's profile, its
+  lock and sandbox as any worker's), claims the task for it, registers the agent and sends the task prompt. A failure
+  raises the task's `agent` card. `BasicGit` makes worktrees until Task 17's `HubGit` is set with `Runs::set_git`.
+- **Order, block:** `job/order` moves a task among the open tasks; `job/block` keeps a task from getting an agent
+  (reason: one line, control and bidi characters replaced, 500 characters); `job/unblock` lets it run again.
+- **Hooks:** `Runs::set_hooks` takes the `Hooks` of Task 16b (reviews, the merge gate, fallback, the budget pause),
+  called after each running job's step and when a job stops.
+
 ## Clashes (`core/drgnx-job-clash.el`)
 
 Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment only inside the reviewer:
