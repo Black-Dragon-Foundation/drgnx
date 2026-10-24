@@ -1282,9 +1282,12 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   user class; `settings/overrides.rs`). The editor sends the values its Lisp and its workspaces hold: `name` is one of
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
-  global); an empty list clears it (the project still counts as having sent). A name that is not a runtime setting or a
-  value that does not fit is `invalid-params` at `overrides[N].name` or `overrides[N].value[.PATH]`, and nothing
-  changes. Each set is kept as last good in `kv` (`settings-override:global`, `settings-override:<project>`) and read
+  global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`); every other runtime setting is
+  global and security-bearing (profiles and their commands, providers and their URLs,
+  `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
+  in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or
+  `overrides[N].value[.PATH]`, and nothing changes. Each set is kept as last good in `kv` (`settings-override:global`, `settings-override:<project>`) and read
   again at start, so a hub with no editor connected still has them. In effect, for a setting and a project
   (`Settings::effective(name, project) -> (value, seen)`): the project's override, else the global one, else
   `settings.el`, else the shipped default; `seen` is false when the project never sent a set. The global overrides are

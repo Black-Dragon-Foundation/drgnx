@@ -409,7 +409,8 @@ impl Settings {
     }
 
     /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that
-    /// is not a runtime setting or a value that does not fit its type is refused with its path, and nothing changes.
+    /// is not a runtime setting, a global one in a project's set ([`overrides::PER_PROJECT`]) or a value that does
+    /// not fit its type is refused with its path, and nothing changes.
     pub async fn set_overrides(
         &self,
         project: Option<&str>,
@@ -422,7 +423,7 @@ impl Settings {
                 path: Some("project".into()),
             });
         }
-        if let Err((i, why)) = overrides::validate(&list) {
+        if let Err((i, why)) = overrides::validate(&list, project.is_some()) {
             return Err(runstav::wire::Error {
                 code: runstav::wire::ErrorCode::InvalidParams,
                 message: why.message,
