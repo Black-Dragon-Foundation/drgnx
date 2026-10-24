@@ -1476,6 +1476,9 @@ session's step writer (`agents/session.rs`) and announced as `agent-step`. The c
 arrive: text between tool calls is `think`; a tool call is `tool` from `in_progress` to `completed`; a permission
 request is `user-wait` (the hub answers it, so it is the user's time, not the tool's); a paused session is `paused`.
 `job-wait`, `machine-queue` and `stalled` are written by the tasks that own those events (exec, the supervisor).
+A step's `provider` is the profile's gateway provider environment (`:ai`) when it has one, else whose CLI it starts
+(`claude`, `codex`, `gemini`), so a subscription session's steps say where they ran (the matrix's `(:provider NAME)`
+column still matches `:ai` only).
 
 Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
 message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the

@@ -625,6 +625,18 @@ fn who_of(role: Role, profile: &AgentProfile) -> Who {
     }
 }
 
+/// The provider a session's step rows name: the gateway's provider environment (`:ai`) when it has one, else whose
+/// CLI it starts (`claude`, `codex`, `gemini`), so a subscription session's steps still say where they ran.
+fn step_provider(profile: &AgentProfile) -> Option<String> {
+    profile.ai.clone().or_else(|| {
+        profile.provider().and_then(|p| {
+            serde_json::to_value(p)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+        })
+    })
+}
+
 /// The launch of a test session: the plan's command, unsandboxed, with a short allowlisted environment.  Only tests
 /// and `test-hooks` builds have it (the mock agent lives outside any sandbox's reach); a shipped build always goes
 /// through `launch::spawn` and Gleipnir.
@@ -1125,7 +1137,7 @@ fn assemble(
         session: i.id.clone(),
         task: i.task.clone(),
         agent: profile.name.clone(),
-        provider: profile.ai.clone(),
+        provider: step_provider(profile),
         cwd: i.cwd.clone(),
     };
     tokio::spawn(write_steps(
@@ -3094,6 +3106,38 @@ mod tests {
         )
         .await;
         assert_eq!(*log.lock().unwrap(), ["rekey", "prompt"]);
+    }
+
+    #[test]
+    fn a_subscription_sessions_steps_name_its_cli() {
+        use crate::settings::profiles::Provider;
+        let p = |ai: Option<&str>, provider: Option<Provider>, cmd: &str| AgentProfile {
+            name: "t".into(),
+            command: vec![cmd.into()],
+            env: vec![],
+            mode: None,
+            ai: ai.map(String::from),
+            model: None,
+            tracker_tools: None,
+            doc: None,
+            provider,
+            job_safe: false,
+        };
+        let gemini = p(None, Some(Provider::Gemini), "/bin/mock");
+        assert_eq!(step_provider(&gemini).as_deref(), Some("gemini"));
+        assert_eq!(
+            step_provider(&p(None, None, "/usr/bin/claude")).as_deref(),
+            Some("claude")
+        );
+        let gw = p(
+            Some("claude-openrouter"),
+            Some(Provider::Claude),
+            "/bin/mock",
+        );
+        assert_eq!(step_provider(&gw).as_deref(), Some("claude-openrouter"));
+        assert_eq!(step_provider(&p(None, None, "/bin/other")), None);
+        // the matrix column stays the gateway environment only
+        assert_eq!(who_of(Role::Worker, &gemini).provider, None);
     }
 
     fn upd(v: Value) -> Value {
