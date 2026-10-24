@@ -97,6 +97,15 @@ tasks go first."
   :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "u32" :schema 'natnum)
 
+(drgnx-defsetting drgnx-agents-net-hosts
+  '((packages "crates.io:443" "index.crates.io:443" "static.crates.io:443"
+              "registry.npmjs.org:443" "pypi.org:443" "files.pythonhosted.org:443"))
+  "The hosts a job that was granted network may reach, per tier: an alist TIER → list of \"host:port\" strings.
+`packages' (the tier of a granted network) is the package registries of crates.io, npm and PyPI; `provider-only'
+reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  Only you can set it, never a repository."
+  :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "NetHosts" :schema '(alist symbol (list-of (string :match ":[0-9]+\\'"))))
+
 (drgnx-defsetting drgnx-agents-container-images nil
   "The images container jobs may run: an alist NAME → image reference pinned by digest (\"registry/name@sha256:…\").
 The hub pulls them; a job names one of them and nothing else.  Only you can set it, never a repository."

@@ -186,3 +186,101 @@ fn a_chat_is_not_a_worker_and_a_bad_session_id_is_refused() {
     assert!(spawn(&fx.plan(".claude"), &req).is_err());
     assert!(scratch_dir(&fx.env(), "../x").is_err());
 }
+
+/// B3: the lock's real list is relative; it is pinned inside the worktree, missing entries included.
+#[test]
+fn the_real_protected_list_is_pinned_in_the_worktree() {
+    use crate::agents::lock::PROTECTED_RO;
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt/.git")).unwrap();
+    let mut plan = fx.plan(".claude");
+    plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
+    let spec = fx.spec(&plan, &fx.shape(NetCell::ProviderOnly));
+    for rel in PROTECTED_RO {
+        let want = fx.p("wt").join(rel);
+        let pin = spec.binds.iter().find(|b| b.source == want);
+        assert_eq!(
+            pin.map(|b| b.mode),
+            Some(Mode::Ro),
+            "{rel}: {:?}",
+            spec.binds
+        );
+        assert!(want.exists(), "{rel} is made so it can be pinned");
+    }
+    assert!(fx.p("wt/.envrc").is_file() && fx.p("wt/.claude").is_dir());
+}
+
+/// B3: a linked worktree has `.git` as a file, so `.git/hooks` has no place to be pinned; the rest still are.
+#[test]
+fn a_linked_worktrees_missing_hooks_dir_is_left_out() {
+    use crate::agents::lock::PROTECTED_RO;
+    let fx = Fx::new();
+    fs::write(fx.p("wt/.git"), "gitdir: /elsewhere").unwrap();
+    let mut plan = fx.plan(".claude");
+    plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
+    let spec = fx.spec(&plan, &fx.shape(NetCell::ProviderOnly));
+    assert!(spec.binds.iter().all(|b| !b.source.ends_with(".git/hooks")));
+    assert!(spec.binds.iter().any(|b| b.source == fx.p("wt/.envrc")));
+}
+
+/// B4: a worktree under `<state>/hub/runs` (inside closed folders) is refused by validation unless the context opens
+/// the run root; the context opens that root and nothing else of the state folder.
+#[test]
+fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
+    let fx = Fx::new();
+    let env = fx.env();
+    let state = paths::state_dir(&env);
+    let wt = state.join("hub/runs/w1");
+    fs::create_dir_all(&wt).unwrap();
+    let shape = SessionShape {
+        sid: "S1".into(),
+        cwd: wt.clone(),
+        write: vec![wt.clone()],
+        read: vec![],
+        net: NetCell::ProviderOnly,
+    };
+    let plan = fx.plan(".claude");
+    paths::make_session_dir(&env, &paths::socket_path(&env), &shape.sid).unwrap();
+    let scratch = scratch_dir(&env, &shape.sid).unwrap();
+    let build = |ctx: &gleipnir::Context| {
+        let spec = session_spec(
+            &env,
+            ctx,
+            &plan,
+            &shape,
+            &scratch,
+            Tier::Reduced,
+            Target::LinuxReduced,
+        )
+        .unwrap();
+        gleipnir::validate(spec, ctx, Target::LinuxReduced)
+    };
+    let ctx = context_for(&env, None);
+    assert_eq!(
+        ctx.open_inside_closed,
+        vec![fs::canonicalize(state.join("hub")).unwrap().join("runs")]
+    );
+    build(&ctx).expect("the shipped layout validates");
+    let mut shut = ctx.clone();
+    shut.open_inside_closed.clear();
+    let refused =
+        build(&shut).expect_err("the closed folder refuses the tree when nothing is opened");
+    assert_eq!(refused.rule, gleipnir::Rule::Closed, "{refused}");
+    // a folder elsewhere in the state folder is not opened by it
+    let mut other = shape.clone();
+    other.write = vec![state.join("hub")];
+    other.cwd = state.join("hub");
+    assert!(
+        session_spec(
+            &env,
+            &ctx,
+            &plan,
+            &other,
+            &scratch,
+            Tier::Reduced,
+            Target::LinuxReduced
+        )
+        .and_then(|s| gleipnir::validate(s, &ctx, Target::LinuxReduced))
+        .is_err()
+    );
+}

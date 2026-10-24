@@ -24,6 +24,9 @@ pub const PROTECTED_RO: [&str; 6] = [
     "mise.toml",
 ];
 
+/// The entries of [`PROTECTED_RO`] that are files (the others are folders): a missing one is created empty to be pinned.
+pub const PROTECTED_FILES: [&str; 2] = [".envrc", "mise.toml"];
+
 /// The largest Claude settings file read for deny/ask rules, in bytes.
 const SETTINGS_MAX: u64 = 1_048_576;
 

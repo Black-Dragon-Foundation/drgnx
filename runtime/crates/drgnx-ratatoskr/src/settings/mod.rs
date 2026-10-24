@@ -93,6 +93,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-agents-checkpoint-cap", "u64", OnError::Strict),
     setting("drgnx-agents-job-memory", "String", OnError::Strict),
     setting("drgnx-agents-job-cpus", "u32", OnError::Strict),
+    setting("drgnx-agents-net-hosts", "NetHosts", OnError::Strict),
     setting(
         "drgnx-agents-container-images",
         "Vec<ContainerImage>",
@@ -137,6 +138,7 @@ pub struct RuntimeValues {
     pub agents_checkpoint_cap: u64,
     pub agents_job_memory: String,
     pub agents_job_cpus: u32,
+    pub agents_net_hosts: NetHosts,
     pub agents_container_images: Vec<ContainerImage>,
     pub agents_silent_after: SilentAfter,
     pub agents_repeat_limit: u32,
@@ -145,11 +147,14 @@ pub struct RuntimeValues {
 }
 
 /// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContainerImage {
     pub name: String,
     pub image: String,
 }
+
+/// `drgnx-agents-net-hosts`: the hosts (`host:port`) a granted network reaches, per tier name, in order.
+pub type NetHosts = Vec<(String, Vec<String>)>;
 
 /// `drgnx-agents-silent-after`: seconds without an update per kind of work, in order.
 pub type SilentAfter = Vec<(String, u64)>;
@@ -234,6 +239,10 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-checkpoint-cap" => values.agents_checkpoint_cap = de(node)?,
         "drgnx-agents-job-memory" => values.agents_job_memory = de(node)?,
         "drgnx-agents-job-cpus" => values.agents_job_cpus = de(node)?,
+        "drgnx-agents-net-hosts" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<Vec<String>>>(node)?;
+            values.agents_net_hosts = pairs;
+        }
         "drgnx-agents-container-images" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<String>>(node)?;
             values.agents_container_images = images(pairs);

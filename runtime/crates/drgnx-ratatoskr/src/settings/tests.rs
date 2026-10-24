@@ -94,8 +94,8 @@ fn only_runtime_names_decode() {
     assert_eq!(or.zdr, Some(true));
     assert_eq!(v.ai_roles[0].chain.len(), 2);
     // what is not a runtime setting has no place to go: RUNTIME is the whole list
-    // (8, and agent system part 1's 12: the matrix, the away signal, the job and container limits)
-    assert_eq!(RUNTIME_NAMES.len(), 20);
+    // (8, and agent system part 1's 13: the matrix, the away signal, the job and container limits, the net hosts)
+    assert_eq!(RUNTIME_NAMES.len(), 21);
     assert!(
         RUNTIME_NAMES
             .iter()

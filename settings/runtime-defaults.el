@@ -82,6 +82,8 @@
  (drgnx-agents-checkpoint-cap 2147483648)
  (drgnx-agents-job-memory "4G")
  (drgnx-agents-job-cpus 2)
+ (drgnx-agents-net-hosts ((packages "crates.io:443" "index.crates.io:443" "static.crates.io:443"
+                                    "registry.npmjs.org:443" "pypi.org:443" "files.pythonhosted.org:443")))
  (drgnx-agents-container-images nil)
  (drgnx-agents-silent-after ((task . 600) (brainstorm . 1800)))
  (drgnx-agents-repeat-limit 3)

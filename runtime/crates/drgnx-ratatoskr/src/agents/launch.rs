@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 /// The matrix's Network cell, as a launch needs it.  Provider-only and provider-and-packages both reach the world only
 /// through the session's proxy (its allowlist differs, which is the proxy owner's); `Open` shares the host network.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NetCell {
     ProviderOnly,
     ProviderAndPackages,

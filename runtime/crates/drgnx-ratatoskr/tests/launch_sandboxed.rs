@@ -186,3 +186,32 @@ fn plain_chat_cannot_read_home() {
     assert_eq!(code, 0);
     assert!(scratch.join("note").exists());
 }
+
+/// B3 + B4 on the shipped layout: the worktree sits under `<state>/hub/runs` (inside Gleipnir's closed folders) and
+/// the lock's real, relative `PROTECTED_RO` list is pinned inside it, `.envrc` and `mise.toml` included, though none
+/// exists yet.  Pinning needs bwrap's read-only bind, so the full tier.
+#[test]
+fn a_worker_under_the_hub_run_root_cannot_write_the_protected_files() {
+    use drgnx_ratatoskr::agents::lock::PROTECTED_RO;
+    let fx = Fx::new();
+    let env = fx.env();
+    let wt = paths::state_dir(&env).join("hub/runs/w1");
+    std::fs::create_dir_all(wt.join(".git")).unwrap();
+    let mut plan = fx.plan(&format!(
+        "echo a > {w}/a || exit 11; for f in .envrc mise.toml .claude/settings.json .git/hooks/post-merge; do \
+         echo x > {w}/$f 2>/dev/null && exit 12; done; exit 0",
+        w = wt.display()
+    ));
+    plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
+    let shape = SessionShape {
+        sid: "S1".into(),
+        cwd: wt.clone(),
+        write: vec![wt.clone()],
+        read: vec![],
+        net: NetCell::ProviderOnly,
+    };
+    let code = fx.run(Tier::Full, &plan, &shape);
+    assert_eq!(code, 0);
+    assert!(wt.join("a").exists());
+    assert_eq!(wt.join("mise.toml").metadata().unwrap().len(), 0);
+}

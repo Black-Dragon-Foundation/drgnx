@@ -32,6 +32,9 @@ pub struct Meta {
     /// A container job's image name (`agents-container-images`).
     #[serde(default)]
     pub image: Option<String>,
+    /// The job waits for a machine slot (`pending.json` holds what to start); it has no process yet.
+    #[serde(default)]
+    pub queued: bool,
 }
 
 /// The shell that wraps the command: `sh -c SCRIPT sh DIR PROGRAM ARGS…`.

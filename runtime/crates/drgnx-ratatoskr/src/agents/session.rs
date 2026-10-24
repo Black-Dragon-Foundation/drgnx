@@ -1841,6 +1841,11 @@ impl Session {
         lock(&self.gateway).take()
     }
 
+    /// The folder the session works in.
+    pub(crate) fn worktree(&self) -> PathBuf {
+        self.cwd.clone()
+    }
+
     /// Who this session is, for the matrix's columns.
     pub(crate) fn who(&self) -> Who {
         Who {

@@ -60,7 +60,9 @@ impl CoordTool for JobStart {
             }
             let started = coord.hub().exec(sid, "exec/start", params).await?;
             let id = started.get("id").cloned().unwrap_or(Value::Null);
-            Ok(json!({"id": id, "text": WOKEN}).to_string())
+            // the hub says when the job waits for a slot ("queued"); either way the agent ends its turn
+            let text = started.get("text").and_then(Value::as_str).unwrap_or(WOKEN);
+            Ok(json!({"id": id, "text": text}).to_string())
         })
     }
 }
@@ -237,7 +239,8 @@ mod tests {
         assert!(!err, "{text}");
         let v: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["id"], "x1");
-        assert_eq!(v["text"], WOKEN);
+        // the hub's own text (it says "queued" for a job that waits for a slot) is passed on
+        assert_eq!(v["text"], "runs");
         let calls = h.calls.lock().unwrap();
         assert_eq!(calls[0].0, "s1 exec/start");
         assert_eq!(calls[0].1["cwd"], "/work/tree");
