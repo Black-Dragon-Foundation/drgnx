@@ -1418,7 +1418,8 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `settings.el`, else the shipped default; `seen` is false when the project never sent a set. The global overrides are
   also what `Settings::current()` (and so the gateway) reads. `config/changed {}` checks `settings.el`'s stamp now.
 - **When.** At start, before anything is served, again when the file's stamp (device, inode, size, mtime, mode, owner)
-  changed when a session starts (`mcp/session`), and on `config/changed`.
+  changed when a session starts (`mcp/session`, and `agents/start` before it looks up the profile), and on
+  `config/changed`.
 - **Problems.** Each is a `notice` event (`source` `hub`, `id` `settings-file` or `settings-<setting>`, `life`
   `event`): a read's new problems go to the subscribers, and a new subscriber hears the current ones after its
   `subscribe` answer. They are logged too.

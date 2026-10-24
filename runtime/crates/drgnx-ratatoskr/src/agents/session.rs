@@ -721,6 +721,9 @@ pub(crate) async fn open(
             "a manager is made through agents/role, not at start",
         ));
     }
+    // a session starts on the settings as the file says now (as `mcp/session` does): a profile added since the last
+    // read is found
+    front.refresh_settings().await;
     let profile = find_profile(front, p.profile.as_str()).ok_or_else(|| {
         invalid(
             "profile",
