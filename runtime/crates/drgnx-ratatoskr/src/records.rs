@@ -196,7 +196,82 @@ fn data_of(op: &GraphOp, file: &Path, kind: RecordKind) -> Value {
         r["file"] = json!(file.to_string_lossy());
         r["kind"] = json!(kind_name(kind));
     }
-    json!({"records": r})
+    let mut d = json!({"records": r});
+    if let Some(t) = &op.task {
+        d["number"] = json!(t.number);
+        d["steps"] = json!(
+            t.steps
+                .iter()
+                .map(|(done, text)| json!({"done": done, "text": text}))
+                .collect::<Vec<_>>()
+        );
+        for (k, v) in [
+            ("role", &t.role),
+            ("model", &t.model),
+            ("interfaces", &t.interfaces),
+        ] {
+            if let Some(v) = v {
+                d[k] = json!(v);
+            }
+        }
+    }
+    if let Some(repo) = &op.repo {
+        let dir = file.parent().unwrap_or(Path::new("/"));
+        d["repo"] = json!(dir.join(repo).to_string_lossy());
+    }
+    d
+}
+
+/// A plan's structure: its tasks are under its head (`parent_of`), and a task waits on the tasks it `Depends:` on
+/// (`blocks`, dependency to task).  Links already there are left as they are.
+fn link_structure(
+    tx: &mut norn::store::WTx<'_>,
+    ops: &[GraphOp],
+) -> Result<(), norn::store::CoordError> {
+    let live =
+        |tx: &norn::store::WTx<'_>, id: &str| -> Result<Option<i64>, norn::store::CoordError> {
+            Ok(entity::by_id(tx.sql(), id)?
+                .filter(|e| e.retired_tx.is_none())
+                .map(|e| e.n))
+        };
+    for op in ops {
+        let Some(t) = &op.task else { continue };
+        let Some(me) = live(tx, &op.id)? else {
+            continue;
+        };
+        if let Some(p) = op.parent.and_then(|p| ops.iter().find(|o| o.seq == p))
+            && let Some(parent) = live(tx, &p.id)?
+        {
+            urdr::graph::link::add(
+                tx,
+                parent,
+                "parent_of",
+                me,
+                None,
+                Origin::Imported,
+                Some(&op.source),
+            )?;
+        }
+        for dep in &t.deps {
+            let found = ops
+                .iter()
+                .find(|o| o.task.as_ref().is_some_and(|d| &d.number == dep));
+            if let Some(d) = found
+                && let Some(dep_n) = live(tx, &d.id)?
+            {
+                urdr::graph::link::add(
+                    tx,
+                    dep_n,
+                    "blocks",
+                    me,
+                    None,
+                    Origin::Imported,
+                    Some(&op.source),
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 enum Act {
@@ -327,7 +402,9 @@ async fn import_one(db: &CoordDb, f: &Found, dry: bool) -> Result<ImportedFile, 
     } else {
         db.write(meta(), move |tx| {
             let acts = diff(tx.sql(), &ops, &data)?;
-            apply_acts(acts, &ops, &data, Some(tx))
+            let done = apply_acts(acts, &ops, &data, Some(&mut *tx))?;
+            link_structure(tx, &ops)?;
+            Ok(done)
         })
         .await
         .map_err(fail)?
@@ -1433,6 +1510,82 @@ mod tests {
             assert_ne!(written, text, "{rel}: the view carries its header");
             assert_eq!(view::strip_header(&written), text, "{rel}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_imported_plan_reads_with_its_tasks() {
+        let f = fix();
+        let rel = "docs/plans/drgnx/q.md";
+        std::fs::write(
+            f.root.join(rel),
+            "# Q plan\n\n**Repo:** ../../..\n\n### Task 1: first\n\n**Role:** implement\n\n- [ ] **Step 1: a**\n\n\
+             ### Task 2: second\n\n**Depends:** Task 1\n\n### Task 3b: third\n\n**Depends:** Task 1, Task 2\n",
+        )
+        .unwrap();
+        f.import(Some(RecordKind::Plans), false).await;
+        // the plan entity with its tasks under it, by number, and each task's waits (what plan_read and job/propose read)
+        let q = "select p.id, t.data from link l join entity p on p.n = l.src join entity t on t.n = l.dst \
+                 where l.kind = 'parent_of' and p.title = 'Q plan' and l.tx_to = ?1 order by l.id";
+        let rows: Vec<(String, String)> =
+            f.db.read(move |c| {
+                let mut st = c.prepare(q)?;
+                let r = st
+                    .query_map([urdr::graph::schema::SENTINEL], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })?
+                    .collect::<Result<_, _>>()?;
+                Ok(r)
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        let numbers: Vec<String> = rows
+            .iter()
+            .map(|(_, d)| {
+                serde_json::from_str::<Value>(d).unwrap()["number"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(numbers, ["1", "2", "3b"]);
+        let deps: Vec<(String, String)> = f
+            .db
+            .read(|c| {
+                let mut st = c.prepare(
+                    "select json_extract(a.data, '$.number'), json_extract(b.data, '$.number') from link l \
+                     join entity a on a.n = l.src join entity b on b.n = l.dst \
+                     where l.kind = 'blocks' and l.tx_to = ?1 order by 2, 1",
+                )?;
+                let r = st
+                    .query_map([urdr::graph::schema::SENTINEL], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<Result<_, _>>()?;
+                Ok(r)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            deps,
+            [
+                ("1".into(), "2".into()),
+                ("1".into(), "3b".into()),
+                ("2".into(), "3b".into())
+            ]
+        );
+        let repo: String =
+            f.db.read(|c| {
+                Ok(c.query_row(
+                    "select json_extract(data, '$.repo') from entity where title = 'Q plan'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert!(repo.ends_with("docs/plans/drgnx/../../.."), "{repo}");
+        // importing again links nothing twice
+        let again = f.import(Some(RecordKind::Plans), false).await;
+        assert!(again.files.iter().all(|x| x.ops == 0));
     }
 
     #[tokio::test]

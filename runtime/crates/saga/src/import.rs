@@ -36,6 +36,67 @@ pub struct GraphOp {
     pub body: String,
     /// `records:<hash>`: what every piece of the file has in common.
     pub source: String,
+    /// A plan's task: what `plan_read` and `job/propose` need of it.
+    pub task: Option<TaskMeta>,
+    /// The seq of the piece this one is under (`parent_of`): a plan's tasks are under its head.
+    pub parent: Option<u32>,
+    /// The head of a plan: its `**Repo:**` line as written.
+    pub repo: Option<String>,
+}
+
+/// A plan task's fields beyond its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskMeta {
+    /// `"5"`, `"22b"`.
+    pub number: String,
+    /// The numbers it waits on (`**Depends:** Task 3, Task 4`).
+    pub deps: Vec<String>,
+    pub role: Option<String>,
+    pub model: Option<String>,
+    pub interfaces: Option<String>,
+    pub steps: Vec<(bool, String)>,
+}
+
+/// The value after LABEL on the first body line that starts with it.
+fn labelled<'a>(body: &'a str, label: &str) -> Option<&'a str> {
+    body.lines()
+        .find_map(|l| l.strip_prefix(label))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// Every `Task N` / `Task 22b` in S.
+fn task_numbers(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(at) = rest.find("Task ") {
+        rest = &rest[at + 5..];
+        let n: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if n.starts_with(|c: char| c.is_ascii_digit()) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+fn meta_of(t: &plan::TaskDoc) -> TaskMeta {
+    TaskMeta {
+        number: t.number.clone(),
+        deps: labelled(&t.body, "**Depends:**")
+            .map(task_numbers)
+            .unwrap_or_default(),
+        role: labelled(&t.body, "**Role:**").map(|r| {
+            r.chars()
+                .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                .collect()
+        }),
+        model: t.model.clone(),
+        interfaces: t.interfaces.clone(),
+        steps: t.steps.iter().map(|s| (s.done, s.text.clone())).collect(),
+    }
 }
 
 /// FNV-1a, 64 bit, as 12 hex digits (stable across runs and platforms).
@@ -83,6 +144,9 @@ impl Out {
             status,
             body,
             source: self.key.clone(),
+            task: None,
+            parent: None,
+            repo: None,
         });
     }
 }
@@ -102,7 +166,8 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
                 .iter()
                 .map(|s| format!("{}{}", s.heading, s.body))
                 .collect();
-            o.push("plan", "head", title(&p.title), None, head);
+            o.push("plan", "head", title(&p.title), None, head.clone());
+            o.ops[0].repo = labelled(&head, "**Repo:**").map(str::to_owned);
             for t in &p.tasks {
                 let mut raw = format!("{}{}", t.heading, t.body);
                 for s in &t.after {
@@ -118,6 +183,9 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
                     Some(st.into()),
                     raw,
                 );
+                let op = o.ops.last_mut().expect("just pushed");
+                op.task = Some(meta_of(t));
+                op.parent = Some(0);
             }
             let rest: String = p
                 .rest

@@ -736,6 +736,9 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   transaction and is refused when `base_version` is behind. An agent's write needs the matrix's `graph.change`
   (the worker column; an Ask makes a card and the write is refused until it is settled). `job/propose` takes the
   entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job.
+- **Imported plans** get the same shape: `graph import-records` puts each `### Task N:` piece under the plan's head
+  (`parent_of`), with `data.{number, role, model, interfaces, steps}`, `**Depends:** Task M` as `blocks` links and the
+  `**Repo:**` line as the head's `data.repo`; so `plan_read` and `job/propose` on the head's entity id work.
 - **`report_submit`** (and the fallback block) files, in one transaction: a `report` entity linked `report_of` to the
   task, whose `data` holds `tip, commits, checks, decisions, differences, interfaces, followups, unrecorded` (so
   `report.data.interfaces` is what briefs and `plan_read` read); a ledger `note` about the task; each follow-up as
