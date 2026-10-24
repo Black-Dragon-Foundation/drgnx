@@ -259,6 +259,23 @@ impl LaunchPlan {
     }
 }
 
+impl LaunchPlan {
+    /// Codex only: the worktree CWD is marked `untrusted` (`projects."<cwd>".trust_level`), so a `.codex/config.toml`
+    /// in it is not loaded as the user's (ledger D9-3).  A no-op for another provider's plan.
+    pub fn with_codex_untrusted(mut self, p: &AgentProfile, cwd: &Path) -> Self {
+        if p.provider() == Some(Provider::Codex) {
+            let q = cwd
+                .to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            self.argv.push("-c".into());
+            self.argv
+                .push(format!("projects.\"{q}\".trust_level=\"untrusted\"").into());
+        }
+        self
+    }
+}
+
 /// Checks the lock at session start: the mode the CLI is put in is the asking one.  Claude and Gemini are set to
 /// `default` (a refusal ends the session); Codex is left alone, as codex-acp's `auto`/`full-access` presets would
 /// replace the `-c` overrides.  A profile with no lock fails.  The probe permission is the session's (Task 8b).

@@ -342,6 +342,30 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         }
         "drgnx-ai-providers" => values.ai_providers = default.ai_providers.clone(),
         "drgnx-ai-roles" => values.ai_roles = default.ai_roles.clone(),
+        "drgnx-agents-matrix" => values.agents_matrix = default.agents_matrix.clone(),
+        "drgnx-agents-away-after" => values.agents_away_after = default.agents_away_after,
+        "drgnx-agents-wait-refusals" => values.agents_wait_refusals = default.agents_wait_refusals,
+        "drgnx-agents-close-idle-after" => {
+            values.agents_close_idle_after = default.agents_close_idle_after;
+        }
+        "drgnx-agents-checkpoint-cap" => {
+            values.agents_checkpoint_cap = default.agents_checkpoint_cap;
+        }
+        "drgnx-agents-job-memory" => values.agents_job_memory = default.agents_job_memory.clone(),
+        "drgnx-agents-job-cpus" => values.agents_job_cpus = default.agents_job_cpus,
+        "drgnx-agents-container-images" => {
+            values.agents_container_images = default.agents_container_images.clone();
+        }
+        "drgnx-agents-silent-after" => {
+            values.agents_silent_after = default.agents_silent_after.clone();
+        }
+        "drgnx-agents-repeat-limit" => values.agents_repeat_limit = default.agents_repeat_limit,
+        "drgnx-agents-no-progress-tokens" => {
+            values.agents_no_progress_tokens = default.agents_no_progress_tokens;
+        }
+        "drgnx-agents-manager-context" => {
+            values.agents_manager_context = default.agents_manager_context;
+        }
         _ => {}
     }
 }
