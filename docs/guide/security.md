@@ -376,6 +376,22 @@ A checker that stays silent, or a shorthand that does not apply: look for **Rest
 the folder if you trust its files. A remote name refused by TRAMP because of an unusual user name: open it with a
 plain `user@host` (an ssh config `Host` alias works for anything ssh accepts).
 
+## The permissions matrix
+
+Every action an agent takes is checked against a matrix: rows are things an agent may do (start agents, spend,
+edit code, commit, push, change settings), columns are its role (manager, worker, chat), its agent and its
+provider. Each cell is Allow, Ask or Never, sometimes with a limit. Three presets ship: Cautious, Balanced and
+Autonomous. Your own cells, a project's and a plan's refine the preset; where several columns apply the most
+restrictive wins, and a more specific column never widens. `unsandboxed` and `user.private` are never allowed.
+
+- **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
+  hash), never the agent's own description. The same question open twice is one card. When the agent goes ahead the
+  hub checks again: if the matrix has since become Never for it, it is refused whatever you answered.
+- **Away:** when you are away the matrix can switch to a stricter (or looser) preset on its own; it applies from the
+  next action.
+- **Managers** may hand a worker less than they have, never more.
+- A plan's override counts only when you wrote it; an agent's write of it is ignored.
+
 ## Checking it
 
 `drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)
