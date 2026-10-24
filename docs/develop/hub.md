@@ -1445,3 +1445,26 @@ and records the exit, and (Linux with a user systemd) by `systemd-run --user --s
 command stays the hub's child. `Runner::open` re-attaches every folder without a result. The graph record is
 `norn::write::exec`. The `exec/runs-in-the-starters-sandbox` row (`exec::tests::exec_runs_in_the_starters_sandbox`) is
 `#[ignore]`d where bwrap is missing (build containers): run it on the desktop or in CI with `-- --ignored`.
+
+## The timeline
+
+Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the
+session's step writer (`agents/session.rs`) and announced as `agent-step`. The classifier sees the updates as they
+arrive: text between tool calls is `think`; a tool call is `tool` from `in_progress` to `completed`; a permission
+request is `user-wait` (the hub answers it, so it is the user's time, not the tool's); a paused session is `paused`.
+`job-wait`, `machine-queue` and `stalled` are written by the tasks that own those events (exec, the supervisor).
+
+Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
+message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
+decision log's version when the step closed) and `snapshot`.
+
+A **step snapshot** is a tree of the session's worktree, written after each completed edit (`edit`, `delete`, `move`
+tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
+session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
+sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
+`drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
+the repositories are collected (`git gc --prune=now`); with nothing finished left, snapshots stop and the editors get
+one `notice` (a running task's refs are never removed). Restore and fork are part 4's.
+
+`timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
+continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.
