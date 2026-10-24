@@ -2946,6 +2946,17 @@ pub async fn move_session(
     Ok(started)
 }
 
+/// The fuzz target `acp_update`'s entry (feature `fuzzing`): every one of UPDATES, in order, through the session's
+/// reducer as the agent's `session/update` JSON; each counts once, and nothing may panic.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_apply(updates: &[Value]) {
+    let mut st = State::new();
+    for u in updates {
+        st.apply(u);
+    }
+    assert_eq!(st.seq, updates.len() as u64);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

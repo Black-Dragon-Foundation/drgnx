@@ -713,8 +713,8 @@ registry's test and the `class_matrix` step read.
 ### The perf rows
 
 `perf/` rows (`requires` `v1` and `perf`) run only with `--perf OUT.json`; without it they are skipped, and
-`--require-all` lets that be. Each is a `measure` step; the file lists every sample and the median. There are no
-budgets: this is a recorded baseline, not a regression gate.
+`--require-all` lets that be. Each is a `measure` step; the file lists every sample and the median. Most have no
+budgets (a recorded baseline, not a regression gate); the `agents-*` rows check theirs in the row.
 
 | Row | Measures | Samples |
 |---|---|---|
@@ -730,6 +730,8 @@ budgets: this is a recorded baseline, not a regression gate.
 | `group-commit` | eight connections each send an `events/add` and wait for all eight answers (one round, group-committed) | 500 |
 | `as-of-churn` | `graph/neighbors` as of a tx inside 200,000 versions of one link, one hop and two, and the same hop now | 20 each |
 | `find` | `tasks/find` on 10^5 tasks: a word 1,000 hold, and a word one holds | 20 each |
+| `agents-streaming-20` | 20 mock agents stream at once (25 chunks and 25 tool calls each) with an editor subscribed, 100 `ping` round trips meanwhile. **Budgets in the row** (`/proc`, Linux only): the hub's CPU (utime + stime) under 40 % of one core over the window, resident set under 400 MB. The ping samples are the keystroke-latency proxy (p95 < 16 ms, judged on the desktop lane) |
+| `agents-idle-20` | 20 idle mock agents for 10 s: the hub's CPU under 3 % of one core (budget in the row) |
 
 The writer-level group-commit number, with `secure_delete` on and off, is `urdr`'s ignored bench
 (`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
@@ -743,6 +745,26 @@ runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/
 
 CI runs this on Linux and macOS and keeps the files as artifacts ([ci.md](ci.md)). Numbers are for a release build on a
 quiet machine.
+
+### The system rows (the agent core's exit criteria)
+
+`test/conformance/system/*.jsonl` prove the agent core's exit criteria across groups, on mocks only (`ratatoskr-mock acp` and
+`llm`; no live run). Each row says in its `doc` what makes it fail. Time-compressed rows shrink the hub's settings (the
+silent limit, the idle close) and hold the build for a multiple of the limit instead of sleeping for minutes.
+
+| Row | Criterion | Fails when |
+|---|---|---|
+| `three-providers-one-plan-under-balanced` | 1, 3 | a task starts on the wrong profile; an in-matrix action makes a card or waits; an ask runs without a card or the user's answer; Codex starts as a worker. Three providers means Claude, Gemini and an API-key `:ai` profile (Codex stays refused until `CODEX_LOCK_PROVEN`). The manager half is Task 25's rows |
+| `mixed-providers-lease-clash-review-spend` | 7, 8 | a task is claimed by the wrong session; the overlap is not carded once; a review is not handed to the reviewer profile; the job does not finish; a step lacks its turn id, log version, plan or task; a worker's rollup differs from its step rows |
+| `ten-minute-build-zero-requests` | 4 | any model request (supervisor, reminder, heartbeat) during the wait; the waiting agent is judged silent; the wake opens a new session |
+| `stall-paused` | 5 | the stuck agent is not paused within its limit, or with the wrong rule or limit; the card names another session or is made twice; the waiting agent is judged |
+| `cost-matches-records` | 6 | the budget adds each cumulative cost report to the last; a rollup differs from the step table; gateway request events, spend rows, `spend` and the status count differ |
+
+Criterion 2 is the laundering rows (`exec/`, `locks/`, `grants/`, `matrix/`), 10 the `restart/*` rows. The perf rows
+`perf/agents-*` are the hub half of "20 agents streaming": hub CPU and resident set from `/proc` with budgets in the row
+(run with `--perf`), and ping round trips while they stream. The editor half (the mirror redraws at most once per frame;
+keystroke p95 under 16 ms) needs a GUI session with a live hub and 20 mock agents; the hub already coalesces a session's
+events to one `agent` and `agent-entries` pair per 50 ms. It runs on the desktop timing lane.
 
 ### The gateway rows
 
@@ -833,6 +855,11 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `provider_merge` | a body and OpenRouter restrictions (flags, `only` and `ignore` lines, then the body) through `rewrite::body`: when the restrictions apply, the answer is a JSON object whose `provider` carries all of them; with nothing to apply the bytes stay |
 | `gateway_admit` | a request head (token class, listener, header style from the first byte; target and headers as lines) through `admit::head`: an admission belongs to its listener, takes a path of its class and stays under the body cap; a refusal is a 4xx with a JSON body |
 | `huginn_read` | bytes through `huginn::read::read_all` under the default limits and under tight ones (512 bytes, depth 6): no panic; a refusal's span inside the input; every node's span inside its parent's, on character boundaries; nesting within the limit; the source of each top-level datum reads alone to the same datum |
+| `acp_update` | JSON (an object, or an array of them) as an agent's `session/update`s through the session reducer (`agents::session::fuzz_apply`, feature `fuzzing`): each update counts once in `seq`, no panic |
+| `report_submit` | JSON as `report_submit`'s arguments over a schema-7 store (as `task_write_args`) |
+| `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
+| `saga_deferred` | the same through `saga::deferred` |
+| `saga_org` | the same through `saga::org` (`board.org`) |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for

@@ -1,0 +1,27 @@
+{"scenario": "system/stall-paused", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Exit criterion 5: two workers under a 2 s silent limit. One waits on a long job (a waiting agent is silent by design); the other is stuck in a turn that sends nothing. The supervisor pauses the stuck one within its limit (a supervisor event naming the rule and that session, 8 s at most for a 2 s limit and a 1 s tick), makes exactly one card whose title carries the rule and the limit, and puts a stalled step on its timeline; the waiting worker gets no card, no stalled step and stays unpaused. It fails if the stuck agent is not paused or is paused with the wrong rule or limit, if the card names another session or is made twice, or if the waiting agent is judged."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-silent-after ((task . 2) (brainstorm . 600))) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:waiter", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$waiter", "text": "call:job_start {\"argv\": [\"sh\", \"-c\", \"cat $ROOT/gate\"]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$waiter", "session": {"status": "waiting"}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:stuck", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$stuck", "text": "silent 4"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "supervisor", "data": {"rule": "silent", "session": "$stuck"}}, "within_ms": 8000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$stuck", "step": {"class": "stalled"}}}, "within_ms": 8000}
+{"do": "expect_silent", "conn": "q", "for_ms": 5000}
+{"do": "sql_expect", "sql": "select count(*), min(kind), min(state), min(json_extract(data, '$.session') = '$stuck'), min(title like 'silent: no update for % s (limit 2 s)') from card where kind = 'supervisor'", "rows": [[1, "supervisor", "open", 1, 1]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/get", "params": {"id": "$waiter"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"session": {"status": "waiting", "paused": "$absent"}}}}
+{"do": "sql_expect", "sql": "select count(*) from step where session = 'session:$waiter' and class = 'stalled'", "rows": [[0]]}

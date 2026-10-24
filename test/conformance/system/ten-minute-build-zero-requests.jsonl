@@ -1,0 +1,33 @@
+{"scenario": "system/ten-minute-build-zero-requests", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Exit criterion 4, time compressed: a worker starts a long build (a job that waits on a fifo) and ends its turn. The settings shrink the clocks that could poke it: the supervisor's silent limit is 1 s and the build is held 12 s (12 times the limit; at the shipped 600 s limit that is the 10-minute build), while the idle close stays far away. Over the whole hold the mock LLM sees exactly one request (the turn that started the job): no supervisor, heartbeat or reminder spends a model request on a waiting agent, and no supervisor card is made. When the build ends the wake is one prompt on the same ACP session (one session/new, no resume or load: the provider's prompt cache stays warm, the mock cannot report cache reads, so the same session is what is proven here), the mock LLM then counts exactly two requests, and the timeline holds a job-wait step of at least the hold. It fails if anything asks the model during the wait, if the waiting agent is judged silent, or if the wake opens a new session."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-silent-after ((task . 1) (brainstorm . 600))) (drgnx-agents-close-idle-after 3600) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\" \"--llm\" \"http://127.0.0.1:$port/v1/messages\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:job_start {\"argv\": [\"sh\", \"-c\", \"cat $ROOT/gate\"]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "waiting", "waiting-on": "$string"}}}, "within_ms": 20000}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1, "within_ms": 15000}
+{"do": "expect_silent", "conn": "q", "for_ms": 12000}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'supervisor'", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"status": "waiting", "paused": "$absent"}}}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "finished — exit 0"}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 2, "at_most": 2, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/acp.log", "lacks": "\"session/resume\""}
+{"do": "file", "path": "$ROOT/acp.log", "lacks": "\"session/load\""}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "job-wait", "end": "$number"}}}, "within_ms": 20000}
+{"do": "sql_expect", "sql": "select count(*) from step where session = 'session:$sid' and class = 'job-wait' and end - start >= 11.5", "rows": [[1]]}
