@@ -219,6 +219,9 @@ it ends, and a stop returns before it has)."
 (defvar-local drgnx-live--pending nil "The newest frame not yet drawn (see `drgnx-live--on-frame').")
 (defvar-local drgnx-live--meta nil "The shown frame's metadata (page size in CSS pixels).")
 (defvar-local drgnx-live--image nil "The shown image.")
+(defvar-local drgnx-live--previous nil
+  "The image shown before `drgnx-live--image', kept in the image cache until the next frame: while the new frame
+decodes off the main thread, Nidhogg draws this one in its place (the stand-in), so the view never shows an empty frame.")
 (defvar-local drgnx-live--drawn 0 "Frames drawn.")
 (defvar-local drgnx-live--dropped 0 "Frames replaced by a newer one before they were drawn.")
 (defvar-local drgnx-live--ready nil "Non-nil once the browser listed its pages (a page created later is a new tab).")
@@ -276,7 +279,8 @@ it ends, and a stop returns before it has)."
       (ignore-errors (websocket-close ws))))
   (drgnx-timer-cancel (cons 'live-draw (current-buffer)))
   (drgnx-timer-cancel (cons 'live-notes (current-buffer)))
-  (when drgnx-live--image (ignore-errors (image-flush drgnx-live--image t)) (setq drgnx-live--image nil)))
+  (dolist (img (list drgnx-live--previous drgnx-live--image)) (when img (ignore-errors (image-flush img t))))
+  (setq drgnx-live--image nil drgnx-live--previous nil))
 
 (defun drgnx-live--opened ()
   (setq drgnx-live--status nil)
@@ -486,10 +490,12 @@ only the newest waits to be drawn."
                             :max-width (if w (window-body-width w t) 1280)))
          (inhibit-read-only t))
     (put-text-property (point-min) (1+ (point-min)) 'display img)
-    (setq drgnx-live--image img)
+    ;; the frame before the last leaves the cache; the last stays until this one is drawn (`drgnx-live--previous');
+    ;; the first frame ends the wait the notes mention
+    (when drgnx-live--previous (ignore-errors (image-flush drgnx-live--previous t)))
+    (setq drgnx-live--previous old drgnx-live--image img)
     (cl-incf drgnx-live--drawn)
-    ;; an old frame's pixels stay in no cache; the first frame ends the wait the notes mention
-    (if old (ignore-errors (image-flush old t)) (drgnx-live--render-notes))))
+    (unless old (drgnx-live--render-notes))))
 
 (defun drgnx-live--agent-notes ()
   "Lines about running agents that do not use this browser."

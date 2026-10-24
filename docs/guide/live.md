@@ -91,5 +91,9 @@ environments are extended through `drgnx-agents-env-functions` (in `core/drgnx-a
 session and returns a list of extra `NAME=value` strings; one that fails, or anything returned that is not a string,
 is reported in a message and left out. The tests talk to a CDP stand-in, `test/fixtures/mock-cdp.el`, never to Chrome.
 
+The view keeps the frame it showed last in Emacs's image cache until the next frame replaces the one it shows now
+(each frame is flushed one frame later). On Nidhogg with its image worker on, a frame whose decode outlasts the
+redisplay's wait is drawn as the last frame until its own pixels land, so the view never shows an empty frame.
+
 The GUI test `test/ui/editor-m11c1-test.el` shows the Live view on the mock browser (a screenshot). The perf workload
 `live-view` types in a file while the view draws frames from the mock, 30 a second ([perf.md](../develop/perf.md)).

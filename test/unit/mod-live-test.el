@@ -96,6 +96,24 @@ no agents, and everything closed afterwards."
     (with-current-buffer "*drgnx live*"
       (should (string-search "https://new.example/" (substring-no-properties (drgnx-live--header)))))))
 
+(ert-deftest drgnx-live/the-last-frame-stays-cached-until-the-next ()
+  ;; While a new frame decodes off the main thread, Nidhogg draws the last frame in its place (the stand-in): so the
+  ;; last frame leaves the image cache only when the next one replaces the new one, and closing flushes both.
+  (skip-unless drgnx-live-test--websocket)
+  (let ((flushed nil))
+    (cl-letf (((symbol-function 'image-flush) (lambda (spec &optional _frame) (push (plist-get (cdr spec) :data) flushed))))
+      (drgnx-live-test--with
+        (drgnx-live-test--open)
+        (dolist (n '(1 2))
+          (drgnx-mock-cdp-frame n)
+          (should (drgnx-mock-cdp-wait (lambda () (equal (drgnx-live-test--shown) (format "frame-%d" n))))))
+        (should-not flushed)
+        (drgnx-mock-cdp-frame 3)
+        (should (drgnx-mock-cdp-wait (lambda () (equal (drgnx-live-test--shown) "frame-3"))))
+        (should (equal flushed '("frame-1")))
+        (with-current-buffer "*drgnx live*" (drgnx-live--disconnect))
+        (should (equal (sort (copy-sequence flushed) #'string<) '("frame-1" "frame-2" "frame-3")))))))
+
 (ert-deftest drgnx-live/an-unchanged-header-allocates-nothing ()
   (with-temp-buffer
     (setq-local drgnx-live--targets (list (list :targetId "T1" :type "page" :title "Example" :url "https://example.org/"))
