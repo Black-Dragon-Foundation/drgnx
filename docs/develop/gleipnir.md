@@ -78,9 +78,30 @@ this returns.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
 - `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`
-  spawns its probe, and `sandbox::check_blocking` gives it a runtime of its own.
+  spawns its probe, and `sandbox::check_blocking` gives it a runtime of its own. On the reduced tier both add
+  `sandbox_settings::REDUCED_CANNOT_PIN` (the text line, and `pins_note` in the JSON; null elsewhere).
+- Your settings files (`drgnx-ratatoskr/src/sandbox_settings.rs`, unified settings design §13), for phase 6's job
+  spec builder, which does not exist yet: it will add the first to its `Context.closed` and the second to its
+  spec's `binds`:
+  - **The closed list.** `closed_config_targets(config_dir, user_lisp_files)` is the true path of `settings.el`,
+    `config.el`, `custom.el`, `described.el` and `workspaces/` in the config dir and of each user Lisp file (a
+    relative one in the config dir). Each name is taken as Emacs loads it: `..` collapsed first, as
+    `expand-file-name` does, then every link followed as the kernel does, a dangling one too (a stow link whose target
+    is not there yet names the place it would be made), 40 links at most (more: left out). The config dir itself is
+    closed already; these entries close the places links lead to, so a write root that holds one is refused as
+    `ExposesUser` in every tier. `read_user_lisp_files(config_dir, home)` reads the paths from `settings.el`'s global
+    `drgnx-user-lisp-files` entry as data (`user_lisp_files` on a parsed `SettingsFile`): `FILE` or `(FILE . PLIST)`,
+    on or off, `~/` in the home; a file that does not read gives none.
+  - **The pins.** `settings_pins(write_roots)` is `Bind { mode: Ro, source: p, dest: p }` for each existing
+    `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx` at the top of each write root, once each. bwrap binds them after
+    the roots (read-only mounts over the writable root: a write is EROFS, an unlink or rename EBUSY); Seatbelt denies
+    their writes in every case of the name. A missing one is not pinned (bwrap cannot bind it); one that is a link is
+    pinned at its target when that lies in a write root, else not at all (it is not writable); the link itself, like a
+    missing file, stays replaceable. The reduced tier has no mount namespace and Landlock only adds rights, so a pin
+    there does nothing: the review gate (workspace trust) guards those files, and the check says so.
 - `ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH] [--pause-before-spawn FIFO]
-  [--landlock-omit PATH]… [--landlock-abi-cap N] -- CMD…` exists only with `test-hooks`, for the escape rows. It
+  [--landlock-omit PATH]… [--landlock-abi-cap N] [--settings-guards] -- CMD…` exists only with `test-hooks`, for the
+  escape rows. `--settings-guards` applies both settings guards above, as a job will. It
   detects, validates the spec against `context`, prepares, and with `--pause-before-spawn` writes `opened` to the
   FIFO once the sources are open and waits for a line back. It spawns through `draugr::spawn_pinned` (stdin
   `/dev/null`, the child's stdout passed through, its stderr's tail written once it has exited), reads the status
@@ -954,6 +975,7 @@ One JSON object per line; unknown keys are a parse error.
 | `result` | a subset of the result file `{refused, layers, exit}` (`NAME_contains` asks for a part of a string). Without it the run itself is asserted: not refused, exit 0, one line per probe |
 | `unsandboxed` | run the probes with no sandbox and judge `expect` on them: the probes are real |
 | `bwrap`, `landlock_omit`, `landlock_abi_cap` | `--bwrap`, `--landlock-omit`, `--landlock-abi-cap` |
+| `settings_guards` | `--settings-guards`: your config files closed, the write roots' settings files pinned (`settings-*` rows) |
 | `files_absent` | paths that must not exist after the run (a marker a refused run must not write) |
 | `proxy_events` | the proxy's events, exactly (placeholders filled): `Denied host:port`, `Refused <Why> target` |
 | `after` | `{after_lines, kill: run\|group, signal?, gone?: {match, within_ms}}`: once N lines are read, kill the `sandbox run` process or the sandbox's process group, and require that no process whose command line contains `match` is left within the time. A killed `sandbox run` writes no result file, so `kill: run` judges the lines and `gone` alone |
@@ -1081,6 +1103,9 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | `dest-link-stays-inside`, `…-plain`, `dest-link-inside-the-root-is-followed-there` | bwrap 0.12.0 refuses a bind whose dest runs through a link leading out of the new root (through `/oldroot`, or to a host path), and follows one that stays inside |
 | `helper-cannot-be-shadowed` | a bind over `/run/gleipnir` is refused by validation, so nothing can take the helper's place, and nothing ran (no line, no `${W}/ran`) |
 | `check-in-a-container` (`rows/container/`) | `sandbox check` says why it cannot work in a container, with no fix |
+| `settings-pin-dir-locals` | with `--settings-guards`, a write root's existing `.dir-locals.el` and `.drgnx/` cannot be written (EROFS) or unlinked and renamed (EBUSY: they are mount points), while the root and a missing `.dir-locals-2.el` stay writable |
+| `settings-stow-target-closed`, `…-reduced` | `settings.el` in the config dir is a link into a write root: the run is refused (`ExposesUser`, naming the target) and nothing ran |
+| `settings-reduced-cannot-pin` | the accepted gap the check names: the reduced tier writes a pinned `.dir-locals.el` (the review gate guards it) |
 
 **Mutations.** Each was built on a scratch copy of the tree and run on the VM (the plan's table, plus three for the
 reduced tier's network); every one turned its row red, and no other row changed:
@@ -1110,7 +1135,9 @@ loop, so they are checked in two places. On Linux, `parses_every_shipped_row` pa
 skips with "needs macos", and another builds every row's spec the way macOS would (`build_spec_for(.., linux:
 false)`), validates it for the macOS target and renders the Seatbelt profile, so a row that gleipnir would refuse, or
 whose `regex` denies are missing, fails on Linux. On macOS CI (Task 18) they run for real; a failing row goes to the
-fix round and the MAC-SB-10 item behind it stays open.
+fix round and the MAC-SB-10 item behind it stays open. `mac-settings-pin` (`settings-pins.jsonl`) is the pins'
+row: with `--settings-guards`, `.dir-locals.el` and `.drgnx/` refuse writes, unlinks and renames in any case of
+their names (`.DIR-LOCALS.EL`, `.Drgnx/`); written, not yet run on a Mac.
 
 The layout every filesystem row shares (made by `setup`, so a row needs no edits to run): `${TASK}` is a write root,
 holding a `.git` pin (a file, or a directory in `mac-case`) and a hidden `conf/.env`; `${W}` is an `rw` bind with an

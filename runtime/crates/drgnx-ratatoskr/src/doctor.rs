@@ -3,7 +3,7 @@
 //! `doctor --json` is
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
 //! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, socket_dir: {path, mode, ok}, sqlite,
-//! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use}}`.  `store` is the running hub's
+//! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}}`.  `store` is the running hub's
 //! work.db: a failed move to schema 7, and the copies that still hold what its deny-list kept out; and from files
 //! (also with no hub, when work.db exists) `wal_bytes`, `last_backup`, `backup_ok`, `backup_age_s`, `deny_list:
 //! {opted_in, warnings}`, `copies: {pre7, schema5}` and `warnings` (a WAL above 64 MiB, a backup older than 48 h or
@@ -72,12 +72,21 @@ fn sandbox_section(c: &Check) -> Value {
         "fix": c.fix,
         "landlock_abi": c.landlock_abi,
         "in_use": false,
+        "pins_note": crate::sandbox_settings::pins_note(c.backend),
     })
 }
 
 /// The doctor's text line about the sandbox. It says what works here and that jobs do not use it yet; it never says a
-/// job is "sandboxed".
+/// job is "sandboxed". On the reduced tier it adds that pins cannot hold there.
 pub fn sandbox_line(c: &Check) -> String {
+    let line = sandbox_state(c);
+    match crate::sandbox_settings::pins_note(c.backend) {
+        Some(note) => format!("{line}; {note}"),
+        None => line,
+    }
+}
+
+fn sandbox_state(c: &Check) -> String {
     if c.ok {
         let name = match &c.version {
             Some(v) => format!("{} {v}", c.backend.name()),
@@ -673,7 +682,7 @@ mod tests {
             v["sandbox"],
             json!({
                 "backend": "bwrap", "version": "0.12.0", "ok": true, "reason": null, "fix": null,
-                "landlock_abi": 10, "in_use": false,
+                "landlock_abi": 10, "in_use": false, "pins_note": null,
             })
         );
         let v = report_of(&broken());

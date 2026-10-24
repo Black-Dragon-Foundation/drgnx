@@ -234,6 +234,9 @@ pub struct Row {
     #[serde(default)]
     pub landlock_omit: Vec<String>,
     pub landlock_abi_cap: Option<u8>,
+    /// `--settings-guards`: the run closes your config files and pins the write roots' settings files, as a job will.
+    #[serde(default)]
+    pub settings_guards: bool,
     /// Paths that must not exist after the run (a marker a refused run must not have written).
     #[serde(default)]
     pub files_absent: Vec<String>,
