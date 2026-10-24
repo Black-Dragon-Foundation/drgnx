@@ -798,3 +798,36 @@ async fn presence_sets_the_away_flag_and_answers_it() {
     );
     assert_eq!(f.core.matrix.active_preset(0.0), Preset::Balanced);
 }
+
+#[tokio::test]
+async fn the_gate_reads_the_real_clock_for_the_time_presets() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = front(dir.path());
+    // a window around the real local minute (wide enough that a minute boundary cannot flip it, wrapping at midnight)
+    let m = i32::from(minute(now_secs()));
+    let (from, to) = ((m + 1440 - 10) % 1440, (m + 10) % 1440);
+    set_matrix(
+        &f,
+        json!({"preset": "cautious", "time": [
+            {"when": {"between": [from, to]}, "preset": "autonomous"}]}),
+    )
+    .await;
+    let w = who(Role::Worker);
+    let verdict = |p: Preset, a: Action| effective(&[&preset(p)], &w).cell(a).verdict;
+    let a = Action::ALL
+        .into_iter()
+        .find(|a| verdict(Preset::Autonomous, *a) != verdict(Preset::Cautious, *a))
+        .expect("the presets differ somewhere");
+    let e = f
+        .core
+        .matrix
+        .effective_now(
+            &f.settings,
+            &f.writer,
+            who(Role::Worker),
+            ActionCtx::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(e.cell(a).verdict, verdict(Preset::Autonomous, a));
+}
