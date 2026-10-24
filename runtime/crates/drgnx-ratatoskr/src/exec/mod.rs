@@ -923,12 +923,11 @@ async fn decide_session_job(
     });
     let command = argv.join(" ");
     let ctx = ActionCtx {
-        session: Some(sid.to_string()),
         facts: serde_json::from_value(
             serde_json::json!({"command": command, "paths": [cwd.to_string_lossy()]}),
         )
         .unwrap_or_default(),
-        ..ActionCtx::default()
+        ..ActionCtx::of_session(&f.core.runs.scopes(), sid)
     };
     f.core
         .matrix

@@ -108,7 +108,7 @@ fn report_text(r: &runstav::methods::plans::Report) -> String {
 /// The facts of session SID working in CWD on TASK (an entity id, `JOB#N` or none), read from the graph and the tree.
 pub async fn gather(front: &Front, sid: &str, cwd: &Path, task: Option<&str>) -> Facts {
     let brief = match task {
-        Some(t) => crate::brief::for_dispatch(front, t).await,
+        Some(t) => crate::brief::for_dispatch(front, t, Some(sid)).await,
         None => None,
     };
     let (s, t) = (sid.to_owned(), task.map(str::to_owned));

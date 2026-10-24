@@ -141,6 +141,17 @@ pub fn effective(layers: &[&Matrix], who: &Who) -> Effective {
     Effective { cells }
 }
 
+/// The more restrictive of X and Y at every action (a delegated worker: its own cells, its delegation and its
+/// manager's cells now).
+pub fn meet(x: &Effective, y: &Effective) -> Effective {
+    Effective {
+        cells: Action::ALL
+            .into_iter()
+            .map(|a| (a, tighter(x.cell(a), y.cell(a))))
+            .collect(),
+    }
+}
+
 /// The verdict for ACTION with AMOUNT (in the cell's unit).  Over the cell's limit the answer is Ask when
 /// `spend.over` allows asking, else Never; a limit with no amount is not exceeded.
 pub fn decide(e: &Effective, a: Action, amount: Option<f64>) -> Verdict {

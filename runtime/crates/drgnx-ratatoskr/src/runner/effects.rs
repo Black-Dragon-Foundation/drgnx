@@ -226,20 +226,28 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
 
 // ---- writing a plan ---------------------------------------------------------------------------------------------
 
-/// Whether the agent C may change the graph: the matrix's `graph.change`, as the worker column says.
+/// Whether the agent C may change the graph: the matrix's `graph.change` for C's session as it is (its role, agent
+/// and provider; a chat's is Never), the worker column for an agent the hub does not hold.
 async fn may_change(f: &Front, c: &Caller, plan: Option<String>) -> Result<(), Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
     if c.class != Class::Agent {
         return Ok(());
     }
-    let who = norn::matrix::Who {
-        role: Some(norn::matrix::Role::Worker),
-        ..Default::default()
+    let who = c
+        .sid
+        .as_deref()
+        .and_then(|s| f.core.agents.who(s))
+        .unwrap_or(norn::matrix::Who {
+            role: Some(norn::matrix::Role::Worker),
+            ..Default::default()
+        });
+    let base = match c.sid.as_deref() {
+        Some(s) => ActionCtx::of_session(&f.core.runs.scopes(), s),
+        None => ActionCtx::default(),
     };
     let ctx = ActionCtx {
-        session: c.sid.clone(),
-        plan,
-        ..Default::default()
+        plan: plan.or(base.plan.clone()),
+        ..base
     };
     match f
         .core

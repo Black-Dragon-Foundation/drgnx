@@ -1113,7 +1113,10 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   once per session per 50 ms. `agents/list` for an `agent` or `service` caller is shaped by `shape::result`.
 - **Permissions.** A permission request of the agent waits in the snapshot's `permissions` until the user answers it
   with `agents/permission` (an option the agent offered, or none to reject). Only the user's connection answers: no
-  peer's or manager's message is approval. The matrix (Task 12) is asked first; a `Never` rejects at once.
+  peer's or manager's message is approval. The matrix (Task 12) is asked first; a `Never` rejects at once. A request
+  the matrix asks about carries its `matrix` card's id: the answer settles the card, settling the card
+  (`cards/settle`) answers the request, and the matrix is checked again before the agent goes on. A request without a
+  card (the store made none) has the id `r<n>`.
 - **Files.** `fs/read_text_file` and `fs/write_text_file` are served inside the session's directory only (symlinks
   resolved first). A brainstorm session may read the project and write only its design document.
 - **Launch.** A session starts inside Gleipnir (`agents/launch.rs`); only test builds (`test-hooks`) can start one

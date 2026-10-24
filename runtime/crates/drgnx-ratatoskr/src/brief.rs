@@ -225,12 +225,13 @@ fn interfaces(conn: &Tx, task_n: i64) -> Result<String, CoordError> {
     Ok(cut_with_pointer(&out, INTERFACES_CAP, "see the reports"))
 }
 
-/// What the graph says about TASK; PROJECT is the repo's project id (resolved by the caller, off the db's thread).
+/// What the graph says about TASK; the matrix part is what WHO may do in CTX (the session's own, when it has one: the
+/// same cells its permission seam checks).
 fn gather(
     conn: &Tx,
     gate: &MatrixGate,
     task: &str,
-    project: Option<String>,
+    (who, ctx): (Who, ActionCtx),
     now: f64,
 ) -> Result<(Vec<(BriefPart, String)>, String), CoordError> {
     let task = bare(task);
@@ -276,15 +277,6 @@ fn gather(
         .and_then(|r| std::fs::read_to_string(Path::new(r).join("AGENTS.md")).ok())
         .map(|t| cut_with_pointer(&t, AGENTS_CAP, "read AGENTS.md in the repo root"))
         .unwrap_or_default();
-    let ctx = ActionCtx {
-        project,
-        plan: plan_file.as_ref().map(|p| format!("plan:{p}")),
-        ..ActionCtx::default()
-    };
-    let who = Who {
-        role: Some(Role::Worker),
-        ..Who::default()
-    };
     let matrix = matrix_lines(&gate.effective_for(conn, &who, &ctx, now));
     let base = match (&job_id, n) {
         (Some(j), Some(n)) => format!(
@@ -328,8 +320,43 @@ fn now() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
-/// The brief of TASK as the graph builds it, or the user's edited one.
-pub async fn build(front: &Front, task: &str) -> Result<Brief, Error> {
+/// The plan and project TASK works under (what a plan run's session is filed under): its job's plan (else the job),
+/// and the project of the job's repository.  None for a task without a job.
+pub async fn task_scope(front: &Front, task: &str) -> Option<(String, Option<String>)> {
+    let t = bare(task).to_owned();
+    let (job, plan, repo) = front
+        .writer
+        .db
+        .read(move |c| {
+            let Some(j) = entity::by_id(c, &format!("task:{t}"))?
+                .and_then(|e| e.data.get("job").and_then(Value::as_str).map(str::to_owned))
+            else {
+                return Ok(None);
+            };
+            let row = norn::read::jobs::job(c, &j).ok().flatten();
+            let (plan, repo) = row.map_or((None, None), |r| (r.plan, r.repo));
+            Ok(Some((j, plan, repo)))
+        })
+        .await
+        .ok()
+        .flatten()?;
+    let plan = plan.map_or_else(|| format!("plan:{job}"), |p| format!("plan:{p}"));
+    // the project is found by git, off the db's thread
+    let project = match repo {
+        Some(r) => {
+            tokio::task::spawn_blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
+    Some((plan, project))
+}
+
+/// The brief of TASK as the graph builds it, or the user's edited one.  For session SID its matrix part is what that
+/// session may do ([`MatrixGate::effective_for`], as its permission seam checks); without one, a worker on TASK.
+pub async fn build(front: &Front, task: &str, sid: Option<&str>) -> Result<Brief, Error> {
     let task = bare(task).to_owned();
     let t = task.clone();
     let db = front.writer.db.clone();
@@ -344,29 +371,30 @@ pub async fn build(front: &Front, task: &str) -> Result<Brief, Error> {
         });
     }
     front.core.matrix.refresh(front);
-    // the project is found by git, off the db's thread
-    let t = task.clone();
-    let repo = db
-        .read(move |c| {
-            Ok(entity::by_id(c, &format!("task:{t}"))?
-                .and_then(|e| e.data.get("job").and_then(Value::as_str).map(str::to_owned))
-                .and_then(|j| norn::read::jobs::job(c, &j).ok().flatten())
-                .and_then(|j| j.repo))
-        })
-        .await
-        .map_err(store_err)?;
-    let project = match repo {
-        Some(r) => {
-            tokio::task::spawn_blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
+    let worker = Who {
+        role: Some(Role::Worker),
+        ..Who::default()
+    };
+    let sight = match sid {
+        Some(s) => (
+            front.core.agents.who(s).unwrap_or(worker),
+            ActionCtx::of_session(&front.core.runs.scopes(), s),
+        ),
+        None => {
+            let (plan, project) = task_scope(front, &task)
                 .await
-                .ok()
-                .flatten()
+                .map_or((None, None), |(p, j)| (Some(p), j));
+            let ctx = ActionCtx {
+                project,
+                plan,
+                ..ActionCtx::default()
+            };
+            (worker, ctx)
         }
-        None => None,
     };
     let (gate, t) = (front.core.matrix.clone(), task.clone());
     let (parts, pointer) = db
-        .read(move |c| gather(c, &gate, &t, project, now()))
+        .read(move |c| gather(c, &gate, &t, sight, now()))
         .await
         .map_err(|e| match e {
             CoordError::Refused(m) => err(ErrorCode::InvalidParams, m),
@@ -385,14 +413,14 @@ pub async fn build(front: &Front, task: &str) -> Result<Brief, Error> {
     })
 }
 
-/// What the runner sends a task's worker: the edited brief if there is one, else the built one; `None` when the graph
-/// cannot say (the runner then keeps its own prompt).
-pub async fn for_dispatch(front: &Front, task: &str) -> Option<String> {
-    build(front, task).await.ok().map(|b| b.text)
+/// What the runner sends a task's worker (session SID): the edited brief if there is one, else the built one; `None`
+/// when the graph cannot say (the runner then keeps its own prompt).
+pub async fn for_dispatch(front: &Front, task: &str, sid: Option<&str>) -> Option<String> {
+    build(front, task, sid).await.ok().map(|b| b.text)
 }
 
 pub async fn build_method(f: &Front, _: &Caller, p: ByTask) -> Result<Brief, Error> {
-    build(f, &p.task.0).await
+    build(f, &p.task.0, None).await
 }
 
 /// Keep TEXT as TASK's edited brief (the note is made, or its body replaced); the note's id.

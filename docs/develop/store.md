@@ -81,7 +81,9 @@ nothing else in the process writes it, and no request runs SQLite on its caller'
 All in `urdr::graph::{entity, link}`; every function takes the write's `&mut Tx`.
 
 - `entity::create` inserts at `ver = 1` with `field_tx` naming the tx for each non-null field (`data` only when not
-  `{}`) and the FTS row; a duplicate `id` is `Refused("id exists")`.
+  `{}`) and the FTS row; a duplicate `id` is `Refused("id exists")`. Every write (create, update, revert, restore,
+  import) also names in `field_tx` the writer of each top-level `data` key it changes, as `data.<key>`, so a policy
+  can trust one key by its own author (the matrix gate's `data.matrix`); `changed_since` lists `data` only.
 - `entity::update(tx, n, expect_ver, changes)`:
   - A stale `expect_ver` answers `Conflict { ver, changed_since }` and writes nothing. `changed_since` lists the
     fields whose `field_tx` is newer than the tx that wrote the caller's version, each with its new value, the

@@ -188,9 +188,23 @@ fn delegated_cells_round_trip_through_the_store() {
         .into_iter()
         .collect(),
     };
-    assert_eq!(cells_from(&cells_json(&e)), Some(e));
-    // unreadable: nothing, and the caller gives the worker nothing
+    let d = Delegation {
+        cells: e,
+        manager: Some(Manager {
+            who: mgr(),
+            project: Some("project:q".into()),
+            plan: None,
+        }),
+    };
+    assert_eq!(cells_from(&cells_json(&d)), Some(d));
+    // a lost one stays lost
+    assert_eq!(
+        cells_from(&cells_json(&Delegation::default())),
+        Some(Delegation::default())
+    );
+    // unreadable (or the old form without its manager): nothing, and the caller gives the worker nothing
     assert_eq!(cells_from("not json"), None);
+    assert_eq!(cells_from("[]"), None);
     assert_eq!(
         Effective::default().cell(Action::CodeEdit).verdict,
         Verdict::Never

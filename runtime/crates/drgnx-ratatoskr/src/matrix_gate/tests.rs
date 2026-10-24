@@ -157,38 +157,127 @@ async fn delegate_refuses_wider() {
     assert!(r.1.is_ok());
 }
 
-#[tokio::test]
-async fn delegation_allows_without_a_card() {
+/// Worker session W1's verdict on A after a manager (all its own cells) delegated to it, under SETTING.
+async fn delegated_verdict(setting: Value, a: Action) -> Verdict {
     let (_d, db) = db();
     let g = MatrixGate::default();
-    g.apply_setting(&ask_commit("balanced", "ask")).unwrap();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let g2 = g.clone();
+    db.read(move |c| {
+        let m = who(Role::Manager);
+        let asked = g2.effective_for(c, &m, &ActionCtx::default(), 1.0);
+        g2.delegate(c, &m, &ActionCtx::default(), "w1", asked, 1.0)
+            .unwrap();
+        Ok(())
+    })
+    .await
+    .unwrap();
+    g.apply_setting(&setting).unwrap();
+    let c = ActionCtx {
+        session: Some("w1".into()),
+        ..ctx("c")
+    };
+    db.read(move |conn| Ok(g.dry(conn, &who(Role::Worker), a, &c, 2.0).verdict))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_delegation_never_widens_the_workers_own_cells() {
+    // the manager may commit (Balanced) and hands that on; the user's worker cell still binds the worker
+    assert_eq!(
+        delegated_verdict(ask_commit("balanced", "ask"), Action::Commit).await,
+        Verdict::Ask
+    );
+    assert_eq!(
+        delegated_verdict(ask_commit("balanced", "never"), Action::Commit).await,
+        Verdict::Never
+    );
+    // a provider's Never binds a delegated worker of that provider too
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced", "cells": [
+        {"action": "commit", "column": {"provider": "p1"}, "verdict": "never"}]}))
+        .unwrap();
+    let v = db
+        .read(move |c| {
+            let m = who(Role::Manager);
+            let asked = g.effective_for(c, &m, &ActionCtx::default(), 1.0);
+            g.delegate(c, &m, &ActionCtx::default(), "w1", asked, 1.0)
+                .unwrap();
+            let w = Who {
+                provider: Some("p1".into()),
+                ..who(Role::Worker)
+            };
+            let x = ActionCtx {
+                session: Some("w1".into()),
+                ..ctx("c")
+            };
+            Ok(g.dry(c, &w, Action::Commit, &x, 2.0).verdict)
+        })
+        .await
+        .unwrap();
+    assert_eq!(v, Verdict::Never);
+}
+
+#[tokio::test]
+async fn tightening_the_manager_reaches_its_workers() {
+    let manager_never = json!({"preset": "balanced", "cells": [
+        {"action": "commit", "column": {"role": "manager"}, "verdict": "never"}]});
+    assert_eq!(
+        delegated_verdict(manager_never, Action::Commit).await,
+        Verdict::Never
+    );
+    // and the away preset reaches them as well (Cautious asks for a worker's machines, Balanced allows them)
+    let away = json!({"preset": "balanced", "time": [{"when": "away", "preset": "cautious"}]});
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&away).unwrap();
+    let g2 = g.clone();
+    db.read(move |c| {
+        let m = who(Role::Manager);
+        let asked = g2.effective_for(c, &m, &ActionCtx::default(), 1.0);
+        g2.delegate(c, &m, &ActionCtx::default(), "w1", asked, 1.0)
+            .unwrap();
+        Ok(())
+    })
+    .await
+    .unwrap();
+    g.set_away(true);
+    let x = ActionCtx {
+        session: Some("w1".into()),
+        ..ctx("c")
+    };
+    let v = db
+        .read(move |c| {
+            Ok(g.dry(c, &who(Role::Worker), Action::Machines, &x, 2.0)
+                .verdict)
+        })
+        .await
+        .unwrap();
+    assert_eq!(v, Verdict::Ask);
+}
+
+#[tokio::test]
+async fn a_delegation_allows_what_both_allow_without_a_card() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
     let r = db
         .write(meta(Class::System), move |tx| {
             let m = who(Role::Manager);
-            let c0 = ActionCtx::default();
-            let asked = g.effective_for(tx.sql(), &m, &c0, 1.0);
-            g.delegate(tx.sql(), &m, &c0, "w1", asked, 1.0).unwrap();
+            let asked = g.effective_for(tx.sql(), &m, &ActionCtx::default(), 1.0);
+            g.delegate(tx.sql(), &m, &ActionCtx::default(), "w1", asked, 1.0)
+                .unwrap();
             let c = ActionCtx {
                 session: Some("w1".into()),
                 ..ctx("c")
             };
-            let own = g.check(
-                tx,
-                &who(Role::Worker),
-                Action::Commit,
-                &ActionCtx {
-                    session: None,
-                    ..ctx("c")
-                },
-                2.0,
-            )?;
-            let delegated = g.check(tx, &who(Role::Worker), Action::Commit, &c, 2.0)?;
-            Ok((own, delegated))
+            g.check(tx, &who(Role::Worker), Action::Commit, &c, 2.0)
         })
         .await
         .unwrap();
-    assert!(matches!(r.0, Gate::Ask(_)));
-    assert_eq!(r.1, Gate::Allow);
+    assert_eq!(r, Gate::Allow);
 }
 
 #[tokio::test]
@@ -234,4 +323,96 @@ async fn plan_override_only_by_the_user() {
         .await
         .unwrap();
     assert_eq!(r, (Verdict::Never, Verdict::Allow));
+}
+
+#[tokio::test]
+async fn an_override_counts_by_the_writer_of_its_own_field() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    let never = json!([{"action": "commit", "column": {"role": "worker"}, "verdict": "never"}]);
+    let mk = |class: Class, id: &'static str, kind: &'static str, data: Value| {
+        db.write(meta(class), move |tx| {
+            entity::create(
+                tx,
+                EntityNew {
+                    id: id.into(),
+                    kind: kind.into(),
+                    project: None,
+                    title: Some("p".into()),
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data,
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            Ok(())
+        })
+    };
+    let note = |class: Class, id: &'static str| {
+        db.write(meta(class), move |tx| {
+            let n = entity::by_id(tx.sql(), id)?.unwrap().n;
+            entity::update(
+                tx,
+                n,
+                None,
+                entity::Changes {
+                    data_patch: Some(json!({"note": "x"})),
+                    ..entity::Changes::default()
+                },
+            )?;
+            Ok(())
+        })
+    };
+    // the user's override, then an agent's write of another data field: the override still counts
+    mk(
+        Class::User,
+        "plan:u",
+        "plan",
+        json!({"matrix": never.clone()}),
+    )
+    .await
+    .unwrap();
+    note(Class::Agent, "plan:u").await.unwrap();
+    // an agent's override, then the user's write of another data field: still the agent's, ignored
+    mk(
+        Class::Agent,
+        "plan:a",
+        "plan",
+        json!({"matrix": never.clone()}),
+    )
+    .await
+    .unwrap();
+    note(Class::User, "plan:a").await.unwrap();
+    // a project's override is read the same way
+    mk(
+        Class::User,
+        "project:q",
+        "project",
+        json!({"matrix": never}),
+    )
+    .await
+    .unwrap();
+    let r = db
+        .read(move |c| {
+            let at = |plan: Option<&str>, project: Option<&str>| {
+                let x = ActionCtx {
+                    plan: plan.map(str::to_owned),
+                    project: project.map(str::to_owned),
+                    ..ActionCtx::default()
+                };
+                g.dry(c, &who(Role::Worker), Action::Commit, &x, 1.0)
+                    .verdict
+            };
+            Ok((
+                at(Some("plan:u"), None),
+                at(Some("plan:a"), None),
+                at(None, Some("project:q")),
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (Verdict::Never, Verdict::Allow, Verdict::Never));
 }

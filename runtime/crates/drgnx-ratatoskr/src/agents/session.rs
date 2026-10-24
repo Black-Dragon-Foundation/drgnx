@@ -86,9 +86,43 @@ pub(crate) fn internal(message: impl Into<String>) -> Error {
 /// A permission request the agent waits on.
 struct Pending {
     request: u64,
+    /// The matrix card the request waits on: its id is the request's (the user answers the card).
+    card: Option<i64>,
     public: Permission,
     options: Vec<(String, String)>,
     resp: hermod::Responder<RequestPermissionResponse>,
+}
+
+impl Pending {
+    /// Whether the user's answer to ID is for this request: the card's id, or `r<n>` for one without a card.
+    fn is(&self, id: &RequestId) -> bool {
+        match (self.card, id) {
+            (Some(c), RequestId::Num(n)) => i64::try_from(*n) == Ok(c),
+            (Some(c), RequestId::Str(s)) => c.to_string() == *s,
+            (None, RequestId::Str(s)) => format!("r{}", self.request) == *s,
+            (None, RequestId::Num(_)) => false,
+        }
+    }
+
+    /// The option to answer with: CHOSEN when it was offered and is of the verdict's kind, else the first allowing
+    /// (ALLOW) or rejecting one.
+    fn option(&self, allow: bool, chosen: Option<&str>) -> Option<String> {
+        let kind = if allow { "allow" } else { "reject" };
+        chosen
+            .filter(|o| {
+                self.options
+                    .iter()
+                    .any(|(id, k)| id == o && k.starts_with(kind))
+            })
+            .map(str::to_owned)
+            .or_else(|| {
+                if allow {
+                    pick_allow(&self.options)
+                } else {
+                    pick_reject(&self.options)
+                }
+            })
+    }
 }
 
 struct State {
@@ -467,6 +501,8 @@ pub struct Session {
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
     writer: crate::coord::Writer,
+    /// The plan and project each session works under (the matrix's project and plan layers).
+    scopes: crate::runner::Scopes,
     budgets: crate::budget::Budgets,
     /// The token of the session's gateway registration (a gateway profile).
     gateway: Mutex<Option<String>>,
@@ -744,7 +780,12 @@ async fn prepare(
     let eff = front
         .core
         .matrix
-        .effective_now(&front.settings, &front.writer, who, ActionCtx::default())
+        .effective_now(
+            &front.settings,
+            &front.writer,
+            who,
+            ActionCtx::of_session(&front.core.runs.scopes(), sid),
+        )
         .await
         .map_err(|e| internal(format!("the matrix: {e:?}")))?;
     let mut plan = plock::plan(profile, role, &eff);
@@ -885,17 +926,26 @@ pub(crate) async fn open(
     p: StartParams,
     caller: &Caller,
 ) -> Result<Started, Error> {
-    open_as(hub, front, p, caller, None).await
+    open_as(hub, front, p, caller, None, None).await
+}
+
+/// A new session id.
+pub(crate) fn new_sid() -> Result<String, Error> {
+    Ok(format!(
+        "a{}",
+        &runstav::proof::nonce().map_err(|e| internal(format!("no session id: {e}")))?[..12]
+    ))
 }
 
 /// [`open`] for a worker a manager started (Task 25): PARENT is the manager's session id, so the worker's budget comes
-/// out of the manager's.
+/// out of the manager's; SID, when given, is the id the caller made (and recorded the worker's delegation under) first.
 pub(crate) async fn open_as(
     hub: &super::Hub,
     front: &Front,
     p: StartParams,
     caller: &Caller,
     parent: Option<String>,
+    sid: Option<String>,
 ) -> Result<Started, Error> {
     if caller.class != Class::User {
         return Err(refuse("only the user starts a session"));
@@ -921,10 +971,10 @@ pub(crate) async fn open_as(
             "a brainstorm needs both about (its topic note) and document (its design document)",
         ));
     }
-    let sid = format!(
-        "a{}",
-        &runstav::proof::nonce().map_err(|e| internal(format!("no session id: {e}")))?[..12]
-    );
+    let sid = match sid {
+        Some(s) => s,
+        None => new_sid()?,
+    };
     let name = format!("{}-{}", profile.name, &sid[1..5]);
     let role = p.role.unwrap_or(if p.task.is_some() || p.job.is_some() {
         Role::Worker
@@ -936,6 +986,13 @@ pub(crate) async fn open_as(
         None => launch::scratch_dir(&runstav::paths::Env::process(), &sid)
             .map_err(|r| internal(format!("scratch directory: {}", r.message)))?,
     };
+    // a session on a task acts under the task's plan and project (the matrix's layers) from its first step
+    if let Some(t) = &p.task
+        && front.core.runs.scope_of(&sid).is_none()
+        && let Some((plan, project)) = crate::brief::task_scope(front, t.as_str()).await
+    {
+        front.core.runs.set_scope(&sid, plan, project);
+    }
     let (l, rx) = launch(
         front,
         &profile,
@@ -1188,6 +1245,7 @@ fn assemble(
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
+        scopes: front.core.runs.scopes(),
         budgets: front.core.budgets.clone(),
         gateway: Mutex::new(l.gateway.clone()),
         scheduled: AtomicBool::new(false),
@@ -2166,9 +2224,8 @@ impl Session {
             }
             let (action, facts) = classify(req.get("toolCall"));
             let ctx = ActionCtx {
-                session: Some(s.id.clone()),
                 facts,
-                ..ActionCtx::default()
+                ..ActionCtx::of_session(&s.scopes, &s.id)
             };
             let gate = s
                 .gate
@@ -2177,22 +2234,27 @@ impl Session {
             match gate {
                 Gate::Never(_) => reply(resp, pick_reject(&options)),
                 Gate::Allow if pick_allow(&options).is_some() => reply(resp, pick_allow(&options)),
-                _ => s.hold_permission(&req, options, resp),
+                Gate::Ask(card) if card > 0 => s.hold_permission(&req, options, resp, Some(card)),
+                _ => s.hold_permission(&req, options, resp, None),
             }
         });
     }
 
-    /// A request the user answers: it waits in the snapshot.
+    /// A request the user answers: it waits in the snapshot, under CARD's id when the matrix asked through one.
     fn hold_permission(
         self: &Arc<Self>,
         req: &Value,
         options: Vec<(String, String)>,
         resp: hermod::Responder<RequestPermissionResponse>,
+        card: Option<i64>,
     ) {
         let tool = req.get("toolCall").cloned();
         let request = self.next_request.fetch_add(1, Ordering::Relaxed);
         let public = Permission {
-            id: Some(RpcId::Int(request as i64)),
+            id: Some(match card {
+                Some(c) => RpcId::Int(c),
+                None => RpcId::Str(format!("r{request}")),
+            }),
             title: tool
                 .as_ref()
                 .and_then(|t| t.get("title"))
@@ -2209,6 +2271,7 @@ impl Session {
             let mut st = lock(&self.state);
             st.permissions.push(Pending {
                 request,
+                card,
                 public,
                 options,
                 resp,
@@ -2218,39 +2281,95 @@ impl Session {
         self.changed();
     }
 
-    /// The user's answer to a request: OPTION (one the agent offered), or none to reject.
-    pub(crate) fn answer_permission(
+    /// The user's answer to a request: OPTION (one the agent offered), or none to reject.  A request the matrix asked
+    /// through a card is answered through that card: it is settled, the matrix is checked again (a cell that has
+    /// become Never refuses whatever the answer), and every request waiting on it goes on.
+    pub(crate) async fn answer_permission(
         self: &Arc<Self>,
         request: &RequestId,
         option: Option<&str>,
     ) -> Result<bool, Error> {
-        let mut st = lock(&self.state);
-        let at = st
-            .permissions
-            .iter()
-            .position(|p| match request {
-                RequestId::Num(n) => p.request == *n,
-                RequestId::Str(s) => p.request.to_string() == *s,
-            })
-            .ok_or_else(|| invalid("request", "no such permission request (answered already?)"))?;
-        if let Some(o) = option
-            && !st.permissions[at].options.iter().any(|(id, _)| id == o)
-        {
-            return Err(invalid(
-                "option",
-                "not one of the options the agent offered",
-            ));
-        }
-        let p = st.permissions.remove(at);
-        st.wait_end();
-        drop(st);
-        let chosen = match option {
-            Some(o) => Some(o.to_string()),
-            None => pick_reject(&p.options),
+        let (card, allow) = {
+            let mut st = lock(&self.state);
+            let at = st
+                .permissions
+                .iter()
+                .position(|p| p.is(request))
+                .ok_or_else(|| {
+                    invalid("request", "no such permission request (answered already?)")
+                })?;
+            let p = &st.permissions[at];
+            if let Some(o) = option
+                && !p.options.iter().any(|(id, _)| id == o)
+            {
+                return Err(invalid(
+                    "option",
+                    "not one of the options the agent offered",
+                ));
+            }
+            let allow = option.is_some_and(|o| {
+                p.options
+                    .iter()
+                    .any(|(id, k)| id == o && k.starts_with("allow"))
+            });
+            match p.card {
+                Some(c) => (c, allow),
+                None => {
+                    // no card to answer (the store made none): the answer goes as it is
+                    let p = st.permissions.remove(at);
+                    st.wait_end();
+                    drop(st);
+                    let answer = p.option(allow, option);
+                    reply(p.resp, answer);
+                    self.changed();
+                    return Ok(true);
+                }
+            }
         };
-        reply(p.resp, chosen);
-        self.changed();
+        let (choice, at) = (if allow { "allow" } else { "deny" }, now());
+        let settled = self
+            .writer
+            .write(&crate::runner::user(), "cards/settle", move |tx| {
+                norn::write::cards::card_settle(tx, card, choice, at)
+            })
+            .await;
+        if let Err(e) = settled {
+            tracing::warn!(session = %self.id, card, "matrix card not settled: {e:?}");
+        }
+        self.release_card(card, option).await;
         Ok(true)
+    }
+
+    /// Matrix card CARD was settled (here, or in the cockpit): each request waiting on it goes on as the matrix says
+    /// now ([`MatrixGate::recheck`]): the user's yes where it still holds, else refused.  CHOSEN is the option the
+    /// user picked here.
+    pub(crate) async fn release_card(self: &Arc<Self>, card: i64, chosen: Option<&str>) {
+        let waiting: Vec<Pending> = {
+            let mut st = lock(&self.state);
+            if !st.permissions.iter().any(|p| p.card == Some(card)) {
+                return;
+            }
+            let (mine, rest) = std::mem::take(&mut st.permissions)
+                .into_iter()
+                .partition(|p| p.card == Some(card));
+            st.permissions = rest;
+            st.wait_end();
+            mine
+        };
+        self.gate.refresh_from(&self.settings);
+        let (g, at) = (self.gate.clone(), now());
+        let gate = self
+            .writer
+            .db
+            .read(move |c| Ok(g.recheck(c, card, at)))
+            .await
+            .unwrap_or_else(|e| Gate::Never(format!("the store did not answer: {e:?}")));
+        let allow = gate == Gate::Allow;
+        for p in waiting {
+            let answer = p.option(allow, chosen);
+            reply(p.resp, answer);
+        }
+        self.changed();
     }
 
     pub(crate) fn do_op(self: &Arc<Self>, p: DoParams) -> Result<bool, Error> {
@@ -2544,6 +2663,8 @@ impl Session {
         let _ = self.conn.cancel(&self.acp);
         let grace = if kill { Duration::ZERO } else { STOP_GRACE };
         draugr::kill_group(self.conn.pid(), grace, &draugr::RealSignaller).await;
+        // the session is gone for good (its runtime.db rows go next): so is what a manager delegated to it
+        self.gate.drop_delegation(&self.id);
     }
 
     /// A prompt from ORIGIN.  Idle, it goes behind whatever a Stop held back and the queue is delivered; during a
@@ -2935,10 +3056,6 @@ pub async fn move_to(f: &Front, c: &Caller, p: MoveParams) -> Result<Started, Er
 /// starts no second worker).  The gateway registration itself is made by the new session's launch (an `:ai` profile).
 /// Called with both sessions running, before the old one stops.
 pub(crate) async fn rekey(front: &Front, old: &Session, new: &str) {
-    if old.parent().is_some() {
-        // a manager's worker stays under its delegation, whatever the new profile's defaults are
-        crate::manager::move_delegation(front, &old.id, new).await;
-    }
     let scope = front.core.runs.scope_of(&old.id);
     if let Some((plan, project)) = &scope {
         front
@@ -3032,8 +3149,23 @@ pub async fn move_session(
         class: Class::User,
         ..caller.clone()
     };
-    // the new session keeps the old one's manager: its budget chain, and (in `rekey`) its delegated grants
-    let started = open_as(hub, front, start, &user, old.parent().map(str::to_owned)).await?;
+    // the new session keeps the old one's manager: its budget chain, and its delegation, which is on the new id
+    // before the new session starts (a manager's worker stays under it, whatever the new profile's defaults are)
+    let new = new_sid()?;
+    if old.parent().is_some() {
+        crate::manager::move_delegation(front, &old.id, &new).await;
+    }
+    let parent = old.parent().map(str::to_owned);
+    let started = match open_as(hub, front, start, &user, parent, Some(new.clone())).await {
+        Ok(s) => s,
+        Err(e) => {
+            front.core.matrix.drop_delegation(&new);
+            if let Some(db) = hub.db() {
+                delete_row(db, &new).await;
+            }
+            return Err(e);
+        }
+    };
     // nothing prompts the new session before everything keyed by the old sid is on the new one
     rekey_then(rekey(front, &old, &started.id), || {
         hub.prompt(&started.id, text, Origin::Hub)

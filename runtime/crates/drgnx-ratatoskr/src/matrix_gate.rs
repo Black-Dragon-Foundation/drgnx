@@ -5,7 +5,12 @@
 //! to its workers only narrow its own (`delegate`).  Methods `matrix/get`, `matrix/check`, `presence/set`.
 //!
 //! One limit per cell: the 30 % weekly share of a subscription is the budget gate's check ([`crate::budget`]), not the
-//! cell's.  A plan's override is its entity's `matrix` data field and counts only when the user wrote it.
+//! cell's.  A project's and a plan's override is its entity's `matrix` data field and counts only when the user wrote
+//! that field (its own writer, `field_tx["data.matrix"]`).
+//!
+//! What a session may do now is one function, [`MatrixGate::effective_for`] (the permission seam, the brief and the
+//! launch all call it): its own cells from every layer, and for a worker a manager started, no more than what the
+//! manager delegated and no more than the manager's own cells as they are at that moment.
 
 use crate::backup_timer::local;
 use crate::dispatch::Caller;
@@ -13,7 +18,7 @@ use crate::front::Front;
 use crate::settings::matrix as decode;
 use norn::matrix::{
     Action, Cell, Column, Effective, Matrix, Preset, TimePreset, Verdict, Who, Widening, active,
-    decide, effective, narrow, preset,
+    decide, effective, meet, narrow, preset,
 };
 use norn::store::{CoordError, WTx};
 use norn::write::cards::{MatrixAsk, matrix_card, matrix_card_get};
@@ -41,10 +46,38 @@ pub struct ActionCtx {
     pub project: Option<String>,
     /// The plan entity's id (its `matrix` field is the plan's override).
     pub plan: Option<String>,
-    /// The session acting (a manager's grants to it replace its columns' cells).
+    /// The session acting (a worker a manager started: its delegation narrows its own cells).
     pub session: Option<String>,
     pub amount: Option<f64>,
     pub facts: Facts,
+}
+
+impl ActionCtx {
+    /// What session SID acts in: the plan and the project of the run (or the task) it works for, from SCOPES.
+    pub fn of_session(scopes: &crate::runner::Scopes, sid: &str) -> ActionCtx {
+        let (plan, project) = scopes.get(sid).map_or((None, None), |(p, j)| (Some(p), j));
+        ActionCtx {
+            project,
+            plan,
+            session: Some(sid.to_owned()),
+            ..ActionCtx::default()
+        }
+    }
+}
+
+/// A manager as the gate reads its own cells again at every check of its worker: its columns, its project and plan.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Manager {
+    pub who: Who,
+    pub project: Option<String>,
+    pub plan: Option<String>,
+}
+
+/// What a manager handed a worker.  No manager: a delegation that was lost (an empty one is Never everywhere).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Delegation {
+    pub cells: Effective,
+    pub manager: Option<Manager>,
 }
 
 #[derive(Default)]
@@ -53,9 +86,10 @@ struct State {
     time: Vec<TimePreset>,
     away: bool,
     user: Matrix,
-    projects: BTreeMap<String, Matrix>,
     /// Worker session → what its manager handed it.
-    delegated: BTreeMap<String, Effective>,
+    delegated: BTreeMap<String, Delegation>,
+    /// Who hears of a new matrix card (none in unit tests).
+    editors: Option<Arc<crate::settings::agents::Editors>>,
 }
 
 /// The gate's state: the setting as last read, the away flag, the managers' grants.
@@ -64,7 +98,7 @@ pub struct MatrixGate {
     st: Arc<Mutex<State>>,
 }
 
-fn who_json(w: &Who) -> Value {
+pub(crate) fn who_json(w: &Who) -> Value {
     json!(WhoParam {
         role: w.role,
         agent: w.agent.clone().map(Bounded),
@@ -72,17 +106,19 @@ fn who_json(w: &Who) -> Value {
     })
 }
 
-fn who_of(v: &Value) -> Who {
+/// The `Who` in V; unreadable: no columns at all (nothing matches it, so nothing is allowed).
+pub(crate) fn who_of(v: &Value) -> Who {
     serde_json::from_value::<WhoParam>(v.clone())
         .map(|p| Who::from(&p))
         .unwrap_or_default()
 }
 
-/// The plan's override when the user wrote it (any other author's is ignored).
-fn plan_override(conn: &urdr::Connection, plan: &str) -> Option<Matrix> {
-    let ent = urdr::graph::entity::by_id(conn, plan).ok()??;
+/// The override of entity ID (a project or a plan) when the user wrote its `matrix` field.  The field's own writer
+/// counts, not whoever wrote another `data` key last; any other author's override is ignored.
+fn user_override(conn: &urdr::Connection, id: &str) -> Option<Matrix> {
+    let ent = urdr::graph::entity::by_id(conn, id).ok()??;
     let field = ent.data.get("matrix")?;
-    let tx = *ent.field_tx.get("data")?;
+    let tx = *ent.field_tx.get("data.matrix")?;
     let class: String = conn
         .query_row("select class from tx where id = ?1", [tx], |r| r.get(0))
         .ok()?;
@@ -118,15 +154,6 @@ impl MatrixGate {
         Ok(())
     }
 
-    /// A project's override layer (its `agents-matrix` cells).
-    pub fn set_project(&self, project: &str, m: Matrix) {
-        self.st
-            .lock()
-            .expect("matrix gate")
-            .projects
-            .insert(project.to_string(), m);
-    }
-
     /// `presence/set`: from the next action the time presets follow.
     pub fn set_away(&self, away: bool) {
         self.st.lock().expect("matrix gate").away = away;
@@ -138,8 +165,26 @@ impl MatrixGate {
         (base, active(base, &st.time, st.away, minute(now)), st.away)
     }
 
-    /// Who's effective cells: the active preset, the user's, the project's and the plan's layers; a manager's grant to
-    /// a session replaces them.
+    /// The layers for CTX: the active preset, the user's cells, the project's and the plan's overrides.
+    fn layers(&self, conn: &urdr::Connection, ctx: &ActionCtx, now: f64) -> Vec<Matrix> {
+        let (_, act, _) = self.preset_now(now);
+        let user = self.st.lock().expect("matrix gate").user.clone();
+        let mut layers = vec![preset(act), user];
+        layers.extend(ctx.project.as_deref().and_then(|p| user_override(conn, p)));
+        layers.extend(ctx.plan.as_deref().and_then(|p| user_override(conn, p)));
+        layers
+    }
+
+    /// WHO's own cells in CTX, from every layer.
+    fn own(&self, conn: &urdr::Connection, who: &Who, ctx: &ActionCtx, now: f64) -> Effective {
+        let layers = self.layers(conn, ctx, now);
+        effective(&layers.iter().collect::<Vec<_>>(), who)
+    }
+
+    /// What WHO (session `ctx.session`) may do now: its own cells from every layer (preset, away and time presets,
+    /// the user's, the project's, the plan's).  A worker a manager started gets the tighter of those, what the
+    /// manager delegated, and the manager's own cells as they are now: a delegation only narrows, and tightening the
+    /// manager reaches its workers at their next action.
     pub fn effective_for(
         &self,
         conn: &urdr::Connection,
@@ -147,30 +192,23 @@ impl MatrixGate {
         ctx: &ActionCtx,
         now: f64,
     ) -> Effective {
-        let (_, act, _) = self.preset_now(now);
-        let (user, project, delegated) = {
-            let st = self.st.lock().expect("matrix gate");
-            (
-                st.user.clone(),
-                ctx.project
-                    .as_ref()
-                    .and_then(|p| st.projects.get(p))
-                    .cloned(),
-                ctx.session
-                    .as_ref()
-                    .and_then(|s| st.delegated.get(s))
-                    .cloned(),
-            )
+        let own = self.own(conn, who, ctx, now);
+        let delegated = ctx.session.as_ref().and_then(|s| self.delegated_to(s));
+        let Some(d) = delegated else {
+            return own;
         };
-        if let Some(d) = delegated {
-            return d;
+        let narrowed = meet(&own, &d.cells);
+        match &d.manager {
+            Some(m) => {
+                let mctx = ActionCtx {
+                    project: m.project.clone(),
+                    plan: m.plan.clone(),
+                    ..ActionCtx::default()
+                };
+                meet(&narrowed, &self.own(conn, &m.who, &mctx, now))
+            }
+            None => narrowed,
         }
-        let plan = ctx.plan.as_deref().and_then(|p| plan_override(conn, p));
-        let base = preset(act);
-        let mut layers: Vec<&Matrix> = vec![&base, &user];
-        layers.extend(project.as_ref());
-        layers.extend(plan.as_ref());
-        effective(&layers, who)
     }
 
     fn verdict(
@@ -279,8 +317,9 @@ impl MatrixGate {
         }
     }
 
-    /// A manager's grant to its worker: ASKED, no wider than what MANAGER (session MANAGER_SID) has itself.  The
-    /// worker's cells are ASKED from now on.  (Kept in the hub, not as a `grant` entity: grants are the user's.)
+    /// A manager's grant to its worker: ASKED, no wider than what MANAGER (in MANAGER_CTX) has itself.  From now on
+    /// the worker may do no more than ASKED, its own cells and the manager's cells at the time of each action.
+    /// (Kept in the hub, not as a `grant` entity: grants are the user's.)
     pub fn delegate(
         &self,
         conn: &urdr::Connection,
@@ -292,16 +331,20 @@ impl MatrixGate {
     ) -> Result<(), Widening> {
         let parent = self.effective_for(conn, manager, manager_ctx, now);
         let granted = narrow(&parent, &asked)?;
-        self.st
-            .lock()
-            .expect("matrix gate")
-            .delegated
-            .insert(worker_sid.to_string(), granted);
+        let d = Delegation {
+            cells: granted,
+            manager: Some(Manager {
+                who: manager.clone(),
+                project: manager_ctx.project.clone(),
+                plan: manager_ctx.plan.clone(),
+            }),
+        };
+        self.set_delegated(worker_sid, d);
         Ok(())
     }
 
     /// What a manager delegated to worker SID, if it did.
-    pub fn delegated_to(&self, sid: &str) -> Option<Effective> {
+    pub fn delegated_to(&self, sid: &str) -> Option<Delegation> {
         self.st
             .lock()
             .expect("matrix gate")
@@ -310,32 +353,30 @@ impl MatrixGate {
             .cloned()
     }
 
-    /// Worker SID's delegated cells as a restart read them back (an empty `Effective` is Never everywhere).
-    pub fn set_delegated(&self, sid: &str, e: Effective) {
+    /// Worker SID's delegation as a restart or a move read it back (an empty one is Never everywhere).
+    pub fn set_delegated(&self, sid: &str, d: Delegation) {
         self.st
             .lock()
             .expect("matrix gate")
             .delegated
-            .insert(sid.to_string(), e);
+            .insert(sid.to_string(), d);
+    }
+
+    /// Worker SID ended (or never started): its delegation goes.
+    pub fn drop_delegation(&self, sid: &str) {
+        self.st.lock().expect("matrix gate").delegated.remove(sid);
     }
 
     fn view(&self, conn: &urdr::Connection, p: &GetParams, now: f64) -> MatrixView {
         let (base, act, away) = self.preset_now(now);
-        let plan_id = p.plan.as_ref().map(|x| x.0.clone());
-        let project = p.project.as_ref().map(|x| x.0.clone());
-        let (user, time, proj) = {
-            let st = self.st.lock().expect("matrix gate");
-            (
-                st.user.clone(),
-                st.time.clone(),
-                project.as_ref().and_then(|x| st.projects.get(x)).cloned(),
-            )
+        let ctx = ActionCtx {
+            project: p.project.as_ref().map(|x| x.0.clone()),
+            plan: p.plan.as_ref().map(|x| x.0.clone()),
+            ..ActionCtx::default()
         };
-        let plan = plan_id.as_deref().and_then(|x| plan_override(conn, x));
-        let preset_m = preset(act);
-        let mut layers: Vec<&Matrix> = vec![&preset_m, &user];
-        layers.extend(proj.as_ref());
-        layers.extend(plan.as_ref());
+        let time = self.st.lock().expect("matrix gate").time.clone();
+        let owned = self.layers(conn, &ctx, now);
+        let layers: Vec<&Matrix> = owned.iter().collect();
         let mut merged: BTreeMap<(Action, Column), Cell> = BTreeMap::new();
         for l in &layers {
             merged.extend(l.cells.iter().map(|(k, c)| (k.clone(), *c)));
@@ -426,12 +467,30 @@ impl MatrixGate {
             conn_id: 0,
             backend: false,
         };
-        writer
+        let title = card_title(a, &ctx.facts);
+        let gate = writer
             .write(&system, "coord/matrix-check", move |tx| {
                 g.check(tx, &who, a, &ctx, now)
             })
             .await
-            .unwrap_or(Gate::Ask(0))
+            .unwrap_or(Gate::Ask(0));
+        // the card is announced as every card is (the cockpit and the mirror wait on the event)
+        let editors = self.st.lock().expect("matrix gate").editors.clone();
+        if let Gate::Ask(id) = gate
+            && id > 0
+            && let Some(e) = editors
+        {
+            e.broadcast(
+                "card",
+                json!({"id": id, "job": null, "task": null, "kind": "matrix", "title": title}),
+            );
+        }
+        gate
+    }
+
+    /// The `card` event of a matrix card goes to EDITORS' subscribers.
+    pub fn announce_to(&self, editors: Arc<crate::settings::agents::Editors>) {
+        self.st.lock().expect("matrix gate").editors = Some(editors);
     }
 }
 

@@ -638,6 +638,7 @@ fn import_entity(tx: &mut Tx<'_>, rec: &EntLine) -> Result<Outcome, WriteError> 
             field_tx.insert(name.to_string(), id);
         }
     }
+    entity::data_keys_by(&mut field_tx, &cur.data, &rec.data, id);
     tx.sql().execute(
         "insert into entity_hist (n, ver, tx_from, tx_to, kind, project, title, status, body, priority, assignee, \
          data, field_tx, lease_holder, lease_epoch, lease_until, origin, retired_tx) \

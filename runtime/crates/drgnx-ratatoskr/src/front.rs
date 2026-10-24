@@ -146,6 +146,8 @@ impl Front {
         let budgets = crate::budget::Budgets::default();
         gate.attach_budgets(budgets.clone());
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
+        let matrix = crate::matrix_gate::MatrixGate::default();
+        matrix.announce_to(editors.clone());
         Front {
             cap,
             pid: std::process::id(),
@@ -165,6 +167,7 @@ impl Front {
             dirs: OnceLock::new(),
             core: crate::agent_core::Core {
                 budgets,
+                matrix,
                 ..Default::default()
             },
             tools,
@@ -501,6 +504,11 @@ impl Front {
         // a new subscriber hears which keys kept registrations need, and the settings' problems, after its answer
         let mut need_keys = None;
         let mut settings_notices = Vec::new();
+        // a settled card may be the one a session's permission request waits on (a matrix Ask)
+        let settled = match &params {
+            Params::CardsSettle(p) => i64::try_from(p.card).ok(),
+            _ => None,
+        };
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
@@ -630,6 +638,9 @@ impl Front {
                 },
             },
         };
+        if let (Some(card), Ok(_)) = (settled, &result) {
+            self.core.agents.card_settled(card).await;
+        }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
         {

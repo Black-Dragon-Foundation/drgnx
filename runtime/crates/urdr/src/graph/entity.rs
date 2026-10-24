@@ -84,7 +84,8 @@ pub struct Ent {
     pub assignee: Option<String>,
     pub lease: Lease,
     pub data: Value,
-    /// Field → the tx that last set it.
+    /// Field → the tx that last set it; each top-level `data` key has its own too, as `data.<key>` (a policy that
+    /// trusts one key by its author, such as a plan's `matrix`, reads that one).
     pub field_tx: BTreeMap<String, i64>,
     pub origin: Origin,
     pub source: Option<String>,
@@ -199,6 +200,25 @@ fn is_empty_object(v: &Value) -> bool {
     v.as_object().is_some_and(|o| o.is_empty())
 }
 
+/// Name tx ID in FIELD_TX as the writer (`data.<key>`) of every top-level key whose value differs from OLD to NEW.
+pub(crate) fn data_keys_by(
+    field_tx: &mut BTreeMap<String, i64>,
+    old: &Value,
+    new: &Value,
+    id: i64,
+) {
+    let none = serde_json::Map::new();
+    let (o, n) = (
+        old.as_object().unwrap_or(&none),
+        new.as_object().unwrap_or(&none),
+    );
+    for k in o.keys().chain(n.keys()) {
+        if o.get(k) != n.get(k) {
+            field_tx.insert(format!("data.{k}"), id);
+        }
+    }
+}
+
 fn text_json(v: &Option<String>) -> Value {
     v.as_ref().map_or(Value::Null, |s| json!(s))
 }
@@ -303,6 +323,7 @@ pub fn create(tx: &mut Tx<'_>, new: EntityNew) -> Result<Ent, WriteError> {
     }
     if !is_empty_object(&new.data) {
         field_tx.insert("data".to_string(), id);
+        data_keys_by(&mut field_tx, &json!({}), &new.data, id);
     }
     tx.sql().execute(
         "insert into entity (id, kind, project, title, status, body, priority, assignee, data, field_tx, origin, \
@@ -361,7 +382,8 @@ fn changed_since(tx: &Tx<'_>, cur: &Ent, expect: i64) -> Result<Vec<FieldChange>
         .unwrap_or(0);
     let mut out = Vec::new();
     for (field, &txid) in &cur.field_tx {
-        if txid <= base {
+        // a data key's own writer is in `data` already
+        if txid <= base || field.starts_with("data.") {
             continue;
         }
         let who: Option<(String, String)> = tx
@@ -473,6 +495,7 @@ pub fn update(
     for f in &changed {
         new.field_tx.insert((*f).to_string(), id);
     }
+    data_keys_by(&mut new.field_tx, &cur.data, &new.data, id);
     to_hist(tx, &cur)?;
     new.ver = cur.ver + 1;
     tx.sql().execute(
@@ -607,6 +630,7 @@ pub(crate) fn set_version(
     for f in &changed {
         field_tx.insert((*f).to_string(), id);
     }
+    data_keys_by(&mut field_tx, &old.data, &snap.data, id);
     to_hist(tx, cur)?;
     tx.sql().execute(
         "update entity set project = ?2, title = ?3, status = ?4, body = ?5, priority = ?6, assignee = ?7, \
@@ -795,6 +819,37 @@ mod tests {
         );
         assert_eq!(e.field_tx["title"], tx2);
         assert_eq!(e.field_tx["body"], tx1);
+    }
+
+    #[test]
+    fn each_data_key_keeps_its_own_writer() {
+        let mut conn = db();
+        let (n, tx1) = {
+            let mut t = tx(&mut conn, "user", Class::User);
+            let e = create(
+                &mut t,
+                EntityNew {
+                    data: json!({"matrix": [1], "note": "a"}),
+                    ..new_task("plan:a")
+                },
+            )
+            .unwrap();
+            let id = t.id();
+            t.commit_for_test().unwrap();
+            (e.n, id)
+        };
+        let mut t = tx(&mut conn, "agent:s1", Class::Agent);
+        let tx2 = t.id();
+        let patch = Changes {
+            data_patch: Some(json!({"note": "b"})),
+            ..Changes::default()
+        };
+        update(&mut t, n, None, patch).unwrap();
+        let e = by_n(t.sql(), n).unwrap().unwrap();
+        // the whole of data was last written by the agent, its matrix key by the user
+        assert_eq!(e.field_tx["data"], tx2);
+        assert_eq!(e.field_tx["data.note"], tx2);
+        assert_eq!(e.field_tx["data.matrix"], tx1);
     }
 
     #[test]

@@ -383,15 +383,31 @@ edit code, commit, push, change settings), columns are its role (manager, worker
 provider. Each cell is Allow, Ask or Never, sometimes with a limit. Three presets ship: Cautious, Balanced and
 Autonomous. Your own cells, a project's and a plan's refine the preset; where several columns apply the most
 restrictive wins, and a more specific column never widens. `unsandboxed` and `user.private` are never allowed.
+A session's project and plan are those of the task it works on (a plan run's, or the task it was started with).
 
 - **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
-  hash), never the agent's own description. The same question open twice is one card. When the agent goes ahead the
-  hub checks again: if the matrix has since become Never for it, it is refused whatever you answered.
+  hash), never the agent's own description. The same question open twice is one card. An agent's permission request
+  waits under that card's id: answering the request settles the card, and settling the card in the Work cockpit
+  answers the request. Before the agent goes on the hub checks again: if the matrix has since become Never for it,
+  it is refused whatever you answered.
 - **Away:** when you are away the matrix can switch to a stricter (or looser) preset on its own; it applies from the
   next action.
-- **Managers** may hand a worker less than they have, never more. What a manager delegated is kept across a hub
-  restart and when the worker is moved to another model; a worker whose grants are gone gets nothing.
-- A plan's override counts only when you wrote it; an agent's write of it is ignored.
+- **Managers** may hand a worker less than they have, never more. A worker a manager started may do only what all
+  three allow: its own cells (every layer above, for its role, agent and provider: your Never for its provider binds
+  it too), what the manager handed it, and the manager's own cells as they are at that moment, so tightening the
+  manager reaches the workers it already started. The grants are recorded before the worker starts, and are kept
+  across a hub restart and when the worker is moved to another model (narrowed again for the new model's columns); a
+  worker whose grants are gone gets nothing. A manager's own Ask card shows the call it is about (the tool and its
+  arguments), and your answer counts for that call only.
+- A project's or a plan's override (its `matrix` field) counts only when you wrote that field; an agent's write of
+  it is ignored, and so is an agent's write of another field of the same plan for the matter of who wrote the
+  override.
+- **How a tool call is read.** The hub maps an agent's tool call to a row by its kind and a plain reading of its
+  command: a `read` or `search` is `code.read`, a `fetch` is `network`, a command containing `git push` (to `main`
+  or `master`: `push.main`) or `git commit` is that row, anything else is `code.edit`. A push written another way
+  (`git -C . push`, an alias, a script) counts as `code.edit`. That coarse map is acceptable because the rows that
+  matter outside the worktree are enforced elsewhere: the sandbox (Gleipnir) decides what network an agent has, and
+  a push needs credentials the sandbox does not give the agent.
 - **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
   builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
   mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is fixed to the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a

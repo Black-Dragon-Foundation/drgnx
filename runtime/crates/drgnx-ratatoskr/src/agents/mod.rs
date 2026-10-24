@@ -99,15 +99,18 @@ impl Hub {
     }
 
     /// A worker a manager started (Task 25): as [`Hub::start`], with PARENT (the manager's session id) as its parent,
-    /// so its budget comes out of the manager's.  The hub acts on a request the manager's tool already checked.
+    /// so its budget comes out of the manager's, and session id SID (its delegation is recorded under it first).  The
+    /// hub acts on a request the manager's tool already checked.
     pub async fn start_child(
         &self,
         front: &Front,
         p: StartParams,
         parent: &str,
+        sid: &str,
     ) -> Result<Started, Error> {
         let hub_as_user = crate::runner::user();
-        session::open_as(self, front, p, &hub_as_user, Some(parent.to_owned())).await
+        let parent = Some(parent.to_owned());
+        session::open_as(self, front, p, &hub_as_user, parent, Some(sid.to_owned())).await
     }
 
     /// Stop: cancel the running turn (the queue waits until the user delivers it or sends something).  A session
@@ -228,7 +231,14 @@ impl Hub {
                 "only the user answers a permission request",
             ));
         }
-        self.find(id)?.answer_permission(request, option)
+        self.find(id)?.answer_permission(request, option).await
+    }
+
+    /// Matrix card CARD was settled (in the cockpit, or by an answer here): the requests waiting on it go on.
+    pub async fn card_settled(&self, card: i64) {
+        for s in self.live_sessions() {
+            s.release_card(card, None).await;
+        }
     }
 
     pub async fn do_op(&self, caller: &Caller, p: DoParams) -> Result<bool, Error> {

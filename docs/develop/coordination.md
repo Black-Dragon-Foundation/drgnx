@@ -889,13 +889,25 @@ property test, units, time presets).
 `agents-matrix` setting decoded by `settings/matrix.rs`, the project's layer, the plan's) and answers `Allow`,
 `Ask(card)` or `Never(why)`. The preset in force is read at every call, so a switch (or `presence/set`) applies from
 the next action. An Ask writes one `matrix` card (`norn::write::cards::matrix_card`); the same open question is the
-same card. The card's title and data come from the hub's `Facts` (command, paths, diff hash) and ids, never from
+same card, and `decide` announces it with the `card` event every card sends (`id`, `kind` `matrix`, `title`). The
+card's title and data come from the hub's `Facts` (command, paths, diff hash) and ids, never from
 agent text. `recheck(card)` runs at execution: a matrix that now says Never refuses whatever the user answered; a
-declined card refuses; an open one is still a question. A plan's override is the `matrix` field of its entity's data
-and counts only when the user's tx wrote that data (an agent's write of it is ignored). `delegate` keeps a manager's
-grant to a worker session, which must be no wider than the manager's own (`narrow`); it replaces the worker's cells,
-so a delegated action needs no card. The grant lives in the hub, not as a `grant` entity (the guard makes grants the
-user's). The weekly-share check on a subscription is the budget gate's (Task 20), not the matrix's.
+declined card refuses; an open one is still a question. A project's and a plan's override is the `matrix` field of
+its entity's data and counts only when the user's tx wrote that field: urdr keeps each top-level data key's writer in
+`field_tx` as `data.<key>`, and the gate reads `data.matrix` (an agent's write of the field, or of another data key,
+never decides it). `ActionCtx::of_session` fills a session's project and plan from the runner's scope table (a plan
+run's, or the one `open_as` derives from the task a session starts on).
+
+`effective_for(conn, who, ctx, now)` is what a session may do now; the permission seam, the brief and the launch
+plan all call it. A worker a manager started gets `meet` (the cellwise tighter) of its own cells from every layer, its
+`Delegation` and the manager's own cells read again at that moment. `delegate` records the delegation (no wider than
+the manager's own, `narrow`) before the worker starts; a move copies it to the new session id before the new session
+starts; `restore_delegation` reads it back (`runtime.db`, with the manager's columns, project and plan); the session's
+end drops it. The grant lives in the hub, not as a `grant` entity (the guard makes grants the user's). A session's
+Ask holds the agent's request under the card's id: `agents/permission` settles the card, `cards/settle` (from the
+cockpit) releases the request, and either way `recheck` decides. A manager's Ask carries the call's facts (the tool
+and its arguments, with their hash), and the manager's pending answer is keyed on them. The weekly-share check on a
+subscription is the budget gate's (Task 20), not the matrix's.
 Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
 
 ### Plan runs: git, the merge gate, trial merges (`drgnx-ratatoskr/src/runner/git.rs`)

@@ -16,11 +16,11 @@ use crate::agents::Origin;
 use crate::agents::session::{self, Session};
 use crate::dispatch::Caller;
 use crate::front::Front;
-use crate::matrix_gate::{ActionCtx, Gate};
+use crate::matrix_gate::{ActionCtx, Delegation, Gate, Manager};
 use crate::runner::{self, TaskTree};
 use norn::matrix::{Action, Cell, Effective, Who, narrow};
 use runstav::methods::agents::{ById, RoleParams, SessionStatus, Slice, SliceParams};
-use runstav::methods::matrix::{Role, Unit};
+use runstav::methods::matrix::{Facts, Role, Unit};
 use runstav::methods::timeline::BudgetScope;
 use runstav::registry::Class;
 use runstav::types::{AbsPath, Bounded, TaskRef};
@@ -68,8 +68,8 @@ struct Mgr {
 #[derive(Default)]
 struct State {
     seen: HashMap<String, Mgr>,
-    /// (manager, action id) → the card it waits on.
-    pending: HashMap<(String, &'static str), i64>,
+    /// (manager, action id and the call's facts) → the card it waits on.
+    pending: HashMap<(String, String), i64>,
     /// Job ends not yet told: (the session that started the job, the line).
     ends: Vec<(String, String)>,
     /// Worker session → its tree.
@@ -535,15 +535,35 @@ async fn say_rotated(f: &Front, card: i64, ok: bool) {
 
 // ------------------------------------------------------------------------- delegated grants kept across a restart
 
-fn cells_json(e: &Effective) -> String {
-    let rows: Vec<(&norn::matrix::Action, &Cell)> = e.cells.iter().collect();
-    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+/// D as runtime.db keeps it: the cells and the manager they are narrowed against again at every check.
+fn cells_json(d: &Delegation) -> String {
+    let rows: Vec<(&norn::matrix::Action, &Cell)> = d.cells.cells.iter().collect();
+    let manager = d.manager.as_ref().map(|m| {
+        json!({"who": crate::matrix_gate::who_json(&m.who), "project": m.project, "plan": m.plan})
+    });
+    json!({"cells": rows, "manager": manager}).to_string()
 }
 
-fn cells_from(text: &str) -> Option<Effective> {
-    let rows: Vec<(Action, Cell)> = serde_json::from_str(text).ok()?;
-    Some(Effective {
-        cells: rows.into_iter().collect(),
+/// A kept delegation; none when TEXT is not one (the caller then gives the worker nothing).
+fn cells_from(text: &str) -> Option<Delegation> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let rows: Vec<(Action, Cell)> = serde_json::from_value(v.get("cells")?.clone()).ok()?;
+    let manager = match v.get("manager")? {
+        Value::Null => None,
+        m => {
+            let s = |k: &str| m.get(k).and_then(Value::as_str).map(str::to_owned);
+            Some(Manager {
+                who: crate::matrix_gate::who_of(m.get("who")?),
+                project: s("project"),
+                plan: s("plan"),
+            })
+        }
+    };
+    Some(Delegation {
+        cells: Effective {
+            cells: rows.into_iter().collect(),
+        },
+        manager,
     })
 }
 
@@ -603,9 +623,17 @@ pub async fn restore_delegation(f: &Front, sid: &str) {
     lose_delegation(f, sid).await;
 }
 
+/// Worker SID never started: its delegation goes, in memory and in runtime.db.
+async fn forget_delegation(f: &Front, sid: &str) {
+    f.core.matrix.drop_delegation(sid);
+    if let Some(db) = f.core.agents.db() {
+        session::delete_row(db, sid).await;
+    }
+}
+
 /// SID has no delegation to read: Never everywhere, and the user a card.
 async fn lose_delegation(f: &Front, sid: &str) {
-    f.core.matrix.set_delegated(sid, Effective::default());
+    f.core.matrix.set_delegated(sid, Delegation::default());
     let card = norn::write::cards::NewCard {
         job: None,
         task: None,
@@ -650,17 +678,40 @@ fn owned(f: &Front, manager: &str, id: &str) -> Result<Arc<Session>, String> {
     }
 }
 
-/// The gate for MANAGER doing A: allowed, or the refusal (a card to wait on, or never).  An action that asked is
-/// asked again only through its card: the user's answer, nothing said in a message.
+/// The facts of manager tool OP called with ARGS, as the hub parsed them: the card shows them and the user's answer
+/// counts for this call only (another call of the same kind is another question).
+fn call_facts(op: &str, args: &Value) -> Facts {
+    let all = format!("{op} {args}");
+    let mut command = all.clone();
+    if command.len() > 4096 {
+        let mut cut = 4096;
+        while !command.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        command.truncate(cut);
+        command.push_str(" …");
+    }
+    use sha2::Digest;
+    let hash: String = sha2::Sha256::digest(all.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    serde_json::from_value(json!({"command": command, "diff_hash": hash})).unwrap_or_default()
+}
+
+/// The gate for MANAGER doing A with FACTS: allowed, or the refusal (a card to wait on, or never).  An action that
+/// asked is asked again only through its card (the user's answer, nothing said in a message), and only for a call
+/// with the same facts.
 async fn gate(
     f: &Front,
     manager: &str,
     who: &Who,
     a: Action,
     amount: Option<f64>,
+    facts: &Facts,
 ) -> Result<(), String> {
     f.core.matrix.refresh(f);
-    let key = (manager.to_owned(), a.id());
+    let key = (manager.to_owned(), format!("{} {}", a.id(), json!(facts)));
     let waiting = f.core.manager.st().pending.get(&key).copied();
     let g = match waiting {
         Some(card) => {
@@ -673,9 +724,9 @@ async fn gate(
         }
         None => {
             let ctx = ActionCtx {
-                session: Some(manager.to_owned()),
                 amount,
-                ..Default::default()
+                facts: facts.clone(),
+                ..ActionCtx::of_session(&f.core.runs.scopes(), manager)
             };
             f.core
                 .matrix
@@ -712,16 +763,17 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
     }
     let who = me.who();
     let bad = |e: serde_json::Error| format!("{op}: {e}");
+    let facts = call_facts(op, &args);
     match op {
         "agent_start" => {
             let a = serde_json::from_value(args).map_err(bad)?;
-            agent_start(f, &me, &who, a).await
+            agent_start(f, &me, &who, a, &facts).await
         }
         "agent_message" => {
             let a: norn::tools::manager::AgentMessageArgs =
                 serde_json::from_value(args).map_err(bad)?;
             let w = owned(f, sid, a.id.as_str())?;
-            gate(f, sid, &who, Action::AgentsControl, None).await?;
+            gate(f, sid, &who, Action::AgentsControl, None, &facts).await?;
             w.prompt(
                 a.text.as_str().to_owned(),
                 Origin::Peer(format!("manager {sid}")),
@@ -732,7 +784,7 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
         "agent_pause" => {
             let a: norn::tools::manager::SessionArg = serde_json::from_value(args).map_err(bad)?;
             owned(f, sid, a.id.as_str())?;
-            gate(f, sid, &who, Action::AgentsControl, None).await?;
+            gate(f, sid, &who, Action::AgentsControl, None, &facts).await?;
             f.core
                 .agents
                 .cancel_after_tool(a.id.as_str())
@@ -742,7 +794,7 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
         "agent_stop" => {
             let a: norn::tools::manager::SessionArg = serde_json::from_value(args).map_err(bad)?;
             owned(f, sid, a.id.as_str())?;
-            gate(f, sid, &who, Action::AgentsControl, None).await?;
+            gate(f, sid, &who, Action::AgentsControl, None, &facts).await?;
             session::stop(f, &runner::user(), ById { id: a.id })
                 .await
                 .map_err(|e| e.message)?;
@@ -752,7 +804,7 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
             let a: runstav::methods::agents::MoveParams =
                 serde_json::from_value(args).map_err(bad)?;
             owned(f, sid, a.id.as_str())?;
-            gate(f, sid, &who, Action::AgentsModel, None).await?;
+            gate(f, sid, &who, Action::AgentsModel, None, &facts).await?;
             let r = session::move_to(f, &runner::user(), a)
                 .await
                 .map_err(|e| e.message)?;
@@ -760,7 +812,7 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
         }
         "report_read" => {
             let a = serde_json::from_value(args).map_err(bad)?;
-            gate(f, sid, &who, Action::CodeRead, None).await?;
+            gate(f, sid, &who, Action::CodeRead, None, &facts).await?;
             let r = runner::effects::reports_get(f, &runner::user(), a)
                 .await
                 .map_err(|e| e.message)?;
@@ -771,7 +823,7 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
             if a.id.as_str() != sid {
                 owned(f, sid, a.id.as_str())?;
             }
-            gate(f, sid, &who, Action::CodeRead, None).await?;
+            gate(f, sid, &who, Action::CodeRead, None, &facts).await?;
             let r = slice_of(f, a.id.as_str(), a.from_step, a.n)
                 .await
                 .map_err(|e| e.message)?;
@@ -780,11 +832,11 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
         "trial_merge" => {
             let a: norn::tools::manager::TrialMergeArgs =
                 serde_json::from_value(args).map_err(bad)?;
-            trial_merge(f, &me, &who, a).await
+            trial_merge(f, &me, &who, a, &facts).await
         }
         "merge" => {
             let a: norn::tools::manager::MergeArgs = serde_json::from_value(args).map_err(bad)?;
-            merge(f, &me, &who, a).await
+            merge(f, &me, &who, a, &facts).await
         }
         _ => Err(format!("{op} is not a manager tool")),
     }
@@ -805,6 +857,7 @@ async fn agent_start(
     me: &Arc<Session>,
     who: &Who,
     a: norn::tools::manager::AgentStartArgs,
+    facts: &Facts,
 ) -> Result<String, String> {
     let sid = me.id.as_str();
     if a.role.is_some_and(|r| r != Role::Worker) {
@@ -814,10 +867,7 @@ async fn agent_start(
     // 1. the grants: never wider than the manager's own (checked before anything starts)
     f.core.matrix.refresh(f);
     let (g, mwho, now_s) = (f.core.matrix.clone(), who.clone(), now());
-    let ctx = ActionCtx {
-        session: Some(sid.to_owned()),
-        ..Default::default()
-    };
+    let ctx = ActionCtx::of_session(&f.core.runs.scopes(), sid);
     let wwho = Who {
         role: Some(Role::Worker),
         agent: Some(profile.clone()),
@@ -882,7 +932,7 @@ async fn agent_start(
     }
     // 3. the matrix: starting a worker is the manager's `agents.start`, up to its count limit
     let n = children(f, sid).len() as f64 + 1.0;
-    gate(f, sid, who, Action::AgentsStart, Some(n)).await?;
+    gate(f, sid, who, Action::AgentsStart, Some(n), facts).await?;
     // 4. its tree, from the manager's integration branch
     let repo = me.cwd().to_path_buf();
     let branch = integration(sid);
@@ -909,6 +959,20 @@ async fn agent_start(
         .await
         .map_err(|e| format!("no worktree: {}", e.stderr))?;
     let task = a.task.as_ref().map(|t| t.to_string());
+    // 5. what it may do, recorded before it starts: its launch and first tool call are already under it
+    let wsid = session::new_sid().map_err(|e| e.message)?;
+    let (g, mwho, ws) = (f.core.matrix.clone(), who.clone(), wsid.clone());
+    let delegated = f
+        .writer
+        .db
+        .read(move |c| Ok(g.delegate(c, &mwho, &ctx, &ws, asked, now_s)))
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    if let Err(w) = delegated {
+        // checked above: only a matrix that changed in between gets here
+        return Err(format!("grant refused: {w}"));
+    }
+    save_delegation(f, &wsid).await;
     let started = f
         .core
         .agents
@@ -924,24 +988,14 @@ async fn agent_start(
                 document: None,
             },
             sid,
+            &wsid,
         )
-        .await
-        .map_err(|e| e.message)?;
-    let wsid = started.id;
-    // 5. what it may do, and what it may spend
-    let (g, mwho, ws) = (f.core.matrix.clone(), who.clone(), wsid.clone());
-    let delegated = f
-        .writer
-        .db
-        .read(move |c| Ok(g.delegate(c, &mwho, &ctx, &ws, asked, now_s)))
-        .await
-        .map_err(|e| format!("{e:?}"))?;
-    if let Err(w) = delegated {
-        // checked above: only a matrix that changed in between gets here; the worker never ran
-        let _ = f.core.agents.kill(&wsid).await;
-        return Err(format!("grant refused: {w}"));
+        .await;
+    if let Err(e) = started {
+        forget_delegation(f, &wsid).await;
+        return Err(e.message);
     }
-    save_delegation(f, &wsid).await;
+    // and what it may spend
     let wscope = session::scope_of(Role::Worker, &wsid);
     if !a.budget.0.is_empty() {
         let hits = f.core.budgets.set(&wscope, a.budget.0.clone());
@@ -950,7 +1004,9 @@ async fn agent_start(
     let _ = f.core.runs.git().touched(&tree.path).await;
     f.core.manager.st().trees.insert(wsid.clone(), tree.clone());
     if let Some(t) = &task {
-        let body = crate::brief::for_dispatch(f, t).await.unwrap_or_default();
+        let body = crate::brief::for_dispatch(f, t, Some(&wsid))
+            .await
+            .unwrap_or_default();
         let prompt = format!(
             "[task {t} from your manager {sid}]\n\n{body}\n\nWork only in this directory (a git worktree of your \
              own). Commit your work and report when done."
@@ -998,6 +1054,7 @@ async fn trial_merge(
     me: &Arc<Session>,
     who: &Who,
     a: norn::tools::manager::TrialMergeArgs,
+    facts: &Facts,
 ) -> Result<String, String> {
     let sid = me.id.as_str();
     let mine = branches_of(f, sid).await;
@@ -1007,7 +1064,7 @@ async fn trial_merge(
             return Err(format!("{b} is not a branch of a worker you started"));
         }
     }
-    gate(f, sid, who, Action::MergeIntegration, None).await?;
+    gate(f, sid, who, Action::MergeIntegration, None, facts).await?;
     let r = f
         .core
         .runs
@@ -1023,6 +1080,7 @@ async fn merge(
     me: &Arc<Session>,
     who: &Who,
     a: norn::tools::manager::MergeArgs,
+    facts: &Facts,
 ) -> Result<String, String> {
     let sid = me.id.as_str();
     let mine = branches_of(f, sid).await;
@@ -1039,7 +1097,7 @@ async fn merge(
     if !target.starts_with("job/") {
         return Err("merges go to integration branches only".into());
     }
-    gate(f, sid, who, Action::MergeIntegration, None).await?;
+    gate(f, sid, who, Action::MergeIntegration, None, facts).await?;
     let repo = me.cwd().to_path_buf();
     let git = f.core.runs.git();
     // the integration branch has a tree of its own next to the workers'

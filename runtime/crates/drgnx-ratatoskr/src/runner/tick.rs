@@ -617,7 +617,7 @@ pub async fn start(
         })
         .and_then(|t| t.get("body").and_then(Value::as_str))
         .unwrap_or("");
-    let body = crate::brief::for_dispatch(front, tid)
+    let body = crate::brief::for_dispatch(front, tid, Some(&sid))
         .await
         .unwrap_or_else(|| body.to_owned());
     let prompt = format!(

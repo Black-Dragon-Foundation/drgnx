@@ -1,0 +1,35 @@
+{"scenario": "manager/a-moved-worker-is-refused-outside-its-delegation", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "C1-W and B2 (gate-F): a manager starts a worker granted code.edit only; it may edit. Moved to mock-gemini, whose agent column the user set to code.edit never, the worker is refused an edit (the user's cell binds a delegated worker) and a read (outside its delegation)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")) (\"mock-gemini\" :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--log\" \"$ROOT/gem.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-matrix", "source": "row", "value": {"cells": [{"action": "code.edit", "column": {"agent": "mock-gemini"}, "verdict": "never"}]}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/role", "params": {"id": "$sid", "role": "manager"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "agent_start", "arguments": {"profile": "mock-claude", "grants": [{"action": "code.edit", "column": {"role": "worker"}, "verdict": "allow"}]}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sessions": {"$contains": [{"id": "$capture:old", "parent": "$sid", "role": "worker"}]}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$old", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$old", "entries": {"$contains": [[ "$any", {"type": "agent", "text": "permission: allow_once"}]]}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/move", "params": {"id": "$old", "profile": "mock-gemini"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"id": "$capture:new", "name": "$string"}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/send", "params": {"id": "$new", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "grep -qF '{\"permission\":{\"kind\":\"edit\",\"answer\":\"reject_once\"}}' $ROOT/gem.log"], "retry_ms": 30000, "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/send", "params": {"id": "$new", "text": "ask:permission read"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "grep -qF '{\"permission\":{\"kind\":\"read\",\"answer\":\"reject_once\"}}' $ROOT/gem.log"], "retry_ms": 30000, "expect_code": 0}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'matrix'", "rows": [[0]]}

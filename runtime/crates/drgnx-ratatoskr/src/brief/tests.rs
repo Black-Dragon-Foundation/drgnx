@@ -41,11 +41,70 @@ async fn setup() -> (tempfile::TempDir, CoordDb, String) {
     (dir, db, p)
 }
 
+fn worker() -> Who {
+    Who {
+        role: Some(Role::Worker),
+        ..Who::default()
+    }
+}
+
 async fn gathered(db: &CoordDb, task: &'static str) -> (Vec<(BriefPart, String)>, String) {
     let gate = MatrixGate::default();
-    db.read(move |c| gather(c, &gate, task, None, 1.0))
+    db.read(move |c| gather(c, &gate, task, (worker(), ActionCtx::default()), 1.0))
         .await
         .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_brief_says_what_the_gate_will_do_for_its_session() {
+    let (_d, db, _) = setup().await;
+    let gate = MatrixGate::default();
+    // the user's Never for one provider, and a manager's delegation that leaves out code.ci-config
+    gate.apply_setting(&json!({"cells": [
+        {"action": "commit", "column": {"provider": "p1"}, "verdict": "never"}]}))
+        .unwrap();
+    let mgr = Who {
+        role: Some(Role::Manager),
+        ..Who::default()
+    };
+    let (g, m) = (gate.clone(), mgr.clone());
+    db.read(move |c| {
+        let mut asked = g.effective_for(c, &m, &ActionCtx::default(), 1.0);
+        asked.cells.remove(&Action::CodeCiConfig);
+        g.delegate(c, &m, &ActionCtx::default(), "w1", asked, 1.0)
+            .unwrap();
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let who = Who {
+        provider: Some("p1".into()),
+        ..worker()
+    };
+    let ctx = ActionCtx {
+        session: Some("w1".into()),
+        ..ActionCtx::default()
+    };
+    let (g, w, x) = (gate.clone(), who.clone(), ctx.clone());
+    let (parts, _) = db
+        .read(move |c| gather(c, &g, "J#1", (w, x), 1.0))
+        .await
+        .unwrap();
+    let m = &parts
+        .iter()
+        .find(|(p, _)| *p == BriefPart::Matrix)
+        .unwrap()
+        .1;
+    let seam = db
+        .read(move |c| Ok(gate.effective_for(c, &who, &ctx, 1.0)))
+        .await
+        .unwrap();
+    assert_eq!(*m, matrix_lines(&seam));
+    assert!(
+        !m.contains("- commit:") && !m.contains("- code.ci-config:"),
+        "{m}"
+    );
+    assert!(m.contains("- code.edit: allow"), "{m}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

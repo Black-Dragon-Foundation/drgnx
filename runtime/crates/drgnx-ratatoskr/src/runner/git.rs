@@ -870,10 +870,14 @@ impl GatePolicy for HubPolicy {
                 .as_deref()
                 .and_then(|s| front.core.runs.scope_of(s))
                 .map_or((None, None), |(p, j)| (Some(p), j));
-            let who = norn::matrix::Who {
-                role: Some(norn::matrix::Role::Worker),
-                ..Default::default()
-            };
+            // the session's own columns (role, agent, provider); the worker column for a tree no session holds
+            let who = session
+                .as_deref()
+                .and_then(|s| front.core.agents.who(s))
+                .unwrap_or(norn::matrix::Who {
+                    role: Some(norn::matrix::Role::Worker),
+                    ..Default::default()
+                });
             let ctx = crate::matrix_gate::ActionCtx {
                 project,
                 plan,
