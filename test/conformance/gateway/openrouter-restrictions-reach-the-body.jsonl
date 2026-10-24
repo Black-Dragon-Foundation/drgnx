@@ -1,0 +1,27 @@
+{"scenario": "gateway/openrouter-restrictions-reach-the-body", "requires": ["v1", "fake-backend"], "doc": "Task 24: a registration with `openrouter` restrictions (only, ignore, data-collection deny, zdr) on the provider `openrouter`: the body the provider receives on /api/v1/messages carries a `provider` object with them, and the client's other keys stay; the same body through a provider of another id is forwarded without any."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/api/v1/messages", "body": "{\"id\": \"msg-or\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}}"}]}
+{"do": "spawn", "capture": "mock_or", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/or.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port_or"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "http://127.0.0.1:$port_or/api/v1", "auth": "none", "messages": true, "caps": ["chat"]}, {"id": "other", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["openrouter", "anthropic/claude-sonnet"]], "agent": "a1", "owner": "$HARNESS_PID", "openrouter": {"only": ["anthropic", "google-vertex"], "ignore": ["azure"], "data-collection": "deny", "zdr": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok_or"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["other", null]], "agent": "a2", "owner": "$HARNESS_PID", "openrouter": {"only": ["anthropic"], "zdr": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$capture:tok_other"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "g1", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok_or", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g1", "status": 200, "body_json": {"id": "msg-or"}}
+{"do": "file", "path": "$ROOT/or.log", "contains": "\\\"only\\\":[\\\"anthropic\\\",\\\"google-vertex\\\"]"}
+{"do": "file", "path": "$ROOT/or.log", "contains": "\\\"ignore\\\":[\\\"azure\\\"]"}
+{"do": "file", "path": "$ROOT/or.log", "contains": "\\\"data_collection\\\":\\\"deny\\\""}
+{"do": "file", "path": "$ROOT/or.log", "contains": "\\\"zdr\\\":true"}
+{"do": "file", "path": "$ROOT/or.log", "contains": "\\\"model\\\":\\\"anthropic/claude-sonnet\\\""}
+{"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok_other", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g2", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/llm.log", "lacks": "zdr"}

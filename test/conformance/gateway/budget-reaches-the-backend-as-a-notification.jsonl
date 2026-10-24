@@ -1,0 +1,19 @@
+{"scenario": "gateway/budget-reaches-the-backend-as-a-notification", "requires": ["v1", "fake-backend"], "doc": "A registration with a tiny budget; one request through the gateway to the mock provider spends it: the spend row is in work.db, the backend gets a budget notification {job, spent, budget} (it stops the job's work), and the backend is never asked anything for it."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg_1\", \"type\": \"message\", \"usage\": {\"input_tokens\": 10, \"output_tokens\": 2, \"cost\": 0.5}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["mock", null]], "job": "j1", "agent": "a1", "budget": 0.01}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "x-api-key": "$tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "msg_1"}}
+{"do": "backend_log", "hub": "h", "expect_line": "notification {\"method\":\"budget\",\"params\":{\"budget\":0.01,\"job\":\"j1\",\"spent\":0.5}}"}
+{"do": "sql_expect", "sql": "select job, agent, provider, input, output, cost, status from spend", "rows": [["j1", "a1", "mock", 10, 2, 0.5, 200]]}
+{"do": "backend_log", "hub": "h", "expect_no_line": "front-answer"}
+{"do": "file_grep", "paths": ["$ROOT/llm.log"], "absent": "$tok"}

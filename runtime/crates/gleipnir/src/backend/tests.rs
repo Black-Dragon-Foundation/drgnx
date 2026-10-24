@@ -285,6 +285,7 @@ fn full_never_falls_back_to_reduced() {
 /// that drops it), the read end sees EOF, never a hang (review S6).
 #[test]
 fn status_write_end_moves_into_the_spawn() {
+    use std::os::fd::AsRawFd;
     let fx = Fx::new();
     for (kind, target) in [
         (BackendKind::Bwrap, Target::LinuxBwrap),
@@ -296,6 +297,16 @@ fn status_write_end_moves_into_the_spawn() {
         } = p;
         let status = status.unwrap();
         drop(invocation);
+        // Another test's child (forked by a thread of this process, before its exec or until it exits) holds a copy
+        // of every fd, close-on-exec or not: wait for EOF first. A copy the invocation kept never closes, so the
+        // read below still finds the pipe open (ci/ci-gate run 39648804545; 15 of 40 local runs before this wait).
+        let mut pfd = libc::pollfd {
+            fd: status.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd naming a live fd this test owns.
+        unsafe { libc::poll(&mut pfd, 1, 10_000) };
         rustix::fs::fcntl_setfl(&status, rustix::fs::OFlags::NONBLOCK).unwrap();
         let mut b = [0u8; 1];
         assert_eq!(
@@ -401,13 +412,28 @@ fn relay_ports_per_tier() {
     );
     let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let busy = busy.local_addr().unwrap().port();
-    let ports = relay_ports(Tier::Reduced, &[3128, 3129]).unwrap();
-    assert_eq!(ports.len(), 2);
-    assert_ne!(ports[0], ports[1]);
-    assert!(!ports.contains(&busy) && !ports.contains(&0));
-    for p in ports {
-        std::net::TcpListener::bind(("127.0.0.1", p)).expect("free again for the relay");
+    // Free again for the relay: relay_ports holds no listener. Other tests of this process bind and connect on
+    // loopback too and can take a port the moment it is free (ci/ci-gate, 7 of 60 local runs), so a fresh set may be
+    // asked for; a listener relay_ports kept would fail every set.
+    let mut last = None;
+    for _ in 0..5 {
+        let ports = relay_ports(Tier::Reduced, &[3128, 3129]).unwrap();
+        assert_eq!(ports.len(), 2);
+        assert_ne!(ports[0], ports[1]);
+        assert!(!ports.contains(&busy) && !ports.contains(&0));
+        let bound: Vec<_> = ports
+            .iter()
+            .map(|p| std::net::TcpListener::bind(("127.0.0.1", *p)))
+            .collect();
+        match bound.into_iter().find_map(Result::err) {
+            None => {
+                last = None;
+                break;
+            }
+            Some(e) => last = Some(e),
+        }
     }
+    assert!(last.is_none(), "free again for the relay: {last:?}");
     assert!(relay_ports(Tier::Reduced, &[]).unwrap().is_empty());
 }
 

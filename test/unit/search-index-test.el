@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-search-index)
+(require 'drgnx-hub-client)             ; `drgnx-hub--editor', which a test binds
 
 ;; No network, no real HOME: a stub embedder (vectors from a hash of the text), temp git repos, a temp
 ;; XDG_STATE_HOME.  Nothing here starts a job.
@@ -449,28 +450,6 @@ started, stays."
           (should (file-exists-p starting)))
       (delete-directory state t))))
 
-(ert-deftest drgnx-search-index/the-job-env-is-the-projects ()
-  "The embed role (and so the keys the job gets) is resolved for ROOT — its .drgnx/ai.eld — not the current buffer."
-  (let* ((conf (make-temp-file "drgnx-search-conf" t))
-         (proj (make-temp-file "drgnx-search-proj" t))
-         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" conf) "ROLE_A_KEY=sk-a" "ROLE_B_KEY=sk-b")
-                                      process-environment))
-         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
-         (drgnx-ai-providers nil) (drgnx-ai-roles nil))
-    (unwind-protect
-        (progn
-          (setq drgnx-ai-providers '((ka :name "A" :kind openai :url "http://127.0.0.1:1/v1" :key-env "ROLE_A_KEY" :caps (embed))
-                                     (kb :name "B" :kind openai :url "http://127.0.0.1:2/v1" :key-env "ROLE_B_KEY" :caps (embed)))
-                drgnx-ai-roles '((embed (ka . "m"))))
-          (make-directory (expand-file-name ".drgnx" proj))
-          (with-temp-file (expand-file-name ".drgnx/ai.eld" proj) (prin1 '(:roles ((embed (kb . "m")))) (current-buffer)))
-          (let* ((default-directory (file-name-as-directory conf))
-                 (env (drgnx-search-index--job-env proj)))
-            (should (member "ROLE_B_KEY=sk-b" env))
-            (should-not (member "ROLE_A_KEY=sk-a" env))))
-      (delete-directory conf t)
-      (delete-directory proj t))))
-
 (ert-deftest drgnx-search-index/a-broken-config-changes-nothing ()
   (drgnx-search-index-test--with (drgnx-search-index-test--named 2)
     (drgnx-search-index root :embed (drgnx-search-index-test--stub))
@@ -484,7 +463,7 @@ started, stays."
       (should (equal (drgnx-search-index-test--paths root) '("f1.txt" "f2.txt")))
       (should (equal (drgnx-search-index-test--peek root #'drgnx-search-store-meta) before)))))
 
-(ert-deftest drgnx-search-index/start-gives-the-job-the-keys-and-dirs-it-needs ()
+(ert-deftest drgnx-search-index/start-gives-the-job-the-gateway-and-dirs-it-needs-and-no-key ()
   (let* ((conf (make-temp-file "drgnx-search-conf" t))
          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" conf) "XDG_STATE_HOME=/tmp/xs" "XDG_CONFIG_HOME=/tmp/xc"
                                             "XDG_CACHE_HOME=/tmp/xk" "XDG_DATA_HOME=/tmp/xd" "DRGNX_DATA_DIR=/tmp/dd"
@@ -492,6 +471,7 @@ started, stays."
                                       process-environment))
          (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
          (drgnx-ai-providers nil) (drgnx-ai-roles nil)
+         (drgnx-hub--editor '("tok-of-the-editor" . "http://127.0.0.1:4711"))
          started)
     (unwind-protect
         (progn
@@ -502,7 +482,9 @@ started, stays."
                     ((symbol-function 'drgnx-jobs-list) (lambda () nil)))
             (drgnx-search-index-start "/tmp/some-project"))
           (let ((env (plist-get (cddr started) :env)))
-            (dolist (e '("SEARCH_TEST_KEY=sk-secret-1" "XDG_STATE_HOME=/tmp/xs" "XDG_CONFIG_HOME=/tmp/xc"
+            (should-not (cl-find-if (lambda (e) (string-search "127.0.0.1:4711" e)) env))   ; the job asks the hub itself
+            (should-not (cl-find-if (lambda (e) (string-match-p "sk-secret\\|SEARCH_TEST_KEY\\|tok-of-the-editor" e)) env))
+            (dolist (e '("XDG_STATE_HOME=/tmp/xs" "XDG_CONFIG_HOME=/tmp/xc"
                          "XDG_CACHE_HOME=/tmp/xk" "XDG_DATA_HOME=/tmp/xd" "DRGNX_DATA_DIR=/tmp/dd"))
               (should (member e env)))
             (should (member (concat "DRGNX_CONFIG_DIR=" conf) env))

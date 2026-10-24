@@ -1,5 +1,7 @@
 ;;; job-policy-test.el --- batch tests: a job agent's permission requests and writes -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'drgnx-hub)
 (require 'drgnx-job)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
@@ -48,7 +50,7 @@
 (defun drgnx-job-policy-test--said (s text)
   (drgnx-job-policy-test--wait (lambda () (string-search text (format "%S" (drgnx-agent-session-entries s))))))
 
-(ert-deftest drgnx-job/edits-and-commands-in-the-worktree-need-no-one ()
+(drgnx-work-db-writer-deftest drgnx-job/edits-and-commands-in-the-worktree-need-no-one ()
   (drgnx-job-policy-test--with
     (let ((s (drgnx-job-policy-test--agent wt job)))
       (drgnx-agents-send s (format "permission edit :: Edit a.txt :: %sa.txt" wt))
@@ -58,7 +60,7 @@
                                                                         (drgnx-agent-session-entries s))))))
       (should-not (drgnx-agent-session-permissions s)))))
 
-(ert-deftest drgnx-job/network-and-installs-go-to-the-user ()
+(drgnx-work-db-writer-deftest drgnx-job/network-and-installs-go-to-the-user ()
   (drgnx-job-policy-test--with
     (let ((s (drgnx-job-policy-test--agent wt job)))
       (drgnx-agents-send s "permission execute :: npm install left-pad")
@@ -73,7 +75,7 @@
       (drgnx-agents-send s "permission fetch :: https://example.com")
       (should (drgnx-job-policy-test--wait (lambda () (drgnx-agent-session-permissions s)))))))
 
-(ert-deftest drgnx-job/a-path-out-of-the-worktree-is-outside ()
+(drgnx-work-db-writer-deftest drgnx-job/a-path-out-of-the-worktree-is-outside ()
   (drgnx-job-policy-test--with
     (make-symbolic-link root (concat wt "out"))
     (let ((s (drgnx-job-policy-test--agent wt job)))
@@ -84,7 +86,7 @@
       (drgnx-agents-send s (format "permission edit :: Edit :: %sout/x" wt))
       (should (drgnx-job-policy-test--wait (lambda () (drgnx-agent-session-permissions s)))))))
 
-(ert-deftest drgnx-job/the-agent-writes-in-its-worktree-directly ()
+(drgnx-work-db-writer-deftest drgnx-job/the-agent-writes-in-its-worktree-directly ()
   (drgnx-job-policy-test--with
     (write-region "first\n" nil (concat wt "f.txt") nil 'silent)
     (let ((s (drgnx-job-policy-test--agent wt job)))
@@ -98,7 +100,7 @@
         (should (drgnx-job-policy-test--wait (lambda () (drgnx-agent-session-reviews s))))
         (should (equal (with-temp-buffer (insert-file-contents out) (buffer-string)) "x\n"))))))
 
-(ert-deftest drgnx-job/interactive-sessions-are-unchanged ()
+(drgnx-work-db-writer-deftest drgnx-job/interactive-sessions-are-unchanged ()
   (drgnx-job-policy-test--with
     (write-region "first\n" nil (concat wt "f.txt") nil 'silent)
     (let ((s (drgnx-job-policy-test--agent wt job t)))
@@ -109,7 +111,7 @@
       (drgnx-agents-send s (format "write %sf.txt" wt))
       (should (drgnx-job-policy-test--wait (lambda () (drgnx-agent-session-reviews s)))))))
 
-(ert-deftest drgnx-job/a-relative-write-path-is-refused ()
+(drgnx-work-db-writer-deftest drgnx-job/a-relative-write-path-is-refused ()
   ;; checked against the worktree, written against the hub's directory: neither — it goes to the user
   (drgnx-job-policy-test--with
     (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
@@ -118,14 +120,14 @@
       (should-not (file-exists-p (concat root "rel.txt")))
       (should-not (file-exists-p (concat wt "rel.txt"))))))
 
-(ert-deftest drgnx-job/the-reviewer-may-read-the-diff ()
+(drgnx-work-db-writer-deftest drgnx-job/the-reviewer-may-read-the-diff ()
   (let ((tree temporary-file-directory))
     (dolist (cmd '("git diff job/j...HEAD" "git log --oneline -5" "git show HEAD" "git status"))
       (should (eq (drgnx-job-policy "review" (list :kind "execute" :title cmd) tree) 'allow)))
     (dolist (cmd '("git diff; curl x" "git diff | sh" "git push" "make test" "git diff $(curl x)"))
       (should (eq (drgnx-job-policy "review" (list :kind "execute" :title cmd) tree) 'ask)))))
 
-(ert-deftest drgnx-job/outward-commands-are-found-anywhere-in-the-line ()
+(drgnx-work-db-writer-deftest drgnx-job/outward-commands-are-found-anywhere-in-the-line ()
   (let ((tree temporary-file-directory))
     (with-temp-buffer
       (emacs-lisp-mode)                                       ; whatever buffer the hub is in
@@ -138,7 +140,7 @@
       ;; the command itself, when the title says less
       (should (eq (drgnx-job-policy "implement" '(:kind "execute" :title "Run a script" :rawInput (:command "curl x")) tree) 'ask)))))
 
-(ert-deftest drgnx-job/allow-without-allow-once-option-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/allow-without-allow-once-option-is-a-card ()
   ;; the policy allows it, but the agent offered no allow_once option to answer with: it goes to the user
   (drgnx-job-policy-test--with
     (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
@@ -148,7 +150,7 @@
                                       7))
       (should (seq-find (lambda (c) (equal (plist-get c :kind) "permission")) (drgnx-coord-cards job "open"))))))
 
-(ert-deftest drgnx-job/a-write-into-a-new-directory-makes-it ()
+(drgnx-work-db-writer-deftest drgnx-job/a-write-into-a-new-directory-makes-it ()
   (drgnx-job-policy-test--with
     (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
           (path (concat wt "new/sub/f.txt")))
@@ -161,7 +163,7 @@
   (make-symbolic-link outside (directory-file-name dir)))
 (put 'drgnx-job-policy-test--swap 'rename (symbol-function 'rename-file))
 
-(ert-deftest drgnx-job/a-link-swapped-in-after-the-check-is-never-written-through ()
+(drgnx-work-db-writer-deftest drgnx-job/a-link-swapped-in-after-the-check-is-never-written-through ()
   ;; Check, then write: the policy found the path inside the worktree (the last check is the agent-config one, which
   ;; fails closed on a path that is no longer inside); a directory on its way swapped for a symlink before the write
   ;; led it out.  The write resolves the path itself: refused (an error the agent gets).
@@ -176,7 +178,7 @@
       (should swapped)
       (should-not (file-exists-p (concat outside "f.txt"))))))
 
-(ert-deftest drgnx-job/a-directory-swapped-during-the-rename-is-an-error ()
+(drgnx-work-db-writer-deftest drgnx-job/a-directory-swapped-during-the-rename-is-an-error ()
   ;; The window Emacs cannot close (it has no openat): a directory swapped right at the rename is found by the check
   ;; after it, and said.
   (drgnx-job-policy-test--with
@@ -191,7 +193,7 @@
       (should (equal (with-temp-buffer (insert-file-contents (concat wt "sub-was/f.txt")) (buffer-string)) "x\n"))
       (should-not (file-exists-p (concat outside "f.txt"))))))
 
-(ert-deftest drgnx-job/a-write-is-a-temp-file-renamed-over-the-target ()
+(drgnx-work-db-writer-deftest drgnx-job/a-write-is-a-temp-file-renamed-over-the-target ()
   ;; written whole: the file keeps its modes, a link inside the worktree is written through and stays a link, and
   ;; no temp file is left beside it
   (drgnx-job-policy-test--with
@@ -205,14 +207,14 @@
       (should (= (file-modes (concat wt "run.sh")) #o755))
       (should (equal (directory-files wt nil "\\`[^.]\\|\\.drgnx") '("link.sh" "run.sh"))))))
 
-(ert-deftest drgnx-job/a-new-file-gets-the-usual-modes ()
+(drgnx-work-db-writer-deftest drgnx-job/a-new-file-gets-the-usual-modes ()
   ;; the temp file is made 0600: a new file gets what `write-region' would give (0666 less the umask)
   (drgnx-job-policy-test--with
     (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
       (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "new.txt") :content "x\n") 1) '(:result nil)))
       (should (= (file-modes (concat wt "new.txt")) (logand #o666 (default-file-modes)))))))
 
-(ert-deftest drgnx-job/a-read-only-file-is-refused ()
+(drgnx-work-db-writer-deftest drgnx-job/a-read-only-file-is-refused ()
   ;; a file the agent could not write before (0444) is not replaced by the rename
   (skip-unless (/= 0 (user-uid)))       ; root can write a 0444 file (CI's containers run as root): nothing to refuse
   (drgnx-job-policy-test--with
@@ -223,7 +225,7 @@
       (should (equal (with-temp-buffer (insert-file-contents (concat wt "ro.txt")) (buffer-string)) "keep\n"))
       (should (equal (directory-files wt nil "\\.drgnx") nil)))))
 
-(ert-deftest drgnx-job/a-remote-write-path-never-reaches-tramp ()
+(drgnx-work-db-writer-deftest drgnx-job/a-remote-write-path-never-reaches-tramp ()
   ;; the policy's check resolved the path with file name handlers on: /ssh:… made the hub connect
   (drgnx-job-policy-test--with
     (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
@@ -236,7 +238,7 @@
 
 (load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
 
-(ert-deftest drgnx-job/a-path-through-a-planted-link-is-decided-with-no-file-name-handler ()
+(drgnx-work-db-writer-deftest drgnx-job/a-path-through-a-planted-link-is-decided-with-no-file-name-handler ()
   ;; the policy and the write resolved the agent's path with handlers on: a link in the worktree climbing `../' to
   ;; `ssh:host:' made the hub load Tramp and connect (`sudo::': start sudo)
   (drgnx-job-policy-test--with
@@ -255,7 +257,7 @@
         (should-not drgnx-test-handler-calls))
       (should (equal (with-temp-buffer (insert-file-contents-literally (concat wt "a.zip/y")) (buffer-string)) "z\n")))))
 
-(ert-deftest drgnx-job/an-agent-never-writes-an-encrypted-or-compressed-file ()
+(drgnx-work-db-writer-deftest drgnx-job/an-agent-never-writes-an-encrypted-or-compressed-file ()
   ;; written with no file name handler, an agent's plain text landed unencrypted in a `.gpg' file (uncompressed in a
   ;; `.gz' one), also through a link to one: the write is an error that says why, an edit tool call asks the user
   (drgnx-job-policy-test--with
@@ -275,7 +277,7 @@
           (should (equal (with-temp-buffer (insert-file-contents-literally (concat wt f)) (buffer-string)) "sealed\n")))
         (should-not (file-exists-p (concat wt "new.gpg")))))))
 
-(ert-deftest drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa ()
+(drgnx-work-db-writer-deftest drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa ()
   ;; end to end, in an Emacs of its own (-Q: nothing loaded them before); Tramp's handler fails if it is ever reached
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-links" t))) (wt (concat root "wt/")))
     (unwind-protect

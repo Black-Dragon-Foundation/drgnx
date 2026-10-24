@@ -1,0 +1,10 @@
+{
+  "setup": [],
+  "clock": [],
+  "tables": [],
+  "calls": [
+    {"tool": "work_status", "now": 510.5, "identity": null, "args": {}},
+    {"tool": "read_inbox", "now": 511.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {}},
+    {"tool": "read_decisions", "now": 512.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {}}
+  ]
+}

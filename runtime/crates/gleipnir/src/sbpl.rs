@@ -110,7 +110,9 @@ impl Default for MacContext {
 /// 8. writes: `write`, `home` when `rw`, `tmp`;
 /// 9. `binds`, in order: readable, and writable for `rw` or denied writes for `ro` (the pins);
 /// 10. `hide`: neither readable nor writable;
-/// 11. no unlink (so no rename) of a writable root, nor of a directory between one and a pin or a hidden path;
+/// 11. no unlink (so no rename) of a writable root, nor of a directory between one and a pin or a hidden path; no
+///     clone of a directory above a hidden path (`hide`, [`SYSTEM_HIDDEN`]): `clonefile` copies a whole tree, hidden
+///     files too, and Seatbelt checks only the directory named;
 /// 12. the network: shared allows outbound IP anywhere, AF_SYSTEM and [`NET_SERVICES`]; isolated is
 ///     `(deny network*)` and outbound to `localhost` on `mac_tcp_ports` only;
 /// 13. every Unix socket denied, then each of `sockets` (and, shared, [`DNS_SOCKET`]) allowed by `path-literal`.
@@ -180,6 +182,8 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
     let roots: Vec<&str> = writes.iter().copied().chain(rw_binds).collect();
     let protected: Vec<&str> = ro_binds.chain(hide.iter().copied()).collect();
     let moves = move_blocks(&roots, &protected);
+    let hidden: Vec<&str> = hide.iter().chain(SYSTEM_HIDDEN).copied().collect();
+    let clones = ancestors(&hidden);
     let meta_of: Vec<&str> = reads
         .iter()
         .chain(DEVICES)
@@ -214,6 +218,7 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
     }
     push(deny_any_case("file-read* file-write*", "subpath", &hide)?);
     push(deny_any_case("file-write-unlink", "literal", &moves)?);
+    push(deny_any_case("file-clone", "literal", &clones)?);
     match &s.net {
         Net::Shared => {
             push(Some("(allow network-outbound (remote ip \"*:*\"))".into()));
@@ -1114,6 +1119,48 @@ mod tests {
             is(r, "allow", &["file-write*"]) && args(r, "subpath").contains(&"/w/task")
         });
         assert!(!args(&rs[w], "subpath").contains(&"/w/state/home-1"));
+    }
+
+    #[test]
+    fn clone_denied_on_every_dir_above_a_hidden_path() {
+        // MAC-SB-10 (j): a clonefile of /w/task/conf copied conf/.env to a name no rule covers. Every directory above a
+        // hidden path (the spec's and the system's), in every case; never the hidden path itself (its deny covers it).
+        let p = prof(spec(Net::Shared));
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let c = one(&rs, "the clone deny", |r| is(r, "deny", &["file-clone"]));
+        let pairs = deny_pairs(&rs[c], "literal");
+        let dirs: Vec<&str> = pairs.iter().map(|(p, _)| *p).collect();
+        assert_eq!(
+            dirs,
+            [
+                "/w/task/conf",
+                "/w/task",
+                "/w",
+                "/opt/homebrew",
+                "/opt",
+                "/usr/local",
+                "/usr"
+            ]
+        );
+        let (_, re) = pairs[0];
+        assert!(re_match(re, "/W/TASK/CONF") && !re_match(re, "/w/task/conf/.env"));
+        // After every allow of the file rules, so no later allow lets a clone through.
+        let u = one(&rs, "the unlink deny", |r| {
+            is(r, "deny", &["file-write-unlink"])
+        });
+        assert!(c > u);
+        // Without a hidden path of its own the spec still hides the system's.
+        let mut s = spec(Net::Shared);
+        s.hide = vec![];
+        let p = prof(s);
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let c = one(&rs, "the clone deny", |r| is(r, "deny", &["file-clone"]));
+        assert_eq!(
+            args(&rs[c], "literal"),
+            ["/opt/homebrew", "/opt", "/usr/local", "/usr"]
+        );
     }
 
     #[test]

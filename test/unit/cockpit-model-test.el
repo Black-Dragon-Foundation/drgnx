@@ -64,7 +64,7 @@
         (should (drgnx-cockpit-model-test--edge-p m t2 t4 'blocks))
         (should-not (drgnx-cockpit-model-test--edge-p m t3 t4 'needs)))
       ;; done: still needed, no longer blocking
-      (drgnx-coord-force-status "jx#2" "done" "s-1")
+      (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#2" "done" "s-1"))
       (let ((m (drgnx-cockpit-model :sessions sessions)))
         (should (drgnx-cockpit-model-test--edge-p m t3 t2 'needs))
         (should-not (drgnx-cockpit-model-test--edge-p m t2 t3 'blocks))
@@ -87,7 +87,8 @@
     (let* ((other (concat repo "elsewhere/q.md")))
       (drgnx-cockpit-fixture-write other "# Q plan\n\n### Task 1: first\n\n### Task 2: second\n")
       (let ((attrs (file-attributes other)))
-        (drgnx-coord-job-create :id "jq" :title "Q" :plan other :repo repo :tasks '((:n 2 :title "second" :role "implement")))
+        (drgnx-work-fixture-as-hub
+          (drgnx-coord-job-create :id "jq" :title "Q" :plan other :repo repo :tasks '((:n 2 :title "second" :role "implement"))))
         (let ((m (drgnx-cockpit-model)))
           (should (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#1" other)) :readonly))
           (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#1" other)) :line) 3))
@@ -131,9 +132,10 @@
         (should (plist-get (drgnx-cockpit-model-test--node m2 "agent:s-2") :waiting)))
       ;; answered: no longer waiting
       (let ((q (seq-find (lambda (q) (equal (plist-get q :agent) "s-1")) (plist-get m :questions))))
-        (drgnx-coord-event-add :agent "user" :job "jx" :kind "answer" :summary "this way" :data (list :question (plist-get q :id))))
+        (drgnx-work-fixture-as-hub
+          (drgnx-coord-event-add :agent "user" :job "jx" :kind "answer" :summary "this way" :data (list :question (plist-get q :id)))))
       (let ((card (plist-get (car (drgnx-coord-cards "jx" "open")) :id)))
-        (drgnx-coord-card-settle card "bar"))
+        (drgnx-work-fixture-as-hub (drgnx-coord-card-settle card "bar")))
       (let ((m (drgnx-cockpit-model :sessions sessions)))
         (should-not (plist-get (drgnx-cockpit-model-test--node m "agent:s-1") :waiting))
         (should-not (plist-get (drgnx-cockpit-model-test--node m t3) :waiting))
@@ -173,8 +175,9 @@
   ;; the batch terminal is not UTF-8 in a C locale (CI): the glyphs below are the Unicode ones
   (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))
     (drgnx-cockpit-fixture-with
-      (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :summary "fail"
-                             :data '(:command "make test" :passed 10 :failed 2))
+      (drgnx-work-fixture-as-hub
+        (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :summary "fail"
+                               :data '(:command "make test" :passed 10 :failed 2)))
       (let* ((lines (drgnx-cockpit-happened "s-1")) (texts (mapcar (lambda (l) (plist-get l :text)) lines)))
         (should (equal (mapcar (lambda (l) (plist-get l :kind)) lines)
                        '("claim" "status" "decision" "edit" "test" "question" "test")))
@@ -202,7 +205,7 @@
         (should (seq-find (lambda (c) (equal (plist-get c :label) "T2 running")) chips))
         (should (seq-find (lambda (c) (and (equal (plist-get c :kind) "question") (string-match-p "asks you" (plist-get c :label)))) chips))
         (should-not (drgnx-cockpit-timeline :since last-id))
-        (drgnx-coord-force-status "jx#2" "done" "s-1")
+        (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#2" "done" "s-1"))
         (should (equal (mapcar (lambda (c) (plist-get c :label)) (drgnx-cockpit-timeline :since last-id)) '("T2 ✓")))))))
 
 (ert-deftest drgnx-cockpit-model/edit-sources-per-kind-of-agent ()
@@ -234,7 +237,7 @@
       (should (eq (plist-get src :kind) 'outside))
       (should (plist-get src :own-worktree))
       (should-not (plist-get src :stopped)))
-    (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "stop" :summary "ended")
+    (drgnx-work-fixture-as-hub (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "stop" :summary "ended"))
     (should (plist-get (drgnx-cockpit-edit-source "ext:claude-code:42") :stopped))
     ;; a silent worktree: the worktree and its merge-base with main
     (let ((src (drgnx-cockpit-edit-source (concat "silent:" (directory-file-name wt-b)))))
@@ -280,9 +283,10 @@
 (ert-deftest drgnx-cockpit-model/remote-names-are-never-expanded ()
   (drgnx-cockpit-fixture-with
     (let ((remote "/ssh:somehost:/srv/proj") files diff)
-      (drgnx-coord-agent-register :id "ext:zed:7" :kind "zed" :name "Zed" :cwd remote :worktree remote :base sha
-                                  :plan "docs/plans/p.md")
-      (drgnx-coord-event-add :agent "ext:zed:7" :kind "edit" :summary "1 file" :data (list :root remote :paths '("a.el")))
+      (drgnx-work-fixture-as-hub
+        (drgnx-coord-agent-register :id "ext:zed:7" :kind "zed" :name "Zed" :cwd remote :worktree remote :base sha
+                                    :plan "docs/plans/p.md")
+        (drgnx-coord-event-add :agent "ext:zed:7" :kind "edit" :summary "1 file" :data (list :root remote :paths '("a.el"))))
       (let ((file-name-handler-alist (list (cons "\\`/[^/|:]+:" #'drgnx-cockpit-model-test--trap)))
             (sessions (append sessions (list (list :id "s-9" :name "far" :cwd (concat remote "/") :task "jx#9" :status 'idle)))))
         (let ((m (drgnx-cockpit-model :sessions sessions)))
@@ -343,8 +347,9 @@
 
 (ert-deftest drgnx-cockpit-model/closed-jobs-only-when-asked ()
   (drgnx-cockpit-fixture-with
-    (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
-    (drgnx-coord-job-set "jold" :status "done")
+    (drgnx-work-fixture-as-hub
+      (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
+      (drgnx-coord-job-set "jold" :status "done"))
     (should-not (drgnx-cockpit-model-test--node (drgnx-cockpit-model :sessions sessions) "job:jold"))
     (should-not (plist-get (drgnx-cockpit-model-test--node (drgnx-cockpit-model :sessions sessions) (format "task:%s#6" plan)) :job))
     (let* ((drgnx-cockpit-include-closed-jobs t) (m (drgnx-cockpit-model :sessions sessions)))
@@ -485,9 +490,10 @@
 
 (ert-deftest drgnx-cockpit-model/closed-jobs-deps-are-not-read ()
   (drgnx-cockpit-fixture-with
-    (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo
-                            :tasks '((:n 5 :title "task 5" :role "implement") (:n 6 :title "task 6" :role "implement" :deps (5))))
-    (drgnx-coord-job-set "jold" :status "done")
+    (drgnx-work-fixture-as-hub
+      (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo
+                              :tasks '((:n 5 :title "task 5" :role "implement") (:n 6 :title "task 6" :role "implement" :deps (5))))
+      (drgnx-coord-job-set "jold" :status "done"))
     (let ((deps (nth 2 (drgnx-cockpit--jobs))))
       (should (gethash "jx#3" deps))
       (should-not (gethash "jold#6" deps)))
@@ -496,10 +502,11 @@
 
 (ert-deftest drgnx-cockpit-model/paused-and-stopped-jobs-are-shown ()
   (drgnx-cockpit-fixture-with
-    (drgnx-coord-job-create :id "jp" :title "paused one" :plan plan :repo repo :tasks '((:n 5 :title "task 5" :role "implement")))
-    (drgnx-coord-job-set "jp" :status "paused")
-    (drgnx-coord-job-create :id "js" :title "stopped one" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
-    (drgnx-coord-job-set "js" :status "stopped")
+    (drgnx-work-fixture-as-hub
+      (drgnx-coord-job-create :id "jp" :title "paused one" :plan plan :repo repo :tasks '((:n 5 :title "task 5" :role "implement")))
+      (drgnx-coord-job-set "jp" :status "paused")
+      (drgnx-coord-job-create :id "js" :title "stopped one" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
+      (drgnx-coord-job-set "js" :status "stopped"))
     (let ((m (drgnx-cockpit-model :sessions sessions)))
       (should (equal (plist-get (drgnx-cockpit-model-test--node m "job:jp") :state) "paused"))
       (should (equal (plist-get (drgnx-cockpit-model-test--node m "job:js") :state) "stopped"))
@@ -547,12 +554,13 @@
 (ert-deftest drgnx-cockpit-model/job-agents-registered-by-the-hub-are-job-agents ()
   (drgnx-cockpit-fixture-with
     ;; the hub registers each task agent (kind job): an open job's shows as its job's agent, a done job's not at all
-    (drgnx-coord-agent-register :id "s-1" :kind "job" :name "claude · jx#2" :cwd tree :worktree tree :branch "job/jx-2" :base sha
-                                :task "jx#2")
-    (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
-    (drgnx-coord-agent-register :id "s-old" :kind "job" :name "claude · jold#6" :cwd repo :task "jold#6")
-    (drgnx-coord-event-add :agent "s-old" :kind "stop" :summary "session ended")
-    (drgnx-coord-job-set "jold" :status "done")
+    (drgnx-work-fixture-as-hub
+      (drgnx-coord-agent-register :id "s-1" :kind "job" :name "claude · jx#2" :cwd tree :worktree tree :branch "job/jx-2" :base sha
+                                  :task "jx#2")
+      (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
+      (drgnx-coord-agent-register :id "s-old" :kind "job" :name "claude · jold#6" :cwd repo :task "jold#6")
+      (drgnx-coord-event-add :agent "s-old" :kind "stop" :summary "session ended")
+      (drgnx-coord-job-set "jold" :status "done"))
     (let ((m (drgnx-cockpit-model :sessions nil)))
       (should-not (drgnx-cockpit-model-test--agent m "s-old"))
       (should-not (drgnx-cockpit-model-test--node m "agent:s-old"))
@@ -569,16 +577,17 @@
 (ert-deftest drgnx-cockpit-model/turns-are-not-an-agent-s-life ()
   (drgnx-cockpit-fixture-with
     ;; s-2's session started (the fixture); a turn of it ended: it is not stopped, and the timeline shows no turns
-    (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo)   ; a native agent the registry knows
-    (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "turn started" :data '(:turn t))
-    (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "turn ended (end_turn)" :data '(:turn t))
+    (drgnx-work-fixture-as-hub
+      (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo)   ; a native agent the registry knows
+      (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "turn started" :data '(:turn t))
+      (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "turn ended (end_turn)" :data '(:turn t)))
     (let ((m (drgnx-cockpit-model :sessions nil)))
       (should (equal (plist-get (drgnx-cockpit-model-test--agent m "s-2") :state) "not running")))
     (should-not (plist-get (drgnx-cockpit-edit-source "s-2") :stopped))
     (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
                    '("started")))
     ;; the session's own stop is its life
-    (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "session ended")
+    (drgnx-work-fixture-as-hub (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "session ended"))
     (should (equal (plist-get (drgnx-cockpit-model-test--agent (drgnx-cockpit-model :sessions nil) "s-2") :state) "stopped"))
     (should (plist-get (drgnx-cockpit-edit-source "s-2") :stopped))
     (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
@@ -586,17 +595,19 @@
 
 (ert-deftest drgnx-cockpit-model/turns-come-from-the-turn-column ()
   (drgnx-cockpit-fixture-with
-    (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo)
-    (let ((a (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "turn started" :data '(:turn t)))
-          (b (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "turn ended (end_turn)" :data '(:turn t))))
-      (should (equal (sqlite-select (drgnx-work-db) "select id, turn from event where id in (?, ?) order by id" (list a b))
+    (drgnx-work-fixture-as-hub (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo))
+    (let ((a (drgnx-work-fixture-as-hub
+               (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "turn started" :data '(:turn t))))
+          (b (drgnx-work-fixture-as-hub
+               (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "turn ended (end_turn)" :data '(:turn t)))))
+      (should (equal (sqlite-select (drgnx-work-fixture--db) "select id, turn from event where id in (?, ?) order by id" (list a b))
                      (list (list a 1) (list b 1))))
       ;; whatever the data text says, the column decides: no turn column set, a life event; set, a turn
-      (sqlite-execute (drgnx-work-db) "update event set data = null where id in (?, ?)" (list a b))
+      (sqlite-execute (drgnx-work-fixture--db) "update event set data = null where id in (?, ?)" (list a b))
       (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
                      '("started")))
       (should (equal (plist-get (drgnx-cockpit-model-test--agent (drgnx-cockpit-model :sessions nil) "s-2") :state) "not running"))
-      (sqlite-execute (drgnx-work-db) "update event set turn = null where id = ?" (list b))
+      (sqlite-execute (drgnx-work-fixture--db) "update event set turn = null where id = ?" (list b))
       (should (equal (plist-get (drgnx-cockpit-model-test--agent (drgnx-cockpit-model :sessions nil) "s-2") :state) "stopped")))))
 
 (load (expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)

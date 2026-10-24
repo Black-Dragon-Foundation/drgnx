@@ -194,18 +194,37 @@ own login, which drgnx only launches and never reads.
 The **hub** is Ratatoskr, a background process (kept by your system's service manager, or by itself where there is none:
 it outlives the Emacs that started it, and a later Emacs finds it again). The first agent that needs it starts it, with
 one `ratatoskr ensure`; `drgnx hub start|stop|status [--json]` are `ratatoskr ensure|stop|status` and manage it by hand.
-Where Ratatoskr is not built, drgnx says so: run `drgnx runtime build`. Keys
-reach it over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never through its
-environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
-then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
-takes them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
+Where Ratatoskr is not built, drgnx says so: run `drgnx runtime build`.
+
+**Keys.** They reach the hub over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never
+through its environment), from auth-source files that never ask, or from the command you ran (a key in
+`~/.authinfo.gpg` is read then) — and stay in its memory. With them your Emacs sends the list of your providers (the
+built-in ones and yours, `drgnx-ai-providers` in settings.el: where each is, what it speaks and does, its price; never
+a key), and again whenever you change them there. A provider of yours that takes a key at an `http://` address off this machine (a server on your LAN)
+works, but its key travels in clear text: drgnx says so once per provider each time Emacs starts; use `https` for it.
+The hub checks an agent's providers when it starts: one with no usable provider (unknown, not speaking the Messages
+API, or without its key) is not started, and says why. Tokens are kept only as hashes, so a restarted hub still takes
+them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
 that started it, except that drgnx sends it your login shell's `PATH` when that changed ([shell.md](shell.md#your-path-in-drgnx):
 at each start, and **Shell: Reload Environment**). So when an agent's program was installed while a hub ran, into a
 directory on your shell's `PATH`, run Shell: Reload Environment: the agents the hub starts from then on find it. When
 it went somewhere your shell's `PATH` does not reach (onboarding's Agents step adds such a directory to the running
 Emacs only), run `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
-With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
+Only the hub holds keys: once it has taken a key, your Emacs forgets its copy (a key you set in the environment stays
+there; [security.md](security.md#where-your-keys-live)). So an agent of a profile with a key (OpenRouter, Anthropic,
+Kimi, DeepSeek) always goes through the gateway, and with no hub to be had it does not start: "the drgnx hub is not
+running; agents reach providers through it". `drgnx-agents-use-gateway` set to nil changes nothing for them; it only
+sends an Ollama agent (no key) to Ollama directly. An Ollama agent with no hub to be had also goes directly and says
+so. An agent the hub starts (a durable session, a job's) always goes through the gateway. The Agents list's **Via**
 column shows which.
+
+### When the hub restarts
+
+A restarted hub holds no key: they live only in its memory. Your Emacs hands them over again as soon as it reconnects,
+and when the hub asks for a key its agents need, Emacs looks for it again where it can without asking anything: the
+provider's environment variable (`OPENROUTER_API_KEY`, …). It never prompts then, and never opens the Keychain or a
+`.gpg` file. When it finds none, a notice says "agents need your PROVIDER key in the drgnx hub: run AI: Load Keys";
+run it (it may ask, since you ran it).
 
 ### When drgnx was updated
 
@@ -343,22 +362,86 @@ minutes the task is free again (the Work cockpit's What needs you shows it; mess
 there too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
+## Working on shared tasks
+
+Besides a job's tasks, agents keep a shared task list in their project: they create tasks, split them, link them
+(what blocks what, what is part of what), label them and claim them. Only tasks of the agent's own project can be
+changed; tasks from your plans and your board are your files', so an agent adds a note or a task that relates to
+them instead.
+
+- **One agent at a time.** Claiming a task holds it for 15 minutes, renewed while the agent works. If another agent
+  reassigns it (always with a note saying why) or the claim ran out and someone else took it, the first agent is
+  told to stop at its next step, and its late changes are refused.
+- **No lost edits.** Two agents changing the same task: the second is told what changed since it read it and
+  re-reads. Labels and links are added and removed one by one, so nothing is overwritten.
+- **Ready is worked out**: a task is ready when nothing open blocks it and its parts are done. A link that would make
+  tasks wait on each other in a circle is refused.
+- **Your tasks stay yours.** On a task you made, an agent adds notes, links, labels and the priority; it changes the
+  title, body or acceptance only with your permission and never drops it. Without permission, an agent's "done"
+  is `in-review` and you close the task. With **only I close my tasks** on, even a permitted "done" is only a
+  proposal: a card for you, and the task waits.
+- **Agents are told** when someone else changes a task they hold or are assigned, when a task they wait on becomes
+  ready, and when they lose a claim. Notices about the same task are merged until read.
+
+### Tools for tracking work
+
+Five tools carry this to agents, on by default for every session, including agents outside drgnx:
+
+- `task_read`: one task by id (with its links, notes and history), a search by words, the tasks that are ready, the
+  agent's own.
+- `task_write`: create, update, claim, hand off, split, complete, link, label.
+- `note_add`: a progress note, finding, question or handoff about a task, decision, plan, file or symbol.
+- `graph_read`: what is around an entity, a path between two, who changed what, who touched a file.
+- `access_request`: asks you to let the agent read another project. It never waits; you answer on a card.
+
+Agents see their own project and the projects you granted them. What other agents (and the agent itself, earlier)
+wrote is handed over as untrusted data with its author, never as instructions. Every answer says how many notices wait,
+and an agent's first `hello` brings a short brief: its project, its tasks, what is ready, its notices.
+
+To turn the five tools off for a profile, set `:tracker-tools off` on it in `drgnx-agents-profiles` (settings.el); for one task, the user sets
+it with `tasks/write` (op `tools`). The task's setting wins over the profile's: a task with the tools on gets them
+even under a profile that turns them off, and the other way round; with neither set they are on. A session keeps the
+list it started with (21 tools with the tracker tools, 16 without). The editor tells the hub at each session start:
+the profile's name (as an id: `claude (OpenRouter)` is `claude-OpenRouter`) and its `:tracker-tools` value, when it
+has one. "Only I close my tasks" is the user option `drgnx-store-only-i-close-my-tasks` (default off): with it on, an
+agent's `done` on one of your tasks waits for your acceptance; the editor sends it when it connects and when you
+change it.
+
+## What an agent can read
+
+drgnx's store (tasks, decisions, notes, and how they link) is shared by every agent, but each agent reads only its
+own **project**: the git repository it was started in, all of its worktrees included (a repository is known by its
+first commit, so renaming its folder changes nothing). An agent started outside any repository reads nothing but the
+names of agents, unless a grant opens a project to it, and writes nothing. Things in other projects are left out of what it reads and only counted ("3 hidden"), never named.
+
+To let agents read another project, give them a grant (an agent can ask for one; the request waits for you in the
+Work cockpit): for every agent in a project, for one profile, or for one session, until you revoke it or it expires.
+Grants open reading only: agents still write only into their own project. Whatever another agent wrote reaches an
+agent marked as that agent's text, as data rather than instructions. More in
+[security.md](security.md#grants).
+
 ## Agents outside drgnx
 
 Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their
-subagents. Give the agent drgnx's coordination server as one more MCP server (stdio), with `KIND` set to the kind of
+subagents. Give the agent Ratatoskr's bridge as one more MCP server (stdio), with `KIND` set to the kind of
 agent (`claude`, `codex`, `zed`, …: a short lower-case name):
 
-- command: `<checkout>/bin/drgnx`
-- arguments: `coord mcp --kind KIND`
+- command: `<data>/bin/ratatoskr` (the installed binary; the path stays the same across updates)
+- arguments: `mcp-bridge --outside --kind KIND`
 
-For Claude Code, that is `claude mcp add drgnx -- <checkout>/bin/drgnx coord mcp --kind claude`. For Codex, it is a
-`[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's settings
-page can add it for you.
+For Claude Code, that is `claude mcp add drgnx -- <data>/bin/ratatoskr mcp-bridge --outside --kind claude`. For Codex,
+it is a `[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's
+settings page can add it for you. Configs written before the bridge (`<checkout>/bin/drgnx coord mcp --kind KIND`)
+keep working: that command now runs the bridge.
 
-The agent must start the server in its project folder. drgnx takes the folder the server starts in (its git
-worktree) as the place the agent works. A server started in your home folder, or at `/`, can say hello, but its
-file reports are refused.
+The agent must start the bridge in its project folder (`--cwd DIR` names it when the agent cannot). drgnx takes the
+folder it starts in (its git worktree) as the place the agent works. A bridge started in your home folder, or at `/`,
+can say hello, but its file reports are refused.
+
+The bridge survives a restart of the hub: while the hub is away the agent still sees its tools, a call waits up to 10
+seconds and then reports "drgnx hub restarting; retry", and a call that was running when the hub went is reported as
+an error, never sent twice: the agent checks before it retries. After 10 minutes without a hub the bridge ends. It
+refuses to connect when the hub's socket folder is open to other users.
 
 The agent then gets four tools to report with:
 - **hello**: who it is and where it works;

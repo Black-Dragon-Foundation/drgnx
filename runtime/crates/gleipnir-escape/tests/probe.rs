@@ -238,10 +238,16 @@ fn every_syscall_name_runs_to_a_result() {
             l[0]
         );
     }
-    // mount on a path that does not exist: ENOENT unfiltered, EPERM under the sandbox's filter.
+    // mount on a path that does not exist: ENOENT unfiltered, EPERM under the sandbox's filter. These are Linux
+    // syscalls; off Linux (macOS, Android) the probe makes none of them and says ENOSYS, and only Linux rows use them.
     let (l, _) = probe(&["syscall", "mount-missing"]);
+    let want: &[&str] = if cfg!(target_os = "linux") {
+        &["ENOENT", "EPERM"]
+    } else {
+        &["ENOSYS"]
+    };
     assert!(
-        matches!(l[0].errno.as_deref(), Some("ENOENT" | "EPERM")),
+        l[0].errno.as_deref().is_some_and(|e| want.contains(&e)),
         "{:?}",
         l[0]
     );

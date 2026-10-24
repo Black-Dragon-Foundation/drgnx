@@ -1,0 +1,25 @@
+{"scenario": "bridge/an-in-flight-call-is-an-error-never-a-retry", "requires": ["v1", "fake-backend"], "doc": "A tools/call sent to a stopped hub is in flight when the hub is killed: the agent gets the went-away tool error (the agent decides), and the call is never sent again, so after a restart only the first report is an event (a write has no request key before schema 7)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "spawn_conn", "conn": "b", "argv": ["$ROOT/bin/ratatoskr", "mcp-bridge", "--socket", "$sock"], "env": {}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "method": "notifications/initialized"}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "report_test", "arguments": {"command": "before", "passed": 1, "failed": 0}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "result": {"isError": "$absent"}}}
+{"do": "kill", "hub": "h", "signal": "STOP"}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "report_test", "arguments": {"command": "during", "passed": 1, "failed": 0}}}}
+{"do": "expect_silent", "conn": "b", "for_ms": 300}
+{"do": "kill", "hub": "h", "signal": "KILL"}
+{"do": "expect_next", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "the drgnx hub went away during this call; whether it took effect is unknown — check with read_inbox, task_status or read_decisions before you retry (if you passed req, retrying with the same req is safe)"}], "isError": true}}, "within_ms": 5000}
+{"do": "expect_exit", "hub": "h", "signal": "KILL"}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
+{"do": "expect_next", "conn": "b", "json": {"jsonrpc": "2.0", "id": 4, "result": {"isError": "$absent"}}, "within_ms": 12000}
+{"do": "expect_silent", "conn": "b", "for_ms": 1000}
+{"do": "sql_expect", "sql": "select summary from event where kind = 'test' order by id", "rows": [["1 passed, 0 failed: before"]]}

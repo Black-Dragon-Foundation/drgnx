@@ -126,7 +126,10 @@ of `/` (no home known: its secret dirs would be `/.ssh` and so on, never the use
 
 The rules apply in this order, each over the whole spec, and the first that applies wins (`validate::Rule`). They
 port the parked Lisp rules (`drgnx-sandbox-validate`). On macOS, path comparisons ignore case (APFS does), which can
-only refuse more.
+only refuse more. On a case-insensitive volume, macOS's `realpath` gives an existing path's stored case, so a path
+spelled in another case than its existing part is refused by rule 1 (a context path: `Malformed`); the fold catches
+the parts that do not exist yet. macOS's own links count like any other: `/tmp` is `/private/tmp` and `/home` is
+`/System/Volumes/Data/home`, so a no-mount dest under `/home` is refused.
 
 1. **`NotUtf8`, `NotCanonical`.** Every path is UTF-8, absolute, free of NUL and newline, and has no `//`, no `.` or
    `..` component and no trailing slash: otherwise a prefix check can be talked past. Every host path (the sources,
@@ -637,6 +640,7 @@ policy:
                                (deny file-write* (subpath B) (regex …))   ; …or ro (the pins)
 (deny file-read* file-write* (subpath H) (regex …) …)                ; 10. hide
 (deny file-write-unlink (literal D) (regex …) …)                     ; 11. no rename of a root or a pin's parents
+(deny file-clone (literal C) (regex …) …)                            ;     no clone of a hidden path's parents
 (allow network-outbound (remote ip "*:*"))      ; 12. shared, with AF_SYSTEM and the network mach services
   — or, isolated: (deny network*) (allow network-outbound (remote ip "localhost:PORT")) per mac_tcp_ports
 (deny network-outbound (remote unix-socket))    ; 13. every Unix socket…
@@ -663,6 +667,10 @@ policy:
   from such a root down to the parent of each `ro` bind and `hide` path. Files in those directories can still be
   removed and renamed. This is sandbox-runtime's move-blocking deny (anthropics/sandbox-runtime,
   `src/sandbox/macos-sandbox-utils.ts`, Apache-2.0), cut to what the spec needs.
+- **No clone past a hide.** A `clonefile` of a directory copies its whole tree, and Seatbelt checks only the directory
+  named, so cloning `conf` made `c3/.env` a readable copy (MAC-SB-10 (j)). So `(deny file-clone (literal C))` covers
+  every directory above a `hide` path or Homebrew's data, up to `/`. A clone of the hidden file itself fails on its
+  own deny (`mac-link-hidden-pinned`). Pins need no clone block: a copy of one is a new file, and the pin is unchanged.
 - **Every deny holds in every case.** APFS is case-insensitive by default, so `.GIT/config` is `.git/config`. Reports
   disagree on whether Seatbelt compares paths that way, so each deny (`/Users`, the pins, `hide`, the rename blocks,
   Homebrew's data) also carries a `regex` of character classes (`\.[Gg][Ii][Tt](/.*)?$`; a non-ASCII letter as

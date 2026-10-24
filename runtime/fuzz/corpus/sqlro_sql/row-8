@@ -1,0 +1,1 @@
+select updated_tx from entity where id = ?1

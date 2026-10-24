@@ -1,0 +1,26 @@
+{"scenario": "tracker/a-notice-reaches-the-assignee", "requires": ["v1", "fake-backend"], "doc": "A change by someone else tells the task's assignee (storage §6.5): the user reassigns a session's task to another session; the new assignee gets one message row from the tracker about the task, and its next tool answer counts it in _meta dev.drgnx/notices; the session that made the task (neither its assignee nor its holder) gets none."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid1", "socket": "$capture:sock1"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t2", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid2", "socket": "$capture:sock2"}}}
+{"do": "connect", "conn": "m1", "hub": "h", "socket": "path:$sock1", "as": "raw"}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "connect", "conn": "m2", "hub": "h", "socket": "path:$sock2", "as": "raw"}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "the fix"}}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"done": {"id": "$capture:t", "ver": "$capture:v"}}, "_meta": {"dev.drgnx/notices": 0}}}}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "mine"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"tasks": []}, "_meta": {"dev.drgnx/notices": 0}}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/write", "params": {"op": "reassign", "id": "$t", "ver": "$v", "to": "agent:$sid2", "note": "yours now"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$t"}}}
+{"do": "sql_expect", "sql": "select count(*) from message where recipient = 'agent:$sid2' and sender = 'tracker' and entity = (select n from entity where id = '$t') and state in ('queued', 'delivered')", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from message where recipient = 'agent:$sid1'", "rows": [[0]]}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "mine"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"tasks": [{"id": "$t"}]}, "_meta": {"dev.drgnx/notices": 1}}}}

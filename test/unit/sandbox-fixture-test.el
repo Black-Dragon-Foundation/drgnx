@@ -40,6 +40,7 @@
       (drgnx-agents-kill s))))
 
 (ert-deftest drgnx-sandbox-fixture/probes-report-reached-when-unsandboxed ()
+  :tags '(:frozen)
   (drgnx-sandbox-fixture-with
     :unsandboxed
     (let* ((text (drgnx-sandbox-fixture-test--ask

@@ -1,7 +1,15 @@
 ;;; work-db-migrate-test.el --- batch tests: work.db migrations step by step; spend -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'drgnx-work-db)
 (require 'drgnx-notice)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
+
+(defun drgnx-work-db-migrate-test--version ()
+  "The schema number after the local writer opened (and so migrated) the file: a reader never migrates."
+  (drgnx-work-db)
+  (drgnx-work-db-version))
 
 (defmacro drgnx-work-db-migrate-test--with (&rest body)
   "BODY with drgnx's data dir a fresh temp dir (`dir'), no database open."
@@ -13,7 +21,7 @@
        (drgnx-work-db-close-all)
        (delete-directory dir t))))
 
-(ert-deftest drgnx-work-db/a-version-1-db-migrates-to-2-keeping-its-nodes ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-version-1-db-migrates-to-2-keeping-its-nodes ()
   (drgnx-work-db-migrate-test--with
     (let ((db (sqlite-open (concat dir "work.db"))))          ; a work.db as M7b wrote it
       (sqlite-execute db "create table meta (key text primary key, value text)")
@@ -24,16 +32,16 @@
       (sqlite-execute db "insert into node (id, kind, title) values ('plan:p', 'plan', 'P')")
       (sqlite-execute db "insert into meta values ('schema', '1')")
       (sqlite-close db))
-    (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
+    (should (= (drgnx-work-db-migrate-test--version) drgnx-work-db-schema-version))
     (should (equal (plist-get (drgnx-work-node "plan:p") :title) "P"))
     (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where name = 'spend'"))))
 
-(ert-deftest drgnx-work-db/a-fresh-db-is-version-2 ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-fresh-db-is-version-2 ()
   (drgnx-work-db-migrate-test--with
-    (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
+    (should (= (drgnx-work-db-migrate-test--version) drgnx-work-db-schema-version))
     (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where name = 'node'"))))
 
-(ert-deftest drgnx-work-db/a-db-newer-than-the-code-is-left-alone ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-db-newer-than-the-code-is-left-alone ()
   (drgnx-work-db-migrate-test--with
     (let ((db (sqlite-open (concat dir "work.db"))))
       (sqlite-execute db "create table meta (key text primary key, value text)")
@@ -44,7 +52,7 @@
       (should (equal (caar (sqlite-select db "select value from meta where key = 'schema'")) "99"))
       (sqlite-close db))))
 
-(ert-deftest drgnx-work-db/a-version-3-db-migrates-to-4-keeping-its-jobs ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-version-3-db-migrates-to-4-keeping-its-jobs ()
   (drgnx-work-db-migrate-test--with
     (let ((db (sqlite-open (concat dir "work.db"))))          ; a work.db as M9b.2 wrote it
       (sqlite-execute db "create table meta (key text primary key, value text)")
@@ -52,11 +60,11 @@
       (sqlite-execute db "insert into job values ('j', 'J', 'p.md', '/r/', 'running', 1.0, null)")
       (sqlite-execute db "insert into meta values ('schema', '3')")
       (sqlite-close db))
-    (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
+    (should (= (drgnx-work-db-migrate-test--version) drgnx-work-db-schema-version))
     (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where name = 'card'"))
     (should (equal (caar (sqlite-select (drgnx-work-db) "select status from job where id = 'j'")) "running"))))
 
-(ert-deftest drgnx-work-db/spend-adds-up-per-job-task-and-agent ()
+(drgnx-work-db-writer-deftest drgnx-work-db/spend-adds-up-per-job-task-and-agent ()
   (drgnx-work-db-migrate-test--with
     (drgnx-work-db-add-spend :job "j" :task "a" :agent "x" :provider "openrouter" :model "m" :input 10 :output 5 :cost 0.5 :status 200)
     (drgnx-work-db-add-spend :job "j" :task "b" :agent "y" :provider "ollama" :model "q" :input 1 :output 2 :cost 0.25 :status 200)
@@ -66,12 +74,12 @@
     (should (equal (drgnx-work-db-spend :agent "z") '(:input 100 :output 100 :cost 9.0 :requests 1)))
     (should (equal (drgnx-work-db-spend :job "none") '(:input 0 :output 0 :cost 0.0 :requests 0)))))
 
-(ert-deftest drgnx-work-db/nodes-of-kinds-in-one-query ()
+(drgnx-work-db-writer-deftest drgnx-work-db/nodes-of-kinds-in-one-query ()
   (drgnx-work-db-migrate-test--with
-    (drgnx-work-put-node "spec:s" :kind 'spec :title "S" :path "/s")
-    (drgnx-work-put-node "plan:p" :kind 'plan :title "P" :path "/p")
-    (drgnx-work-put-node "step:p#1.1" :kind 'step :title "do" :path "/p")
-    (drgnx-work-put-node "task:p#1" :kind 'task :title "T" :path "/p" :ord 1 :stale t)
+    (drgnx-work-fixture-put-node "spec:s" :kind 'spec :title "S" :path "/s")
+    (drgnx-work-fixture-put-node "plan:p" :kind 'plan :title "P" :path "/p")
+    (drgnx-work-fixture-put-node "step:p#1.1" :kind 'step :title "do" :path "/p")
+    (drgnx-work-fixture-put-node "task:p#1" :kind 'task :title "T" :path "/p" :ord 1 :stale t)
     (should (equal (mapcar (lambda (n) (plist-get n :id)) (drgnx-work-nodes-of-kinds '(spec plan task)))
                    '("plan:p" "spec:s" "task:p#1")))
     (should (eq (plist-get (car (drgnx-work-nodes-of-kinds '(task))) :stale) t))
@@ -115,9 +123,9 @@ drgnx leaves it."
   '(("node" "id" drgnx-records-node-data) ("job" "id" drgnx-records-job-data) ("card" "id" drgnx-records-card-data)
     ("event" "id" drgnx-records-event-data) ("jtask" "id" any)))
 
-(ert-deftest drgnx-work-db/migration-6-converts-every-kind ()
+(drgnx-work-db-writer-deftest drgnx-work-db/migration-6-converts-every-kind ()
   (drgnx-work-db-migrate-test--with-5
-    (should (= (drgnx-work-db-version) 6))
+    (should (= (drgnx-work-db-migrate-test--version) 6))
     (should (= drgnx-work-db-schema-version 6))
     (should (= drgnx-work-db-compat-read 6))
     (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'compat-read'")) "6"))
@@ -154,13 +162,13 @@ drgnx leaves it."
     (should (equal (plist-get (plist-get (drgnx-coord-card 3) :data) :key) "against-decision:1"))
     (should (equal (plist-get (nth 9 (drgnx-coord-events)) :data) '(:root "/work/repo/" :paths ("a.el" "b.el"))))))
 
-(ert-deftest drgnx-work-db/migration-6-survives-unreadable-rows ()
+(drgnx-work-db-writer-deftest drgnx-work-db/migration-6-survives-unreadable-rows ()
   ;; Review Focus 2: an unreadable object, text cut short, a symbol no schema covers
   (drgnx-work-db-migrate-test--with-5
     (let ((said nil))
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
                 ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text said) nil)))   ; a notice, Task 20
-        (should (= (drgnx-work-db-version) 6)))
+        (should (= (drgnx-work-db-migrate-test--version) 6)))
       (should (= (length said) 1))
       (should (string-match-p "\\<3\\>" (car said))))
     (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'migrate-6-dropped'")) "3"))
@@ -178,7 +186,7 @@ drgnx leaves it."
       (should-not said))
     (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'migrate-6-dropped'")) "3"))))
 
-(ert-deftest drgnx-work-db/migration-6-drops-a-row-any-error-fails-on ()
+(drgnx-work-db-writer-deftest drgnx-work-db/migration-6-drops-a-row-any-error-fails-on ()
   ;; review S3: not only reader and schema errors: whatever fails on one row (here the schema check signalling
   ;; wrong-type-argument on an odd value) drops that row alone, and the migration finishes
   (drgnx-work-db-migrate-test--with-5
@@ -189,11 +197,11 @@ drgnx leaves it."
                    (let ((json (apply orig args)))
                      (if (= (cl-incf good) 1) (signal 'wrong-type-argument '(listp 1)) json))))
                 ((symbol-function 'message) #'ignore))
-        (should (= (drgnx-work-db-version) 6))))
+        (should (= (drgnx-work-db-migrate-test--version) 6))))
     ;; the fixture's 3 unreadable rows and this one
     (should (equal (caar (sqlite-select (drgnx-work-db) "select value from meta where key = 'migrate-6-dropped'")) "4"))))
 
-(ert-deftest drgnx-work-db/migration-6-is-all-or-nothing ()
+(drgnx-work-db-writer-deftest drgnx-work-db/migration-6-is-all-or-nothing ()
   ;; a failure outside a row's conversion (a write: a full disk, say) rolls the whole migration back
   (drgnx-work-db-migrate-test--with-5
     (let ((file (concat dir "work.db")) (calls 0) (orig (symbol-function 'sqlite-execute)))
@@ -213,11 +221,11 @@ drgnx leaves it."
         (should-not (sqlite-select db "select name from sqlite_master where name like '%_new'"))
         (sqlite-close db))
       ;; and the next open (nothing forced) finishes the job
-      (should (= (drgnx-work-db-version) 6)))))
+      (should (= (drgnx-work-db-migrate-test--version) 6)))))
 
-(ert-deftest drgnx-work-db/migration-6-keeps-a-schema-5-copy ()
+(drgnx-work-db-writer-deftest drgnx-work-db/migration-6-keeps-a-schema-5-copy ()
   (drgnx-work-db-migrate-test--with-5
-    (should (= (drgnx-work-db-version) 6))
+    (should (= (drgnx-work-db-migrate-test--version) 6))
     (let ((copy (concat dir "work.db.schema5")))
       (should (file-exists-p copy))
       (let ((db (sqlite-open copy t)))
@@ -232,13 +240,13 @@ drgnx leaves it."
         (drgnx-work-db-close-all)
         (dolist (f (list "work.db" "work.db-wal" "work.db-shm")) (ignore-errors (delete-file (concat dir f))))
         (drgnx-work-db-migrate-test--load-5 (concat dir "work.db") '("insert into job values ('job-9', 'Late', NULL, '/r/', 'proposed', 1.0, NULL)"))
-        (should (= (drgnx-work-db-version) 6))
+        (should (= (drgnx-work-db-migrate-test--version) 6))
         (should (equal (drgnx-work-db-migrate-test--bytes copy) hash))
         (should (equal (caar (sqlite-select (drgnx-work-db) "select title from job where id = 'job-9'")) "Late"))))))
 
-(ert-deftest drgnx-work-db/migration-6-is-safe-to-run-twice ()
+(drgnx-work-db-writer-deftest drgnx-work-db/migration-6-is-safe-to-run-twice ()
   (drgnx-work-db-migrate-test--with-5
-    (should (= (drgnx-work-db-version) 6))
+    (should (= (drgnx-work-db-migrate-test--version) 6))
     (let ((rows (lambda () (list (sqlite-select (drgnx-work-db) "select id, data from event order by id")
                                  (sqlite-select (drgnx-work-db) "select id, data, ref from card order by id")
                                  (sqlite-select (drgnx-work-db) "select id, answers from message order by id")
@@ -247,10 +255,10 @@ drgnx leaves it."
         ;; the version row lost (a migration cut short elsewhere): every step runs again
         (sqlite-execute (drgnx-work-db) "delete from meta where key = 'schema'")
         (drgnx-work-db-close-all)
-        (should (= (drgnx-work-db-version) 6))
+        (should (= (drgnx-work-db-migrate-test--version) 6))
         (should (equal (funcall rows) once))))))
 
-(ert-deftest drgnx-work-db/a-newer-schema-is-refused-by-the-writer ()
+(drgnx-work-db-writer-deftest drgnx-work-db/a-newer-schema-is-refused-by-the-writer ()
   (drgnx-work-db-migrate-test--with
     (let ((db (sqlite-open (concat dir "work.db"))))
       (sqlite-execute db "create table meta (key text primary key, value text)")
@@ -259,7 +267,7 @@ drgnx leaves it."
     (let ((err (should-error (drgnx-work-db) :type 'user-error)))
       (should (string-match-p "newer" (cadr err))))))
 
-(ert-deftest drgnx-work-db/no-sql-matches-printed-lisp ()
+(drgnx-work-db-writer-deftest drgnx-work-db/no-sql-matches-printed-lisp ()
   ;; the columns say what the SQL asks for; nothing matches the printed text of a plist any more
   (let ((bad nil))
     (dolist (dir '("core" "wb" "modules"))

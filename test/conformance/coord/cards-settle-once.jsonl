@@ -1,0 +1,13 @@
+{"scenario": "coord/cards-settle-once", "requires": ["v1", "fake-backend"], "doc": "An open card settles once (drgnx-coord-card-settle): the second cards/settle answers settled false, the card keeps the first choice, and status counts the two transactions the front's writer committed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into card (id, kind, title, state, at) values (7, 'review', 'review j1#1', 'open', 1.0)"]}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "cards/settle", "params": {"card": 7, "choice": "accept"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"settled": true}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "cards/settle", "params": {"card": 7, "choice": "revert"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settled": false}}}
+{"do": "sql_expect", "sql": "select state, choice from card where id = 7", "rows": [["settled", "accept"]]}
+{"do": "sql_expect", "sql": "select kind, summary from event", "rows": [["card", "review: review j1#1 -> accept"]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"store": {"writes": 2}}}}

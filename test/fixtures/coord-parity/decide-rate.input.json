@@ -1,0 +1,17 @@
+{
+  "setup": [],
+  "clock": [],
+  "tables": ["decision", "event", "meta"],
+  "calls": [
+    {"fn": "drgnx-coord-decide", "now": 200.0, "args": {"kind": "wait", "subject": "d1", "author": "a2", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 200.0, "args": {"kind": "wait", "subject": "d2", "author": "a2", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 200.0, "args": {"kind": "wait", "subject": "d3", "author": "a2", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 200.0, "args": {"kind": "wait", "subject": "d4", "author": "a2", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 200.0, "args": {"kind": "wait", "subject": "d5", "author": "a2", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 200.0, "args": {"kind": "wait", "subject": "d6", "author": "a2", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 230.0, "args": {"kind": "wait", "subject": "d7 over the rate", "author": "a2", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 231.0, "args": {"kind": "wait", "subject": "another author is fine", "author": "a3", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 232.0, "args": {"kind": "wait", "subject": "the user has no rate", "author": "user", "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 300.0, "args": {"kind": "wait", "subject": "d8 a minute later", "author": "a2", "job": "j1"}}
+  ]
+}

@@ -102,8 +102,10 @@ then renamed over it, so a hub that dies mid-write (or a machine) leaves the old
   (drgnx-file-write file value :private t :fsync t))
 
 (defun drgnx-hub--save-registrations ()
-  "Keep the registrations (`drgnx-hub--write-private')."
-  (drgnx-hub--write-private (drgnx-hub--registrations-file) (drgnx-gateway-registrations)))
+  "Keep the registrations (`drgnx-hub--write-private') — not behind the front (`drgnx-hub--behind-front'), whose
+gateway keeps them: there is no registrations.eld there."
+  (unless drgnx-hub--behind-front
+    (drgnx-hub--write-private (drgnx-hub--registrations-file) (drgnx-gateway-registrations))))
 
 (defun drgnx-hub--kept-unusable (file why consequence)
   "FILE, a kept file the hub cannot use (WHY), is copied aside (`drgnx-file-backup': the next save replaces it) and
@@ -159,6 +161,9 @@ a pid.  How many went."
     ("gateway/keys" (drgnx-hub--set-keys (plist-get params :keys)) t)
     ("events/since" (drgnx-hub--events-since params))
     ("env/set" (drgnx-hub--set-env (plist-get params :env)))
+    ;; behind the front: its gateway's `budget' (a job's budget is spent), a notification that pauses the job
+    ("budget" (if drgnx-hub--behind-front (progn (drgnx-job--gateway-event 'budget params) t)
+                (list :error "no method budget")))
     ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver)   ; a coordination server wrote: deliver now, look for clashes
      (drgnx-hub--events-soon)                                    ; and send its events
      (run-at-time 0 nil (lambda () (dolist (j (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-clash-scan j)))))
@@ -271,7 +276,18 @@ agents and jobs the hub starts from now on get the new PATH (running ones keep t
 restrictions of `drgnx-gateway-restrictions', lists or vectors) :keys (:PROVIDER KEY…) :owner PID), keys held in
 memory; OWNER, the pid of the Emacs whose agent it is, ends it when it is gone
 \(`drgnx-hub--prune-registrations').  (:token :url :openrouter KEPT): KEPT, the restrictions registered, lets the
-editor check that they all were.  Restrictions that do not read refuse the registration (an error naming them)."
+editor check that they all were.  Restrictions that do not read refuse the registration (an error naming them).
+Behind the front (`drgnx-hub--behind-front') the front's gateway registers it (`gateway/register' through
+`drgnx-hub-call-front'), without keys (the backend holds none; the front judges each step, its keys included): a
+refusal signals `drgnx-hub-front-error' with the front's text."
+  (if drgnx-hub--behind-front
+      (drgnx-hub-call-front "gateway/register"
+                            (cl-loop for (k v) on params by #'cddr
+                                     unless (or (eq k :keys) (null v)) append (list k v)))
+    (drgnx-hub--register-here params)))
+
+(defun drgnx-hub--register-here (params)
+  "`drgnx-hub-register' in the standalone Lisp hub: its own gateway, keys in its memory."
   (let ((restrictions (drgnx-gateway-restrictions (plist-get params :openrouter) t)))
     (drgnx-hub--set-keys (plist-get params :keys))
     (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
@@ -483,13 +499,15 @@ which the next call looks."
                         (append (list :root (drgnx-agent-session-cwd s)) (drgnx-hub--edit-paths (list (plist-get item :path))))))
 
 (defun drgnx-hub--events-soon ()
-  "Send subscribers the new events soon: one `events' event per `drgnx-hub-events-interval' at the most often."
-  (drgnx-timer-soon 'hub-events drgnx-hub-events-interval #'drgnx-hub--events-send :owner :core))
+  "Send subscribers the new events soon: one `events' event per `drgnx-hub-events-interval' at the most often.  Behind
+the front (`drgnx-hub--behind-front') nothing: the front broadcasts the event log."
+  (unless drgnx-hub--behind-front
+    (drgnx-timer-soon 'hub-events drgnx-hub-events-interval #'drgnx-hub--events-send :owner :core)))
 
 (defun drgnx-hub--events-check ()
   "Events another process added (a coordination server, the CLI) or this one without a broadcast (a job's review,
 merge and writes) go out too: the hub's tick, every 2 s."
-  (when (> (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0) drgnx-hub--events-sent)
+  (when (> (or (caar (sqlite-select (drgnx-work-db-read) "select max(id) from event")) 0) drgnx-hub--events-sent)
     (drgnx-hub--events-soon)))
 
 (defun drgnx-hub--event-rows (since limit)
@@ -501,7 +519,8 @@ DATA the JSON object the store's checked column holds (schema 6), parsed; absent
                                                             :null-object :null :false-object :false)))))
               (append (list :id id :at at :agent agent :job job :task task :kind kind :summary summary)
                       (and d (list :data d)))))
-          (sqlite-select (drgnx-work-db) (format "select %s from event where id > ? order by id limit ?" drgnx-coord--event-cols)
+          (sqlite-select (drgnx-work-db-read)
+                         (format "select %s from event where id > ? order by id limit ?" drgnx-coord--event-cols)
                          (list since limit))))
 
 (defun drgnx-hub--events-send ()
@@ -571,7 +590,7 @@ for an agent that is not here (or exited) stays queued."
     (drgnx-job-tick)
     (drgnx-hub--prune-registrations)
     (drgnx-hub--drop-stuck)
-    (drgnx-hub--events-check)
+    (unless drgnx-hub--behind-front (drgnx-hub--events-check))   ; behind the front, the front broadcasts the log
     (when (zerop (% (cl-incf drgnx-hub--ticks) 30)) (drgnx-hub--housekeeping))))
 
 (defun drgnx-hub--flush (s)
@@ -638,20 +657,22 @@ reader), a newer event never reaches another before this one."
 
 (defun drgnx-hub-serve (socket)
   "Be the hub on SOCKET: the gateway started, the registrations a previous hub kept taken back.  Returns the server.
-Signals an error when a hub already serves there."
+Behind the front (`drgnx-hub--behind-front') the gateway is the front's: no listener, no registrations.eld, no port
+file here.  Signals an error when a hub already serves there."
   (when (drgnx-hub--ping-socket socket) (error "a hub already serves on %s" socket))
   (drgnx-hub--private-dir (file-name-directory socket))
   (drgnx-hub--take-lock socket)
   (ignore-errors (delete-file socket))
-  ;; the port agents were given, again (running agents keep the address they started with)
-  (let* ((file (drgnx-hub--port-file))
-         (old (ignore-errors (string-to-number (with-temp-buffer (insert-file-contents file) (buffer-string))))))
-    (unless (and old (> old 0) (ignore-errors (drgnx-gateway-start old)))
-      (when (and old (> old 0)) (message "drgnx hub: port %d is taken; agents started before must start again" old))
-      (drgnx-gateway-start))
-    (drgnx-file-write-text file (number-to-string (drgnx-gateway-port))))
-  (drgnx-hub--load-registrations)
-  (drgnx-hub--prune-registrations)
+  (unless drgnx-hub--behind-front
+    ;; the port agents were given, again (running agents keep the address they started with)
+    (let* ((file (drgnx-hub--port-file))
+           (old (ignore-errors (string-to-number (with-temp-buffer (insert-file-contents file) (buffer-string))))))
+      (unless (and old (> old 0) (ignore-errors (drgnx-gateway-start old)))
+        (when (and old (> old 0)) (message "drgnx hub: port %d is taken; agents started before must start again" old))
+        (drgnx-gateway-start))
+      (drgnx-file-write-text file (number-to-string (drgnx-gateway-port))))
+    (drgnx-hub--load-registrations)
+    (drgnx-hub--prune-registrations))
   (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
   (add-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
@@ -661,7 +682,7 @@ Signals an error when a hub already serves there."
   (add-hook 'drgnx-gateway-event-functions #'drgnx-job--gateway-event)
   (drgnx-timer-start 'hub-tick 2 #'drgnx-hub--tick :repeat 2 :owner :core)
   ;; subscribers get the events from now on (`events/since' has the ones before)
-  (setq drgnx-hub--events-sent (or (caar (sqlite-select (drgnx-work-db) "select max(id) from event")) 0))
+  (setq drgnx-hub--events-sent (or (caar (sqlite-select (drgnx-work-db-read) "select max(id) from event")) 0))
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
@@ -672,7 +693,7 @@ Signals an error when a hub already serves there."
                                                            (lambda (line) (drgnx-hub--receive-malformed conn line))
                                                            drgnx-hub--max-line))
                                        "hub requests")))
-  ;; serving now: a resumed agent registers with this hub's gateway directly
+  ;; serving now: a resumed agent registers with this hub's gateway (behind the front: the front's)
   (drgnx-hub--resume-sessions)
   drgnx-hub--server)
 
@@ -728,7 +749,10 @@ when it cannot start for any other reason.  It serves on DRGNX_HUB_SERVE_SOCKET 
 backend), else on `drgnx-hub-socket'; both that and DRGNX_HUB_PARENT_PID are read and unset before anything starts a
 process (`drgnx-hub--take-serve-env').  A DRGNX_HUB_SERVE_SOCKET that is set but not an absolute name is exit 1: it
 never falls back to the front's socket.  So is one without DRGNX_HUB_SERVE_SECRET: the backend serves only Ratatoskr
-(`drgnx-hub--secret')."
+(`drgnx-hub--secret').
+With a serve socket it is the backend behind Ratatoskr's front: `drgnx-hub--behind-front' is set, the coordination
+writers call the front (`drgnx-coord-writer' `front', `drgnx-hub-call-front'), and the front broadcasts the event
+log (no `events' from here).  Without one it is the standalone Lisp hub and writes work.db itself (`local')."
   (pcase-let* ((`(,serve ,parent ,secret) (drgnx-hub--take-serve-env))
                (socket (cond ((consp serve)
                               (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is not an absolute name: %s" (cadr serve))
@@ -737,7 +761,9 @@ never falls back to the front's socket.  So is one without DRGNX_HUB_SERVE_SECRE
                               (message "drgnx hub: DRGNX_HUB_SERVE_SOCKET is set without DRGNX_HUB_SERVE_SECRET")
                               (kill-emacs 1))
                              (t (or serve (drgnx-hub-socket))))))
-    (setq drgnx-hub--secret (and serve secret))
+    (setq drgnx-hub--secret (and serve secret)
+          drgnx-hub--behind-front (and serve t)
+          drgnx-coord-writer (if serve 'front 'local))
     (drgnx-settings-defaults-apply)               ; the hub's Lisp half reads the profiles, routes and providers
     (drgnx-gc-batch-setup)
     (setq drgnx-timer-report-file "hub-timers-report.eld")   ; the hub's stopped timers go to a file of their own
@@ -748,7 +774,9 @@ never falls back to the front's socket.  So is one without DRGNX_HUB_SERVE_SECRE
                (message "drgnx hub: %s" (if already "a hub already serves" (error-message-string err)))
                (kill-emacs (if already 3 1)))))
     (add-hook 'kill-emacs-hook #'drgnx-hub-stop)
-    (message "drgnx hub: serving on %s, gateway on 127.0.0.1:%d" socket (drgnx-gateway-port))
+    (message "drgnx hub: serving on %s, %s" socket
+             (if drgnx-hub--behind-front "behind Ratatoskr (its gateway)"
+               (format "gateway on 127.0.0.1:%d" (drgnx-gateway-port))))
     ;; a test's hub (DRGNX_HUB_PARENT_PID: its test Emacs) and Ratatoskr's backend end with their parent, never
     ;; outliving it
     (while t

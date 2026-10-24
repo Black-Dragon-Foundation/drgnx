@@ -1177,24 +1177,47 @@ mod tests {
         );
     }
 
-    /// APFS ignores case, so on macOS `~/.SSH` is `~/.ssh`: comparisons fold case for that target.
+    /// APFS ignores case, so on macOS `~/.SSH` is `~/.ssh`: comparisons fold case for that target. On a volume that
+    /// folds case (macOS's default), realpath gives an existing path's stored case, so another spelling of it is not
+    /// its own true name (rule 1); the fold is what catches the parts that do not exist yet.
     #[test]
     fn macos_compares_without_case() {
         let fx = Fx::new();
+        // Neither `home/W` nor `home/w` exists in any case, so rule 1 passes on every volume and only the fold refuses
+        // (unfolded, the write would be `Missing` and the read would pass).
         let ctx = Context {
-            home: fx.p("home/U"),
+            home: fx.p("home/W"),
             ..fx.ctx()
         };
         let mut spec = fx.spec(Target::Macos);
-        spec.write.push(fx.p("home"));
-        assert_eq!(
-            validate(spec, &ctx, Target::Macos).unwrap_err().rule,
-            Rule::ExposesUser
-        );
+        spec.write.push(fx.p("home/w"));
+        let r = validate(spec, &ctx, Target::Macos).unwrap_err();
+        assert_eq!(r.rule, Rule::ExposesUser, "{}", r.message);
+        let mut spec = fx.spec(Target::Macos);
+        spec.read.push(fx.p("home/w/.SSH"));
+        let r = validate(spec, &ctx, Target::Macos).unwrap_err();
+        assert_eq!(r.rule, Rule::SecretDir, "{}", r.message);
+        // An existing secret dir spelled in another case is refused either way: as a secret dir where the volume
+        // keeps `.SSH` apart (Linux), as no true name where it is `.ssh` itself (macOS).
+        let folds = fx.p("HOME/u").exists();
         fs::create_dir_all(fx.p("home/u/.SSH")).unwrap();
         let mut spec = fx.spec(Target::Macos);
         spec.read.push(fx.p("home/u/.SSH"));
-        refused(&fx, "~/.SSH", Target::Macos, spec, Rule::SecretDir);
+        let rule = if folds {
+            Rule::NotCanonical
+        } else {
+            Rule::SecretDir
+        };
+        refused(&fx, "~/.SSH", Target::Macos, spec, rule);
+        if folds {
+            // So is a context home spelled in another case than the one on disk: `Malformed`, never read loosely.
+            let ctx = Context {
+                home: fx.p("home/U"),
+                ..fx.ctx()
+            };
+            let r = validate(fx.spec(Target::Macos), &ctx, Target::Macos).unwrap_err();
+            assert_eq!(r.rule, Rule::Malformed, "{}", r.message);
+        }
     }
 
     #[test]
@@ -1536,8 +1559,10 @@ mod tests {
             let mut s = fx.spec(t);
             s.binds[0].dest = "/mnt/other".into();
             refused(&fx, "bind", t, s, Rule::DestDiffers);
+            // A dest inside the fixture, not `/home/agent`: these targets look dests up on the host, and `/home` is a
+            // link on macOS (to /System/Volumes/Data/home) and on Silverblue, which rule 1 refuses first.
             let mut s = fx.spec(t);
-            s.home.as_mut().unwrap().dest = "/home/agent".into();
+            s.home.as_mut().unwrap().dest = fx.p("elsewhere/agent");
             refused(&fx, "home", t, s, Rule::DestDiffers);
             let mut s = fx.spec(t);
             s.run.as_mut().unwrap().dest = "/run/drgnx".into();

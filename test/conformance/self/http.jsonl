@@ -1,0 +1,11 @@
+{"scenario": "self/http", "requires": ["v0"], "doc": "The harness's own row for the http verbs: a request with a header and a counted body, the head read first and the rest read later by expect_http, a connection reused, a response matched by status, header and body, and file_grep over the logs of a scripted listener (ratatoskr-mock llm)."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/stream", "chunks": [[0, "data: a\n\n"], [300, "data: b\n\n"]]}, {"path": "/upload", "status": 201, "headers": {"x-reply": "yes"}, "body": "{\"ok\": true}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "http", "conn": "u", "to": "tcp:127.0.0.1:$port", "method": "POST", "path": "/upload", "headers": {"X-Probe": "1", "Content-Type": "text/plain"}, "body_bytes": {"fill": "x", "n": 20}}
+{"do": "expect_http", "conn": "u", "status": 201, "headers": {"X-Reply": "yes", "content-type": "application/json"}, "body_json": {"ok": true}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"x-probe\":\"1\""}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"body\":\"xxxxxxxxxxxxxxxxxxxx\""}
+{"do": "http", "conn": "s", "to": "tcp:127.0.0.1:$port", "path": "/stream", "read": "head"}
+{"do": "expect_http", "conn": "s", "status": 200, "headers": {"content-type": "text/event-stream"}, "body_contains": "data: b", "within_ms": 5000}
+{"do": "file_grep", "paths": ["$ROOT/*.log"], "absent": "not-in-any-log"}

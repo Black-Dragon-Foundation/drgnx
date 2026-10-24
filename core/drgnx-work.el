@@ -167,21 +167,23 @@ on a timer, never inside the process filter that saw the turn end."
 
 (defun drgnx-work-collect-jobs ()
   "Record the commits of the jobs that worked on a task and ended (each job once), in the repository
-the job started in (its worktree may be gone by now)."
+the job started in (its worktree may be gone by now).  Through the hub: `graph/record' with the key `job ID' (which
+the hub keeps, so a job is never collected twice), or the key alone (`graph/put-parsed') when there is nothing to
+record."
   (require 'drgnx-jobs)
   (dolist (job (drgnx-jobs-list))
     (let* ((id (plist-get job :id)) (key (concat "job " id)))
       (when (and (plist-get job :task) (memq (plist-get job :status) '(exited stopped))
-                 (not (sqlite-select (drgnx-work-db) "select 1 from meta where key = ?" (list key))))
+                 (not (sqlite-select (drgnx-work-db-read) "select 1 from meta where key = ?" (list key))))
         (let* ((repo (or (and (plist-get job :git-dir) (drgnx-work--main-repo (plist-get job :git-dir)))
                          (drgnx-work--main-repo (plist-get job :cwd))))
                (end (drgnx-jobs--text (expand-file-name "head" (drgnx-jobs--dir id)))))
           (when repo                                   ; else: the repository may come back; try again later
             (let ((new (drgnx-work--new-commits repo (plist-get job :head) end (or (plist-get job :start-time) 0))))
-              (when (and new (<= (length new) drgnx-work-collect-max))
-                (drgnx-work-record-commits (plist-get job :task) repo new)
-                (when (drgnx-work--notes-p) (dolist (c new) (drgnx-work--note repo (car c) (plist-get job :task))))))
-            (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, 'collected')" (list key))))))))
+              (if (and new (<= (length new) drgnx-work-collect-max))
+                  (progn (drgnx-work-record-commits (plist-get job :task) repo new key)
+                         (when (drgnx-work--notes-p) (dolist (c new) (drgnx-work--note repo (car c) (plist-get job :task)))))
+                (drgnx-work--hub "graph/put-parsed" (list :collected (vector key)))))))))))
 
 ;;;; Scanning what the user works on
 
@@ -223,48 +225,63 @@ the job started in (its worktree may be gone by now)."
           :tasks (funcall pair (plist-get row :tasks)) :steps (funcall pair (plist-get row :steps))
           :todos (funcall pair (plist-get row :todos)) :commits (plist-get row :commits))))
 
-(defun drgnx-work-cli-run (args)
-  "Run `drgnx work' ARGS (strings); the exit code (2: a usage error)."
+(defun drgnx-work--ensure-hub ()
+  "t when a hub serves (started if need be); else it says so and nil: the tracker updates only through the hub."
   (condition-case err
-      (pcase args
-        (`("record" . ,rest)
-         (let ((task (getenv "DRGNX_TASK")) shas)
-           (while rest
-             (let ((a (pop rest)))
-               (if (equal a "--task") (setq task (pop rest)) (push a shas))))
-           (if (or (null task) (string-empty-p task))
-               (progn (drgnx-work--print "drgnx work record: which task? (--task ID, or DRGNX_TASK)") 2)
-             (let ((repo (drgnx-work--git default-directory "rev-parse" "--show-toplevel")) (bad 0))
-               (if (not repo) (progn (drgnx-work--print "drgnx work record: not inside a git repository") 1)
-                 (dolist (sha (or (nreverse shas) '("HEAD")))
-                   (let ((full (drgnx-work--git repo "rev-parse" "--verify" "--quiet" (concat sha "^{commit}"))))
-                     (if (and full (drgnx-work-record-commit task (file-name-as-directory repo) full))
-                         (drgnx-work--print "%s → %s" (substring full 0 7) task)
-                       (drgnx-work--print "drgnx work record: no commit %s here" sha)
-                       (setq bad 1))))
-                 bad)))))
-        (`("scan" . ,rest)
-         (let* ((board (when (equal (car rest) "--board") (pop rest) (expand-file-name (pop rest))))
-                (t0 (float-time)) (r (drgnx-work-refresh (mapcar #'expand-file-name rest) board)))
-           (drgnx-work--print "%d files read in %.2f s; %d plans, %d specs (%s)" (plist-get r :files) (- (float-time) t0)
-                              (length (drgnx-work-nodes 'plan)) (length (drgnx-work-nodes 'spec)) (drgnx-work-db-file))
-           0))
-        (`("status" . ,flags)
-         (let ((rows (drgnx-work--status-rows)))
-           (if (member "--json" flags)
-               ;; json-serialize gives UTF-8 bytes (unibyte); decode them so the locale's encoding of stdout is
-               ;; not applied on top, and write UTF-8 whatever the locale says.
-               (let ((coding-system-for-write 'utf-8-unix))
-                 (princ (decode-coding-string (json-serialize (vconcat (mapcar #'drgnx-work--json-row rows))) 'utf-8)))
-             (if (null rows) (drgnx-work--print "no plans yet: drgnx work scan [DIR…]")
-               (dolist (r rows)
-                 (let ((c (lambda (k) (format "%d/%d" (car (plist-get r k)) (cdr (plist-get r k))))))
-                   (drgnx-work--print "%-9s tasks %-6s steps %-7s todos %-5s commits %-3d %s%s"
-                                      (cond ((plist-get r :merged) "merged") ((plist-get r :branch) "branch") (t ""))
-                                      (funcall c :tasks) (funcall c :steps) (funcall c :todos) (plist-get r :commits)
-                                      (plist-get r :title) (if (plist-get r :branch) (format "  [%s]" (plist-get r :branch)) ""))))))
-           0))
-        (_ (drgnx-work--print "usage: drgnx work record [--task ID] [SHA…] | scan [--board FILE] [DIR…] | status [--json]") 2))
+      (drgnx-hub-ensure)
+    (error (drgnx-work--print "the work tracker updates through the drgnx hub (%s)" (error-message-string err))
+           nil)))
+
+(defun drgnx-work-cli-run (args)
+  "Run `drgnx work' ARGS (strings); the exit code (2: a usage error).  `record' and `scan' go through the hub and
+wait for it (`drgnx-work--sync'); with no hub they say so, write nothing and fail."
+  (condition-case err
+      (let ((drgnx-work--sync t))
+        (pcase args
+          (`("record" . ,rest)
+           (let ((task (getenv "DRGNX_TASK")) shas)
+             (while rest
+               (let ((a (pop rest)))
+                 (if (equal a "--task") (setq task (pop rest)) (push a shas))))
+             (if (or (null task) (string-empty-p task))
+                 (progn (drgnx-work--print "drgnx work record: which task? (--task ID, or DRGNX_TASK)") 2)
+               (let ((repo (drgnx-work--git default-directory "rev-parse" "--show-toplevel")) (bad 0))
+                 (cond
+                  ((not repo) (drgnx-work--print "drgnx work record: not inside a git repository") 1)
+                  ((not (drgnx-work--ensure-hub)) 1)
+                  (t
+                   (dolist (sha (or (nreverse shas) '("HEAD")))
+                     (let ((full (drgnx-work--git repo "rev-parse" "--verify" "--quiet" (concat sha "^{commit}"))))
+                       (if (and full (drgnx-work-record-commit task (file-name-as-directory repo) full))
+                           (drgnx-work--print "%s → %s" (substring full 0 7) task)
+                         (drgnx-work--print "drgnx work record: no commit %s here" sha)
+                         (setq bad 1))))
+                   bad))))))
+          (`("scan" . ,rest)
+           (if (not (drgnx-work--ensure-hub)) 1
+             (let* ((board (when (equal (car rest) "--board") (pop rest) (expand-file-name (pop rest))))
+                    (t0 (float-time)) (r (drgnx-work-refresh (mapcar #'expand-file-name rest) board)))
+               (dolist (x (plist-get r :refused))
+                 (drgnx-work--print "refused: %s (%s)" (or (plist-get (plist-get x :source) :path) (plist-get x :id) "?") (plist-get x :why)))
+               (drgnx-work--print "%d files read in %.2f s; %d plans, %d specs (%s)" (plist-get r :files) (- (float-time) t0)
+                                  (length (drgnx-work-nodes 'plan)) (length (drgnx-work-nodes 'spec)) (drgnx-work-db-file))
+               0)))
+          (`("status" . ,flags)
+           (let ((rows (drgnx-work--status-rows)))
+             (if (member "--json" flags)
+                 ;; json-serialize gives UTF-8 bytes (unibyte); decode them so the locale's encoding of stdout is
+                 ;; not applied on top, and write UTF-8 whatever the locale says.
+                 (let ((coding-system-for-write 'utf-8-unix))
+                   (princ (decode-coding-string (json-serialize (vconcat (mapcar #'drgnx-work--json-row rows))) 'utf-8)))
+               (if (null rows) (drgnx-work--print "no plans yet: drgnx work scan [DIR…]")
+                 (dolist (r rows)
+                   (let ((c (lambda (k) (format "%d/%d" (car (plist-get r k)) (cdr (plist-get r k))))))
+                     (drgnx-work--print "%-9s tasks %-6s steps %-7s todos %-5s commits %-3d %s%s"
+                                        (cond ((plist-get r :merged) "merged") ((plist-get r :branch) "branch") (t ""))
+                                        (funcall c :tasks) (funcall c :steps) (funcall c :todos) (plist-get r :commits)
+                                        (plist-get r :title) (if (plist-get r :branch) (format "  [%s]" (plist-get r :branch)) ""))))))
+             0))
+          (_ (drgnx-work--print "usage: drgnx work record [--task ID] [SHA…] | scan [--board FILE] [DIR…] | status [--json]") 2)))
     (error (drgnx-work--print "drgnx work: %s" (error-message-string err)) 1)))
 
 (defun drgnx-work-cli ()

@@ -1,0 +1,20 @@
+{
+  "setup": [],
+  "clock": [],
+  "tables": ["decision", "event", "meta", "jtask"],
+  "calls": [
+    {"fn": "drgnx-coord-job-create", "now": 50.0, "args": {"id": "j1", "title": "Decisions", "plan": null, "repo": null,
+      "tasks": [{"n": 1, "title": "One", "role": "implement", "deps": []}]}},
+    {"fn": "drgnx-coord-decide", "now": 100.0, "args": {"kind": "build", "subject": "the user decides", "task": null, "paths": "a.el", "reason": "because", "author": "user", "seen": null, "replaces": null, "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 101.0, "args": {"kind": "build", "subject": "not my task", "task": "j1#1", "paths": null, "reason": null, "author": "a1", "seen": 1, "replaces": null, "job": "j1"}},
+    {"fn": "drgnx-coord-claim", "now": 102.0, "args": {"task": "j1#1", "agent": "a1", "seen": 2}},
+    {"fn": "drgnx-coord-decide", "now": 103.0, "args": {"kind": "build", "subject": "my own task", "task": "j1#1", "paths": "b.el", "reason": "r", "author": "a1", "seen": 2, "replaces": null, "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 104.0, "args": {"kind": "wont-build", "subject": "replacing my own", "task": "j1#1", "paths": null, "reason": null, "author": "a1", "seen": 3, "replaces": 3, "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 105.0, "args": {"kind": "build", "subject": "replacing the user's", "task": "j1#1", "paths": null, "reason": null, "author": "a1", "seen": 4, "replaces": 1, "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 106.0, "args": {"kind": "build", "subject": "stale", "task": "j1#1", "paths": null, "reason": null, "author": "a1", "seen": 2, "replaces": null, "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 107.0, "args": {"kind": "build", "subject": "future", "task": null, "paths": null, "reason": null, "author": "a1", "seen": 99, "replaces": null, "job": "j1"}},
+    {"fn": "drgnx-coord-decide", "now": 108.0, "args": {"kind": "build", "subject": "the user replaces", "task": null, "paths": null, "reason": null, "author": "user", "seen": 5, "replaces": 2, "job": "j1"}},
+    {"fn": "drgnx-coord-claim", "now": 109.0, "args": {"task": "j1#1", "agent": "a1", "seen": 5}},
+    {"fn": "drgnx-coord-claim", "now": 110.0, "args": {"task": "j1#1", "agent": "a1", "seen": 6}}
+  ]
+}

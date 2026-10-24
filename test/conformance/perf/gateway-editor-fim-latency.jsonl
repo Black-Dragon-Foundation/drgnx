@@ -1,0 +1,17 @@
+{"scenario": "perf/gateway-editor-fim-latency", "requires": ["v1", "fake-backend", "perf"], "doc": "The gateway's added latency for the editor's FIM-sized request: a 2 KiB POST /completions with a 64-token answer, 100 times direct to the mock and 100 times through the gateway as /p/mock/completions with the editor token (--perf records every sample, no budget; the median and p95 of the difference are the number). The request is the whole round trip, since a completion is a small body."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/completions", "body": "{\"id\": \"cmpl-1\", \"choices\": [{\"text\": \"fn main() { println!(\\\"hello, world, this is a sixty-four token completion of about two hundred and fifty characters, as a code model answers a fill-in-the-middle request: a body, an argument list, a few statements and a closing brace\\\"); }\"}], \"usage\": {\"prompt_tokens\": 512, \"completion_tokens\": 64}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "start", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "openai", "base": "http://127.0.0.1:$port", "auth": "none", "messages": false, "caps": ["chat", "fim"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "w", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body_bytes": {"fill": "x", "n": 2048}}
+{"do": "expect_http", "conn": "w", "status": 200, "body_json": {"id": "cmpl-1"}}
+{"do": "measure", "name": "direct-fim", "repeat": 100, "steps": [{"do": "http", "conn": "d", "to": "tcp:127.0.0.1:$port", "method": "POST", "path": "/completions", "headers": {"content-type": "application/json"}, "body_bytes": {"fill": "x", "n": 2048}}, {"do": "expect_http", "conn": "d", "status": 200, "body_json": {"id": "cmpl-1"}}]}
+{"do": "measure", "name": "gateway-fim", "repeat": 100, "steps": [{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body_bytes": {"fill": "x", "n": 2048}}, {"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "cmpl-1"}}]}

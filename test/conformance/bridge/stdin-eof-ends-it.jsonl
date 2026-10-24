@@ -1,0 +1,14 @@
+{"scenario": "bridge/stdin-eof-ends-it", "requires": ["v1", "fake-backend"], "doc": "The agent closing the bridge's stdin ends it at once with exit 0 (MCP stdio), its stdout closed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "spawn_conn", "conn": "b", "argv": ["$ROOT/bin/ratatoskr", "mcp-bridge", "--socket", "$sock"], "env": {}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "b", "raw": "", "no_newline": true, "eof": true}
+{"do": "expect_closed", "conn": "b", "within_ms": 1000}
+{"do": "expect_exit", "conn": "b", "code": 0, "within_ms": 1000}

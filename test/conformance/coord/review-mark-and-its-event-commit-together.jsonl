@@ -1,0 +1,13 @@
+{"scenario": "coord/review-mark-and-its-event-commit-together", "requires": ["v1", "fake-backend"], "doc": "review/mark writes the mark and its event in one transaction (call 6): both are there, and when the event cannot be written (a trigger refuses it) neither is."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["create trigger no_revert before insert on event when new.kind = 'revert' begin select raise(abort, 'no revert events'); end"]}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "review/mark", "params": {"agent": "agent-1", "path": "src/a.el", "state": "accepted", "hash": "abc123", "event": {"kind": "accept", "job": "j1", "summary": "accepted src/a.el", "data": {"path": "src/a.el"}}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "sql_expect", "sql": "select r.state, r.hash, e.kind, e.agent, e.job from review_mark r, event e where r.path = 'src/a.el'", "rows": [["accepted", "abc123", "accept", "agent-1", "j1"]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "review/mark", "params": {"agent": "agent-1", "path": "src/b.el", "state": "pending", "hash": "def456", "event": {"kind": "revert", "summary": "reverted src/b.el"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "internal"}}}
+{"do": "sql_expect", "sql": "select count(*) from review_mark where path = 'src/b.el'", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"store": {"writes": 1}}}}

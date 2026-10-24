@@ -50,6 +50,9 @@
     id))
 
 (ert-deftest drgnx-agents-mirror-permission/a-new-editor-sees-the-pending-request-and-answers-it ()
+  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
+  ;; The hub's start has a wall-clock deadline that a loaded machine misses ("The drgnx hub did not start"); the Rust
+  ;; runtime replaces the hub, so the test is not reworked.
   (drgnx-agents-mirror-permission-test--with
     (let ((id (drgnx-agents-mirror-permission-test--start)))
       (drgnx-agents-mirror-sync)

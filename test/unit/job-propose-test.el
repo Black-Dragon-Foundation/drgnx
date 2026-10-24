@@ -1,5 +1,7 @@
 ;;; job-propose-test.el --- batch tests: a plan read into a job proposal -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'drgnx-job)
 (require 'drgnx-ai)
 
@@ -49,7 +51,7 @@
        (drgnx-work-db-close-all)
        (delete-directory root t))))
 
-(ert-deftest drgnx-job/a-plan-reads-into-tasks-dependencies-and-roles ()
+(drgnx-work-db-writer-deftest drgnx-job/a-plan-reads-into-tasks-dependencies-and-roles ()
   (drgnx-job-test--with
     (let ((p (drgnx-job-read-plan plan)))
       (should (equal (plist-get p :title) "Build the parser"))
@@ -61,7 +63,7 @@
       (should (equal (plist-get p :decisions) '((:kind "wont-build" :subject "the XML export"))))
       (should (stringp (plist-get p :sha))))))
 
-(ert-deftest drgnx-job/a-proposal-is-stored-with-routes-and-an-estimate ()
+(drgnx-work-db-writer-deftest drgnx-job/a-proposal-is-stored-with-routes-and-an-estimate ()
   (drgnx-job-test--with
     (setq drgnx-ai-providers '((openrouter :name "OR" :kind openai :url "https://openrouter.ai/api/v1"
                                            :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t :price (3.0 . 15.0)))
@@ -77,7 +79,7 @@
         (should (equal (plist-get est :unpriced) '("claude"))))
       (should (equal (mapcar (lambda (task) (plist-get task :status)) (drgnx-coord-tasks id)) '("ready" "ready" "pending" "pending"))))))
 
-(ert-deftest drgnx-job/a-budget-with-an-unpriced-provider-is-warned-about ()
+(drgnx-work-db-writer-deftest drgnx-job/a-budget-with-an-unpriced-provider-is-warned-about ()
   ;; the gateway counts only what it can price: a budget set over a provider without :price does not stop it
   (drgnx-job-test--with
     (setq drgnx-ai-providers '((openrouter :name "OR" :kind openai :url "https://openrouter.ai/api/v1"
@@ -96,7 +98,7 @@
            (id (drgnx-job-propose plan :budget 5)))                                ; a subscription profile: not counted at all
       (should-not (plist-get (plist-get (drgnx-job-get id) :proposal) :unpriced-budget)))))
 
-(ert-deftest drgnx-job/won-t-build-lines-become-the-user-s-decisions ()
+(drgnx-work-db-writer-deftest drgnx-job/won-t-build-lines-become-the-user-s-decisions ()
   (drgnx-job-test--with
     (let* ((id (drgnx-job-propose plan)) (ds (drgnx-coord-decisions-since 0 id)))
       (should (= (length ds) 1))
@@ -104,19 +106,19 @@
       (should (equal (plist-get (car ds) :author) "user"))
       (should (equal (plist-get (car ds) :status) "current")))))
 
-(ert-deftest drgnx-job/a-cycle-or-an-unknown-dependency-is-refused ()
+(drgnx-work-db-writer-deftest drgnx-job/a-cycle-or-an-unknown-dependency-is-refused ()
   (drgnx-job-test--with
     (write-region "# P\n\n### Task 1: a\n**Depends:** Task 2\n\n### Task 2: b\n**Depends:** Task 1\n" nil plan nil 'silent)
     (should (string-search "cycle" (cadr (should-error (drgnx-job-propose plan) :type 'user-error))))
     (write-region "# P\n\n### Task 1: a\n**Depends:** Task 9\n" nil plan nil 'silent)
     (should (string-search "Task 9" (cadr (should-error (drgnx-job-propose plan) :type 'user-error))))))
 
-(ert-deftest drgnx-job/a-duplicate-task-number-is-refused ()
+(drgnx-work-db-writer-deftest drgnx-job/a-duplicate-task-number-is-refused ()
   (drgnx-job-test--with
     (write-region "# P\n\n### Task 1: a\n\n### Task 2: b\n\n### Task 1: again\n" nil plan nil 'silent)
     (should (string-search "Task 1 appears twice" (cadr (should-error (drgnx-job-propose plan) :type 'user-error))))))
 
-(ert-deftest drgnx-job/a-changed-plan-is-noticed-never-applied ()
+(drgnx-work-db-writer-deftest drgnx-job/a-changed-plan-is-noticed-never-applied ()
   (drgnx-job-test--with
     (let ((id (drgnx-job-propose plan)))
       (should-not (drgnx-job-plan-changed-p id))

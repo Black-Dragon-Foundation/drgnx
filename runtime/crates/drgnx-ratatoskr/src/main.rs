@@ -44,6 +44,25 @@ fn main() -> ExitCode {
         // The relay builds its own single-threaded runtime; it refuses to start under another parent than its
         // `--parent-pid`.
         Command::Relay { args } => return code(gleipnir::net::relay::main(args.into_iter())),
+        // Its own single-threaded runtime; it reads no environment variable but, outside, the data dir's.
+        Command::McpBridge(args) => return ExitCode::from(drgnx_ratatoskr::bridge::main(args)),
+        // No runtime: the migration and the copy run on this thread, and refuse while a hub holds the store.
+        Command::Store(cli::StoreCommand::MigrateCheck { db, scratch, json }) => {
+            return code(drgnx_ratatoskr::store_cli::migrate_check(
+                &Env::process(),
+                &db,
+                &scratch,
+                json,
+            ));
+        }
+        Command::Store(cli::StoreCommand::RestorePre7 { yes }) => {
+            return code(drgnx_ratatoskr::store_cli::restore_pre7(
+                &Env::process(),
+                yes,
+            ));
+        }
+        // No runtime: a blocking client of the running hub (started first when none runs).
+        Command::Graph(g) => return code(drgnx_ratatoskr::graph_cli::run(&Env::process(), g)),
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),

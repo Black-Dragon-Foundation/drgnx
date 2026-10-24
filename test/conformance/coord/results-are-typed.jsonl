@@ -1,0 +1,15 @@
+{"scenario": "coord/results-are-typed", "requires": ["v1", "lisp-backend"], "doc": "What the front writes, the Lisp backend reads (once it made work.db: the first job/status): a job made by coord/job-create, a card by coord/card-create and a message by messages/send; each answer is typed, and job/status over them matches the registry (a result that did not would be internal)."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "job/status", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": "$any"}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "coord/job-create", "params": {"id": "j1", "title": "One task", "tasks": [{"n": 1, "title": "Do the thing", "role": "implement"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "j1"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "coord/card-create", "params": {"job": "j1", "task": "j1#1", "kind": "review", "title": "review j1#1", "data": {"diff": 3}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "messages/send", "params": {"recipient": "user", "text": "ready for review", "job": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"ok": true, "id": "$number", "state": "queued"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "events/since"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"events": {"$contains": [{"kind": "card", "job": "j1"}, {"kind": "message", "job": "j1"}]}}}}

@@ -43,8 +43,8 @@ use zeroize::Zeroizing;
 pub const READY_WITHIN: Duration = Duration::from_secs(10);
 /// A forwarded call's deadline.
 pub const CALL_DEADLINE: Duration = Duration::from_secs(30);
-/// How long `status` waits for the backend's own `status`.
-pub const STATUS_DEADLINE: Duration = Duration::from_secs(1);
+/// How long a notification to the backend (`coord/notify`) waits for a starting backend, and then to be written.
+pub const NOTIFY_DEADLINE: Duration = Duration::from_secs(10);
 /// How long restart-when-idle waits for each of the backend's two lists.
 pub const IDLE_DEADLINE: Duration = Duration::from_secs(2);
 /// The first wait before a restart, doubled after each early exit up to [`BACKOFF_MAX`].
@@ -525,38 +525,51 @@ impl Backend {
         })
     }
 
-    /// The backend's state and pid, and, while it runs, the gateway's port and registrations from its own `status`.
+    /// The backend's pid while it is starting (once spawned) or running.
+    pub fn pid(&self) -> Option<i32> {
+        match &*self.phase.borrow() {
+            Phase::Starting(pid) => *pid,
+            Phase::Running(l) => Some(l.pid),
+            _ => None,
+        }
+    }
+
+    /// METHOD with PARAMS to the backend as a notification: no id, never answered.  A starting backend is waited for
+    /// up to [`NOTIFY_DEADLINE`], and the line must be written within it again or the connection is given up (as a
+    /// line it would not read).  Without a backend (missing, the hub stopping, none within the deadline) it is
+    /// dropped: a backend that starts runs delivery anyway.
+    pub async fn notify(&self, method: &str, params: Value) {
+        let Ok(Ok(link)) = timeout(NOTIFY_DEADLINE, self.link()).await else {
+            return;
+        };
+        let line =
+            json!({"method": method, "params": params, "caller": {"class": "user"}}).to_string();
+        let written = timeout(NOTIFY_DEADLINE, async {
+            let mut w = link.writer.lock().await;
+            w.write_all(line.as_bytes()).await?;
+            w.write_all(b"\n").await
+        })
+        .await;
+        if !matches!(written, Ok(Ok(()))) {
+            tracing::warn!(method, "the Lisp backend did not read a notification");
+            link.give_up().await;
+        }
+    }
+
+    /// The backend's state and pid (the gateway's numbers are the front's since Task 22: the backend is not asked).
     pub async fn info(&self) -> BackendInfo {
-        let phase = self.phase.borrow().clone();
-        let (state, pid) = match &phase {
+        let (state, pid) = match &*self.phase.borrow() {
             Phase::Missing(_) => (BackendState::Missing, None),
             Phase::Starting(pid) => (BackendState::Starting, *pid),
             Phase::Running(l) => (BackendState::Running, Some(l.pid)),
             Phase::Failed | Phase::Stopped => (BackendState::Failed, None),
         };
-        let mut info = BackendInfo {
+        BackendInfo {
             backend: Some(BackendStatus {
                 state,
                 pid: pid.and_then(|p| u64::try_from(p).ok()),
             }),
-            gateway_port: None,
-            registrations: None,
-        };
-        if let Phase::Running(_) = phase {
-            let id = self.next_id();
-            let line = Zeroizing::new(
-                json!({"id": id, "method": "status", "params": {}, "caller": {"class": "user"}})
-                    .to_string(),
-            );
-            if let Ok(s) = self
-                .request_within(id, "status", line, STATUS_DEADLINE)
-                .await
-            {
-                info.gateway_port = s.get("gateway_port").and_then(Value::as_u64);
-                info.registrations = s.get("registrations").and_then(Value::as_u64);
-            }
         }
-        info
     }
 
     /// The turns running (restart-when-idle, [`crate::idle`]): the backend's `busy` sessions plus its `running` jobs,
@@ -889,7 +902,7 @@ async fn connect_ready(
 }
 
 /// Read the backend's lines (up to 16 MiB each) until its connection ends: answers to their call, events to the
-/// relay.  Then every call in flight fails once.
+/// relay (but `events`: [`handle_line`]).  Then every call in flight fails once.
 async fn read_loop(
     mut r: OwnedReadHalf,
     mut buf: BytesMut,
@@ -897,10 +910,12 @@ async fn read_loop(
     events: mpsc::Sender<(String, Value)>,
 ) {
     let mut codec = LinesCodec::new_with_max_length(MAX_HUB_LINE);
+    // one read loop per backend start: its `events` events are logged once
+    let mut dropped_events = false;
     'read: loop {
         loop {
             match codec.decode(&mut buf) {
-                Ok(Some(line)) => handle_line(&line, &link, &events).await,
+                Ok(Some(line)) => handle_line(&line, &link, &events, &mut dropped_events).await,
                 Ok(None) => break,
                 Err(e) => {
                     tracing::warn!("dropped a line from the Lisp backend: {e}");
@@ -920,12 +935,29 @@ async fn read_loop(
     link.close();
 }
 
-async fn handle_line(line: &str, link: &Link, events: &mpsc::Sender<(String, Value)>) {
+/// One line of the backend: an answer to its call, or an event for the relay.  The backend's `events` is dropped: the
+/// front's writer broadcasts the event log (`crate::coord`), and the backend stops sending it (logged once per start,
+/// in DROPPED_EVENTS).
+async fn handle_line(
+    line: &str,
+    link: &Link,
+    events: &mpsc::Sender<(String, Value)>,
+    dropped_events: &mut bool,
+) {
     let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(line) else {
         tracing::warn!("dropped a line from the Lisp backend that is not a JSON object");
         return;
     };
     if let Some(Value::String(name)) = obj.remove("event") {
+        if name == "events" {
+            if !*dropped_events {
+                *dropped_events = true;
+                tracing::info!(
+                    "dropped the Lisp backend's events event: the front broadcasts the event log (logged once per start)"
+                );
+            }
+            return;
+        }
         let data = obj.remove("data").unwrap_or(Value::Null);
         let _ = events.send((name, data)).await;
         return;

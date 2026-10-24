@@ -2,10 +2,12 @@
 # against the built binary (every row, the v0 rows through the front too), a release build and the recorded perf
 # baseline; plus the oldest supported compiler (MSRV 1.88), the supply-chain policy and the fuzz targets.
 #
-# Push and pull-request runs come from ci.yml, which calls this file (`workflow_call`): its emacs-31 job needs the
-# binary built here (a `needs:` cannot reach another workflow file, so the call is the only way). Running this file on
-# push as well would build everything twice, so its own triggers are the daily run (deny, and the fuzz targets for 10
-# minutes each) and a manual one (`fuzz_minutes` per target). docs/develop/ci.md, docs/develop/runtime.md
+# Push (main, ci/*) and pull-request runs come from ci.yml, which calls this file (`workflow_call`), so these jobs are
+# part of ci.yml's `CI gate`. Running this file on push as well would build everything twice, so its own triggers are
+# the daily run (deny, and the fuzz targets for 10 minutes each) and a manual one (`fuzz_minutes` per target).
+# Nothing stops early: `cargo test --no-fail-fast`, and each independent step runs whatever the steps before it said
+# (`!cancelled()`; a step that needs a build waits only for that build's outcome). docs/develop/ci.md,
+# docs/develop/runtime.md
 name: Runtime
 
 on:
@@ -27,9 +29,10 @@ on:
 permissions:
   contents: read
 
+# a push never cancels the daily policy run; a newer push to a ci/* branch cancels the older run, one on main never
 concurrency:
-  group: runtime-${{ github.event_name }}-${{ github.ref }}   # a push never cancels the daily policy run
-  cancel-in-progress: true
+  group: runtime-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: never
@@ -64,31 +67,22 @@ jobs:
             runtime/target
           key: cargo-${{ runner.os }}-fedora45-${{ hashFiles('runtime/Cargo.lock') }}
       - run: cargo fmt --check
-      - run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
-      - run: cargo test --locked --workspace --features drgnx-ratatoskr/test-hooks
-      # the test-hooks binary and the harness: ci.yml's emacs-31 job runs the editor's tests against this ratatoskr
+      - if: ${{ !cancelled() }}
+        run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
+      # --no-fail-fast: every crate's failures in one run
+      - if: ${{ !cancelled() }}
+        run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks
+      # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
-      - run: cargo build --locked -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ratatoskr
-          path: runtime/target/debug/ratatoskr
-          if-no-files-found: error
-          retention-days: 7
-      # huginn's dump example: ci.yml's emacs-31 job runs the editor's differential test (drgnx-huginn/differential-fresh-seed)
-      # against it (DRGNX_HUGINN_DUMP): Emacs's reader and huginn's read a fresh seed of random data and must agree
-      - run: cargo build --locked -p huginn --example dump
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: huginn-dump
-          path: runtime/target/debug/examples/dump
-          if-no-files-found: error
-          retention-days: 7
+      - id: build
+        if: ${{ !cancelled() }}
+        run: cargo build --locked -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       # gleipnir's test hooks (landlock_omit, abi_cap) must never be on in a build without --features (review M5).
       # The inverted form: the forward `cargo tree` does not show gleipnir's feature even when it is on (Task 0).
       # `shell: bash` adds pipefail (a failed `cargo tree` fails the step), and the tree must name gleipnir at all, so
       # an empty file never passes (gate review S14).
       - name: gleipnir has no test-hooks in a default ratatoskr build
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           cargo tree --locked -e features -i gleipnir -p drgnx-ratatoskr | tee "$RUNNER_TEMP/gleipnir-features.txt"
@@ -96,12 +90,24 @@ jobs:
           if grep -q 'gleipnir feature "test-hooks"' "$RUNNER_TEMP/gleipnir-features.txt"; then
             echo "gleipnir's test-hooks are on in a default build" >&2; exit 1
           fi
+      # The gateway speaks HTTP/1.1 over rustls with the ring provider: neither h2 nor aws-lc-sys may be in any
+      # target's graph (all kinds of dependencies). `cargo tree -i` prints nothing and fails when the package is not
+      # in the graph, which is what we want; any output means it is.
+      - name: h2 and aws-lc-sys are not in the tree
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          for crate in h2 aws-lc-sys; do
+            found=$(cargo tree --locked --workspace --target all -e normal,build,dev -i "$crate" 2>/dev/null || true)
+            if [ -n "$found" ]; then echo "$crate is in the dependency tree:" >&2; echo "$found" >&2; exit 1; fi
+          done
       # The escape suite, container tier (docs/develop/gleipnir.md, "Proving it"). As root in this container there are
       # no user namespaces to nest, so the full and reduced rows skip with a listed reason ("inside a container",
       # "Landlock ABI N below 9"); what runs is that the rows parse, the probes reach without a sandbox,
       # check-in-a-container, the floor row, path-bwrap-never-run and fail-closed-no-bwrap. Only listed reasons may skip.
       # No --require-all (a skip here is expected); the VM/host jobs below hold the rest.
       - name: escape suite (container tier)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           mkdir -p "$RUNNER_TEMP/escape"
           target/debug/gleipnir-escape --ratatoskr target/debug/ratatoskr --probe target/debug/gleipnir-probe \
@@ -114,16 +120,20 @@ jobs:
           path: ${{ runner.temp }}/escape/escape-container.json
           if-no-files-found: warn
       - name: Nidhogg 31.1 (the Emacs drgnx ships on)
+        id: nidhogg
+        if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: |
           dnf -y install curl tar xz
           bash test/container/nidhogg.sh fedora-45
       - name: conformance-lisp (the v0 rows against the Lisp hub)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
         working-directory: ${{ github.workspace }}
         run: runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
       # every row against Ratatoskr, the v0 rows through the front against the Lisp backend (design 8.4, "both ways").
       # --require-all: a skipped row fails the job, except a macOS-only row here and the perf rows (they run below)
       - name: conformance (Ratatoskr in front of the Lisp backend and the fake backend)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
         working-directory: ${{ github.workspace }}
         run: |
           runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
@@ -131,18 +141,23 @@ jobs:
             --scenarios test/conformance --require-all
       # the build install.sh makes: no test hooks in it, and it says so
       - name: release build says test_hooks false
+        id: release
+        if: ${{ !cancelled() }}
         run: |
           cargo build --locked --release -p drgnx-ratatoskr -p domr
           target/release/ratatoskr version --json | tee "$RUNNER_TEMP/version.json"
           grep -q '"test_hooks":false' "$RUNNER_TEMP/version.json"
       # a recorded baseline, no budgets (perf regression runs are deferred)
       - name: perf baseline
+        id: perf
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
         working-directory: ${{ github.workspace }}
         run: |
           runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
             --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
             --only 'perf/*' --perf perf-linux.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() && steps.perf.outcome == 'success' }}
         with:
           name: ratatoskr-perf-linux
           path: perf-linux.json
@@ -170,12 +185,11 @@ jobs:
   # runner (free for public repositories), a real arm64 Linux run of the seccomp tests (GL-T4-2: the aarch64 syscall
   # numbers). Ubuntu 24.04 turns unprivileged user namespaces off through AppArmor, so the job lifts the restriction
   # with sudo (the runner user has passwordless sudo) and builds bubblewrap 0.12.0 (gleipnir's floor; apt has 0.9.0).
-  # continue-on-error until a first real run shows which rows this kernel can hold (docs/develop/ci.md).
+  # It gates (green on both runners since 74be75cf; a failure here fails the CI gate: docs/develop/ci.md).
   escape-host:
     name: escape suite on the runner (${{ matrix.os }})
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -215,10 +229,13 @@ jobs:
           bwrap --unshare-all --ro-bind / / true
       - run: rustup toolchain install stable --profile minimal
       # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
-      - run: cargo test --locked --manifest-path runtime/Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
-      - run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
+      - id: build
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       # No --require-all: a Landlock ABI below 9 skips the reduced rows ("Landlock ABI N below 9"), as the harness lists.
       - name: escape suite (full tier on the runner)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           mkdir -p "$RUNNER_TEMP/escape"
           runtime/target/debug/gleipnir-escape --ratatoskr runtime/target/debug/ratatoskr \
@@ -249,7 +266,8 @@ jobs:
       - run: rustup target add aarch64-linux-android
       - run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
-      - run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p huginn -- -D warnings
+      - if: ${{ !cancelled() }}
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -- -D warnings
 
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
@@ -273,7 +291,7 @@ jobs:
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
   # a pull request runs none. A crash uploads its input.
   fuzz:
-    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, huginn_read)
+    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, mcp_message, jsonrpc_parse, text_one_line, put_parsed, task_write_args, graph_read_args, trust_fence, sqlro_sql, sse_usage, provider_merge, gateway_admit, huginn_read)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -304,13 +322,16 @@ jobs:
           key: cargo-${{ runner.os }}-fuzz-${{ hashFiles('runtime/fuzz/Cargo.lock', '.github/workflows/runtime.yml') }}
       - name: cargo-fuzz 0.13.2
         run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
+      # every target runs, whatever an earlier one found; the step fails at the end naming each that failed
       - name: Run each target
         run: |
-          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec huginn_read; do
+          failed=""
+          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec mcp_message jsonrpc_parse text_one_line put_parsed task_write_args graph_read_args trust_fence sqlro_sql sse_usage provider_merge gateway_admit huginn_read; do
             echo "::group::$target ($FUZZ_SECONDS s)"
-            cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS"
+            cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS" || failed="$failed $target"
             echo "::endgroup::"
           done
+          if [ -n "$failed" ]; then echo "failed:$failed" >&2; exit 1; fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
@@ -346,37 +367,46 @@ jobs:
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
-      - run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      - id: build
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
+        id: nidhogg
+        if: ${{ !cancelled() }}
         run: /bin/bash test/container/nidhogg.sh macos
       - name: conformance-lisp (the v0 rows against the Lisp hub)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
         run: runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
       # as the runner user; the `sudo` rows reach the socket as nobody through passwordless `sudo -n -u nobody`, so
       # security/another-uid-is-refused covers tokio's getpeereid path. --require-all fails it if it is skipped
       - name: conformance (Ratatoskr in front of the Lisp backend and the fake backend)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
         run: |
           sudo -n true
           runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
             --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
             --scenarios test/conformance --require-all
       - name: perf baseline (release build)
+        id: perf
+        if: ${{ !cancelled() }}
         run: |
           cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
           runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
             --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
             --only 'perf/*' --perf perf-macos.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() && steps.perf.outcome == 'success' }}
         with:
           name: ratatoskr-perf-macos
           path: perf-macos.json
           if-no-files-found: error
-      # The Seatbelt rows run for real, with the real /usr/bin/sandbox-exec. --require-all: a skip fails the job. Last
-      # in the job, so a failing row never skips the conformance and perf steps above (gate review B1); ci.yml's
-      # emacs-31 job runs whatever this job's result. mac-works-git needs the git draugr trusts: xcode-select points
-      # at the Command Line Tools since the step before the tests.
+      # The Seatbelt rows run for real, with the real /usr/bin/sandbox-exec. --require-all: a skip fails the job. It
+      # runs whatever the conformance and perf steps said, and they whatever it says. mac-works-git needs the git
+      # draugr trusts: xcode-select points at the Command Line Tools since the step before the tests.
       # mac-net-* need a non-loopback address (the fixture takes the one the default route uses); the step prints
       # what the runner has.
       - name: escape suite (Seatbelt, required)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           xcode-select -p
           route -n get default | grep -E 'interface|gateway' || true
@@ -396,4 +426,4 @@ jobs:
       # (gate review M21). After the escape rows, whatever they say, so neither hides the other.
       - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p huginn -- -D warnings
+        run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -- -D warnings

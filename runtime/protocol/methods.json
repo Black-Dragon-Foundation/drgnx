@@ -291,6 +291,7 @@
         "type": "object"
       },
       "doc": "a session's snapshot changed (at most one per session per 50 ms)",
+      "from": "backend",
       "name": "agent"
     },
     {
@@ -366,6 +367,7 @@
         "type": "object"
       },
       "doc": "a session's entries new or changed since the last time",
+      "from": "backend",
       "name": "agent-entries"
     },
     {
@@ -398,6 +400,7 @@
         "type": "object"
       },
       "doc": "a job's spend reached its budget",
+      "from": "front",
       "name": "budget"
     },
     {
@@ -442,6 +445,7 @@
         "type": "object"
       },
       "doc": "a job's card needs the user",
+      "from": "backend",
       "name": "card"
     },
     {
@@ -469,6 +473,7 @@
         "type": "object"
       },
       "doc": "the hub's nonce, sent on accept",
+      "from": "front",
       "name": "challenge"
     },
     {
@@ -564,6 +569,7 @@
         "type": "object"
       },
       "doc": "the event log's new rows (at most 200 a time, every 0.25 s at most)",
+      "from": "front",
       "name": "events"
     },
     {
@@ -613,7 +619,58 @@
         "type": "object"
       },
       "doc": "a request or a task moved to the next provider or profile",
+      "from": "front",
       "name": "fallback"
+    },
+    {
+      "data": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The ids of the providers whose key the hub holds, never a key: `gateway/keys-held`'s answer, and the data of the\nevent `gateway/keys-changed`.",
+        "properties": {
+          "providers": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Id"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeysHeld",
+        "type": "object"
+      },
+      "doc": "the providers whose key the hub holds changed: their ids, never a key (to user connections)",
+      "from": "front",
+      "name": "gateway/keys-changed"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Providers whose key the hub does not hold, though a registration needs it: an editor hands its keys over.",
+        "properties": {
+          "providers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "title": "NeedKeys",
+        "type": "object"
+      },
+      "doc": "a registration needs keys the hub does not hold (to user connections)",
+      "from": "front",
+      "name": "gateway/need-keys"
     },
     {
       "data": {
@@ -632,6 +689,7 @@
         "type": "object"
       },
       "doc": "a job's status, tasks or open cards changed",
+      "from": "backend",
       "name": "job"
     },
     {
@@ -662,6 +720,7 @@
         "type": "object"
       },
       "doc": "a task's claim ran out",
+      "from": "backend",
       "name": "lease-released"
     },
     {
@@ -704,6 +763,7 @@
         "type": "object"
       },
       "doc": "a message for the user from the hub itself",
+      "from": "front",
       "name": "notice"
     },
     {
@@ -777,6 +837,7 @@
         "type": "object"
       },
       "doc": "the gateway forwarded a request: its tokens and cost",
+      "from": "front",
       "name": "request"
     }
   ],
@@ -786,6 +847,7 @@
         "user"
       ],
       "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
+      "home": "backend",
       "name": "agents/do",
       "params": {
         "$defs": {
@@ -885,6 +947,7 @@
         "user"
       ],
       "doc": "a session's snapshot, whole transcript and change number",
+      "home": "backend",
       "name": "agents/get",
       "params": {
         "$defs": {
@@ -1235,6 +1298,7 @@
         "user"
       ],
       "doc": "the session ends",
+      "home": "backend",
       "name": "agents/kill",
       "params": {
         "$defs": {
@@ -1271,6 +1335,7 @@
         "service"
       ],
       "doc": "the sessions: snapshots for the user, {id, name, job, task} for the others (an agent: its own job's)",
+      "home": "backend",
       "name": "agents/list",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1564,6 +1629,7 @@
         "user"
       ],
       "doc": "the user's answer to a permission request: the only way one is answered",
+      "home": "backend",
       "name": "agents/permission",
       "params": {
         "$defs": {
@@ -1623,6 +1689,7 @@
         "user"
       ],
       "doc": "a prompt to the session (queued or steering as its mode says)",
+      "home": "backend",
       "name": "agents/send",
       "params": {
         "$defs": {
@@ -1666,6 +1733,7 @@
         "user"
       ],
       "doc": "a session the hub holds",
+      "home": "backend",
       "name": "agents/start",
       "params": {
         "$defs": {
@@ -1757,6 +1825,7 @@
         "user"
       ],
       "doc": "the session's turn stops",
+      "home": "backend",
       "name": "agents/stop",
       "params": {
         "$defs": {
@@ -1788,11 +1857,1178 @@
     },
     {
       "classes": [
+        "user"
+      ],
+      "doc": "an open card settled with a choice, once (drgnx-coord-card-settle)",
+      "home": "front",
+      "name": "cards/settle",
+      "params": {
+        "$defs": {
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "card": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choice": {
+            "$ref": "#/$defs/Text"
+          }
+        },
+        "required": [
+          "card",
+          "choice"
+        ],
+        "title": "SettleParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`cards/settle`'s answer: false when the card was not open (nothing happens twice).",
+        "properties": {
+          "settled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "settled"
+        ],
+        "title": "Settled",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the gateway's provider table (no keys), replaced; a keyed provider over clear text is warned about",
+      "home": "front",
+      "name": "config/providers",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "ProviderAuth": {
+            "description": "How a provider takes its key; `none` is a keyless (local) provider.",
+            "enum": [
+              "bearer",
+              "x-api-key",
+              "none"
+            ],
+            "type": "string"
+          },
+          "ProviderCap": {
+            "enum": [
+              "chat",
+              "fim",
+              "embed"
+            ],
+            "type": "string"
+          },
+          "ProviderConfig": {
+            "description": "One provider of the table the editor hands over (no key: keys come by `gateway/keys`).",
+            "properties": {
+              "auth": {
+                "$ref": "#/$defs/ProviderAuth"
+              },
+              "base": {
+                "$ref": "#/$defs/ProviderUrl"
+              },
+              "caps": {
+                "items": {
+                  "$ref": "#/$defs/ProviderCap"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "id": {
+                "$ref": "#/$defs/Id"
+              },
+              "kind": {
+                "$ref": "#/$defs/ProviderKind"
+              },
+              "messages": {
+                "description": "It speaks Anthropic's Messages API, so an agent's chain may use it.",
+                "type": "boolean"
+              },
+              "price": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ProviderPrice"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "base",
+              "auth",
+              "messages",
+              "caps"
+            ],
+            "type": "object"
+          },
+          "ProviderKind": {
+            "description": "A provider's API family: it decides the paths an editor token reaches (`/p/PROVIDER/…`).",
+            "enum": [
+              "openai",
+              "ollama",
+              "llamacpp",
+              "tei",
+              "anthropic"
+            ],
+            "type": "string"
+          },
+          "ProviderPrice": {
+            "description": "A provider's price, US dollars per million tokens.",
+            "properties": {
+              "input": {
+                "$ref": "#/$defs/Usd"
+              },
+              "output": {
+                "$ref": "#/$defs/Usd"
+              }
+            },
+            "required": [
+              "input",
+              "output"
+            ],
+            "type": "object"
+          },
+          "ProviderUrl": {
+            "description": "a provider's base URL: https, or http for any host (clear text off loopback)",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "providers": {
+            "description": "The whole table: it replaces the one before.",
+            "items": {
+              "$ref": "#/$defs/ProviderConfig"
+            },
+            "maxItems": 64,
+            "type": "array"
+          }
+        },
+        "required": [
+          "providers"
+        ],
+        "title": "ProvidersParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ProviderWarning": {
+            "additionalProperties": false,
+            "description": "A warning about one provider (a keyed one whose key travels in clear text).",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`config/providers`' answer: how many providers the table now has, and the warnings.",
+        "properties": {
+          "applied": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ProviderWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "applied"
+        ],
+        "title": "ProvidersApplied",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-agent-register, drgnx-coord-agent-seen)",
+      "home": "front",
+      "name": "coord/agent",
+      "params": {
+        "$defs": {
+          "AgentField": {
+            "description": "An agent's field `clear` sets to null.",
+            "enum": [
+              "kind",
+              "name",
+              "cwd",
+              "worktree",
+              "branch",
+              "base",
+              "plan",
+              "task",
+              "pid"
+            ],
+            "type": "string"
+          },
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "AgentRow": {
+            "description": "An agent that works (again): what is given is stored, what is not is kept.",
+            "properties": {
+              "base": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "branch": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "clear": {
+                "description": "Fields set to null after the rest is stored.",
+                "items": {
+                  "$ref": "#/$defs/AgentField"
+                },
+                "maxItems": 9,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "$ref": "#/$defs/AgentName"
+              },
+              "kind": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "pid": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan": {
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "worktree": {
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`{register: AgentRow}` or `{seen: AgentName}`: one of the two.",
+        "properties": {
+          "register": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seen": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This agent is alive now: stamped (telemetry: a busy work.db answers `{}`)."
+          }
+        },
+        "title": "AgentParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`coord/agent`'s answer: the registered agent's `id`, or the `seen` stamp (none when it was never registered).",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seen": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "title": "AgentResult",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-create)",
+      "home": "front",
+      "name": "coord/card-create",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "`ask` makes it a question to the user.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "CardCreateParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The id of what was made: a card's.",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CardCreated",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-set)",
+      "home": "front",
+      "name": "coord/card-set",
+      "params": {
+        "$defs": {
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A change (a reopened card) leaves a `card` event."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CardSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-decide)",
+      "home": "front",
+      "name": "coord/decide",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "author": {
+            "$ref": "#/$defs/AgentName"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "description": "`build`, `wait`, `wont-build` or `replaces`.",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replaces": {
+            "description": "A decision's number, marked replaced when this one is current.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "seen": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "subject": {
+            "$ref": "#/$defs/Text"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "subject",
+          "author"
+        ],
+        "title": "DecideParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Decision": {
+            "additionalProperties": false,
+            "description": "One decision as the log has it (`drgnx-coord--decision-plist`).",
+            "properties": {
+              "at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "n": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "paths": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "replaces": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "subject": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ver": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`coord/decide`'s answer (`drgnx-coord-decide`): `{ok, n, status, version}`, `{held, version, changes}` or `{error}`.",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/$defs/Decision"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "held": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "n": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "Decided",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-note-held)",
+      "home": "front",
+      "name": "coord/held",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/AgentName"
+          },
+          "held": {
+            "description": "The agent's write was held (its count goes up by one), or went through (the count is 0).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent",
+          "held"
+        ],
+        "title": "HeldParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-create)",
+      "home": "front",
+      "name": "coord/job-create",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "NewTask": {
+            "description": "One task of a new job: without `deps` it starts `ready`, else `pending`.",
+            "properties": {
+              "deps": {
+                "description": "The numbers of the job's tasks this one waits on.",
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 1000,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "n": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "role": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "$ref": "#/$defs/Text"
+              }
+            },
+            "required": [
+              "n",
+              "title"
+            ],
+            "type": "object"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "plan": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/$defs/NewTask"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "title": {
+            "$ref": "#/$defs/Text"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "JobCreateParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The id of what was made: a job's.",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobCreated",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-set)",
+      "home": "front",
+      "name": "coord/job-set",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A change leaves a `job` event."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-renew, drgnx-coord-release-stale)",
+      "home": "front",
+      "name": "coord/leases",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "release_stale": {
+            "description": "Then the claims whose lease ran out are released.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "renew": {
+            "description": "These agents are alive: each one's claims are renewed.",
+            "items": {
+              "$ref": "#/$defs/AgentName"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "LeasesParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Released": {
+            "additionalProperties": false,
+            "description": "A claim whose lease ran out, released.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "released": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Released"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Leases",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
         "user",
         "agent",
         "service"
       ],
-      "doc": "a coordination server wrote: delivery runs now and the new events go out (a notification; users too, SB-T12-4)",
+      "doc": "a coordination server wrote: the new events go out, and the backend hears it (coalesced: one a 0.25 s) and runs delivery (a notification; users too, SB-T12-4)",
+      "home": "front",
       "name": "coord/notify",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1811,7 +3047,101 @@
       "classes": [
         "user"
       ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-events-prune-daily; never fails)",
+      "home": "front",
+      "name": "coord/prune",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`coord/prune`'s answer: whether the daily prune ran (the cap is held either way).",
+        "properties": {
+          "pruned": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pruned"
+        ],
+        "title": "Pruned",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-force-status)",
+      "home": "front",
+      "name": "coord/task-status",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The holder; `null` (or none) leaves the task without one."
+          },
+          "status": {
+            "$ref": "#/$defs/Status"
+          },
+          "task": {
+            "$ref": "#/$defs/TaskRef"
+          }
+        },
+        "required": [
+          "task",
+          "status"
+        ],
+        "title": "TaskStatusParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's login-shell variables the hub allows, for the agents and jobs it starts next",
+      "home": "backend",
       "name": "env/set",
       "params": {
         "$defs": {
@@ -1878,7 +3208,158 @@
       "classes": [
         "user"
       ],
+      "doc": "an event in the log (drgnx-coord-event-add; best_effort: a busy work.db is no error)",
+      "home": "front",
+      "name": "events/add",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "EventKind": {
+            "description": "What an event can be (`drgnx-coord-event-kinds`).",
+            "enum": [
+              "start",
+              "stop",
+              "claim",
+              "release",
+              "status",
+              "decision",
+              "edit",
+              "test",
+              "question",
+              "answer",
+              "review",
+              "message",
+              "card",
+              "accept",
+              "revert",
+              "comment",
+              "job"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "best_effort": {
+            "description": "Telemetry: a busy work.db answers `{}`, not an error.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stored as `{\"truncated\": true, \"size\": N}` over 4096 characters; a start or stop with `turn: true` is a turn's."
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/EventKind"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cut to one line of at most 200 characters."
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "AddEventParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`events/add`'s answer: the event's id (none when a best-effort event met a busy work.db).",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "Added",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the event log after since (0), oldest first, at most limit (200; at most 1000)",
+      "home": "front",
       "name": "events/since",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2002,7 +3483,42 @@
       "classes": [
         "user"
       ],
-      "doc": "provider keys to the gateway's memory (never a file)",
+      "doc": "the caller's editor token (loopback only, the /p/PROVIDER/… paths; one per owner, kept across a restart)",
+      "home": "front",
+      "name": "gateway/editor-token",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The editor's token (class `editor`: the `/p/PROVIDER/…` paths only) and the loopback URL it is good on.",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "url"
+        ],
+        "title": "EditorToken",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "provider keys to the hub's memory (never a file, never the backend)",
+      "home": "front",
       "name": "gateway/keys",
       "params": {
         "$defs": {
@@ -2049,7 +3565,47 @@
       "classes": [
         "user"
       ],
-      "doc": "an agent's token and the gateway's URL; its keys go to the gateway's memory",
+      "doc": "the providers whose key the hub holds (ids only)",
+      "home": "front",
+      "name": "gateway/keys-held",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The ids of the providers whose key the hub holds, never a key: `gateway/keys-held`'s answer, and the data of the\nevent `gateway/keys-changed`.",
+        "properties": {
+          "providers": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Id"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeysHeld",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an agent's token and where it is good (the URL, or a session's socket); its keys go to the hub's memory",
+      "home": "front",
       "name": "gateway/register",
       "params": {
         "$defs": {
@@ -2074,7 +3630,7 @@
           },
           "OpenrouterRestrictions": {
             "additionalProperties": false,
-            "description": "OpenRouter restrictions (agents.eld's `:openrouter`): an unknown one is refused.",
+            "description": "OpenRouter restrictions (agents.eld's `:openrouter`): an unknown one is refused, and so is a slug that is not one\n(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`, the Lisp's strict rule; the front checks it at registration).",
             "properties": {
               "data-collection": {
                 "anyOf": [
@@ -2129,6 +3685,12 @@
             },
             "type": "object"
           },
+          "SessionId": {
+            "description": "a session's id: ASCII letters, digits, - and _, 1 to 64",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
           "TaskRef": {
             "description": "a task: no control characters, 1 to 512 characters",
             "maxLength": 512,
@@ -2163,10 +3725,11 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "USD for the whole job; absent: the job's `data.budget` in work.db."
           },
           "chain": {
-            "description": "The providers to try in turn: `[[provider, model-or-null]…]`, at most 16.",
+            "description": "The providers to try in turn: `[[provider, model-or-null]…]`, at most 16.  At least one must be usable now (a\nprovider of the table that speaks Messages and whose key the hub holds), or the registration is refused.",
             "items": {
               "items": {
                 "maxLength": 128,
@@ -2212,13 +3775,24 @@
             ]
           },
           "owner": {
-            "description": "The pid of the Emacs whose agent it is: its registrations go when it does.",
+            "description": "The pid of the Emacs whose agent it is: its registrations go when it does (absent: the caller's pid).",
             "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
               "null"
             ]
+          },
+          "sid": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SessionId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A live session (`mcp/session`): the token is issued for its own `gateway.sock`, and good only there."
           },
           "task": {
             "anyOf": [
@@ -2240,31 +3814,86 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "A registration's token and where it is good: the loopback listener's `url`, or a session's `socket`.",
         "properties": {
           "openrouter": {
             "description": "The restrictions kept; absent when none."
+          },
+          "socket": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "token": {
             "type": "string"
           },
           "url": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "token",
-          "url"
+          "token"
         ],
         "title": "Registration",
         "type": "object"
       },
-      "writes": true
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "seam: every registration of the job gets the budget (drgnx-gateway-set-budget)",
+      "home": "front",
+      "name": "gateway/set-budget",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Usd": {
+            "description": "an amount of US dollars",
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "budget": {
+            "$ref": "#/$defs/Usd"
+          },
+          "job": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "job",
+          "budget"
+        ],
+        "title": "SetBudgetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
         "user"
       ],
       "doc": "the token no longer forwards",
+      "home": "front",
       "name": "gateway/unregister",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2285,7 +3914,2085 @@
         "title": "boolean",
         "type": "boolean"
       },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a checked copy of work.db in <data>/backup/ (VACUUM INTO), then the old copies rotated",
+      "home": "front",
+      "name": "graph/backup",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a backup did: the checked copy, and the old copies rotation removed.",
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "removed": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "ok",
+          "bytes",
+          "ms"
+        ],
+        "title": "BackupAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "parsed entities' old versions thinned and retired sessions' link stats folded (authored facts never)",
+      "home": "front",
+      "name": "graph/compact",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dry_run": {
+            "description": "Say what would go, change nothing.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "CompactParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "link_stats": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "versions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "versions",
+          "link_stats",
+          "dry_run"
+        ],
+        "title": "CompactAnswer",
+        "type": "object"
+      },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an entity (as of a tx) with who wrote it; its links, the notes about it and its history on request",
+      "home": "front",
+      "name": "graph/entity",
+      "params": {
+        "$defs": {
+          "Include": {
+            "description": "What `graph/entity` adds to the entity.",
+            "oneOf": [
+              {
+                "const": "links",
+                "description": "Its current links, both ways.",
+                "type": "string"
+              },
+              {
+                "const": "notes",
+                "description": "The notes `about` it.",
+                "type": "string"
+              },
+              {
+                "const": "history",
+                "description": "Every version, with its author.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "as_of": {
+            "description": "The entity as of this tx (its version then).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "include": {
+            "items": {
+              "$ref": "#/$defs/Include"
+            },
+            "maxItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "EntityParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One entity with who wrote it (`by` of its creating and its last tx); the store's columns as they are.",
+        "properties": {
+          "approximate": {
+            "description": "An as-of read of a version the migration synthesized (its time is the migration's).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "by": {
+            "description": "The authors: `{created: {tx, actor, class, at}, updated: {…}}`."
+          },
+          "entity": {
+            "description": "The entity's columns (`n`, `id`, `kind`, `project`, `title`, `status`, `body`, `data`, `ver`, …)."
+          },
+          "history": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "links": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notes": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entity",
+          "by"
+        ],
+        "title": "EntityAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an entity's (or a tx's) text blanked in every version, its search rows and copies in the coordination tables, then VACUUM and a WAL checkpoint; the backups and transcripts still holding it, removed or redacted on request",
+      "home": "front",
+      "name": "graph/excise",
+      "params": {
+        "$defs": {
+          "ExciseField": {
+            "description": "A field an excise blanks.",
+            "enum": [
+              "title",
+              "status",
+              "body",
+              "assignee",
+              "data"
+            ],
+            "type": "string"
+          },
+          "ExciseTarget": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "maxLength": 4352,
+                "type": "string"
+              }
+            ],
+            "description": "An excise's target: a tx, or an entity by id."
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fields": {
+            "description": "Default: an entity's title, body and data; a tx's every field.",
+            "items": {
+              "$ref": "#/$defs/ExciseField"
+            },
+            "maxItems": 5,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "reason": {
+            "$ref": "#/$defs/Text",
+            "description": "Kept in `excise_log` (never the content)."
+          },
+          "rotate_backups": {
+            "description": "Remove the backup copies and exports that still hold the excised text.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "target": {
+            "$ref": "#/$defs/ExciseTarget"
+          },
+          "transcripts": {
+            "description": "Redact the session transcripts that hold it, in place.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "target",
+          "reason"
+        ],
+        "title": "ExciseParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What an excise did (`ExciseReport`), what the scrub after it did (`ScrubReport`: the WAL truncated or what blocked\nit), and the files outside `work.db` that hold the excised text.",
+        "properties": {
+          "backups_holding": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "backups_removed": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "blanked": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "blocked_by": {
+            "description": "`readers` or `writer`: what kept the WAL from being truncated (close drgnx editors, then `graph scrub`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entities": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcripts_holding": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "transcripts_redacted": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tx": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "txs_blanked": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vacuumed": {
+            "type": "boolean"
+          },
+          "versions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wal_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tx",
+          "entities",
+          "versions",
+          "txs_blanked",
+          "blanked",
+          "vacuumed",
+          "wal_truncated"
+        ],
+        "title": "ExciseAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the store as sorted JSON lines (entities, links, txs; history and activity on request) in <data>/export/ or OUT, the personal-notes deny-list applied",
+      "home": "front",
+      "name": "graph/export",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "history": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "out": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default: `<data>/export/`."
+          },
+          "project": {
+            "description": "One project's entities only (its id or alias); needs `out`.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "`tx.jsonl` from this tx on.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "with_activity": {
+            "description": "Also `touched` links, `link_stat` and sessions.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "ExportParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What an export or import did.",
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "entities": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "links": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refused": {
+            "default": [],
+            "description": "Import: `[line, why]` of each record refused.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "txs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dir",
+          "entities",
+          "links",
+          "txs",
+          "skipped"
+        ],
+        "title": "PortAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks), revoke one; the store refuses a grant from any other class",
+      "home": "front",
+      "name": "graph/grants",
+      "params": {
+        "$defs": {
+          "GrantAccess": {
+            "enum": [
+              "read",
+              "edit-user-tasks"
+            ],
+            "type": "string"
+          },
+          "GrantsList": {
+            "properties": {
+              "active": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "who": {
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "NewGrant": {
+            "properties": {
+              "access": {
+                "$ref": "#/$defs/GrantAccess"
+              },
+              "expires": {
+                "description": "Unix seconds, in the future.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "what": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "who": {
+                "maxLength": 256,
+                "type": "string"
+              }
+            },
+            "required": [
+              "who",
+              "what",
+              "access"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NewGrant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "list": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrantsList"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revoke": {
+            "description": "A grant's id (`grant:…`).",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "GrantsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "GrantView": {
+            "additionalProperties": false,
+            "description": "A grant as the user sees it.",
+            "properties": {
+              "access": {
+                "type": "string"
+              },
+              "active": {
+                "description": "Active and not expired now.",
+                "type": "boolean"
+              },
+              "expires": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "description": "`active` or `revoked`.",
+                "type": "string"
+              },
+              "what": {
+                "type": "string"
+              },
+              "who": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "who",
+              "what",
+              "access",
+              "status",
+              "active"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`graph/grants`' answer: the list, the new grant, or whether a grant was revoked.",
+        "properties": {
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrantView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/$defs/GrantView"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "revoked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "GrantsAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "every version of an entity, with its tx's author, class and tool",
+      "home": "front",
+      "name": "graph/history",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "since": {
+            "description": "Versions from this tx on.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "HistoryParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "versions": {
+            "default": [],
+            "description": "Each version: `{ver, tx, at, actor, class, tool, session, fields, imported}`.",
+            "items": true,
+            "type": "array"
+          }
+        },
+        "title": "HistoryAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "an export read back, idempotent by version, the personal-notes deny-list applied; never a grant",
+      "home": "front",
+      "name": "graph/import",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dir": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "dir"
+        ],
+        "title": "ImportParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What an export or import did.",
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "entities": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "links": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refused": {
+            "default": [],
+            "description": "Import: `[line, why]` of each record refused.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "txs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dir",
+          "entities",
+          "links",
+          "txs",
+          "skipped"
+        ],
+        "title": "PortAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a breadth-first walk from an entity (depth 1 to 4, kinds past 3), within its budget: what stopped it in truncated",
+      "home": "front",
+      "name": "graph/neighbors",
+      "params": {
+        "$defs": {
+          "Direction": {
+            "description": "Which way links are followed.",
+            "enum": [
+              "out",
+              "in",
+              "both"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "as_of": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "depth": {
+            "description": "1 to 4 (default 1).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Direction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "kinds": {
+            "description": "The link kinds to follow (needed past depth 3).",
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NeighborsParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A walk's answer: the nodes and links found, how many were out of scope (`hidden`, never named), and why it\nstopped early.",
+        "properties": {
+          "hidden": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "links": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "nodes": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "truncated": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hidden"
+        ],
+        "title": "WalkAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a shortest path between two entities (at most 6 links), within its budget",
+      "home": "front",
+      "name": "graph/path",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "as_of": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "from": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "max_depth": {
+            "description": "1 to 6 (default 3).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "to": {
+            "maxLength": 4352,
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "PathParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A walk's answer: the nodes and links found, how many were out of scope (`hidden`, never named), and why it\nstopped early.",
+        "properties": {
+          "hidden": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "links": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "nodes": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          },
+          "truncated": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hidden"
+        ],
+        "title": "WalkAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the personal-notes opt-ins and hard entries read again now and applied: a removed opt-in excises what came in",
+      "home": "front",
+      "name": "graph/privacy",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "delete_copies": {
+            "description": "Delete these copies, as an earlier answer's `backups_holding` named them, after the user confirmed: only the\nbackups, `work.db.schema5` and the set-aside `work.db.schema7-*` count; exports are never deleted.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "reload": {
+            "description": "Read `personal-notes-allow.json` and `personal-notes-deny.json` again now and apply the change.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reload"
+        ],
+        "title": "PrivacyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What applying a change of the opt-ins did (`norn::privacy::PrivacyReport`), and the copies deleted.",
+        "properties": {
+          "added": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "backups_holding": {
+            "default": [],
+            "description": "The backups and set-aside copies that still hold an excised value (`delete_copies` may name them).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "backups_removed": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "excised": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "exports_holding": {
+            "default": [],
+            "description": "The exports that still hold one: the user's files, listed only.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ignored": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "excised"
+        ],
+        "title": "PrivacyAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "proposed txs accepted, or rejected (reverted newest first)",
+      "home": "front",
+      "name": "graph/proposed",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "accept": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "reject": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "ProposedParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Reverted": {
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "links": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a revert did: the entities given a restoring version and the links retired or added again, or the later txs\nthat block it (nothing written).  `listed`: a `cascade` look, nothing written either way.",
+        "properties": {
+          "blocked": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "listed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reverted": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reverted"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RevertAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what a tracker scan read, by typed source, in one transaction: every path a record carries checked against the personal-notes deny-list (a denied path refuses its whole source), unchanged entities untouched, derived statuses, collected keys",
+      "home": "front",
+      "name": "graph/put-parsed",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "LinkOrigin": {
+            "description": "Who made a link: read from a file, or inferred (a ledger's commits, a worktree's branch).",
+            "enum": [
+              "parsed",
+              "inferred"
+            ],
+            "type": "string"
+          },
+          "ParsedEntity": {
+            "description": "One entity a source holds.  `data` carries what the Lisp readers see as columns (`path`, `line`, `parent`, `ord`)\nand the rest (`sha`, `date`, `repo`, …); a key set to `null` is left out.",
+            "properties": {
+              "data": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/JsonObject"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "kind": {
+                "description": "spec, plan, task, step, ruling, todo, file, commit or branch.",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Status"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ParsedLink": {
+            "description": "One link a source holds, by the ids of its ends.  `kind` is a link kind of storage §5.4 (`on-branch` is read as\n`on_branch`); `ledger-of` (a ledger's plan) is kept as `relates` with `data.was`, as the migration keeps it.",
+            "properties": {
+              "dst": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "kind": {
+                "maxLength": 32,
+                "type": "string"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LinkOrigin"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "src": {
+                "maxLength": 4352,
+                "type": "string"
+              }
+            },
+            "required": [
+              "src",
+              "kind",
+              "dst"
+            ],
+            "type": "object"
+          },
+          "ParsedSource": {
+            "description": "One source of a scan: everything it holds now (a `file` or `spec` source replaces what it held before; a `commit`\nor `branch` source adds).",
+            "properties": {
+              "entities": {
+                "items": {
+                  "$ref": "#/$defs/ParsedEntity"
+                },
+                "maxItems": 10000,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "links": {
+                "items": {
+                  "$ref": "#/$defs/ParsedLink"
+                },
+                "maxItems": 10000,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "mtime": {
+                "description": "The file's modification time as the scan saw it (the Lisp `file` view's `mtime`).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "source": {
+                "$ref": "#/$defs/SourceRef"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "type": "object"
+          },
+          "ParsedUpdate": {
+            "description": "A derived attribute the scan computed (a ledger's `done`, a task whose steps are all done, git facts).",
+            "properties": {
+              "data_patch": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/JsonObject"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A merge patch of `gone`, `stale`, `range-stale`, `merged` (true, false or null), `branch`, `worktree`, `repo`\n(text or null; the two paths absolute)."
+              },
+              "id": {
+                "maxLength": 4352,
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Status"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "`open` or `done`, on a parsed task, step or plan."
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "SourceKind": {
+            "description": "Where what a scan read came from.",
+            "oneOf": [
+              {
+                "const": "file",
+                "description": "A file the scan read (a plan, a ledger, the board): its entities carry its path.",
+                "type": "string"
+              },
+              {
+                "const": "spec",
+                "description": "A spec: its own source, one `spec:PATH` entity.",
+                "type": "string"
+              },
+              {
+                "const": "commit",
+                "description": "Commits (`commit:SHA`): no path.",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "Branches (`branch:…`): no path.",
+                "type": "string"
+              }
+            ]
+          },
+          "SourceRef": {
+            "description": "A source, typed: never a free string the hub would read as a relative path.  `path` for `file` and `spec` only.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/SourceKind"
+              },
+              "path": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AbsPath"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "collected": {
+            "description": "Keys the job-commit collector is done with (`job ID`), kept so it never collects them twice.",
+            "items": {
+              "maxLength": 133,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "gone": {
+            "description": "Sources that are gone: what they held retired, their file forgotten.  `file` and `spec` only.",
+            "items": {
+              "$ref": "#/$defs/SourceRef"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The scan's root, for the tx's actor (`scan:ROOT`)."
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/ParsedSource"
+            },
+            "maxItems": 1000,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "updates": {
+            "items": {
+              "$ref": "#/$defs/ParsedUpdate"
+            },
+            "maxItems": 10000,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "PutParsedParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Refusal": {
+            "additionalProperties": false,
+            "description": "What was not stored, and why (a refused source stores nothing of itself; WHY never names a denied path).",
+            "properties": {
+              "id": {
+                "description": "The id of a refused update.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SourceRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The refused source, as sent."
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "why"
+            ],
+            "type": "object"
+          },
+          "SourceKind": {
+            "description": "Where what a scan read came from.",
+            "oneOf": [
+              {
+                "const": "file",
+                "description": "A file the scan read (a plan, a ledger, the board): its entities carry its path.",
+                "type": "string"
+              },
+              {
+                "const": "spec",
+                "description": "A spec: its own source, one `spec:PATH` entity.",
+                "type": "string"
+              },
+              {
+                "const": "commit",
+                "description": "Commits (`commit:SHA`): no path.",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "Branches (`branch:…`): no path.",
+                "type": "string"
+              }
+            ]
+          },
+          "SourceRef": {
+            "description": "A source, typed: never a free string the hub would read as a relative path.  `path` for `file` and `spec` only.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/SourceKind"
+              },
+              "path": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AbsPath"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`graph/put-parsed`'s answer: entities made or given a new version, entities retired, and what was refused.",
+        "properties": {
+          "changed": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refused": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Refusal"
+            },
+            "type": "array"
+          },
+          "retired": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "changed",
+          "retired"
+        ],
+        "title": "PutParsedAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "commits that did a task (implements links), once per collected key (the request's key: a second record answers the first)",
+      "home": "front",
+      "name": "graph/record",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "RecordCommit": {
+            "description": "One commit `graph/record` records.",
+            "properties": {
+              "date": {
+                "description": "The commit time (unix seconds).",
+                "format": "double",
+                "type": "number"
+              },
+              "seq": {
+                "description": "Its place among the repository's commits (`drgnx-work--put-commits`: older is smaller).",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sha": {
+                "description": "4 to 64 hex digits.",
+                "maxLength": 64,
+                "type": "string"
+              },
+              "subject": {
+                "$ref": "#/$defs/Text"
+              }
+            },
+            "required": [
+              "sha",
+              "date",
+              "subject"
+            ],
+            "type": "object"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "collected": {
+            "description": "The job-commit collector's key (`job ID`): the request's key, so a second record of the same job answers the\nfirst answer and writes nothing.",
+            "maxLength": 133,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/$defs/RecordCommit"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "repo": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The main repository the commits are in."
+          },
+          "task": {
+            "description": "The task, step or todo the commits did (an entity id).",
+            "maxLength": 4352,
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "repo",
+          "commits"
+        ],
+        "title": "RecordParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`graph/record`'s answer: the commits' ids, in the order sent.",
+        "properties": {
+          "ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "title": "RecordAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a tx reverted (or an entity put back to a version) as a new tx of the user's; a later change to what it wrote blocks it and is named; cascade only lists",
+      "home": "front",
+      "name": "graph/revert",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cascade": {
+            "description": "List only: what the revert would do, or the later txs that block it; nothing is written.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "entity": {
+            "description": "Or put ENTITY back to version VER (a new version).",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tx": {
+            "description": "Revert this tx.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ver": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "RevertParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Reverted": {
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "links": {
+                "default": [],
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a revert did: the entities given a restoring version and the links retired or added again, or the later txs\nthat block it (nothing written).  `listed`: a `cascade` look, nothing written either way.",
+        "properties": {
+          "blocked": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "listed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reverted": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reverted"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RevertAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "VACUUM and a WAL checkpoint (TRUNCATE) of work.db as a writer request, saying when readers keep the WAL from being truncated",
+      "home": "front",
+      "name": "graph/scrub",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a scrub did (`graph/scrub`; the excise's own report carries the same three fields).",
+        "properties": {
+          "blocked_by": {
+            "description": "`readers` or `writer`: what kept the WAL from being truncated.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vacuumed": {
+            "type": "boolean"
+          },
+          "wal_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "vacuumed",
+          "wal_truncated"
+        ],
+        "title": "ScrubAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the store's settings (only_user_closes: only I close my tasks), written in a user-class tx only",
+      "home": "front",
+      "name": "graph/settings",
+      "params": {
+        "$defs": {
+          "Empty": {
+            "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+            "type": "object"
+          },
+          "SettingsSet": {
+            "properties": {
+              "only_user_closes": {
+                "description": "\"Only I close my tasks\" (`setting:only-user-closes`).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "get": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Empty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "set": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SettingsSet"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SettingsParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The store's settings.",
+        "properties": {
+          "only_user_closes": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "only_user_closes"
+        ],
+        "title": "Settings",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one read-only SELECT on a hardened connection of its own (no ATTACH, PRAGMA, writes, recursive CTEs or extension loading), with a deadline and a row cap",
+      "home": "front",
+      "name": "graph/sql",
+      "params": {
+        "$defs": {
+          "SqlParam": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/Text"
+              }
+            ],
+            "description": "A value bound to a `?` of `graph/sql`."
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "deadline_ms": {
+            "description": "At most 10000 (default 2000).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "params": {
+            "items": {
+              "$ref": "#/$defs/SqlParam"
+            },
+            "maxItems": 100,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "At most 10000 (default 1000).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sql": {
+            "description": "One `SELECT` (no `ATTACH`, `PRAGMA`, writes or recursive CTEs).",
+            "maxLength": 100000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "title": "SqlParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "default": [],
+            "description": "Each row's values (a blob as `{\"blob\": LEN}`).",
+            "items": {
+              "items": true,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "truncated"
+        ],
+        "title": "SqlAnswer",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -2294,9 +6001,16 @@
         "service"
       ],
       "doc": "a connection's first line: versions, and the proofs that make it a user connection",
+      "home": "front",
       "name": "hello",
       "params": {
         "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
           "Hex64": {
             "description": "64 lowercase hex digits",
             "maxLength": 64,
@@ -2319,6 +6033,17 @@
               "string",
               "null"
             ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The folder the client started in: an outside agent's bridge sends it, and `mcp/attach` makes it the tools'\nhome."
           },
           "drgnx_version": {
             "maxLength": 64,
@@ -2488,6 +6213,7 @@
         "user"
       ],
       "doc": "a proposed job runs, with an optional budget",
+      "home": "backend",
       "name": "job/approve",
       "params": {
         "$defs": {
@@ -2630,6 +6356,7 @@
         "user"
       ],
       "doc": "a task waits for the user, with a reason (the Work graph)",
+      "home": "backend",
       "name": "job/block",
       "params": {
         "$defs": {
@@ -2771,6 +6498,7 @@
         "user"
       ],
       "doc": "the user's action on a card (once: a settled card is an error)",
+      "home": "backend",
       "name": "job/card",
       "params": {
         "$defs": {
@@ -2924,6 +6652,7 @@
         "user"
       ],
       "doc": "a message acted on without an answer",
+      "home": "backend",
       "name": "job/dismiss",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2952,6 +6681,7 @@
         "user"
       ],
       "doc": "a task moves in its job's run order (the Work graph)",
+      "home": "backend",
       "name": "job/order",
       "params": {
         "$defs": {
@@ -3088,6 +6818,7 @@
         "user"
       ],
       "doc": "a job from a plan, proposed (approved at once with auto)",
+      "home": "backend",
       "name": "job/propose",
       "params": {
         "$defs": {
@@ -3266,6 +6997,7 @@
         "user"
       ],
       "doc": "a task goes to another profile (the Work graph)",
+      "home": "backend",
       "name": "job/reassign",
       "params": {
         "$defs": {
@@ -3397,6 +7129,7 @@
         "user"
       ],
       "doc": "the user's answer to an agent's message",
+      "home": "backend",
       "name": "job/reply",
       "params": {
         "$defs": {
@@ -3436,6 +7169,7 @@
         "user"
       ],
       "doc": "a stopped job runs again, with an optional new budget",
+      "home": "backend",
       "name": "job/resume",
       "params": {
         "$defs": {
@@ -3578,6 +7312,7 @@
         "user"
       ],
       "doc": "Start as Job: task n of a plan and the tasks it needs, proposed; the plan is only read",
+      "home": "backend",
       "name": "job/start-task",
       "params": {
         "$defs": {
@@ -3735,6 +7470,7 @@
         "user"
       ],
       "doc": "one job (with its decision log when asked), or every job",
+      "home": "backend",
       "name": "job/status",
       "params": {
         "$defs": {
@@ -3895,6 +7631,7 @@
         "user"
       ],
       "doc": "a job's agents stop and it waits",
+      "home": "backend",
       "name": "job/stop",
       "params": {
         "$defs": {
@@ -4021,6 +7758,7 @@
         "user"
       ],
       "doc": "a blocked task may run again (the Work graph)",
+      "home": "backend",
       "name": "job/unblock",
       "params": {
         "$defs": {
@@ -4144,11 +7882,533 @@
     },
     {
       "classes": [
+        "service"
+      ],
+      "doc": "an outside agent's bridge: the connection carries MCP after the answer, as ext:KIND:PID-HASH from the peer process",
+      "home": "front",
+      "name": "mcp/attach",
+      "params": {
+        "$defs": {
+          "AgentKind": {
+            "description": "an agent kind: lowercase letters, digits, _ and - (a letter or digit first), at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/AgentKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "AttachParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`mcp/attach`'s answer: the identity the connection's tools act as; MCP lines follow it.",
+        "properties": {
+          "identity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "identity"
+        ],
+        "title": "AttachAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db with its profile and tool sets, and closed with its owner; the tracker tools unless the session's task or its profile turns them off",
+      "home": "front",
+      "name": "mcp/session",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "SessionId": {
+            "description": "a session's id: ASCII letters, digits, - and _, 1 to 64",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "TaskRef": {
+            "description": "a task: no control characters, 1 to 512 characters",
+            "maxLength": 512,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
+          "ToolSetsParam": {
+            "description": "Which tool sets a session's socket serves (call 16).",
+            "properties": {
+              "tracker": {
+                "description": "The tracker and graph tools (`task_read`, `task_write`, `note_add`, `graph_read`, `access_request`).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "tracker"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/AgentName",
+            "description": "The agent's id: what every tool on the socket acts as."
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The folder the agent works in (the tools' `home`)."
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "description": "The pid of the process the session belongs to: the session is closed when it is gone.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The drgnx profile the agent runs as (grants by `profile:NAME` name it)."
+          },
+          "sid": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SessionId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The session's directory when it has one already (its agent `hub.sock`); else the hub mints the id."
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolSetsParam"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The profile's tool sets (absent: the profile says nothing; the task's setting, else on, decides)."
+          }
+        },
+        "required": [
+          "agent",
+          "owner"
+        ],
+        "title": "SessionParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`mcp/session`'s answer: the session's id and the socket to connect to.",
+        "properties": {
+          "sid": {
+            "type": "string"
+          },
+          "socket": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sid",
+          "socket"
+        ],
+        "title": "SessionAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a session's mcp.sock and its directory gone (false: no such session)",
+      "home": "front",
+      "name": "mcp/session-close",
+      "params": {
+        "$defs": {
+          "SessionId": {
+            "description": "a session's id: ASCII letters, digits, - and _, 1 to 64",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "sid": {
+            "$ref": "#/$defs/SessionId"
+          }
+        },
+        "required": [
+          "sid"
+        ],
+        "title": "SessionCloseParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a message moved on to delivered, read or acted, never back (drgnx-coord-mark)",
+      "home": "front",
+      "name": "messages/mark",
+      "params": {
+        "$defs": {
+          "MessageState": {
+            "description": "The states a message moves on to (never back; `held` stands apart).",
+            "enum": [
+              "delivered",
+              "read",
+              "acted"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/MessageState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "title": "MarkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`messages/mark`'s answer: whether the message moved on.",
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "changed"
+        ],
+        "title": "Changed",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a message, from the user (only the backend names another sender); held when seen is behind the decision log (drgnx-coord-send)",
+      "home": "front",
+      "name": "messages/send",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "answers": {
+            "description": "The question to the user (a message's id) this message answers.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "question": {
+            "description": "A message to `user` that is a question (the `ask_user` tool).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "recipient": {
+            "$ref": "#/$defs/AgentName",
+            "description": "`user`, an agent's id, or a job's task holder."
+          },
+          "seen": {
+            "description": "The decision-log version the sender last read: behind the log, nothing is sent and the answer is held.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sender": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only the Lisp backend names a sender (its agents' messages); an editor always sends as the user."
+          },
+          "text": {
+            "$ref": "#/$defs/Text"
+          }
+        },
+        "required": [
+          "recipient",
+          "text"
+        ],
+        "title": "SendParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Decision": {
+            "additionalProperties": false,
+            "description": "One decision as the log has it (`drgnx-coord--decision-plist`).",
+            "properties": {
+              "at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "job": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "n": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "paths": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "replaces": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "subject": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ver": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`messages/send`'s answer (`drgnx-coord-send`): `{ok, id, state}` (state `queued`, or `held` when the recipient's\nqueue is full or the two talk too much), or `{held, version, changes}` when the sender's `seen` is behind the log\n(nothing was sent; `changes` are the decisions after `seen`, newest first).",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/$defs/Decision"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "held": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "SendResult",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
         "user",
         "agent",
         "service"
       ],
       "doc": "the hub's pid",
+      "home": "front",
       "name": "ping",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4179,6 +8439,7 @@
         "user"
       ],
       "doc": "answers true, then the hub exits 75 for its supervisor to start it again",
+      "home": "front",
       "name": "restart",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4197,7 +8458,155 @@
       "classes": [
         "user"
       ],
+      "doc": "a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
+      "home": "front",
+      "name": "review/mark",
+      "params": {
+        "$defs": {
+          "AgentName": {
+            "description": "an agent's name: no control characters, at most 256",
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+            "type": "string"
+          },
+          "EventKind": {
+            "description": "What an event can be (`drgnx-coord-event-kinds`).",
+            "enum": [
+              "start",
+              "stop",
+              "claim",
+              "release",
+              "status",
+              "decision",
+              "edit",
+              "test",
+              "question",
+              "answer",
+              "review",
+              "message",
+              "card",
+              "accept",
+              "revert",
+              "comment",
+              "job"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          },
+          "ReviewEvent": {
+            "description": "The review's own event, written in the mark's transaction (its agent is the mark's).",
+            "properties": {
+              "data": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/JsonObject"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "job": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Id"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/EventKind"
+              },
+              "summary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ReviewState": {
+            "enum": [
+              "accepted",
+              "pending"
+            ],
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/AgentName"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReviewEvent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hash": {
+            "description": "The diff's hash the mark is for (the merge gate compares it).",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/ReviewState"
+          }
+        },
+        "required": [
+          "agent",
+          "path",
+          "state",
+          "hash"
+        ],
+        "title": "ReviewMarkParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "answers true, then the hub exits",
+      "home": "front",
       "name": "shutdown",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4219,6 +8628,7 @@
         "service"
       ],
       "doc": "what a job's, task's or agent's requests came to (an agent: its own job's)",
+      "home": "front",
       "name": "spend",
       "params": {
         "$defs": {
@@ -4283,7 +8693,7 @@
         "description": "What the requests came to.",
         "properties": {
           "cost": {
-            "description": "US dollars.",
+            "description": "US dollars: a JSON number, which a whole amount may spell `2.0` (R-T18-2).",
             "format": "double",
             "type": "number"
           },
@@ -4320,7 +8730,8 @@
         "agent",
         "service"
       ],
-      "doc": "the hub's state: versions, refusals, read-only, the backend",
+      "doc": "the hub's state: versions, refusals, read-only, the backend, the gateway",
+      "home": "front",
       "name": "status",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4360,6 +8771,125 @@
             ],
             "type": "string"
           },
+          "GatewayStatus": {
+            "additionalProperties": false,
+            "description": "The gateway the front serves: its loopback port (none until it listens), the registrations held, and what it\ncarried since the hub started (requests answered, those that failed, fallbacks, request and answer bytes); the\nprovider table's size, the ids whose key the hub holds (never a key) and the clear-text warnings.",
+            "properties": {
+              "bytes_in": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "bytes_out": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "errors": {
+                "description": "Requests whose provider answered 4xx or 5xx, or none at all.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fallbacks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "keys_held": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "keys_refused": {
+                "description": "Why this hub refuses keys (it could not keep other processes out of its memory); absent when it takes them.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "providers": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "registrations": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "requests": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "warnings": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ProviderWarning"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "registrations",
+              "requests",
+              "errors",
+              "fallbacks",
+              "bytes_in",
+              "bytes_out",
+              "providers"
+            ],
+            "type": "object"
+          },
+          "McpStatus": {
+            "additionalProperties": false,
+            "description": "The coordination tools the front serves: the sessions' sockets, and the outside bridges connected now.",
+            "properties": {
+              "outside": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sessions": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sessions",
+              "outside"
+            ],
+            "type": "object"
+          },
+          "ProviderWarning": {
+            "additionalProperties": false,
+            "description": "A warning about one provider (a keyed one whose key travels in clear text).",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "text"
+            ],
+            "type": "object"
+          },
           "Refusals": {
             "additionalProperties": false,
             "description": "The refusals the hub counted, and the last ones (method, code, class, path; never params).",
@@ -4396,6 +8926,114 @@
               "commit"
             ],
             "type": "object"
+          },
+          "StoreStatus": {
+            "additionalProperties": false,
+            "description": "work.db as the front's writer has it.",
+            "properties": {
+              "backup_ok": {
+                "description": "Whether that copy passed its check.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "batches": {
+                "description": "The graph writer's batches (group commits) since the hub started.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "denied_in": {
+                "description": "The copies that still hold what the migration's deny-list kept out of work.db (the pre-migration copy,\n`work.db.schema5`): the doctor offers removing them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "failed": {
+                "description": "Why the move from schema 6 failed (it is not tried again until the hub restarts; `work.db` is still schema 6).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "last_backup": {
+                "description": "The newest backup copy (Task 17's daily ones).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "migrated_at": {
+                "description": "When the move from schema 6 committed (unix seconds; none for a file made at schema 7).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "readers": {
+                "description": "The read pool's connections in use now.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "replays": {
+                "description": "Keyed requests answered from their stored first answer.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "schema": {
+                "description": "`meta.schema` at the last look (0: no file).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "wal_bytes": {
+                "description": "The size of `work.db-wal` (0 without one).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "writer": {
+                "$ref": "#/$defs/WriterState"
+              },
+              "writes": {
+                "description": "The transactions the front's methods committed since the hub started.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema",
+              "writer",
+              "writes"
+            ],
+            "type": "object"
+          },
+          "WriterState": {
+            "description": "Whether the front's writer can write work.db: a schema-7 file the hub made or migrated (`not-ready` while the\nmigration waits or after it failed, `read-only` for a newer file).",
+            "enum": [
+              "ready",
+              "not-ready",
+              "read-only"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4418,7 +9056,19 @@
               "null"
             ]
           },
+          "gateway": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GatewayStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The gateway the front serves (none from a Lisp hub)."
+          },
           "gateway_port": {
+            "description": "A Lisp hub's gateway port (Ratatoskr says `gateway.port`).",
             "format": "uint64",
             "minimum": 0,
             "type": [
@@ -4431,6 +9081,17 @@
               "string",
               "null"
             ]
+          },
+          "mcp": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The front's MCP hosting (none from a Lisp hub)."
           },
           "pid": {
             "format": "uint64",
@@ -4481,6 +9142,7 @@
             ]
           },
           "registrations": {
+            "description": "A Lisp hub's registrations (Ratatoskr says `gateway.registrations`).",
             "format": "uint64",
             "minimum": 0,
             "type": [
@@ -4517,6 +9179,17 @@
               "string",
               "null"
             ]
+          },
+          "store": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StoreStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The front's writer (none from a Lisp hub)."
           }
         },
         "required": [
@@ -4532,6 +9205,7 @@
         "user"
       ],
       "doc": "this connection receives the events from now on",
+      "home": "front",
       "name": "subscribe",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4545,10 +9219,456 @@
         "type": "boolean"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "tasks by words (full text), status, assignee, labels and project, 50 a page",
+      "home": "front",
+      "name": "tasks/find",
+      "params": {
+        "$defs": {
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "assignee": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cursor": {
+            "description": "The `cursor` of the answer before: the next page.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "labels": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "project": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Words, ranked by full text."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "FindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A page of tasks: each `{id, title, status, priority, assignee, labels, project, ver, lease}`.",
+        "properties": {
+          "cursor": {
+            "description": "More follow: pass it back.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "title": "TaskList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the ready tracker tasks (open, nothing open blocks them, no live lease), by priority then age",
+      "home": "front",
+      "name": "tasks/ready",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "labels": {
+            "description": "Only tasks with every one of these labels.",
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "1 to 50 (default 50).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "Only this project's tasks.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "ReadyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A page of tasks: each `{id, title, status, priority, assignee, labels, project, ver, lease}`.",
+        "properties": {
+          "cursor": {
+            "description": "More follow: pass it back.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": true,
+            "type": "array"
+          }
+        },
+        "title": "TaskList",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools): done, a conflict with what changed, a lost lease, or a close proposal",
+      "home": "front",
+      "name": "tasks/write",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Op": {
+            "description": "A tracker operation.",
+            "enum": [
+              "create",
+              "update",
+              "claim",
+              "heartbeat",
+              "release",
+              "handoff",
+              "reassign",
+              "split",
+              "complete",
+              "link",
+              "unlink",
+              "label",
+              "tools"
+            ],
+            "type": "string"
+          },
+          "SplitMode": {
+            "description": "How a split goes: the parts as children (default), or in the task's place.",
+            "enum": [
+              "children",
+              "replace"
+            ],
+            "type": "string"
+          },
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "acceptance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "add": {
+            "description": "Label: the labels added and removed.",
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "body": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dst": {
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The task (every op but create, link and unlink).",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "maxLength": 32,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lease": {
+            "description": "The lease epoch a claim answered (heartbeat, release, handoff, complete).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SplitMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "op": {
+            "$ref": "#/$defs/Op"
+          },
+          "parent": {
+            "description": "Create: the new task's parent.",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parts": {
+            "description": "Split: the parts' titles.",
+            "items": {
+              "$ref": "#/$defs/Text"
+            },
+            "maxItems": 20,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "Create: the project (its id or alias), or the folder whose project it is.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remove": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "src": {
+            "description": "Link, unlink: the link's ends and kind.",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "description": "Handoff, reassign: who next (none: back to open).",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracker": {
+            "description": "Tools: the tracker tools on or off for sessions working on this task (absent: the profile decides).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "ver": {
+            "description": "The version the change is based on (update, reassign, split).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "title": "WriteParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "AnyValue"
+      },
+      "writes": true
     }
   ],
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 6
+  "schema": 7
 }

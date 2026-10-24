@@ -44,11 +44,11 @@ your data, and whether to use only zero-data-retention endpoints, and saves the 
 cannot be had, an agent with restrictions does not start rather than go direct without them. A value that is not a
 restriction, or a `settings.el` that does not read, shows *OpenRouter restrictions: unreadable* with the reason, and
 OpenRouter agents do not start until it is fixed (**[Change…]** replaces a wrong value; a file that does not read is
-fixed in the file itself). With the gateway turned off (`drgnx-agents-use-gateway`) and restrictions set, a Claude
-Code route shows them followed by *the gateway is turned off, so OpenRouter agents do not start: turn it on
-(drgnx-agents-use-gateway) or remove the restrictions*, with **[Change…]**. A route that goes direct (Codex, or the
-gateway turned off with no restrictions) says *applies through drgnx's gateway only; without it, your OpenRouter
-account settings apply* and links to `https://openrouter.ai/settings/privacy`.
+fixed in the file itself). A Claude Code route to OpenRouter always goes through the gateway, since only the hub holds
+the key (`drgnx-agents-use-gateway` changes nothing for it), so it always shows the restrictions with **[Change…]**. A
+route that goes direct (Codex) says *applies through drgnx's gateway only; without it, your OpenRouter account
+settings apply* and links to `https://openrouter.ai/settings/privacy`. **[Store key…]** keeps a key in your Keychain
+or keyring and hands it to the hub; your Emacs then forgets it ([security.md](security.md#where-your-keys-live)).
 
 A setting that overrides a route is shown in the warning colour. Examples: a Claude Code settings file whose `env`
 sets `ANTHROPIC_BASE_URL`, or a Codex `model_provider` that replaces the ChatGPT login.
@@ -96,8 +96,8 @@ Under the rules and project, the page says **Reports to drgnx: yes** or **no**, 
 **[Remove drgnx]** (also `R`, or Agent Settings: Report to drgnx in the palette, which is offered on the page). A
 `drgnx` server that is switched off shows **no (disabled)**. An agent that runs outside drgnx, in a terminal or
 another editor, shows in the Work cockpit ([cockpit.md](cockpit.md)) only when it has drgnx's coordination server.
-The button adds an MCP server called `drgnx` to the agent's **user** settings: `bin/drgnx coord mcp --kind KIND`, the
-same server drgnx's own agents are given. It asks first and names the file. Nothing is written without it, and
+The button adds an MCP server called `drgnx` to the agent's **user** settings: `<data>/bin/ratatoskr mcp-bridge --outside --kind KIND`, the
+same tools drgnx's own agents are given (an existing entry that runs `bin/drgnx coord mcp` is left as it is). It asks first and names the file. Nothing is written without it, and
 opening the page never writes.
 
 - Claude Code: through its `claude mcp add-json drgnx … --scope user` (and `claude mcp remove` to take it out).

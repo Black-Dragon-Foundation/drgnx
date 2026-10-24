@@ -202,28 +202,38 @@ pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
     Ok(Holder::Ratatoskr { pid, start })
 }
 
-/// The pid `stop` may signal for a held lock that names PID and START: only the process whose start time now is
-/// the recorded one (a pid reused since is another process) and whose executable is ratatoskr.  CURRENT is that
-/// pid's start time now (none: gone); RATATOSKR says whether a pid runs ratatoskr ([`is_ratatoskr`]).
+/// The pid `stop` may signal for a held lock that names LOCK_PID and LOCK_START (call 14): only the process LISTENER
+/// found listening on the hub's socket ([`crate::peer::listener_of`]), when it is the lock's pid and its start time now
+/// (START_TIME_OF; none: gone) is the recorded one, and its pidfd still names a running process (so the start time read
+/// was its).  Anything else names both pids and refuses: a lock's text is never enough to signal what it names.
 pub fn signal_target(
-    pid: Option<u32>,
-    start: Option<u64>,
-    current: impl Fn(u32) -> Option<u64>,
-    ratatoskr: impl Fn(u32) -> bool,
+    lock_pid: Option<u32>,
+    lock_start: Option<u64>,
+    listener: &crate::peer::Listener,
+    start_time_of: impl Fn(u32) -> Option<u64>,
 ) -> Result<u32, String> {
-    let (Some(pid), Some(start)) = (pid, start) else {
+    let (Some(pid), Some(start)) = (lock_pid, lock_start) else {
         return Err("the lock is held but does not name a process".into());
     };
-    match current(pid) {
-        Some(now) if now == start && ratatoskr(pid) => Ok(pid),
-        Some(now) if now == start => Err(format!(
-            "the lock names pid {pid}, which does not run ratatoskr: not signalling it"
-        )),
-        Some(now) => Err(format!(
-            "the lock names pid {pid} started at {start}, but that pid started at {now} (another process): not signalling it"
-        )),
-        None => Err(format!("the lock names pid {pid}, which is gone")),
+    if listener.pid != pid {
+        return Err(format!(
+            "the process listening on its socket is pid {}, but the lock names pid {pid}: not signalling either",
+            listener.pid
+        ));
     }
+    match start_time_of(pid) {
+        Some(now) if now == start => {}
+        Some(now) => {
+            return Err(format!(
+                "the lock names pid {pid} started at {start}, but that pid started at {now} (another process): not signalling it"
+            ));
+        }
+        None => return Err(format!("the lock names pid {pid}, which is gone")),
+    }
+    if !listener.running() {
+        return Err(format!("pid {pid} ended meanwhile"));
+    }
+    Ok(pid)
 }
 
 /// The pid in a Lisp lock directory's `pid` file (at most 32 bytes; anything but a number is none).
@@ -240,52 +250,6 @@ fn read_pid(file: &Path) -> Option<u32> {
 /// Is PID a process ([`draugr::alive`]; a number above `i32::MAX` is none)?
 pub fn alive(pid: u32) -> bool {
     i32::try_from(pid).is_ok_and(draugr::alive)
-}
-
-/// Does PID run this ratatoskr: its executable's resolved path is this process's ([`crate::idle::resolve_exe`]), not
-/// just a name that matches.  An executable replaced on disk since it started (Linux names it "PATH (deleted)") still
-/// counts as the one at PATH.  None that cannot be read counts as no.
-pub fn is_ratatoskr(pid: u32) -> bool {
-    match (exe_of(pid), crate::idle::resolve_exe()) {
-        (Some(theirs), Ok(mine)) => theirs == mine,
-        _ => false,
-    }
-}
-
-/// The executable of PID: Linux and Android `readlink /proc/PID/exe` (without a " (deleted)" suffix).
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn exe_of(pid: u32) -> Option<PathBuf> {
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    let link = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-    let bytes = link.as_os_str().as_bytes();
-    Some(match bytes.strip_suffix(b" (deleted)") {
-        Some(b) => PathBuf::from(std::ffi::OsString::from_vec(b.to_vec())),
-        None => link,
-    })
-}
-
-/// The executable of PID: macOS `proc_pidpath`, resolved as `resolve_exe` resolves its own.
-#[cfg(target_os = "macos")]
-pub fn exe_of(pid: u32) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStringExt;
-    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    // SAFETY: the buffer is PROC_PIDPATHINFO_MAXSIZE bytes long and proc_pidpath writes at most that many
-    let n = unsafe {
-        libc::proc_pidpath(
-            i32::try_from(pid).ok()?,
-            buf.as_mut_ptr().cast(),
-            libc::PROC_PIDPATHINFO_MAXSIZE as u32,
-        )
-    };
-    let n = usize::try_from(n).ok().filter(|n| *n > 0)?;
-    buf.truncate(n);
-    std::fs::canonicalize(PathBuf::from(std::ffi::OsString::from_vec(buf))).ok()
-}
-
-/// The executable of PID on a platform with no way to read it: none, so nothing is ever signalled there.
-#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-pub fn exe_of(_pid: u32) -> Option<PathBuf> {
-    None
 }
 
 /// The arguments of PID (Linux and Android `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`; any other platform has
@@ -454,34 +418,44 @@ mod tests {
         assert_eq!(holder(&path, &Fake(vec![])).unwrap(), Holder::Nobody);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     #[test]
-    fn only_the_recorded_process_is_a_signal_target() {
-        let same = |_: u32| Some(5);
-        let yes = |_: u32| true;
-        assert_eq!(signal_target(Some(9), Some(5), same, yes), Ok(9));
-        // a reused pid (another start time) and a gone one are refused
-        let e = signal_target(Some(9), Some(4), same, yes).unwrap_err();
-        assert!(e.contains("(another process)"), "{e}");
-        assert!(signal_target(Some(9), Some(5), |_| None, yes).is_err());
-        // a lock that names nobody
-        assert!(signal_target(None, Some(5), same, yes).is_err());
-        assert!(signal_target(Some(9), None, same, yes).is_err());
-        // the right start time, but another program (a lock another user wrote naming one of ours)
-        let e = signal_target(Some(9), Some(5), same, |_| false).unwrap_err();
-        assert!(e.contains("does not run ratatoskr"), "{e}");
-    }
-
-    #[test]
-    fn ratatoskr_is_known_by_its_resolved_executable() {
-        // this test binary is "the" ratatoskr here: resolve_exe is its own path
-        assert!(is_ratatoskr(std::process::id()));
-        assert_eq!(
-            exe_of(std::process::id()).as_deref(),
-            crate::idle::resolve_exe().ok()
+    fn signal_target_takes_the_listener_not_the_lock() {
+        // the listener is this process, on a socket it listens on
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("hub-x.sock");
+        let _listening = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let me = std::process::id();
+        let listener = crate::peer::listener_of(&path).unwrap();
+        assert_eq!(listener.pid, me);
+        let start_of = |p: u32| {
+            i32::try_from(p)
+                .ok()
+                .and_then(|p| draugr::start_time(p).ok())
+        };
+        // a lock naming another live process with its true start time (pid 1: no child is forked here, see above):
+        // refused, naming both, and nothing is signalled
+        // (where pid 1's start time reads, its true one; else any)
+        let one = start_of(1).unwrap_or(1);
+        let e = signal_target(Some(1), Some(one), &listener, start_of).unwrap_err();
+        assert!(
+            e.contains(&format!("is pid {me}")) && e.contains("names pid 1"),
+            "{e}"
         );
-        // pid 1 runs something else (or cannot be read: no either way); no pid is none
-        assert!(!is_ratatoskr(1));
-        assert!(!is_ratatoskr(0) && !is_ratatoskr(u32::MAX));
+        assert!(alive(1));
+        // the lock naming the listener with its start time: the target
+        let mine = start_of(me).unwrap();
+        assert_eq!(
+            signal_target(Some(me), Some(mine), &listener, start_of),
+            Ok(me)
+        );
+        // the listener's pid with another start time (a reused pid), or gone, or a lock that names nobody: refused
+        let e = signal_target(Some(me), Some(mine + 1), &listener, start_of).unwrap_err();
+        assert!(e.contains("(another process)"), "{e}");
+        assert!(signal_target(Some(me), Some(mine), &listener, |_| None).is_err());
+        assert!(signal_target(None, Some(mine), &listener, start_of).is_err());
+        assert!(signal_target(Some(me), None, &listener, start_of).is_err());
     }
 
     #[test]

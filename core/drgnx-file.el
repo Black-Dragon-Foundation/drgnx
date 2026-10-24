@@ -13,6 +13,7 @@
 ;;   stays a symlink, the mode is kept, data must read back `equal', and no buffer ever visits the file.
 ;; - `drgnx-file-update' is the locked read-modify-write: a `make-directory' lock, a fresh read, the change applied,
 ;;   the lock released.
+;; - `drgnx-file-append-line' appends one line to a log (JSON Lines): no read back, no backup, no lock.
 ;; - `drgnx-file-truename' and `drgnx-file-inside-p' resolve a name an agent gave, with no file name handler
 ;;   (docs/develop/core.md, "Names an agent gave").
 ;; Every name is used with no file name handlers and `default-directory' "/", so nothing here reaches Tramp, and
@@ -355,6 +356,21 @@ rename.  No buffer visits FILE, nothing prompts and no lock file is made."
 (cl-defun drgnx-file-write-text (file text &key mode private (fsync t))
   "Write the string TEXT to FILE (UTF-8) atomically, as `drgnx-file-write' writes, with no read back; the path."
   (drgnx-file--replace (drgnx-file--target file) (encode-coding-string text 'utf-8-unix) mode private fsync nil))
+
+(defun drgnx-file-append-line (file line)
+  "Append LINE and a newline to FILE (UTF-8); the path written (FILE's truename).
+For the logs drgnx keeps (JSON Lines): one `write-region' append, no read back, no backup, no lock, no fsync.  A new
+file is made 0600 and missing folders 0700.  `drgnx-file-refused' for a LINE holding a newline, a remote name or
+something there that is not a regular file (a FIFO would block).  No buffer visits FILE and nothing prompts."
+  (when (string-search "\n" line)
+    (signal 'drgnx-file-refused (list file "a line with a newline")))
+  (with-file-modes #o700
+    (let ((target (drgnx-file--target file)))
+      (drgnx-file--locally
+        (let ((coding-system-for-write 'utf-8-unix) (write-region-inhibit-fsync t) (create-lockfiles nil)
+              (write-region-annotate-functions nil) (write-region-post-annotation-function nil))
+          (write-region (concat line "\n") nil target t 'silent)
+          target)))))
 
 ;;;; Backups
 

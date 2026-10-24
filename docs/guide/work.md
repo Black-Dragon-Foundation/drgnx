@@ -30,6 +30,18 @@ changed since the last scan are read again (a rescan of 30 files takes well unde
 checks that each linked commit is still on a branch, tag or HEAD: commits a rebase, squash or amend left behind
 are marked ⚠ (and their task *stale*) until they are reachable again.
 
+### The scan writes through the hub
+
+The editor never writes the tracker's database. `drgnx work scan` reads the files (in a batch Emacs), then sends
+everything it found in **one** `graph/put-parsed` request to the hub and waits for its answer (up to 30 s, then it
+fails); the hub stores it in one transaction. Recording commits (`drgnx work record`, an agent's turn, an ended job)
+goes through `graph/record` the same way: the batch commands wait, the editor's own turn-end path only asks and never
+waits (an error shows once as "drgnx hub: …"). With no hub (Ratatoskr not built) the scan prints "the work tracker
+updates through the drgnx hub" and fails; nothing is written. Each file or spec is sent as a typed source, and the
+hub tells which it refused (shown with the reason). The scan itself leaves out files the personal-notes deny-list
+denies, and a `**Spec:**` that names one (also through a link into `~/org`); see
+[Personal notes](security.md#personal-notes). The editor only reads `work.db`, and never creates it.
+
 ## Recording commits
 
 Agent sessions and jobs can work on a task — any tracker node id, such as `task:/path/plan.md#3`:
@@ -104,6 +116,19 @@ looking at draws nothing; it catches up when you show it.
 `drgnx doctor` checks `work`: Emacs has SQLite (else the tracker is off), how many plans are tracked, and whether
 this Emacs can show SVG (else there is no graph; the tab shows the same tree).
 
+## Closing your tasks
+
+Agents may finish tasks you made only if you let them (an `edit-user-tasks` grant, [security.md](security.md#grants));
+without it, an agent's "done" is `in-review` and you close the task. With **only I close my tasks** on (the store
+setting `only_user_closes`, `graph/settings`), even a permitted "done" is a proposal: a **close card** in the Work
+cockpit, and the task stays as it was, so nothing that waits on it starts yet.
+
+- **Accept** closes the task as you, if nobody changed it since the agent proposed it. If someone did, drgnx says so
+  and the card stays open: look at the task, then accept or reject again.
+- **Reject** changes nothing; the agent that proposed it is told.
+
+Agents' own access requests come as cards too, with four choices: [security.md](security.md#grants).
+
 ## Status
 
 `drgnx work status` prints one line per plan: merged or on a branch, tasks, steps and TODOs done of all, commits
@@ -117,6 +142,60 @@ several Emacs can share it). Every node and edge carries the source it came from
 so reading a file again replaces exactly what that file gave. The database migrates itself step by step when drgnx
 updates it (a `work.db` from a newer drgnx is left alone, with an error saying so); since schema 2 it also keeps what
 the agent gateway carried, one row per request (`spend`: job, task, agent, provider, model, tokens, cost).
+
+## Backups and exports
+
+The store keeps dated copies of `work.db` (`backup/work-YYYYMMDD.db`: the last 7 days and the last 4 Sundays; each
+copy is checked and a bad one is deleted, so the previous good one stays). `work-pre7-*.db`, made before the move to
+the new store, is only ever removed by you.
+
+### The move to the new store
+
+The first time the new hub starts it moves your `work.db` to the new store (schema 7) before it answers anything:
+it first copies the file to `backup/work-pre7-<time>.db` and checks the copy, then moves everything in one step, so
+an interruption leaves the old file as it was. What it reads from your personal notes folder (`~/org`, the board
+aside) is not moved; the doctor says which copies still hold it, so you can remove them.
+
+### If the migration fails
+
+The hub keeps running without writing: the doctor says why (`ratatoskr doctor`, `store.failed`), and it does not
+try again until it restarts. Your file is unchanged. To go back to the previous drgnx:
+
+1. `drgnx hub stop`
+2. `ratatoskr store restore-pre7 --yes`: the newest checked `work-pre7-*.db` becomes `work.db` again; the new file
+   is kept beside it as `work.db.schema7-<time>` (with its `-wal` and `-shm`). Without `--yes` it only says what it
+   would do.
+3. Install the drgnx from before the move, and start the hub.
+
+An export is a folder of plain JSONL files: `entities.jsonl` and `links.jsonl` (what you and your agents wrote, one
+item per line, sorted so a change touches only its lines), `tx.jsonl` (who changed what), and on request
+`history.jsonl` and the activity (sessions, what they touched). Notes you keep outside the store's reach never
+appear in it. Importing a folder is safe to repeat: items that are already there at that version or later are
+skipped.
+
+Each night at 03:00 (or at the first moment after a missed one: the hub was off, the laptop asleep) the hub makes a
+new dated copy, checks it and rotates the old ones. No copy starts while an excise runs. `drgnx doctor` warns when the
+newest copy is more than 48 hours old or failed its check.
+
+## The graph from the command line
+
+`drgnx graph …` talks to the running hub (it starts one when none runs), so it works the same from a shell as from
+the editor. Every command takes `--json` and then prints the hub's answer as one line; otherwise it prints text. It
+exits 0 when it did what you asked, 1 when it did not (a failed backup, a revert that was blocked, an error) and 2 for
+a command line it does not understand.
+
+| Command | What it does |
+|---|---|
+| `drgnx graph export [--project P --out DIR] [--since TX] [--with activity] [--history]` | Writes the export folder (default `<data>/export/`). `--project` needs `--out`. `DIR` must be new, empty or an earlier export: a folder holding anything else (a repository) is refused, never replaced. |
+| `drgnx graph import DIR` | Reads an export folder back (safe to repeat; never creates a grant). |
+| `drgnx graph backup [now]` | Makes and checks a dated copy now and rotates the old ones. |
+| `drgnx graph revert --tx N` or `--entity ID --to-ver V` `[--cascade]` | Puts a change back as a new version of yours. `--cascade` only lists what depends on it. |
+| `drgnx graph excise ID\|TX [--field F]… --reason R [--rotate-backups] [--transcripts] [--yes]` | Blanks a text in every version, every search row and the copies the hub keeps, then vacuums the file. It cannot be undone: in a terminal it asks first; from a script it needs `--yes`. If readers keep the WAL open it says "close drgnx editors and run `drgnx graph scrub`". |
+| `drgnx graph scrub` | Vacuums `work.db` and truncates its WAL. Run it again after closing editors if an excise could not finish. |
+| `drgnx graph grants [list [--who W] \| grant WHO WHAT [--access read\|edit-user-tasks] [--expires T] \| revoke ID]` | Lists, makes and revokes access grants. `T` is unix seconds or a span such as `12h` or `7d`. |
+| `drgnx graph sql 'SELECT …'` | One read-only query (no writes, no `PRAGMA`), with a row cap and a deadline. |
+| `drgnx graph compact [--dry-run]` | Thins old history: a parsed item (spec, plan, step, commit) keeps its current version and the last old version of each day; the counters of sessions that ended fold into one total per file. Things you and your agents wrote (tasks, decisions, notes, grants) are never touched. |
+| `drgnx graph proposed accept\|reject TX…` | Settles changes an agent proposed. |
 
 ## Tests
 

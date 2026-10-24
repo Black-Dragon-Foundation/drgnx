@@ -1,0 +1,11 @@
+{"scenario": "store/a-newer-store-is-read-only", "requires": ["v1"], "doc": "work.db of schema 8 (a newer drgnx made it): the hub neither migrates it nor copies it; writes answer schema and status says the writer is read-only."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["create table meta (key text primary key, value text)", "insert into meta values ('schema', '8')"]}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "events/add", "params": {"kind": "comment", "summary": "x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "schema", "message": "work.db is schema 8, newer than this hub's 7: update drgnx"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"read_only": 8, "store": {"schema": 8, "writer": "read-only", "writes": 0}}}}
+{"do": "sql_expect", "sql": "select key, value from meta", "rows": [["schema", "8"]]}
+{"do": "file", "path": "$DATA/backup", "exists": false}

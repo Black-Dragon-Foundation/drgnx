@@ -1,15 +1,24 @@
 [package]
 name = "urdr"
-description = "A small SQLite store: one owning thread, read-only connections that never checkpoint, migrations as data"
+description = "A small SQLite store: one owning thread, read-only connections that never checkpoint, migrations as data; the generic graph store (graph)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# Test-only surfaces (`graph::tx::Tx::for_test`, the writer's hooks): off in the binary install.sh builds.
+test-hooks = []
+
 [dependencies]
-rusqlite.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+# `hooks`: the progress handler (walk and graph/sql deadlines) and the authorizer (graph/sql); `limits`: graph/sql's
+# lowered `sqlite3_limit`s
+rusqlite = { workspace = true, features = ["hooks", "limits"] }
+serde.workspace = true
+serde_json.workspace = true
+# `rt`: `spawn_blocking`, so the read pool and graph/sql never run SQLite on an async worker
+tokio = { workspace = true, features = ["sync", "rt"] }
 
 [dev-dependencies]
 tempfile.workspace = true

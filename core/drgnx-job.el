@@ -928,8 +928,12 @@ settled meanwhile (Merge as it is, Back to an agent, Drop) or a job no longer ru
 
 (defun drgnx-job-budget (id) "Job ID's budget in USD, or nil." (and id (plist-get (plist-get (drgnx-coord-job id) :data) :budget)))
 
+(defvar drgnx-hub--behind-front)
+(declare-function drgnx-hub-call-front "drgnx-hub-client")
+
 (defun drgnx-job--gateway-event (event data)
-  "`drgnx-gateway-event-functions': a running job whose budget is spent pauses — its agents stop, the user decides."
+  "`drgnx-gateway-event-functions', and behind Ratatoskr the front's `budget' notification (drgnx-hub.el): a running
+job whose budget is spent pauses — its agents stop, the user decides."
   (when-let* (((eq event 'budget)) (id (plist-get data :job))
               ((equal (plist-get (drgnx-coord-job id) :status) "running")))
     (drgnx-coord-job-set id :status "paused")
@@ -947,7 +951,9 @@ settled meanwhile (Merge as it is, Back to an agent, Drop) or a job no longer ru
       (user-error "Job %s has no job worktree (it was never approved, or the worktree was removed): propose the plan again" id))
     (when budget
       (drgnx-coord-job-set id :data (plist-put (plist-get job :data) :budget budget))
-      (drgnx-gateway-set-budget id budget))
+      ;; behind Ratatoskr the gateway is the front's
+      (if (bound-and-true-p drgnx-hub--behind-front) (drgnx-hub-call-front "gateway/set-budget" (list :job id :budget budget))
+        (drgnx-gateway-set-budget id budget)))
     (drgnx-coord-job-set id :status "running")
     (dolist (task (drgnx-coord-tasks id)) (drgnx-job--set-count id :in-review-since (plist-get task :id) nil))   ; the pause was no wait
     (dolist (s (drgnx-agents-sessions))
@@ -1287,7 +1293,9 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (when (member (plist-get task :status) '("done" "dropped")) (user-error "Task %s is %s already" tid (plist-get task :status)))
     task))
 
-(defun drgnx-job--job-of (task) "The job of TASK (a store plist)." (drgnx-coord--task-job (drgnx-work-db) (plist-get task :id)))
+(defun drgnx-job--job-of (task)
+  "The job of TASK (a store plist)."
+  (drgnx-coord--task-job (drgnx-work-db-read) (plist-get task :id)))
 
 (defun drgnx-job--set-data (job key task value)
   "Job JOB's data KEY (an alist by task id) says VALUE of TASK (its id; nil: nothing); its subscribers hear of it."

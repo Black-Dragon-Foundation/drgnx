@@ -1,0 +1,13 @@
+{"scenario": "gateway/config-providers-refuses-a-bad-url", "requires": ["v1", "fake-backend"], "doc": "config/providers refuses ftp:// and a URL with a user with invalid-params at providers[0].base, and applies nothing; https and loopback http are accepted, a keyed loopback one without a warning."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "x", "kind": "openai", "base": "ftp://example.com", "auth": "bearer", "messages": false, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "providers[0].base"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/providers", "params": {"providers": [{"id": "x", "kind": "openai", "base": "http://user@host", "auth": "bearer", "messages": false, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "providers[0].base"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"providers": 0}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "https://openrouter.ai/api/v1", "auth": "bearer", "messages": true, "caps": ["chat"]}, {"id": "ollama", "kind": "ollama", "base": "http://127.0.0.1:11434", "auth": "bearer", "messages": false, "caps": ["chat", "embed"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"applied": 2, "warnings": []}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"gateway": {"providers": 2, "warnings": []}}}}

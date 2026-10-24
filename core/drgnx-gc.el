@@ -29,6 +29,11 @@
 (defconst drgnx-gc-gap-share 0.85
   "`drgnx-gc-gap' collects once this share of `gc-cons-threshold' was consed since the last collection.")
 
+(defvar nidhogg-watchdog-gc-origin nil
+  "Why the collection running now was started: `idle' (`drgnx-gc--idle'), `gap' (`drgnx-gc-gap'), `audit' (the heap
+audit); nil reads as `auto'.  Callers bind it around `garbage-collect'; the GC census (core/drgnx-gc-census.el) reads
+it on `post-gc-hook'.  Nidhogg's watchdog defines the same variable.")
+
 (defvar drgnx-gc--base 0 "`drgnx-gc--consed' at the last collection.")
 
 (defun drgnx-gc--consed ()
@@ -37,14 +42,19 @@
     (+ (* 16 (nth 0 c)) (* 8 (nth 1 c)) (* 8 (nth 2 c)) (* 48 (nth 3 c)) (nth 4 c) (* 56 (nth 5 c))
        (* 32 (nth 6 c)))))
 
+(defvar drgnx-gc-census-mode)
+(declare-function drgnx-gc-census--note "drgnx-gc-census")
+
 (defun drgnx-gc--note ()
-  "On `post-gc-hook': remember how much was allocated at this collection."
+  "On `post-gc-hook': the GC census's record of this collection when the census is on (first, before this
+function allocates), then how much was allocated at it."
+  (when (bound-and-true-p drgnx-gc-census-mode) (drgnx-gc-census--note))
   (setq drgnx-gc--base (drgnx-gc--consed)))
 
 (defun drgnx-gc--idle ()
   "The idle collection: only when more than a quarter of the threshold was consed since the last one."
   (when (> (- (drgnx-gc--consed) drgnx-gc--base) (/ gc-cons-threshold 4))
-    (let ((inhibit-interaction t)) (garbage-collect))))
+    (let ((inhibit-interaction t) (nidhogg-watchdog-gc-origin 'idle)) (garbage-collect))))
 
 (defun drgnx-gc-gap ()
   "Collect now if this is a quiet gap and memory is nearly full; t when it collected.
@@ -54,7 +64,7 @@ For producers that finish a burst of work: no input pending, idle for `drgnx-gc-
              (let ((idle (current-idle-time))) (and idle (>= (float-time idle) drgnx-gc-gap-quiet)))
              (not (input-pending-p))
              (>= (- (drgnx-gc--consed) drgnx-gc--base) (* drgnx-gc-gap-share gc-cons-threshold)))
-    (let ((inhibit-interaction t)) (garbage-collect))
+    (let ((inhibit-interaction t) (nidhogg-watchdog-gc-origin 'gap)) (garbage-collect))
     t))
 
 (defun drgnx-gc--start-idle ()
@@ -86,18 +96,28 @@ Acts only on a real change: loading gcmh.el sets the variable to nil, which must
 (defconst drgnx-gc--starting-above (* 256 1024 1024)
   "early-init.el's startup threshold is above this (its emacs-startup-hook tests the same).")
 
+(declare-function drgnx-gc-census-maybe-start "drgnx-gc-census")
+
 (defun drgnx-gc-setup ()
   "The owner on, the steady threshold and the idle collection (once) — unless gcmh-mode does both, and the
-threshold only while it is early-init's startup value (a user's own is kept)."
+threshold only while it is early-init's startup value (a user's own is kept).  The GC census when its setting is on."
   (drgnx-gc-mode 1)
   (unless (bound-and-true-p gcmh-mode)
     (when (> gc-cons-threshold drgnx-gc--starting-above)
       (setq gc-cons-threshold drgnx-gc-cons-threshold gc-cons-percentage 0.1))
-    (drgnx-gc--start-idle)))
+    (drgnx-gc--start-idle))
+  (when (require 'drgnx-gc-census nil t)               ; absent where only this file is on the load path (a harness)
+    (drgnx-gc-census-maybe-start)))
 
 (defun drgnx-gc-batch-setup ()
   "The settings of a long-lived batch Emacs (hub, workers): a modest threshold, a low percentage."
   (setq gc-cons-threshold drgnx-gc-batch-threshold gc-cons-percentage 0.2))
+
+(defun drgnx-gc-collect (origin)
+  "Collect now on a caller's request, with `nidhogg-watchdog-gc-origin' bound to ORIGIN (e.g. `audit', the heap
+audit's own collection), so the census and the watchdog's GC row say why; `garbage-collect''s value."
+  (let ((nidhogg-watchdog-gc-origin origin) (inhibit-interaction t))
+    (garbage-collect)))
 
 (provide 'drgnx-gc)
 ;;; drgnx-gc.el ends here

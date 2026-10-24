@@ -9,7 +9,13 @@ drgnx=$(cd "$(dirname "$0")/../.." && pwd)
 emacs=${DRGNX_EMACS:-emacs}
 
 hub() {
-  exec "$emacs" --batch -Q --eval '(setq load-prefer-newer t)' -L "$drgnx/core" -l drgnx-hub -f drgnx-hub-main
+  # DRGNX_WORK_DB_GATE=1 (the one-writer gate, test/support/work-db-gate.el): the backend signals on a read-write open
+  # of work.db, so a backend path that still writes it fails the lisp-backend rows
+  gate=()
+  if [ "${DRGNX_WORK_DB_GATE:-}" = 1 ]; then
+    gate=(-l "$drgnx/test/support/work-db-gate.el" --eval '(drgnx-work-db-gate-enable)')
+  fi
+  exec "$emacs" --batch -Q --eval '(setq load-prefer-newer t)' -L "$drgnx/core" ${gate[@]+"${gate[@]}"} -l drgnx-hub -f drgnx-hub-main
 }
 
 if [ "$#" -eq 0 ]; then

@@ -21,6 +21,9 @@ core/drgnx-tty-fallback.el   keys a legacy terminal cannot send: their Alt+Shift
 core/drgnx-file.el   files drgnx keeps: the bounded reader, the atomic writer, the locked update, backups (below)
 core/drgnx-shell-env.el  PATH, MANPATH, INFOPATH from the login shell, once per start, asynchronously; never a key;
                      the hub follows (env/set); Shell: Reload Environment (../guide/shell.md)
+core/drgnx-owner.el  who owns a Lisp file: a package (its directory), emacs (lisp-directory), drgnx (the module)
+core/drgnx-heap.el   Help → Heap Audit: the live heap by owner, shared data counted once; snapshots; the budget
+                     table and drgnx-heap-check (autoloaded; ../guide/speed.md)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
@@ -154,6 +157,10 @@ size limit: reports, units and exports are not read back through the bounded rea
 The text files drgnx writes all use it: the markdown export (`drgnx-surfaces-export-markdown`: an old file keeps its
 modes, a new one gets 0644), the systemd unit (`drgnx-pkg-service-unit`), the Linux desktop entry, the `config.el`
 template (made only when the file is missing) and the agents' settings files and their backups (below).
+
+`(drgnx-file-append-line FILE LINE)` appends LINE and a newline to a log drgnx keeps (JSON Lines: the GC census's day
+files, [perf.md](perf.md)): one `write-region` append, no read back, backup, lock or fsync; a new file is 0600 and
+missing folders 0700. A LINE with a newline, a remote name and anything there that is not a regular file are refused.
 
 **The locked update.** `(drgnx-file-update FILE FN &key on-unreadable (timeout 1.0) max-bytes header pretty render)`
 takes the lock, reads the file fresh, and writes `(FN DATA)`. FN gets a deep copy of the data, so a `plist-put` in
@@ -1510,7 +1517,8 @@ all in one file. The segment and the header are read per redisplay; a hit alloca
 `window-live-p`, `frame-live-p` or `process-live-p` and drops a dead entry. `key` `string` is an `equal` table with an
 LRU; `cap` is required and positive. A get stamps the entry; a put past the cap evicts the oldest stamp (a scan of the
 table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key; `drgnx-cache-keys NAME` lists the keys (a pass over the
-table, stamping nothing: not for redisplay). **Every cache has a
+table, stamping nothing: not for redisplay). `drgnx-cache-peek` reads one value without stamping it, for a look that
+is no use of the entry: a late process sentinel checking whether its result still counts (`wb/drgnx-git.el`). **Every cache has a
 cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
 
 The workbench has two string caches, both activated by `core/workbench`: `git-status` (repository root → its status

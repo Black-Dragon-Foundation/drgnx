@@ -1,0 +1,18 @@
+{"scenario": "mcp/a-closed-session-is-gone", "requires": ["v1"], "doc": "mcp/session-close answers true once and false after: the socket, its directory and the runtime.db row are gone and the session's connections closed."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "ping"}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session-close", "params": {"sid": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect_closed", "conn": "m", "within_ms": 2000}
+{"do": "file", "path": "$sock", "exists": false}
+{"do": "file", "path": "$SOCKET_DIR/s/$sid", "exists": false}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from msession", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "mcp/session-close", "params": {"sid": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": false}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"mcp": {"sessions": 0, "outside": 0}}}}

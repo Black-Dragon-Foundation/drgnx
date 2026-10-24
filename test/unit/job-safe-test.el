@@ -4,6 +4,8 @@
 ;; one.  No real agent runs: the mock agents of job-fixture.el, and profiles that are only read.
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 
 (defmacro drgnx-job-safe-test--with (&rest body)
@@ -27,13 +29,13 @@
     (make-symbolic-link js (expand-file-name "claude-agent-acp" bin))
     bin))
 
-(ert-deftest drgnx-job-safe/builtins-are-job-safe ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/builtins-are-job-safe ()
   (drgnx-job-safe-test--with
     (dolist (p drgnx-agents-builtin-profiles)
       (should (plist-get (cdr p) :job-safe))
       (should (drgnx-job-safe-p (car p))))))
 
-(ert-deftest drgnx-job-safe/a-user-profile-is-not ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/a-user-profile-is-not ()
   (drgnx-job-safe-test--with
     (let ((drgnx-agents-profiles '(("mine" :command ("claude-agent-acp"))                    ; Claude, not said
                                    ("claude" :command ("claude-agent-acp" "--x"))            ; a built-in's name, redefined
@@ -59,7 +61,7 @@
     (let ((exec-path (list root)) (drgnx-agents-profiles '(("mine" :command ("claude-agent-acp") :job-safe t))))   ; no adapter
       (should-not (drgnx-job-safe-p "mine")))))
 
-(ert-deftest drgnx-job-safe/subscription-profile-refused-on-macos ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/subscription-profile-refused-on-macos ()
   (drgnx-job-safe-test--with
     (let ((system-type 'darwin))
       (should-not (drgnx-job-safe-p "claude"))
@@ -70,7 +72,7 @@
 (defun drgnx-job-safe-test--cards (id kind)
   (seq-filter (lambda (c) (equal (plist-get c :kind) kind)) (drgnx-coord-cards id "open")))
 
-(ert-deftest drgnx-job-safe/refused-with-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/refused-with-a-card ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((drgnx-job-run-test--safe nil) (system-type 'gnu/linux)
            (drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)))
@@ -90,7 +92,7 @@
         (drgnx-job--start-review-agent id task)
         (should-not (seq-find (lambda (s) (equal (drgnx-agent-session-job s) id)) drgnx-agents--sessions))))))
 
-(ert-deftest drgnx-job-safe/a-job-session-on-an-unsafe-profile-never-starts ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/a-job-session-on-an-unsafe-profile-never-starts ()
   ;; the backstop where a session gets its job: a direct start and the hub's agents/start alike
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((drgnx-job-run-test--safe nil) (id (drgnx-job-propose plan))
@@ -106,7 +108,7 @@
       (let ((plain (drgnx-agents-start "mock" repo)))                  ; no job: any profile
         (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status plain) 'idle))))))))
 
-(ert-deftest drgnx-job-safe/clash-reviewer-refused-with-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/clash-reviewer-refused-with-a-card ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (require 'drgnx-job-clash)
     (let* ((drgnx-job-run-test--safe nil) (id (drgnx-job-propose plan))
@@ -123,7 +125,7 @@
   (list :kind "other" :title (or title name) :rawInput (append (and server (list :server server)) '(:uri "x://y"))
         :_meta (list :claudeCode (list :toolName name))))
 
-(ert-deftest drgnx-job-safe/resource-tools-ask ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/resource-tools-ask ()
   (let ((tree temporary-file-directory))
     (dolist (tool '("ReadMcpResourceTool" "ListMcpResourcesTool"))
       (should (eq (drgnx-job-policy "implement" (drgnx-job-safe-test--resource tool "other") tree) 'ask))
@@ -134,13 +136,13 @@
       (should (eq (drgnx-job-policy "implement" (drgnx-job-safe-test--resource tool "other" "Read resource") tree) 'ask))
       (should (eq (drgnx-job-policy "review" (drgnx-job-safe-test--resource tool "other") tree) 'ask)))))
 
-(ert-deftest drgnx-job-safe/resource-tools-of-drgnx-allowed ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/resource-tools-of-drgnx-allowed ()
   (let ((tree temporary-file-directory))
     (dolist (tool '("ReadMcpResourceTool" "ListMcpResourcesTool"))
       (should (eq (drgnx-job-policy "implement" (drgnx-job-safe-test--resource tool "drgnx") tree) 'allow))
       (should (eq (drgnx-job-policy "implement" (drgnx-job-safe-test--resource tool "drgnx-search") tree) 'allow)))))
 
-(ert-deftest drgnx-job-safe/profile-mcp-servers-are-appended ()
+(drgnx-work-db-writer-deftest drgnx-job-safe/profile-mcp-servers-are-appended ()
   (drgnx-job-safe-test--with
     (let* ((docs '(:name "docs" :command "docs-mcp" :args ["--ro"] :env []))
            (drgnx-agents-profiles
@@ -148,12 +150,18 @@
                :mcp-servers (,docs (:name "drgnx" :command "evil" :args [] :env [])   ; drgnx's own names are drgnx's
                                    (:name "drgnx-search" :command "evil" :args [] :env [])))
               ("plain" :command ("claude-agent-acp")))))
-      (dolist (job '(nil "job-1"))
-        (let ((servers (append (drgnx-agents--mcp-servers (drgnx-agents--make :id "s-1" :profile "mine" :cwd root :job job)) nil)))
-          (should (equal (mapcar (lambda (e) (plist-get e :name)) servers) '("drgnx" "docs")))   ; after drgnx's
-          (should (equal (car (last servers)) docs))))
-      (should (equal (mapcar (lambda (e) (plist-get e :name))
-                             (drgnx-agents--mcp-servers (drgnx-agents--make :id "s-2" :profile "plain" :cwd root)))
-                     '("drgnx"))))))
+      ;; the hub's MCP session is made before (`drgnx-agents--with-mcp'): its socket is on the session here
+      (let ((process-environment (cons "DRGNX_RATATOSKR_BIN=/usr/bin/true" process-environment)))
+        (dolist (job '(nil "job-1"))
+          (let ((servers (append (drgnx-agents--mcp-servers
+                                  (drgnx-agents--make :id "s-1" :profile "mine" :cwd root :job job
+                                                      :mcp-sid "x1" :mcp-socket "/x/mcp.sock"))
+                                 nil)))
+            (should (equal (mapcar (lambda (e) (plist-get e :name)) servers) '("drgnx" "docs")))   ; after drgnx's
+            (should (equal (car (last servers)) docs))))
+        (should (equal (mapcar (lambda (e) (plist-get e :name))
+                               (drgnx-agents--mcp-servers (drgnx-agents--make :id "s-2" :profile "plain" :cwd root
+                                                                              :mcp-sid "x2" :mcp-socket "/x/mcp.sock")))
+                       '("drgnx")))))))
 
 ;;; job-safe-test.el ends here

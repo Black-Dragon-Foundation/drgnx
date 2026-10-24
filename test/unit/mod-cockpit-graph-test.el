@@ -298,7 +298,7 @@ with `drgnx-cockpit-fixture-show-pane'."
     (drgnx-cockpit-graph-redraw t)
     (let ((n (drgnx-cockpit-graph-test--stat :rows-drawn)))
       ;; a change, then a burst of events: one draw on its way, the changed rows drawn
-      (drgnx-coord-force-status "jx#4" "running" "s-1")
+      (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
       (dotimes (_ 20) (drgnx-cockpit--hub-event "job" '(:id "jx")))
       (drgnx-cockpit-graph-test--tick)
       (should (> (drgnx-cockpit-graph-test--stat :rows-drawn) n))
@@ -314,7 +314,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       ;; a line that did not change keeps its text (and the window its point)
       (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "spec:" spec)))
       (let ((pt (window-point (get-buffer-window g))))
-        (drgnx-coord-force-status "jx#4" "done" "s-1")
+        (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "done" "s-1"))
         (drgnx-cockpit-schedule)
         (drgnx-cockpit-graph-test--tick)
         (should (> (drgnx-cockpit-graph-test--stat :rows-drawn) n))
@@ -329,7 +329,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       (drgnx-cockpit-fixture-hide-pane w)
       (should-not (drgnx-timer-active-p (cons 'cockpit-check g)))
       ;; events while hidden: the draw on its way finds it hidden; after that nothing is armed, whatever comes
-      (drgnx-coord-force-status "jx#4" "running" "s-1")
+      (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
       (drgnx-cockpit--hub-event "job" '(:id "jx"))
       (when (drgnx-timer-active-p (cons 'drgnx-view g)) (drgnx-cockpit-graph-test--tick))
       (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")) (drgnx-cockpit--agent-changed nil) (drgnx-cockpit-schedule))
@@ -341,7 +341,7 @@ with `drgnx-cockpit-fixture-show-pane'."
     (let ((w (drgnx-cockpit-fixture-show-pane 'work-graph g 'left)))
       (drgnx-cockpit-graph-test--tick)
       (drgnx-cockpit-fixture-hide-pane w)
-      (drgnx-coord-force-status "jx#4" "running" "s-1")
+      (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
       (drgnx-cockpit--hub-event "job" '(:id "jx"))
       (when (drgnx-timer-active-p (cons 'drgnx-view g)) (drgnx-cockpit-graph-test--tick))
       (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should-not (looking-at ".*running")))
@@ -376,7 +376,7 @@ with `drgnx-cockpit-fixture-show-pane'."
       (let ((drawn (drgnx-cockpit-graph-test--stat :rows-drawn)) (skips (drgnx-cockpit-graph-test--stat :stale-skips))
             (built 0) (orig (symbol-function 'drgnx-cockpit-model)))
         (cl-letf (((symbol-function 'drgnx-cockpit-model) (lambda (&rest args) (cl-incf built) (apply orig args))))
-          (drgnx-coord-force-status "jx#4" "running" "s-1")
+          (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
           (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")))
           (drgnx-cockpit-graph-test--tick))
         (should (> (drgnx-cockpit-graph-test--stat :stale-skips) skips))
@@ -391,7 +391,7 @@ with `drgnx-cockpit-fixture-show-pane'."
            (drawn (drgnx-cockpit-graph-test--stat :rows-drawn))
            (spec-line (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "spec:" spec)) (point))))
       (should (> rows 15))
-      (drgnx-coord-force-status "jx#4" "running" "s-1")
+      (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
       (drgnx-cockpit--hub-event "job" '(:id "jx"))
       (drgnx-cockpit-graph-test--tick)
       (should (<= 1 (- (drgnx-cockpit-graph-test--stat :rows-drawn) drawn) 3))
@@ -440,7 +440,7 @@ with `drgnx-cockpit-fixture-show-pane'."
 (ert-deftest drgnx-cockpit-graph/write-back-commands-ask-the-hub ()
   ;; each action is one call to the hub (it changes the store); a plan task is only proposed, never run or written
   (drgnx-cockpit-graph-test--with
-    (drgnx-coord-job-set "jx" :data (list :blocked '(("jx#3" . "waits on a name"))))
+    (drgnx-work-fixture-as-hub (drgnx-coord-job-set "jx" :data (list :blocked '(("jx#3" . "waits on a name")))))
     (drgnx-cockpit-graph-redraw t)
     (let ((calls nil) (jobs nil) (opened nil) (answer "mock2")
           (bytes (with-temp-buffer (insert-file-contents-literally plan) (buffer-string))))
@@ -526,7 +526,7 @@ with `drgnx-cockpit-fixture-show-pane'."
             (should-not flushed)
             ;; a change: the old band's pixels go
             (setq old (funcall images))
-            (drgnx-coord-force-status "jx#4" "running" "s-1")
+            (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
             (drgnx-cockpit-graph-redraw)
             (dolist (i old) (should (memq i flushed)))
             ;; a change that moves no box (running → claimed, as long): the buffer's text stays, the band gets its
@@ -534,7 +534,7 @@ with `drgnx-cockpit-fixture-show-pane'."
             (let ((tick (with-current-buffer g (buffer-modified-tick))) (img (car (funcall images))))
               (setq flushed nil)
               (let ((data (image-property img :data)))
-                (drgnx-coord-force-status "jx#4" "claimed" "s-1")
+                (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "claimed" "s-1"))
                 (drgnx-cockpit-graph-redraw)
                 (should (= tick (with-current-buffer g (buffer-modified-tick))))
                 (should (eq img (car (funcall images))))
@@ -558,7 +558,7 @@ with `drgnx-cockpit-fixture-show-pane'."
         (should (<= (drgnx-test-alloc (dotimes (_ 100) (drgnx-cockpit-graph-redraw))) 52130))   ; 100 redraws of an unchanged graph: ceil(1.25 × 41704)
         (should (= 0 built))
         ;; this Emacs writes the store: one build, one draw
-        (drgnx-coord-force-status "jx#4" "running" "s-1")
+        (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
         (drgnx-cockpit-schedule)
         (drgnx-cockpit-graph-test--tick)
         (should (= 1 built))))))
@@ -569,8 +569,8 @@ with `drgnx-cockpit-fixture-show-pane'."
     (drgnx-cockpit-graph-test--tick)                                     ; the draw the redraw armed: nothing left
     (drgnx-cockpit--check g)                                             ; the pane's check (it runs while it shows)
     (should-not (drgnx-timer-active-p (cons 'drgnx-view g)))             ; nothing written: nothing to do
-    ;; another process (a second connection) writes the store
-    (let ((db2 (sqlite-open (drgnx-work-db-file))))
+    ;; another process (a second connection: the hub, by its stand-in) writes the store
+    (let ((db2 (drgnx-work-fixture-as-hub (sqlite-open (drgnx-work-db-file)))))
       (unwind-protect (sqlite-execute db2 "update jtask set status = 'running' where id = 'jx#4'")
         (sqlite-close db2)))
     (drgnx-cockpit--check g)
@@ -587,8 +587,9 @@ with `drgnx-cockpit-fixture-show-pane'."
   (drgnx-cockpit-graph-test--with
     ;; roots: jobs' repos and registered agents' folders; a remote one (a job's, an agent's) is never asked whether
     ;; it is a folder
-    (drgnx-coord-job-create :id "jr" :title "remote" :repo "/ssh:nowhere.invalid:/r/" :tasks '((:n 1 :title "t" :role "implement")))
-    (drgnx-coord-agent-register :id "ext:far:1" :kind "far" :cwd "/ssh:nowhere.invalid:/w" :worktree "/ssh:nowhere.invalid:/w")
+    (drgnx-work-fixture-as-hub
+      (drgnx-coord-job-create :id "jr" :title "remote" :repo "/ssh:nowhere.invalid:/r/" :tasks '((:n 1 :title "t" :role "implement")))
+      (drgnx-coord-agent-register :id "ext:far:1" :kind "far" :cwd "/ssh:nowhere.invalid:/w" :worktree "/ssh:nowhere.invalid:/w"))
     (let ((asked nil) (orig (symbol-function 'file-directory-p)))
       (cl-letf (((symbol-function 'file-directory-p) (lambda (f) (push f asked) (funcall orig f))))
         (should (equal (sort (drgnx-cockpit--roots) #'string<) (sort (list repo wt-a) #'string<))))
@@ -703,7 +704,7 @@ with `drgnx-cockpit-fixture-show-pane'."
                   (dolist (b changed) (should (and (<= (car e) (+ (car b) (cadr b))) (>= (cadr e) (car b)))))))
               ;; a model change keeps the selection, and its stroke
               (drgnx-cockpit--focus t2)
-              (drgnx-coord-force-status "jx#4" "running" "s-1")
+              (drgnx-work-fixture-as-hub (drgnx-coord-force-status "jx#4" "running" "s-1"))
               (drgnx-cockpit-graph-redraw)
               (should (equal drgnx-cockpit--selected t2))
               (should (seq-some (lambda (b) (string-search "#00ee00" (image-property (nth 2 b) :data))) drgnx-cockpit--bands)))

@@ -1,0 +1,28 @@
+{"scenario": "tracker/done-with-a-grant", "requires": ["v1", "fake-backend"], "doc": "The user's answer 4: a session the user granted edit-user-tasks on a user-made task completes it, and it is done (no card, no in-review); the task it blocked was not in the session's ready list before and is after."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "the user's", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:t"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "create", "title": "after it", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:dep"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/write", "params": {"op": "link", "src": "$t", "kind": "blocks", "dst": "$dep"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "graph/grants", "params": {"grant": {"who": "session:$sid", "what": "$t", "access": "edit-user-tasks"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"grant": {"id": "$string", "access": "edit-user-tasks", "active": true}}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "ready"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"tasks": [{"id": "$t"}]}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "claim", "id": "$t"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"done": {"id": "$t", "lease": "$capture:lease"}}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "complete", "id": "$t", "lease": "$lease", "note": "all green"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"done": {"id": "$t"}}}}}
+{"do": "sql_expect", "sql": "select status, (select count(*) from card where kind = 'close') from entity where id = '$t'", "rows": [["done", 0]]}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "ready"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "result": {"structuredContent": {"tasks": [{"id": "$dep"}]}}}}

@@ -25,6 +25,8 @@
 (require 'drgnx-jobs)
 (require 'drgnx-gc)
 
+(defvar drgnx-hub--editor)              ; drgnx-hub-client.el: (TOKEN . URL) once the hub gave this Emacs its editor token
+
 (defconst drgnx-search-index-default-batch 32
   "Chunks per embedding request: TEI's default max-client-batch-size (a 413 halves it for the rest of the run).")
 
@@ -325,7 +327,7 @@ Reads each job's job.eld and looks for its exit file; only a job of ROOT without
             (if kept (ignore-errors (delete-directory jdir t)) (setq kept t))))))))
 
 ;; The job is a fresh process: it gets the editor's state directories (so it writes the index and lock the
-;; editor reads) and the keys of the embed chain (resolved here, where a key may live in auth-source).
+;; editor reads) and the gateway's address; it never gets a key (it asks the hub for its own token).
 
 (defun drgnx-search-index--dir-env ()
   "\"NAME=value\"… of the XDG and DRGNX_*_DIR variables set here: where a batch drgnx finds the user's files."
@@ -333,17 +335,13 @@ Reads each job's job.eld and looks for its exit file; only a job of ROOT without
            when (string-match-p "\\`\\(XDG_\\(STATE\\|CONFIG\\|CACHE\\|DATA\\)_HOME\\|DRGNX_[A-Z0-9_]*_DIR\\)=." e)
            collect e))
 
-(defun drgnx-search-index--job-env (root)
-  "\"NAME=value\"… for the indexing job of the project at ROOT: the XDG and DRGNX_*_DIR variables set here, and for
-each provider in ROOT's `embed' role (its .drgnx/ai.eld counts, not the current buffer's) with a key, its key
-variable.  Resolved without prompting.  The values travel in the environment only."
-  (append
-   (drgnx-search-index--dir-env)
-   (let ((default-directory (file-name-as-directory (expand-file-name root))))
-     (cl-loop for (id . _) in (drgnx-ai-role 'embed)
-              for name = (plist-get (drgnx-ai-provider id) :key-env)
-              for key = (and name (drgnx-ai-key id nil))
-              when key collect (concat name "=" key)))))
+(defun drgnx-search-index--job-env ()
+  "\"NAME=value\"… for an indexing job: the XDG and DRGNX_*_DIR variables set here.  No key, no token and no
+gateway address: the job ensures the hub and asks it for an editor token of its own (`drgnx-ai-gateway-credentials'),
+which comes with the gateway's current address, so the token is pruned with the job, not with the editor, and a port
+the hub left after a restart is never used; the embed role is the project's, resolved by the job from its working
+directory."
+  (drgnx-search-index--dir-env))
 
 (defconst drgnx-search-index--start-grace 30
   "Seconds a job just started may take to hold the lock: a second start in that time waits for it.")
@@ -382,7 +380,7 @@ Never lists the jobs (the re-index timer calls this), but a job of ROOT without 
                                       "-l" "drgnx-search-index" "-f" "drgnx-search-index-cli" root)
                                 (and rebuild (list "--rebuild")))
                         :cwd root :memory-max "1G" :nice 10
-                        :env (drgnx-search-index--job-env root)))))
+                        :env (drgnx-search-index--job-env)))))
 
 (provide 'drgnx-search-index)
 ;;; drgnx-search-index.el ends here

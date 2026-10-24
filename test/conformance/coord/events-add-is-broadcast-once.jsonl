@@ -1,0 +1,11 @@
+{"scenario": "coord/events-add-is-broadcast-once", "requires": ["v1", "fake-backend"], "doc": "events/add writes one row and the front's writer broadcasts it once as an events event {since, last, events} (design 5.3); nothing follows in the next second (the 2 s tick finds nothing new)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "events/add", "params": {"kind": "comment", "agent": "user", "summary": "looks good", "data": {"path": "src/a.el"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:ev"}}}
+{"do": "expect", "conn": "c", "json": {"event": "events", "data": {"since": 0, "last": "$ev", "events": [{"id": "$ev", "kind": "comment", "agent": "user", "summary": "looks good", "data": {"path": "src/a.el"}, "job": "$absent"}]}}}
+{"do": "expect_silent", "conn": "c", "for_ms": 1000}

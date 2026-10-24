@@ -1,6 +1,7 @@
 ;;; ai-ask-test.el --- batch tests: Ask the Codebase, Choose Provider/Model, gptel from the registry -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(require 'drgnx-hub-client)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
@@ -254,13 +255,11 @@ provider `o' served by a mock answering ANSWER, its LOG."
       (should (eq (car spec) 'gptel-make-ollama))
       (should (equal (plist-get (cddr spec) :host) (format "127.0.0.1:%d" port)))
       (should (equal (plist-get (cddr spec) :protocol) "http")))
-    (let* ((process-environment (cons "OPENROUTER_API_KEY=sk-or-from-env" process-environment))
-           (spec (drgnx-ai-gptel-spec 'openrouter "openrouter/auto")))
-      (should (eq (car spec) 'gptel-make-openai))
-      (should (equal (plist-get (cddr spec) :host) "openrouter.ai"))
-      (should (equal (plist-get (cddr spec) :endpoint) "/api/v1/chat/completions"))
-      (should (functionp (plist-get (cddr spec) :key)))                       ; resolved when gptel asks, never stored
-      (should (equal (funcall (plist-get (cddr spec) :key)) "sk-or-from-env")))))
+    ;; a provider with a key is the hub's gateway, never asked directly with the key in this Emacs's environment: no
+    ;; hub, no backend (ai-gateway-test.el has the gateway's)
+    (let ((process-environment (append '("OPENROUTER_API_KEY=sk-or-from-env" "DRGNX_NO_HUB_START=1") process-environment))
+          (drgnx-hub--editor nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil))
+      (should-error (drgnx-ai-gptel-spec 'openrouter "openrouter/auto") :type 'drgnx-ai-gateway-unavailable))))
 
 (ert-deftest drgnx-ai-gptel/configured-unless-the-user-chose-a-backend-of-their-own ()
   ;; gptel is not loaded here: its variables are set and unset by hand (never let-bound: they are special once

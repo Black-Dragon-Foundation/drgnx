@@ -13,6 +13,7 @@ use runstav::methods::hub::{HelloParams, HelloReply, Runtime};
 use runstav::proof::{self, Cap};
 use runstav::registry::{self, Class};
 use runstav::wire::{Error, ErrorCode};
+use std::path::PathBuf;
 
 /// Which socket a connection came in on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +35,12 @@ pub struct Session {
     pub proto: u32,
     /// A hello has been answered here.
     pub hello_done: bool,
+    /// The peer's pid (`SO_PEERCRED`), when the system gives it: the front compares it with the backend's.
+    pub peer_pid: Option<i32>,
+    /// The folder the hello said the client started in (`cwd`): an outside agent's home for `mcp/attach`.
+    pub cwd: Option<PathBuf>,
+    /// Set by `mcp/attach` once answered: the connection carries MCP from its next byte, as this identity.
+    pub attach: Option<norn::tools::Identity>,
 }
 
 impl Session {
@@ -49,9 +56,13 @@ impl Session {
             hub_nonce: String::new(),
             proto: 0,
             hello_done: false,
+            peer_pid: None,
+            cwd: None,
+            attach: None,
         }
     }
 
+    /// The caller this connection is; [`Caller::backend`] is the front's to set (it knows the backend's pid).
     pub fn caller(&self) -> Caller {
         let (sid, job) = match &self.socket {
             Socket::Main => (None, None),
@@ -62,6 +73,7 @@ impl Session {
             sid,
             job,
             conn_id: self.conn,
+            backend: false,
         }
     }
 }
@@ -83,6 +95,7 @@ pub fn hello(
     }
     s.hello_done = true;
     s.proto = u32::try_from(p.proto).unwrap_or(u32::MAX);
+    s.cwd = p.cwd.as_ref().map(|c| PathBuf::from(c.as_str()));
     let mut hub_proof = None;
     if let Some(given) = &p.proof {
         let want = proof::client_proof(cap, &s.hub_nonce, p.nonce.as_str());
@@ -137,6 +150,7 @@ mod tests {
             records: None,
             client: None,
             proof: proof.map(|x| Hex64::new(x).unwrap()),
+            cwd: None,
         };
         (p, nonce)
     }

@@ -5,6 +5,7 @@
 //! `domr connect-as --socket PATH` (the connection of another uid, relayed over stdio).
 
 mod exec;
+mod http;
 mod hub;
 mod matcher;
 mod report;
@@ -164,6 +165,7 @@ fn main() -> ExitCode {
         fake_backend: args.fake_backend.is_some(),
         lisp_backend: args.lisp_hub.is_some(),
         perf: args.perf.is_some(),
+        ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
     };
     let cfg = exec::Config {
         lisp_target: args.lisp_target,

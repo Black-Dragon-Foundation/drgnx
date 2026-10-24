@@ -1,0 +1,33 @@
+[package]
+name = "norn"
+description = "work.db's coordination writer: the writers of the coordination tables, their readers, and the 16 coordination tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`): drgnx-ratatoskr's test-hooks
+test-hooks = []
+
+[dependencies]
+runstav = { path = "../runstav", version = "0.1.0" }
+urdr = { path = "../urdr", version = "0.1.0" }
+mimir = { path = "../mimir", version = "0.1.0" }
+draugr = { path = "../draugr", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+sha1.workspace = true
+
+[dev-dependencies]
+# `test-hooks`: `urdr::graph::Tx::for_test`, so the policy's tests write through the primitives without a writer
+urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
+# tests/canary.rs: the hub's entity embedder (door 4) over the canary store (a dev-dependency cycle cargo allows)
+drgnx-ratatoskr = { path = "../drgnx-ratatoskr", version = "0.1.0" }
+tempfile.workspace = true
+proptest.workspace = true
+insta.workspace = true

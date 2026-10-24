@@ -12,13 +12,17 @@
 ;; `.drgnx/search.eld' says.  That file can only narrow the list.  A file in a merge conflict (index
 ;; stages 1-3 only) is not listed until it is resolved.  If git fails the listing signals
 ;; `drgnx-search-files-error' rather than return a partial list.
-;; See docs/guide/search.md.
+;; Personal notes (~/org, storage §5.6): `drgnx-search--files-1' is the one place every indexed path passes.  A
+;; project root inside ~/org is refused before anything under it is read, and every file whose real path is
+;; personal notes is left out (`drgnx-search-denied-p'; the board is not, opt-ins are ignored).
+;; See docs/guide/search.md and docs/guide/security.md.
 
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-timer)
 (require 'drgnx-config)
+(require 'drgnx-deny)
 (require 'drgnx-setting)
 (require 'drgnx-settings-workspace)
 
@@ -381,6 +385,15 @@ the answer per directory."
     (if (not (eq known 'unknown)) known
       (puthash dir (string-prefix-p true-root (file-name-as-directory (file-truename dir))) cache))))
 
+(defconst drgnx-search-personal-notes-refusal "the search index never reads ~/org (personal notes)"
+  "The error of a listing (and of an index run) whose project root is inside ~/org.")
+
+(defun drgnx-search-denied-p (file)
+  "Non-nil when FILE (absolute; a symlink is followed) is personal notes the search index never reads: anything
+`drgnx-deny-path-p' denies, with the user's opt-ins ignored (they lift the tier for the work graph, never for
+the code index).  The board (~/org/board.org) is not."
+  (drgnx-deny-path-p file t))
+
 (defun drgnx-search-files (root)
   "The files of the project at ROOT to index, as (PATH . HASH).
 PATH is relative to ROOT; HASH is the working-tree content hash (git blob SHA), so an unchanged
@@ -394,20 +407,25 @@ submodule), a dot file or a file under a dot directory, a key or secret by name 
 anything containing secret or credential, and any name with netrc or authinfo as a whole component — at the start
 or after `.', `_' or `-', followed by the end, `~' or a `.' — such as .netrc, work.netrc, prod.authinfo,
 authinfo.gpg.bak, but not netrc-parser.el or a source file like netrc.el; all case-insensitively), a file over
-1 MiB, a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A file whose path
+1 MiB, a binary, a file in a directory whose real path (symlinks resolved) is outside the project, and personal
+notes (`drgnx-search-denied-p': a file whose real path is in ~/org, the board excepted).  A file whose path
 contains a newline is left out (a modified one could not be hashed, and a clean one must not come and go with
 its edits), and so is a modified or untracked file whose path starts with a double
 quote.  The configuration then narrows the list.
 
 nil when ROOT is no git repository, git is missing or the project's search is `:off'.  When git
 fails, or .drgnx/search.eld is there but cannot be read (see `drgnx-search-config'), the listing signals
-`drgnx-search-files-error' (never a partial list, never more than the project asked for)."
+`drgnx-search-files-error' (never a partial list, never more than the project asked for).  A ROOT inside ~/org
+signals it with `drgnx-search-personal-notes-refusal' before anything under ROOT is read."
   (let ((drgnx-search--git-deadline (or drgnx-search--git-deadline
                                         (and drgnx-search-git-timeout (+ (float-time) drgnx-search-git-timeout)))))
     (drgnx-search--files-1 root)))
 
 (defun drgnx-search--files-1 (root)
-  "The body of `drgnx-search-files' (ROOT)."
+  "The body of `drgnx-search-files' (ROOT): the one place every indexed path passes (the personal-notes door)."
+  ;; before `drgnx-search-config', which reads ROOT/.drgnx/search.eld
+  (when (drgnx-search-denied-p (directory-file-name (expand-file-name root)))
+    (signal 'drgnx-search-files-error (list drgnx-search-personal-notes-refusal)))
   (let* ((config (drgnx-search-config root))
          (include (mapcar #'drgnx-search--glob-regexp (plist-get config :include)))
          (exclude (mapcar #'drgnx-search--glob-regexp (plist-get config :exclude)))
@@ -439,6 +457,7 @@ fails, or .drgnx/search.eld is there but cannot be read (see `drgnx-search-confi
                      (attrs (file-attributes file 'integer)))
                 (when (and attrs (null (file-attribute-type attrs)) (file-regular-p file)
                            (drgnx-search--inside-p (file-name-directory file) true-root dirs)
+                           (not (drgnx-search-denied-p file)) ; before anything reads it
                            (<= (file-attribute-size attrs) drgnx-search-chunk-max-file-bytes)
                            (not (drgnx-search--binary-p file)))
                   (if (cdr entry) (push entry known) (push path pending)))))))

@@ -179,6 +179,78 @@ named_string!(
     what: "a card's action: lowercase letters and -, a letter first, at most 32"
 );
 
+named_string!(
+    /// A job's, task's or card's state as the coordination store keeps it (`running`, `needs-input`, `settled`, …).
+    Status, max: 32, pattern: Some("^[a-z][a-z-]*$"),
+    ok: |s| {
+        let mut cs = s.chars();
+        cs.next().is_some_and(|c| c.is_ascii_lowercase())
+            && cs.all(|c| c.is_ascii_lowercase() || c == '-')
+    },
+    what: "a status: lowercase letters and -, a letter first, at most 32"
+);
+
+named_string!(
+    /// A session's id: the name of its directory beside the hub's socket (`s/SID`), never a path.
+    SessionId, max: 64, pattern: Some("^[A-Za-z0-9_-]+$"),
+    ok: |s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+    what: "a session's id: ASCII letters, digits, - and _, 1 to 64"
+);
+
+named_string!(
+    /// An outside agent's kind (`claude`, `codex`, …): the KIND of its identity `ext:KIND:PID-HASH` (`bin/drgnx`'s
+    /// rule).
+    AgentKind, max: 32, pattern: Some("^[a-z0-9][a-z0-9_-]*$"),
+    ok: |s| {
+        let mut cs = s.chars();
+        cs.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    },
+    what: "an agent kind: lowercase letters, digits, _ and - (a letter or digit first), at most 32"
+);
+
+/// A JSON object of at most 64 KiB as JSON text (an event's, a card's or a job's `data`).  The store keeps it as the
+/// JSON it is; what is inside is the writer's and its reader's business.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct JsonObject(serde_json::Map<String, Value>);
+
+impl JsonObject {
+    /// The most bytes of JSON text.
+    pub const MAX: usize = 65_536;
+
+    pub fn into_inner(self) -> serde_json::Map<String, Value> {
+        self.0
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.0.get(key)
+    }
+}
+
+impl<'de> Deserialize<'de> for JsonObject {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let m = serde_json::Map::<String, Value>::deserialize(d)?;
+        let n = serde_json::to_string(&m).map_or(usize::MAX, |t| t.len());
+        if n > Self::MAX {
+            return Err(de::Error::custom(format!(
+                "a JSON object of at most 64 KiB (65536 bytes as JSON), not {n}"
+            )));
+        }
+        Ok(JsonObject(m))
+    }
+}
+
+impl JsonSchema for JsonObject {
+    fn schema_name() -> Cow<'static, str> {
+        "JsonObject".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"type": "object",
+                      "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)"})
+    }
+}
+
 /// What `Bounded` bounds: a string's characters or a list's items.
 pub trait Bound {
     /// The JSON Schema keyword of the bound (`maxLength`, `maxItems`).
@@ -376,8 +448,9 @@ impl JsonSchema for StringOrNumber {
     }
 }
 
-/// Provider id → key: at most 32, each at most 4096.  Kept secret: no `Debug`, and the only serialisation is the
-/// re-encode of a method's params for the backend link (Task 15), which must carry the keys.
+/// Provider id → key: at most 32, each at most 4096.  Kept secret: no `Debug`; the front keeps them in the gateway's
+/// memory (Task 22) and never forwards them.  The serialisation exposes them only because every method's params
+/// re-encode (`Params::to_value`); no line to the backend carries `gateway/*` params any more.
 pub struct ProviderKeys(BTreeMap<Id, SecretString>);
 
 impl ProviderKeys {
@@ -392,6 +465,13 @@ impl ProviderKeys {
     /// Provider → key.
     pub fn iter(&self) -> impl Iterator<Item = (&Id, &SecretString)> {
         self.0.iter()
+    }
+
+    /// Provider id → key, taken (the keys move, never copied: the gateway's memory holds them from here).
+    pub fn into_pairs(self) -> impl Iterator<Item = (String, SecretString)> {
+        self.0
+            .into_iter()
+            .map(|(id, key)| (id.as_str().to_owned(), key))
     }
 }
 
@@ -419,6 +499,11 @@ impl<'de> Deserialize<'de> for ProviderKeys {
                     let v: String = a.next_value()?;
                     if chars(&v) > ProviderKeys::MAX_KEY {
                         return Err(de::Error::custom("a key is at most 4096 characters"));
+                    }
+                    // An empty key is no key (the Lisp oracle skipped it too): taken, it would replace a good one
+                    // and mark the provider held, and every request would go upstream with an empty Bearer.
+                    if v.is_empty() {
+                        continue;
                     }
                     if out.insert(k, SecretString::from(v)).is_some() {
                         return Err(de::Error::custom("a provider is named twice"));
@@ -499,6 +584,17 @@ mod tests {
         refuses::<TaskRef>(json!(""), json!("t"));
         refuses::<AgentName>(json!("a\u{7f}"), json!("Agent 7"));
         refuses::<CardAction>(json!("Approve"), json!("approve-all"));
+        refuses::<Status>(json!("In-review"), json!("needs-input"));
+        refuses::<SessionId>(json!("../x"), json!("0123456789ab"));
+        refuses::<SessionId>(json!("s".repeat(65)), json!("s_1-a"));
+        refuses::<AgentKind>(json!("Claude"), json!("claude"));
+        refuses::<AgentKind>(json!("-x"), json!("gry-worker_2"));
+        refuses::<AgentKind>(json!("a".repeat(33)), json!("a".repeat(32)));
+        refuses::<JsonObject>(json!([1]), json!({"a": [1, {"b": null}]}));
+        refuses::<JsonObject>(
+            json!({"t": "x".repeat(65_536)}),
+            json!({"t": "x".repeat(65_000)}),
+        );
         refuses::<RequestId>(json!(-1), json!(3));
         refuses::<RequestId>(json!("r".repeat(129)), json!("r1"));
         refuses::<Usd>(json!(1_000_001), json!(0.5));
@@ -566,6 +662,17 @@ mod tests {
             serde_json::to_value(&k).unwrap(),
             json!({"openrouter": "sk-canary"})
         );
+    }
+
+    #[test]
+    fn an_empty_provider_key_is_no_key() {
+        // review m1: an empty key never replaces a held one, nor marks its provider held
+        let (k, _) =
+            crate::decode::typed::<ProviderKeys>(&json!({"openrouter": "", "p": "sk-canary"}))
+                .unwrap();
+        assert_eq!(k.providers().map(Id::as_str).collect::<Vec<_>>(), ["p"]);
+        let (k, _) = crate::decode::typed::<ProviderKeys>(&json!({"openrouter": ""})).unwrap();
+        assert_eq!(k.providers().count(), 0);
     }
 
     #[test]

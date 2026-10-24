@@ -1,0 +1,14 @@
+{"scenario": "cli/graph-backup-checks", "requires": ["v1", "fake-backend"], "doc": "ratatoskr graph backup (Urdr Task 17; storage §8.1): a checked copy in <data>/backup/ (mode 0600, the folder 0700), the answer says ok, and status.store carries last_backup and backup_ok. scrub and compact answer; an excise with no terminal and no --yes is refused (exit 2) before the hub is asked."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["graph", "backup", "now", "--json"], "expect_code": 0, "expect_stdout": {"ok": true, "path": "$string", "bytes": "$number"}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(stat -c %a $DATA/backup/work-2*.db)\" = 600"], "expect_code": 0}
+{"do": "file", "path": "$DATA/backup", "mode": "700"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"store": {"backup_ok": true, "last_backup": "$string"}}}}
+{"do": "run", "args": ["graph", "backup"], "expect_code": 0, "expect_stdout": "checked"}
+{"do": "run", "args": ["graph", "scrub", "--json"], "expect_code": 0, "expect_stdout": {"vacuumed": true}}
+{"do": "run", "args": ["graph", "compact", "--dry-run", "--json"], "expect_code": 0, "expect_stdout": {"dry_run": true, "versions": "$number", "link_stats": "$number"}}
+{"do": "run", "args": ["graph", "excise", "task:nothing", "--reason", "no terminal and no --yes"], "expect_code": 2, "expect_stderr": "--yes"}

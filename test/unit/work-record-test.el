@@ -5,6 +5,7 @@
 (require 'drgnx-jobs)
 (require 'drgnx-projects)
 (require 'drgnx-sandbox-vc)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defun drgnx-work-rec--git (dir &rest args)
   (with-temp-buffer
@@ -31,7 +32,7 @@
          (progn (make-directory ,repo t)
                 (drgnx-work-rec--git ,repo "init" "-q" "-b" "main")
                 (drgnx-work-rec--commit ,repo "base")
-                ,@body)
+                (drgnx-work-fixture-with-hub ,@body))
        (drgnx-work-db-close-all)
        (delete-directory root t))))
 

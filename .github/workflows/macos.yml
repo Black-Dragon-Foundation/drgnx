@@ -1,12 +1,12 @@
-# macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27). Every push to main and every pull
-# request: the unit suite (the client's tests run against a Ratatoskr built here) and the install plan, with Nidhogg's release tarball and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
-# first sync from the shipped lock, the app bundle and a headless start. The GUI tier stays Linux-only.
-# docs/develop/ci.md
+# macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27). Every push to main or a ci/* branch and
+# every pull request: the unit suite (the client's tests run against a Ratatoskr built here) and the install plan, with Nidhogg's release tarball and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
+# first sync from the shipped lock, the app bundle and a headless start. The GUI tier stays Linux-only. The `gate` job
+# ("macOS gate") is the check branch protection requires. docs/develop/ci.md
 name: macOS
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
   pull_request:
   schedule:
     - cron: "23 4 * * 3"
@@ -15,9 +15,10 @@ on:
 permissions:
   contents: read
 
+# a push never cancels the weekly install; a newer push to a ci/* branch cancels the older run, one on main never
 concurrency:
-  group: macos-${{ github.event_name }}-${{ github.ref }}   # a push never cancels the weekly install
-  cancel-in-progress: true
+  group: macos-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   unit:
@@ -32,19 +33,27 @@ jobs:
       - name: ripgrep and Rust (Homebrew)
         run: brew install ripgrep rust
       # the editor's tests run against Ratatoskr; runtime.yml's macos job tests the runtime itself, so this is the build only.
-      # With the test hooks: some client tests need --idle-tick-ms (a test binary, never installed)
+      # With the test hooks: some client tests need --idle-tick-ms (a test binary, never installed). ratatoskr-mock beside
+      # it: the gateway tests' provider (test/unit/ai-gateway-test.el)
       - name: Ratatoskr (cargo build, for the client's tests)
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr \
+            --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
           echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
       - name: install.sh parses under macOS's bash 3.2
+        if: ${{ !cancelled() }}
         run: /bin/bash -n install.sh
       - name: install.sh prints the macOS plan and changes nothing
+        if: ${{ !cancelled() }}
         run: /bin/bash install.sh --dry-run
       - name: Nidhogg (the release tarball) for the suite
+        id: nidhogg
+        if: ${{ !cancelled() }}
         run: /bin/bash test/container/nidhogg.sh macos
-      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md)
+      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
+      # Whatever the steps before said, once there is an Emacs: without Ratatoskr only the tests that need it fail
       - name: Unit suite, the files in parallel (no :timing tests)
+        if: ${{ !cancelled() && steps.nidhogg.outcome == 'success' }}
         env:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
@@ -75,3 +84,19 @@ jobs:
           test -d "$HOME/Applications/drgnx.app"
       - name: drgnx open --check (a headless start)
         run: drgnx open --check
+
+  # The one check branch protection requires of this workflow: the push jobs (unit) succeeded. It always runs, and a
+  # failed, cancelled or skipped job fails it; the weekly run has no unit job and no gate (docs/develop/ci.md, "Gates").
+  gate:
+    name: macOS gate
+    if: ${{ always() && github.event_name != 'schedule' }}
+    needs: [unit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every needed job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          jq -e 'all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null

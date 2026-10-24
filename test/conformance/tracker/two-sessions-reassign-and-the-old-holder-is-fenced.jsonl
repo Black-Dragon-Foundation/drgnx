@@ -1,0 +1,30 @@
+{"scenario": "tracker/two-sessions-reassign-and-the-old-holder-is-fenced", "requires": ["v1", "fake-backend"], "doc": "Fenced leases (storage §6.3): session one claims a task; the user reassigns it to session two with a note; one's next holder op (complete with its old lease) is lease_lost with the reassign and its note, and changes nothing; two claims it with a new epoch and completes it (the tracker leaves it in-review)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid1", "socket": "$capture:sock1"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t2", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid2", "socket": "$capture:sock2"}}}
+{"do": "connect", "conn": "m1", "hub": "h", "socket": "path:$sock1", "as": "raw"}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "connect", "conn": "m2", "hub": "h", "socket": "path:$sock2", "as": "raw"}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "the fix"}}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"done": {"id": "$capture:t"}}}}}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "claim", "id": "$t"}}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"done": {"id": "$t", "ver": "$capture:v1", "lease": "$capture:l1"}}}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/write", "params": {"op": "reassign", "id": "$t", "ver": "$v1", "to": "agent:$sid2", "note": "two takes it"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$t"}}}
+{"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "complete", "id": "$t", "lease": "$l1", "note": "finished"}}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"lease_lost": {"by": "user", "how": "reassign", "note": {"text": "two takes it"}}}}}}
+{"do": "sql_expect", "sql": "select status, assignee = 'agent:$sid2', lease_holder from entity where id = '$t'", "rows": [["open", 1, null]]}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "claim", "id": "$t"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"done": {"id": "$t", "lease": "$capture:l2"}}}}}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "complete", "id": "$t", "lease": "$l2"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"done": {"id": "$t"}}}}}
+{"do": "sql_expect", "sql": "select status, lease_epoch > $l1 from entity where id = '$t'", "rows": [["in-review", 1]]}

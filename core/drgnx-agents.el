@@ -42,6 +42,7 @@
                                           (:mode (enum queue steer interrupt) "What a message to a busy agent does")
                                           (:ai symbol "The provider environment it gets")
                                           (:model string "The model it asks for")
+                                          (:tracker-tools (enum on off) "The five tracker tools; on by default")
                                           (:doc string "One line")))
                      "Your agent profiles; the built-in ones need none")
           (:default string "The profile New Agent Session… offers")
@@ -105,7 +106,8 @@ OpenRouter agents do not start until it is fixed."
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
-  mcp-dir)                              ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
+  mcp-dir                               ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
+  mcp-sid mcp-socket)                   ; the hub's MCP session for the agent's bridge (`drgnx-agents--with-mcp'), or nil
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 
@@ -586,30 +588,39 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
+(declare-function drgnx-ai-agent-keyed-p "drgnx-ai")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-hub--drop-keys "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-hub-serving-p "drgnx-hub")
 (declare-function drgnx-hub-register "drgnx-hub")
 (defvar drgnx-ai-gateway-kinds)
 
 (defvar drgnx-agents-use-gateway t
-  "Non-nil: agents on OpenRouter, Ollama or Anthropic profiles talk to the hub's gateway (a token, never a key);
-without a hub they go to the provider directly.")
+  "Non-nil: an Ollama agent (a keyless profile) talks to the hub's gateway too, and goes to Ollama directly only when
+no hub can be had; nil: it always goes directly.  For keyed profiles (OpenRouter, Anthropic, Kimi, DeepSeek:
+`drgnx-ai-agent-keyed-p') it means nothing any more: only the hub holds keys, so they always go through its gateway
+\(a token, never a key), and without a hub they do not start.")
 
 (defun drgnx-agents--in-hub-p ()
   "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
   (and (featurep 'drgnx-hub) (drgnx-hub-serving-p)))
 
 (defun drgnx-agents--gateway (s kind &optional model)
-  "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
-no hub can be had (S then goes direct, and says so).  In the hub, keys are only those editors handed over (and the
-environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says how one comes.
+  "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token).  When no hub can
+be had a keyed KIND (`drgnx-ai-agent-keyed-p') fails closed with a `user-error' (only the hub holds keys); a keyless
+one (Ollama) gets nil, goes direct and says so.  Keys this command finds go with the registration, and once the hub
+took them this Emacs drops them (`drgnx-hub--drop-keys').  In the standalone Lisp hub, keys are only those editors
+handed over (and the environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says
+how one comes.  In the Lisp backend behind Ratatoskr (`drgnx-hub--behind-front') the front registers it and judges
+the chain and its keys itself; there is no direct route there (the backend holds no key): a refusal fails the start
+with the front's text.
 An OpenRouter chain with restrictions (`drgnx-agents-openrouter-restrictions') fails closed: restrictions that do
 not read, no hub, or a hub that did not keep them all is a `user-error' — never a direct start without them."
   (let* ((chain (drgnx-ai-agent-gateway-chain kind model))
          ;; read before anything can fall back: a file that does not read refuses the start here
          (restrictions (and (assq 'openrouter chain) (drgnx-agents-openrouter-restrictions))))
-    (when (drgnx-agents--in-hub-p)
+    (when (and (drgnx-agents--in-hub-p) (not (bound-and-true-p drgnx-hub--behind-front)))
       (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
                         chain)
         (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
@@ -636,12 +647,20 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                                (drgnx-hub-call-sync "gateway/register"
                                                     (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
                                                                :keys (or keys (make-hash-table)))))))
+                     (when keys (drgnx-hub--drop-keys keys))     ; the hub holds them now
                      (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
                      r))
                (error
+                (when (bound-and-true-p drgnx-hub--behind-front)
+                  (user-error "%s is not started: %s" (drgnx-agent-session-name s)
+                              (if (eq (car err) 'drgnx-hub-front-error) (plist-get (cdr err) :message)
+                                (error-message-string err))))
                 (when restrictions
-                  (user-error "OpenRouter restrictions are set in drgnx-agents-openrouter and apply through drgnx's hub only, which is not available (%s): %s is not started directly without them; start the hub, or remove drgnx-agents-openrouter from settings.el to go direct"
+                  (user-error "OpenRouter restrictions are set in drgnx-agents-openrouter and apply through drgnx's hub only, which is not available (%s): %s is not started without them; start the hub"
                               (error-message-string err) (drgnx-agent-session-name s)))
+                (when (drgnx-ai-agent-keyed-p kind)
+                  (user-error "%s is not started: the drgnx hub is not running; agents reach providers through it (%s)"
+                              (drgnx-agent-session-name s) (error-message-string err)))
                 (setf (drgnx-agent-session-via s) 'direct)
                 (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
                          (drgnx-agent-session-name s))
@@ -653,14 +672,6 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
         (user-error "The drgnx hub did not keep the OpenRouter restrictions (it predates them): %s is not started; restart the hub (`drgnx hub stop', then start an agent)"
                     (drgnx-agent-session-name s)))
       r)))
-
-(defun drgnx-agents--refuse-direct-restrictions (s kind &optional model)
-  "With the gateway turned off, S's agent (profile KIND, MODEL) would reach OpenRouter directly: a `user-error' when
-its chain has an OpenRouter step and restrictions are set (or do not read) — they are never dropped silently."
-  (when (and (memq kind drgnx-ai-gateway-kinds) (assq 'openrouter (drgnx-ai-agent-gateway-chain kind model))
-             (drgnx-agents-openrouter-restrictions))
-    (user-error "OpenRouter restrictions are set in drgnx-agents-openrouter and apply through drgnx's gateway only, which is turned off (drgnx-agents-use-gateway): %s is not started without them; turn the gateway on, or remove drgnx-agents-openrouter from settings.el"
-                (drgnx-agent-session-name s))))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
 
@@ -726,10 +737,10 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
                        (kind (plist-get profile :ai)))
              (require 'drgnx-ai)
              (drgnx-ai-check-agent-model kind (plist-get profile :model))   ; before a gateway token is made
-             (unless drgnx-agents-use-gateway (drgnx-agents--refuse-direct-restrictions s kind (plist-get profile :model)))
              (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model) :small-model (plist-get profile :small-model))
-                                 (not (drgnx-agents--in-hub-p))
-                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
+                                 ;; a keyed kind always: only the hub holds keys
+                                 (and (memq kind drgnx-ai-gateway-kinds)
+                                      (or drgnx-agents-use-gateway (drgnx-ai-agent-keyed-p kind))
                                       (drgnx-agents--gateway s kind (plist-get profile :model)))))
            (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
            (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
@@ -900,19 +911,70 @@ outside, as S."
              (drgnx-agents--stdio-mcp-servers s))
            (drgnx-agents--profile-mcp-servers s)))
 
+(declare-function drgnx-hub-mcp-session "drgnx-hub-client")
+(declare-function drgnx-hub-mcp-session-close "drgnx-hub-client")
+
 (defun drgnx-agents--close-mcp (s)
-  "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close')."
-  (when (drgnx-agent-session-mcp-dir s) (drgnx-sandbox-mcp-close s)))
+  "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close'), and the hub's
+session for its bridge closes (`drgnx-hub-mcp-session-close')."
+  (when (drgnx-agent-session-mcp-dir s) (drgnx-sandbox-mcp-close s))
+  (when-let* ((sid (drgnx-agent-session-mcp-sid s)))
+    (setf (drgnx-agent-session-mcp-sid s) nil (drgnx-agent-session-mcp-socket s) nil)
+    (drgnx-hub-mcp-session-close sid)))
+
+(defun drgnx-agents--coordination-p (_s)
+  "Does S's agent get the coordination tools of a hub session?  A sandboxed one too: the hub's bridge behind its own
+mcp.sock attaches to that session (`drgnx-sandbox-mcp--spec')."
+  (and drgnx-agents-coordination (memq 'coordination (drgnx-agents-mcp-names))))
+
+(defun drgnx-agents--tracker-tools (s)
+  "The `:tools' of S's `mcp/session': `(:tracker t)' or `(:tracker :false)' from its profile's `:tracker-tools', nil
+when the profile says nothing (the hub's task setting, else on, then decides)."
+  (when-let* ((name (drgnx-agent-session-profile s))
+              (profile (assoc name (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles)))
+              (v (plist-get (cdr profile) :tracker-tools)))
+    (list :tracker (if (member v '(off "off")) :false t))))
+
+(defun drgnx-agents--with-mcp (s k)
+  "Make S's MCP session at the hub (`drgnx-hub-mcp-session', identity = S's id: a name repeats across hubs and
+editors), then call K with no arguments, which sends session/new or session/load (`drgnx-agents--mcp-servers').
+In a daemon path the hub is asked without waiting and K runs from its answer (as a start, `drgnx-agents--start-safely').
+An agent whose session could not be made starts without the coordination tools and says why in its transcript."
+  (if (or (not (drgnx-agents--coordination-p s)) (drgnx-agent-session-mcp-socket s))
+      (funcall k)
+    (require 'drgnx-hub-client)
+    (let* ((keep (lambda (answer err)
+                   (if answer
+                       (setf (drgnx-agent-session-mcp-sid s) (plist-get answer :sid)
+                             (drgnx-agent-session-mcp-socket s) (plist-get answer :socket))
+                     (drgnx-agents--add s (list :type 'error
+                                                :text (format "the coordination tools are not available: %s" err))))))
+           (later (lambda (answer err)  ; a daemon path: the hub's answer, after the command that started S returned
+                    (if (eq (drgnx-agent-session-status s) 'exited)
+                        (when answer (drgnx-hub-mcp-session-close (plist-get answer :sid)))
+                      (funcall keep answer err)
+                      (drgnx-agents--start-safely s k))))
+           (answer nil) (failed nil))
+      (condition-case err
+          (setq answer (drgnx-hub-mcp-session (drgnx-agent-session-id s)
+                                              :job (drgnx-agent-session-job s) :task (drgnx-agent-session-task s)
+                                              :cwd (drgnx-agent-session-cwd s) :profile (drgnx-agent-session-profile s)
+                                              :tools (drgnx-agents--tracker-tools s) :callback later))
+        (error (setq failed (error-message-string err))))
+      ;; a daemon path returned nil with no error: `later' runs from the hub's answer; any other has one now
+      (unless (and (null answer) (null failed))
+        (funcall keep answer failed)
+        (funcall k)))))
 
 (defun drgnx-agents--stdio-mcp-servers (s)
-  "The servers S's agent starts itself (`drgnx-agents--mcp-servers')."
+  "The servers S's agent starts itself (`drgnx-agents--mcp-servers'): the bridge to its hub session's socket when it
+has one (`drgnx-agents--with-mcp')."
   (let ((names (drgnx-agents-mcp-names)))
     (vconcat
-     (and drgnx-agents-coordination (memq 'coordination names)
+     (and (drgnx-agents--coordination-p s) (drgnx-agent-session-mcp-socket s)
           (progn (require 'drgnx-coord-mcp)
-                 ;; its identity is its id: a name (\"profile · dir\") repeats across hubs and editors
-                 (list (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
-                                                    :task (drgnx-agent-session-task s)))))
+                 (list (drgnx-coord-mcp-server-spec (list :sid (drgnx-agent-session-mcp-sid s)
+                                                          :socket (drgnx-agent-session-mcp-socket s))))))
      (and (memq 'search names)
           (with-demoted-errors "drgnx agents: the search tool: %S"
             (require 'drgnx-search-mcp)
@@ -965,15 +1027,17 @@ is not job-safe (`drgnx-agents-job-safe-p') starts nothing: the session has exit
            (error "%s is not job-safe: a job's agent runs on a profile of Claude Code (docs/guide/jobs.md)" profile))
          (drgnx-agents--connect
           s (lambda (meta)
-              (let ((pin (and meta t)))
-                (drgnx-agents--request
-                 s "session/new"
-                 (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
-                         (and meta (list :_meta meta)))
-                 (lambda (r)
-                   (if (cdr r) (drgnx-agents--failed s (cdr r))
-                     (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId))
-                     (drgnx-agents--pin-mode s pin #'drgnx-agents--ready)))))))))
+              (drgnx-agents--with-mcp
+               s (lambda ()
+                   (let ((pin (and meta t)))
+                     (drgnx-agents--request
+                      s "session/new"
+                      (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
+                              (and meta (list :_meta meta)))
+                      (lambda (r)
+                        (if (cdr r) (drgnx-agents--failed s (cdr r))
+                          (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId))
+                          (drgnx-agents--pin-mode s pin #'drgnx-agents--ready)))))))))))
     s))
 
 (defun drgnx-agents--ready (s)
@@ -1026,15 +1090,17 @@ hub resuming its sessions: messages and spend follow them)."
           s (lambda (meta)
               (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
                   (progn (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)") (drgnx-agents-kill s))
-                (let ((pin (and meta t)))
-                  (drgnx-agents--request
-                   s "session/load"
-                   (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
-                                 :mcpServers (drgnx-agents--mcp-servers s))
-                           (and meta (list :_meta meta)))
-                   (lambda (r)
-                     (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
-                       (drgnx-agents--pin-mode s pin #'drgnx-agents--ready))))))))))
+                (drgnx-agents--with-mcp
+                 s (lambda ()
+                     (let ((pin (and meta t)))
+                       (drgnx-agents--request
+                        s "session/load"
+                        (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
+                                      :mcpServers (drgnx-agents--mcp-servers s))
+                                (and meta (list :_meta meta)))
+                        (lambda (r)
+                          (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
+                            (drgnx-agents--pin-mode s pin #'drgnx-agents--ready))))))))))))
     s))
 
 (defun drgnx-agents-free-p (s)

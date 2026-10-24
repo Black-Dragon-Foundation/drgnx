@@ -1,0 +1,23 @@
+{"scenario": "gateway/editor-requests-carry-no-restrictions", "requires": ["v1", "fake-backend"], "doc": "Task 24, editor row (the user's answer 2): an agent registration with `openrouter` restrictions exists for the provider `openrouter`, but the editor's chat request to the same provider reaches the mock with its body as the editor sent it: no `provider` object is added."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/api/v1/chat/completions", "body": "{\"id\": \"chat-or\", \"usage\": {\"prompt_tokens\": 2, \"completion_tokens\": 1}}"}, {"path": "/api/v1/messages", "body": "{\"id\": \"msg-or\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "http://127.0.0.1:$port/api/v1", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["openrouter", null]], "agent": "a1", "owner": "$HARNESS_PID", "openrouter": {"only": ["anthropic"], "data-collection": "deny", "zdr": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:agent_tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "a", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $agent_tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": []}"}
+{"do": "expect_http", "conn": "a", "status": 200, "body_json": {"id": "msg-or"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\\\"zdr\\\":true"}
+{"do": "http", "conn": "e", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/openrouter/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"messages\":[]}"}
+{"do": "expect_http", "conn": "e", "status": 200, "body_json": {"id": "chat-or"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"path\":\"/api/v1/chat/completions\""}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"body\":\"{\\\"model\\\":\\\"m\\\",\\\"messages\\\":[]}\""}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\\\"zdr\\\"", "count": 1, "at_most": 1}

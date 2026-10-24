@@ -7,13 +7,14 @@
 
 (defmacro drgnx-ai-client-test--with (spec &rest body)
   "BODY with a mock LLM server answering SPEC (a list of answers, see mock-llm.el) on PORT, its LOG, and providers
-`a' (openai), `o' (ollama), `l' (llama.cpp) and `dead' (nothing listens) pointing at it in `drgnx-ai-providers'."
+`a' (openai), `o' (ollama), `l' (llama.cpp) and `dead' (nothing listens) pointing at it in `drgnx-ai-providers' — all
+keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hub's gateway may ask (ai-gateway-test.el)."
   (declare (indent 1))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-client" t)))
           (port nil) (dead nil)
           (log (concat root "llm.log")) (script (concat root "llm.eld"))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state")
-                                             "A_KEY=sk-test-123")
+                                             (concat "XDG_RUNTIME_DIR=" root "run") "DRGNX_NO_HUB_START=1" "K_KEY=sk-test-123")
                                        process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai-detected nil)
           (drgnx-ai-providers nil) (drgnx-ai-roles nil)
@@ -25,7 +26,8 @@
            (setq mock (drgnx-ai-test-mock-llm nil script log)
                  port (process-get mock :port)
                  dead (drgnx-test-free-port))
-           (setq drgnx-ai-providers `((a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY" :caps (chat fim))
+           (setq drgnx-ai-providers `((a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :caps (chat fim))
+                                      (k :name "K" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "K_KEY" :caps (chat fim))
                                       (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
                                       (l :name "L" :kind llamacpp :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
                                       (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (chat fim))))
@@ -43,20 +45,6 @@
     result))
 
 (defvar drgnx-ai-client-test--roles nil)
-
-(ert-deftest drgnx-ai-client/a-command-may-read-keys-that-ask-a-timer-never ()
-  ;; a key only in ~/.authinfo.gpg: commands the user runs (Edit with AI, Ask, Choose) may read it
-  (drgnx-ai-client-test--with '((:path "/v1/chat/completions" :body "{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}"))
-    (let ((process-environment (cons "A_KEY" process-environment)) (asked nil) result)
-      (cl-letf (((symbol-function 'drgnx-ai-key) (lambda (_id &optional interactive) (push interactive asked) (and interactive "sk-gpg"))))
-        (should (string-search "no key" (plist-get (cdr (drgnx-ai-client-test--call '((a . "m")) 'chat '(:messages [(:role "user" :content "x")]))) :error)))
-        (drgnx-ai-request 'test 'chat '(:messages [(:role "user" :content "x")]) (lambda (text _) (setq result text))
-                          :chain '((a . "m")) :interactive t)
-        (let ((deadline (+ (float-time) 5))) (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-        (should (equal result "hi"))
-        (should (equal asked '(t nil)))
-        (should (drgnx-ai-usable-p 'a 'chat t))
-        (should-not (drgnx-ai-usable-p 'a 'chat))))))
 
 (ert-deftest drgnx-ai-client/what-cannot-be-sent-falls-back-and-leaves-nothing-behind ()
   ;; a raw byte in the buffer (json-serialize refuses it), no curl: a reason, never an error in a timer
@@ -93,10 +81,10 @@
         (should (string-search "\"input_suffix\":\")\"" (funcall request "/infill")))))))
 
 (ert-deftest drgnx-ai-client/the-key-travels-as-a-header-never-in-a-command-line ()
+  ;; the bearer token curl sends (toward the gateway, the editor token) goes in its standard input, never its arguments
   (drgnx-ai-client-test--with '((:path "/v1/chat/completions" :delay 0.5 :body "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}"))
-    (let (proc)
-      (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_r) '((a . "m")))))
-        (setq proc (drgnx-ai-request-process (drgnx-ai-request 'test 'chat '(:messages [(:role "user" :content "x")]) #'ignore))))
+    (let ((proc (drgnx-ai--curl (format "http://127.0.0.1:%d/v1/chat/completions" port) #'ignore
+                                :key "sk-test-123" :body '(:messages []) :timeout 5)))
       (should (processp proc))
       (should-not (seq-find (lambda (a) (string-search "sk-test-123" a)) (process-command proc)))
       (let ((deadline (+ (float-time) 10))) (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output nil 0.05)))
@@ -119,12 +107,15 @@
       (should-not (car r))
       (should (stringp (plist-get (cdr r) :error))))))                           ; none left: said, not thrown
 
-(ert-deftest drgnx-ai-client/a-provider-without-its-key-is-skipped-not-called ()
-  (drgnx-ai-client-test--with '((:path "/api/chat" :body "{\"message\":{\"content\":\"local\"}}"))
-    (let ((process-environment (cons "A_KEY" process-environment)))
-      (let ((r (drgnx-ai-client-test--call '((a . "m") (o . "m")) 'chat '(:messages [(:role "user" :content "x")]))))
-        (should (equal (car r) "local"))
-        (should-not (string-search "/v1/chat" (drgnx-ai-client-test--log log)))))))
+(ert-deftest drgnx-ai-client/a-keyed-provider-is-never-asked-directly ()
+  ;; k's key is in this Emacs's environment, but no hub runs: k is skipped, never called with it, and the chain goes on
+  (drgnx-ai-client-test--with '((:path "/v1/chat/completions" :body "{\"choices\":[{\"message\":{\"content\":\"direct\"}}]}")
+                                (:path "/api/chat" :body "{\"message\":{\"content\":\"local\"}}"))
+    (let ((r (drgnx-ai-client-test--call '((k . "m") (o . "m")) 'chat '(:messages [(:role "user" :content "x")]))))
+      (should (equal (car r) "local"))
+      (should (eq (plist-get (cdr r) :provider) 'o))
+      (should-not (string-search "/v1/chat" (drgnx-ai-client-test--log log)))
+      (should-not (string-search "sk-test-123" (drgnx-ai-client-test--log log))))))
 
 (ert-deftest drgnx-ai-client/a-cancelled-request-never-answers ()
   (drgnx-ai-client-test--with '((:path "/v1/chat/completions" :delay 1 :body "{\"choices\":[{\"message\":{\"content\":\"late\"}}]}"))

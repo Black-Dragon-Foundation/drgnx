@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-doctor)
 (require 'drgnx-macos)   ; so `drgnx-macos-app-dir' is special before a test let-binds it
+(require 'drgnx-ai)      ; its config file defined now, not inside a test's let-bound config table (ai-env-keys)
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 
 (defun drgnx-doctor-test--facts (&rest kv)
@@ -518,6 +519,11 @@
 
 (ert-deftest drgnx-doctor/config-files-ok ()
   (drgnx-test-with-config
+    ;; only this test's definitions: the counts must not depend on which libraries an earlier test loaded (drgnx-ai is
+    ;; required at the top of this file). The first read loads the check's features (they define their files), then
+    ;; those definitions go; the fixture puts every one back after.
+    (drgnx-doctor--config-files)
+    (clrhash drgnx-config--defs)
     (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
     (drgnx-doctor-test--define-config 'doctor-test-b "b.eld")
     (drgnx-test-config-put 'doctor-test-a "(:a 2 :b \"x\")\n")
@@ -886,6 +892,32 @@ what `ratatoskr doctor --json' said)."
              unless (memq k '(:commit :running :socket :hooks :sandbox)) do (setq fact (plist-put fact k v)))
     (drgnx-doctor-test--facts :ratatoskr fact)))
 
+(ert-deftest drgnx-doctor/store-section ()
+  ;; the `store' check reads the `store' section of `ratatoskr doctor --json': ok with the facts, a warning for any of
+  ;; its warnings or for copies that hold personal notes, a failure for a migration that failed
+  (let ((check (lambda (store)
+                 (let* ((fact (plist-get (drgnx-doctor-test--rtsk) :ratatoskr))
+                        (fact (plist-put fact :report (plist-put (plist-get fact :report) :store store))))
+                   (drgnx-doctor-check 'store (list :ratatoskr fact))))))
+    (let ((r (funcall check '(:schema 7 :writer "ready" :wal_bytes 4096 :backup_age_s 7200 :backup_ok t
+                                      :warnings [] :deny_list (:opted_in 2 :warnings []) :denied_in []))))
+      (should (eq (car r) 'ok))
+      (should (string-search "schema 7, WAL 4 KiB, last backup 2 h ago; 2 personal-notes opt-ins" (nth 1 r))))
+    (let ((r (funcall check '(:schema 7 :backup_age_s 200000
+                                      :warnings ["the last backup is 55 hours old (the nightly one runs at 03:00): `drgnx graph backup'"
+                                                 "work.db-wal is 80 MiB (above 64 MiB): close idle editors so it can be checkpointed"]))))
+      (should (eq (car r) 'warn))
+      (should (string-search "55 hours old" (nth 1 r)))
+      (should (string-search "close idle editors" (nth 1 r))))
+    (let ((r (funcall check '(:schema 7 :denied_in ["/d/backup/work-pre7-1.db"]))))
+      (should (eq (car r) 'warn))
+      (should (string-search "work-pre7-1.db" (nth 1 r))))
+    (let ((r (funcall check '(:schema 6 :failed "entities step failed"))))
+      (should (eq (car r) 'fail))
+      (should (string-search "restore-pre7" (nth 2 r))))
+    ;; no section (no hub, no work.db): nothing to say
+    (should (eq (car (funcall check nil)) 'ok))))
+
 (ert-deftest drgnx-doctor/ratatoskr-report-is-read-from-the-binary ()
   ;; the report is exactly the binary's output: no "Process finished" line from a default sentinel (found by the e2e run)
   (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))
@@ -900,6 +932,18 @@ what `ratatoskr doctor --json' said)."
             (should (plist-get (plist-get r :socket_dir) :ok)))
           (with-temp-file bin (insert "#!/bin/sh\nexit 1\n"))
           (should-not (drgnx-doctor--ratatoskr-report bin)))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-doctor/ratatoskr-report-of-a-binary-that-exited-before-the-read ()
+  ;; a fast binary has exited, and Emacs knows, before its output is read: the report is still its output (Fedora CI:
+  ;; "gave no answer to doctor --json within 2 s" failed onboarding's finish step)
+  (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file bin (insert "#!/bin/sh\necho '{\"binary\":{\"commit\":\"abc\"},\"socket_dir\":{\"ok\":true}}'\n"))
+          (set-file-modes bin #o755)
+          (let ((r (drgnx-test-with-exit-before-read (drgnx-doctor--ratatoskr-report bin))))
+            (should (equal (plist-get (plist-get r :binary) :commit) "abc"))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-doctor/ratatoskr-shows-the-sandbox-line ()
@@ -975,3 +1019,22 @@ what `ratatoskr doctor --json' said)."
         (should (string-search v (nth 1 r)))))
     (dolist (v '("3.6.23" "3.51.3" "3.53.0" nil))
       (should (eq (car (funcall check :emacs-sqlite v)) 'ok)))))
+
+(ert-deftest drgnx-doctor/the-environment-keys-are-noted ()
+  ;; a key the user put in this Emacs's environment stays there (Task 23c, the user's answer 1): the doctor says so in
+  ;; an information line naming the variable, never its value, and unsets nothing
+  (let ((process-environment (append '("OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY")
+                                     process-environment)))
+    (should (equal (plist-get (cdr (assq 'openrouter (drgnx-ai-providers))) :key-env) "OPENROUTER_API_KEY"))
+    (should-not (drgnx-doctor--ai-env-keys))
+    (should (eq (car (drgnx-doctor-check 'ai-env-keys (list :ai-env-keys nil))) 'ok))
+    (let ((process-environment (append '("OPENROUTER_API_KEY=sk-doctor-canary" "MOONSHOT_API_KEY=") process-environment)))
+      (let* ((names (drgnx-doctor--ai-env-keys)) (r (drgnx-doctor-check 'ai-env-keys (list :ai-env-keys names))))
+        (should (equal names '("OPENROUTER_API_KEY")))                  ; an empty value is no key
+        (should (eq (car r) 'info))
+        (should (equal (nth 1 r) "OPENROUTER_API_KEY is set in this Emacs's environment; children inherit it; agents use the copy the hub holds"))
+        (should-not (string-search "sk-doctor-canary" (prin1-to-string r))))
+      (should (equal (getenv "OPENROUTER_API_KEY") "sk-doctor-canary")))   ; left as it was
+    (let ((process-environment (append '("OPENROUTER_API_KEY=sk-a" "DEEPSEEK_API_KEY=sk-b") process-environment)))
+      (should (equal (nth 1 (drgnx-doctor-check 'ai-env-keys (list :ai-env-keys (drgnx-doctor--ai-env-keys))))
+                     "OPENROUTER_API_KEY, DEEPSEEK_API_KEY are set in this Emacs's environment; children inherit them; agents use the copies the hub holds")))))

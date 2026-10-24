@@ -1,0 +1,13 @@
+{
+  "setup": [
+    "insert into agent (id, kind, name, started, seen) values ('s-1', 'claude', 'claude · drgnx', 1.0, 1.0)"
+  ],
+  "clock": [],
+  "tables": ["agent"],
+  "calls": [
+    {"tool": "report_test", "now": 200.5, "identity": {"agent": "s-1"}, "args": {"command": "cargo test", "passed": 3, "failed": 0}},
+    {"tool": "report_test", "now": 201.5, "identity": {"agent": "s-1"}, "args": {"command": "  make\ncheck  ", "summary": "my summary"}},
+    {"tool": "report_test", "now": 202.5, "identity": {"agent": "s-1"}, "args": {"command": "go test"}},
+    {"tool": "report_test", "now": 203.5, "identity": {"agent": "s-1"}, "args": {"command": " \n "}}
+  ]
+}

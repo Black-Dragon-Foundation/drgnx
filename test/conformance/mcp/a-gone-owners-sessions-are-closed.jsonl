@@ -1,0 +1,18 @@
+{"scenario": "mcp/a-gone-owners-sessions-are-closed", "requires": ["v1"], "doc": "A session's owner dies: within the tick (1 s) its socket, its directory and its runtime.db row are gone, then its connections are closed, and status counts no session."}
+{"do": "start", "hub": "h"}
+{"do": "spawn", "capture": "P", "argv": ["sleep", "60"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "owner": "$P"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "ping"}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"mcp": {"sessions": 1, "outside": 0}}}}
+{"do": "kill", "pid": "$P", "signal": "KILL"}
+{"do": "expect_closed", "conn": "m", "within_ms": 3000}
+{"do": "file", "path": "$sock", "exists": false}
+{"do": "file", "path": "$SOCKET_DIR/s/$sid", "exists": false}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from msession", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"mcp": {"sessions": 0, "outside": 0}}}}

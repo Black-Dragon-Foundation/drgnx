@@ -1,0 +1,14 @@
+{
+  "setup": [
+    "insert into job values ('j3', 'Agents', null, null, 'running', 1.0, null)",
+    "insert into jtask (id, job, n, title, role, status, agent, lease_until) values ('j3#1', 'j3', 1, 'One', 'implement', 'running', 's-6', 2000.0)",
+    "insert into jtask (id, job, n, title, role, status) values ('j3#2', 'j3', 2, 'Two', 'test', 'ready')"
+  ],
+  "clock": [],
+  "tables": [],
+  "calls": [
+    {"tool": "list_agents", "now": 400.5, "identity": {"agent": "s-6", "job": "j3", "task": "j3#1"}, "args": {}},
+    {"tool": "list_agents", "now": 401.5, "identity": null, "args": {}},
+    {"tool": "list_agents", "now": 402.5, "identity": {"agent": "s-7", "job": "none"}, "args": {}}
+  ]
+}

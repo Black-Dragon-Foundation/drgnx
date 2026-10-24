@@ -1,11 +1,13 @@
 ;;; job-liveness-test.el --- batch tests: a job never loops, forks or strands a task -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 
 (defconst drgnx-job-liveness-test--one "# One\n\n### Task 1: one\n")
 
-(ert-deftest drgnx-job/an-agent-that-will-not-start-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/an-agent-that-will-not-start-is-a-card ()
   ;; a profile whose command is missing: a few tries, then the user — never a storm of sessions
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-agents-profiles (cons '("broken" :command ("/nonexistent/agent-binary")) drgnx-agents-profiles))
@@ -19,7 +21,7 @@
         (should (= (length drgnx-agents--sessions) n)))
       (should (seq-find (lambda (m) (string-prefix-p "[agent]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
 
-(ert-deftest drgnx-job/answering-a-reviewer-keeps-the-task-in-review ()
+(drgnx-work-db-writer-deftest drgnx-job/answering-a-reviewer-keeps-the-task-in-review ()
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid nil) (rev nil))
       (drgnx-job-approve id)
@@ -33,7 +35,7 @@
       (should (equal (plist-get (drgnx-coord-task tid) :agent) "s-impl"))
       (remhash "s-rev" drgnx-job--reviewers))))
 
-(ert-deftest drgnx-job/a-request-of-a-gone-agent-is-released ()
+(drgnx-work-db-writer-deftest drgnx-job/a-request-of-a-gone-agent-is-released ()
   ;; the hub restarted while a permission waited: its agent is gone, the request with it
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid nil))
@@ -59,7 +61,7 @@
       (drgnx-job-step id)
       (should (equal (drgnx-job-run-test--status id 1) "needs-input")))))
 
-(ert-deftest drgnx-job/a-turn-without-complete-task-is-nudged-then-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/a-turn-without-complete-task-is-nudged-then-a-card ()
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid nil))
       (drgnx-job-approve id)
@@ -74,7 +76,7 @@
                                   (drgnx-agent-session-entries s))))
         (should (seq-find (lambda (m) (string-prefix-p "[stalled]" (plist-get m :text))) (drgnx-coord-inbox "user")))))))
 
-(ert-deftest drgnx-job/a-turn-that-never-ends-in-review-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job/a-turn-that-never-ends-in-review-is-a-card ()
   ;; complete_task puts the task in review mid-turn; the turn hangs: the review waits for `drgnx-job-review-turn-limit',
   ;; then it is the user's
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
@@ -94,7 +96,7 @@
         (should (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))
         (should (equal (drgnx-job-run-test--status id 1) "needs-input"))))))
 
-(ert-deftest drgnx-job/a-card-restarts-the-wait-for-a-turn-in-review ()
+(drgnx-work-db-writer-deftest drgnx-job/a-card-restarts-the-wait-for-a-turn-in-review ()
   ;; a permission card (or a pause) in the middle of the wait: the clock starts again when the task is back in review
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")) (drgnx-job-review-turn-limit 0.3))
@@ -113,7 +115,7 @@
         (drgnx-job-step id)
         (should-not (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))))))
 
-(ert-deftest drgnx-job/review-now-on-a-stalled-review-starts-the-review ()
+(drgnx-work-db-writer-deftest drgnx-job/review-now-on-a-stalled-review-starts-the-review ()
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")) (drgnx-job-review-turn-limit 0.3) (reviews 0))
       (cl-letf (((symbol-function 'drgnx-job--start-review) (lambda (&rest _) (setq reviews (1+ reviews)))))
@@ -135,7 +137,7 @@
             (should (eq (drgnx-agent-session-status s) 'exited))
             (should (equal (drgnx-job-run-test--status id 1) "in-review"))))))))
 
-(ert-deftest drgnx-job/counts-survive-a-hub-restart ()
+(drgnx-work-db-writer-deftest drgnx-job/counts-survive-a-hub-restart ()
   ;; how often a task's agent ended and was nudged is in the job's record, not in the hub's memory
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid nil)
@@ -161,7 +163,7 @@
         (drgnx-job--nudge id (drgnx-coord-task tid) s)
         (should (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))))))
 
-(ert-deftest drgnx-job/the-prompt-of-an-ended-session-is-dropped ()
+(drgnx-work-db-writer-deftest drgnx-job/the-prompt-of-an-ended-session-is-dropped ()
   (drgnx-job-run-test--with drgnx-job-liveness-test--one
     (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)))
       (drgnx-job-approve id)

@@ -1,0 +1,18 @@
+{"scenario": "gateway/keys-only-on-a-user-connection", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "gateway/keys from a service or an agent connection is not-allowed and the key is held nowhere: not in the hub (status keys_held), the backend or any file under the root; a user connection's key is held (its provider named, never the key)."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "s", "hub": "h", "as": "service"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "s", "json": {"id": 1, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-service-key"}}}}
+{"do": "expect", "conn": "s", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"anthropic": "canary-agent-key"}}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"keys_held": []}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "gateway/keys", "params": {"keys": {"openai": "canary-user-key"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"gateway": {"keys_held": ["openai"]}}}}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "canary-service-key"}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "canary-agent-key"}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "canary-user-key"}

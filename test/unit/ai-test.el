@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-ai)
 (require 'drgnx-ai-probe)
+(require 'drgnx-hub-client)             ; its variables are let-bound below
 (require 'drgnx-file)
 (require 'drgnx-jobs)
 (require 'auth-source)
@@ -236,6 +237,27 @@ LOG/security.calls."
         (with-temp-file plain (insert "machine openrouter.ai password sk-or-new-789\n")))   ; replaced: the old one is not served
       (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))
         (should (equal (drgnx-ai-key 'openrouter) "sk-or-new-789"))))))
+
+(ert-deftest drgnx-ai/an-empty-key-is-never-handed-over ()
+  ;; review m1: an empty password in a store, or an empty key waiting here, is no key: in the hub it would replace a
+  ;; good one and every request would go upstream with an empty Bearer
+  (drgnx-ai-test--with root
+    (require 'drgnx-hub-client)
+    (let ((auth-sources (list (concat root "authinfo"))))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (list (list :secret (lambda () ""))))))
+        (should-not (drgnx-ai-key 'openrouter))
+        (should-not (gethash 'openrouter drgnx-ai--keys))))
+    (puthash 'openrouter "" drgnx-ai--keys)
+    (should-not (plist-member (drgnx-hub--held-keys) :openrouter))
+    (puthash 'openrouter "sk-or-test-123" drgnx-ai--keys)
+    (should (equal (plist-get (drgnx-hub--held-keys) :openrouter) "sk-or-test-123"))))
+
+(ert-deftest drgnx-ai/the-gateway-url-comes-with-the-token ()
+  ;; review m4: the token and the address the hub gave over the proven socket go together; an address in the
+  ;; environment (a port the hub left after a restart, which another process may hold) never gets the token
+  (let ((drgnx-hub--editor '("tok-m4" . "http://127.0.0.1:4711"))
+        (process-environment (cons "DRGNX_AI_GATEWAY_URL=http://127.0.0.1:9" process-environment)))
+    (should (equal (drgnx-ai-gateway-credentials) '("http://127.0.0.1:4711" . "tok-m4")))))
 
 (ert-deftest drgnx-ai/a-batch-emacs-never-searches-the-keychain-even-when-asked ()
   (drgnx-ai-test--with root
@@ -492,12 +514,15 @@ LOG/security.calls."
 (ert-deftest drgnx-ai/agent-profiles-get-their-environment-when-they-start ()
   (drgnx-ai-test--with root
     (let ((process-environment (cons "OPENROUTER_API_KEY=sk-or-test" process-environment)))
-      (should (equal (drgnx-ai-agent-env '(:kind claude-openrouter))
-                     '("ANTHROPIC_BASE_URL=https://openrouter.ai/api" "ANTHROPIC_AUTH_TOKEN=sk-or-test" "ANTHROPIC_API_KEY=")))
-      (should (equal (drgnx-ai-agent-env '(:kind claude-ollama))
+      ;; a keyed kind goes through the hub's gateway with a token of its own, never with the key here
+      (should (equal (drgnx-ai-agent-env '(:kind claude-openrouter) '(:url "http://127.0.0.1:9/a/1" :token "agent-token"))
+                     '("ANTHROPIC_BASE_URL=http://127.0.0.1:9/a/1" "ANTHROPIC_AUTH_TOKEN=agent-token" "ANTHROPIC_API_KEY=")))
+      ;; without the hub it is not started: said, never sent direct with the key
+      (let ((err (should-error (drgnx-ai-agent-env '(:kind claude-openrouter)) :type 'user-error)))
+        (should (string-search "agents reach providers through it" (cadr err))))
+      (should (equal (drgnx-ai-agent-env '(:kind claude-ollama))                          ; a local runner: direct, keyless
                      '("ANTHROPIC_BASE_URL=http://127.0.0.1:11434" "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY=")))
-      (should-not (drgnx-ai-agent-env '(:kind subscription))))                             ; its own login, never read
-    (should-error (drgnx-ai-agent-env '(:kind claude-openrouter)) :type 'user-error)))     ; no key: said, not sent empty
+      (should-not (drgnx-ai-agent-env '(:kind subscription))))))                           ; its own login, never read
 
 (ert-deftest drgnx-ai/an-agent-profile-names-its-kind-and-gets-the-environment-at-start ()
   (require 'drgnx-agents)
@@ -537,7 +562,8 @@ LOG/security.calls."
 
 (ert-deftest drgnx-ai/load-keys-reads-the-roles-keys-as-a-command-and-keeps-them ()
   ;; The keys of the providers the roles name, through the sources a command may use (the Keychain); then the
-  ;; background (ghost text: not interactive) has them.  Local runners have no key: nothing is read for them.
+  ;; background (ghost text: not interactive) has them.  Local runners have no key: nothing is read for them.  No hub
+  ;; runs here, so they wait in memory for it; once it takes them they are dropped (ai-keys-test.el).
   (drgnx-ai-test--with root
     (setq drgnx-ai-roles '((complete (openrouter . "m") (ollama . "c")) (chat (openrouter . "m"))))
     (let ((system-type 'darwin) (noninteractive nil) (asked nil) (auth-sources nil))

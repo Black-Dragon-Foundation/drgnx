@@ -27,7 +27,7 @@ pub struct Handle {
 impl Store {
     /// Open the file (migrating a read-write one) on the caller, then move the connection to its own thread.
     pub fn spawn(spec: StoreSpec) -> Result<(Store, Handle)> {
-        let writable = matches!(spec.mode, Mode::ReadWrite { .. });
+        let writable = !matches!(spec.mode, Mode::ReadOnly);
         let conn = open_store(&spec)?;
         let (tx, mut rx) = mpsc::channel::<Job>(QUEUE);
         let thread = std::thread::Builder::new()
@@ -100,10 +100,14 @@ impl Handle {
                 }
                 conn.execute_batch("BEGIN IMMEDIATE")?;
                 match f(conn) {
-                    Ok(v) => conn
-                        .execute_batch("COMMIT")
-                        .map(|()| v)
-                        .map_err(Error::from),
+                    // A failed COMMIT (BUSY, FULL, IOERR, a deferred constraint) may leave the transaction open:
+                    // roll it back, or every later BEGIN IMMEDIATE fails and the write lock stays held.
+                    Ok(v) => conn.execute_batch("COMMIT").map(|()| v).map_err(|e| {
+                        if !conn.is_autocommit() {
+                            let _ = conn.execute_batch("ROLLBACK");
+                        }
+                        Error::from(e)
+                    }),
                     Err(e) => {
                         let _ = conn.execute_batch("ROLLBACK");
                         Err(e)
@@ -172,5 +176,51 @@ mod tests {
             .await
             .unwrap();
         assert!(handle.read(|_| Ok(())).await.is_err());
+    }
+
+    /// Review m3: a COMMIT that fails with the transaction still open (SQLite keeps it open on a deferred
+    /// foreign-key violation, as on BUSY) is rolled back, so the next write starts and commits.
+    #[tokio::test]
+    async fn a_failed_commit_leaves_no_open_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = StoreSpec {
+            path: dir.path().join("a.db"),
+            mode: Mode::ReadWrite {
+                file_mode: 0o600,
+                synchronous_full: false,
+            },
+            migrations: &[(
+                1,
+                "create table p(id integer primary key);
+                 create table c(p integer references p(id) deferrable initially deferred);",
+            )],
+        };
+        let (store, handle) = Store::spawn(spec).unwrap();
+        handle
+            .read(|c| Ok(c.execute_batch("pragma foreign_keys = on")?))
+            .await
+            .unwrap();
+        let e = handle
+            .write(|c| Ok(c.execute("insert into c values (9)", [])?))
+            .await;
+        assert!(e.is_err(), "the COMMIT must fail: {e:?}");
+        assert!(handle.read(|c| Ok(c.is_autocommit())).await.unwrap());
+        handle
+            .write(|c| Ok(c.execute("insert into p values (1)", [])?))
+            .await
+            .unwrap();
+        let n: i64 = handle
+            .read(|c| Ok(c.query_row("select count(*) from p", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let n: i64 = handle
+            .read(|c| Ok(c.query_row("select count(*) from c", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "the refused write is gone");
+        tokio::task::spawn_blocking(move || store.shutdown())
+            .await
+            .unwrap();
     }
 }

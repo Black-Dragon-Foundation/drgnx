@@ -1,0 +1,20 @@
+{"scenario": "bridge/a-call-while-away-waits-then-errors", "requires": ["v1", "fake-backend"], "doc": "With no hub, a tools/call waits 10 s for the socket, then gets the tool error 'drgnx hub restarting; retry'; the bridge itself stays."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "spawn_conn", "conn": "b", "argv": ["$ROOT/bin/ratatoskr", "mcp-bridge", "--socket", "$sock"], "env": {}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "method": "notifications/initialized"}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "expect_silent", "conn": "b", "for_ms": 300}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "report_test", "arguments": {"command": "make check", "passed": 1, "failed": 0}}}}
+{"do": "expect_silent", "conn": "b", "for_ms": 9500}
+{"do": "expect_next", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "drgnx hub restarting; retry"}], "isError": true}}, "within_ms": 2500}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "ping"}}
+{"do": "expect_next", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {}}, "within_ms": 1000}

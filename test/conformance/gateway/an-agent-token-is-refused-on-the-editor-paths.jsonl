@@ -1,0 +1,17 @@
+{"scenario": "gateway/an-agent-token-is-refused-on-the-editor-paths", "requires": ["v1", "fake-backend"], "doc": "Task 24, editor row: an agent's token has the Messages paths only; on the editor's /p/mock/chat/completions it is 404 (not a way around its chain, budget or restrictions), and the provider is never asked."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-openai.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "openai", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["mock", null]], "agent": "a1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "e", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"messages\":[]}"}
+{"do": "expect_http", "conn": "e", "status": 404}
+{"do": "http", "conn": "f", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"prompt\":\"x\"}"}
+{"do": "expect_http", "conn": "f", "status": 404}
+{"do": "file", "path": "$ROOT/llm.log", "lacks": "request"}

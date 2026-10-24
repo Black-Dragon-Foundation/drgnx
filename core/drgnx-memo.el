@@ -363,6 +363,12 @@ key drops its entry."
         (remhash k table)
         nil))))
 
+(defun drgnx-cache-peek (name k)
+  "The value of K in cache NAME, or nil, stamping nothing: a look that is no use of the entry (a late callback
+checking whether its result still counts) must not keep it from eviction."
+  (let* ((def (drgnx-cache--def name)) (v (gethash k (drgnx-memo--def-table def))))
+    (if (eq (drgnx-memo--def-key def) 'string) (car v) (and (drgnx-cache--live-p k) v))))
+
 (defun drgnx-cache--evict (def)
   "Drop DEF's entry with the oldest stamp (a scan of the table: on put only)."
   (let ((table (drgnx-memo--def-table def)) oldest stamp)

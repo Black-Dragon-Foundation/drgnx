@@ -1,0 +1,19 @@
+{"scenario": "bridge/survives-a-hub-restart-modern", "requires": ["v1", "fake-backend"], "doc": "The gate row, stateless era (2026-07-28): no initialize to replay; after a TERM and a start on the same root the next tools/call (with its _meta) goes through the redialled socket, and both report_test calls are events."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "spawn_conn", "conn": "b", "argv": ["$ROOT/bin/ratatoskr", "mcp-bridge", "--socket", "$sock"], "env": {}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 1, "result": {"resultType": "complete", "supportedVersions": ["2026-07-28"]}}}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "report_test", "arguments": {"command": "make check", "passed": 3, "failed": 0}, "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}}}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 2, "result": {"resultType": "complete", "isError": "$absent"}}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "report_test", "arguments": {"command": "make check", "passed": 4, "failed": 0}, "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}}}}}
+{"do": "expect_next", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"resultType": "complete", "isError": "$absent"}}, "within_ms": 12000}
+{"do": "sql_expect", "sql": "select count(*), min(agent), max(agent) from event where kind = 'test'", "rows": [[2, "s-0000000a", "s-0000000a"]]}

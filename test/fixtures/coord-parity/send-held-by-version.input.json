@@ -1,0 +1,8 @@
+{"setup": ["insert or replace into meta values ('log-version', '5')"],
+ "clock": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+ "tables": ["message"],
+ "calls": [
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "b", "text": "stale", "seen": 3, "job": "j1"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "b", "text": "fresh", "seen": 5, "job": "j1"}},
+  {"fn": "drgnx-coord-send", "args": {"recipient": "b", "text": "from the user's emacs"}}
+ ]}

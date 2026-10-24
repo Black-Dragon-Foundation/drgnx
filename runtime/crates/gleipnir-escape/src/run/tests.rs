@@ -103,6 +103,12 @@ fn an_unlisted_skip_reason_is_a_fail() {
     let needy = row(
         json!({"row": "r", "needs": ["bwrap", "reduced", "root"], "probes": [["fds"]], "expect": [{"result": "reached"}]}),
     );
+    // bwrap and the reduced tier are Linux's: no other host has everything this row needs (macOS has no bwrap,
+    // Landlock or seccomp; Android has no backend at all), so there it is skipped whatever the host's flags say.
+    if !cfg!(target_os = "linux") {
+        assert_eq!(skip_reason(&needy, &host), Some(Skip::NeedsLinux));
+        return;
+    }
     assert_eq!(skip_reason(&needy, &host), None);
     let host = Host {
         in_container: true,
@@ -403,7 +409,8 @@ fn spec_defaults_and_the_probe_dir() {
         json!({"row": "r", "tier": "reduced", "spec": {"write": ["${W}"]}, "probes": [["fds"]], "expect": [{"result": "reached"}]}),
     );
     let bin = fx.path("bin");
-    let spec = build_spec(&fx, &r, &bin).unwrap();
+    // The Linux defaults on any host (the macOS ones are `macos_row_specs_validate_and_make_a_profile`'s).
+    let spec = build_spec_for(&fx, &r, &bin, true).unwrap();
     assert_eq!(spec["chdir"], fx.path("w").to_string_lossy().as_ref());
     assert_eq!(spec["tmp"], fx.path("t").to_string_lossy().as_ref());
     assert_eq!(spec["layers"]["landlock_min_abi"], 9);

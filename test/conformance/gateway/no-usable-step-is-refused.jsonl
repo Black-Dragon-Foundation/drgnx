@@ -1,0 +1,10 @@
+{"scenario": "gateway/no-usable-step-is-refused", "requires": ["v1", "fake-backend"], "doc": "A chain of an unknown provider and one the gateway cannot carry (messages false) is refused with invalid-params at chain, giving each step's reason; runtime.db has no row and status counts none."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "embedder", "kind": "tei", "base": "http://127.0.0.1:9", "auth": "none", "messages": false, "caps": ["embed"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["nowhere", null], ["embedder", "m"]], "job": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "chain", "message": "no step of the chain can be used: nowhere: not configured; embedder: the gateway cannot carry it"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"registrations": 0}}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from registration", "rows": [[0]]}

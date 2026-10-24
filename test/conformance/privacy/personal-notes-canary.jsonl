@@ -1,0 +1,62 @@
+{"scenario": "privacy/personal-notes-canary", "requires": ["v1", "lisp-backend"], "doc": "The personal-notes canary (Urdr Task 19; storage §5.6). Random bytes made here sit in ~/org/notes.org, ~/org/other.md and ~/org/reading.org (opted in, with notes.org: that opt-in opens nothing). A schema-6 work.db holding the first two (spec, file, link and dot-dot forms) is migrated at hub start; the Lisp scan is given HOME and HOME/org, refuses HOME/org before reading anything in it, and reads HOME, where plans name ../../org/notes.org, a link to it, a linked folder into org and the opted-in reading.org as their specs, and the board's TODO is read; a tampered export is imported; the Lisp search indexer runs on HOME (as a project holding org/) against a mock TEI and is refused a project inside org; reading.org's opt-in is revoked; the store is exported; a note whose data.path is notes.org is planted in work.db past every other door, and a tei provider is configured for the hub's entity embedder (door 4), which skips it and sends stored entities to the mock TEI after a quiet minute (no text written for a minute: the Lisp backend's 60 s housekeeping writes none), and the row waits for that round. No canary is in work.db, its WAL, the code index, the export, the TEI requests or the hub log, and no file under HOME/org changed."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "c() { od -An -N32 -tx1 /dev/urandom | tr -d ' \\n'; }; printf '{\"notes\": \"%s\", \"other\": \"%s\", \"reading\": \"%s\"}' \"$(c)\" \"$(c)\" \"$(c)\" > $ROOT/canary.json"], "expect_code": 0}
+{"do": "capture_file", "path": "$ROOT/canary.json", "capture": "notes", "json_path": "notes"}
+{"do": "capture_file", "path": "$ROOT/canary.json", "capture": "other", "json_path": "other"}
+{"do": "capture_file", "path": "$ROOT/canary.json", "capture": "reading", "json_path": "reading"}
+{"do": "write_file", "path": "$HOME/org/notes.org", "text": "# $notes\n"}
+{"do": "write_file", "path": "$HOME/org/other.md", "text": "# $other\n"}
+{"do": "write_file", "path": "$HOME/org/reading.org", "text": "# reading $reading\n"}
+{"do": "write_file", "path": "$HOME/org/board.org", "text": "* TODO the board task marker-board-19c\n:PROPERTIES:\n:PLAN_FILE: $HOME/proj/plans/c.md\n:END:\n"}
+{"do": "write_file", "path": "$HOME/readme.md", "text": "# the home project marker-readme-19c\n"}
+{"do": "write_file", "path": "$HOME/proj/plans/a.md", "text": "# Plan A\n**Spec:** `../../org/notes.org`\n\n### Task 1: one\n"}
+{"do": "write_file", "path": "$HOME/proj/plans/b.md", "text": "# Plan B\n**Spec:** `../n.org`\n\n### Task 1: one\n"}
+{"do": "write_file", "path": "$HOME/proj/plans/c.md", "text": "# Plan C\n**Spec:** `../../org/reading.org`\n\n### Task 1: one\n"}
+{"do": "write_file", "path": "$HOME/proj/plans/d.md", "text": "# Plan D\n**Spec:** `../o/other.md`\n\n### Task 1: one\n"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null; ln -s $HOME/org/notes.org $HOME/proj/n.org; ln -s ../org $HOME/proj/o; ln -s $HOME/org/notes.org $HOME/n.org; ln -s $HOME/org $HOME/linkdir; mkdir -p $HOME/org/proj; git init -q $HOME; git init -q $HOME/proj; git init -q $HOME/org/proj; printf ';; inside org\\n' > $HOME/org/proj/main.el"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; cd $HOME/org; find . -path ./proj/.git -prune -o -print | LC_ALL=C sort | xargs stat -c '%n %s %Y %a' > $ROOT/org.before; find . -path ./proj/.git -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum >> $ROOT/org.before"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/personal-notes-allow.json", "json": {"version": 1, "paths": ["$HOME/org/notes.org", "$HOME/org/reading.org"]}, "mode": "0600"}
+{"do": "write_file", "path": "$ROOT/tei.json", "json": [{"path": "/embed", "body": "[[0.1, 0.2], [0.3, 0.4]]"}]}
+{"do": "spawn", "capture": "tei", "argv": ["$MOCK", "llm", "--script", "$ROOT/tei.json", "--log", "$ROOT/tei.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "text": "(drgnx-settings :version 1 (drgnx-ai-providers ((tei :name \"TEI\" :kind tei :url \"http://127.0.0.1:$port\" :caps (embed)))) (drgnx-ai-roles ((embed (tei)))))\n", "mode": "0600"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sed -e 's|@HOME@|$HOME|g' -e 's|@NOTES@|$notes|g' -e 's|@OTHER@|$other|g' $SCENARIOS/../fixtures/work-db-6-canary.sql > $ROOT/canary6.sql"], "expect_code": 0}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$ROOT/canary6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready"}}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/privacy", "params": {"reload": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"excised": 0}}}
+{"do": "sql_expect", "sql": "select count(*) from entity where id = 'plan:$HOME/proj/plans/old.md'", "rows": [[1]]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "$SCENARIOS/../../bin/drgnx work scan --board $HOME/org/board.org $HOME $HOME/org"], "expect_code": 0, "expect_stdout": "refused: $HOME/org (the work tracker never reads a project inside ~/org (personal notes))"}
+{"do": "sql_expect", "sql": "select count(*) from entity where id = 'todo:$HOME/org/board.org#1' and kind = 'todo' and title like '%marker-board-19c%'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where id = 'spec:$HOME/org/reading.org' and instr(title, '$reading') > 0", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where id in ('plan:$HOME/proj/plans/a.md', 'plan:$HOME/proj/plans/b.md', 'plan:$HOME/proj/plans/c.md', 'plan:$HOME/proj/plans/d.md')", "rows": [[4]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where instr(replace(replace(id || ' ' || coalesce(source, '') || ' ' || data, '$HOME/org/board.org', ''), '$HOME/org/reading.org', ''), '$HOME/org/') > 0", "rows": [[0]]}
+{"do": "write_file", "path": "$ROOT/tampered/entities.jsonl", "text": "{\"id\": \"note:from-notes\", \"kind\": \"note\", \"project\": null, \"title\": \"$notes\", \"status\": null, \"body\": null, \"priority\": null, \"assignee\": null, \"data\": {\"path\": \"$HOME/org/notes.org\"}, \"origin\": \"imported\", \"source\": null, \"ver\": 1}\n{\"id\": \"spec:$HOME/org/other.md\", \"kind\": \"spec\", \"project\": null, \"title\": \"$other\", \"status\": null, \"body\": null, \"priority\": null, \"assignee\": null, \"data\": {}, \"origin\": \"imported\", \"source\": \"spec $HOME/org/other.md\", \"ver\": 1}\n{\"id\": \"note:through-a-link\", \"kind\": \"note\", \"project\": null, \"title\": \"$notes\", \"status\": null, \"body\": null, \"priority\": null, \"assignee\": null, \"data\": {\"path\": \"$HOME/proj/n.org\"}, \"origin\": \"imported\", \"source\": null, \"ver\": 1}\n{\"id\": \"note:an-unknown-source\", \"kind\": \"note\", \"project\": null, \"title\": \"$other\", \"status\": null, \"body\": null, \"priority\": null, \"assignee\": null, \"data\": {}, \"origin\": \"imported\", \"source\": \"notes\", \"ver\": 1}\n{\"id\": \"note:plain\", \"kind\": \"note\", \"project\": null, \"title\": \"a plain imported note\", \"status\": null, \"body\": null, \"priority\": null, \"assignee\": null, \"data\": {}, \"origin\": \"imported\", \"source\": null, \"ver\": 1}\n"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/import", "params": {"dir": "$ROOT/tampered"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"entities": 1, "skipped": 4}}}
+{"do": "sql_expect", "sql": "select count(*) from entity where id = 'note:plain'", "rows": [[1]]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "$SCENARIOS/../../bin/drgnx search index $HOME"], "expect_code": 0, "expect_stdout": "search index: added 2"}
+{"do": "file", "path": "$ROOT/tei.log", "contains": "marker-readme-19c", "within_ms": 10000}
+{"do": "file", "path": "$ROOT/tei.log", "contains": "marker-board-19c"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "$SCENARIOS/../../bin/drgnx search index $HOME/org/proj"], "expect_code": 1, "expect_stdout": "the search index never reads ~/org (personal notes)"}
+{"do": "write_file", "path": "$CONFIG/personal-notes-allow.json", "json": {"version": 1, "paths": []}, "mode": "0600"}
+{"do": "expect", "conn": "e", "json": {"event": "notice", "data": {"id": "privacy-opt-ins", "text": "$string"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select (select count(*) from entity where instr(id || coalesce(title, '') || data, '$reading') > 0) + (select count(*) from entity_hist where instr(coalesce(title, '') || coalesce(data, ''), '$reading') > 0)", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "graph/export", "params": {"out": "$ROOT/export"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"entities": "$number"}}}
+{"do": "file", "path": "$ROOT/export/entities.jsonl", "contains": "note:plain"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into entity (id, kind, title, data, origin, source, ver, created_tx, updated_tx) values ('note:past-the-doors', 'note', 'planted past the doors marker-denied-19c', json_object('path', '$HOME/org/notes.org'), 'recorded', 'recorded', 1, 1, 1)"]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "config/providers", "params": {"providers": [{"id": "tei", "kind": "tei", "base": "http://127.0.0.1:$port", "auth": "none", "messages": false, "caps": ["embed"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"applied": 1}}}
+{"do": "file", "path": "$ROOT/tei.log", "contains": "a plain imported note", "within_ms": 120000}
+{"do": "file_grep", "paths": ["$ROOT/tei.log"], "absent": "marker-denied-19c"}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$notes"}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$other"}
+{"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$reading"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; cd $HOME/org; find . -path ./proj/.git -prune -o -print | LC_ALL=C sort | xargs stat -c '%n %s %Y %a' > $ROOT/org.after; find . -path ./proj/.git -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum >> $ROOT/org.after; cmp $ROOT/org.before $ROOT/org.after"], "expect_code": 0}

@@ -1,0 +1,8 @@
+{"setup": ["with recursive n(i) as (select 1 union all select i+1 from n where i < 20) insert into message (sender, recipient, text, state, at) select 'x', 'b', 'q', 'queued', 900 from n",
+           "with recursive n(i) as (select 1 union all select i+1 from n where i < 25) insert into message (sender, recipient, text, state, at) select 'x', 'user', 'q', 'queued', 900 from n"],
+ "clock": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+ "tables": ["message"],
+ "calls": [
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "b", "text": "no room"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "user", "text": "the user is never full"}}
+ ]}

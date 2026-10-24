@@ -1,0 +1,20 @@
+{"scenario": "seam/a-lisp-job-writes-through-the-front", "requires": ["v1", "lisp-backend"], "doc": "Task 12: behind the front the Lisp backend writes coordination tables only through the front (drgnx-coord-writer front). job/propose is 3 front writes (coord/job-create, messages/send and coord/card-create for the proposal card) and job/stop 3 more (cards/settle, messages/mark, coord/job-set); the front's status.store.writes counts them, and work.db has the job, its tasks and the job event. A local write in the backend would have signalled and failed the call, and would not count."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Seam\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n\n### Task 2: Check the thing\n\n**Role:** review\n**Depends:** Task 1\n\nCheck it.\n"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": "$any"}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"store": {"writes": 0}}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"store": {"writes": 3}}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "job/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$job", "status": "stopped"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"store": {"writes": 6}}}}
+{"do": "sql_expect", "sql": "select id, status from job", "rows": [["$job", "stopped"]]}
+{"do": "sql_expect", "sql": "select n, status from jtask order by n", "rows": [[1, "ready"], [2, "pending"]]}
+{"do": "sql_expect", "sql": "select kind, job from event where kind = 'job'", "rows": [["job", "$job"]]}
+{"do": "sql_expect", "sql": "select kind, state, choice from card", "rows": [["proposal", "settled", "reject"]]}

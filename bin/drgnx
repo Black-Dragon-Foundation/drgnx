@@ -357,7 +357,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   fi
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
@@ -426,7 +426,9 @@ test_snapshot() { # DIR — a snapshot of the working tree (edits during a run c
   (cd "$here" && git ls-files -z -co --exclude-standard | tar --null -T - -cf -) | tar -C "$snap" -xf -
   git -C "$snap" init -q -b main
   git -C "$snap" add -A
-  git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid commit -q -m snapshot
+  # no auto maintenance: git ≥ 2.5x repacks in a detached process after the commit, still writing into the snapshot
+  # while the bundle is made and the run removes it (rm: "Directory not empty")
+  git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid -c maintenance.auto=false commit -q -m snapshot
   git -C "$snap" bundle create -q "$snap/drgnx.bundle" main
 }
 
@@ -536,7 +538,8 @@ test_bootstrap() { # [--fedora 44|45] — the exit test of a second machine: one
   cp "$here/etc/drgnx.lock.eld" "$fixture/drgnx.lock.eld"
   git -C "$fixture" init -q -b main
   git -C "$fixture" add -A
-  git -C "$fixture" -c user.name=drgnx-test -c user.email=test@drgnx.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m config
+  git -C "$fixture" -c user.name=drgnx-test -c user.email=test@drgnx.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+    -c maintenance.auto=false commit -q -m config
   git clone -q --bare "$fixture" "$snap/config.git"
   local limit=()
   test_time_limit 3600
@@ -1654,6 +1657,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                every plan: tasks, steps, TODOs and commits done, branch, merged
        drgnx hub start|stop|status [--json]
                                the hub: the durable process behind agents and their gateway (docs/guide/agents.md)
+       drgnx graph export|import|backup|revert|excise|scrub|grants|sql|compact|proposed …
+                               the work store from the command line (docs/guide/work.md, "The graph from the command line")
        drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto]
                                a job from a plan: tasks, routes, estimate; nothing starts before approve
        drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
@@ -1711,6 +1716,12 @@ case "${1:-help}" in
         if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
         if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
         DRGNX_DIR="$here" exec "$rtsk" "$sub" "$@" ;;
+  graph) shift   # the store's commands (export, import, backup, revert, excise, scrub, grants, sql, compact, proposed): Ratatoskr's, a client of the running hub
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
+        DRGNX_DIR="$here" exec "$rtsk" graph "$@" ;;
   job) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-job-cli -- "$@" ;;
@@ -1729,13 +1740,14 @@ case "${1:-help}" in
           *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
         esac ;;
   coord) shift
-        # an agent outside drgnx: exec, so the server's parent is the agent (its identity); no cd (the folder it
-        # starts in is where the agent works); a drgnx session's identity in the agent's shell is not inherited
+        # an agent outside drgnx (configs written before the bridge keep working through this): exec Ratatoskr's
+        # bridge, so its parent is the agent (its identity, computed by the hub); no cd (the folder it starts in is
+        # where the agent works); a drgnx session's identity in the agent's shell is not inherited
         if [[ "${1:-}" == mcp && "${2:-}" == --kind && "$#" -eq 3 && "$3" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+          rtsk="$(drgnx_dir data)/bin/ratatoskr"
+          if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
           unset DRGNX_AGENT DRGNX_JOB DRGNX_TASK
-          trap '' PIPE
-          DRGNX_AGENT_KIND="$3" exec "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
-               -l drgnx-coord-mcp -f drgnx-coord-mcp-main
+          exec "$rtsk" mcp-bridge --outside --kind "$3"
         fi
         echo "usage: drgnx coord mcp --kind KIND   (KIND: a short lower-case name: claude, codex, zed…)" >&2; exit 2 ;;
   keys) shift

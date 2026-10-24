@@ -1,0 +1,11 @@
+{"scenario": "store/a-fresh-hub-makes-schema-7", "requires": ["v1"], "doc": "No work.db: the hub makes one at schema 7 (0600, compat-read 6 for the Lisp readers), with no pre-migration copy, and a write goes through at once."}
+{"do": "start", "hub": "h"}
+{"do": "file", "path": "$DATA/work.db", "mode": "600"}
+{"do": "file", "path": "$DATA/backup", "exists": false}
+{"do": "sql_expect", "sql": "select key, value from kv where key in ('schema', 'compat-read') order by key", "rows": [["compat-read", "6"], ["schema", "7"]]}
+{"do": "sql_expect", "sql": "select count(*) from entity", "rows": [[0]]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "events/add", "params": {"kind": "comment", "summary": "first"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready", "migrated_at": "$absent", "failed": "$absent"}}}}

@@ -1,0 +1,25 @@
+{"scenario": "gateway/keys-held-lists-ids-only", "requires": ["v1", "fake-backend"], "doc": "gateway/keys-held answers the ids whose key the hub holds, and a user subscriber hears gateway/keys-changed with those ids whenever the set changes (gateway/keys, a registration's keys), not when a held key is replaced; no canary key in an answer, an event, the backend log or any file under the root."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "w", "hub": "h"}
+{"do": "send", "conn": "w", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "w", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "gateway/keys-held"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"providers": []}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-held-key-1"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "w", "json": {"event": "gateway/keys-changed", "data": {"providers": ["openrouter"]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/keys-held"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"providers": ["openrouter"]}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-held-key-2"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect_silent", "conn": "w", "for_ms": 500}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "config/providers", "params": {"providers": [{"id": "anthropic", "kind": "anthropic", "base": "https://api.anthropic.com", "auth": "x-api-key", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "gateway/register", "params": {"chain": [["anthropic", null]], "keys": {"anthropic": "canary-held-key-3"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"token": "$string"}}}
+{"do": "expect", "conn": "w", "json": {"event": "gateway/keys-changed", "data": {"providers": ["anthropic", "openrouter"]}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "gateway/keys-held"}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"providers": ["anthropic", "openrouter"]}}}
+{"do": "backend_log", "hub": "h", "expect_no_line": "canary"}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "canary"}

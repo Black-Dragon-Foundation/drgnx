@@ -8,13 +8,19 @@
 //! - [`registry`]: every method, its classes, schemas and `writes` flag; `methods.json` and the docs table.
 //! - [`methods`]: each method's params and result types; [`types`]: the named input types; [`events`]: the event
 //!   types.
+//! - [`text`]: the one sanitizer for user-visible text; [`url`]: the URL rule and the provider-base rule.
+//! - [`secrets`]: the one list of secret patterns, for refusing credentials in stored text.
 
 pub mod decode;
 pub mod events;
+pub mod jsonrpc;
 pub mod line;
 pub mod methods;
 pub mod paths;
 pub mod proof;
 pub mod registry;
+pub mod secrets;
+pub mod text;
 pub mod types;
+pub mod url;
 pub mod wire;

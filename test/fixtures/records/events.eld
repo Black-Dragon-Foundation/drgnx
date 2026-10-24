@@ -17,4 +17,7 @@
  ("accept" (:path "/work/repo/a.el" :by "user" :hash "5e1f"))
  ("revert" (:path "/work/repo/a.el" :by "user" :direct t :to "HEAD") (:path "/work/repo/a.el" :by "user" :requested t))
  ("comment" (:path "/work/repo/a.el" :by "user" :line 12))
- ("job" (:status "running")))
+ ("job" (:status "running"))
+ ;; the hub's tracker (norn tracker::run)
+ ("task" (:op "create" :id "task:k3f" :ver 1) (:op "split" :id "task:k3f" :ver 2 :parts ("task:k3g" "task:k3h"))
+  (:op "complete" :id "task:k3f" :proposed 4) (:op "update" :id "task:k3f" :ver 3 :accepted t)))

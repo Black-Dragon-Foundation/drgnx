@@ -12,7 +12,7 @@
 (defun drgnx-run-ert-test--batch (dir results &rest env)
   "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
   (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
-                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE") ; not this run's selector, census or order
+                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE" "DRGNX_WORK_DB_GATE") ; not this run's selector, census, order or gate
                                      process-environment))
         ;; never a buffer's deleted directory, which call-process refuses
         (default-directory (if (file-directory-p default-directory) default-directory temporary-file-directory)))
@@ -195,6 +195,46 @@
           (should (equal (mapcar (lambda (te) (plist-get te :name)) (plist-get (drgnx-run-ert-test--json results) :tests))
                          '("sel-fast"))))
       (delete-directory tmp t))))
+
+(defun drgnx-run-ert-test--gate-run (tests &rest env)
+  "Run a suite of one file (the gate's macro loaded, then TESTS, a string) in a fresh batch Emacs with ENV; return the
+parsed summary."
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-gate" t))) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (with-temp-file (concat tmp "gate-test.el")
+            (insert (format "(require 'ert)\n(load %S nil t)\n%s" (expand-file-name "../test/support/work-db-gate" (file-name-directory (locate-library "run-ert.el"))) tests)))
+          (apply #'drgnx-run-ert-test--batch (concat tmp "gate-test.el") results "DRGNX_TEST_ONE_PROCESS=1" env)
+          (drgnx-run-ert-test--json results))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/gate-mode-signals-on-a-read-write-work-db ()
+  ;; DRGNX_WORK_DB_GATE=1: `sqlite-open' of a file named work.db signals unless it is read-only; other names are free
+  (let ((r (drgnx-run-ert-test--gate-run
+            "(ert-deftest gate-open ()
+               (let* ((dir temporary-file-directory) (other (expand-file-name \"other.db\" dir)) (f (expand-file-name \"work.db\" dir)))
+                 (sqlite-close (sqlite-open other))
+                 (should-error (sqlite-open f) :type 'drgnx-work-db-gate)
+                 (should-not (file-exists-p f))
+                 (copy-file other f)
+                 (sqlite-close (sqlite-open f t))))"
+            "DRGNX_WORK_DB_GATE=1")))
+    (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(1 1 0))))
+  ;; …and without the variable it opens
+  (let ((r (drgnx-run-ert-test--gate-run
+            "(ert-deftest gate-open () (sqlite-close (sqlite-open (expand-file-name \"work.db\" temporary-file-directory))))")))
+    (should (= (plist-get r :passed) 1))))
+
+(ert-deftest drgnx-run-ert/gate-mode-skips-only-tagged-tests ()
+  (let ((tests "(drgnx-work-db-writer-deftest gate-tagged () (should (eq drgnx-coord-writer 'local)))
+                (ert-deftest gate-plain () (should t))"))
+    (let ((r (drgnx-run-ert-test--gate-run tests "DRGNX_WORK_DB_GATE=1")))
+      (should (equal (list (plist-get r :total) (plist-get r :passed)) '(1 1)))
+      (should (equal (mapcar (lambda (s) (plist-get s :name)) (plist-get r :skipped)) '("gate-tagged")))
+      (should (equal (mapcar (lambda (te) (plist-get te :name)) (plist-get r :tests)) '("gate-plain"))))
+    (let ((r (drgnx-run-ert-test--gate-run tests)))        ; not in gate mode: both run
+      (should (equal (list (plist-get r :total) (plist-get r :passed)) '(2 2)))
+      (should (zerop (length (plist-get r :skipped)))))))
 
 (ert-deftest drgnx-run-ert/unit-tests-never-see-the-users-provider-keys ()
   ;; a test that runs the onboarding's AI step (a live test call) must never reach a paid provider

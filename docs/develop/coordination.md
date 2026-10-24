@@ -68,8 +68,8 @@ read-only handle (`sqlite-open` with the read-only flag, `busy_timeout` 5000), c
 and never writes. Closing it never checkpoints, so a reader that outlives the writer leaves the WAL as it is.
 `drgnx-work-db-close-all` closes the readers first, then the writers.
 
-- A missing file, or a schema below `drgnx-work-db-schema-version`, is first made or migrated by the writer
-  (`(drgnx-work-db)`, once): until the hub is Rust, every drgnx Emacs is still a writer.
+- A missing file, or a schema below `drgnx-work-db-schema-version`, reads as an empty database: the hub makes and
+  migrates work.db, and only the `local` writer mode opens it read-write ("Who opens work.db" below).
 - A newer schema is read when its `meta` `compat-read` is at most `drgnx-work-db-compat-read`; otherwise
   `drgnx-work-db-too-new` is signalled ("work.db is schema N, which this drgnx cannot read: update drgnx").
 - A select inside a transaction keeps the transaction's handle. A function that reads and then writes may read on the
@@ -122,18 +122,256 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
 - **Review marks:** `drgnx-coord-review-mark AGENT PATH STATE HASH` and `drgnx-coord-review-marks AGENT` (alist
   path → `(:state :hash :at)`). Accepting or reverting is a review layer only: nothing in the files changes.
 
+## The writer (`runtime/crates/norn`, `runtime/crates/urdr`)
+
+Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 12); the Lisp in
+`core/drgnx-coord.el` stays the oracle until it is deleted. Rules:
+
+- **One writer, the graph writer.** `norn::store::CoordDb` is a thin wrapper over `urdr::graph::WriterHandle`: every
+  `CoordDb::write(meta, f)` is one request of the graph writer (group commit, a savepoint of its own, answered after
+  `COMMIT`; a failed `COMMIT` that left the transaction open is rolled back, so the one writer never stays stuck in
+  it; [store.md](store.md#the-writer-task-1)). The writer's opening rule (`norn::migrate7::open_rule`) makes a
+  missing file at schema 7 or migrates a schema-6 one ([store.md](store.md#migration-from-schema-6-task-11)); the
+  hub hands its writer to `CoordDb::with_graph`, `CoordDb::spawn` (tests) starts one of its own beside the path.
+  Nothing here opens a second write connection.
+- **Every write has an author.** The writer inserts the request's `tx` row first, from the `TxMeta` the caller gives
+  `write`; the author is never an argument:
+  - a coordination tool: the session's identity (`Identity::tx_meta`): class `agent` (a session drgnx runs) or `ext`
+    (an outside agent), actor `agent:SID` / `ext:KIND:PID-HASH`, its session, profile and job, tool `mcp:<name>`;
+  - an editor method (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's connection: actor
+    `user`, class `user`, tool `proto:<method>`; a seam method (`coord/*`) actor `hub`, and anything the Lisp
+    backend's connection writes actor `backend`, both class `system` (`drgnx-ratatoskr/src/coord.rs`, `tx_meta`);
+  - the gateway's `spend` rows and the rate card of a held report: actor `hub`, class `system`.
+
+  The rows of the kept tables a write made (`event`, `message`, `card`, `review_mark`, `agent`, `job`; `spend` from
+  Task 12b) carry that tx in their `tx` column (a later update of the row moves it), so excise blanks the right ones
+  (see "Excise" below).
+- **Writers take the transaction.** Each `norn::write::*` writer takes `&mut WTx` (`urdr::graph::Tx`), runs its SQL
+  through `tx.sql()` and the entity and link primitives with `&mut tx`; readers take the read connection (`&Tx`,
+  a plain `Connection`) and read the kept tables and the compat views. `CoordDb::read` runs on a read-only connection
+  of its own, outside any transaction.
+- **Hub keys are `kv`.** `write::meta` (`log-version`, `seen:AGENT`, `held:AGENT`, `rate-told:AGENT`,
+  `event-pruned`) reads and writes the `kv` table, through the class guard (`setting:` keys are the user's); `meta`
+  is the read-only view the Lisp readers see.
+- **Decisions are entities.** `decide` writes an entity of kind `decision` (`id decision:N`, `title` the subject,
+  `status`, `body` the reason, `data {n, kind, task?, paths?, author, at, ver, job?}`), `N` one past the highest
+  number so far, a `supersedes` link to the decision it `replaces` (when that number exists; else the number stays in
+  `data.replaces`), and bumps the `log-version` counter in the same transaction (call 4: `seen:*` keys keep working).
+  A replacing current decision marks the old one `replaced` (a new version) and gives it the new `ver`. Rates and
+  the HELD rules are unchanged. The readers read the `decision` view.
+- **Job tasks are entities.** `job_create` makes `task:JOB#N` (`data {job, n, role}`, status `ready` or `pending`)
+  and a `blocks` link from each dependency to the task that waits on it (a dependency the job does not have is left
+  out). `claim` sets status `claimed`, assignee and `lease_holder` to the agent, `lease_until` and **bumps
+  `lease_epoch`** (a renewal by the holder is a claim again: the epoch moves); `force_status`, `set_status`,
+  `heartbeat`, `renew` and `release_stale` update the entity (a version in `entity_hist`, `field_tx` naming the tx);
+  a released task keeps its epoch and has no holder. The readers read the `jtask` and `jdep` views. A job task's
+  `project` is the tx's project (none from the front's methods or the tools yet: Task 13/14 give the tracker's
+  tools theirs).
+- **Not ready.** While the graph writer is not ready (a file below schema 6, a migration that failed or waits) a
+  write is `NotReady` with the opening rule's text, and a read too; a newer schema is readable and a write is
+  `ReadOnly { schema }`.
+- **Follows the file.** The hub's 2 s schema tick calls the writer's `tick` and `CoordDb::tick`: the writer runs its
+  rule again while not ready and opens a replaced file (R-T14-2); the read connection opens when not open and again
+  when the file's `(dev, inode)` changed. A read or write that finds the store not open asks the writer to look once
+  itself first, so a `work.db` made or migrated after the hub started is used by the next call, the front's methods
+  and the coordination tools alike, not 2 s later.
+- **Excise.** `write::CoordBlanker` (`write::blankers()`, added to every `urdr::graph::excise::excise` call) blanks
+  the copies the kept tables hold: an `event`'s summary and data written by an excised tx or about an excised task
+  (`event.task`); a `message`'s text by `message.tx` (a coalesced notice is found by whichever tx last updated it) or
+  `message.entity`; a `card`'s title and data by `card.tx`, `card.entity` or `data.task`. The marker is the excise's
+  `[excised TX]`, the data `{"excised": TX}`.
+- **Events and meta.** `write::event` is `drgnx-coord--event`: the summary is one line of at most 200 characters
+  (`runstav::text::one_line`), data over 4096 characters is stored as `{"truncated": true, "size": N}`, `turn` is 1
+  for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 18 of `drgnx-coord-event-kinds` (a test
+  reads the Lisp list). `task` is the tracker's own (one per operation, written by `tracker::run`, never through
+  `events/add`); every `event` row goes through `write::event::event` (`urdr/tests/one_write_path.rs` checks it).
+  `write::meta` keeps `log-version`, `seen:AGENT` and `held:AGENT`.
+- **Messages, cards, review marks and agents.** `write::messages` (`send`, `mark`, `message_prompt`, `notice`),
+  `write::cards`, `write::review` and `write::agents` are the Lisp writers of the same names, rule for rule: `send`
+  is held by the log version (an answer with the versions, never a write; a version from the future is an error),
+  holds a message for a full queue (20, never for `user`) or a chatty pair (6 a minute), closes what the other side
+  sent, and writes its `question` or `message` event in the same transaction; `mark` goes forward only and never from
+  `held`; a card is settled once and an `ask` card is a `question` event whose settling is an `answer`; a review
+  mark takes an optional event of its own; `agent_register` keeps what is not given and `clear` nulls named fields.
+  Every writer takes the caller's clock (`now`). The typed readers are in `read::{messages,cards,review,agents}`.
+  `Held` carries the versions only: the caller adds `changes` from the decision reader.
+- **Jobs, tasks, decisions, pruning.** `write::jobs` (`job_create`, `job_set`), `write::tasks` (`claim`,
+  `set_status`, `force_status`, `heartbeat`, `renew`, `release_stale`; the lease is 15 minutes, only `claimed` and
+  `running` claims go stale, so `needs-input` and `in-review` keep theirs), `write::decisions` (`held_check`,
+  `decide`: the version check, 6 decisions a minute per agent, `current` versus `proposed`, `replaces`, the author's
+  own `seen`) and `write::prune` (30 days and 100,000 rows; questions, answers and decisions are kept; the
+  `event-pruned` meta key) port the Lisp of the same names. Each takes the time as an argument. The readers are
+  `read::{jobs,tasks,decisions}`.
+- **Parity.** `test/fixtures/coord-parity/CASE.input.json` (`setup`, `clock`, `calls`, optionally `tables`, the tables
+  to compare besides `event` and `meta`) is run by `gen.el` against the real Lisp functions, which writes
+  `CASE.expect.json` (results and tables); `norn/tests/parity.rs` replays each input against the Rust writers with the
+  same clock, on a schema-7 database: a schema-6 file made from `test/fixtures/work-db-6.sql` and the case's `setup`,
+  opened by the graph writer's opening rule, every call one write of it, the tables compared **through the compat views
+  and the kept tables** (the new `tx` and `entity` columns and the migration's `meta` keys left out;
+  `every_write_has_one_tx_row` looks at the first). A call with `"now": T` sees T at every `float-time`; a refused call
+  is `{"signal": MESSAGE}`. `test/fixtures/work-db-6.sql` is the schema every Rust test starts from. Run `gen.el` by
+  hand in the build container (its header has the commands); the fixtures stay when the Lisp is deleted.
+
+### Who writes what
+
+Under Ratatoskr, work.db has one writer per table group while the job runner is still Lisp (hub.md, "Ratatoskr and
+the Lisp backend"):
+
+| Writes | Through | Who calls |
+|---|---|---|
+| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`drgnx-ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection); the Lisp backend too |
+| jobs, tasks, leases, decisions, agents, the job runner's cards, held counts, the daily prune | the seam's `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` | the Lisp job runner (the backend), until it moves to Rust (phase 6) |
+| what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting |
+
+The Lisp side writes none of these tables itself. `drgnx-coord-writer` decides what each public writer of
+`core/drgnx-coord.el` does (a `pcase` in every one, including those that write with a direct `sqlite-execute`):
+- `front` (the backend behind Ratatoskr: `drgnx-hub-main` with a serve socket) calls the front's method above through
+  `drgnx-hub-call-front` (hub.md, "The backend writes through the front") and decodes its answer to the plist, id or
+  t/nil the function returned before. A refusal of the front is an `error` with its message. `claim`,
+  `set-status`, `heartbeat`, `set-seen` and `events-prune` have no front method (only the coordination tools,
+  `norn::tools`, write them): behind the front they signal "NAME has no front method"; `events-prune-daily` is
+  `coord/prune`, whose retention is the front's;
+- `local` (the standalone Lisp hub without a serve socket, `lisp-hub.sh`, and the unit tests: `harness/run-ert.el`
+  sets it, and a test's child Emacs that writes passes `--eval "(setq drgnx-coord-writer 'local)"`) writes work.db
+  as before;
+- `refuse`, the default, signals "coordination writes go through the drgnx hub (Ratatoskr)": an editor, the CLI and
+  the Lisp coordination server (`drgnx-coord-mcp-main`, until agents use the Rust bridge) never write these tables.
+  `drgnx-coord--tx` signals unless `local`.
+
+The front's methods take the Lisp keywords as params (`messages/send` `{recipient, text, job?, sender?, seen?,
+answers?, question?}`; only the backend may name a `sender`) and answer the Lisp results typed: `messages/send` is
+`{ok, id, state}` or `{held, version, changes}` (the decisions after `seen`, newest first, as `decisions_since` reads
+them), `coord/decide` `{ok, n, status, version}`, `{held, version, changes}` or `{error}`, `coord/leases`
+`{released: [{task, agent, job}]}`. Each is one transaction; each committed one is counted in `status`'s
+`store.writes`, sends its new events to subscribers and, unless the backend made it, tells the backend
+(`coord/notify`, coalesced) so it delivers.
+
+### Who opens work.db
+
+The hub (Ratatoskr) makes work.db at schema 7, or migrates a schema-6 file, before it serves; from then on its writer
+thread is the file's one writer. No Lisp opens it read-write outside the `local` mode:
+
+- `(drgnx-work-db)`, the read-write, migrating handle, signals `drgnx-work-db-not-the-writer` ("work.db is written by
+  the drgnx hub") unless `drgnx-coord-writer` is `local`, before it opens or makes anything. An editor and the CLI
+  (`refuse`) and the Lisp backend behind Ratatoskr (`front`) get the error, so a write that slipped past the writers'
+  `pcase` fails instead of taking the write lock (and, on schema 7, instead of migrating a newer file).
+- Everything the Lisp backend reads goes through `(drgnx-work-db-read)`, which reads schema 7 through the compat
+  views: the event log's last id at start and in the tick (`drgnx-hub-serve`, `drgnx-hub--events-check`), the
+  events a client catches up on (`drgnx-hub--event-rows`), a task's job (`drgnx-job--job-of`), and a coordination
+  server's last "reports held" card (`drgnx-coord-mcp--tell-held`).
+- The writes left on `(drgnx-work-db)` are the `local` branches of the writers in `core/drgnx-coord.el`
+  (`drgnx-coord--tx`, `review-mark`, `heartbeat`, `renew`, `set-seen`, `note-held`, the daily prune), the
+  coordination server's "told" stamp, and the gateway's `spend` row (`drgnx-work-db-add-spend`). Behind the front
+  the last two are refused, the stamp silently and the spend row as a logged "spend not recorded", until the Rust
+  gateway writes `spend`.
+- `drgnx-work-db/the-writer-refuses-outside-local-mode` is the guard's test, and
+  `store/the-lisp-backend-starts-on-schema-7` the row: a schema-6 file with a job, migrated by the hub, then the
+  Lisp backend lists the job, and the jobs list adds nothing to `status.store.writes`.
+
+### The editor writes through the hub
+
+The cockpit (`modules/tools/drgnx-cockpit*.el`) writes nothing to `work.db`; its five writes are hub calls
+(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits):
+
+| Where | Call |
+|---|---|
+| answering an ask card (`drgnx-cockpit-answer`) | `cards/settle`; `{settled: false}` says "That card was settled already" |
+| an answer to a message, a message to an agent (feed, cards, edits) | `messages/send`; a held one says why |
+| an answer closes its question | `events/add` (the `answer` event), then `messages/mark` `acted`, in that order |
+| a comment or a revert request in the edits pane | `messages/send`, then `events/add` once it was sent |
+| accepting a file | one `review/mark` with its `accept` event |
+
+An error is said once as "drgnx hub: TEXT". The editor sends no `coord/notify` after a send: the front notifies
+itself after a write. Reads stay on the read-only path. `drgnx-cockpit/no-writer-call-in-the-modules` walks the cockpit
+modules and `core/drgnx-cockpit-model.el` for a `drgnx-coord-` writer or a `sqlite-execute`.
+
+## The tracker (`runtime/crates/norn/src/tracker`)
+
+Tasks agents share, besides a job's tasks. `tracker::op(tx, caller, TaskOp)` runs one op in the caller's tx (the
+`task_write` tool and `tasks/write` call it through `tracker::op_or_roll_back`) and adds one `event` of kind `task`
+(`summary` "OP ID: TITLE", the title after the op; `data {op, id, ver[, parts]}`). The answer is `Done {id, title, ver,
+lease, parts}`, `Conflict {id, ver, changed_since, next}`, `LeaseLost {by, how, tx, note, next}` or `Proposed
+{card}`; a refusal is `WriteError::Refused` with what to do instead, and rolls the request back. A conflict or a lost
+lease writes nothing: `op_or_roll_back` keeps its answer aside and rolls the request back, so not even a tx row
+commits, and the caller answers with the kept answer.
+
+- **A tracker task** is an entity of kind `task`, origin `recorded`, id `task:<pp>-<5 base36>` (`pp`: the first two
+  letters of its project's first alias), in its creator's project (a caller without a project makes none, the user
+  included: `tasks/write` passes the project), with `data {labels?, acceptance?, tracker_tools?, lease_end?}`. The
+  ops: `create` (optionally under a `parent`), `update` (title, body, priority, acceptance, status), `claim`,
+  `heartbeat`, `release`, `handoff`, `reassign`, `split`, `complete`, `link`, `unlink`, `label` and, user only,
+  `tools` (`data.tracker_tools`, on job tasks too).
+- **What an agent may change:** a tracker task of its own project. A task out of its scope, missing or retired is
+  "no such task" (never "forbidden"); one a read grant shows is refused as another project's. A parsed entity (a
+  plan's or a board's task, origin `parsed`) is the file's: "this comes from FILE; add a note or a task that relates
+  to it", for the user too, since the next scan would overwrite it. A job's task (`data.job`) answers "use
+  claim_task, update_task or complete_task".
+- **Versions:** `update`, `reassign` and `split` take the `ver` the caller read; a stale one answers `Conflict` with
+  each field changed since (its value, who, their class, the tx). `label` (add and remove, never a whole list),
+  `link`, `unlink` and the lease ops need none, so concurrent label adds lose nothing.
+- **Links** follow `norn::kinds`. `blocks` and `parent_of` change what is ready, so both ends must be in the
+  caller's project (writes into another project are not grantable), neither parsed nor a job's; `relates` and
+  `duplicates` may point into a project a grant shows. A `blocks` link that would close a cycle is refused with the
+  path (`A → B → C → A`).
+- **Ready is computed**, never stored (`tracker::ready`): an open task, or a claimed one whose lease ran out, with no
+  live lease, no open `blocks` into it and no open `parent_of` part. `split` makes the parts (`split_from` the
+  original; project, labels and priority inherited) and either adds `parent_of` (`children`, the default: the
+  original waits for its parts) or drops the original with `duplicates` links (`replace`).
+- **The user's tasks** (made in a user-class tx): an agent adds notes, links, labels and the priority freely; the
+  title, body and acceptance change only under an `edit-user-tasks` grant (`norn::grants`), never `dropped`.
+  Without the grant an agent sets only `in-review`, and `complete` gives `in-review`; with it `done` is done, unless
+  **only I close my tasks** (`kv` `setting:only-user-closes`, `1`) is on: then `done` is a `close` card (`card` kind
+  `close`, `entity` the task, `data {task, ver, by, note}`, merged while one is open) and a notice to the user, and
+  the task is unchanged, so it unblocks nothing. An agent's own task goes `in-review` on `complete`.
+- **Secrets:** a title, body, acceptance, label or note that looks like a credential (`runstav::secrets`) is
+  refused with the rule's name.
+
+### Leases
+
+`claim` takes a ready task (or one whose lease ran out): status `claimed`, assignee and holder the caller, 15
+minutes, **epoch + 1**, a `works_on` link from the caller's `session:SID`. The answer's `lease` is the epoch, and
+`heartbeat`, `release`, `handoff` and `complete` must give it back: the fence passes only when the caller holds the
+lease, the epoch matches and it has not run out. Otherwise the op answers `LeaseLost` and writes nothing: `how`
+`reassign` (with the reassigner and the note), `reclaimed` (someone claimed after it ran out; a holder that claimed
+again after reconnecting has a new epoch too, and the old one is dead) or `expired`. The epoch that ended is kept in
+`data.lease_end`. `reassign` needs a note and the task's `ver` and is anyone's in the project: no holder, epoch + 1,
+status `open`, assignee `to`. `release` and `handoff` (a note required, to an agent, the user or nobody) set
+`open` and keep the epoch. While another holds a live lease, nobody else changes the status. Closing a task clears
+its lease. Notes are entities of kind `note` with an `about` link to the task.
+
+### Notices
+
+The agents a change affects get a `message` in the change's tx (`norn::write::notices`): sender `tracker`,
+recipient the actor (`agent:SID`, `ext:…`), `entity` the task's `n`, `text` JSON `{kind: "task-changed", task,
+title, fields, by, tx, notes, says, changes}`. Told: the task's assignee and holder before and after the change, the
+maker on `complete`, the assignee of a task a closed blocker (or a removed `blocks`) made ready (`says` "now
+ready"), the old holder of a lost lease ("lease lost"), and the user only of a close proposal. Never the caller.
+While a notice is queued, the next one about the same task merges into it (fields, notes and says joined,
+`changes` counted). Notes appear by id only, so excising a note leaves no copy. `tracker::notices::notices_unread`
+counts them for an actor; the tool calls the hub's `notify()` after `COMMIT`.
+
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 
 `drgnx-mcp-serve NAME TOOLS` is a small MCP server (stdio, protocol 2025-06-18: initialize, ping, tools/list,
 tools/call). A tool is `(NAME :description :schema :call FN)`; FN gets the arguments as a plist and returns a
 string or a value (sent as JSON); its errors are `isError` results. `drgnx-mcp-schema` builds the input schema.
 
-Every agent session gets the coordination server in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
-`drgnx-coord-mcp-server-spec`): one batch Emacs per agent, its identity in its environment (`DRGNX_AGENT` = the
-session's **id**, `s-…` — a name like "claude · drgnx" repeats across hubs and editors — `DRGNX_JOB`, `DRGNX_TASK`,
-and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. An agent outside drgnx sets
-`DRGNX_AGENT_KIND` instead and gets an identity of its own (below). Messages are addressed to a session's id
-(or its name).
+### How an agent reaches the tools
+
+Every agent session gets the coordination tools in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
+`drgnx-coord-mcp-server-spec`) as Ratatoskr's bridge: `<data>/bin/ratatoskr mcp-bridge --socket PATH`, with an empty
+environment. PATH is the `mcp.sock` of a session the hub minted for it (`mcp/session`, called by
+`drgnx-hub-mcp-session` from `drgnx-agents--with-mcp` just before `session/new` or `session/load`): the socket is the
+identity, and it names the session's **id** (`s-…` — a name like "claude · drgnx" repeats across hubs and editors),
+its job and task. The owner is the Emacs that made it (`(emacs-pid)`): when it dies the hub closes the session, and a
+session's end calls `mcp/session-close` (`drgnx-hub-mcp-session-close`). In the backend the call goes to the front
+(`drgnx-hub-call-front`); in an editor a command waits at most 2 s; a timer or startup path asks without waiting and
+the session start continues from the answer. When the session cannot be made (no binary, no hub) the agent starts
+without the coordination tools and says why in its transcript. An agent outside drgnx runs `ratatoskr mcp-bridge
+--outside --kind KIND` (or the old `bin/drgnx coord mcp --kind KIND`, which execs it) and gets an identity of its own
+(below). Messages are addressed to a session's id (or its name). The Lisp server (`drgnx-coord-mcp-main`) stays on
+disk, launched by nothing, until phase 7: a sandboxed session's hub-run coordination server is the same bridge
+(`drgnx-sandbox-mcp.el`).
 
 | Tool | Does |
 |---|---|
@@ -249,6 +487,83 @@ and its answer is then nil. No tool asks anything.
 
 **The command** M11c-2's agent settings pages write is `(drgnx-coord-mcp-outside-spec KIND)` → `(:type stdio
 :command "<checkout>/bin/drgnx" :args ("coord" "mcp" "--kind" KIND))`.
+
+### The tools in Ratatoskr (`runtime/crates/norn/src/tools`)
+
+Ratatoskr serves the same tools in its own process, on `mimir`, one `Coord` per hub (the store, the hub, the report
+limit, the clock). Each tool is the Lisp tool of the same name, ported with the Lisp as the oracle: the rules, the
+answers (JSON in the Lisp's key order; an empty list is `null`, as the Lisp's nil) and the error texts are the
+Lisp's. `tests/tools.rs` replays the cases `gen.el` makes by running the Lisp tools
+(`test/fixtures/coord-parity/tools-*.json`). `report.rs` has `hello`, `report_edit`, `report_test`, `ask_user` and
+`list_agents`; `job.rs` and `read.rs` have the rest. The hub's `Front` holds the one `Coord` (`Front.tools`, on the
+front's writer) and the list (`Front.tool_list`, `norn::tools::tools()`); its `Hub` (`coord::ToolHub`) answers
+`sessions()` with the backend's `agents/list` (2 s) and `notify()` with the front's `events` and the coalesced
+`coord/notify`.
+
+**Who an agent is.** A call's context is `(Arc<Coord>, Identity)`, and the identity comes from the connection, never
+from an argument or an environment variable (`DRGNX_AGENT` is never read):
+- `Identity::Session {agent, job, task, home}`: a session's own `mcp.sock` (hub.md, "Sessions and their sockets"). Its
+  job and task are what `DRGNX_JOB` and `DRGNX_TASK` were; `home` is the folder the session started in, the Lisp
+  server's `default-directory`.
+- `Identity::Outside {id, kind, home}`: an outside bridge. `Identity::outside(KIND, PID, START, HOME)` makes
+  `ext:KIND:PID-HASH` from the bridge's peer process, as the Lisp did for itself: PID the agent's process, HASH 6 hex
+  of sha1 over its start time to the second (`ext:KIND:PID` without one; `hello` then says so in `note`). An outside
+  agent has no job and no task. With no `home` (a bridge that named no folder), `hello` and `report_edit` answer "No
+  folder is known for you".
+- `Identity::None`: reads only; a write answers "This server has no agent identity …".
+
+**The guard.** Every tool is a `CoordTool` wrapped by `guard::guarded`, so none can skip it:
+- the identity is checked on every call: `user` in any case, or an id that is not plain, refuses every tool;
+- an argument named `agent`, `from`, `sender`, `as` or `identity` is refused twice: by the tool's check (`agent:
+  tools never take an identity`, a tool error with its path, before the typed check that would also refuse it as an
+  unknown key) and again in the call, with the Lisp text (`No tool takes `agent': you are …`).
+
+**The report limit** (`guard::REPORT_RATE`, 20 a minute per identity) counts in the hub's memory across all of an
+agent's connections; a held report writes nothing. The `rate` card and the store's `rate-told:ID` stamp are written in
+one transaction, at most once an hour per identity, also across a hub restart. A failed write tells nobody, as in
+the Lisp.
+
+**git** (`hello`'s worktree, base and branch; `report_edit`'s root): the root-owned git of `draugr::git` with its
+overrides (no fsmonitor, no hook, no pager, no `ext::`, `--no-optional-locks`), in a minimal environment
+(`PATH`, `HOME`, the locale, `TMPDIR`), stdin closed, killed after 3 s (manager's call 10). The worktree is looked up
+on each call; the Lisp server found it once.
+
+**Writes by `job.rs`** (`send_message`, `record_decision`, `claim_task`, `update_task`, `complete_task`,
+`escalate`) are one transaction each: the writer, then the agent's `held:ID` count (a held write adds one, any other
+write clears it), then `coord/notify`. A write made from an old `seen_version` is held, nothing written, and the answer
+is `HELD: …` with the decisions since (`changes`, newest first). A recipient is `user`, an agent of the caller's job,
+or a hub session named by id or name (asked last); an outside agent's `send_message` counts as a report.
+`read.rs` has `read_inbox` (its rows are as they were read, then marked `read`), `ack`, `read_decisions` (the caller's
+`seen:ID` is written only when it changed), `task_status` and `work_status`: the work tracker's plans from the `node`
+and `edge` tables, read-only, sorted by path, with the counts of `drgnx-work-counts`. The size of `tools/list` is
+measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byte (about 6k-token) budget for the 16
+tools and 36,000 bytes (about 9k tokens) for the 21 with the tracker set.
+
+**The tracker and graph tools** (`tools/tracker.rs`, `tools/graph.rs`; storage §6.1, §6.4) are `RichTool`s behind the
+same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or the 16 above with `tracker: false`.
+- **The caller** comes from the identity (`Caller::from_identity`) with the project of its folder, resolved once and
+  kept in `Coord::projects()`. Writes register a new project; reads use only one the store knows. It is never an
+  argument.
+- **Answers** are text plus `structuredContent` (`Authored` text: `{text, by, class, tx, project, trust}`), a
+  `resource_link` (`drgnx://entity/ID`) per entity named, and `_meta["dev.drgnx/notices"] = n`, with a last text line
+  `notices: n (read_inbox)` only when n > 0. Untrusted text, the caller's own included, is fenced in the text. Lists
+  hold 50 rows and a `next_cursor` (`o:N`).
+- `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. A caller without a project
+  (a folder that is no git repository) writes nothing: `task_write create` and `note_add` are refused ("you have no
+  project"). `access_request` makes (or
+  finds) one open `access` card per session and target and answers `{requested: card}` for a known project and an
+  unknown one alike.
+- `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
+  `about: [id]`.
+- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
+  project and the projects granted to it) lack a vector; the vector half
+  waits for the embedder (Task 12b).
+
+**Where Rust and Lisp differ, on purpose:**
+- an identity's error texts name the agent's id instead of `DRGNX_AGENT`;
+- a missing or ill-typed argument is a tool error with its path (contract Task 10, amended), before the tool runs;
+- `ask_user`'s message and its task's `needs-input` commit in one transaction, and so do `hello`'s registration and its
+  `start` event (the Lisp made two).
 
 ## What this does not protect against
 
@@ -399,3 +714,8 @@ or flooding — `drgnx-coord-mcp/outside-agents-cannot-forge-or-flood`),
 decisions, leases); the job tests are listed in [jobs.md](../guide/jobs.md#tests). The mock agent's `coord TOOL JSON` prompt
 calls a tool of the server it was given; `[drgnx task ID]` does a task, `[drgnx review ID]` reviews one
 (`MOCK_ACP_VERDICT=fail`), `MOCK_ACP_RATE_LIMIT` answers every prompt with a 429.
+
+The Rust tools: `runtime/crates/norn/tests/tools.rs` (identity names refused on every tool, `user` never an
+identity, no identity reads only, outside agents kept off the job tools, the report limit and its card, path rules,
+`hello`'s cwd, a planted git hook and fsmonitor that never run, and the Lisp tools' cases replayed) and the unit tests
+of `norn::tools::{identity, guard, report}`.

@@ -1,0 +1,16 @@
+{"scenario": "gateway/streaming-first-chunk-first", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: the provider streams `data: a` at once and `data: b` 1500 ms later. The agent reads the first chunk within 1 s of asking (the gateway relays each chunk as it comes, not the whole answer at its end), and the second arrives after it."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "content_type": "text/event-stream", "chunks": [[0, "data: a\n\n"], [1500, "data: b\n\n"]]}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"stream\": true, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "read": {"bytes": 9}, "within_ms": 1000}
+{"do": "expect_http", "conn": "g", "status": 200, "body_contains": "data: a", "within_ms": 1000}
+{"do": "expect_http", "conn": "g", "status": 200, "body_contains": "data: b", "within_ms": 5000}

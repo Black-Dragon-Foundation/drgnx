@@ -1,12 +1,14 @@
 # The test images, prebuilt so CI pulls them instead of installing packages every run: built from
 # test/container/Containerfile{,.gui,.tty} and tagged with the Containerfile's hash (CI pulls the tag of the
-# Containerfile it checked out, else builds it itself). Weekly too, so distribution updates arrive.
+# Containerfile it checked out, else builds it itself). Weekly too, so distribution updates arrive. A push to a ci/*
+# branch publishes only the hash tag (a Containerfile not on main never moves `f45`). No gate: it makes a cache, not a
+# verdict (a job without its image builds it), and its paths filter means most pushes never run it.
 # docs/develop/ci.md
 name: Test images
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
     paths: ["test/container/**", ".github/workflows/images.yml"]
   schedule:
     - cron: "41 2 * * 1"
@@ -16,8 +18,9 @@ permissions:
   contents: read
   packages: write
 
+# one run at a time per ref (a ci/* run never queues behind or replaces main's), none cancelled
 concurrency:
-  group: images
+  group: images-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -48,6 +51,7 @@ jobs:
           FILE: ${{ matrix.file }}
           BUILD_ARGS: ${{ matrix.args }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
+          REF: ${{ github.ref }}
         run: |
           image="ghcr.io/black-dragon-foundation/$NAME"
           tag="$(sha256sum "test/container/$FILE" | cut -c1-16)"
@@ -56,4 +60,4 @@ jobs:
           podman build --pull=always $BUILD_ARGS --label "org.opencontainers.image.source=$SOURCE" \
             -t "$image:$tag" -t "$image:f45" -f "test/container/$FILE" test/container
           podman push "$image:$tag"
-          podman push "$image:f45"
+          if [ "$REF" = refs/heads/main ]; then podman push "$image:f45"; fi

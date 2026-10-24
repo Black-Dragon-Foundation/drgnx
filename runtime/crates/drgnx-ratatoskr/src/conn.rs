@@ -1,8 +1,11 @@
 //! One connection (design 4.1, 5.3): the peer-uid check first, then the hub's challenge, then lines in through the
 //! 1 MiB codec to [`Front::start_line`] (at most 64 forwarded calls in flight), and lines out through a writer task
 //! of its own with a queue that drops a client that stopped reading (16 MiB queued, or 10 s without the write making
-//! progress), so one stopped client never stalls another.  With the `test-hooks` feature a line calling `__test_flood` is served here, before the
-//! dispatcher (it is no method of the registry).
+//! progress), so one stopped client never stalls another.  With the `test-hooks` feature a line calling
+//! `__test_flood` or `__test_owner_gone` is served here, before the dispatcher (neither is a method of the registry).
+//!
+//! After `mcp/attach` is answered (an outside agent's bridge), the connection is MCP's: the answer and any call in
+//! flight are written, and the bytes after the attach line go to [`crate::sessions::Sessions::serve_outside`].
 
 use crate::front::{Front, MAX_IN_FLIGHT};
 use crate::hello::{Session, Socket};
@@ -180,30 +183,33 @@ impl Outbox {
     }
 }
 
-/// The writer task: lines in order, each write given [`STUCK_AFTER`] to make progress.
-async fn write_loop(mut w: OwnedWriteHalf, out: Arc<Outbox>) {
+/// The writer task: lines in order, each write given [`STUCK_AFTER`] to make progress.  When the queue was finished
+/// and written whole (never closed), the write half comes back: `mcp/attach` hands it on.
+async fn write_loop(mut w: OwnedWriteHalf, out: Arc<Outbox>) -> Option<OwnedWriteHalf> {
     while let Some(line) = out.next().await {
         let mut rest = line.as_bytes();
         while !rest.is_empty() {
             let step = tokio::select! {
                 r = tokio::time::timeout(STUCK_AFTER, w.write(rest)) => r,
-                () = out.closed() => return,
+                () = out.closed() => return None,
             };
             match step {
                 Ok(Ok(n)) if n > 0 => rest = &rest[n..],
                 Ok(Ok(_)) | Ok(Err(_)) => {
                     out.close("closed a client whose socket refused a write");
-                    return;
+                    return None;
                 }
                 Err(_) => {
                     out.close("dropped a client that stopped reading: no progress for 10 s");
-                    return;
+                    return None;
                 }
             }
         }
         out.written(line.len());
     }
+    let whole = !out.queue.lock().expect("the queue lock").closed;
     out.close("closed a connection");
+    whole.then_some(w)
 }
 
 /// Serve one connection accepted on SOCKET until it closes.
@@ -233,6 +239,7 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     let out = Arc::new(Outbox::new(id));
     let writer = tokio::spawn(write_loop(w, out.clone()));
     let mut session = Session::new(id, socket);
+    session.peer_pid = cred.pid();
     // the hub's challenge, the first line on every connection (design 4.2)
     match proof::nonce() {
         Ok(n) => {
@@ -245,15 +252,22 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     let mut buf = BytesMut::with_capacity(8192);
     // this connection's forwarded calls in flight
     let slots = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
+    // `mcp/attach` answered: the identity the rest of the connection's bytes are MCP for
+    let mut attached = None;
     'read: loop {
         loop {
             match codec.decode(&mut buf) {
                 Ok(Some(l)) => {
                     #[cfg(feature = "test-hooks")]
-                    if flood::serve(&out, &l).await {
+                    if flood::serve(&out, &l).await || owner_gone::serve(&front, &out, &l).await {
                         continue;
                     }
                     front.start_line(&mut session, &out, &l, &slots).await;
+                    if let Some(who) = session.attach.take() {
+                        // what follows the line in BUF is the first MCP bytes, never a hub line
+                        attached = Some(who);
+                        break 'read;
+                    }
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -282,7 +296,53 @@ pub async fn serve(stream: UnixStream, front: Arc<Front>, socket: Socket) {
         }
     }
     front.gone(id);
-    let _ = writer.await;
+    let Some(who) = attached else {
+        let _ = writer.await;
+        return;
+    };
+    // the answer and any call still in flight written first, then the connection is MCP's from its next byte
+    let _ = slots.acquire_many(MAX_IN_FLIGHT as u32).await;
+    out.finish();
+    let Ok(Some(w)) = writer.await else {
+        return;
+    };
+    let rest = std::io::Cursor::new(buf.to_vec());
+    front.mcp.serve_outside(who, rest.chain(r), w).await;
+}
+
+/// `__test_owner_gone {owner}` (test-hooks): the sessions OWNER owns closed as if it had died, now; answered with how
+/// many.
+#[cfg(feature = "test-hooks")]
+mod owner_gone {
+    use super::Outbox;
+    use crate::front::Front;
+    use runstav::wire::{Answer, Request};
+    use serde_json::json;
+
+    /// Serve LINE when it is a `__test_owner_gone` request (true), else leave it to the dispatcher.
+    pub(super) async fn serve(front: &Front, out: &Outbox, line: &str) -> bool {
+        let Ok(req) = serde_json::from_str::<Request>(line) else {
+            return false;
+        };
+        if req.method != "__test_owner_gone" {
+            return false;
+        }
+        let owner = req.params["owner"]
+            .as_u64()
+            .and_then(|o| u32::try_from(o).ok())
+            .unwrap_or(0);
+        let closed = front.mcp.owner_gone(owner).await;
+        if let Some(id) = req.id {
+            let a = serde_json::to_string(&Answer {
+                id,
+                result: json!({"closed": closed}),
+                ignored: vec![],
+            })
+            .expect("an answer serializes");
+            out.push(format!("{a}\n").into());
+        }
+        true
+    }
 }
 
 /// `__test_flood {lines, size}` (test-hooks): LINES `flood` events of SIZE bytes of data, one per millisecond, on

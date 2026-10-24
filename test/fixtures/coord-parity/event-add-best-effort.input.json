@@ -1,0 +1,8 @@
+{
+  "setup": [],
+  "clock": [300.0, 301.0],
+  "calls": [
+    {"fn": "drgnx-coord-event-add-best-effort", "args": {"agent": "a1", "kind": "test", "summary": "tests ran", "data": {"passed": 3, "failed": 0}}},
+    {"fn": "drgnx-coord-event-add-best-effort", "args": {"agent": "a1", "kind": "test", "summary": "again"}}
+  ]
+}

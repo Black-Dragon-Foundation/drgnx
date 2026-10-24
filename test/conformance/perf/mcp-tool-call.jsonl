@@ -1,0 +1,13 @@
+{"scenario": "perf/mcp-tool-call", "requires": ["v1", "fake-backend", "perf"], "doc": "The baseline of a tool call over a session socket: tools/call read_inbox on an initialized MCP connection, 100 times (--perf records every sample, no budget)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}, {"type": "text", "text": "$string"}], "isError": "$absent"}}}
+{"do": "measure", "name": "read-inbox-call", "repeat": 100, "steps": [{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "read_inbox", "arguments": {}}}}, {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}}]}

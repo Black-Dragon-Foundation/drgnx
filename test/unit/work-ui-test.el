@@ -4,6 +4,7 @@
 (require 'drgnx-agents)                ; loaded before any test stubs its functions
 (load (expand-file-name "modules/tools/drgnx-work-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defun drgnx-work-ui-test--git (dir &rest args)
   (with-temp-buffer
@@ -21,7 +22,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
           (drgnx-work-db--handles nil) (drgnx-work-ui--expanded (make-hash-table :test #'equal))
           (drgnx-work-ui-filter-text nil) (drgnx-work-ui-hide-merged nil))
      (unwind-protect
-         (progn
+         (drgnx-work-fixture-with-hub
            (make-directory (concat ,root "docs/specs") t) (make-directory (concat ,root "docs/plans") t)
            (make-directory (concat ,root "code") t)
            (write-region "# The Spec\n\nWhy.\n" nil (concat ,root "docs/specs/s.md") nil 'silent)
@@ -110,7 +111,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
       (should-not (string-search "The Spec" (buffer-string)))   ; a spec with no plan shown is hidden too
       (drgnx-work-ui-filter "") (drgnx-work-ui-test--draw)
       (should (string-search "Plan Alpha" (buffer-string)))
-      (drgnx-work-update-node (concat "plan:" root "docs/plans/beta.md") :merged t)
+      (drgnx-work-fixture-update-node (concat "plan:" root "docs/plans/beta.md") :merged t)
       (drgnx-work-ui-toggle-merged) (drgnx-work-ui-test--draw)
       (should-not (string-search "Plan Beta" (buffer-string)))
       (should (string-search "Plan Alpha" (buffer-string))))))
@@ -129,8 +130,8 @@ without SVG (librsvg), e.g. a terminal-only build."
 (ert-deftest drgnx-work-ui/the-graph-lays-out-specs-plans-and-branches-in-columns ()
   (drgnx-work-ui-test--with root
     (let ((alpha (concat "plan:" root "docs/plans/alpha.md")) (beta (concat "plan:" root "docs/plans/beta.md")))
-      (drgnx-work-update-node alpha :branch "feature")
-      (drgnx-work-update-node beta :title (concat "Plan Beta " (make-string 80 ?x)))
+      (drgnx-work-fixture-update-node alpha :branch "feature")
+      (drgnx-work-fixture-update-node beta :title (concat "Plan Beta " (make-string 80 ?x)))
       (let* ((l (drgnx-work-ui-graph-layout))
              (spec (drgnx-work-ui-test--box l (concat "spec:" root "docs/specs/s.md")))
              (a (drgnx-work-ui-test--box l alpha)) (b (drgnx-work-ui-test--box l beta))
@@ -156,8 +157,8 @@ without SVG (librsvg), e.g. a terminal-only build."
   (drgnx-work-ui-test--with root
     (dolist (p '("alpha" "beta"))
       (let ((id (concat "plan:" root "docs/plans/" p ".md")))
-        (drgnx-work-update-node id :branch "main")
-        (drgnx-work-put-edge id "branch:/repo/.git:main" 'on-branch 'inferred "branch")))
+        (drgnx-work-fixture-update-node id :branch "main")
+        (drgnx-work-fixture-put-edge id "branch:/repo/.git:main" 'on-branch 'inferred "branch")))
     (let ((l (drgnx-work-ui-graph-layout)))
       (dolist (e (plist-get l :edges))
         (when (eq (plist-get (cadr e) :kind) 'branch)
@@ -242,7 +243,7 @@ without SVG (librsvg), e.g. a terminal-only build."
 
 (ert-deftest drgnx-work-ui/a-click-on-a-box-opens-what-it-shows ()
   (drgnx-work-ui-test--with root
-    (drgnx-work-update-node (concat "plan:" root "docs/plans/alpha.md") :branch "feature")
+    (drgnx-work-fixture-update-node (concat "plan:" root "docs/plans/alpha.md") :branch "feature")
     (let* ((g (drgnx-work-ui-test--graph))
            (img (with-current-buffer g (let ((d (get-text-property (point-min) 'display))) (if (eq (car d) 'image) d (cadr d)))))
            (keymap (with-current-buffer g (get-text-property (point-min) 'keymap)))
@@ -282,20 +283,37 @@ without SVG (librsvg), e.g. a terminal-only build."
       (should (eq (lookup-key keymap [double-mouse-1]) #'ignore))
       (should (eq (lookup-key keymap (vector (nth 1 spot) 'double-mouse-1)) #'ignore)))))
 
+(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+
 (ert-deftest drgnx-work-ui/refresh-scans-in-another-process-and-redraws ()
-  (drgnx-work-ui-test--with root
-    (let ((drgnx-work-roots (list root)))
-      (write-region "# Plan Gamma\n\n### Task 1: x\n\n- [ ] y\n" nil (concat root "docs/plans/gamma.md") nil 'silent)
-      (with-current-buffer (drgnx-work-ui-buffer)
-        (should-not (string-search "Plan Gamma" (buffer-string)))
-        (let ((p (drgnx-work-ui-refresh)))
-          (should (processp p))                                 ; not the scan itself: Emacs stays free
-          (let ((d (+ (float-time) 60))) (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
-          (accept-process-output nil 0.2))
-        (should (drgnx-view-pending-p drgnx-view))              ; the sentinel only marked the view
-        (should-not (string-search "Plan Gamma" (buffer-string)))
-        (drgnx-work-ui-test--draw)
-        (should (string-search "Plan Gamma" (buffer-string)))))))
+  ;; binary: the refresh is a batch `drgnx work scan' that writes through the real hub (Ratatoskr serving ROOT), and
+  ;; this Emacs reads what it stored through the read-only handle
+  (drgnx-hub-client-test--with-ratatoskr
+    (let* ((proj (concat root "proj/")) (drgnx-work-roots (list proj))
+           (drgnx-work-db--handles nil) (drgnx-work-db--read-handles nil) (drgnx-work-ui--scan nil)
+           (drgnx-work-ui--expanded (make-hash-table :test #'equal)) (drgnx-work-ui-filter-text nil)
+           (drgnx-work-ui-hide-merged nil))
+      (unwind-protect
+          (progn
+            (make-directory (concat proj "docs/plans") t)
+            (write-region "# Plan Gamma\n\n### Task 1: x\n\n- [ ] y\n" nil (concat proj "docs/plans/gamma.md")
+                          nil 'silent)
+            (with-current-buffer (drgnx-work-ui-buffer)
+              (should-not (string-search "Plan Gamma" (buffer-string)))
+              (let ((p (drgnx-work-ui-refresh)))
+                (should (processp p))                           ; not the scan itself: Emacs stays free
+                (let ((d (+ (float-time) 60)))
+                  (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
+                (accept-process-output nil 0.2)
+                (let ((out (with-current-buffer (process-buffer p) (buffer-string))))   ; its output, when it failed
+                  (should (equal (cons (process-exit-status p) out) (cons 0 out)))))
+              (should (drgnx-view-pending-p drgnx-view))        ; the sentinel only marked the view
+              (should-not (string-search "Plan Gamma" (buffer-string)))
+              (drgnx-work-ui-test--draw)
+              (should (string-search "Plan Gamma" (buffer-string)))))
+        (when (get-buffer "*drgnx Work*") (kill-buffer "*drgnx Work*"))
+        (when (get-buffer " *drgnx work scan*") (kill-buffer " *drgnx work scan*"))
+        (drgnx-work-db-close-all)))))
 
 (ert-deftest drgnx-work-ui/a-failed-scan-says-only-its-own-output-and-never-errors ()
   ;; a stub bin/drgnx that fails; started from a deleted directory; its buffer holds an earlier scan's
@@ -332,7 +350,7 @@ without SVG (librsvg), e.g. a terminal-only build."
           (drgnx-work-ui-test--goto "Task 2: second")
           (drgnx-work-ui-start-agent "mock")
           (should (equal started (list "mock" (concat root "docs/plans/") (concat "task:" root "docs/plans/alpha.md#2"))))
-          (drgnx-work-update-node (concat "plan:" root "docs/plans/alpha.md") :worktree (concat root "code/"))
+          (drgnx-work-fixture-update-node (concat "plan:" root "docs/plans/alpha.md") :worktree (concat root "code/"))
           (drgnx-work-ui-start-agent "mock")                     ; the plan's worktree, when it has one
           (should (equal (nth 1 started) (concat root "code/"))))))))
 
@@ -354,7 +372,7 @@ without SVG (librsvg), e.g. a terminal-only build."
            (commit (lambda (msg) (write-region msg nil (concat code msg) nil 'silent)
                      (drgnx-work-ui-test--git code "add" "-A") (drgnx-work-ui-test--git code "commit" "-q" "-m" msg)
                      (drgnx-work-ui-test--git code "rev-parse" "HEAD"))))
-      (drgnx-work-put-node "todo:/b.org#1" :kind 'todo :title "a todo" :path "/b.org" :line 1 :status "open" :parent plan :ord 1 :source "/b.org")
+      (drgnx-work-fixture-put-node "todo:/b.org#1" :kind 'todo :title "a todo" :path "/b.org" :line 1 :status "open" :parent plan :ord 1 :source "/b.org")
       (drgnx-work-record "todo:/b.org#1" code (funcall commit "for-the-todo"))
       (drgnx-work-record plan code (funcall commit "for-the-plan"))
       (with-current-buffer (drgnx-work-ui-buffer)
@@ -374,7 +392,7 @@ without SVG (librsvg), e.g. a terminal-only build."
         (should (equal text (buffer-string)))
         (drgnx-work-ui-test--draw)
         (should (= before (drgnx-work-ui-test--rows-drawn)))     ; nothing changed: no row drawn again
-        (drgnx-work-update-node (concat "task:" root "docs/plans/alpha.md#2") :title "second, renamed")
+        (drgnx-work-fixture-update-node (concat "task:" root "docs/plans/alpha.md#2") :title "second, renamed")
         (drgnx-work-ui--redraw)
         (should (equal text (buffer-string)))                    ; the mark draws nothing
         (drgnx-work-ui-test--draw)
@@ -429,7 +447,7 @@ without SVG (librsvg), e.g. a terminal-only build."
       (drgnx-work-ui-filter "beta")
       (should-not (string-search "Plan Alpha" (buffer-string)))
       (drgnx-work-ui-filter "")
-      (drgnx-work-update-node (concat "plan:" root "docs/plans/beta.md") :merged t)
+      (drgnx-work-fixture-update-node (concat "plan:" root "docs/plans/beta.md") :merged t)
       (drgnx-work-ui-toggle-merged)
       (should-not (string-search "Plan Beta" (buffer-string))))))
 
@@ -440,7 +458,7 @@ without SVG (librsvg), e.g. a terminal-only build."
       (let ((task (concat "task:" root "docs/plans/alpha.md#2")))
         (drgnx-work-ui-test--goto "Task 2: second")
         (let ((line (plist-get (drgnx-work-ui--node) :line)) (before (drgnx-work-ui-test--rows-drawn)))
-          (drgnx-work-update-node task :line (+ 100 (or line 0)))   ; moved in its file; its row text is the same
+          (drgnx-work-fixture-update-node task :line (+ 100 (or line 0)))   ; moved in its file; its row text is the same
           (drgnx-work-ui--redraw) (drgnx-work-ui-test--draw)
           (should (= before (drgnx-work-ui-test--rows-drawn)))      ; the row was not drawn again
           (drgnx-work-ui-test--goto "Task 2: second")

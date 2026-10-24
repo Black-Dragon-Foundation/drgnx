@@ -1,0 +1,26 @@
+{"scenario": "scope/a-session-reads-its-project-only", "requires": ["v1", "fake-backend"], "doc": "A session reads the project of the folder it works in and no other (storage §6.4): with a task in alpha and one in beta, a session in alpha finds and gets alpha's; beta's is no such task, and it is in neither its ready list nor its find; the user's tasks/ready lists both."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/beta && cd $ROOT/work/beta && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000100 +0000' GIT_COMMITTER_DATE='@1700000100 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m beta"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "alpha work", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a1"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "create", "title": "beta work", "cwd": "$ROOT/work/beta"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:b1"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "tasks/ready"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tasks": {"$contains": [{"id": "$a1"}, {"id": "$b1"}]}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "ready"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"tasks": [{"id": "$a1"}]}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "find", "query": "work"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"tasks": [{"id": "$a1"}]}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "get", "id": "$a1"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"task": {"id": "$a1"}}, "isError": "$absent"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "get", "id": "$b1"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}}

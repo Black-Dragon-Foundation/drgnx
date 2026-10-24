@@ -1,0 +1,8 @@
+{
+  "setup": [],
+  "clock": [200.0, 201.0],
+  "calls": [
+    {"fn": "drgnx-coord-event-add", "args": {"agent": "a1", "kind": "comment", "summary": "__REP:A:300__"}},
+    {"fn": "drgnx-coord-event-add", "args": {"agent": "a1", "kind": "comment", "summary": "big data", "data": {"command": "__REP:y:5000__"}}}
+  ]
+}

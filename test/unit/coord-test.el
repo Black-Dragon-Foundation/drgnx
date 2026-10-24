@@ -1,5 +1,7 @@
 ;;; coord-test.el --- batch tests: the coordination store (jobs, tasks, leases, decisions, messages) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'drgnx-coord)
 
 (defmacro drgnx-coord-test--with (&rest body)
@@ -20,13 +22,13 @@
 (defun drgnx-coord-test--status (n) (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (drgnx-coord-tasks "j")) :status))
 (defun drgnx-coord-test--id (n) (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (drgnx-coord-tasks "j")) :id))
 
-(ert-deftest drgnx-coord/a-job-s-tasks-start-ready-or-pending-by-their-dependencies ()
+(drgnx-work-db-writer-deftest drgnx-coord/a-job-s-tasks-start-ready-or-pending-by-their-dependencies ()
   (drgnx-coord-test--with
     (should (equal (mapcar #'drgnx-coord-test--status '(1 2 3 4)) '("ready" "ready" "pending" "pending")))
     (should (equal (plist-get (seq-find (lambda (x) (= (plist-get x :n) 3)) (drgnx-coord-tasks "j")) :deps)
                    (list (drgnx-coord-test--id 1) (drgnx-coord-test--id 2))))))
 
-(ert-deftest drgnx-coord/one-claim-wins ()
+(drgnx-work-db-writer-deftest drgnx-coord/one-claim-wins ()
   ;; two processes woken at the same instant race through 30 ready tasks: each task goes to exactly one of them
   (drgnx-coord-test--with
     (drgnx-coord-job-create :id "race" :tasks (mapcar (lambda (n) (list :n n :title "t")) (number-sequence 1 30)))
@@ -39,6 +41,7 @@
                                     :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                    "--eval" "(setq load-prefer-newer t)"
                                                    "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-coord"
+                                                   "--eval" "(setq drgnx-coord-writer 'local)"   ; a test's own writer
                                                    "--eval" (format "(progn (drgnx-coord-version) (sleep-for (max 0 (- %f (float-time))))
                                                                        (dotimes (i 30)
                                                                          (princ (format \"RESULT:%%S\\n\" (drgnx-coord-claim (format \"race#%%d\" (1+ i)) %S (drgnx-coord-version))))))"
@@ -58,7 +61,7 @@
         (should (seq-every-p (lambda (task) (member (plist-get task :agent) '("a" "b"))) (drgnx-coord-tasks "race"))))
       (mapc #'kill-buffer outs))))
 
-(ert-deftest drgnx-coord/concurrent-held-writes-and-hub-writes ()
+(drgnx-work-db-writer-deftest drgnx-coord/concurrent-held-writes-and-hub-writes ()
   ;; two Emacs processes write the held-count (read, then write) in a loop while this one writes decisions: the work
   ;; database waits for its lock (busy_timeout) — nobody fails with "database is locked". The overlap is made, not hoped
   ;; for: each child reports STARTED after its first write and keeps writing until this test creates the stop file (bounded
@@ -74,6 +77,7 @@
                                     :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                    "--eval" "(setq load-prefer-newer t)"
                                                    "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-coord"
+                                                   "--eval" "(setq drgnx-coord-writer 'local)"   ; a test's own writer
                                                    "--eval" (format "(let ((i 0) (cap (+ (float-time) 20)))
                                                                       (princ (condition-case e
                                                                                  (progn
@@ -113,7 +117,7 @@
         (dolist (p procs) (when (process-live-p p) (kill-process p)))
         (mapc #'kill-buffer outs)))))
 
-(ert-deftest drgnx-coord/a-stale-version-is-held-with-every-change ()
+(drgnx-work-db-writer-deftest drgnx-coord/a-stale-version-is-held-with-every-change ()
   (drgnx-coord-test--with
     (let ((v0 (drgnx-coord-version)))
       (drgnx-coord-decide :kind "wont-build" :subject "the old parser" :reason "replaced by tree-sitter" :author "user" :seen v0)
@@ -127,7 +131,7 @@
       (should (plist-get (drgnx-coord-claim (drgnx-coord-test--id 1) "a" (drgnx-coord-version)) :ok))
       (should (equal (drgnx-coord-test--status 1) "claimed")))))
 
-(ert-deftest drgnx-coord/seen-version-ahead-rejected ()
+(drgnx-work-db-writer-deftest drgnx-coord/seen-version-ahead-rejected ()
   ;; a seen_version the log has not reached is no claim to have read it: nothing is written
   (drgnx-coord-test--with
     (let ((ahead (+ (drgnx-coord-version) 5)))
@@ -139,7 +143,7 @@
       (should-not (drgnx-coord-inbox "b"))
       (should (= (drgnx-coord-version) 0)))))
 
-(ert-deftest drgnx-coord/done-readies-the-dependents ()
+(drgnx-work-db-writer-deftest drgnx-coord/done-readies-the-dependents ()
   (drgnx-coord-test--with
     (let ((t1 (drgnx-coord-test--id 1)) (t2 (drgnx-coord-test--id 2)))
       (drgnx-coord-claim t1 "a" (drgnx-coord-version))
@@ -155,12 +159,12 @@
       (drgnx-coord-claim (drgnx-coord-test--id 3) "c" (drgnx-coord-version))
       (should (equal (plist-get (drgnx-coord-set-status (drgnx-coord-test--id 3) "z" "done" (drgnx-coord-version)) :taken) "c")))))
 
-(ert-deftest drgnx-coord/a-claim-waits-for-the-dependencies ()
+(drgnx-work-db-writer-deftest drgnx-coord/a-claim-waits-for-the-dependencies ()
   (drgnx-coord-test--with
     (let ((r (drgnx-coord-claim (drgnx-coord-test--id 3) "a" (drgnx-coord-version))))
       (should (equal (plist-get r :not-ready) (list (drgnx-coord-test--id 1) (drgnx-coord-test--id 2)))))))
 
-(ert-deftest drgnx-coord/a-decision-outside-its-own-task-is-proposed ()
+(drgnx-work-db-writer-deftest drgnx-coord/a-decision-outside-its-own-task-is-proposed ()
   (drgnx-coord-test--with
     (let ((t1 (drgnx-coord-test--id 1)) (t2 (drgnx-coord-test--id 2)))
       (drgnx-coord-claim t1 "a" (drgnx-coord-version))
@@ -178,7 +182,7 @@
             (should (seq-find (lambda (d) (and (= (plist-get d :n) n) (equal (plist-get d :status) "replaced"))) since))
             (should (seq-find (lambda (d) (= (plist-get d :n) (plist-get r :n))) since))))))))
 
-(ert-deftest drgnx-coord/an-agent-never-replaces-the-user-s-decision ()
+(drgnx-work-db-writer-deftest drgnx-coord/an-agent-never-replaces-the-user-s-decision ()
   ;; "the user's decisions always win": an agent replacing one only proposes
   (drgnx-coord-test--with
     (let* ((t1 (drgnx-coord-test--id 1))
@@ -197,7 +201,7 @@
         (should (equal (plist-get (seq-find (lambda (d) (equal (plist-get d :n) own)) (drgnx-coord-decisions-since 0)) :status)
                        "replaced"))))))
 
-(ert-deftest drgnx-coord/an-agent-s-own-decision-keeps-it-current-and-decisions-are-rate-limited ()
+(drgnx-work-db-writer-deftest drgnx-coord/an-agent-s-own-decision-keeps-it-current-and-decisions-are-rate-limited ()
   (drgnx-coord-test--with
     (drgnx-coord-claim (drgnx-coord-test--id 1) "a" 0)
     (drgnx-coord-decide :kind "build" :subject "x" :task (drgnx-coord-test--id 1) :reason "r" :author "a" :seen 0)
@@ -207,14 +211,14 @@
       (should-not (plist-get r :ok))
       (should (string-search "too many decisions" (plist-get r :error))))))
 
-(ert-deftest drgnx-coord/decisions-belong-to-their-job ()
+(drgnx-work-db-writer-deftest drgnx-coord/decisions-belong-to-their-job ()
   (drgnx-coord-test--with
     (drgnx-coord-decide :kind "build" :subject "for j" :job "j" :reason "r" :author "user" :seen 0)
     (drgnx-coord-decide :kind "build" :subject "for k" :job "k" :reason "r" :author "user" :seen (drgnx-coord-version))
     (should (equal (mapcar (lambda (d) (plist-get d :subject)) (drgnx-coord-decisions-since 0 "j")) '("for j")))
     (should (= (length (drgnx-coord-decisions-since 0)) 2))))
 
-(ert-deftest drgnx-coord/a-task-waiting-on-the-user-keeps-its-claim ()
+(drgnx-work-db-writer-deftest drgnx-coord/a-task-waiting-on-the-user-keeps-its-claim ()
   (drgnx-coord-test--with
     (let ((t1 (drgnx-coord-test--id 1)))
       (drgnx-coord-claim t1 "a" 0)
@@ -223,12 +227,12 @@
       (should-not (drgnx-coord-release-stale))
       (should (equal (drgnx-coord-test--status 1) "in-review")))))
 
-(ert-deftest drgnx-coord/escalations-to-the-user-are-never-held-as-a-full-queue ()
+(drgnx-work-db-writer-deftest drgnx-coord/escalations-to-the-user-are-never-held-as-a-full-queue ()
   (drgnx-coord-test--with
     (dotimes (i 25) (drgnx-coord-send :sender (format "s%d" i) :recipient "user" :text "decide" :seen 0))
     (should-not (seq-find (lambda (m) (equal (plist-get m :state) "held")) (drgnx-coord-inbox "user")))))
 
-(ert-deftest drgnx-coord/a-silent-lease-is-released ()
+(drgnx-work-db-writer-deftest drgnx-coord/a-silent-lease-is-released ()
   (drgnx-coord-test--with
     (let ((t1 (drgnx-coord-test--id 1)))
       (drgnx-coord-claim t1 "a" (drgnx-coord-version))
@@ -237,7 +241,7 @@
       (should (equal (drgnx-coord-test--status 1) "ready"))
       (should-not (plist-get (seq-find (lambda (x) (= (plist-get x :n) 1)) (drgnx-coord-tasks "j")) :agent)))))
 
-(ert-deftest drgnx-coord/messages-never-go-backwards-and-loops-are-held ()
+(drgnx-work-db-writer-deftest drgnx-coord/messages-never-go-backwards-and-loops-are-held ()
   (drgnx-coord-test--with
     (let* ((id (plist-get (drgnx-coord-send :job "j" :sender "a" :recipient "b" :text "hi" :seen (drgnx-coord-version)) :id)))
       (drgnx-coord-mark id "delivered") (drgnx-coord-mark id "read") (drgnx-coord-mark id "acted")
@@ -258,7 +262,7 @@
       (should (plist-get (drgnx-coord-send :job "j" :sender "a" :recipient "d" :text "late" :seen 0) :held))
       (should (= (length (drgnx-coord-inbox "d")) count)))))
 
-(ert-deftest drgnx-coord/the-user-s-own-messages-count-towards-the-pair-rate-and-answer-agents ()
+(drgnx-work-db-writer-deftest drgnx-coord/the-user-s-own-messages-count-towards-the-pair-rate-and-answer-agents ()
   ;; the user's Emacs sends with no sender: still one sender for the loop limit, and a reply to an agent
   (drgnx-coord-test--with
     (let ((id (plist-get (drgnx-coord-send :job "j" :sender "a" :recipient "user" :text "question" :seen 0) :id)))

@@ -1,0 +1,23 @@
+{"scenario": "gateway/request-events-and-spend-rows", "requires": ["v1", "fake-backend"], "doc": "Task 24: a request of a job's task is one request event {agent, job, task, provider, input, output, cost, status} for subscribers and one spend row in work.db with the same figures (200 input and 50 output tokens at 1000 and 2000 USD per million: 0.3 USD); `spend` for the job sums it."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg-1\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 200, \"output_tokens\": 50}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"], "price": {"input": 1000, "output": 2000}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "job": "j1", "task": "j1#1", "agent": "a1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw", "requests": 0}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"agent": "a1", "job": "j1", "task": "j1#1", "provider": "a", "input": 200, "output": 50, "status": 200, "cost": 0.3}}}
+{"do": "sql_expect", "sql": "select job, agent, provider, input, output, status from spend", "rows": [["j1", "a1", "a", 200, 50, 200]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "spend", "params": {"job": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"input": 200, "output": 50, "requests": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"gateway": {"requests": 1, "errors": 0}}}}

@@ -7,13 +7,13 @@
 
 (defmacro drgnx-ai-embed-test--with (spec chain &rest body)
   "BODY with a mock LLM server answering SPEC on PORT (its request LOG), providers `tei', `a' (openai), `o' (ollama),
-`l' (llama.cpp) and `dead' (nothing listens) pointing at it, and the embed role set to CHAIN in drgnx-ai-roles."
+`l' (llama.cpp) and `dead' (nothing listens) pointing at it, all keyless (asked directly; a keyed provider goes through
+the hub's gateway: ai-gateway-test.el), and the embed role set to CHAIN in drgnx-ai-roles."
   (declare (indent 2))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-embed" t)))
           (port nil) (dead nil)
           (log (concat root "llm.log")) (script (concat root "llm.eld"))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state")
-                                             "A_KEY=sk-test-123")
+          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state"))
                                        process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai-detected nil)
           (drgnx-ai-providers nil) (drgnx-ai-roles nil)
@@ -26,7 +26,7 @@
                  port (process-get mock :port)
                  dead (drgnx-test-free-port))
            (setq drgnx-ai-providers `((tei :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
-                                      (a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY" :caps (embed))
+                                      (a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :caps (embed))
                                       (o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
                                       (l :name "L" :kind llamacpp :url ,(format "http://127.0.0.1:%d" port) :caps (embed))
                                       (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (embed)))

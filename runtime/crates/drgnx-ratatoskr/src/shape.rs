@@ -1,10 +1,11 @@
-//! What a forwarded call's caller may see and ask, by class (design 4.2), on top of the registry's class check:
+//! What a caller may see and ask, by class (design 4.2), on top of the registry's class check:
 //!
 //! - `agents/list`: a `user` gets the backend's snapshots; a `service` connection gets `{sessions: [{id, name, job,
 //!   task}]}`, and an `agent` the same for its own job's sessions (and its own session) only.
 //! - `spend` from an `agent`: `job` defaults to the caller's own job, and another job is `not-allowed`.
 //!
-//! The params are shaped before the line goes to the backend, the result after it passed `check_result`.
+//! The params are shaped before the line goes to the backend, the result after it passed `check_result`; `spend` is the
+//! front's since Task 22 ([`crate::gateway`]), which shapes its params here the same way.
 
 use crate::dispatch::Caller;
 use runstav::methods::Params;
@@ -81,6 +82,7 @@ mod tests {
             sid: sid.map(str::to_string),
             job: job.map(str::to_string),
             conn_id: 1,
+            backend: false,
         }
     }
 

@@ -1,6 +1,8 @@
 ;;; job-clash-test.el --- batch tests: clashes found by fixed rules -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 (require 'drgnx-job-clash)
 
@@ -22,7 +24,7 @@
 (defun drgnx-job-clash-test--cards (id &optional kind)
   (seq-filter (lambda (c) (or (null kind) (equal (plist-get c :kind) kind))) (drgnx-coord-cards id "open")))
 
-(ert-deftest drgnx-job-clash/build-and-wont-build-on-one-subject-is-a-clash ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/build-and-wont-build-on-one-subject-is-a-clash ()
   (drgnx-job-clash-test--running drgnx-job-clash-test--two
     (drgnx-job-clash-test--decide id "build" "The CSV export" "s-a" :task (concat id "#1"))
     (drgnx-job-clash-test--decide id "wont-build" "the  csv export " "s-b" :task (concat id "#2"))
@@ -36,7 +38,7 @@
     (drgnx-job-clash-scan id)
     (should (= 1 (length (drgnx-job-clash-test--cards id "clash"))))))
 
-(ert-deftest drgnx-job-clash/the-user-s-decision-wins-without-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/the-user-s-decision-wins-without-a-card ()
   (drgnx-job-clash-test--running drgnx-job-clash-test--two
     (drgnx-job-clash-test--decide id "wont-build" "x" "user")
     (let ((n (plist-get (drgnx-job-clash-test--decide id "build" "X " "s-a" :task (concat id "#1")) :n)))
@@ -46,7 +48,7 @@
       (should (seq-find (lambda (d) (and (equal (plist-get d :kind) "replaces") (eql (plist-get d :replaces) n) (equal (plist-get d :author) "user")))
                         (drgnx-coord-decisions-since 0 id))))))
 
-(ert-deftest drgnx-job-clash/a-proposed-decision-is-a-clash ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/a-proposed-decision-is-a-clash ()
   (drgnx-job-clash-test--running drgnx-job-clash-test--two
     ;; s-a decides about task 2, which it does not hold: proposed
     (should (equal (plist-get (drgnx-job-clash-test--decide id "wont-build" "the importer" "s-a" :task (concat id "#2")) :status) "proposed"))
@@ -55,7 +57,7 @@
       (should card)
       (should (equal (plist-get (plist-get card :data) :rule) "proposed")))))
 
-(ert-deftest drgnx-job-clash/two-user-decisions-replace-an-agent-s-once ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/two-user-decisions-replace-an-agent-s-once ()
   (drgnx-job-clash-test--running drgnx-job-clash-test--two
     (drgnx-job-clash-test--decide id "wont-build" "x" "user")
     (drgnx-job-clash-test--decide id "wont-build" "X" "user")
@@ -64,7 +66,7 @@
       (should (= 1 (length (seq-filter (lambda (d) (and (equal (plist-get d :kind) "replaces") (eql (plist-get d :replaces) n)))
                                        (drgnx-coord-decisions-since 0 id))))))))
 
-(ert-deftest drgnx-job-clash/a-proposed-contradiction-gets-one-card ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/a-proposed-contradiction-gets-one-card ()
   (drgnx-job-clash-test--running drgnx-job-clash-test--two
     ;; s-a decides about task 2, which it does not hold: proposed; and it contradicts what task 2's agent decided
     (drgnx-job-clash-test--decide id "wont-build" "the importer" "s-b" :task (concat id "#2"))
@@ -74,7 +76,7 @@
     (should (equal (mapcar (lambda (c) (plist-get (plist-get c :data) :rule)) (drgnx-job-clash-test--cards id "clash"))
                    '("contradiction")))))
 
-(ert-deftest drgnx-job-clash/picking-the-proposed-side-leaves-no-second-card ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/picking-the-proposed-side-leaves-no-second-card ()
   (drgnx-job-clash-test--running drgnx-job-clash-test--two
     (drgnx-job-clash-test--decide id "wont-build" "the importer" "s-b" :task (concat id "#2"))
     (drgnx-job-clash-test--decide id "build" "the importer" "s-a" :task (concat id "#2"))     ; proposed
@@ -85,7 +87,8 @@
     (drgnx-job-clash-scan id)
     (should-not (drgnx-job-clash-test--cards id "clash"))))
 
-(ert-deftest drgnx-job-clash/a-task-that-touches-what-will-not-be-built-waits ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/a-task-that-touches-what-will-not-be-built-waits ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n\nTouch the legacy code.\n"
     (let* ((id (drgnx-job-propose plan)))
       (drgnx-job-clash-test--decide id "wont-build" "the legacy module" "user" :paths "legacy/, old/*.c")
@@ -98,7 +101,7 @@
       (should-not (drgnx-job--reviewer-of (concat id "#1")))
       (should (equal (drgnx-job-run-test--status id 1) "in-review")))))
 
-(ert-deftest drgnx-job-clash/two-held-writes-are-a-stalled-card ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/two-held-writes-are-a-stalled-card ()
   (drgnx-job-clash-test--running drgnx-job-clash-test--two
     (let ((s (drgnx-agents--make :id "s-a" :name "a" :profile "mock" :cwd repo :task (concat id "#1") :job id :status 'idle)))
       (push s drgnx-agents--sessions)
@@ -113,7 +116,8 @@
       (should (= 0 (drgnx-coord-held "s-a")))
       (setq drgnx-agents--sessions (delq s drgnx-agents--sessions)))))
 
-(ert-deftest drgnx-job-clash/overlapping-tasks-are-advisory ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/overlapping-tasks-are-advisory ()
+  :tags '(:frozen)
   ;; both tasks append to task.txt: when the first is in review, the other open task changed the same file.  The two
   ;; run at once, so either can be first: the card is on the task that reached review (macOS CI 39605706447 read
   ;; task 1, still running, after task 2's card), and advisory means that task stays in review
@@ -126,7 +130,7 @@
         (should (member (plist-get (drgnx-coord-task (plist-get card :task)) :status) '("in-review" "done"))))
       (should (= 1 (length (drgnx-job-clash-test--cards id "overlap")))))))   ; one per pair
 
-(ert-deftest drgnx-job-clash/covers ()
+(drgnx-work-db-writer-deftest drgnx-job-clash/covers ()
   (should (drgnx-job-clash--covers-p "legacy/a.txt" "legacy/"))
   (should-not (drgnx-job-clash--covers-p "legacy2/a" "legacy/"))
   (should (drgnx-job-clash--covers-p "legacy/a.txt" "legacy"))

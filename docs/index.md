@@ -36,6 +36,7 @@ Using drgnx.
 - [Your files](guide/files.md): when a settings file has a mistake (the last good copy, Open and Reset), backups, locks and `config-good/`, two machines sharing one folder.
 - [A second machine](guide/second-machine.md): what travels (the whole config dir), what stays on this machine (the data, state and cache dirs), paths written `~/…`, the doctor's `portable-config` check, provider keys in `secrets.age`, the one command `drgnx bootstrap`.
 - [Notices](guide/notices.md): how drgnx tells you things; the two counts in the mode line and the Notices list; desktop notifications for everything waiting on you, once each, while no drgnx window has focus (D-Bus, `osascript` on macOS), and the off switch.
+- [Speed: freezes, GC and the heap](guide/speed.md): the GC census (one line per collection, Help → GC Census) and the Heap Audit (Help → Heap Audit: what keeps the Lisp heap large, by owner, against budgets; it asks first, because Emacs stops for seconds).
 - [Your shell](guide/shell.md): the one line for zsh, bash and fish — `drgnx` completion, eat's shell integration in the terminal, why an idle shell never blocks quit, `EDITOR`, your login shell's `PATH` in drgnx, prompt themes, fish's limits.
 
 ## Reference
@@ -60,6 +61,7 @@ How drgnx is built, tested and measured.
 - [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
+- [The store (Urdr)](develop/store.md): `work.db` schema 7 — one knowledge graph with history, written by Ratatoskr only (being written).
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.
 - [The job sandbox](develop/sandbox.md): what a job agent can see — the spec, what it refuses, the bubblewrap argv

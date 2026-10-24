@@ -64,6 +64,7 @@
                         (plist-get (drgnx-hub-call-sync "agents/list" nil) :sessions))))))
 
 (ert-deftest drgnx-hub-agents/the-agent-gets-the-coordination-tools ()
+  :tags '(:frozen)
   (drgnx-hub-agents-test--with
     (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one")))
     (let ((id (drgnx-hub-agents-test--start)))

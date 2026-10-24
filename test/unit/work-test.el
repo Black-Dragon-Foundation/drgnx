@@ -3,6 +3,8 @@
 (require 'ert)
 (require 'drgnx-work-db)
 (require 'drgnx-work-scan)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defun drgnx-work-test--git (dir &rest args)
   (with-temp-buffer
@@ -48,11 +50,13 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
                                      (format "# SDD ledger — plan: %sdocs/plans/p.md\nTask 1: complete (commits %s..%s, tests: ok)\nTask 1: Ruling: keep it small — why — cost\n" ,root c0 c2))
              (drgnx-work-test--write ,root "org/board.org"
                                      (format "* code\n:PROPERTIES:\n:PROJECT_ROOT: %s\n:END:\n** DONE one\n:PROPERTIES:\n:ONBOARD_ID: x1\n:PLAN_FILE: docs/plans/p.md\n:PLAN_TEXT: one\n:END:\n" ,root))
-             ,@body))
+             (drgnx-work-fixture-with-hub ,@body)))
        (drgnx-work-db-close-all)
        (delete-directory ,root t))))
 
-(defun drgnx-work-test--scan (root) (drgnx-work-scan (list root) :board (concat root "org/board.org")))
+(defun drgnx-work-test--scan (root)
+  "Scan ROOT; the hub's side is the fixture's applier (the real hub is tested by work-scan-test's binary rows)."
+  (drgnx-work-fixture-with-hub (drgnx-work-scan (list root) :board (concat root "org/board.org"))))
 (defun drgnx-work-test--kids (id &optional kind)
   (seq-filter (lambda (n) (or (null kind) (eq (plist-get n :kind) kind))) (drgnx-work-children id)))
 
@@ -64,18 +68,18 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
          (drgnx-work-db--handles nil))
     (unwind-protect
         (progn
-          (drgnx-work-put-node "plan:a" :kind 'plan :title "A" :path "/a.md" :line 1 :status "open" :source "/a.md")
-          (drgnx-work-put-node "task:a#1" :kind 'task :title "T1" :parent "plan:a" :ord 1 :source "/a.md")
-          (drgnx-work-put-node "task:a#2" :kind 'task :title "T2" :parent "plan:a" :ord 2 :source "/a.md")
-          (drgnx-work-put-edge "commit:abc" "task:a#1" 'implements 'recorded)
+          (drgnx-work-fixture-put-node "plan:a" :kind 'plan :title "A" :path "/a.md" :line 1 :status "open" :source "/a.md")
+          (drgnx-work-fixture-put-node "task:a#1" :kind 'task :title "T1" :parent "plan:a" :ord 1 :source "/a.md")
+          (drgnx-work-fixture-put-node "task:a#2" :kind 'task :title "T2" :parent "plan:a" :ord 2 :source "/a.md")
+          (drgnx-work-fixture-put-edge "commit:abc" "task:a#1" 'implements 'recorded)
           (should (equal (plist-get (drgnx-work-node "plan:a") :title) "A"))
           (should (equal (mapcar (lambda (n) (plist-get n :id)) (drgnx-work-children "plan:a")) '("task:a#1" "task:a#2")))
           (should (equal (drgnx-work-edges-to "task:a#1" 'implements) '(("commit:abc" . recorded))))
-          (drgnx-work-forget-source "/a.md")                               ; a rescan of the file
+          (drgnx-work-fixture-forget-source "/a.md")                               ; a rescan of the file
           (should-not (drgnx-work-node "task:a#1"))
           (should (drgnx-work-edges-to "task:a#1" 'implements))           ; recorded links are kept
           (should (equal (drgnx-work-db-version) drgnx-work-db-schema-version))
-          (should (= (caar (sqlite-select (drgnx-work-db) "pragma busy_timeout")) 5000)))
+          (should (= (caar (sqlite-select (drgnx-work-fixture--db) "pragma busy_timeout")) 5000)))
       (drgnx-work-db-close-all)
       (delete-directory dir t))))
 
@@ -85,14 +89,14 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
          (process-environment (cons (concat "DRGNX_DATA_DIR=" dir) process-environment))
          (drgnx-work-db--handles nil))
     (unwind-protect
-        (let ((db (sqlite-open (drgnx-work-db-file))))
+        (let ((db (drgnx-work-fixture-as-hub (sqlite-open (drgnx-work-db-file)))))   ; the other process: the hub's stand-in
           (sqlite-execute db "create table meta (key text primary key, value text)")
           (sqlite-execute db "create table node (id text primary key, kind text, title text, path text, line integer,
                             status text, parent text, ord integer, source text, data text, updated real)")
           (sqlite-execute db "create index node_parent on node(parent)")
           (sqlite-close db)
           (should (equal (drgnx-work-db-version) drgnx-work-db-schema-version))
-          (drgnx-work-put-edge "commit:abc" "task:a#1" 'implements 'recorded)
+          (drgnx-work-fixture-put-edge "commit:abc" "task:a#1" 'implements 'recorded)
           (should (drgnx-work-edges-to "task:a#1" 'implements)))
       (drgnx-work-db-close-all)
       (delete-directory dir t))))
@@ -333,7 +337,7 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
           (progn
             (drgnx-work-test--write root "README.md" "# Read me\n\n### Task 1: not a plan of the root\n")
             (drgnx-work-test--write root "docs/specs/s.md" "# The spec\n\n### Task 1: a spec, not a plan\n")
-            (drgnx-work-scan (list root))
+            (drgnx-work-fixture-with-hub (drgnx-work-scan (list root)))
             (should-not (drgnx-work-node (concat "spec:" root "README.md")))
             (should-not (drgnx-work-node (concat "plan:" root "README.md")))
             (should (drgnx-work-node (concat "spec:" root "docs/specs/s.md")))
@@ -386,7 +390,7 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
          (drgnx-work-db--handles nil))
     (unwind-protect
         (progn
-          (drgnx-work-put-node "plan:a" :kind 'plan :title title :path "/a.md" :line 1 :status "open" :source "/a.md")
+          (drgnx-work-fixture-put-node "plan:a" :kind 'plan :title title :path "/a.md" :line 1 :status "open" :source "/a.md")
           (drgnx-work-db-close-all)
           (dolist (locale '("C" "C.UTF-8"))
             (let ((process-environment (append (list (concat "LC_ALL=" locale) (concat "LANG=" locale) "LANGUAGE=")

@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 26] = [
+pub const VERBS: [&str; 33] = [
     "start",
     "root",
     "rename",
@@ -22,6 +22,7 @@ pub const VERBS: [&str; 26] = [
     "kill",
     "expect_exit",
     "file",
+    "proc",
     "write_file",
     "sqlite",
     "backend_log",
@@ -29,6 +30,12 @@ pub const VERBS: [&str; 26] = [
     "class_matrix",
     "bad_params",
     "measure",
+    "spawn_conn",
+    "sql_expect",
+    "capture_file",
+    "http",
+    "expect_http",
+    "file_grep",
 ];
 
 #[derive(Debug)]
@@ -188,6 +195,8 @@ pub struct Host {
     pub fake_backend: bool,
     pub lisp_backend: bool,
     pub perf: bool,
+    /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
+    pub ptrace_stays: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -232,7 +241,38 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
     }
+    if h.ptrace_stays
+        && s.steps
+            .iter()
+            .any(|st| st.obj.get("drop_ptrace").and_then(Value::as_bool) == Some(true))
+    {
+        // with the capability a non-dumpable process is no obstacle, so the row would not test what it says
+        return skip("CAP_SYS_PTRACE is effective and setpriv is missing", true);
+    }
     Gate::Run
+}
+
+/// Has this process `CAP_SYS_PTRACE` (bit 19 of `CapEff` in `/proc/self/status`)?  Linux only; on macOS (and Android,
+/// where the harness does not run) nothing to drop: false.
+pub fn ptrace_effective() -> bool {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("CapEff:"))
+                .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
+        })
+        .is_some_and(|caps| caps & (1 << 19) != 0)
+}
+
+/// Can `setpriv` run here?
+pub fn setpriv_available() -> bool {
+    std::process::Command::new("setpriv")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// Does `CMD -n true` succeed (passwordless sudo)?
@@ -277,6 +317,7 @@ mod tests {
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0}
 {"do": "file", "path": "$CAP", "exists": true, "mode": "0600"}
+{"do": "proc", "pid": "$PID(h)", "part": "argv", "lacks": "x"}
 {"do": "write_file", "path": "$ROOT/x", "text": "t"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql": ["select 1"]}
 {"do": "backend_log", "expect_line": "x"}
@@ -284,6 +325,12 @@ mod tests {
 {"do": "class_matrix", "table": "t.json"}
 {"do": "bad_params", "registry": "r.json"}
 {"do": "measure", "name": "m", "repeat": 2, "steps": []}
+{"do": "spawn_conn", "conn": "b", "argv": ["cat"]}
+{"do": "sql_expect", "sql": "select 1", "rows": [[1]]}
+{"do": "capture_file", "path": "$ROOT/x.json", "capture": "p", "json_path": "a"}
+{"do": "http", "conn": "h", "to": "tcp:127.0.0.1:1", "method": "POST", "path": "/", "headers": {"a": "b"}, "body": "x", "read": "head", "close_after": true}
+{"do": "expect_http", "conn": "h", "status": 200, "headers": {"content-type": "$any"}, "body_contains": "x", "body_json": {}, "within_ms": 100}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "secret"}
 "#;
 
     #[test]
@@ -296,6 +343,39 @@ mod tests {
             assert!(verbs.contains(&v), "verb {v} did not parse");
         }
         assert_eq!(s.steps[0].line, 3, "steps remember their file line");
+    }
+
+    #[test]
+    fn new_verbs_parse() {
+        let s = parse(
+            r#"{"scenario": "t/new"}
+{"do": "connect", "conn": "r", "socket": "path:$CAP", "as": "raw"}
+{"do": "spawn_conn", "conn": "b", "argv": ["cat"], "env": {}, "cwd": "$ROOT"}
+{"do": "sql_expect", "sql": "select 1", "rows": [[1]]}
+{"do": "capture_file", "path": "$ROOT/x.json", "capture": "p", "json_path": "a.b"}
+"#,
+        )
+        .unwrap();
+        let verbs: Vec<&str> = s.steps.iter().map(|x| x.verb.as_str()).collect();
+        assert_eq!(
+            verbs,
+            ["connect", "spawn_conn", "sql_expect", "capture_file"]
+        );
+    }
+
+    #[test]
+    fn http_verbs_parse() {
+        let s = parse(
+            r#"{"scenario": "t/http"}
+{"do": "spawn", "capture": "m", "argv": ["x"], "capture_stdout": {"regex": "PORT (\\d+)", "name": "port"}}
+{"do": "http", "to": "unix:$ROOT/s", "path": "/", "body_bytes": {"fill": "a", "n": 10}, "read": {"bytes": 4}}
+{"do": "expect_http", "status": 429, "body_json": {"error": "$any"}}
+{"do": "file_grep", "paths": ["$ROOT/*.log"], "absent": "k"}
+"#,
+        )
+        .unwrap();
+        let verbs: Vec<&str> = s.steps.iter().map(|x| x.verb.as_str()).collect();
+        assert_eq!(verbs, ["spawn", "http", "expect_http", "file_grep"]);
     }
 
     #[test]
@@ -316,6 +396,34 @@ mod tests {
             "{{\"scenario\": \"t/row\", \"requires\": [{requires}]}}\n"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_drop_ptrace_row_is_skipped_only_where_the_capability_stays() {
+        let s = parse(
+            "{\"scenario\": \"t/p\", \"requires\": [\"v1\"]}\n\
+             {\"do\": \"run\", \"args\": [\"stop\"], \"drop_ptrace\": true}\n",
+        )
+        .unwrap();
+        let stays = Host {
+            linux: true,
+            ptrace_stays: true,
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &stays),
+            Gate::Skip {
+                reason: "CAP_SYS_PTRACE is effective and setpriv is missing".into(),
+                excused: true
+            }
+        );
+        // a row without the step runs anyway
+        assert_eq!(gate(&row("\"v1\""), &stays), Gate::Run);
+        let dropped = Host {
+            linux: true,
+            ..Host::default()
+        };
+        assert_eq!(gate(&s, &dropped), Gate::Run);
     }
 
     #[test]

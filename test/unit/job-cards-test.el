@@ -1,6 +1,8 @@
 ;;; job-cards-test.el --- batch tests: cards are records with actions; the user acts on them through the hub -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)   ; a repo, the hub, mock agents
 
 (defconst drgnx-job-cards-test--one "# One\n\n### Task 1: one\n")
@@ -16,7 +18,7 @@
        (drgnx-job-approve id)
        ,@body)))
 
-(ert-deftest drgnx-job-cards/a-card-is-a-record-with-actions ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/a-card-is-a-record-with-actions ()
   (drgnx-job-cards-test--running
     (let ((cid (drgnx-job--card id tid "merge-conflict" "conflicts in: a.txt")))
       (should (integerp cid))
@@ -28,14 +30,14 @@
         (should c)
         (should (assoc "retry" (plist-get c :actions)))))))
 
-(ert-deftest drgnx-job-cards/one-open-card-per-task-and-kind ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/one-open-card-per-task-and-kind ()
   (drgnx-job-cards-test--running
     (let ((a (drgnx-job--card id tid "stalled" "first")) (b (drgnx-job--card id tid "stalled" "second")))
       (should (equal a b))
       (should (= 1 (length (drgnx-job-cards-test--open id "stalled"))))
       (should (equal (plist-get (car (drgnx-job-cards-test--open id "stalled")) :title) "second")))))
 
-(ert-deftest drgnx-job-cards/retry-frees-the-task-and-settles-the-card ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/retry-frees-the-task-and-settles-the-card ()
   (drgnx-job-cards-test--running
     (drgnx-coord-force-status tid "running" "s-gone")
     (drgnx-job--set-count id :exits tid 3)
@@ -49,7 +51,8 @@
       (should (equal (plist-get (seq-find (lambda (m) (string-prefix-p "[agent]" (plist-get m :text))) (drgnx-coord-inbox "user")) :state)
                      "acted")))))
 
-(ert-deftest drgnx-job-cards/acting-twice-does-nothing-twice ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/acting-twice-does-nothing-twice ()
+  :tags '(:frozen)
   (drgnx-job-run-test--with drgnx-job-cards-test--one
     (let* ((drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid (concat id "#1")))
       (drgnx-job-approve id)
@@ -61,7 +64,7 @@
           (should-error (drgnx-job-card-act cid "accept"))
           (should (equal (drgnx-job-run-test--git repo "rev-parse" (concat "job/" id)) head)))))))
 
-(ert-deftest drgnx-job-cards/permission-cards-answer-the-agent ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/permission-cards-answer-the-agent ()
   (drgnx-job-cards-test--running
     (let ((s (drgnx-agents-start "mock" repo tid id)))
       (drgnx-coord-force-status tid "running" (drgnx-agent-session-id s))
@@ -74,7 +77,7 @@
         (should (equal (drgnx-job-run-test--status id 1) "running"))
         (should (equal (plist-get (drgnx-coord-card cid) :state) "settled"))))))
 
-(ert-deftest drgnx-job-cards/answering-in-the-transcript-settles-the-card ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/answering-in-the-transcript-settles-the-card ()
   (drgnx-job-cards-test--running
     (let ((s (drgnx-agents-start "mock" repo tid id)))
       (drgnx-coord-force-status tid "running" (drgnx-agent-session-id s))
@@ -85,7 +88,7 @@
                                                      :option "allow"))
       (should-not (drgnx-job-cards-test--open id "permission")))))
 
-(ert-deftest drgnx-job-cards/the-proposal-is-a-card ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/the-proposal-is-a-card ()
   (drgnx-job-run-test--with drgnx-job-cards-test--one
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (card (car (drgnx-job-cards-test--open id "proposal"))))
       (should card)
@@ -94,7 +97,7 @@
       (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
       (should-not (drgnx-job-cards-test--open id "proposal")))))
 
-(ert-deftest drgnx-job-cards/messages-to-the-user-are-listed-with-a-reply ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/messages-to-the-user-are-listed-with-a-reply ()
   (drgnx-job-cards-test--running
     (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "user" :text "[escalation] db: which one?"
                                             :seen (drgnx-coord-version))
@@ -108,7 +111,7 @@
       (should (equal (plist-get (drgnx-coord-message mid) :state) "acted")))))
 
 ;; M9b4-1: a message that needs no answer is dismissed: acted on, nothing sent back
-(ert-deftest drgnx-job-cards/a-message-is-dismissed-without-a-reply ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/a-message-is-dismissed-without-a-reply ()
   (drgnx-job-cards-test--running
     (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "user" :text "[fyi] done early" :seen (drgnx-coord-version)) :id)))
       (should (drgnx-hub-call-sync "job/dismiss" (list :message mid)))
@@ -119,7 +122,7 @@
       (should-error (drgnx-hub-call-sync "job/dismiss" (list :message 99999))))))
 
 ;; the hub's job/dismiss is this function (the body lives in drgnx-job.el, with `drgnx-job-reply')
-(ert-deftest drgnx-job-cards/dismissing-is-a-job-function ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/dismissing-is-a-job-function ()
   (drgnx-job-cards-test--running
     (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "user" :text "[fyi] done" :seen (drgnx-coord-version)) :id)))
       (should (drgnx-job-dismiss mid))
@@ -129,7 +132,7 @@
         (should-error (drgnx-job-dismiss other) :type 'user-error)))))
 
 ;; only a job's own message to the user can be dismissed: an agent's message to another agent stays queued
-(ert-deftest drgnx-job-cards/only-a-message-to-the-user-can-be-dismissed ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/only-a-message-to-the-user-can-be-dismissed ()
   (drgnx-job-cards-test--running
     (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "s-b" :text "hello b" :seen (drgnx-coord-version)) :id)))
       (should-error (drgnx-hub-call-sync "job/dismiss" (list :message mid)))
@@ -139,7 +142,7 @@
       (should-error (drgnx-hub-call-sync "job/dismiss" (list :message mid)))
       (should-not (equal (plist-get (drgnx-coord-message mid) :state) "acted")))))
 
-(ert-deftest drgnx-job-cards/a-change-is-a-job-event ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/a-change-is-a-job-event ()
   (drgnx-job-cards-test--running
     (let ((events nil))
       (let ((drgnx-hub-event-functions (list (lambda (e d) (push (cons e d) events)))))
@@ -149,7 +152,7 @@
         (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (e) (and (equal (car e) "job") (equal (plist-get (cdr e) :id) id))) events))))))))
 
 
-(ert-deftest drgnx-job-cards/rejecting-a-task-less-request-answers-it-not-the-job ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/rejecting-a-task-less-request-answers-it-not-the-job ()
   ;; a clash reviewer has no task: its permission card's Reject answers the request; the job goes on
   (drgnx-job-cards-test--running
     (let ((s (drgnx-agents-start "mock" repo nil id)))
@@ -161,7 +164,7 @@
       (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
       (should-not (eq (drgnx-agent-session-status s) 'exited)))))
 
-(ert-deftest drgnx-job-cards/a-task-less-request-answered-in-the-transcript-settles-its-card ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/a-task-less-request-answered-in-the-transcript-settles-its-card ()
   (drgnx-job-cards-test--running
     (let ((s (drgnx-agents-start "mock" repo nil id)))
       (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
@@ -171,7 +174,7 @@
                                                      :option "allow"))
       (should-not (drgnx-job-cards-test--open id "permission")))))
 
-(ert-deftest drgnx-job-cards/retry-ends-the-task-s-agent ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/retry-ends-the-task-s-agent ()
   (drgnx-job-cards-test--running
     (let ((s (drgnx-agents-start "mock" repo tid id)))
       (drgnx-coord-force-status tid "running" (drgnx-agent-session-id s))
@@ -180,7 +183,7 @@
       (should (eq (drgnx-agent-session-status s) 'exited))
       (should (equal (drgnx-job-run-test--status id 1) "ready")))))
 
-(ert-deftest drgnx-job-cards/a-finished-task-s-cards-settle-and-cannot-undo-it ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/a-finished-task-s-cards-settle-and-cannot-undo-it ()
   (drgnx-job-cards-test--running
     (let ((cid (drgnx-job--card id tid "stalled" "held twice")))
       (drgnx-coord-force-status tid "done" "s-x")
@@ -189,7 +192,7 @@
       (drgnx-job-step id)
       (should (equal (plist-get (drgnx-coord-card cid) :state) "settled")))))
 
-(ert-deftest drgnx-job-cards/resume-after-reject-refuses ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/resume-after-reject-refuses ()
   ;; a rejected proposal never started: there is no job branch to go on with
   (drgnx-job-run-test--with drgnx-job-cards-test--one
     (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (card (car (drgnx-job-cards-test--open id "proposal"))))
@@ -198,7 +201,7 @@
       (should (string-search "never approved" (cadr (should-error (drgnx-job-resume id) :type 'user-error))))
       (should (equal (plist-get (drgnx-coord-job id) :status) "stopped")))))
 
-(ert-deftest drgnx-job-cards/a-request-after-complete-task-keeps-the-task-in-review ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/a-request-after-complete-task-keeps-the-task-in-review ()
   ;; the agent finished (in review) but its turn goes on and it asks the user for something
   (drgnx-job-cards-test--running
     (let ((s (drgnx-agents-start "mock" repo tid id)))
@@ -212,7 +215,7 @@
       (should (equal (drgnx-job-run-test--status id 1) "in-review"))
       (should (equal (plist-get (drgnx-coord-task tid) :agent) (drgnx-agent-session-id s))))))
 
-(ert-deftest drgnx-job-cards/an-agent-gone-while-its-task-is-in-review-leaves-it-in-review ()
+(drgnx-work-db-writer-deftest drgnx-job-cards/an-agent-gone-while-its-task-is-in-review-leaves-it-in-review ()
   (drgnx-job-cards-test--running
     (let ((gone (drgnx-agents--make :id "s-gone" :name "g" :profile "mock" :cwd repo :task tid :job id)))
       (drgnx-coord-force-status tid "in-review" "s-gone")

@@ -19,6 +19,13 @@ runstav = { path = "../crates/runstav" }
 drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
 huginn = { path = "../crates/huginn" }
+mimir = { path = "../crates/mimir" }
+# no platform verifier: the targets make no TLS connection, and it is the one optional piece with a system dependency
+bifrost = { path = "../crates/bifrost", default-features = false }
+http = "1"
+norn = { path = "../crates/norn" }
+urdr = { path = "../crates/urdr", features = ["test-hooks"] }
+tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
 
 [workspace]
 
@@ -81,6 +88,83 @@ bench = false
 [[bin]]
 name = "huginn_read"
 path = "fuzz_targets/huginn_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_message"
+path = "fuzz_targets/mcp_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonrpc_parse"
+path = "fuzz_targets/jsonrpc_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_one_line"
+path = "fuzz_targets/text_one_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "put_parsed"
+path = "fuzz_targets/put_parsed.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "task_write_args"
+path = "fuzz_targets/task_write_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graph_read_args"
+path = "fuzz_targets/graph_read_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trust_fence"
+path = "fuzz_targets/trust_fence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sqlro_sql"
+path = "fuzz_targets/sqlro_sql.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sse_usage"
+path = "fuzz_targets/sse_usage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "provider_merge"
+path = "fuzz_targets/provider_merge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gateway_admit"
+path = "fuzz_targets/gateway_admit.rs"
 test = false
 doc = false
 bench = false

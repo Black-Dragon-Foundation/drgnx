@@ -102,12 +102,23 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
 (declare-function drgnx-ai-model-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-role "drgnx-ai")
+(declare-function drgnx-ai-providers "drgnx-ai")
 
 (defun drgnx-doctor--ai-up ()
   "The providers the last probe found running."
   (ignore-errors
     (require 'drgnx-ai-probe)
     (mapcar #'car (seq-filter (lambda (e) (plist-get (cdr e) :up)) (drgnx-ai-detected-cached)))))
+
+(defun drgnx-doctor--ai-env-keys ()
+  "The names of the providers' key variables (`:key-env') set in this Emacs's environment, in provider order: names
+only, never a value."
+  (ignore-errors
+    (require 'drgnx-ai)
+    (delete-dups (cl-loop for (_ . p) in (drgnx-ai-providers)
+                          for env = (plist-get p :key-env)
+                          when (and (stringp env) (let ((v (getenv env))) (and v (not (string-empty-p v)))))
+                          collect env))))
 
 ;; Semantic search: SQLite with FTS5, the embedding provider the last probe found, the known projects' indexes.
 ;; A failure becomes a fact (:error), never a crash; nothing here prompts, and the network is asked at most once, for a second.
@@ -283,6 +294,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
     drgnx-search-chunk
     drgnx-onboard
     drgnx-face-state
+    drgnx-gc-census
     )
   "The core features whose loading defines config files, for the `config-files' check.")
 
@@ -460,6 +472,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :window-manager (drgnx-platform-doctor-facts)
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
+           :ai-env-keys (drgnx-doctor--ai-env-keys)
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
            :sandbox (drgnx-doctor--sandbox)
@@ -770,6 +783,9 @@ severity, the fix the first `:fix'."
     (unwind-protect
         (progn
           (while (and (process-live-p p) (< (float-time) limit)) (accept-process-output p 0.05))
+          ;; a fast binary counts as exited before its output is read (Emacs's SIGCHLD handler records the exit): read
+          ;; what it left
+          (unless (process-live-p p) (while (accept-process-output p 0)))
           (when (and (eq (process-status p) 'exit) (eql (process-exit-status p) 0))
             (with-current-buffer buf
               (ignore-errors (json-parse-string (buffer-string) :object-type 'plist :false-object nil :null-object nil)))))
@@ -852,6 +868,42 @@ It only informs: nothing runs in the sandbox yet (phase 6), so the check's statu
                      :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory"
                      :check (lambda (f) (drgnx-doctor--ratatoskr-check (plist-get f :ratatoskr))))
 
+;; The work store (work.db, Urdr): the `store' section of `ratatoskr doctor --json' (schema, a failed migration, the
+;; WAL, the backups, the personal-notes opt-in file, the copies a deny-list kept text out of).
+(defun drgnx-doctor--store-check (f)
+  "The `store' check of the fact F (`drgnx-doctor--ratatoskr'): a failed migration fails, any warning warns."
+  (let* ((store (plist-get (plist-get (plist-get f :ratatoskr) :report) :store))
+         (failed (plist-get store :failed))
+         (warnings (append (plist-get store :warnings) nil))
+         (denied (append (plist-get store :denied_in) nil))
+         (age (plist-get store :backup_age_s)))
+    (cond
+     ((null store) (list 'ok "no work.db yet, or no answer from the hub" nil))
+     (failed
+      (list 'fail (format "the move of work.db to schema 7 failed: %s" failed)
+            "`ratatoskr store restore-pre7' (hub stopped) puts the pre-migration copy back; install the previous drgnx"))
+     (warnings
+      (list 'warn (string-join warnings "; ")
+            (if denied
+                (format "remove the copies once you no longer need them: %s" (string-join denied ", "))
+              "see docs/guide/work.md, \"The graph from the command line\"")))
+     (denied
+      (list 'warn (format "the migration kept personal notes out; these copies still hold them: %s" (string-join denied ", "))
+            "remove them once you no longer need them"))
+     (t (list 'ok (format "schema %s%s%s; %d personal-notes opt-in%s"
+                          (or (plist-get store :schema) "?")
+                          (if-let* ((w (plist-get store :wal_bytes)))
+                              (format ", WAL %d KiB" (/ w 1024))
+                            "")
+                          (if age (format ", last backup %d h ago" (/ age 3600)) ", no backup yet")
+                          (or (plist-get (plist-get store :deny_list) :opted_in) 0)
+                          (if (eql (or (plist-get (plist-get store :deny_list) :opted_in) 0) 1) "" "s"))
+              nil)))))
+
+(drgnx-doctor-define 'store :group "Agents"
+                     :doc "The work store (work.db): its schema, WAL size, nightly backups, opt-in file and old copies"
+                     :check (lambda (f) (drgnx-doctor--store-check f)))
+
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
                               (let* ((p (plist-get f :packages))
@@ -892,6 +944,20 @@ It only informs: nothing runs in the sandbox yet (phase 6), so the check's statu
                                       (t (list 'ok (format "providers: %s%s" (mapconcat #'symbol-name (append (plist-get f :ai-up) (plist-get f :ai-keys)) ", ")
                                                            (if free (format "; %d MiB GPU free" free) ""))
                                                nil))))))
+
+(defun drgnx-doctor--ai-env-keys-check (names)
+  "The `ai-env-keys' check of NAMES (`drgnx-doctor--ai-env-keys'): an information line when some are set — the key
+stays in this Emacs's environment, its children inherit it, agents use the hub's copy — else ok."
+  (if (null names)
+      (list 'ok "no provider key in this Emacs's environment; the hub holds the keys AI: Load Keys gave it" nil)
+    (let ((one (null (cdr names))))
+      (list 'info
+            (format "%s %s set in this Emacs's environment; children inherit %s; agents use the %s the hub holds"
+                    (string-join names ", ") (if one "is" "are") (if one "it" "them") (if one "copy" "copies"))
+            "to keep a key out of shells and compile commands too, keep it in your Keychain or keyring instead (AI: Load Keys hands it to the hub; docs/guide/security.md)"))))
+
+(drgnx-doctor-define 'ai-env-keys :group "drgnx" :doc "Provider keys in this Emacs's environment (they stay there; the hub holds its own copy)"
+                     :check (lambda (f) (drgnx-doctor--ai-env-keys-check (plist-get f :ai-env-keys))))
 
 (declare-function drgnx-search-setup-mismatch "drgnx-search-setup")
 

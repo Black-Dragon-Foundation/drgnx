@@ -251,20 +251,35 @@ mod tests {
             .collect()
     }
 
-    /// Starts the relay in-process, waits for `ready`, returns the ports' task.
-    async fn start(pairs: Vec<RelayPair>) -> tokio::task::JoinHandle<io::Result<()>> {
-        let (r, w) = std::io::pipe().unwrap();
-        let h = tokio::spawn(run(pairs, Some(OwnedFd::from(w))));
-        let mut r = r;
-        let line = tokio::task::spawn_blocking(move || {
-            let mut s = String::new();
-            r.read_to_string(&mut s).unwrap();
-            s
-        })
-        .await
-        .unwrap();
-        assert_eq!(line, "ready\n");
-        h
+    /// Starts the relay in-process on `n` free ports (`make` turns them into its pairs), waits for `ready`, returns the
+    /// ports' task and the ports. Other tests of this process bind and connect on loopback too and can take a port
+    /// between `free_port` and the relay's bind (ci/ci-gate: about 1 run in 13 locally); the relay then fails with
+    /// AddrInUse and no ready line, and fresh ports are asked for. Any other failure fails the test.
+    async fn start(
+        n: usize,
+        make: impl Fn(&[u16]) -> Vec<RelayPair>,
+    ) -> (tokio::task::JoinHandle<io::Result<()>>, Vec<u16>) {
+        for _ in 0..5 {
+            let ports: Vec<u16> = (0..n).map(|_| free_port()).collect();
+            let (mut r, w) = std::io::pipe().unwrap();
+            let h = tokio::spawn(run(make(&ports), Some(OwnedFd::from(w))));
+            let line = tokio::task::spawn_blocking(move || {
+                let mut s = String::new();
+                r.read_to_string(&mut s).unwrap();
+                s
+            })
+            .await
+            .unwrap();
+            if line == "ready\n" {
+                return (h, ports);
+            }
+            let res = h.await.unwrap();
+            assert!(
+                matches!(&res, Err(e) if e.kind() == io::ErrorKind::AddrInUse),
+                "no ready line: {line:?}, {res:?}"
+            );
+        }
+        panic!("5 sets of free ports were all taken before the relay bound them");
     }
 
     #[test]
@@ -295,8 +310,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("e.sock");
         echo_server(&sock);
-        let port = free_port();
-        let h = start(vec![RelayPair { port, socket: sock }]).await;
+        let (h, ports) = start(1, |p| {
+            vec![RelayPair {
+                port: p[0],
+                socket: sock.clone(),
+            }]
+        })
+        .await;
+        let port = ports[0];
         let up = pattern(1 << 20, 1);
         let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let (mut r, mut w) = c.split();
@@ -340,9 +361,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("e.sock");
         echo_server(&sock);
-        let port = free_port();
-        let h = start(vec![RelayPair { port, socket: sock }]).await;
-        let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (h, ports) = start(1, |p| {
+            vec![RelayPair {
+                port: p[0],
+                socket: sock.clone(),
+            }]
+        })
+        .await;
+        let mut c = TcpStream::connect(("127.0.0.1", ports[0])).await.unwrap();
         c.write_all(b"hi").await.unwrap();
         let mut b = [0u8; 2];
         c.read_exact(&mut b).await.unwrap();
@@ -355,8 +381,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("e.sock");
         echo_server(&sock);
-        let port = free_port();
-        let h = start(vec![RelayPair { port, socket: sock }]).await;
+        let (h, ports) = start(1, |p| {
+            vec![RelayPair {
+                port: p[0],
+                socket: sock.clone(),
+            }]
+        })
+        .await;
+        let port = ports[0];
         let mut set = tokio::task::JoinSet::new();
         for i in 0..100u8 {
             set.spawn(async move {
@@ -379,18 +411,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let good = dir.path().join("good.sock");
         echo_server(&good);
-        let (bad_port, good_port) = (free_port(), free_port());
-        let h = start(vec![
-            RelayPair {
-                port: bad_port,
-                socket: dir.path().join("missing.sock"),
-            },
-            RelayPair {
-                port: good_port,
-                socket: good,
-            },
-        ])
+        let (h, ports) = start(2, |p| {
+            vec![
+                RelayPair {
+                    port: p[0],
+                    socket: dir.path().join("missing.sock"),
+                },
+                RelayPair {
+                    port: p[1],
+                    socket: good.clone(),
+                },
+            ]
+        })
         .await;
+        let (bad_port, good_port) = (ports[0], ports[1]);
         let mut c = TcpStream::connect(("127.0.0.1", bad_port)).await.unwrap();
         let mut buf = Vec::new();
         let n = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut buf))
@@ -425,9 +459,14 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let port = free_port();
-        let h = start(vec![RelayPair { port, socket: sock }]).await;
-        let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (h, ports) = start(1, |p| {
+            vec![RelayPair {
+                port: p[0],
+                socket: sock.clone(),
+            }]
+        })
+        .await;
+        let mut c = TcpStream::connect(("127.0.0.1", ports[0])).await.unwrap();
         c.write_all(&[7u8; 1000]).await.unwrap();
         c.shutdown().await.unwrap();
         let mut reply = String::new();
@@ -478,8 +517,10 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
+        // "it has gone" is `adopt_parent`'s refusal, which `main` returns before it binds anything. (No connect to the
+        // port here: the child has exited, so nothing it bound could still listen, and another test of this process
+        // may hold that free port: ci/ci-gate, 1 of 60 local runs.)
         assert!(String::from_utf8_lossy(&out.stderr).contains("it has gone"));
-        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
         let out = run(pair);
         assert_eq!(out.status.code(), Some(2), "no --parent-pid: usage");
         let parse = |a: &[&str]| parse_args(a.iter().map(OsString::from)).map(|a| a.pairs.len());

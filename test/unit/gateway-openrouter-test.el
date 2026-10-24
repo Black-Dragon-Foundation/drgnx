@@ -235,42 +235,37 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
           (should (eq (drgnx-agent-session-status s) 'exited))
           (should (seq-find (lambda (e) (string-search "OpenRouter restrictions" (or (plist-get e :text) "")))
                             (drgnx-agent-session-entries s))))
-        ;; without restrictions it goes direct, as before
+        ;; without restrictions it does not start either: only the hub holds keys (design §5.6)
         (drgnx-agents-set-setting :openrouter nil)
-        (let ((s (drgnx-gateway-openrouter-test--session)))
-          (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_BASE_URL=" e)) (drgnx-agents--env s)))
-          (should (eq (drgnx-agent-session-via s) 'direct)))))))
-
-(ert-deftest drgnx-gateway-openrouter/gateway-off-with-restrictions-refuses ()
-  ;; restrictions are never dropped silently: with the gateway turned off, an OpenRouter agent with restrictions does
-  ;; not start either, and says how to fix it; without restrictions, or without an OpenRouter step, it goes direct
-  (drgnx-gateway-openrouter-test--with
-    (let ((drgnx-agents-profiles nil) (drgnx-agents--sessions nil) (drgnx-agents-use-gateway nil) (started nil)
-          (hub-asked nil))
-      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
-      (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () (setq hub-asked t)))
-                ((symbol-function 'drgnx-acp-start) (lambda (&rest args) (push args started) nil)))
         (let* ((s (drgnx-gateway-openrouter-test--session))
                (err (should-error (drgnx-agents--env s) :type 'user-error)))
-          (should (string-search "OpenRouter restrictions" (error-message-string err)))
-          (should (string-search "turned off" (error-message-string err)))
-          (should (string-search "drgnx-agents-use-gateway" (error-message-string err)))
-          (should (string-search "remove drgnx-agents-openrouter" (error-message-string err))))
-        (let ((s (drgnx-agents-start "claude (OpenRouter)" temporary-file-directory)))
-          (should-not started)
-          (should (eq (drgnx-agent-session-status s) 'exited))
-          (should (seq-find (lambda (e) (string-search "turned off" (or (plist-get e :text) "")))
-                            (drgnx-agent-session-entries s))))
+          (should (string-search "agents reach providers through it" (error-message-string err)))
+          (should-not (eq (drgnx-agent-session-via s) 'direct)))))))
+
+(ert-deftest drgnx-gateway-openrouter/gateway-off-means-nothing-for-openrouter ()
+  ;; `drgnx-agents-use-gateway' nil does not send an OpenRouter agent directly (with or without restrictions): it goes
+  ;; through the hub, and without one it does not start; an agent with no OpenRouter step (Ollama) goes direct
+  (drgnx-gateway-openrouter-test--with
+    (let ((drgnx-agents-profiles nil) (drgnx-agents--sessions nil) (drgnx-agents-use-gateway nil) (started nil)
+          (process-environment (append (list (concat "XDG_RUNTIME_DIR=" root "run") "DRGNX_NO_HUB_START=1") process-environment)))
+      (cl-letf (((symbol-function 'drgnx-acp-start) (lambda (&rest args) (push args started) nil)))
+        (dolist (r (list drgnx-gateway-openrouter-test--restrictions nil))
+          (drgnx-agents-set-setting :openrouter r)
+          (let* ((s (drgnx-gateway-openrouter-test--session))
+                 (err (should-error (drgnx-agents--env s) :type 'user-error)))
+            (should (string-search "is not started" (error-message-string err)))
+            (should (string-search "hub" (error-message-string err)))
+            (should-not (string-search "sk-or-test" (error-message-string err))))
+          (let ((s (drgnx-agents-start "claude (OpenRouter)" temporary-file-directory)))
+            (should-not started)                                  ; no agent ran, with any environment
+            (should (eq (drgnx-agent-session-status s) 'exited))))
         ;; a value that does not read refuses too
         (drgnx-gateway-openrouter-test--put-settings "(drgnx-agents-openrouter (:zdr yes))")
         (should-error (drgnx-agents--env (drgnx-gateway-openrouter-test--session)) :type 'user-error)
-        ;; no OpenRouter step: not held up
-        (should (drgnx-agents--env (drgnx-gateway-openrouter-test--session "claude (Ollama)")))
-        ;; no restrictions: direct, as before
-        (drgnx-gateway-openrouter-test--put-settings "(drgnx-agents-openrouter nil)")
-        (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_BASE_URL=" e))
-                          (drgnx-agents--env (drgnx-gateway-openrouter-test--session))))
-        (should-not hub-asked)))))
+        ;; no OpenRouter step: not held up, and direct
+        (let ((s (drgnx-gateway-openrouter-test--session "claude (Ollama)")))
+          (should (drgnx-agents--env s))
+          (should-not (eq (drgnx-agent-session-via s) 'gateway)))))))
 
 (ert-deftest drgnx-gateway-openrouter/restrictions-that-cannot-be-read-refuse-the-start ()
   ;; a typo never turns a restriction off: a settings.el that does not read, or a `drgnx-agents-openrouter' value that
@@ -411,30 +406,20 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
     (with-current-buffer (drgnx-agent-settings-open 'claude root)
       (prog1 (buffer-string) (kill-buffer (current-buffer))))))
 
-(ert-deftest drgnx-gateway-openrouter/direct-route-says-gateway-only ()
+(ert-deftest drgnx-gateway-openrouter/an-openrouter-route-is-always-through-the-gateway ()
+  ;; OpenRouter agents only go through the hub's gateway (it alone holds the key): whatever `drgnx-agents-use-gateway'
+  ;; says, the page shows the restrictions with a Change button, never a direct route
   (drgnx-gateway-openrouter-test--agent-env
     (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
           (drgnx-agents-profiles nil))
       (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
-      ;; gateway off with restrictions: the page says the agents do not start, and how to fix it
-      (let ((text (drgnx-gateway-openrouter-test--page-text nil root)))
-        (should (string-search "OpenRouter restrictions: only anthropic, google-vertex" text))
-        (should (string-search "the gateway is turned off, so OpenRouter agents do not start" text))
-        (should (string-search "turn it on (drgnx-agents-use-gateway) or remove the restrictions" text))
-        (should (string-search "[Change…]" text)))
-      ;; gateway off without restrictions: the setting does not apply, and where the account's settings are
-      (drgnx-agents-set-setting :openrouter nil)
-      (let ((text (drgnx-gateway-openrouter-test--page-text nil root)))
-        (should (string-search "applies through drgnx's gateway only; without it, your OpenRouter account settings apply" text))
-        (should (string-search "https://openrouter.ai/settings/privacy" text)))
-      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
-      ;; through the gateway: the restrictions are shown, with a Change button
-      (let ((text (drgnx-gateway-openrouter-test--page-text t root)))
-        (should (string-search "OpenRouter restrictions" text))
-        (should (string-search "only anthropic, google-vertex" text))
-        (should (string-search "never azure" text))
-        (should (string-search "[Change…]" text))
-        (should-not (string-search "applies through drgnx's gateway only" text))))))
+      (dolist (use '(nil t))
+        (let ((text (drgnx-gateway-openrouter-test--page-text use root)))
+          (should (string-search "OpenRouter restrictions: only anthropic, google-vertex" text))
+          (should (string-search "never azure" text))
+          (should (string-search "[Change…]" text))
+          (should-not (string-search "turned off" text))
+          (should-not (string-search "applies through drgnx's gateway only" text)))))))
 
 (ert-deftest drgnx-gateway-openrouter/the-page-says-when-they-cannot-be-read ()
   (drgnx-gateway-openrouter-test--agent-env

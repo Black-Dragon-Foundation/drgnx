@@ -1,0 +1,24 @@
+{"scenario": "gateway/count-tokens-and-models-paths-pass", "requires": ["v1", "fake-backend"], "doc": "Task 24: besides /v1/messages an agent may use POST /v1/messages/count_tokens, GET /v1/models and GET /v1/models/ID: each is forwarded along the chain and answered; another path (/v1/complete) is 404 from the gateway and never reaches the provider."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages/count_tokens", "body": "{\"input_tokens\": 7}"}, {"path": "/v1/models/m1", "body": "{\"id\": \"m1\", \"type\": \"model\"}"}, {"path": "/v1/models", "body": "{\"data\": [{\"id\": \"m1\"}]}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "g1", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages/count_tokens", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"}
+{"do": "expect_http", "conn": "g1", "status": 200, "body_json": {"input_tokens": 7}}
+{"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "GET", "path": "/v1/models", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok"}}
+{"do": "expect_http", "conn": "g2", "status": 200, "body_json": {"data": [{"id": "m1"}]}}
+{"do": "http", "conn": "g3", "to": "tcp:127.0.0.1:$gw", "method": "GET", "path": "/v1/models/m1", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok"}}
+{"do": "expect_http", "conn": "g3", "status": 200, "body_json": {"id": "m1"}}
+{"do": "http", "conn": "g4", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/complete", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{}"}
+{"do": "expect_http", "conn": "g4", "status": 404}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"path\":\"/v1/messages/count_tokens\""}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"path\":\"/v1/models/m1\""}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "\"request\"", "count": 3, "at_most": 3}

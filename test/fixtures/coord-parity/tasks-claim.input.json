@@ -1,0 +1,26 @@
+{
+  "setup": [],
+  "clock": [],
+  "tables": ["jtask", "jdep", "event", "meta"],
+  "calls": [
+    {"fn": "drgnx-coord-job-create", "now": 100.0, "args": {"id": "j1", "title": "Chain", "plan": null, "repo": null,
+      "tasks": [{"n": 1, "title": "One", "role": "implement", "deps": []},
+                {"n": 2, "title": "Two", "role": "test", "deps": [1]},
+                {"n": 3, "title": "Three", "role": "docs", "deps": [1, 2]}]}},
+    {"fn": "drgnx-coord-claim", "now": 101.0, "args": {"task": "j1#2", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 102.0, "args": {"task": "j1#1", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 103.0, "args": {"task": "j1#1", "agent": "a2", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 104.0, "args": {"task": "j1#1", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 105.0, "args": {"task": "nope", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-set-status", "now": 106.0, "args": {"task": "j1#1", "agent": "a2", "status": "running", "seen": null}},
+    {"fn": "drgnx-coord-set-status", "now": 107.0, "args": {"task": "j1#1", "agent": "a1", "status": "running", "seen": null}},
+    {"fn": "drgnx-coord-set-status", "now": 108.0, "args": {"task": "j1#1", "agent": "a1", "status": "done", "seen": null}},
+    {"fn": "drgnx-coord-set-status", "now": 109.0, "args": {"task": "j1#2", "agent": "a1", "status": "running", "seen": null}},
+    {"fn": "drgnx-coord-set-status", "now": 109.5, "args": {"task": "nope", "agent": "a1", "status": "running", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 110.0, "args": {"task": "j1#3", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-claim", "now": 111.0, "args": {"task": "j1#1", "agent": "a1", "seen": null}},
+    {"fn": "drgnx-coord-force-status", "now": 112.0, "args": {"task": "j1#2", "status": "done", "agent": null}},
+    {"fn": "drgnx-coord-force-status", "now": 113.0, "args": {"task": "nope", "status": "done", "agent": "a1"}},
+    {"fn": "drgnx-coord-claim", "now": 114.0, "args": {"task": "j1#3", "agent": "a3", "seen": null}}
+  ]
+}

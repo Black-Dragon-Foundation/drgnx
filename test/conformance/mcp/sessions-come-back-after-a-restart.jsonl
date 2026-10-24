@@ -1,0 +1,25 @@
+{"scenario": "mcp/sessions-come-back-after-a-restart", "requires": ["v1", "fake-backend"], "doc": "A session whose owner (the harness) outlives the hub: after a stop and a start on the same root the same socket path answers again, as the same agent (one agent row)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"isError": "$absent"}}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "n", "hub": "h2", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "n", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "n", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "n", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "hello", "arguments": {}}}}
+{"do": "expect", "conn": "n", "json": {"jsonrpc": "2.0", "id": 2, "result": {"isError": "$absent"}}}
+{"do": "sql_expect", "sql": "select id from agent", "rows": [["s-0000000a"]]}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select sid, agent from msession", "rows": [["$sid", "s-0000000a"]]}
+{"do": "connect", "conn": "d", "hub": "h2"}
+{"do": "send", "conn": "d", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "d", "json": {"id": 1, "result": {"mcp": {"sessions": 1, "outside": 0}}}}

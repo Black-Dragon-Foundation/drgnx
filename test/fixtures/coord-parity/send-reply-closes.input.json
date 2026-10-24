@@ -1,0 +1,12 @@
+{"setup": ["insert into message (sender, recipient, text, state, at) values ('b', 'a', 'delivered ask', 'delivered', 900)",
+           "insert into message (sender, recipient, text, state, at) values ('b', 'a', 'read ask', 'read', 901)",
+           "insert into message (sender, recipient, text, state, at) values ('b', 'a', 'still queued', 'queued', 902)",
+           "insert into message (sender, recipient, text, state, at) values ('c', 'a', 'someone else', 'delivered', 903)",
+           "insert into message (sender, recipient, text, state, at) values (null, 'a', 'from the user', 'delivered', 904)"],
+ "clock": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+ "tables": ["message"],
+ "calls": [
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "b", "text": "reply"}},
+  {"fn": "drgnx-coord-send", "args": {"recipient": "a", "text": "the user's reply closes the user's"}},
+  {"fn": "drgnx-coord-send", "args": {"sender": "a", "recipient": "user", "text": "to the user"}}
+ ]}

@@ -800,8 +800,12 @@ happened when its agent has none (a reply then)."
           (t (let ((choices (mapcar (lambda (q) (cons (drgnx-cockpit-feed--describe q) q)) qs)))
                (cdr (assoc (completing-read "Answer: " choices nil t) choices)))))))
 
-(defun drgnx-cockpit-feed--hub (method params done &optional flight)
-  "Ask the hub METHOD with PARAMS; DONE runs when it answered without an error, an error is said.  No hub: an error.
+(declare-function drgnx-cockpit-edits--args "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--sent-p "drgnx-cockpit-edits")
+
+(defun drgnx-cockpit-feed--hub (method params done &optional flight accept)
+  "Ask the hub METHOD with PARAMS; DONE runs when it answered without an error and ACCEPT (when given) approved the
+result (it gets the result), an error is said once as \"drgnx hub: TEXT\".  No hub: an error.
 FLIGHT, when given, is the question on its way: a second answer to it is refused (`drgnx-cockpit-feed--in-flight')
 until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' passes."
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
@@ -814,9 +818,10 @@ until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' 
   (let ((land (lambda () (when flight (setq drgnx-cockpit-feed--in-flight
                                             (seq-remove (lambda (e) (equal (car e) flight)) drgnx-cockpit-feed--in-flight))))))
     (condition-case err
-        (drgnx-hub-call method params (lambda (_r err)
+        (drgnx-hub-call method params (lambda (r err)
                                         (funcall land)
-                                        (if err (message "Work cockpit: %s" err) (funcall done))))
+                                        (cond (err (drgnx-notify 'hub 'warn (format "drgnx hub: %s" err)))
+                                              ((or (null accept) (funcall accept r)) (funcall done)))))
       (error (funcall land) (signal (car err) (cdr err))))))
 
 (defun drgnx-cockpit-feed--changed ()
@@ -833,7 +838,8 @@ the message of AGENT's that TEXT answers, which a message in the store names):
 - a hub session's mirror: the hub's `agents/send' (queued), unless its mode interrupts;
 - a mirror whose mode interrupts, an exited or failed session, or an agent with no session here: a message in the
   store, which the hub gives its sessions when they are free (an outside agent reads it).
-`session', `message', or nil when the store held it back."
+`session', or `message' when the hub's `messages/send' is on its way (an error, or a message it held back, is said when
+it answers; DONE runs only when the message was sent)."
   (let* ((s (drgnx-cockpit-feed--session agent))
          (live (and s (not (memq (drgnx-agent-session-status s) '(exited failed))))))
     (cond
@@ -847,18 +853,16 @@ the message of AGENT's that TEXT answers, which a message in the store names):
       (drgnx-cockpit-feed--hub "agents/send" (list :id (drgnx-agent-session-remote s) :text text) done flight)
       'session)
      (t
-      (let ((r (drgnx-coord-send :recipient agent :text text :answers answers)))
-        (if (equal (plist-get r :state) "held")
-            (progn (message "Work cockpit: held, not sent — %s" (or (plist-get (drgnx-coord-message (plist-get r :id)) :reason) "too many messages"))
-                   nil)
-          (funcall done)
-          (when (fboundp 'drgnx-hub-call) (ignore-errors (drgnx-hub-call "coord/notify" nil #'ignore)))   ; deliver now
-          'message))))))
+      ;; the hub's `messages/send' (it delivers now, and notifies itself); its answer comes later
+      (drgnx-cockpit-feed--hub "messages/send" (drgnx-cockpit-edits--args :recipient agent :text text :answers answers)
+                               done flight (lambda (r) (drgnx-cockpit-edits--sent-p r "Work cockpit:")))
+      'message))))
 
 (defun drgnx-cockpit-answer (question text)
   "Answer QUESTION (an open question of `drgnx-cockpit-feed--questions') with TEXT, never interrupting anyone; an
 `answer' event (by \"user\", data (:question ID)) then closes it.  How it goes, by what asked:
-- an ask card: settled with TEXT (`drgnx-coord-card-settle', which writes the answer) — `card';
+- an ask card: settled with TEXT by the hub's `cards/settle' (which writes the answer; a card settled already is
+  said) — `card';
 - a job's agent's message: the hub's `job/reply' (a message the hub delivers when the agent is free) — `job';
 - an outside agent: a message to it in the store (it reads its inbox) — `message';
 - a native session: queued in it, never cancelling its turn (`drgnx-cockpit-feed--queue') — `session' or `message';
@@ -878,12 +882,20 @@ else one you pick; then the text is asked for.  In what happened, an agent with 
            (card (or (plist-get question :card) (plist-get data :card)))
            (mid (plist-get data :message))
            (job (or (plist-get question :job) (and mid (plist-get (drgnx-coord-message mid) :job))))
-           (answered (lambda ()
-                       (when qid
-                         (drgnx-coord-event-add :agent "user" :job (plist-get question :job) :task (plist-get question :task)
-                                                :kind "answer" :summary text :data (list :question qid)))
-                       (when mid (drgnx-coord-mark mid "acted"))
+           ;; in order, each after the hub answered the one before: the answer event, the message marked acted, the refresh
+           (marked (lambda ()
+                     (if mid
+                         (drgnx-cockpit-feed--hub "messages/mark" (list :id mid :state "acted") #'drgnx-cockpit-feed--changed)
                        (drgnx-cockpit-feed--changed))))
+           (answered (lambda ()
+                       (if qid
+                           (drgnx-cockpit-feed--hub
+                            "events/add"
+                            (drgnx-cockpit-edits--args :kind "answer" :agent "user" :job (plist-get question :job)
+                                                       :task (plist-get question :task) :summary text
+                                                       :data (list :question qid))
+                            marked)
+                         (funcall marked)))))
       (when (and (not (equal (plist-get question :kind) "permission")) (or (null text) (string-blank-p text)))
         (user-error "An empty answer: nothing sent"))
       (let* ((flight (or qid (and card (cons 'card card))))
@@ -894,15 +906,21 @@ else one you pick; then the text is asked for.  In what happened, an agent with 
                 (message "Answer the permission in %s's transcript" (drgnx-cockpit-feed--name agent))
                 'transcript)
                (card
-                (unless (drgnx-coord-card-settle card text) (user-error "That card was settled already"))
-                (drgnx-cockpit-feed--changed)
+                ;; `cards/settle' writes an ask card's `answer' event itself: only the message is marked after it
+                (drgnx-cockpit-feed--hub "cards/settle" (list :card card :choice text) marked flight
+                                         (lambda (r)
+                                           (or (plist-get r :settled)
+                                               (progn (message "That card was settled already")
+                                                      (drgnx-cockpit-feed--changed)
+                                                      nil))))
                 'card)
                ((and mid job)
                 (drgnx-cockpit-feed--hub "job/reply" (list :message mid :text text) answered flight)
                 'job)
                (t (drgnx-cockpit-feed--queue agent text answered flight mid)))))
         ;; nil: the store held it back, and said so
-        (when (and route (not (eq route 'transcript)))
+        ;; `message' goes through the hub's write: its answer (a held message, an error) speaks
+        (when (and route (not (memq route '(transcript message))))
           ;; through the hub, it is not queued yet: the hub's answer (or error) comes later
           (message (if (or (eq route 'job)
                            (and (eq route 'session)

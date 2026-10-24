@@ -220,6 +220,22 @@ build/ ignored (with build/out.o)."
       (should (eq (drgnx-git-status first) 'untracked))
       (should (= (drgnx-cache-size 'git-status) 16)))))
 
+(ert-deftest drgnx-git/a-late-sentinel-keeps-the-eviction-order ()
+  ;; A run read before its sentinel ran (the wait reads a git that is gone) gets that sentinel later, during other
+  ;; roots' runs: its look at the cache is no use of the root, so the root stays the oldest (macOS CI: the late look
+  ;; stamped r00 and r01 was evicted in its place).
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--many-repos roots 17
+    (let ((first (car roots)) proc)
+      (drgnx-git-refresh first)
+      (setq proc (plist-get (drgnx-cache-get 'git-status first) :proc))
+      (drgnx-git-refresh first t)                                                    ; read: :proc is cleared
+      (dolist (r (butlast (cdr roots))) (drgnx-git-refresh r t))                     ; 16 roots, the first the oldest
+      (drgnx-git--done proc first)                                                   ; its sentinel, late
+      (drgnx-git-refresh (car (last roots)) t)                                       ; the 17th evicts the oldest
+      (should-not (drgnx-git-status (expand-file-name "u.txt" first)))
+      (should (eq (drgnx-git-status (expand-file-name "u.txt" (nth 1 roots))) 'untracked)))))
+
 (ert-deftest drgnx-git/an-evicted-root-comes-back-when-its-run-finishes ()
   ;; A root pushed out while its git runs is not killed: its result puts the root back.
   (skip-unless (executable-find "git"))

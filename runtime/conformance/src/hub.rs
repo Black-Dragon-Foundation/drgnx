@@ -527,6 +527,44 @@ impl Conn {
         })
     }
 
+    /// A child's stdin and stdout as a connection (both piped).  It is killed when the connection is dropped.
+    pub fn from_child(mut child: Child) -> Result<Conn, String> {
+        let writer = child.stdin.take().ok_or("the child has no piped stdin")?;
+        let reader = child.stdout.take().ok_or("the child has no piped stdout")?;
+        Ok(Conn {
+            writer: Box::new(writer),
+            socket: None,
+            rx: spawn_reader(reader, Arc::new(AtomicBool::new(false))),
+            pause: Arc::new(AtomicBool::new(false)),
+            buf: VecDeque::new(),
+            eof: false,
+            helper: Some(child),
+            hub_nonce: None,
+            next_id: 1,
+        })
+    }
+
+    /// The child's exit status, waiting up to `within` (an error when the connection is not a child's or it runs on).
+    pub fn wait_exit(&mut self, within: Duration) -> Result<std::process::ExitStatus, String> {
+        let child = self
+            .helper
+            .as_mut()
+            .ok_or("the connection is not a child process")?;
+        let deadline = Instant::now() + within;
+        loop {
+            if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+                return Ok(s);
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "the child is still running after {} ms",
+                    within.as_millis()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Write one line.  A hub that closed the connection meanwhile is not an error here: the next `expect_closed` says so.
     pub fn send_line(&mut self, text: &str, newline: bool) -> Result<(), String> {
         let mut data = text.as_bytes().to_vec();

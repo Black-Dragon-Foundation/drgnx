@@ -218,8 +218,17 @@ in `meta' `migrate-6-dropped'.  New columns: event.turn, message.answers, card.r
     (error (ignore-errors (sqlite-execute db "rollback"))
            (signal (car err) (cdr err)))))
 
+(defvar drgnx-coord-writer)            ; core/drgnx-coord.el: who writes work.db from this Emacs
+
+(define-error 'drgnx-work-db-not-the-writer "work.db is written by the drgnx hub")
+
 (defun drgnx-work-db ()
-  "The open database (opened, created and migrated on first use)."
+  "The open database (opened, created and migrated on first use), read-write.  Only for the Rust-bound `local' writer
+mode (`drgnx-coord-writer': the standalone Lisp hub of the v0 rows and the coordination unit tests).  Anywhere else —
+an editor, the CLI, the Lisp backend behind Ratatoskr — it signals `drgnx-work-db-not-the-writer' and opens nothing:
+the hub is the one writer of work.db, and readers use `drgnx-work-db-read'."
+  (unless (and (boundp 'drgnx-coord-writer) (eq drgnx-coord-writer 'local))
+    (signal 'drgnx-work-db-not-the-writer nil))
   (let ((file (drgnx-work-db-file)))
     (or (alist-get file drgnx-work-db--handles nil nil #'equal)
         (progn
@@ -234,8 +243,7 @@ in `meta' `migrate-6-dropped'.  New columns: event.turn, message.answers, card.r
 (defvar drgnx-work-db--read-handles nil "Alist file → read-only database (`drgnx-work-db-read').")
 
 (defconst drgnx-work-db--writer-reads
-  '((drgnx-work-collect-jobs . "reads the collected-key, then writes the commits and the key: the check and the write share one connection")
-    (drgnx-coord-events-prune-daily . "reads the last prune time, then prunes and writes the new time"))
+  '((drgnx-coord-events-prune-daily . "reads the last prune time, then prunes and writes the new time"))
   "(NAME . REASON) of the functions that may `sqlite-select' on `(drgnx-work-db)': a read followed by a write.
 Every other read goes through `drgnx-work-db-read' (checked by `drgnx-work-db/readers-use-the-read-only-path').")
 
@@ -252,31 +260,41 @@ Every other read goes through `drgnx-work-db-read' (checked by `drgnx-work-db/re
       (let ((have (drgnx-work-db--meta db "schema")))
         (if have (cons db (string-to-number have)) (sqlite-close db) nil)))))
 
+(defvar drgnx-work-db--empty nil "An empty schema-6 database in memory: what a reader sees before the hub made work.db.")
+
+(defun drgnx-work-db--empty ()
+  "The empty in-memory database (`drgnx-work-db--empty'): the tables the readers query, no rows, no file."
+  (or drgnx-work-db--empty
+      (let ((db (sqlite-open)))
+        (drgnx-work-db--migrate db)
+        (setq drgnx-work-db--empty db))))
+
 (defun drgnx-work-db-read ()
-  "A read-only handle on work.db: it never migrates and never runs a writing statement, and closing it
-never checkpoints.  A missing file, or one below `drgnx-work-db-schema-version', is first made by the
-writer (`drgnx-work-db'): every drgnx Emacs is still a writer.  A newer schema is read when its `compat-read'
-is at most `drgnx-work-db-compat-read'; else `drgnx-work-db-too-new'."
+  "A read-only handle on work.db: it never creates, migrates or writes the file, and closing it never checkpoints.
+The hub makes and migrates work.db (Ratatoskr: the editor is no writer of the tracker).  A file that is missing, or
+below `drgnx-work-db-schema-version', answers like an empty database (an in-memory one: the readers find no rows).
+A newer schema (the hub's 7) is read through its compatibility views when its `compat-read' is at most
+`drgnx-work-db-compat-read'; else `drgnx-work-db-too-new'."
   (let ((file (drgnx-work-db-file)))
     (or (alist-get file drgnx-work-db--read-handles nil nil #'equal)
         (let ((open (drgnx-work-db--open-read file)))
-          (when (or (null open) (< (cdr open) drgnx-work-db-schema-version))
-            (when open (sqlite-close (car open)))
-            (drgnx-work-db)
-            (setq open (drgnx-work-db--open-read file)))
-          (pcase-let ((`(,db . ,have) open))
-            (when (> have drgnx-work-db-schema-version)
-              (let ((compat (string-to-number (or (drgnx-work-db--meta db "compat-read") "999999"))))
-                (when (> compat drgnx-work-db-compat-read)
-                  (sqlite-close db)
-                  (signal 'drgnx-work-db-too-new
-                          (list (format "work.db is schema %d, which this drgnx cannot read: update drgnx" have))))))
-            (push (cons file db) drgnx-work-db--read-handles)
-            db)))))
+          (if (or (null open) (< (cdr open) drgnx-work-db-schema-version))
+              (progn (when open (sqlite-close (car open)))
+                     (drgnx-work-db--empty))
+            (pcase-let ((`(,db . ,have) open))
+              (when (> have drgnx-work-db-schema-version)
+                (let ((compat (string-to-number (or (drgnx-work-db--meta db "compat-read") "999999"))))
+                  (when (> compat drgnx-work-db-compat-read)
+                    (sqlite-close db)
+                    (signal 'drgnx-work-db-too-new
+                            (list (format "work.db is schema %d, which this drgnx cannot read: update drgnx" have))))))
+              (push (cons file db) drgnx-work-db--read-handles)
+              db))))))
 
 (defun drgnx-work-db-close-all ()
   (dolist (h drgnx-work-db--read-handles) (ignore-errors (sqlite-close (cdr h))))   ; readers first: the writer closes last and checkpoints
   (setq drgnx-work-db--read-handles nil)
+  (when drgnx-work-db--empty (ignore-errors (sqlite-close drgnx-work-db--empty)) (setq drgnx-work-db--empty nil))
   (dolist (h drgnx-work-db--handles) (ignore-errors (sqlite-close (cdr h))))
   (setq drgnx-work-db--handles nil))
 
@@ -285,19 +303,9 @@ is at most `drgnx-work-db-compat-read'; else `drgnx-work-db-too-new'."
 
 ;;;; Nodes and edges
 
-(defconst drgnx-work--columns '(:kind :title :path :line :status :parent :ord :source))
-
-(defun drgnx-work-put-node (id &rest props)
-  "Insert or replace node ID with PROPS (:kind :title :path :line :status :parent :ord :source and
-any other keys, kept in its data)."
-  (let ((data (cl-loop for (k v) on props by #'cddr unless (memq k drgnx-work--columns) append (list k v))))
-    (sqlite-execute (drgnx-work-db)
-                    "insert or replace into node values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                    (list id (and (plist-get props :kind) (symbol-name (plist-get props :kind)))
-                          (plist-get props :title) (plist-get props :path) (plist-get props :line)
-                          (plist-get props :status) (plist-get props :parent) (plist-get props :ord)
-                          (plist-get props :source)
-                          (and data (drgnx-records-encode 'drgnx-records-node-data data)) (float-time)))))
+;; Nothing here writes: the tracker's entities and links are written by the hub (graph/put-parsed, graph/record;
+;; core/drgnx-work-scan.el sends them).  These are the readers, over the `node', `edge' and `file' tables of schema 6
+;; and the views of schema 7.
 
 (defun drgnx-work--row-node (row)
   (pcase-let ((`(,id ,kind ,title ,path ,line ,status ,parent ,ord ,source ,data) row))
@@ -311,18 +319,6 @@ any other keys, kept in its data)."
   (when-let* ((row (car (sqlite-select (drgnx-work-db-read) (concat drgnx-work--select " where id = ?") (list id)))))
     (drgnx-work--row-node row)))
 
-(defun drgnx-work-update-node (id &rest props)
-  "Change PROPS of node ID (columns and data), keeping the rest."
-  (when-let* ((n (drgnx-work-node id)))
-    (cl-loop for (k v) on props by #'cddr do (setq n (plist-put n k v)))
-    (apply #'drgnx-work-put-node id (cl-loop for (k v) on n by #'cddr unless (eq k :id) append (list k v)))))
-
-(defun drgnx-work-put-edge (src dst kind origin &optional source)
-  "The KIND edge SRC → DST, from ORIGIN (`parsed', `inferred', `recorded'): a recorded edge stays recorded."
-  (sqlite-execute (drgnx-work-db) "insert into edge values (?, ?, ?, ?, ?) on conflict (src, dst, kind)
-                                   do update set origin = excluded.origin, source = excluded.source where edge.origin <> 'recorded'"
-                  (list src dst (symbol-name kind) (symbol-name origin) (or source (symbol-name origin)))))
-
 (defun drgnx-work-edges-to (dst kind)
   "((SRC . ORIGIN)…) of the KIND edges into DST."
   (mapcar (lambda (r) (cons (car r) (intern (cadr r))))
@@ -332,11 +328,6 @@ any other keys, kept in its data)."
   "((DST . ORIGIN)…) of the KIND edges out of SRC."
   (mapcar (lambda (r) (cons (car r) (intern (cadr r))))
           (sqlite-select (drgnx-work-db-read) "select dst, origin from edge where src = ? and kind = ? order by dst" (list src (symbol-name kind)))))
-
-(defun drgnx-work-forget-source (source)
-  "Forget every node and edge SOURCE gave (before reading SOURCE again)."
-  (sqlite-execute (drgnx-work-db) "delete from node where source = ?" (list source))
-  (sqlite-execute (drgnx-work-db) "delete from edge where source = ?" (list source)))
 
 (defun drgnx-work-children (id)
   "The tree children of ID: nodes whose parent it is (by order), then the plans that derive from it
@@ -372,16 +363,10 @@ and the commits that implement it (newest first)."
                                    (mapconcat (lambda (_) "?") kinds ", "))
                            (mapcar #'symbol-name kinds)))))
 
-(defun drgnx-work-forget-orphan-commits ()
-  "Forget the commits no edge links any more (commits belong to no file: several ledgers may name one)."
-  (sqlite-execute (drgnx-work-db) "delete from node where kind = 'commit' and id not in (select src from edge)"))
-
 ;;;; Files seen
 
 (defun drgnx-work-file-mtime (path) (caar (sqlite-select (drgnx-work-db-read) "select mtime from file where path = ?" (list path))))
-(defun drgnx-work-set-file (path mtime) (sqlite-execute (drgnx-work-db) "insert or replace into file values (?, ?)" (list path mtime)))
 (defun drgnx-work-files () (mapcar #'car (sqlite-select (drgnx-work-db-read) "select path from file")))
-(defun drgnx-work-drop-file (path) (sqlite-execute (drgnx-work-db) "delete from file where path = ?" (list path)))
 
 ;;;; Spend (the gateway's requests)
 

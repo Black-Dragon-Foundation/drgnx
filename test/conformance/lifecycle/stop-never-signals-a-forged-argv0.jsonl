@@ -1,0 +1,10 @@
+{"scenario": "lifecycle/stop-never-signals-a-forged-argv0", "requires": ["v1", "test-hooks", "linux"], "doc": "The hub ignores shutdown and still holds its lock, whose text now names another process (a sleep whose argv[0] is ratatoskr) with its true start time: `stop` signals only the process listening on the socket, which is not the one the lock names, so it refuses (exit 1, \"signal it yourself\"); the sleep and the hub both live."}
+{"do": "start", "hub": "h", "args": ["--test-ignore-shutdown"]}
+{"do": "spawn", "capture": "P", "argv": ["bash", "-c", "exec -a ratatoskr sleep 60"]}
+{"do": "pid", "capture": "P", "alive": true, "within_ms": 1000}
+{"do": "write_file", "path": "$LOCK", "text": "$P $P_start\n"}
+{"do": "run", "args": ["stop", "--timeout", "1"], "drop_ptrace": true, "expect_code": 1, "expect_stderr": "signal it yourself"}
+{"do": "pid", "capture": "P", "alive": true, "stays_for_ms": 500}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}

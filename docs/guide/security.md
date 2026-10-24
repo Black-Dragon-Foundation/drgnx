@@ -128,6 +128,209 @@ The rules behind it:
   hub showed, in its answer to their hello, that it read the same cap file. A hub that cannot show it is closed and
   you are told; a hub of an older drgnx (before Ratatoskr) still gets your editor's calls but never a key. The
   coordination servers your agents run never read the cap: they stay at the level of a connection without a proof.
+- **Your keys stay in the hub's memory.** The gateway runs inside Ratatoskr, and the keys your editor hands it are
+  held only in its memory: never in a file, its database, its log, an environment or a command line, and never
+  passed to the Lisp hub behind it. Agents get a token instead, which works only for them and only on the hub's own
+  port or their session's socket; the hub keeps a hash of it, never the token. `ratatoskr doctor` names the providers
+  whose key the hub holds, never a key. A restarted hub has no key until your editor connects again; when it asks
+  for one, the editor reads the provider's environment variable again and never prompts (no Keychain, no `.gpg`
+  file), else it tells you to run AI: Load Keys. The provider list the editor sends the hub (and again when the
+  providers in settings.el change) holds no key. The Lisp hub behind Ratatoskr registers its agents through Ratatoskr, without keys.
+- **The hub is not dumpable.** Another program running as you (an agent outside a sandbox, a debugger) cannot read
+  the hub's memory, and so your keys, with `ptrace` or `/proc/PID/mem`, and the hub writes no core file. This does
+  not stop root, or a program given the `CAP_SYS_PTRACE` capability. A hub that cannot protect itself this way (on
+  macOS, one started under a debugger) takes no key at all: `ratatoskr doctor` and `ratatoskr status` print "keys:
+  refused, this hub cannot protect keys" with the reason; restart the hub outside the debugger. `ratatoskr stop` signals only the process that
+  is actually listening on the hub's socket, asked of the system (on Linux through a pidfd, which cannot hit a reused
+  pid), never a process named by a file or a command line: a program that calls itself `ratatoskr` is never stopped
+  by mistake.
+- **Providers over plain http.** A provider's URL is `https`, or `http` for any host. A provider that takes a key
+  at an `http` address off this machine (a server on your LAN) still works, but its key travels in clear text: the
+  hub warns you when the provider list is applied, in its log once, and in `ratatoskr doctor`, and your editor shows
+  it once per provider each time it starts. Use `https` for it.
+  A keyless provider (a local Ollama) gets no warning.
+
+## Where your keys live
+
+The hub holds your provider keys, in its memory only (above). What else gets near them:
+
+- **Agents** get a token, never a key. It reaches only Anthropic's Messages API, along the agent's own provider list,
+  and only on the hub's port or the agent's session socket.
+- **The editor** can take a token of its own for its AI requests (chat, completion, embeddings), so the request
+  carries the token and the hub adds the key. That token reaches only a provider's own paths
+  (`http://127.0.0.1:PORT/p/PROVIDER/…`), one provider per request, and only on the hub's port on this machine:
+  never an agent's session socket, and never the Messages API agents use. One process holds one such token (asking
+  again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
+  your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly. Chat, completion, edits, commit
+  messages, embeddings and gptel all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
+  again on every reconnect and keeps it in memory only. The search indexer job asks for a token of its own, so it goes
+  with the job. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
+  waits.
+- **The editor keeps no key once the hub has one.** AI: Load Keys (and onboarding, the Store key button of Agent
+  Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
+  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, the
+  gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
+  runs, a key AI: Load Keys found waits in memory and goes when the editor connects. Checking whether a provider is
+  usable (AI: Choose, onboarding's checks) reads its key only to see that there is one, and keeps nothing: neither the
+  key nor auth-source's copy of the file. When the hub restarts (an update, `drgnx hub restart`), the editor hands
+  over again the keys it can read without asking: your environment and a plain `~/.authinfo`. A key that lives only in
+  your Keychain, keyring or a `.gpg` file cannot be read without asking, so a notice says "the drgnx hub restarted
+  without your … key: run AI: Load Keys". A provider with a key is never asked directly,
+  and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
+  hub is not running; agents reach providers through it".
+- **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
+  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
+- **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,
+  so the programs your Emacs starts (shells, `compile`) still see them; agents do not (their environment drops every
+  provider key) and use the copy the hub holds. `drgnx doctor` notes such a key ("OPENROUTER_API_KEY is set in this
+  Emacs's environment; children inherit it; agents use the copy the hub holds"). To keep a key out of shells too, keep
+  it in your Keychain or keyring instead and let AI: Load Keys hand it over.
+
+## Who an agent is
+
+The coordination tools (hello, reports, messages, tasks, decisions) act as one agent, and the agent never says
+which: Ratatoskr knows it from how the connection reached it.
+
+- **An agent drgnx runs** gets a socket of its own (`mcp.sock`, in its session's private directory: mode 0700, the
+  socket 0600, both yours). Whoever connects to that socket is that agent, with its job and task. A name in a tool's
+  arguments, or `DRGNX_AGENT` in an environment, changes nothing. The socket closes when the program that opened the
+  session (your editor, or the hub's job) is gone, and comes back on the same path after a hub restart while that
+  program still runs.
+- **An agent drgnx did not start** (Claude Code in a terminal, for example) reaches the tools through a bridge on the
+  hub's main socket, without the cap. Ratatoskr names it after the process that started the bridge, from the system,
+  not from the bridge: `ext:KIND:PID-HASH` (the kind the bridge gives, that process's pid and a hash of its start
+  time, so a reused pid is a new name). Such an agent is unverified: it can say hello, report edits and tests and send
+  messages, but the tools of drgnx's jobs (claiming, updating or completing a job's task, recording a decision) refuse
+  it. A bridge whose parent is init (pid 1) is refused.
+- Any program running as you can still connect to these sockets: the agent sandbox, not the socket, is the boundary
+  between agents and your account.
+
+## Personal notes
+
+Your personal notes never enter drgnx's store (`work.db`), so no agent can read them through it. Kept out:
+everything under `~/org/` except `~/org/board.org`, your task board, which the tracker reads. Ratatoskr checks each
+path after resolving links, so a link from a project into `~/org`, or `..` in a path, changes nothing.
+
+- **Always kept out:** `~/org/notes.org`, and under `~/org` any file whose name starts with `notes`, `journal`,
+  `diary` or `personal` (any case), or anything inside a folder so named. You cannot open these.
+- **Your own additions:** `~/.config/drgnx/personal-notes-deny.json` lists more files, folders and globs to keep
+  out, anywhere, as firmly as the built-in ones:
+
+  ```json
+  {"version": 1, "entries": [{"kind": "folder", "path": "~/Documents/diary"},
+                             {"kind": "glob", "path": "~/docs/*.private"}]}
+  ```
+
+  A glob has `*` and `?` in its last part only. The built-in list cannot be shortened. If this file cannot be read
+  or has a mistake, the built-in list still applies and no personal file is opened (below) until you fix it.
+- **Opening one file:** `~/.config/drgnx/personal-notes-allow.json` names single files under `~/org` that the store
+  may read, for example a reading list a plan refers to: `{"version": 1, "paths": ["~/org/reading.org"]}`. Only
+  existing regular files count: a folder, a glob or a path outside `~/org` is ignored. A file that is always kept out
+  stays out even if listed.
+- Keep both files `0600`. An opt-in file that others may write is ignored entirely. `drgnx doctor` lists every entry
+  it ignored and why.
+- **The work scan's own door.** The scan that reads your plans (`drgnx work scan`) applies the same rules in Lisp
+  (`core/drgnx-deny.el`, held to the same table of cases as the hub's check) before it sends anything: it skips
+  files the rules deny, and drops a plan's `**Spec:**` that names one, even through a link. The hub checks again
+  (defence in depth). The code indexer asks the same check with the opt-ins ignored: a file you opened for the store
+  is not opened for the code index. A scan root inside `~/org` (or `~/org` itself) is refused the same way, opt-ins
+  ignored, with "the work tracker never reads a project inside ~/org (personal notes)": nothing under it is read and
+  git never runs there (nor in a repository inside `~/org` that a project contains); the other roots are scanned.
+- **The entity embedder skips them too.** When the hub makes the store's search vectors (a `tei` embedding provider
+  in your providers), an entity whose source, path or id the rules deny is never sent, even one stored before you
+  added its folder to your deny list. A text you excise (or a file you revoke) while the provider is answering gets
+  no vector of what was sent.
+- **The code search index never reads `~/org`.** `drgnx search index` refuses a project whose root is inside
+  `~/org` (or reaches it through a link) with "the search index never reads ~/org (personal notes)", before it
+  reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose
+  real path is under `~/org` is left out, the board excepted; nothing of it is read, sent to an embedding provider
+  or stored.
+- **Every other way in is checked too.** Importing an export (`graph/import`) drops a record that names a denied
+  path or has a source form it cannot read; a store from before schema 7 loses such rows when it is upgraded
+  (its pre-upgrade backup keeps them, and `drgnx doctor` lists that backup); and an export (`graph/export`) checks
+  every record again, so a path you add to your deny list never leaves in a later export, nor do the notes of the
+  changes that wrote such a record. A test plants random
+  bytes in fixture notes and checks that none of them reaches the store, its write-ahead log, the code index, an
+  export, the embedding provider or the hub's log; the hub never writes a file under `~/org`.
+
+### Opening a personal file to the store
+
+Use the commands rather than editing the files by hand (palette, Preferences):
+
+- **Open a Personal File to the Store…** (`drgnx-store-allow-personal-file`) asks for one file under `~/org`. A
+  folder, a file outside `~/org`, the board and a file that is always kept out (`notes.org`, the names above, your
+  own deny entries) are refused before anything is asked. It then asks once, naming the file ("Agents in your
+  projects may read what the tracker parses from it"), writes `personal-notes-allow.json` (`0600`, replaced in one
+  step), and asks the hub to apply it now; the next scan reads the file.
+- **Close a Personal File to the Store…** (`drgnx-store-revoke-personal-file`) offers the files you opened. Closing
+  one **excises** what came in from it (every version, the search index, the notices that quoted it; see "Removing
+  something for good"), then compacts the store. If dated backups or older copies of the store still hold its text,
+  it names them and asks once whether to delete them; say yes, or they keep it (they cannot be found again later,
+  since what they hold is gone from the store). Your exports are only listed: they are your files.
+- **Keep a Path Out of the Store…** (`drgnx-store-deny-personal-path`) adds a file, a folder or a glob to your own
+  deny list; whatever came in from it is excised at once. **Stop Keeping a Path Out…**
+  (`drgnx-store-undeny-personal-path`) takes one of your entries back (nothing stored changes); the built-in list
+  cannot be shortened.
+- None of them reads the file's content, and they run only when you call them. What each did (and a hub that did
+  not apply it at once) is a Store notice, shown once in the echo area and kept in the Notices list.
+- **Any change counts, not only the commands'.** Any program running as you can edit these files (an agent too:
+  the same Unix user is no boundary). The hub looks at both files every two seconds and when it starts, applies any
+  change at once (a file closed while the hub was down is excised at its next start; no backup is ever deleted
+  that way, only by the command's question), and tells every drgnx editor:
+  "personal-file opt-ins changed: +1 / −0". An entry it ignored is counted in that notice, and `drgnx doctor` says
+  why. If you did not make the change, close the file again.
+
+## Grants
+
+An agent reads only its own project in drgnx's store: the project of the folder it was started in (for an agent
+outside drgnx, the folder its bridge reported). To let it read another project, you give a **grant**; nothing else
+widens what it sees.
+
+- A grant is for a project (every agent working in it), a profile (every session of that profile, in any project)
+  or one session, and opens one project or all of them (`*`, future ones included). It may expire.
+- A second kind of grant lets agents edit the title, text and status of tasks **you** made, one task or a whole
+  project. It never reaches a task in a project other than the agent's own: no grant lets an agent write into
+  another project.
+- **Only you make, change and revoke grants.** The store refuses any write of a grant that does not come from you,
+  whatever path it takes (an agent's tool, a proposed change, an import, a scanned file), and the same holds for the
+  store's settings. An agent can only ask (an access card in the Work cockpit), never grant itself or another
+  anything.
+- **An agent's request** (`access_request`) waits on a card in the Work cockpit with its reason. You answer with one
+  of four choices: **This session** (that session only, while it lives and for a day at most), **Its project**
+  (every agent working in the requester's project), **Its profile** (every session of its profile) or **Refuse**.
+  The first three give a read grant of the project it asked for; the agent is told either way. drgnx's own
+  background process can refuse a request for you, never grant one.
+- You can list, give and revoke grants directly too, through the hub method `graph/grants`.
+- Revoking takes effect at once: the next read by any agent runs without it, and a walk through the graph already
+  running stops at its next step.
+- An agent sees the grants given to it, never the others (they would name your other projects).
+- Text agents wrote is shown to other agents as data, not instructions, fenced with its author and project, even
+  under a grant and even to the agent that wrote it.
+
+## Secrets in the store
+
+An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store
+credentials"): a private key block, an AWS key id, a key with a known prefix (`sk-`, `ghp_`, `gho_`, `github_pat_`,
+`glpat-`, `xoxb-` and the like), `password=…`-style assignments (`password`, `passwd`, `secret`, `token`, `api_key`
+with a value of 8 or more characters), and long random-looking strings. Commit ids, paths, URLs and dates pass.
+
+## Removing something for good
+
+The store keeps every version of what is written into it. When a secret or a personal text got in by mistake,
+**excise** it: only you can, and the reason you give is kept, never the text.
+
+- Excising a task, note or other entry replaces its title, text and data (or the fields you name) with
+  `[excised <n>]` in every version it ever had, in the search index, in its embedding, in the stored replies and
+  notes of the changes that wrote it, linked it or quoted it, and in the notices and cards that quoted it. Excising one change does the
+  same for what that change wrote. The history still shows that something changed, and who changed it.
+- Then the store file is compacted, so the old bytes leave the file and its write-ahead log. If a drgnx editor still
+  has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
+  after closing it.
+- **Copies outside the store** are listed, not changed silently: the dated backups and the pre-upgrade copies
+  (`backup/work-pre7-*.db`, `work.db.schema5`, and the `work.db.schema7-*` files a rollback set aside) that still
+  hold the text, which you can have deleted; exports, which are
+  made again; and session transcripts holding the text, which can be rewritten without it.
+- A value shorter than 12 characters is not searched for in those copies, since it would match unrelated text.
 
 ## When something you trust is held back
 

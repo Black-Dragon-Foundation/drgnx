@@ -1,0 +1,23 @@
+{"scenario": "gateway/an-editor-token-is-loopback-only", "requires": ["v1", "fake-backend"], "doc": "An editor token is good on the loopback listener only: on a session's gateway.sock (bound by an agent's registration for that session) its /p/… request is 401, while the same request on 127.0.0.1 reaches the mock provider; the session's agent token on the socket never reaches /p/… (404)."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/chat/completions", "body": "{\"id\": \"chat-1\", \"usage\": {\"prompt_tokens\": 1, \"completion_tokens\": 1}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "openai", "base": "http://127.0.0.1:$port", "auth": "none", "messages": false, "caps": ["chat"]}, {"id": "local", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "s-0000000a", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["local", null]], "agent": "s-0000000a", "sid": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$capture:agent_tok", "socket": "$capture:gsock", "url": "$absent"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "http", "conn": "u", "to": "unix:$gsock", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "localhost", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"messages\": []}"}
+{"do": "expect_http", "conn": "u", "status": 401, "body_json": {"type": "error", "error": {"type": "authentication_error", "message": "not a drgnx gateway token"}}}
+{"do": "http", "conn": "a", "to": "unix:$gsock", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "localhost", "Authorization": "Bearer $agent_tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"messages\": []}"}
+{"do": "expect_http", "conn": "a", "status": 404}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "t", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"messages\": []}"}
+{"do": "expect_http", "conn": "t", "status": 200, "body_json": {"id": "chat-1"}}

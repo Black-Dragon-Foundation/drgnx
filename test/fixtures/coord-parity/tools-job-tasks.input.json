@@ -1,0 +1,37 @@
+{
+  "setup": [
+    "insert into job values ('j1', 'Tasks', null, null, 'running', 1.0, null)",
+    "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'One', 'implement', 'ready')",
+    "insert into jtask (id, job, n, title, role, status) values ('j1#2', 'j1', 2, 'Two', 'implement', 'ready')",
+    "insert into jtask (id, job, n, title, role, status) values ('j1#3', 'j1', 3, 'Three', 'test', 'pending')",
+    "insert into jdep values ('j1#3', 'j1#1')",
+    "insert into jdep values ('j1#3', 'j1#2')"
+  ],
+  "clock": [],
+  "tables": ["jtask"],
+  "calls": [
+    {"tool": "claim_task", "now": 300.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#1", "seen_version": 0}},
+    {"tool": "claim_task", "now": 301.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"task": "j1#1", "seen_version": 0}},
+    {"tool": "claim_task", "now": 302.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#3", "seen_version": 0}},
+    {"tool": "claim_task", "now": 303.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#9", "seen_version": 0}},
+    {"tool": "update_task", "now": 304.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#1", "status": "running", "seen_version": 0}},
+    {"tool": "update_task", "now": 305.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#1", "status": "done", "seen_version": 0}},
+    {"tool": "update_task", "now": 306.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#1", "status": "failed", "seen_version": 0}},
+    {"tool": "update_task", "now": 307.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"task": "j1#1", "status": "running", "seen_version": 0}},
+    {"tool": "update_task", "now": 308.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"task": "j1#2", "status": "running", "seen_version": 0}},
+    {"tool": "claim_task", "now": 309.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"task": "j1#2", "seen_version": 0}},
+    {"tool": "update_task", "now": 310.5, "identity": {"agent": "s-2", "job": "j1"}, "args": {"task": "j1#2", "status": "needs-input", "seen_version": 0}},
+    {"tool": "complete_task", "now": 311.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#1", "seen_version": 0}},
+    {"tool": "task_status", "now": 312.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {}},
+    {"tool": "task_status", "now": 313.5, "identity": null, "args": {"job": "j1"}},
+    {"tool": "task_status", "now": 314.5, "identity": null, "args": {}},
+    {"tool": "task_status", "now": 315.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"job": "none"}},
+    {"tool": "update_task", "now": 316.5, "identity": {"agent": "s-2"}, "args": {"task": "j1#2", "status": "bogus", "seen_version": 0}},
+    {"tool": "update_task", "now": 317.5, "identity": {"agent": "s-2"}, "args": {"task": "j1#2", "status": "failed", "seen_version": 0}},
+    {"tool": "complete_task", "now": 318.5, "identity": {"agent": "s-2"}, "args": {"task": "j1#2", "seen_version": 0}},
+    {"tool": "complete_task", "now": 319.5, "identity": {"agent": "s-2"}, "args": {"task": "j1#3", "seen_version": 0}},
+    {"tool": "claim_task", "now": 320.5, "identity": {"agent": "s-1", "job": "j1"}, "args": {"task": "j1#3", "seen_version": 5}},
+    {"tool": "claim_task", "now": 321.5, "identity": {"outside": "claude", "tag": "4242-abcdef"}, "args": {"task": "j1#3", "seen_version": 0}},
+    {"tool": "claim_task", "now": 322.5, "identity": null, "args": {"task": "j1#3", "seen_version": 0}}
+  ]
+}

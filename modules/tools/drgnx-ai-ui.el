@@ -78,9 +78,9 @@ for it there, bound or not (`drgnx-modal-order-alists'), where it is inert while
   (seq-some (lambda (step) (drgnx-ai-usable-p (car step) 'fim)) (drgnx-ai-role 'complete)))
 
 (defun drgnx-ai-ghost--keyless ()
-  "The first provider of the `complete' role that needs a key and has none loaded (the background never reads the
-Keychain or the keyring), or nil."
-  (car (seq-find (lambda (step) (and (plist-get (drgnx-ai-provider (car step)) :key-env) (not (drgnx-ai-key (car step)))))
+  "The first provider of the `complete' role that needs a key and has none the hub holds (the background never reads
+the Keychain or the keyring), or nil."
+  (car (seq-find (lambda (step) (and (plist-get (drgnx-ai-provider (car step)) :key-env) (not (drgnx-ai-key-held-p (car step)))))
                  (drgnx-ai-role 'complete))))
 
 (defvar drgnx-ai-ghost-inhibit-functions nil

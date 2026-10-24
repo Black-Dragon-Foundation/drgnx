@@ -39,7 +39,9 @@
 (declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
 (declare-function drgnx-cockpit-edits-show "drgnx-cockpit-edits")
 (declare-function drgnx-cockpit-edits--model-agent "drgnx-cockpit-edits")
-(declare-function drgnx-coord-send "drgnx-coord")
+(declare-function drgnx-cockpit-edits--write "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--args "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--sent-p "drgnx-cockpit-edits")
 (declare-function drgnx-coord-version "drgnx-coord")
 (declare-function drgnx-coord-message "drgnx-coord")
 (declare-function drgnx-job-ui--schedule-recount "drgnx-job-ui")
@@ -155,6 +157,17 @@ spaces (a dock is narrow: a button is never cut in two)."
         (drgnx-cockpit-cards--button "Message…" (lambda () (drgnx-cockpit-cards--message job id)))
         (insert "\n")))))
 
+(defconst drgnx-cockpit-cards--store-choices
+  '(("access" ("session" "This session") ("project" "Its project") ("profile" "Its profile") ("refuse" "Refuse"))
+    ("close" ("accept" "Accept") ("reject" "Reject")))
+  "The choices of the store's cards, settled with `cards/settle': an agent's access request (a read grant for its
+session, its project or its profile, or none) and a close proposal of \"only I close my tasks\".")
+
+(defun drgnx-cockpit-cards--actions (c)
+  "Card C's actions: a store card's choices, else what the hub sent."
+  (or (cdr (assoc (plist-get c :kind) drgnx-cockpit-cards--store-choices))
+      (drgnx-cockpit-cards--v (plist-get c :actions))))
+
 (defun drgnx-cockpit-cards--insert-card (job c &optional repo)
   "Card C of JOB with its actions (REPO: the job's repository, for Open)."
   (let ((d (drgnx-cockpit-cards--v (plist-get c :data))))
@@ -172,8 +185,11 @@ spaces (a dock is narrow: a button is never cut in two)."
                       ((null rec) "  The reviewer is reading both sides…\n")
                       (t (format "  The reviewer recommends %s: %s\n" (or (drgnx-cockpit-cards--v (plist-get rec :side)) "neither")
                                  (plist-get rec :why)))))))
+    (when-let* (((equal (plist-get c :kind) "access"))
+                (why (drgnx-cockpit-cards--v (plist-get d :reason))))
+      (insert (format "  Why: %s\n" (replace-regexp-in-string "[\n\r]+" " " (format "%s" why)))))
     (insert "  ")
-    (dolist (a (drgnx-cockpit-cards--v (plist-get c :actions)))
+    (dolist (a (drgnx-cockpit-cards--actions c))
       (let ((action (car a)))
         (drgnx-cockpit-cards--button (cadr a) (lambda () (drgnx-cockpit-cards--act job c action repo)))))
     (insert "\n\n")))
@@ -394,6 +410,13 @@ for the badge (`drgnx-cockpit-cards--draw-all')."
   "The user's ACTION on CARD of JOB, through the hub (an argument asked first where the action needs one); REPO, the
 job's repository, for Open."
   (cond
+   ;; the store's cards settle into a grant or a closed task (or nothing): the choice is the action
+   ((assoc (plist-get card :kind) drgnx-cockpit-cards--store-choices)
+    (drgnx-cockpit-cards--hub)
+    (drgnx-hub-call "cards/settle" (list :card (plist-get card :id) :choice action)
+                    (lambda (_r err)      ; the hub's answer, after the command: a notice
+                      (when err (drgnx-notify 'hub 'warn (format "Settling the card: %s" err) :echo t))
+                      (drgnx-cockpit-cards--changed))))
    ((equal action "open") (drgnx-cockpit-cards--open-tree job repo))
    ;; the merge gate's card: the edits of the task's agent, where its files are accepted
    ((equal action "edits")
@@ -455,17 +478,18 @@ job's repository, for Open."
   (drgnx-agents-ui-transcript (drgnx-cockpit-cards--mirror id)))
 
 (defun drgnx-cockpit-cards--message (job id)
-  "Ask for a message to agent ID of JOB and leave it in the store as the user's (`drgnx-coord-send', no sender): the
+  "Ask for a message to agent ID of JOB and leave it in the store as the user's (the hub's `messages/send', no sender): the
 hub gives it to the agent when its turn ends, under the user's header (`drgnx-coord-message-prompt'), never
 interrupting it and never as a raw prompt."
   (let ((text (read-string (format "Message to %s (queues, never interrupts): " id))))
     (when (string-blank-p text) (user-error "An empty message: nothing sent"))
-    (let ((r (drgnx-coord-send :job job :recipient id :text text :seen (drgnx-coord-version))))
-      (if (equal (plist-get r :state) "held")
-          (message "drgnx: held, not sent — %s" (or (plist-get (drgnx-coord-message (plist-get r :id)) :reason) "too many messages"))
-        (drgnx-cockpit-cards--hub)
-        (ignore-errors (drgnx-hub-call "coord/notify" nil #'ignore))))   ; deliver now, when the agent is free
-    (drgnx-cockpit-cards--changed)))
+    ;; the hub's `messages/send' (it delivers when the agent is free, and notifies itself)
+    (drgnx-cockpit-cards--hub)
+    (drgnx-cockpit-edits--write
+     "messages/send"
+     (drgnx-cockpit-edits--args :job job :recipient id :text text :seen (drgnx-coord-version))
+     (lambda (_r) (drgnx-cockpit-cards--changed))
+     (lambda (r) (drgnx-cockpit-edits--sent-p r "drgnx:")))))
 
 ;;;; The filter and showing the parts
 
