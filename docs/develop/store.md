@@ -536,7 +536,11 @@ stays the truth for a setting; the store records its history as entities of kind
   - an outside agent, the hub and an import (`Class::Ext`, `Class::System` with another tool): refused ("settings
     are the user's").
   - `options::may_write(conn, &caller, target, now)` is the same check without a write (the hub's `settings_change`
-    asks it before it records a proposed tx).
+    asks it before it records a proposed tx; [hub.md](hub.md#agents-change-settings)).
+  - `options::may_read(conn, &caller, scope, now)` is `settings_get`'s: the user always; anyone else under an active
+    grant of its own `who` that is an `options` grant of the scope or a `read` grant covering it (`*`, or its own
+    project for private and shared; `NO_READ_GRANT` otherwise). `options::option_id(scope, project, name)` is the
+    id of an agent's plain setting (never a dir or mode section; `NO_PROJECT` for a project scope with none).
 - **The deny-list's name half** (`options::deny::is_denied(name)`, call 9): the names, prefixes and suffixes of
   `test/fixtures/settings-deny.json` (drgnx's and Emacs's security settings, `eval` and `mode`, `drgnx-trust-*`,
   `safe-local-variable-*`, Emacs's risky endings and design §4.4's program endings, case folded). The test

@@ -28,7 +28,6 @@ use runstav::registry;
 use runstav::registry::{Class, Method};
 use runstav::wire::{Answer, Error, ErrorAnswer, ErrorCode, Event, Id};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -76,7 +75,9 @@ pub struct Front {
     /// The gateway ([`crate::gateway`]).
     pub gate: Gate,
     /// What the hub read of `settings.el` and the shipped defaults ([`crate::settings`]).
-    pub settings: crate::settings::Settings,
+    pub settings: Arc<crate::settings::Settings>,
+    /// The subscribers: the editors the agents' settings tools ask ([`crate::settings::agents`]).
+    pub editors: Arc<crate::settings::agents::Editors>,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -90,7 +91,6 @@ pub struct Front {
     /// From work.db's `migrate-7` report: when the move from schema 6 committed, and the copies that still hold what
     /// its deny-list kept out.
     migration: Mutex<(Option<f64>, Vec<String>)>,
-    subscribers: Mutex<BTreeMap<u64, Arc<Outbox>>>,
     stop: Notify,
     /// The stop asked for is a restart.
     restart: AtomicBool,
@@ -121,9 +121,13 @@ impl Front {
         forward: Arc<dyn Forward>,
     ) -> Front {
         let signals = Arc::new(Signals::default());
+        let settings = Arc::new(crate::settings::Settings::new());
+        let editors = Arc::new(crate::settings::agents::Editors::default());
         let hub = Arc::new(ToolHub {
             forward: forward.clone(),
             signals: signals.clone(),
+            editors: editors.clone(),
+            settings: settings.clone(),
         });
         let uid = rustix::process::geteuid().as_raw();
         let coord = norn::tools::Coord::new(coord_db.clone(), hub);
@@ -146,7 +150,8 @@ impl Front {
             },
             mcp: Sessions::new(uid, tools.clone(), tool_list.clone()),
             gate,
-            settings: crate::settings::Settings::new(),
+            settings,
+            editors,
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             tools,
@@ -156,7 +161,6 @@ impl Front {
             schema: AtomicU32::new(0),
             read_only: AtomicU32::new(0),
             migration: Mutex::new((None, Vec::new())),
-            subscribers: Mutex::new(BTreeMap::new()),
             stop: Notify::new(),
             restart: AtomicBool::new(false),
             next_conn: AtomicU64::new(1),
@@ -239,19 +243,13 @@ impl Front {
 
     /// The connection CONN is gone: no more events for it.
     pub fn gone(&self, conn: u64) {
-        self.subscribers.lock().expect("subscribers").remove(&conn);
+        self.editors.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
     /// so a newer event never reaches one subscriber before an older one.
     pub fn broadcast(&self, event: &str, data: Value) {
-        let Some(line) = event_line(event, data) else {
-            return;
-        };
-        self.subscribers
-            .lock()
-            .expect("subscribers")
-            .retain(|_, out| out.push(line.clone()));
+        self.editors.broadcast(event, data);
     }
 
     /// `gateway/keys-changed` to the subscribers when the held keys' ids are no longer BEFORE (ids only).  A
@@ -499,10 +497,7 @@ impl Front {
             Params::Status(_) if backend => Ok(json!(self.status())),
             Params::Status(_) => Ok(json!(self.status_with_backend().await)),
             Params::Subscribe(_) => {
-                self.subscribers
-                    .lock()
-                    .expect("subscribers")
-                    .insert(s.conn, out.clone());
+                self.editors.subscribe(s.conn, out.clone());
                 need_keys = self.gate.pending_need_keys();
                 settings_notices = self.settings.current().notices();
                 Ok(json!(true))
@@ -567,6 +562,31 @@ impl Front {
                 self.refresh_settings().await;
                 Ok(json!(true))
             }
+            // the agents' settings tools: the editor's answers (crate::settings::agents)
+            Params::SettingsConfirm(p) => {
+                let (tx, ok) = (i64::try_from(p.tx).unwrap_or(i64::MAX), p.ok);
+                let error = p.error.as_ref().map(|e| e.to_string());
+                let r = crate::graph::settings_confirm(&self.writer, &caller, p).await;
+                if r.is_ok() {
+                    self.editors.confirmed(tx, ok, error);
+                }
+                r
+            }
+            Params::SettingsExplained(_) if backend => Err(Error {
+                code: ErrorCode::NotAllowed,
+                message: "only the editor explains settings: the backend's connection never does"
+                    .into(),
+                path: None,
+            }),
+            Params::SettingsExplained(p) => {
+                let rows = p
+                    .settings
+                    .into_inner()
+                    .into_iter()
+                    .map(|o| Value::Object(o.into_inner()))
+                    .collect();
+                Ok(json!(self.editors.explained(p.req, rows)))
+            }
             // the graph store's (`graph/*`, `tasks/*`), then the coordination writes
             other => match crate::graph::serve(
                 &self.writer,
@@ -623,7 +643,7 @@ impl Front {
 }
 
 /// EVENT with DATA as the line a subscriber gets; none (logged) over 16 MiB.
-fn event_line(event: &str, data: Value) -> Option<Arc<str>> {
+pub(crate) fn event_line(event: &str, data: Value) -> Option<Arc<str>> {
     let text = serde_json::to_string(&Event {
         event: event.into(),
         data,

@@ -1,6 +1,7 @@
 //! The events a hub sends unasked, `{event, data}`: the nine the Lisp backend broadcast on main (`core/drgnx-hub.el`,
-//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice`, `gateway/need-keys` and
-//! `gateway/keys-changed`.  Each names
+//! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice`, `gateway/need-keys`,
+//! `gateway/keys-changed`, `settings/proposed` and `settings/explain` (the agents' settings tools, to the editor).
+//! Each names
 //! the side that sends it ([`EventType::from`]): `events` is the front's since the front writes work.db (its writer's
 //! new rows), and the gateway's `request`, `budget` and `fallback` since the front serves the gateway (Task 22; a
 //! job's `fallback`, with its `job`, still comes from the backend's job runner); the other five are the backend's.
@@ -244,6 +245,18 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             Front,
             "a message for the user from the hub itself"
         ),
+        event!(
+            "settings/proposed",
+            crate::methods::settings::Proposed,
+            Front,
+            "an agent's granted settings change, as a proposed tx: the editor checks it, writes the file and answers settings/confirm"
+        ),
+        event!(
+            "settings/explain",
+            crate::methods::settings::Explain,
+            Front,
+            "an agent's settings_get: the editor answers settings/explained with the same req"
+        ),
     ];
     v.sort_by_key(|e| e.name);
     v
@@ -306,6 +319,8 @@ mod tests {
                     "notice",
                     "gateway/need-keys",
                     "gateway/keys-changed",
+                    "settings/proposed",
+                    "settings/explain",
                 ]
                 .contains(&n.as_str())
             })
@@ -320,7 +335,11 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 13);
+        assert_eq!(events().len(), 15);
+        assert_eq!(
+            event("settings/proposed").map(|e| e.from),
+            Some(Home::Front)
+        );
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();
         assert_eq!(changed.from, Home::Front);

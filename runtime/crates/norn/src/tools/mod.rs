@@ -18,8 +18,10 @@ pub mod identity;
 pub mod job;
 pub mod read;
 pub mod report;
+pub mod settings;
 pub mod tracker;
 
+pub use settings::EditorAnswer;
 pub use tracker::{ToolSets, tools_for};
 
 /// Who is calling a tool.  Never built from a tool argument or an environment variable ([`identity`] holds its
@@ -67,6 +69,33 @@ pub trait Hub: Send + Sync {
     fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>>;
     /// A coalesced `coord/notify`.
     fn notify(&self);
+
+    /// The `settings/proposed` EVENT to the editor, and its `settings/confirm` waited for at most WAIT (none when
+    /// WAIT is zero). The default (a hub with no editor link): no editor.
+    fn propose(
+        &self,
+        _event: runstav::methods::settings::Proposed,
+        _wait: std::time::Duration,
+    ) -> BoxFuture<'_, EditorAnswer> {
+        Box::pin(async { EditorAnswer::NoEditor })
+    }
+
+    /// `settings/explain` to the editor and its rows (`settings/explained`), waited for at most
+    /// [`settings::EXPLAIN_WAIT`]; `None`: no editor, or no answer in time.
+    fn explain(
+        &self,
+        _scope: runstav::methods::settings::SettingScope,
+        _names: Option<Vec<String>>,
+        _root: Option<String>,
+    ) -> BoxFuture<'_, Option<Vec<serde_json::Value>>> {
+        Box::pin(async { None })
+    }
+
+    /// The runtime settings the hub read itself (`settings.el`, the shipped defaults, the editor's overrides) as rows
+    /// `{name, value, source}`: NAMES only, or all.
+    fn known_settings(&self, _names: Option<&[String]>) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
 }
 
 /// The clock the tools read (`float-time`): seconds since the epoch.
@@ -164,5 +193,6 @@ pub fn tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     all.extend(read::tools());
     all.extend(tracker::tools());
     all.extend(graph::tools());
+    all.extend(settings::tools());
     all
 }

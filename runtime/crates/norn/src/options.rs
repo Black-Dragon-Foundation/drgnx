@@ -15,6 +15,7 @@
 
 use std::fmt;
 
+use runstav::methods::settings::SettingScope;
 use urdr::Connection;
 use urdr::graph::entity::{self, Origin};
 use urdr::graph::guard::Target;
@@ -365,6 +366,65 @@ fn refused(text: &str) -> WriteError {
     WriteError::Refused(text.into())
 }
 
+/// The refusal of a `settings_get` no grant covers.
+pub const NO_READ_GRANT: &str =
+    "reading settings needs an options or a read grant for this scope: the user grants it";
+/// The refusal of a project's settings for a caller with no project.
+pub const NO_PROJECT: &str =
+    "private and shared settings are your project's: this session has no project";
+
+/// The option id of the plain setting NAME (no dir or mode section) in SCOPE, PROJECT being the bare project id
+/// (`project:` taken off; call 13) a private or shared id needs. Refused when SCOPE needs a project and there is
+/// none, or when the id is not well formed or NAME would read as a section.
+pub fn option_id(scope: SettingScope, project: Option<&str>, name: &str) -> Result<String, BadId> {
+    let id = match (scope, project) {
+        (SettingScope::Global, _) => format!("option:global:{name}"),
+        (SettingScope::Private, Some(p)) => format!("option:private/{p}:{name}"),
+        (SettingScope::Shared, Some(p)) => format!("option:shared/{p}:{name}"),
+        (_, None) => return Err(BadId(NO_PROJECT)),
+    };
+    // a dir or mode section parsed out of NAME leaves a variable that is not NAME
+    if parse_id(&id)?.var != name {
+        return Err(BadId(
+            "a setting's name is a variable, not a dir or mode section",
+        ));
+    }
+    Ok(id)
+}
+
+/// Whether CALLER may read the settings of SCOPE at NOW (`settings_get`, design §13): the user always; any other
+/// caller under an active grant whose `who` is its own: an `options` grant of the scope (`options:global`, or
+/// `options:project` for private and shared), or a `read` grant that covers it (`*` covers every scope; a grant of
+/// its own project covers private and shared). The grant's `names` do not narrow a read.
+pub fn may_read(
+    conn: &Connection,
+    caller: &Caller,
+    scope: SettingScope,
+    now: f64,
+) -> Result<Result<(), &'static str>, urdr::SqliteError> {
+    if caller.class == Class::User {
+        return Ok(Ok(()));
+    }
+    let want = match scope {
+        SettingScope::Global => What::OptionsGlobal,
+        SettingScope::Private | SettingScope::Shared => What::OptionsProject,
+    };
+    let covered = grants::live(conn)?.iter().any(|g| {
+        g.active(now)
+            && g.who.matches(caller)
+            && match g.access {
+                Access::Options => g.what == want,
+                Access::Read => match g.what {
+                    What::All => true,
+                    What::Project(p) => want == What::OptionsProject && caller.project == Some(p),
+                    _ => false,
+                },
+                Access::EditUserTasks => false,
+            }
+    });
+    Ok(if covered { Ok(()) } else { Err(NO_READ_GRANT) })
+}
+
 /// Whether the tracker scan (`graph/put-parsed`) may write the option entity TARGET (the manager's ruling for
 /// unified-settings Task 24). A repository's `.drgnx/settings.el` describes the repository, never your global or
 /// private settings, so: a well-formed shared id; a create makes it `parsed` (a write to a stored entity keeps its
@@ -545,6 +605,141 @@ mod tests {
         for s in deny::SUFFIXES {
             assert!(deny::is_denied(&format!("x{s}")), "{s}");
         }
+    }
+
+    #[test]
+    fn an_agents_setting_is_a_plain_variable() {
+        use SettingScope::*;
+        assert_eq!(
+            option_id(Global, None, "fill-column").unwrap(),
+            "option:global:fill-column"
+        );
+        assert_eq!(
+            option_id(Global, Some("abc"), "fill-column").unwrap(),
+            "option:global:fill-column"
+        );
+        assert_eq!(
+            option_id(Private, Some("abc"), "tab-width").unwrap(),
+            "option:private/abc:tab-width"
+        );
+        assert_eq!(
+            option_id(Shared, Some("abc"), "tab-width").unwrap(),
+            "option:shared/abc:tab-width"
+        );
+        assert_eq!(option_id(Private, None, "x"), Err(BadId(NO_PROJECT)));
+        assert_eq!(option_id(Shared, None, "x"), Err(BadId(NO_PROJECT)));
+        // a name that reads as a section, or as more than the name
+        for (scope, name) in [
+            (Global, "mode/c-mode:fill-column"),
+            (Shared, "mode/c-mode:fill-column"),
+            (Shared, "dir/src/:fill-column"),
+            (Global, "dir/src/:x"),
+            (Global, ""),
+            (Global, "fill column"),
+            (Shared, "a\nb"),
+        ] {
+            assert!(option_id(scope, Some("abc"), name).is_err(), "{name:?}");
+        }
+        // a colon is part of a variable's name, as the id grammar reads it
+        assert_eq!(option_id(Global, None, "a:b").unwrap(), "option:global:a:b");
+        assert!(option_id(Private, Some("ABC"), "x").is_err());
+    }
+
+    #[test]
+    fn reading_settings_needs_a_grant_of_the_scope() {
+        use crate::grants::{Who, create, create_options, revoke};
+        use crate::scope::testkit::{db, project, user, write};
+        use SettingScope::*;
+        let (_d, _p, mut conn) = db();
+        let (a, b) = (project(&mut conn, "a"), project(&mut conn, "b"));
+        let agent = |sid: &str, p: Option<i64>| Caller {
+            class: Class::Agent,
+            actor: format!("agent:{sid}"),
+            session: Some(sid.into()),
+            profile: Some("prof".into()),
+            job: None,
+            project: p,
+            backend: false,
+        };
+        let sid = |s: &str| Who::Session(s.into());
+        let options = |conn: &mut Connection, who: Who, what: What| {
+            write(conn, user(), |tx| {
+                create_options(tx, who, what, Some(vec!["tab-*".into()]), None)
+            })
+            .unwrap()
+        };
+        let read = |conn: &mut Connection, who: Who, what: What| {
+            write(conn, user(), |tx| create(tx, who, what, Access::Read, None)).unwrap()
+        };
+        const NOW: f64 = 2_000_000_000.0;
+        // s1: options:global (its names do not narrow a read); s2: options:project; s3: read `*`; s4: a read of its
+        // own project; s5: a read of another project; s6: edit-user-tasks `*`; s7: an expired options:global; s8: a
+        // revoked read `*`; profile prof: options:project; s9: nothing
+        options(&mut conn, sid("s1"), What::OptionsGlobal);
+        options(&mut conn, sid("s2"), What::OptionsProject);
+        read(&mut conn, sid("s3"), What::All);
+        read(&mut conn, sid("s4"), What::Project(a));
+        read(&mut conn, sid("s5"), What::Project(b));
+        write(&mut conn, user(), |tx| {
+            create(tx, sid("s6"), What::All, Access::EditUserTasks, None)
+        })
+        .unwrap();
+        let soon = write(&mut conn, user(), |tx| {
+            let at = tx.at();
+            create_options(tx, sid("s7"), What::OptionsGlobal, None, Some(at + 1.0))
+        })
+        .unwrap();
+        let gone = read(&mut conn, sid("s8"), What::All);
+        write(&mut conn, user(), |tx| revoke(tx, &gone.id)).unwrap();
+        let may = |conn: &Connection, c: &Caller, s: SettingScope, now: f64| {
+            may_read(conn, c, s, now).unwrap()
+        };
+        let at = soon.expires.unwrap() - 0.5;
+        for (who, p, scope, now, want) in [
+            ("s1", Some(a), Global, NOW, true),
+            ("s1", Some(a), Shared, NOW, false),
+            ("s2", Some(a), Private, NOW, true),
+            ("s2", Some(a), Shared, NOW, true),
+            ("s2", Some(a), Global, NOW, false),
+            ("s3", None, Global, NOW, true),
+            ("s3", Some(a), Shared, NOW, true),
+            ("s4", Some(a), Shared, NOW, true),
+            ("s4", Some(a), Private, NOW, true),
+            ("s4", Some(a), Global, NOW, false),
+            ("s4", Some(b), Shared, NOW, false),
+            ("s4", None, Shared, NOW, false),
+            ("s5", Some(a), Shared, NOW, false),
+            ("s6", Some(a), Global, NOW, false),
+            ("s6", Some(a), Shared, NOW, false),
+            ("s7", Some(a), Global, at, true),
+            ("s7", Some(a), Global, soon.expires.unwrap(), false),
+            ("s8", Some(a), Global, NOW, false),
+            ("s9", Some(a), Global, NOW, false),
+            ("s9", Some(a), Shared, NOW, false),
+        ] {
+            let got = may(&conn, &agent(who, p), scope, now);
+            assert_eq!(got.is_ok(), want, "{who} {scope:?}");
+            if !want {
+                assert_eq!(got, Err(NO_READ_GRANT));
+            }
+        }
+        // a profile grant covers its sessions; the user reads anything, with no grant
+        options(&mut conn, Who::Profile("prof".into()), What::OptionsProject);
+        assert_eq!(may(&conn, &agent("s9", Some(a)), Shared, NOW), Ok(()));
+        assert_eq!(
+            may(&conn, &agent("s9", Some(a)), Global, NOW),
+            Err(NO_READ_GRANT)
+        );
+        assert_eq!(may(&conn, &Caller::user(false), Global, NOW), Ok(()));
+        // an outside agent under a grant of its session reads; the hub's class does not read by class
+        let mut ext = agent("ext:claude:1-ab", Some(a));
+        ext.class = Class::Ext;
+        assert_eq!(may(&conn, &ext, Global, NOW), Err(NO_READ_GRANT));
+        read(&mut conn, sid("ext:claude:1-ab"), What::All);
+        assert_eq!(may(&conn, &ext, Global, NOW), Ok(()));
+        let mut hub = agent("s9", None);
+        hub.class = Class::System;
+        assert_eq!(may(&conn, &hub, Global, NOW), Err(NO_READ_GRANT));
     }
 
     #[test]

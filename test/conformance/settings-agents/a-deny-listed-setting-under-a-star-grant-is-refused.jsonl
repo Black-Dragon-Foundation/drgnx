@@ -1,0 +1,28 @@
+{"scenario": "settings-agents/a-deny-listed-setting-under-a-star-grant-is-refused", "requires": ["v1", "fake-backend"], "doc": "Under an options grant of every name (*), settings_change of a deny-listed setting (load-path; an ending such as -hook) is a tool error that names the deny-list: no proposed tx, no card, nothing to the editor. A setting off the list under the same grant goes to the editor."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/grants", "params": {"grant": {"who": "session:$sid", "what": "options:global", "access": "options", "names": ["*"]}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"grant": {"active": true}}}}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "load-path", "value": "(\"/tmp/mine\")", "reason": "my library"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "name: load-path is on the settings deny-list: no agent changes it, under any grant"}], "isError": true}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "after-save-hook", "value": "(my-upload)", "reason": "upload on save"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "name: after-save-hook is on the settings deny-list: no agent changes it, under any grant"}], "isError": true}}}
+{"do": "expect_silent", "conn": "e", "for_ms": 500}
+{"do": "sql_expect", "sql": "select (select count(*) from tx where tool = 'mcp:settings_change'), (select count(*) from card where kind = 'access'), (select count(*) from entity where kind = 'option')", "rows": [[0, 0, 0]]}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "fill-column", "value": "100", "reason": "wider lines"}}}}
+{"do": "expect", "conn": "e", "json": {"event": "settings/proposed", "data": {"tx": "$capture:tx", "name": "fill-column", "value": "100"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "settings/confirm", "params": {"tx": "$tx", "ok": false, "error": "fill-column is set in init.el"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"state": "reverted"}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"refused": "$tx", "error": "fill-column is set in init.el"}}}}
+{"do": "sql_expect", "sql": "select state from tx where id = $tx", "rows": [["reverted"]]}

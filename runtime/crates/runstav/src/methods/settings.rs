@@ -4,10 +4,13 @@
 //!   and the hub records it as one user-class transaction on entities of kind `option` (`norn::write::options`).
 //!   The file stays the truth; the store keeps its history. A repository's `.drgnx/settings.el` comes in through
 //!   `graph/put-parsed` instead (the scan's door).
+//! - Agents' changes (design §13; Task 32): the tools `settings_get` and `settings_change` ask the editor through two
+//!   events, `settings/explain` ([`Explain`]) and `settings/proposed` ([`Proposed`]), and the editor answers with
+//!   `settings/explained` and `settings/confirm`. The editor writes the file; the hub never does.
 
 use super::method;
 use crate::registry::Method;
-use crate::types::{Bounded, Text};
+use crate::types::{Bounded, JsonObject, Text};
 use crate::wire::{Error, ErrorCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -90,13 +93,123 @@ fn check_record(p: &RecordParams) -> Result<(), Error> {
     Ok(())
 }
 
+/// Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared
+/// `.drgnx/settings.el` of the session's project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingScope {
+    Global,
+    Private,
+    Shared,
+}
+
+impl SettingScope {
+    /// `global`, `private` or `shared`.
+    pub fn parse(text: &str) -> Option<SettingScope> {
+        match text {
+            "global" => Some(SettingScope::Global),
+            "private" => Some(SettingScope::Private),
+            "shared" => Some(SettingScope::Shared),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SettingScope::Global => "global",
+            SettingScope::Private => "private",
+            SettingScope::Shared => "shared",
+        }
+    }
+}
+
+/// The `settings/proposed` event (to the editor): an agent's change under a grant, recorded as the proposed tx `tx`.
+/// The editor checks it again, writes it to the file SCOPE names (under ROOT for a project's), and answers
+/// `settings/confirm`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Proposed {
+    pub tx: i64,
+    pub scope: SettingScope,
+    pub name: String,
+    /// The value as printed Lisp: read as data by the hub, never evaluated.
+    pub value: String,
+    /// The session's folder: a job's task folder, or the checkout it started in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// Who asks (`agent:SID`).
+    pub agent: String,
+    pub reason: String,
+}
+
+/// The `settings/explain` event (to the editor): an agent's `settings_get`; the editor answers `settings/explained`
+/// with the same `req`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Explain {
+    pub req: u64,
+    pub scope: SettingScope,
+    /// None: every setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ConfirmParams {
+    /// The proposed tx of `settings/proposed`.
+    pub tx: u64,
+    /// The editor wrote the change; false: it refused it (the tx is undone).
+    pub ok: bool,
+    /// Why the editor refused it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<Bounded<String, 4096>>,
+}
+
+/// What `settings/confirm` did with the proposed tx.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfirmState {
+    Accepted,
+    Reverted,
+    /// A refusal met a later change of the same setting: nothing undone.
+    Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmAnswer {
+    pub state: ConfirmState,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ExplainedParams {
+    /// The `req` of `settings/explain`.
+    pub req: u64,
+    /// One object per setting (`drgnx-settings-explain`'s answer).
+    pub settings: Bounded<Vec<JsonObject>, 1000>,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
-    vec![method!(
-        "settings/record", SettingsRecord(RecordParams) -> RecordAnswer,
-        classes: [User], writes: true, home: Front,
-        doc: "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed; a value that looks like a secret is never stored: no value, redacted true), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
-        check: check_record,
-    )]
+    vec![
+        method!(
+            "settings/record", SettingsRecord(RecordParams) -> RecordAnswer,
+            classes: [User], writes: true, home: Front,
+            doc: "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed; a value that looks like a secret is never stored: no value, redacted true), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
+            check: check_record,
+        ),
+        method!(
+            "settings/confirm", SettingsConfirm(ConfirmParams) -> ConfirmAnswer,
+            classes: [User], writes: true, home: Front,
+            doc: "the editor's answer to settings/proposed: ok accepts the agent's proposed tx (the editor wrote the file), else it is reverted (blocked when a later change of the setting came first); the agent gets a message either way; only a proposed tx of the tool mcp:settings_change",
+        ),
+        method!(
+            "settings/explained", SettingsExplained(ExplainedParams) -> bool,
+            classes: [User], writes: false, home: Front,
+            doc: "the editor's answer to settings/explain (one object per setting) for the settings_get waiting on req; false when none waits (it timed out)",
+        ),
+    ]
 }
 
 #[cfg(test)]
