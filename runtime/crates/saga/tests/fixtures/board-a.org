@@ -1,0 +1,24 @@
+#+TITLE: Invented board
+#+TODO: TODO BLOCKED(b) | SHIPPED
+
+* TODO [#A] Write the parser :code:parser:
+:PROPERTIES:
+:ID: t-001
+:EFFORT: 2h
+:END:
+Body text with *bold*.
+** BLOCKED Child waiting
+SCHEDULED: <2026-10-30 Fri>
+:PROPERTIES:
+:ID: t-002
+:END:
+- list item
+#+begin_src sh
+echo hi
+#+end_src
+* Plain heading
+| a | b |
+:LOGBOOK:
+- State "DONE" from "TODO" [2026-10-01 Thu 10:00]
+:END:
+* SHIPPED Last one
