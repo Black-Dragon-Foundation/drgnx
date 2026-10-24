@@ -684,7 +684,7 @@ reassign,resume}` are Task 16b's.) The Lisp runner (`core/drgnx-job*.el`) is fro
   (the plan's text per task), `routes`, `estimate`, `budget`, `gate`, and by task id `blocked`, `profiles`, `bases`,
   `exits`, `notes`, and the run `order`. Nothing else lives in memory except "a worktree is being made" (`starting`,
   shown as the task's status). A hub restart loses nothing.
-- **Propose:** a plan file (an absolute path; a plan entity id answers "not yet, Task 21") is read like
+- **Propose:** a plan file (an absolute path, or a `plan` entity id: the graph's plan becomes the job, see "Plans, reports and decisions") is read like
   `drgnx-job-read-plan` (`# title`, `**Repo:**`, `### Task N: title`, `**Role:**`, `**Depends:**`, `**Won't build:**`
   lines become decisions); duplicates, missing dependencies and cycles are refused; the job starts `proposed` with
   one `proposal` card and a message (three writes). `auto` approves at once; `job/start-task` proposes task N and the
@@ -726,6 +726,31 @@ A session the hub starts gets `mcpServers: [{name: "drgnx", command: ratatoskr, 
 `session/new` (and `resume`/`load`): `agents::session::bridge` mints the socket with `Sessions::open` (owner: the hub),
 reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run a session's jobs unsandboxed when
 `DRGNX_TEST_PLAIN_JOBS` is set (the conformance container has no sandbox helper).
+
+### Plans, reports and decisions (`runner/effects.rs`, `norn/src/tools/{plan,reports}.rs`)
+
+- **A plan in the graph** is a `plan` entity; its tasks are `task` entities under it (`parent_of`) with
+  `data.{number, model, interfaces, steps, role}`; a task waits on the tasks that `block` it. `plans/get` (and the
+  `plan_read` tool) returns the tasks with status, deps, steps, their reports and the latest report's interfaces;
+  `plans/write` (`plan_write`) creates or changes a plan, its tasks (by number), steps and `blocks` in one
+  transaction and is refused when `base_version` is behind. An agent's write needs the matrix's `graph.change`
+  (the worker column; an Ask makes a card and the write is refused until it is settled). `job/propose` takes the
+  entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job.
+- **`report_submit`** (and the fallback block) files, in one transaction: a `report` entity linked `report_of` to the
+  task, whose `data` holds `tip, commits, checks, decisions, differences, interfaces, followups, unrecorded` (so
+  `report.data.interfaces` is what briefs and `plan_read` read); a ledger `note` about the task; each follow-up as
+  a `task` linked `discovered_from` (area `deferred`: a `todo` linked `relates`); decisions listed but never
+  recorded in `unrecorded`; and the task `in-review`. Prose fields are at most 2000 characters; unknown keys are
+  refused. An agent without drgnx's tools ends its last message with a fenced `drgnx-report` block of the same
+  schema; the hub validates it when the turn ends and files it as that session (once: not for a task already in
+  review or done). `reports/get` reads them back.
+- **Decisions and commits.** `record_decision` takes `step` and `origin` (`from-brief`, `own`, `needs-user`) and
+  keeps them, with the session, in the decision. After each shell step of a plan-run session the hub lists the new
+  non-merge commits of its tree beyond `job/<job>` (git in a blocking task) and links each new commit
+  (`commit:<sha>`) `implements` to every decision that session recorded and no commit implements yet.
+  `decisions/effects` returns a decision's commits and the later commits whose changed lines (`git diff-tree -U0`,
+  old side) overlap the lines the decision's commits wrote; line numbers are not followed through the commits in
+  between, and the result says `computed`. It needs the tree (or the repository) to still exist.
 
 ## Clashes (`core/drgnx-job-clash.el`)
 

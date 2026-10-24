@@ -339,13 +339,13 @@ mod core_tests {
             task: None,
             home: dir.path().to_path_buf(),
         };
-        let all = core_tools();
-        let stop = all.iter().find(|t| t.name() == "plan_read").unwrap();
-        let args = serde_json::json!({"plan": "plan:x1"});
+        let all = manager_tools();
+        let stop = all.iter().find(|t| t.name() == "agent_stop").unwrap();
+        let args = serde_json::json!({"id": "s1"});
         stop.check(&args).unwrap();
         match stop.call(&(coord, who), args).await {
             ToolResult::Err(text) => {
-                assert_eq!(text, "plan_read: not yet (agent system part 1, Task 21)")
+                assert_eq!(text, "agent_stop: not yet (agent system part 1, Task 25)")
             }
             _ => panic!("a stub answered"),
         }

@@ -1426,6 +1426,14 @@ async fn write_steps(
             cost: c.cost,
             cost_unit: None,
         };
+        // a shell step may have committed: link the new commits to the decisions this session recorded
+        if let Some(task) = &ctx.task
+            && step.class == StepClass::Tool
+            && matches!(step.tool_kind.as_deref(), None | Some("execute"))
+        {
+            crate::runner::effects::link_new_commits(&sink.writer, &ctx.session, task, &ctx.cwd)
+                .await;
+        }
         let ev = AgentStep {
             session: ctx.session.clone(),
             step,
@@ -2305,6 +2313,7 @@ impl Session {
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
         let out = end.0;
         let mut waiting = false;
+        let mut message: Option<String> = None;
         {
             let mut st = lock(&self.state);
             st.open = None;
@@ -2315,6 +2324,21 @@ impl Session {
             st.hold = false;
             let mut rest = Map::new();
             let mut used = TurnUse::default();
+            // the turn's last message: an agent without drgnx's tools ends with a `drgnx-report` block in it
+            for e in st.entries.iter().rev() {
+                match e.kind {
+                    EntryType::User => break,
+                    EntryType::Agent => {
+                        message = e
+                            .rest
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
             match &out {
                 Ok(o) => {
                     rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
@@ -2355,6 +2379,27 @@ impl Session {
         }
         if waiting {
             self.close_when_idle();
+        }
+        if let Some(m) = message.filter(|m| m.contains("drgnx-report") && self.task.is_some()) {
+            let (w, sid, task, job) = (
+                self.writer.clone(),
+                self.id.clone(),
+                self.task.clone(),
+                self.job.clone(),
+            );
+            tokio::spawn(async move {
+                if let Some(Err(e)) = crate::runner::effects::submit_fallback(
+                    &w,
+                    &sid,
+                    task.as_deref(),
+                    job.as_deref(),
+                    &m,
+                )
+                .await
+                {
+                    tracing::warn!(sid, "fallback report not submitted: {e}");
+                }
+            });
         }
         if lock(&self.state).ending {
             self.drain_steps();

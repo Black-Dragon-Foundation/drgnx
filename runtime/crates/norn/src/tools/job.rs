@@ -257,6 +257,10 @@ struct RecordDecisionArgs {
     seen_version: u64,
     /// Entities it is about (ids): `about` links from the decision
     about: Option<Vec<String>>,
+    /// The step (your timeline's step number) the decision was made in
+    step: Option<i64>,
+    /// Where it came from: from-brief, own or needs-user
+    origin: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -292,6 +296,18 @@ async fn record_decision(
 ) -> Result<String, String> {
     who.not_outside("record_decision")?;
     let me = who.me()?.to_owned();
+    if let Some(o) = args.origin.as_deref()
+        && !matches!(o, "from-brief" | "own" | "needs-user")
+    {
+        return Err(format!(
+            "origin is from-brief, own or needs-user, not {o:?}"
+        ));
+    }
+    let (step, origin) = (args.step, args.origin.clone());
+    let sid = match who {
+        Identity::Session { sid, .. } => Some(sid.clone()),
+        _ => None,
+    };
     let d = Decide {
         kind: args.kind,
         subject: args.subject,
@@ -324,6 +340,21 @@ async fn record_decision(
                 _ => None,
             };
             note_held(tx, &me, held)?;
+            if let (DecideResult::Ok { n, .. }, true) =
+                (&r, step.is_some() || origin.is_some() || sid.is_some())
+                && let Some(e) = entity::by_id(tx.sql(), &format!("decision:{n}"))?
+            {
+                let patch = json!({"step": step, "origin": origin, "session": sid});
+                entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    entity::Changes {
+                        data_patch: Some(patch),
+                        ..entity::Changes::default()
+                    },
+                )?;
+            }
             if let (DecideResult::Ok { n, .. }, Some(caller)) = (&r, &caller) {
                 let from = entity::by_id(tx.sql(), &format!("decision:{n}"))?;
                 for id in &about {

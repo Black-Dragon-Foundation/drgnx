@@ -903,14 +903,17 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         gate,
         only,
     } = p;
-    let file = match plan {
-        PlanRef::File(p) => PathBuf::from(p.as_str()),
-        PlanRef::Entity(_) => return Err(not_yet("job/propose (a plan in the graph)", "21")),
+    let (file, mut read) = match plan {
+        PlanRef::File(p) => {
+            let file = PathBuf::from(p.as_str());
+            let text = tokio::fs::read_to_string(&file)
+                .await
+                .map_err(|e| invalid(format!("{}: {e}", file.display())))?;
+            let read = plan::read(&text, &file);
+            (file, read)
+        }
+        PlanRef::Entity(id) => effects::plan_for_job(front, id.as_str()).await?,
     };
-    let text = tokio::fs::read_to_string(&file)
-        .await
-        .map_err(|e| invalid(format!("{}: {e}", file.display())))?;
-    let mut read = plan::read(&text, &file);
     let tasks = match only {
         Some(n) => {
             read.title = format!("{} — Task {n}", read.title);

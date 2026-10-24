@@ -658,7 +658,7 @@ pub(crate) fn writable_task(
 
 /// A new id `KIND:<prefix>-<5 base36>`: the prefix is the first two letters of PROJECT's first alias (`xx` without
 /// one), the suffix random; an id already taken is drawn again.
-pub(crate) fn new_id(tx: &Tx<'_>, kind: &str, project: Option<i64>) -> Result<String, WriteError> {
+pub fn new_id(tx: &Tx<'_>, kind: &str, project: Option<i64>) -> Result<String, WriteError> {
     let slug: Option<String> = match project {
         Some(p) => opt(tx.sql().query_row(
             "select slug from project_alias where project = ?1 order by tx, slug limit 1",
