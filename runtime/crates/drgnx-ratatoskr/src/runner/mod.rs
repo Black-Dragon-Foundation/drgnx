@@ -23,7 +23,6 @@ pub mod plan;
 pub mod review;
 pub mod tick;
 
-use crate::agent_core::not_yet;
 use crate::coord::fail;
 use crate::dispatch::Caller;
 use crate::front::Front;
