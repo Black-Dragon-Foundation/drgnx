@@ -431,6 +431,9 @@ writes the file (the hub never does), and the change goes into the setting's his
   `.drgnx/settings.el`). It needs a grant: an `options` grant of that scope, or a read grant that covers it (`*`, or
   the agent's own project for `private` and `shared`). With no editor open the answer says `complete: false`: the hub
   knows `settings.el`, the shipped defaults and what the editor last sent, but not your Lisp or the workspace files.
+  The editor answers only settings (drgnx's, described ones and `defcustom`s): a plain variable, a security setting
+  (one agents may never change) or a name that looks like it holds a secret (`password`, `token`, `secret`, `auth`,
+  `credential`) comes back "not shown to agents", with no value.
 - **`settings_change {scope, name, value, reason}`** asks to change one setting. The value is Lisp data (`80`,
   `"text"`, `(a b)`), read as data and never run; a value or a reason that looks like a secret is refused. The
   security settings are never an agent's, under any grant: drgnx's agent, sandbox, trust, keys and module settings,

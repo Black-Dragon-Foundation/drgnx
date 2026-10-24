@@ -177,6 +177,21 @@
         (should (equal (plist-get row :value) "120"))
         (should (equal (plist-get row :source) "your workspace file"))))))
 
+(defvar drgnx-sat-plain "hidden" "A test variable: no setting (no `defcustom', no description).")
+(defcustom drgnx-sat-api-token "sk-not-a-real-one" "A test setting: a secret-looking name." :type 'string :group 'drgnx)
+
+(ert-deftest drgnx-settings-agents/explain-never-shows-secrets-or-plain-variables ()
+  (drgnx-sat--with
+    (drgnx-settings-agents--event
+     "settings/explain" '(:req 6 :scope "global" :names ["drgnx-sat-plain" "drgnx-sat-api-token" "drgnx-sat-secure"
+                                                         "drgnx-sat-width"]))
+    (let ((rows (plist-get (cadr (drgnx-sat--sent-p "settings/explained")) :settings)))
+      (should (= (length rows) 4))
+      (dotimes (i 3)
+        (should-not (plist-member (aref rows i) :value))
+        (should (equal (plist-get (aref rows i) :source) "not shown to agents")))
+      (should (equal (plist-get (aref rows 3) :value) "80")))))
+
 ;;; settings-agents-test.el ends here
 
 (ert-deftest drgnx-settings-agents/hub-disconnect-removes-its-hook ()

@@ -17,7 +17,9 @@
 ;;   recorded the agent's tx already.  Then `settings/confirm' with `ok' true and a notice "AGENT changed NAME to
 ;;   VALUE in PROJECT [Undo]"; Undo writes the earlier value back, reported as a revert of the agent's tx.
 ;; - `settings/explain' is answered with `settings/explained {req, settings}': per setting its value (printed), the
-;;   layer and source it comes from (`drgnx-settings-explain'; for a project, the workspace files over it).
+;;   layer and source it comes from (`drgnx-settings-explain'; for a project, the workspace files over it).  Only a
+;;   drgnx, described or `defcustom' setting is answered, never an `:agents never' one or a name that looks like it
+;;   holds a secret (password, token, secret, auth, credential): those rows carry no value.
 ;; Nothing here prompts; a handler never signals to the hub.
 
 ;;; Code:
@@ -32,6 +34,7 @@
 (require 'drgnx-settings-editors)
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-history)
+(require 'drgnx-settings-described)
 
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (defvar drgnx-hub--event-conn)
@@ -162,8 +165,24 @@ it had no entry) back, reported as a revert of TX.  A `user-error' when VAR's en
 
 ;;;; settings/explain
 
+(defconst drgnx-settings-agents--secret-name-regexp "password\\|passwd\\|token\\|secret\\|auth\\|credential"
+  "A name matching this is never explained to an agent: it may hold a secret.")
+
+(defun drgnx-settings-agents--explainable-p (var)
+  "Non-nil when an agent may read VAR's value: a drgnx, described or `defcustom' setting, not `:agents never',
+whose name does not look like it holds a secret."
+  (and (or (drgnx-setting-own-p var) (get var 'standard-value) (drgnx-settings-described var))
+       (not (eq (plist-get (drgnx-setting-meta var) :agents) 'never))
+       (not (string-match-p drgnx-settings-agents--secret-name-regexp (symbol-name var)))))
+
 (defun drgnx-settings-agents--row (var root)
-  "VAR's row for `settings/explained': its value and where it comes from (for the project at ROOT when given)."
+  "VAR's row for `settings/explained': its value and where it comes from (for the project at ROOT when given).
+A variable that is not `drgnx-settings-agents--explainable-p' gets a row with no value."
+  (if (not (drgnx-settings-agents--explainable-p var))
+      (list :name (symbol-name var) :source "not shown to agents")
+    (drgnx-settings-agents--row-1 var root)))
+
+(defun drgnx-settings-agents--row-1 (var root)
   (let* ((x (with-temp-buffer (drgnx-settings-explain var)))
          (row (list :name (symbol-name var) :value (plist-get x :value) :layer (plist-get x :layer)
                     :source (plist-get x :source) :file (plist-get x :file) :line (plist-get x :line))))
