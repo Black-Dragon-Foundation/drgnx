@@ -95,8 +95,8 @@ at all.
 ## drgnx-agents-profiles
 
 Your agent profiles: an alist NAME → plist (:command LIST :env ("NAME=value"…) :mode queue|steer|interrupt
-:ai PROVIDER-ENVIRONMENT :model MODEL :doc LINE).  The built-in ones need none; never holds secrets (keys come from
-the environment).
+:ai PROVIDER-ENVIRONMENT :model MODEL :tracker-tools on|off :doc LINE).  The built-in ones need none; never holds
+secrets (keys come from the environment).
 
 | Key | Value |
 | --- | --- |
