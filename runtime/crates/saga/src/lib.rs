@@ -3,6 +3,10 @@
 //! no I/O, no store.  Agent system part 1 fills it: Task 5 (`md`, `plan`, `ledger`), Task 6 (`table`, `deferred`,
 //! `board_md`, `org`), Task 14 (`import`, `view`), Task 14b (`proposal`).
 
+pub mod board_md;
+pub mod deferred;
 pub mod ledger;
 pub mod md;
+pub mod org;
 pub mod plan;
+pub mod table;

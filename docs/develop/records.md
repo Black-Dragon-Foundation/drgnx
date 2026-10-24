@@ -21,3 +21,23 @@ pure: strings in, models out, no files and no store.
 
 Headings and tables come from pulldown-cmark's offset iterator (`saga::md`); the text is always sliced from the source,
 never regenerated, which is what keeps it byte-exact.
+
+## DEFERRED, the build board and `board.org`
+
+- `table` cuts GFM pipe tables out of the text line by line (`md::tables` flattens inline markup, so it is not used
+  here). A table is a `|` header line, a separator line and the following `|` lines; an indented line after a row
+  continues that row, so a row longer than one line is kept as written. Cells split at `|` unless written `\|`;
+  cell text is trimmed but keeps its markup and escapes. Fenced code is skipped. Rows carry `raw` and a byte `span`.
+- `deferred::parse(text) -> DeferredDoc { preamble, rows, rest }`: the register is the first table with four columns
+  starting `#`/`id` (`| # | Area | Item | Status |`). `preamble` runs up to the separator line, `rest` is everything
+  after the register's rows (other tables included). Each `DeferredRow` has `id`, `area`, `text`, `status` (raw
+  cells), `span` and `raw`; `deferred::render` joins the pieces back unchanged.
+- `board_md::parse(text) -> BoardDoc { blocks }`: text and table blocks in order. `tables()` lists the tables,
+  `table_mut(first_header_cell)` finds one to replace its rows; prose stays untouched.
+- `org::parse(text) -> OrgDoc { preamble, items }`: an item is a headline (`*`s at column 0) with `level`, `keyword`,
+  `title`, `tags` and `properties` (the `:PROPERTIES:` drawer at the start of the body, after an optional planning
+  line). `body` and `heading` hold the text as written, so planning lines, logbooks, source blocks and anything the
+  parser does not know are kept. Keywords: the Org defaults, `NEXT STARTED WAITING HOLD REVIEW CANCELLED CANCELED`
+  and any `#+TODO:` words of the preamble.
+
+All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well under 50 ms.
