@@ -6044,6 +6044,7 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "argv": {
             "description": "The command and its arguments (at most 256); never run through a shell by the hub.",

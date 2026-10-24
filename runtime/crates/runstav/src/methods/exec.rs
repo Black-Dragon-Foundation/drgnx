@@ -85,6 +85,7 @@ pub struct ExecRow {
 pub type Arg = Bounded<String, 4096>;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StartParams {
     /// The command and its arguments (at most 256); never run through a shell by the hub.
     pub argv: Bounded<Vec<Arg>, 256>,

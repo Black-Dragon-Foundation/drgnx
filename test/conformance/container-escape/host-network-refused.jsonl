@@ -1,4 +1,4 @@
-{"scenario":"container-escape/host-network-refused","requires":["v1","podman","linux"],"doc":"Task 11c: a network=host field changes nothing: the container has only a loopback."}
+{"scenario":"container-escape/host-network-refused","requires":["v1","podman","linux"],"doc":"Task 11d: an exec/start with a field the method does not have is refused (invalid-params), not ignored; nothing runs."}
 {"do": "root"}
 {"do":"run","bin":"/bin/sh","args":["-c","set -e; podman pull -q docker.io/library/busybox:1.36 >/dev/null; d=$(podman image inspect --format '{{.Digest}}' docker.io/library/busybox:1.36); mkdir -p $ROOT/work;  printf '(drgnx-settings :version 1 (drgnx-agents-container-images ((\"busybox\" . \"docker.io/library/busybox@%s\"))) )\\n' \"$d\" > $CONFIG/settings.el; chmod 600 $CONFIG/settings.el"],"expect_code":0}
 {"do": "start", "hub": "h"}
@@ -7,5 +7,4 @@
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
 {"do":"send","conn":"c","json":{"id":1,"method":"exec/start","params":{"argv":["sh","-c","test \"$(grep -c : /proc/net/dev)\" = 1 && echo only-lo"],"cwd":"$ROOT/work","kind":"container","image":"busybox","network":"host","net":"host"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 120000}
-{"do":"expect","conn":"e","json":{"event":"exec-done","data":{"id":"$job","status":"done","summary":{"exit":0,"lines":{"$contains":["only-lo"]}}}},"within_ms":60000}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params"}}, "within_ms": 10000}

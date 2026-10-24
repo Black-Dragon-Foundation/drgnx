@@ -10,7 +10,7 @@ mod tests {
     use crate::scenario::parse;
     use std::path::Path;
 
-    const ROWS: [&str; 15] = [
+    const ROWS: [&str; 16] = [
         "extra-mount-refused",
         "volume-in-argv-is-just-argv",
         "image-not-on-the-list",
@@ -20,6 +20,7 @@ mod tests {
         "cap-add-refused",
         "host-network-refused",
         "network-none-cannot-reach-the-proxy-or-host",
+        "network-granted-reaches-only-the-proxy",
         "podman-socket-not-visible",
         "home-not-visible",
         "symlink-out-of-the-worktree-dangles",

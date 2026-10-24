@@ -26,9 +26,30 @@ pub struct Caps {
     /// `agents-job-cpus`.
     pub cpus: u32,
     pub pids: u32,
-    /// The podman network whose only route is the Gleipnir proxy ([`proxy_network`]); none until one exists.
-    pub proxy_network: Option<String>,
+    /// What a job that was granted network reaches the proxy through ([`Proxy`]); none: a grant is refused.
+    pub proxy: Option<Proxy>,
 }
+
+/// A granted network is not a network: the job keeps `--network=none`, and two files are bind-mounted read-only into
+/// it, the job's Gleipnir proxy socket and the forwarder ([`FORWARDER`]) that gives the job's own loopback a port in
+/// front of that socket.  The only route out is the proxy, by construction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Proxy {
+    /// The job's proxy socket on the host.
+    pub socket: PathBuf,
+    /// The `drgnx-fwd` binary on the host.
+    pub forwarder: PathBuf,
+}
+
+/// Where the proxy socket and the forwarder appear inside the container.
+pub const PROXY_SOCKET: &str = "/run/drgnx/proxy.sock";
+pub const FORWARDER: &str = "/run/drgnx/fwd";
+
+/// The extra flags a granted network adds: the two mounts, the proxy variables and the forwarder as entrypoint.
+#[cfg(test)]
+const NET_FLAGS: usize = 2 + 2 + 8 + 2;
+/// The arguments the entrypoint takes before the job's command: the port, the socket, `--`.
+pub const FORWARDER_ARGS: usize = 3;
 
 /// The process limit of a container job.
 pub const PIDS: u32 = 512;
@@ -117,14 +138,14 @@ pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
             "agents-job-memory, agents-job-cpus: a limit that fits podman",
         ));
     }
-    let network = match req.net {
-        None => "--network=none".to_string(),
-        Some(_) => format!(
-            "--network={}",
-            caps.proxy_network.as_deref().ok_or_else(|| refuse(
-                "this job was granted network access, but no proxy network is set up for containers yet"
-            ))?
-        ),
+    let proxy = match req.net {
+        None => None,
+        Some(_) => {
+            let p = caps.proxy.as_ref().ok_or_else(|| {
+                refuse("this job was granted network access, but it has no proxy to go through")
+            })?;
+            Some((mount_source(&p.socket)?, mount_source(&p.forwarder)?))
+        }
     };
     let mut a: Vec<OsString> = [
         "run",
@@ -148,12 +169,32 @@ pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
     a.push(caps.memory.clone().into());
     a.push("--cpus".into());
     a.push(caps.cpus.to_string().into());
-    a.push(network.into());
+    a.push("--network=none".into());
     a.push("-v".into());
     a.push(format!("{source}:{WORK}:Z").into());
     a.push("-w".into());
     a.push(WORK.into());
+    if let Some((socket, forwarder)) = &proxy {
+        // The socket is this job's alone (`Z`: private label); the forwarder is shared by every job (`z`).
+        a.push("-v".into());
+        a.push(format!("{socket}:{PROXY_SOCKET}:ro,Z").into());
+        a.push("-v".into());
+        a.push(format!("{forwarder}:{FORWARDER}:ro,z").into());
+        let url = format!("http://127.0.0.1:{}", crate::sandbox::PROXY_PORT);
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            a.push("-e".into());
+            a.push(format!("{k}={url}").into());
+        }
+        a.push("--entrypoint".into());
+        a.push(FORWARDER.into());
+    }
     a.push(image.into());
+    if proxy.is_some() {
+        // the entrypoint binds the port, then runs the command in its place
+        a.push(crate::sandbox::PROXY_PORT.to_string().into());
+        a.push(PROXY_SOCKET.into());
+        a.push("--".into());
+    }
     a.extend(req.argv.iter().map(OsString::from));
     Ok(a)
 }
@@ -168,12 +209,50 @@ pub fn podman_missing() -> Refusal {
     }
 }
 
-/// The podman network whose only route is the Gleipnir proxy, created on first use.  Not built yet: a container
-/// that is granted network access is refused until it is (the argv side, [`argv`], already takes its name).
-pub fn proxy_network(_sid: &str) -> Result<String, Refusal> {
-    Err(refuse(
-        "a network for container jobs is not set up yet (its only route would be the Gleipnir proxy)",
-    ))
+/// The hosts a job granted network may reach through its proxy (exact `host:port`, as for a session that is granted
+/// packages); the provider-only cell reaches none, a container having no provider.
+pub fn allowed_hosts(net: NetCell) -> &'static [&'static str] {
+    match net {
+        NetCell::ProviderOnly => &[],
+        NetCell::ProviderAndPackages | NetCell::Open => &[
+            "crates.io:443",
+            "index.crates.io:443",
+            "static.crates.io:443",
+            "registry.npmjs.org:443",
+            "pypi.org:443",
+            "files.pythonhosted.org:443",
+        ],
+    }
+}
+
+/// Starts the proxy of job ID, listening on the Unix socket SOCKET with the allow-list of NET.  The job holds the
+/// handle for as long as it runs; dropping it closes the socket's listener and every connection.
+pub fn start_proxy(
+    socket: &Path,
+    net: NetCell,
+) -> Result<gleipnir::net::proxy::ProxyHandle, Refusal> {
+    use gleipnir::net::{host, proxy};
+    let allow = allowed_hosts(net)
+        .iter()
+        .map(|h| host::parse_target(h))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| refuse(format!("the allow-list: {e:?}")))?;
+    let _ = std::fs::remove_file(socket);
+    let listener = tokio::net::UnixListener::bind(socket)
+        .map_err(|e| refuse(format!("the proxy socket {}: {e}", socket.display())))?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    // nobody is asked about a denied host here; the channel only has to stay drained
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let handle = proxy::start(
+        proxy::ProxyConfig {
+            allow,
+            ..Default::default()
+        },
+        std::sync::Arc::new(proxy::SystemResolver),
+        tx,
+    );
+    handle.listen(proxy::Listener::Unix(listener), 1);
+    Ok(handle)
 }
 
 /// Run `podman ARGS`; kill it and say so when it outlives LIMIT.
@@ -289,7 +368,10 @@ mod tests {
             memory: "4G".into(),
             cpus: 2,
             pids: PIDS,
-            proxy_network: Some("drgnx-proxy".into()),
+            proxy: Some(Proxy {
+                socket: "/run/h/job.sock".into(),
+                forwarder: "/opt/drgnx-fwd".into(),
+            }),
         }
     }
 
@@ -417,11 +499,15 @@ mod tests {
         let mut r = req(&["ls"]);
         r.net = Some(NetCell::ProviderAndPackages);
         let a = strs(argv(&r, &caps()).unwrap());
-        assert!(a.contains(&"--network=drgnx-proxy".to_string()));
-        assert!(!a.contains(&"--network=none".to_string()));
-        // a grant with no proxy network is refused, never turned into the host's network
+        // still no podman network: the proxy comes in as files
+        assert!(a.contains(&"--network=none".to_string()));
+        assert!(
+            !a.iter()
+                .any(|s| s.starts_with("--network=") && s != "--network=none")
+        );
+        // a grant with no proxy is refused, never turned into the host's network
         let c = Caps {
-            proxy_network: None,
+            proxy: None,
             ..caps()
         };
         assert!(argv(&r, &c).is_err());
@@ -431,6 +517,75 @@ mod tests {
                 .iter()
                 .any(|s| s.contains("host"))
         );
+    }
+
+    #[test]
+    fn a_grant_adds_exactly_two_ro_mounts_the_proxy_env_and_the_entrypoint() {
+        let plain = strs(argv(&req(&["ls", "-l"]), &caps()).unwrap());
+        let mut r = req(&["ls", "-l"]);
+        r.net = Some(NetCell::ProviderAndPackages);
+        let a = strs(argv(&r, &caps()).unwrap());
+        // the fixed flags before the extras are untouched
+        let at = plain.iter().position(|s| s == REF).unwrap();
+        assert_eq!(a[..at], plain[..at]);
+        let image = a.iter().position(|s| s == REF).unwrap();
+        assert_eq!(image - at, NET_FLAGS);
+        let extra = &a[at..image];
+        assert_eq!(
+            extra[..4],
+            [
+                "-v",
+                "/run/h/job.sock:/run/drgnx/proxy.sock:ro,Z",
+                "-v",
+                "/opt/drgnx-fwd:/run/drgnx/fwd:ro,z"
+            ]
+        );
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            let want = format!("{k}=http://127.0.0.1:3128");
+            assert!(
+                extra.windows(2).any(|w| w[0] == "-e" && w[1] == want),
+                "{k}"
+            );
+        }
+        assert_eq!(extra[12..], ["--entrypoint", "/run/drgnx/fwd"]);
+        // the command stays last, after the forwarder's own arguments
+        assert_eq!(
+            a[image + 1..],
+            ["3128", "/run/drgnx/proxy.sock", "--", "ls", "-l"]
+        );
+        // a mount source that podman would read as options is refused
+        let c = Caps {
+            proxy: Some(Proxy {
+                socket: "/a:b/s".into(),
+                forwarder: "/f".into(),
+            }),
+            ..caps()
+        };
+        assert!(argv(&r, &c).is_err());
+    }
+
+    #[test]
+    fn no_grant_adds_no_proxy_flag() {
+        let a = strs(argv(&req(&["ls"]), &caps()).unwrap());
+        assert!(!a.iter().any(|s| s.contains("proxy") || s == "--entrypoint"));
+        assert_eq!(a.len(), 22 + 1 + 1);
+    }
+
+    #[tokio::test]
+    async fn the_job_proxy_listens_on_its_socket() {
+        let d = tempfile::tempdir().unwrap();
+        let sock = d.path().join("proxy.sock");
+        let handle = start_proxy(&sock, NetCell::ProviderAndPackages).unwrap();
+        // not on the allow-list: refused by the proxy itself
+        let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        c.write_all(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 12];
+        let n = c.read(&mut buf).await.unwrap_or(0);
+        assert!(!buf[..n].starts_with(b"HTTP/1.1 200"), "{:?}", &buf[..n]);
+        drop(handle);
     }
 
     #[test]

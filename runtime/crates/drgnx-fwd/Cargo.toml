@@ -1,0 +1,17 @@
+[package]
+name = "drgnx-fwd"
+description = "A container job's forwarder: 127.0.0.1:PORT in the job's own network forwarded to the job's proxy socket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "drgnx-fwd"
+path = "src/main.rs"
+
+# std and libc only, so it builds into one small static binary (RUSTFLAGS="-C target-feature=+crt-static") that the hub
+# bind-mounts read-only into a container job.
+[dependencies]
+libc.workspace = true

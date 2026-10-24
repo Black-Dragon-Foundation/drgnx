@@ -1,0 +1,11 @@
+{"scenario":"container-escape/network-granted-reaches-only-the-proxy","requires":["v1","podman","linux"],"doc":"Task 11d: a container job granted network still has only a loopback (--network=none); the one thing behind it is the job proxy, which refuses a host off its allow-list; a direct connect to a public address fails."}
+{"do": "root"}
+{"do":"run","bin":"/bin/sh","args":["-c","set -e; podman pull -q docker.io/library/busybox:1.36 >/dev/null; d=$(podman image inspect --format '{{.Digest}}' docker.io/library/busybox:1.36); mkdir -p $ROOT/work;  printf '(drgnx-settings :version 1 (drgnx-agents-container-images ((\"busybox\" . \"docker.io/library/busybox@%s\"))) )\\n' \"$d\" > $CONFIG/settings.el; chmod 600 $CONFIG/settings.el"],"expect_code":0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do":"send","conn":"c","json":{"id":1,"method":"exec/start","params":{"argv":["sh","-c","test \"$(grep -c : /proc/net/dev)\" = 1 && test \"$HTTPS_PROXY\" = http://127.0.0.1:3128 && ! nc -w 2 1.1.1.1 443 </dev/null >/dev/null 2>&1 && r=$(printf 'CONNECT example.com:443 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\\r\\n' | nc -w 3 127.0.0.1 3128) && test -n \"$r\" && ! echo \"$r\" | grep -q ' 200' && echo only-the-proxy"],"cwd":"$ROOT/work","kind":"container","image":"busybox"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 120000}
+{"do":"expect","conn":"e","json":{"event":"exec-done","data":{"id":"$job","status":"done","summary":{"exit":0,"lines":{"$contains":["only-the-proxy"]}}}},"within_ms":60000}
