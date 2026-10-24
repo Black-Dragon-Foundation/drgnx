@@ -4,6 +4,9 @@
 (require 'ert)
 (require 'drgnx-gateway)
 (require 'drgnx-paths)
+;; the Lisp hub's gateway (v0; Ratatoskr's gateway.rs replaces it) writes spend in the `local' writer mode: the tests
+;; that read spend back are of that mode
+(load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
@@ -135,7 +138,7 @@ FIRST-BODY is the body as it was when the first of it arrived."
         (should (equal (plist-get r :first-body) "data: {\"x\":1}\n\n"))
         (should (equal (plist-get r :body) "data: {\"x\":1}\n\ndata: {}\n\n"))))))
 
-(ert-deftest drgnx-gateway/spend-is-recorded-per-agent-and-task ()
+(drgnx-work-db-writer-deftest drgnx-gateway/spend-is-recorded-per-agent-and-task ()
   (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse)))) '()
     (let ((token (drgnx-gateway-register '(:job "j" :task "t1" :agent "a1" :chain ((openrouter . "m1"))))))
       (drgnx-gw-test--request port :token token)
@@ -202,7 +205,7 @@ FIRST-BODY is the body as it was when the first of it arrived."
       (should (plist-get r :closed))
       (should (equal (drgnx-gw-test--log ol-log) "")))))
 
-(ert-deftest drgnx-gateway/the-budget-stops-new-requests ()
+(drgnx-work-db-writer-deftest drgnx-gateway/the-budget-stops-new-requests ()
   (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse)))) '()
     (let ((token (drgnx-gateway-register '(:job "j" :chain ((openrouter . nil)) :budget 0.0001)))
           (other (drgnx-gateway-register '(:job "k" :chain ((openrouter . nil)) :budget 1.0))))
@@ -214,7 +217,7 @@ FIRST-BODY is the body as it was when the first of it arrived."
       (should (equal (plist-get (cdr (assq 'budget events)) :job) "j"))
       (should (= (plist-get (drgnx-gw-test--request port :token other) :status) 200)))))
 
-(ert-deftest drgnx-gateway/budget-event-fires-when-spend-crosses-the-budget ()
+(drgnx-work-db-writer-deftest drgnx-gateway/budget-event-fires-when-spend-crosses-the-budget ()
   ;; the request that spends the budget pauses the job at once, not when the next request is refused
   (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse)))) '()
     (let ((token (drgnx-gateway-register '(:job "j" :chain ((openrouter . nil)) :budget 0.0001)))
@@ -229,7 +232,7 @@ FIRST-BODY is the body as it was when the first of it arrived."
         (should (< (abs (- (plist-get e :spent) (+ (* 12 3e-6) (* 7 15e-6)))) 1e-9))
         (should (= (plist-get e :budget) 0.0001))))))
 
-(ert-deftest drgnx-gateway/a-client-that-hangs-up-stops-the-upstream ()
+(drgnx-work-db-writer-deftest drgnx-gateway/a-client-that-hangs-up-stops-the-upstream ()
   ;; the upstream's last chunk comes long after any wait below: only the hang-up can end curl while the test waits
   (drgnx-gw-test--with `((:path "/api/v1/messages" :chunks ((0 . ,drgnx-gw-test--sse) (1 . "data: {}\n\n") (600 . "data: {}\n\n")))) '()
     (let ((token (drgnx-gateway-register '(:task "t9" :chain ((openrouter . nil))))))

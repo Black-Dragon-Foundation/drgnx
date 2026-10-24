@@ -13,7 +13,7 @@
     "work-db-read-test.el" "work-db-migrate-test.el" "job-budget-test.el" "job-cards-test.el" "job-clash-review-test.el"
     "job-clash-test.el" "job-cockpit-test.el" "job-exit-test.el" "job-gate-test.el" "job-liveness-test.el"
     "job-mcp-policy-test.el" "job-policy-test.el" "job-propose-test.el" "job-review-test.el" "job-run-test.el"
-    "job-safe-test.el")
+    "job-safe-test.el" "gateway-test.el")
   "The test files (test/unit/) of the Rust-bound Lisp whose tests may carry `:work-db-writer'.")
 
 (defun drgnx-lint-work-db--forms (file)
