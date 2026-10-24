@@ -1,0 +1,10 @@
+{"scenario": "settings/a-package-entry-never-stops-the-hub", "requires": ["v1", "fake-backend"], "doc": "Entries the hub does not know (a package's option of any shape, one that is not even (VAR VALUE), a section) are skipped: the hub starts, serves, reads its own settings beside them and reports no problem; a subscriber hears no notice for them."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings\n :version 1\n (some-package-option (:a 1 :b \"x\" [1 2] (3 . 4) ?\\C-a 1.5e3))\n (eglot-server-programs ((python-mode \"pylsp\")))\n (not-a-pair 1 2 3)\n (:mode org-mode (org-startup-folded t))\n (drgnx-agents-default \"claude\")\n (drgnx-ai-providers ((work :kind openai :url \"https://llm.example/v1\"))))\n"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settings": {"file": "ok", "problems": 0, "presets": 17, "profiles": 7}}}}

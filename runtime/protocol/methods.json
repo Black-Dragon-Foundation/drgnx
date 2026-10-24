@@ -8927,6 +8927,45 @@
             ],
             "type": "object"
           },
+          "SettingsFileState": {
+            "description": "Whether `settings.el` read (`ok`, also when there is none) or not (`failed`: the agents' settings use the shipped\ndefaults, the others their last good values).",
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "SettingsStatus": {
+            "additionalProperties": false,
+            "description": "`status.settings`: the file's state, the problems of the runtime settings (each a `notice`), and how many\nproviders and agent profiles the hub has (the presets and built-in profiles count, with no editor too).",
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/SettingsFileState"
+              },
+              "presets": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "problems": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "profiles": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "file",
+              "problems",
+              "presets",
+              "profiles"
+            ],
+            "type": "object"
+          },
           "StoreStatus": {
             "additionalProperties": false,
             "description": "work.db as the front's writer has it.",
@@ -9167,6 +9206,17 @@
               "integer",
               "null"
             ]
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SettingsStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the hub read of `settings.el` and the shipped defaults (none from a Lisp hub)."
           },
           "socket": {
             "type": [

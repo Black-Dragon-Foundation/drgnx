@@ -1,0 +1,7 @@
+{"scenario": "settings/no-editor-still-has-presets-and-profiles", "requires": ["v1", "fake-backend"], "doc": "With no settings.el and no editor, the hub has every shipped preset (16) and built-in profile (7) from the runtime-defaults.el it embeds; the file's absence is no problem."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"settings": {"file": "ok", "problems": 0, "presets": 16, "profiles": 7}}}}

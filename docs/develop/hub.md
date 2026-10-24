@@ -1170,3 +1170,51 @@ user subscribers get the event `gateway/keys-changed {providers}` whenever that 
 registration's `keys`; a key replaced for a provider already held changes nothing). Never a key. The editor judges a
 provider usable from these, not from a key of its own. A restarted hub holds none: a reconnecting editor asks
 `gateway/keys-held`, and hears `gateway/keys-changed` when its handover fills the set again.
+
+## Settings
+
+Ratatoskr reads `<config>/settings.el` itself, and the shipped `settings/runtime-defaults.el`, which it embeds at build
+time (`include_str!`): the hub and the editor are built from one checkout, so with no editor connected the hub still
+has every preset and built-in profile (unified settings design §11.1; amends runtime design §5.9). Both are read as
+data with `huginn` ([settings.md](settings.md#the-data-subset)): never loaded, never written. The code is
+`runtime/crates/drgnx-ratatoskr/src/settings/` (`mod.rs`: the runtime settings and `Settings`; `load.rs`: the checks,
+reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
+
+- **Only the runtime settings.** `settings::RUNTIME` lists them with their Rust type and fallback: the
+  `drgnx-agents-{profiles,default,mcp,routes,openrouter,allow-unsandboxed}` (`strict`) and `drgnx-ai-{providers,roles}`
+  (last good). Each top-level entry of one of them is decoded through `huginn::de` into its type (`AgentProfile`,
+  `AgentRoute`, `OpenRouterRestrictions`, `ProviderEntry`, `RoleChain`); every other entry, a `(:mode …)` section and
+  an entry that is not even `(VAR VALUE)` are skipped, never an error, so a package's setting never stops the hub.
+  `settings::conformance::runtime_names_equal_lisp_declarations` holds the list equal to the Lisp declarations'
+  `:runtime` and `:on-error`.
+- **The file.** Only `<config>/settings.el`: a repository's file is never read. A link there is followed (a stow link);
+  what it reaches must be a regular file of at most 1 MiB, owned by the user and writable by nobody else. The checks are
+  made on the opened file (opened without waiting, so a FIFO is refused, not waited on).
+- **Fallbacks** (the user's rule, design §5.2). A file that is refused or does not read: the `strict` settings take
+  their shipped defaults, `drgnx-ai-providers` and `drgnx-ai-roles` their last good values. An entry whose value does
+  not fit falls back alone by the same rule; its problem names the line and the path inside the value
+  (`settings.el line 4: drgnx-agents-profiles: review.mode: unknown variant …`). The last good values are kept in
+  `runtime.db`'s `kv` under `settings-last-good` (a JSON object, setting → the Lisp text of the value that last
+  decoded; no migration), so they survive a restart. An entry that is absent has its default, and no last good value.
+- **The provider table** (design §11.1's mapping, as `drgnx-hub--provider-json` has it): the presets, each of the
+  user's `drgnx-ai-providers` entries replacing the preset of its id and going first; `:url` → `base`, `:auth
+  x-api-key` / `:key-env` / neither → `auth`, the known `:caps` once each, `:price (IN . OUT)` → `price`. A provider
+  with no `:url` or `:kind` is left out silently, as the editor leaves it out; one the gateway would refuse (a URL
+  that is not a provider's) is left out with a problem. `settings::conformance::providers_json_equals_lisp` compares
+  the table with the editor's for `test/conformance/settings/providers-settings.el`. The gateway's own table is still
+  the one `config/providers` sends; unified settings Task 21 folds that method into `config/settings`.
+- **When.** At start, before anything is served, and again when the file's stamp (device, inode, size, mtime, mode,
+  owner) changed when a session starts (`mcp/session`); unified settings Task 21 adds `config/changed`.
+- **Problems.** Each is a `notice` event (`source` `hub`, `id` `settings-file` or `settings-<setting>`, `life`
+  `event`): a read's new problems go to the subscribers, and a new subscriber hears the current ones after its
+  `subscribe` answer. They are logged too.
+- **`status.settings`** is `{file: "ok" | "failed", problems: N, presets: N, profiles: N}`: `ok` also when there is no
+  file; `presets` is the provider table's size, `profiles` the profile names an agent may start on (the user's, then
+  the built-in ones, each once).
+- **The editor's side.** `test/conformance/settings/dump.el` (batch Nidhogg; its header gives the command) writes
+  `lisp-dump.json`: what the editor reads of `runtime-defaults.el`, its provider table for the fixture, and its
+  `:runtime` declarations. The Rust tests compare with it; `drgnx-settings-runtime-dump/committed-dump-is-current`
+  (`test/unit/settings-runtime-dump-test.el`) runs the same command and compares, so neither side drifts. Rows
+  `test/conformance/settings/*.jsonl` (`fake-backend`): `the-hub-reads-settings-el`,
+  `no-editor-still-has-presets-and-profiles`, `a-package-entry-never-stops-the-hub`,
+  `a-broken-file-gives-strict-agents-and-last-good-providers`.

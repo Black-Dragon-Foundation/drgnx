@@ -29,6 +29,8 @@ eitri = { path = "../eitri", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 norn = { path = "../norn", version = "0.1.0" }
 bifrost = { path = "../bifrost", version = "0.1.0" }
+huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
+serde_path_to_error.workspace = true  # where in a setting's value a mistake is
 tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)
 tokio-util.workspace = true
 bytes = "1"              # the read buffer the line codec decodes from (already in the tree through tokio)

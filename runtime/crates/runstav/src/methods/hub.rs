@@ -202,6 +202,29 @@ pub struct HubStatus {
     /// A Lisp hub's registrations (Ratatoskr says `gateway.registrations`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registrations: Option<u64>,
+    /// What the hub read of `settings.el` and the shipped defaults (none from a Lisp hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<SettingsStatus>,
+}
+
+/// Whether `settings.el` read (`ok`, also when there is none) or not (`failed`: the agents' settings use the shipped
+/// defaults, the others their last good values).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingsFileState {
+    Ok,
+    Failed,
+}
+
+/// `status.settings`: the file's state, the problems of the runtime settings (each a `notice`), and how many
+/// providers and agent profiles the hub has (the presets and built-in profiles count, with no editor too).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsStatus {
+    pub file: SettingsFileState,
+    pub problems: u64,
+    pub presets: u64,
+    pub profiles: u64,
 }
 
 /// The gateway the front serves: its loopback port (none until it listens), the registrations held, and what it

@@ -211,6 +211,11 @@ pub async fn run(args: ServeArgs) -> Exit {
         .open_store(env.clone(), socket.clone(), runtime.clone());
     front.mcp.restore().await;
     tokio::spawn(sessions::watch(front.clone()));
+    // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
+    front
+        .settings
+        .open(paths::config_dir(&env), runtime.clone());
+    front.refresh_settings().await;
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept
     front.gate.open_store(runtime);
     match front.gate.listen(gateway_port).await {
