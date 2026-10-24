@@ -1623,7 +1623,9 @@ provider key), its files in one process.  Never in this process: its environment
 Print the child's output; return non-nil when it passed."
   (let* ((dir (or dir (expand-file-name "test/live" drgnx-ui-repo-dir)))
          (done nil) (code nil)
-         (process-environment (append (list "DRGNX_TEST_ONE_PROCESS=1") (drgnx-test-env-outer) process-environment))
+         (results (and (consp drgnx-ui--batch-totals) (make-temp-file "drgnx-ui-live" nil ".json")))
+         (process-environment (append (list "DRGNX_TEST_ONE_PROCESS=1") (and results (list (concat "DRGNX_TEST_RESULTS=" results)))
+                                      (drgnx-test-env-outer) process-environment))
          (p (make-process
              :name "drgnx-ui-live" :noquery t :connection-type 'pipe :buffer nil
              :command (list (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory))
@@ -1635,13 +1637,27 @@ Print the child's output; return non-nil when it passed."
              :sentinel (lambda (proc _e)
                          (unless (process-live-p proc) (setq code (process-exit-status proc) done t))))))
     (while (not done) (accept-process-output p 0.2))
+    (when results
+      (when-let* ((r (ignore-errors (drgnx-ui--read-json results))))
+        (setcdr drgnx-ui--batch-totals (plist-get r :total)))
+      (delete-file results))
     (eql code 0)))
 
+(defvar drgnx-ui--batch-totals nil
+  "The number of tests each half of the ui tier ran, as (SESSION . LIVE); nil parts until the half ended.")
+
 (defun drgnx-ui-run-ui-tests ()
-  "`drgnx test --ui': the GUI suite in a session, then the live suite in a sandboxed Emacs.  Return an exit code."
+  "`drgnx test --ui': the GUI suite in a session, then the live suite in a sandboxed Emacs.  Return an exit code.
+With a selector a half may select no test (the selector names tests of the other); only both empty is a failure."
   (let* ((t0 (float-time))
+         (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)))))
+         (process-environment (if selector (cons "DRGNX_TEST_EMPTY_OK=1" process-environment) process-environment))
+         (drgnx-ui--batch-totals (cons nil nil))
          (ok (eq 0 (drgnx-ui-run-ui-session-tests))))
     (setq ok (and (drgnx-ui-run-live-tests) ok))
+    (when (and ok selector (eql 0 (car drgnx-ui--batch-totals)) (eql 0 (cdr drgnx-ui--batch-totals)))
+      (princ "ui tier: the selector matched no test in either half\n")
+      (setq ok nil))
     (princ (format "ui tier: %s in %.1fs\n" (if ok "green" "RED") (- (float-time) t0)))
     (if ok 0 1)))
 
@@ -1658,9 +1674,11 @@ runs the live suite in shards).  Return an exit code."
                                        selector (error-message-string err))))))
          ;; a narrowed run stays narrow in the session too
          (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
-                                        (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))))
+                                        (append (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
+                                                (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
          (ok (and (eq rc 0) results (eq (plist-get results :failed) 0))))
+    (when (and results (consp drgnx-ui--batch-totals)) (setcar drgnx-ui--batch-totals (plist-get results :total)))
     (if results
         (progn
           (princ (format "ui ERT: %s/%s passed%s\n" (plist-get results :passed) (plist-get results :total)

@@ -386,7 +386,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
          (load-failures
           (append load-failures
                   (and (null selector) (not drgnx-run-ert--order-in) (drgnx-run-ert--unindexed stats dir))
-                  (and (stringp selector) (not drgnx-run-ert--file-child)
+                  (and (stringp selector) (not drgnx-run-ert--file-child) (not (drgnx-run-ert--empty-ok-p))
                        (zerop (+ (ert-stats-total stats) (length load-failures)))
                        (list (drgnx-run-ert--matched-nothing selector)))))
          (leaks (and census (drgnx-run-ert--census-finish)))
@@ -695,6 +695,11 @@ name: a name selector could not see it.  A file with a computed name (OPEN) is n
                   failures))))
     (nreverse failures)))
 
+(defun drgnx-run-ert--empty-ok-p ()
+  "Non-nil when DRGNX_TEST_EMPTY_OK=1: a string selector that matches nothing is not a failure here.  The ui tier
+sets it, for one of its two batches may hold none of the tests a narrow selector names (it checks both are not empty)."
+  (equal (getenv "DRGNX_TEST_EMPTY_OK") "1"))
+
 (defun drgnx-run-ert--matched-nothing (selector)
   "The failure (:name :condition) of a run whose string SELECTOR matched no test."
   (list :name "selector"
@@ -763,7 +768,7 @@ file passed."
     (let ((summary (drgnx-run-ert--merge (sort done (lambda (a b) (< (cl-position (plist-get a :file) files :test #'equal)
                                                                      (cl-position (plist-get b :file) files :test #'equal))))
                                          timeout)))
-      (when (and (stringp selector) (zerop (plist-get summary :total)))
+      (when (and (stringp selector) (not (drgnx-run-ert--empty-ok-p)) (zerop (plist-get summary :total)))
         (let ((f (drgnx-run-ert--matched-nothing selector)))
           (setq summary (plist-put (plist-put (plist-put (plist-put summary :total 1) :failed 1)
                                               :failures (vector f))
