@@ -776,6 +776,28 @@ so a delegated action needs no card. The grant lives in the hub, not as a `grant
 user's). The weekly-share check on a subscription is the budget gate's (Task 20), not the matrix's.
 Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
 
+### Plan runs: git, the merge gate, trial merges (`drgnx-ratatoskr/src/runner/git.rs`)
+
+`HubGit` is the hub's `RunGit`. Every git call is async with a deadline and none runs on the runner's tick.
+
+- **Trees.** Worktree mode: `git worktree add -b job/<run>-<task>` under `<root>/<run>/<task>`. Snapshot mode: one
+  bare store per run (`<root>/<run>.git`), copied (reflink where the filesystem can) into the task's `.git`, the task's
+  work comes back as a bundle (`<task>.bundle`).
+- **The gate reads the trusted repository only** (never a task folder; this removes the VC-guard refusals of the Lisp
+  gate in snapshot mode). A snapshot bundle is first imported: `git bundle verify`, `fetch` with
+  `fetch.fsckObjects`/`transfer.fsckObjects`, a branch that descends from the task's base, and the ref written
+  compare-and-swap. The changed set is `git diff --raw -z` of base..tip; each path's diff hash covers its mode, blob ids
+  and status, so a mark made before the tip moved does not count.
+- **Verdicts.** Paths under the lock's protected list (`.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks`,
+  `mise.toml`) are refused (`Never`). Files not all accepted against the current diff hash wait (`Never` with the
+  count). `.github/`, `Makefile*`, `build.rs` and `*.sh` ask as `code.ci-config` (a card under Balanced). Otherwise
+  `Allow`. The tip checked is remembered; `HubGit::merge` merges exactly that tip with `merge --no-ff` and refuses a
+  branch that moved since the check; a conflict is aborted and listed.
+- **Trial merges** (`trial_merge`) merge the branches in order into a scratch worktree (hooks off) and list the
+  conflicting paths; the scratch worktree is removed.
+- **Touched-folder ledger.** `op` rows (`kind = 'touched'`) in `runtime.db` record the folders a sandboxed agent worked
+  in. Plain git is refused there (`folder_git`, `write_bundle`) and runs only inside the sandbox; the rows survive a restart.
+
 ## Tests
 
 `test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio; outside
