@@ -6,6 +6,6 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
-{"do":"send","conn":"c","json":{"id":1,"method":"exec/start","params":{"argv":["sh","-c","test \"$(grep -c : /proc/net/dev)\" = 1 && test \"$HTTPS_PROXY\" = http://127.0.0.1:3128 && ! nc -w 2 1.1.1.1 443 </dev/null >/dev/null 2>&1 && r=$(printf 'CONNECT example.com:443 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\\r\\n' | nc -w 3 127.0.0.1 3128) && test -n \"$r\" && ! echo \"$r\" | grep -q ' 200' && echo only-the-proxy"],"cwd":"$ROOT/work","kind":"container","image":"busybox"}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"exec/start","params":{"argv":["sh","-c","test \"$(grep -c : /proc/net/dev)\" = 1 && test \"$HTTPS_PROXY\" = http://127.0.0.1:3128 && ! nc -w 2 1.1.1.1 443 </dev/null >/dev/null 2>&1 && r=$(printf 'CONNECT example.com:443 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\\r\\n' | nc -w 3 127.0.0.1 3128) && test -n \"$r\" && ! echo \"$r\" | grep -q ' 200' && echo only-the-proxy"],"cwd":"$ROOT/work","kind":"container","image":"busybox","network":true}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 120000}
 {"do":"expect","conn":"e","json":{"event":"exec-done","data":{"id":"$job","status":"done","summary":{"exit":0,"lines":{"$contains":["only-the-proxy"]}}}},"within_ms":60000}

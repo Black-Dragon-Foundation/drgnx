@@ -100,6 +100,10 @@ pub struct StartParams {
     /// A container job's image: a name on `agents-container-images` (kind container only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<Bounded<String, 256>>,
+    /// A container job started by the user asks for the proxy network (default: none).  An agent's job gets the
+    /// matrix's Network cell instead, and this field changes nothing for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
     /// The machine: only `local` in part 1 (any other is refused: Calls made 3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<Id>,

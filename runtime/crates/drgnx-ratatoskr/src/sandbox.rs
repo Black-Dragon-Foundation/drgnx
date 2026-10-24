@@ -561,6 +561,24 @@ mod run {
 /// The proxy port inside a session whose network is the provider's only.
 pub const PROXY_PORT: u16 = 3128;
 
+/// The one allow-list of a job's proxy by its network cell (exact `host:port`): the hub starts no other proxy.
+/// Provider-only reaches none beyond the provider's own (a job has no provider); the packages cell reaches the package
+/// hosts of the toolchains drgnx uses.  `Open` shares the host's network for a session and gets the same list here.
+pub fn allowed_hosts(net: crate::agents::launch::NetCell) -> &'static [&'static str] {
+    use crate::agents::launch::NetCell;
+    match net {
+        NetCell::ProviderOnly => &[],
+        NetCell::ProviderAndPackages | NetCell::Open => &[
+            "crates.io:443",
+            "index.crates.io:443",
+            "static.crates.io:443",
+            "registry.npmjs.org:443",
+            "pypi.org:443",
+            "files.pythonhosted.org:443",
+        ],
+    }
+}
+
 /// What a session's spec is built from (Task 10): its id, where it works, what else it reads and the network cell.
 #[derive(Debug, Clone)]
 pub struct SessionShape {

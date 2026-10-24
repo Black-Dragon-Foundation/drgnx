@@ -6095,6 +6095,13 @@
             ],
             "description": "The machine: only `local` in part 1 (any other is refused: Calls made 3)."
           },
+          "network": {
+            "description": "A container job started by the user asks for the proxy network (default: none).  An agent's job gets the\nmatrix's Network cell instead, and this field changes nothing for it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "timebox_s": {
             "description": "Seconds before it is ended: 1 to 86400 (default 3600).",
             "format": "uint64",

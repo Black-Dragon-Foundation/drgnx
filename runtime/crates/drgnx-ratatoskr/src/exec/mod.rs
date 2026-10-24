@@ -429,7 +429,7 @@ impl Inner {
         id: &str,
         dir: &Path,
         spec: &ExecSpec,
-    ) -> Result<(draugr::Spec, Option<gleipnir::net::proxy::ProxyHandle>), Refusal> {
+    ) -> Result<(draugr::Spec, Option<container::JobProxy>), Refusal> {
         let job = spec.container.as_ref().expect("a container job");
         let podman = self
             .hooks
@@ -437,27 +437,27 @@ impl Inner {
             .clone()
             .ok_or_else(container::podman_missing)?;
         let mut caps = job.caps.clone();
-        // A granted network is this job's own proxy, on a Unix socket in its folder, mounted into the container.  When
-        // the forwarder is not installed or the socket cannot be made, the job keeps `--network=none` and no more.
+        // A granted network is this job's own proxy: a socket on a short path under the runtime dir and a copy of the
+        // forwarder in the job's folder, both mounted read-only.  One that cannot be given refuses the job.
         let mut proxy = None;
-        let mut net = None;
-        if let (Some(n), Some(forwarder)) = (job.net, self.hooks.forwarder.clone()) {
-            let socket = dir.join("proxy.sock");
-            match container::start_proxy(&socket, n) {
-                Ok(h) => {
-                    proxy = Some(h);
-                    net = job.net;
-                    caps.proxy = Some(container::Proxy { socket, forwarder });
-                }
-                Err(e) => tracing::warn!("job {id}: no network: {}", e.message),
-            }
+        if let Some(n) = job.net {
+            let forwarder = self.hooks.forwarder.clone().ok_or_else(|| {
+                setup("this job was granted network access, but drgnx-fwd (the forwarder) is not installed beside the hub")
+            })?;
+            let run_dir = runstav::paths::socket_path(&Env::process())
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(std::env::temp_dir);
+            let jp = container::prepare_proxy(id, dir, &run_dir, &forwarder, n)?;
+            caps.proxy = Some(jp.mounts.clone());
+            proxy = Some(jp);
         }
         let req = container::ContainerReq {
             image: job.image.clone(),
             argv: spec.argv.clone(),
             worktree: spec.cwd.clone(),
             job: id.to_string(),
-            net,
+            net: job.net,
         };
         let args = container::argv(&req, &caps)?;
         let (p, reference) = (
@@ -945,17 +945,27 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
     }
-    // The Network cell: an Allow gives the job its proxy (never a network of its own); Ask and Never leave it with
-    // none.  A job the user starts has no cell (the matrix binds agents): it gets the proxy.
+    // The Network cell: an Allow gives the job its proxy (never a network of its own), a Never leaves it with none, an
+    // Ask refuses the start with the card (the matrix keeps one open card per question, so a start while it is open
+    // finds it and makes no second).  A job the user starts has no cell: it gets the proxy only when it asks.
     let net = match (&c.sid, kind) {
         (Some(sid), CheckKind::Container) => {
+            use crate::matrix_gate::Gate;
             let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
-            let verdict =
-                decide_session_job(f, sid, &cwd, &argv, norn::matrix::Action::Network).await;
-            matches!(verdict, crate::matrix_gate::Gate::Allow)
-                .then_some(NetCell::ProviderAndPackages)
+            match decide_session_job(f, sid, &cwd, &argv, norn::matrix::Action::Network).await {
+                Gate::Allow => Some(NetCell::ProviderAndPackages),
+                Gate::Never(_) => None,
+                Gate::Ask(card) => {
+                    return Err(error(
+                        ErrorCode::NotAllowed,
+                        format!("this job's network needs the user's yes (matrix card {card})"),
+                    ));
+                }
+            }
         }
-        (None, CheckKind::Container) => Some(NetCell::ProviderAndPackages),
+        (None, CheckKind::Container) => {
+            (p.network == Some(true)).then_some(NetCell::ProviderAndPackages)
+        }
         _ => None,
     };
     let container = match (&p.image, kind) {

@@ -175,11 +175,11 @@ pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
     a.push("-w".into());
     a.push(WORK.into());
     if let Some((socket, forwarder)) = &proxy {
-        // The socket is this job's alone (`Z`: private label); the forwarder is shared by every job (`z`).
+        // The socket is this job's alone (`Z`: private label); so is the forwarder, the job's own copy.
         a.push("-v".into());
         a.push(format!("{socket}:{PROXY_SOCKET}:ro,Z").into());
         a.push("-v".into());
-        a.push(format!("{forwarder}:{FORWARDER}:ro,z").into());
+        a.push(format!("{forwarder}:{FORWARDER}:ro,Z").into());
         let url = format!("http://127.0.0.1:{}", crate::sandbox::PROXY_PORT);
         for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
             a.push("-e".into());
@@ -209,30 +209,69 @@ pub fn podman_missing() -> Refusal {
     }
 }
 
-/// The hosts a job granted network may reach through its proxy (exact `host:port`, as for a session that is granted
-/// packages); the provider-only cell reaches none, a container having no provider.
-pub fn allowed_hosts(net: NetCell) -> &'static [&'static str] {
-    match net {
-        NetCell::ProviderOnly => &[],
-        NetCell::ProviderAndPackages | NetCell::Open => &[
-            "crates.io:443",
-            "index.crates.io:443",
-            "static.crates.io:443",
-            "registry.npmjs.org:443",
-            "pypi.org:443",
-            "files.pythonhosted.org:443",
-        ],
+/// A job's proxy: the listener on its socket, the socket (removed when the job ends) and the forwarder's copy.
+pub struct JobProxy {
+    _handle: gleipnir::net::proxy::ProxyHandle,
+    pub mounts: Proxy,
+}
+
+impl Drop for JobProxy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.mounts.socket);
     }
 }
 
-/// Starts the proxy of job ID, listening on the Unix socket SOCKET with the allow-list of NET.  The job holds the
-/// handle for as long as it runs; dropping it closes the socket's listener and every connection.
+/// Where a job's proxy socket lives: a short path (a Unix socket's path holds 108 bytes) under the user's runtime dir.
+pub fn socket_for(job: &str, run_dir: &Path) -> PathBuf {
+    run_dir.join("drgnx-jobs").join(format!("{job}.sock"))
+}
+
+/// Makes job JOB's proxy: its own copy of FORWARDER in DIR (the job's folder; the copy is what gets relabelled, never
+/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET.  An error means the job
+/// was granted a network it cannot be given.
+pub fn prepare_proxy(
+    job: &str,
+    dir: &Path,
+    run_dir: &Path,
+    forwarder: &Path,
+    net: NetCell,
+) -> Result<JobProxy, Refusal> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let copy = dir.join("fwd");
+    std::fs::copy(forwarder, &copy)
+        .and_then(|_| std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)))
+        .map_err(|e| {
+            refuse(format!(
+                "this job was granted network access, but the forwarder {} cannot be copied: {e}",
+                forwarder.display()
+            ))
+        })?;
+    let socket = socket_for(job, run_dir);
+    if let Some(parent) = socket.parent() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|e| refuse(format!("{}: {e}", parent.display())))?;
+    }
+    let handle = start_proxy(&socket, net)?;
+    Ok(JobProxy {
+        _handle: handle,
+        mounts: Proxy {
+            socket,
+            forwarder: copy,
+        },
+    })
+}
+
+/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET.  Dropping the handle closes the
+/// listener and every connection.
 pub fn start_proxy(
     socket: &Path,
     net: NetCell,
 ) -> Result<gleipnir::net::proxy::ProxyHandle, Refusal> {
     use gleipnir::net::{host, proxy};
-    let allow = allowed_hosts(net)
+    let allow = crate::sandbox::allowed_hosts(net)
         .iter()
         .map(|h| host::parse_target(h))
         .collect::<Result<Vec<_>, _>>()
@@ -537,7 +576,7 @@ mod tests {
                 "-v",
                 "/run/h/job.sock:/run/drgnx/proxy.sock:ro,Z",
                 "-v",
-                "/opt/drgnx-fwd:/run/drgnx/fwd:ro,z"
+                "/opt/drgnx-fwd:/run/drgnx/fwd:ro,Z"
             ]
         );
         for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
@@ -562,6 +601,70 @@ mod tests {
             ..caps()
         };
         assert!(argv(&r, &c).is_err());
+    }
+
+    #[tokio::test]
+    async fn every_mount_source_lies_in_the_jobs_own_dirs() {
+        let d = tempfile::tempdir().unwrap();
+        let (job_dir, run_dir, installed) = (
+            d.path().join("job"),
+            d.path().join("run"),
+            d.path().join("bin-drgnx-fwd"),
+        );
+        std::fs::create_dir_all(&job_dir).unwrap();
+        std::fs::write(&installed, b"binary").unwrap();
+        let jp = prepare_proxy(
+            "j1",
+            &job_dir,
+            &run_dir,
+            &installed,
+            NetCell::ProviderAndPackages,
+        )
+        .unwrap();
+        // the socket path stays short; the copy is the job's own; the installed file is never a mount source
+        assert!(jp.mounts.socket.starts_with(&run_dir));
+        assert!(jp.mounts.socket.as_os_str().len() < 108);
+        assert_eq!(jp.mounts.forwarder, job_dir.join("fwd"));
+        assert_eq!(std::fs::read(&jp.mounts.forwarder).unwrap(), b"binary");
+        let c = Caps {
+            proxy: Some(jp.mounts.clone()),
+            ..caps()
+        };
+        let mut r = req(&["ls"]);
+        r.worktree = d.path().join("tree");
+        r.net = Some(NetCell::ProviderAndPackages);
+        let a = strs(argv(&r, &c).unwrap());
+        let sources: Vec<&str> = a
+            .windows(2)
+            .filter(|w| w[0] == "-v")
+            .map(|w| w[1].split(':').next().unwrap())
+            .collect();
+        assert_eq!(sources.len(), 3);
+        for s in sources {
+            let p = Path::new(s);
+            assert!(
+                p.starts_with(d.path().join("tree"))
+                    || p.starts_with(&job_dir)
+                    || p.starts_with(&run_dir),
+                "{s}"
+            );
+            assert_ne!(p, installed);
+        }
+        assert!(a.iter().all(|s| !s.ends_with(":ro,z")));
+        let sock = jp.mounts.socket.clone();
+        drop(jp);
+        assert!(!sock.exists());
+        // a forwarder that is not there refuses the job instead of running it without a network
+        assert!(
+            prepare_proxy(
+                "j2",
+                &job_dir,
+                &run_dir,
+                &d.path().join("none"),
+                NetCell::Open
+            )
+            .is_err()
+        );
     }
 
     #[test]
