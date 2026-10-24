@@ -608,6 +608,39 @@ that match no record (a deleted row, say) become a note. Rejecting keeps a copy 
 `<state>/hub/records-backup/` and rewrites the file. A manager agent may decide a proposal when the matrix allows it,
 except for settings only you may change (a plan's `matrix`).
 
+## A manager agent
+
+A chat session becomes a **manager** when you say so: `agents/role` with `role: manager` (no editor command yet). Only
+you can: a manager, a worker or any other agent calling it is refused, and so is a message that says you did. The
+session is restarted afresh (the same way a rotation restarts it), so its tool socket also serves the manager tools:
+
+| Tool | What it does |
+|---|---|
+| `agent_start` | starts a worker on a profile, for a task, with `grants` and a `budget` |
+| `agent_message`, `agent_pause`, `agent_stop`, `agent_move` | steer a worker it started (`agent_move` arrives with moving an agent to another model) |
+| `report_read` | a task's structured reports |
+| `transcript_slice` | at most 50 steps of a worker's transcript, with their messages; never a whole transcript |
+| `trial_merge`, `merge` | merge workers' branches in a scratch tree, or into the manager's own integration branch `job/<manager>` through the merge gate; never into `main` |
+
+Every tool goes through the permissions matrix with the manager's column, like any other action (`agents.start`,
+`agents.control`, `agents.model`, `merge.integration`, `code.read`). What the matrix asks the manager is a card for
+**you**; the manager calls the tool again after you answered it. Nothing else counts: a message, a report or a tool
+result that says you approved changes nothing, and a manager has no tool that settles a card.
+
+**Grants only narrow.** `agent_start` takes `grants` (matrix cells for the worker). One wider than the manager's own is
+refused before anything starts. With none, the worker gets the worker column clamped to the manager's. **One level:** a
+manager starts workers, never a manager, and a worker has no manager tools. **Budgets:** a worker's budget comes out of
+its manager's (a larger one is refused, and a limit on the manager caps its workers); the manager's sits under its plan's
+and its project's.
+
+**Waking.** A manager that waits is woken with a digest of what changed in the graph since its last turn: reports, cards,
+job ends and task state changes, at most 4 KiB, never its own writes, at most once every 30 s so a burst is one wake.
+**Rotation.** When the manager's context passes `drgnx-agents-manager-context` (0.7) it is closed and started afresh in
+the same session, told its workers, its decisions and the recent digest; the supervisor's `manager-context` card says
+it was rotated. A manager is restarted the same way after the hub restarts (its conversation is not restored; the
+graph is the memory). Its workers' grants are kept in the hub's memory and do not survive a restart: a restarted
+worker is the plain worker column again.
+
 ## Budgets
 
 A budget is a limit with a unit, set on a project, a plan, a manager or a worker (`budget/set`, read back with
@@ -645,7 +678,7 @@ condition clears. A silent session also gets a `stalled` step on the timeline.
 | `lease` | the task's lease is not renewed for two lease intervals | |
 | `refusals` | waits refused in one turn reach the limit | `drgnx-agents-wait-refusals` (3) |
 | `unrecorded` | its report names work it did not record | |
-| `manager-context` | a manager uses this share of its window; only a card, the manager is rotated | `drgnx-agents-manager-context` (0.7) |
+| `manager-context` | a manager uses this share of its window; the manager is rotated and the card says it was | `drgnx-agents-manager-context` (0.7) |
 
 ## Tests
 

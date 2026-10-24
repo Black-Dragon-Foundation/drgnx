@@ -118,6 +118,17 @@ pub trait Hub: Send + Sync {
         Box::pin(async { Err("jobs are the hub's: none here".to_string()) })
     }
 
+    /// A manager tool OP (`agent_start`, …) called as the session SID with ARGS: the answer's text, or the refusal's.
+    /// The hub checks the session is a manager, the matrix and the grants.  The default (no hub): no managers.
+    fn manager(
+        &self,
+        _sid: &str,
+        _op: &'static str,
+        _args: serde_json::Value,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("managers are the hub's: none here".to_string()) })
+    }
+
     /// The session SID waited on a job that runs (refused): the hub counts it and cancels the turn at the limit.
     fn wait_refused(&self, _sid: &str) {}
 
@@ -270,33 +281,6 @@ pub fn manager_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     manager::tools()
 }
 
-/// The answer of a tool whose task has not filled it yet.
-pub(crate) fn not_yet(tool: &str, task: &str) -> String {
-    format!("{tool}: not yet (agent system part 1, Task {task})")
-}
-
-/// A tool that answers [`not_yet`] until TASK fills it: `stub_tool!(Name, "name", Args, "task", "description")`.
-macro_rules! stub_tool {
-    ($ty:ident, $name:literal, $args:ty, $task:literal, $doc:literal) => {
-        pub struct $ty;
-
-        impl $crate::tools::guard::CoordTool for $ty {
-            type Args = $args;
-            const NAME: &'static str = $name;
-            const DESCRIPTION: &'static str = $doc;
-            fn run<'a>(
-                &'a self,
-                _: &'a $crate::tools::Coord,
-                _: &'a $crate::tools::Identity,
-                _: Self::Args,
-            ) -> mimir::BoxFuture<'a, Result<String, String>> {
-                Box::pin(async { Err($crate::tools::not_yet($name, $task)) })
-            }
-        }
-    };
-}
-pub(crate) use stub_tool;
-
 #[cfg(test)]
 mod core_tests {
     use super::*;
@@ -325,7 +309,7 @@ mod core_tests {
     }
 
     #[tokio::test]
-    async fn a_stub_answers_not_yet() {
+    async fn a_manager_tool_without_a_hub_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let coord = Arc::new(Coord::new(
             CoordDb::spawn(dir.path().join("work.db")),
@@ -345,9 +329,9 @@ mod core_tests {
         stop.check(&args).unwrap();
         match stop.call(&(coord, who), args).await {
             ToolResult::Err(text) => {
-                assert_eq!(text, "agent_stop: not yet (agent system part 1, Task 25)")
+                assert_eq!(text, "managers are the hub's: none here")
             }
-            _ => panic!("a stub answered"),
+            _ => panic!("a hub-less tool answered"),
         }
     }
 }

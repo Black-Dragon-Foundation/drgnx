@@ -97,6 +97,18 @@ impl Hub {
         session::open(self, front, p, caller).await
     }
 
+    /// A worker a manager started (Task 25): as [`Hub::start`], with PARENT (the manager's session id) as its parent,
+    /// so its budget comes out of the manager's.  The hub acts on a request the manager's tool already checked.
+    pub async fn start_child(
+        &self,
+        front: &Front,
+        p: StartParams,
+        parent: &str,
+    ) -> Result<Started, Error> {
+        let hub_as_user = crate::runner::user();
+        session::open_as(self, front, p, &hub_as_user, Some(parent.to_owned())).await
+    }
+
     /// Stop: cancel the running turn (the queue waits until the user delivers it or sends something).  A session
     /// with no turn running is ended instead: its process (SIGTERM, then SIGKILL after a grace period).
     pub async fn stop(&self, id: &str) -> Result<bool, Error> {

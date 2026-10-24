@@ -33,7 +33,7 @@ use runstav::methods::hub::McpStatus;
 use runstav::methods::mcp::{SessionAnswer, SessionParams};
 use runstav::paths::{self, Env};
 use runstav::wire::{Error, ErrorCode};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -142,6 +142,9 @@ pub struct Sessions {
     by_sets: [OnceLock<ToolList>; 2],
     store: OnceLock<Store>,
     live: Mutex<BTreeMap<String, Live>>,
+    /// Sessions made managers (Task 25): their socket also serves the manager tools.
+    managers: Mutex<BTreeSet<String>>,
+    manager_list: OnceLock<ToolList>,
     /// Outside bridges connected now.
     outside: Arc<AtomicUsize>,
     /// One open or close at a time: a row and its socket change together.
@@ -372,7 +375,18 @@ impl Sessions {
             live: Mutex::new(BTreeMap::new()),
             outside: Arc::new(AtomicUsize::new(0)),
             serial: tokio::sync::Mutex::new(()),
+            managers: Mutex::new(BTreeSet::new()),
+            manager_list: OnceLock::new(),
         }
+    }
+
+    /// Session SID is a manager: its next socket serves the manager tools too (an open socket is closed and opened
+    /// again by the caller).
+    pub fn mark_manager(&self, sid: &str) {
+        self.managers
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
     }
 
     /// Sessions are kept in DB, their directories made for the hub's main SOCKET under ENV (once; at start).
@@ -480,6 +494,16 @@ impl Sessions {
             None => None,
         };
         let sets = crate::graph::tool_sets(task, row.tracker);
+        if self.managers.lock().expect("sessions").contains(&row.sid) {
+            return self
+                .manager_list
+                .get_or_init(|| {
+                    let mut all = norn::tools::tools_for(norn::tools::ToolSets::default());
+                    all.extend(norn::tools::manager_tools());
+                    all.into()
+                })
+                .clone();
+        }
         self.by_sets[usize::from(sets.tracker)]
             .get_or_init(|| norn::tools::tools_for(sets).into())
             .clone()

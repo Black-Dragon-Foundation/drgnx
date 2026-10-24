@@ -1,0 +1,26 @@
+{"scenario": "manager/digest-wakes-batched", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 25: two graph changes inside the (4 s test) debounce wake the manager once, with both in one digest; the wake is a hub prompt, and the manager's own writes are not in it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_DIGEST_DEBOUNCE_MS": "4000"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/role", "params": {"id": "$sid", "role": "manager"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 70, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 70, "result": {"sid": "$capture:tsid", "socket": "$capture:tsock"}}}
+{"do": "connect", "conn": "t", "hub": "h", "socket": "path:$tsock", "as": "raw"}
+{"do": "send", "conn": "t", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "t", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "t", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "alpha job"}}}}
+{"do": "expect", "conn": "t", "json": {"jsonrpc": "2.0", "id": 2, "result": "$any"}}
+{"do": "send", "conn": "t", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "beta job"}}}}
+{"do": "expect", "conn": "t", "json": {"jsonrpc": "2.0", "id": 3, "result": "$any"}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "graph changes since your last turn", "count": 1, "at_most": 1, "within_ms": 20000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "alpha job"}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "beta job"}

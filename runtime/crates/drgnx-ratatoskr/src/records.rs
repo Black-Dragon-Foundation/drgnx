@@ -1389,12 +1389,16 @@ async fn tool_call(
     };
     f.core.matrix.refresh(f);
     let gate = f.core.matrix.clone();
-    // a session's own column is not known here: the worker column, the more restrictive of the two that may change the graph
-    let who = norn::matrix::Who {
-        role: Some(runstav::methods::matrix::Role::Worker),
-        agent: None,
-        provider: None,
-    };
+    // the session's own column; a caller the hub does not hold gets the worker column, the more restrictive of the two
+    // that may change the graph
+    let who = session
+        .as_deref()
+        .and_then(|s| f.core.agents.who(s))
+        .unwrap_or(norn::matrix::Who {
+            role: Some(runstav::methods::matrix::Role::Worker),
+            agent: None,
+            provider: None,
+        });
     let ctx = ActionCtx {
         session,
         ..Default::default()
