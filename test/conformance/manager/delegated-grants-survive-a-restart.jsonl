@@ -1,0 +1,33 @@
+{"scenario": "manager/delegated-grants-survive-a-restart", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 25: what a manager delegated to a worker is kept in runtime.db (delegation) and read back when the worker is resumed after a hub restart, before its first tool call. A restart with the row makes no card; a worker whose row is gone gets nothing and the user a card (grants ... lost)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/role", "params": {"id": "$sid", "role": "manager"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "agent_start", "arguments": {"profile": "mock-claude", "grants": [{"action": "code.edit", "column": {"role": "worker"}, "verdict": "never"}]}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 60000}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*), min(instr(cells, 'code.edit') > 0) from delegation", "rows": [[1, 1]]}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "agents/list"}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$sid", "role": "manager"}, {"id": "$string", "parent": "$sid", "role": "worker"}]}}}, "within_ms": 60000}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from delegation", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from card where title like 'grants of %'", "rows": [[0]]}
+{"do": "kill", "hub": "h2", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h2", "code": 0, "within_ms": 15000}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["delete from delegation"]}
+{"do": "start", "hub": "h3", "same_root_as": "h"}
+{"do": "connect", "conn": "c3", "hub": "h3"}
+{"do": "send", "conn": "c3", "json": {"id": 1, "method": "agents/list"}}
+{"do": "expect", "conn": "c3", "json": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$string", "parent": "$sid", "role": "worker"}]}}}, "within_ms": 60000}
+{"do": "sql_expect", "sql": "select count(*) from card where title like 'grants of % were lost%'", "rows": [[1]]}

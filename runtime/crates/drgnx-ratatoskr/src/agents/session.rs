@@ -784,7 +784,7 @@ async fn prepare(
 
 /// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
 /// `claude-openrouter` without a model follows the `agent` role.
-fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Option<String>)> {
+pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Option<String>)> {
     let kind = p.ai.as_deref().unwrap_or_default();
     let one = |id: &str, m: Option<String>| vec![(id.to_string(), m)];
     match kind {
@@ -1347,6 +1347,10 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
 /// session, no `session/resume`, that is told FIRST (its digest and open decisions) instead of [`RESTART_NOTICE`].
 async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Option<String>) -> bool {
     let (sid, name, profile_name, role, cwd, task, job, acp, parent, at) = row;
+    // a worker a manager started gets back what the manager delegated, before its first tool call
+    if parent.is_some() {
+        crate::manager::restore_delegation(front, &sid).await;
+    }
     let Some(profile) = find_profile(front, &profile_name) else {
         tracing::warn!(
             sid,
@@ -1723,7 +1727,10 @@ async fn insert_row(db: &urdr::Handle, s: &Session) {
 pub(crate) async fn delete_row(db: &urdr::Handle, sid: &str) {
     let s = sid.to_owned();
     if let Err(e) = db
-        .write(move |c| Ok(c.execute("delete from asession where sid = ?1", [s])?))
+        .write(move |c| {
+            c.execute("delete from delegation where sid = ?1", [&s])?;
+            Ok(c.execute("delete from asession where sid = ?1", [&s])?)
+        })
         .await
     {
         tracing::warn!(sid, "cannot remove a session from runtime.db: {e}");

@@ -1,4 +1,4 @@
-{"scenario": "manager/rotates-past-context", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 25: a manager whose context passes agents-manager-context (0.014 here: the 2nd turn, with a long message, passes it; the 1st does not) is closed and started afresh in the same hub session (a 3rd session/new), and the supervisor's manager-context card says it was rotated; it is still a manager."}
+{"scenario": "manager/rotates-past-context", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 25: a manager whose context passes agents-manager-context (0.014 here: the 2nd turn, with a long message, passes it; the 1st does not) is closed and started afresh in the same hub session (a 3rd session/new), at the end of the turn that passed it (a running turn is never cut), and the supervisor's manager-context card says when it was rotated; it is still a manager."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
@@ -20,6 +20,6 @@
 {"do": "expect", "conn": "c", "json": {"id": 80, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "supervisor", "data": {"rule": "manager-context", "session": "$sid", "card": "$number", "text": "$string"}}, "within_ms": 40000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/new\"", "count": 3, "at_most": 3, "within_ms": 20000}
-{"do": "sql_expect", "sql": "select count(*) from card where kind = 'supervisor' and title like '%rotated: a fresh session%'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'supervisor' and title like '%rotated%'", "rows": [[1]]}
 {"do": "send", "conn": "c", "json": {"id": 81, "method": "agents/list"}}
 {"do": "expect", "conn": "c", "json": {"id": 81, "result": {"sessions": {"$contains": [{"id": "$sid", "role": "manager"}]}}}}

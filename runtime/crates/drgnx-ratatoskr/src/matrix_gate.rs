@@ -300,6 +300,25 @@ impl MatrixGate {
         Ok(())
     }
 
+    /// What a manager delegated to worker SID, if it did.
+    pub fn delegated_to(&self, sid: &str) -> Option<Effective> {
+        self.st
+            .lock()
+            .expect("matrix gate")
+            .delegated
+            .get(sid)
+            .cloned()
+    }
+
+    /// Worker SID's delegated cells as a restart read them back (an empty `Effective` is Never everywhere).
+    pub fn set_delegated(&self, sid: &str, e: Effective) {
+        self.st
+            .lock()
+            .expect("matrix gate")
+            .delegated
+            .insert(sid.to_string(), e);
+    }
+
     fn view(&self, conn: &urdr::Connection, p: &GetParams, now: f64) -> MatrixView {
         let (base, act, away) = self.preset_now(now);
         let plan_id = p.plan.as_ref().map(|x| x.0.clone());

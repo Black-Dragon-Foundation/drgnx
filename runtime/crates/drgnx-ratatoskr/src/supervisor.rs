@@ -327,11 +327,18 @@ async fn changed_lines(cwd: &std::path::Path) -> Option<u64> {
 /// the card, announce it.
 async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
     let mut text = text.to_string();
+    let mut deferred = false;
     if rule == Rule::ManagerContext {
-        let said = if crate::manager::rotate_for_context(f, &o.sid).await {
-            "rotated: a fresh session was started with its digest and open decisions"
-        } else {
-            "could not be rotated"
+        use crate::manager::Rotation;
+        let said = match crate::manager::rotate_for_context(f, &o.sid).await {
+            Rotation::Done => {
+                "rotated: a fresh session was started with its digest and open decisions"
+            }
+            Rotation::Deferred => {
+                deferred = true;
+                "its turn is running: it is rotated when the turn ends"
+            }
+            Rotation::Failed => "could not be rotated",
         };
         text = format!("{text}; {said}");
     } else {
@@ -365,6 +372,9 @@ async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
         .await;
     match made {
         Ok(id) => {
+            if deferred {
+                crate::manager::note_card(f, &o.sid, id).await;
+            }
             f.writer.signals.wrote();
             f.broadcast(
                 "supervisor",

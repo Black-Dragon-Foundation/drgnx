@@ -162,3 +162,37 @@ fn agent_start_args_carry_a_role_the_hub_refuses() {
         Some(Role::Manager)
     );
 }
+
+#[test]
+fn delegated_cells_round_trip_through_the_store() {
+    let e = Effective {
+        cells: [
+            (
+                Action::CodeEdit,
+                Cell {
+                    verdict: Verdict::Never,
+                    limit: None,
+                },
+            ),
+            (
+                Action::Spend,
+                Cell {
+                    verdict: Verdict::Allow,
+                    limit: Some(runstav::methods::matrix::Limit {
+                        amount: 2.0,
+                        unit: Unit::Usd,
+                    }),
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    assert_eq!(cells_from(&cells_json(&e)), Some(e));
+    // unreadable: nothing, and the caller gives the worker nothing
+    assert_eq!(cells_from("not json"), None);
+    assert_eq!(
+        Effective::default().cell(Action::CodeEdit).verdict,
+        Verdict::Never
+    );
+}

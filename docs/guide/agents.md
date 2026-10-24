@@ -635,11 +635,11 @@ and its project's.
 
 **Waking.** A manager that waits is woken with a digest of what changed in the graph since its last turn: reports, cards,
 job ends and task state changes, at most 4 KiB, never its own writes, at most once every 30 s so a burst is one wake.
-**Rotation.** When the manager's context passes `drgnx-agents-manager-context` (0.7) it is closed and started afresh in
+**Rotation.** When the manager's context passes `drgnx-agents-manager-context` (0.7) it is closed when its turn ends (a running turn is never cut, unless the window is full) and started afresh in
 the same session, told its workers, its decisions and the recent digest; the supervisor's `manager-context` card says
 it was rotated. A manager is restarted the same way after the hub restarts (its conversation is not restored; the
-graph is the memory). Its workers' grants are kept in the hub's memory and do not survive a restart: a restarted
-worker is the plain worker column again.
+graph is the memory). What a manager delegated to a worker is kept in `runtime.db` and read back when the worker is resumed; a worker whose
+grants are gone gets nothing and you get a card.
 
 ## Budgets
 

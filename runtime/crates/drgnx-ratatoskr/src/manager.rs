@@ -76,6 +76,8 @@ struct State {
     trees: HashMap<String, TaskTree>,
     /// Branch → the merge gate's card.
     gates: HashMap<String, i64>,
+    /// Managers to rotate when their turn ends, and the `manager-context` card that waits for the news.
+    deferred: HashMap<String, Option<i64>>,
 }
 
 /// The manager sessions and their digests.
@@ -354,6 +356,15 @@ pub async fn run(f: Arc<Front>) {
             if !matches!(s.status(), SessionStatus::Idle | SessionStatus::Waiting) {
                 continue;
             }
+            // its turn ended: the rotation the supervisor asked for happens now, and its card says so
+            let waiting = f.core.manager.st().deferred.remove(&s.id);
+            if let Some(card) = waiting {
+                let ok = rotate_now(&f, &s.id).await == Rotation::Done;
+                if let Some(card) = card {
+                    say_rotated(&f, card, ok).await;
+                }
+                continue;
+            }
             let due = {
                 let st = f.core.manager.st();
                 st.seen
@@ -443,11 +454,162 @@ async fn remembered(f: &Front, sid: &str) -> (Vec<String>, Vec<String>) {
     (kids, decisions)
 }
 
-/// The supervisor's `manager-context` rule fired: rotate manager SID (close it, start it afresh with its digest and
-/// open decisions).  The rule's card says it was done.
-pub async fn rotate_for_context(f: &Front, sid: &str) -> bool {
+/// What the supervisor's `manager-context` rule got done.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Rotation {
+    /// Rotated now.
+    Done,
+    /// A turn is running: it is rotated when the turn ends.
+    Deferred,
+    Failed,
+}
+
+/// The context share at which a running turn is cut: the window is truly full.
+const FULL: f64 = 0.95;
+
+/// The supervisor's `manager-context` rule fired for manager SID.  Past the threshold the manager is rotated when its
+/// turn ends (a running turn is never cut) unless the window is full; then now.  The same path as the restart.
+pub async fn rotate_for_context(f: &Front, sid: &str) -> Rotation {
+    let Ok(s) = f.core.agents.find(sid) else {
+        return Rotation::Failed;
+    };
+    let busy = matches!(s.status(), SessionStatus::Busy | SessionStatus::Starting);
+    let full = s.observe().context.is_some_and(|c| c >= FULL);
+    if busy && !full {
+        f.core.manager.st().deferred.insert(sid.to_owned(), None);
+        return Rotation::Deferred;
+    }
+    rotate_now(f, sid).await
+}
+
+async fn rotate_now(f: &Front, sid: &str) -> Rotation {
     let first = restart_prompt(f, sid).await;
-    session::rotate(&f.core.agents, f, sid, first).await
+    if session::rotate(&f.core.agents, f, sid, first).await {
+        Rotation::Done
+    } else {
+        Rotation::Failed
+    }
+}
+
+/// The card that tells of a deferred rotation of SID is CARD.  If the rotation happened meanwhile the card is told so.
+pub async fn note_card(f: &Front, sid: &str, card: i64) {
+    let waiting = {
+        let mut st = f.core.manager.st();
+        match st.deferred.get_mut(sid) {
+            Some(c) => {
+                *c = Some(card);
+                true
+            }
+            None => false,
+        }
+    };
+    if !waiting {
+        say_rotated(f, card, true).await;
+    }
+}
+
+async fn say_rotated(f: &Front, card: i64, ok: bool) {
+    let title = if ok {
+        "manager-context: rotated when its turn ended; a fresh session has its digest and open decisions"
+    } else {
+        "manager-context: could not be rotated when its turn ended"
+    };
+    let set = norn::write::cards::CardSet {
+        title: Some(title.to_owned()),
+        data: None,
+        state: None,
+    };
+    let at = now();
+    let r = f
+        .writer
+        .db
+        .write(
+            urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "manager"),
+            move |tx| norn::write::cards::card_set(tx, card, set, at),
+        )
+        .await;
+    if let Err(e) = r {
+        tracing::warn!("a rotation card was not updated: {e}");
+    }
+}
+
+// ------------------------------------------------------------------------- delegated grants kept across a restart
+
+fn cells_json(e: &Effective) -> String {
+    let rows: Vec<(&norn::matrix::Action, &Cell)> = e.cells.iter().collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+}
+
+fn cells_from(text: &str) -> Option<Effective> {
+    let rows: Vec<(Action, Cell)> = serde_json::from_str(text).ok()?;
+    Some(Effective {
+        cells: rows.into_iter().collect(),
+    })
+}
+
+/// Keep what a manager delegated to worker SID (runtime.db `delegation`).
+async fn save_delegation(f: &Front, sid: &str) {
+    let (Some(db), Some(e)) = (f.core.agents.db(), f.core.matrix.delegated_to(sid)) else {
+        return;
+    };
+    let (s, cells, at) = (sid.to_owned(), cells_json(&e), now());
+    let r = db
+        .write(move |c| {
+            Ok(c.execute(
+                "insert or replace into delegation(sid, cells, at) values (?1, ?2, ?3)",
+                (s, cells, at),
+            )?)
+        })
+        .await;
+    if let Err(e) = r {
+        tracing::warn!(sid, "delegation not kept: {e}");
+    }
+}
+
+/// Worker SID is resumed: what its manager delegated is back before its first tool call.  A worker whose row is
+/// missing (or unreadable) gets nothing (Never everywhere), never its profile's default, and the user a card.
+pub async fn restore_delegation(f: &Front, sid: &str) {
+    let Some(db) = f.core.agents.db() else { return };
+    let s = sid.to_owned();
+    let row: Option<String> = db
+        .read(move |c| {
+            use urdr::SqliteError as E;
+            match c.query_row("select cells from delegation where sid = ?1", [s], |r| {
+                r.get(0)
+            }) {
+                Ok(t) => Ok(Some(t)),
+                Err(E::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
+        .unwrap_or(None);
+    if let Some(e) = row.as_deref().and_then(cells_from) {
+        f.core.matrix.set_delegated(sid, e);
+        return;
+    }
+    f.core.matrix.set_delegated(sid, Effective::default());
+    let card = norn::write::cards::NewCard {
+        job: None,
+        task: None,
+        kind: Some("agent".into()),
+        title: Some(format!(
+            "grants of {sid} were lost in the restart: it may do nothing until you decide"
+        )),
+        data: Some(json!({"session": sid, "fixes": ["stop"], "choices": ["stop"]})),
+    };
+    let at = now();
+    let r = f
+        .writer
+        .db
+        .write(
+            urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "manager"),
+            move |tx| norn::write::cards::card_create(tx, card, at),
+        )
+        .await;
+    if let Err(e) = r {
+        tracing::warn!(sid, "no card for lost grants: {e}");
+    }
 }
 
 // ----------------------------------------------------------------------------------------------------- the tools
@@ -762,6 +924,7 @@ async fn agent_start(
         let _ = f.core.agents.kill(&wsid).await;
         return Err(format!("grant refused: {w}"));
     }
+    save_delegation(f, &wsid).await;
     let wscope = session::scope_of(Role::Worker, &wsid);
     if !a.budget.0.is_empty() {
         let hits = f.core.budgets.set(&wscope, a.budget.0.clone());
