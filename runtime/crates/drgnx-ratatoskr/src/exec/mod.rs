@@ -311,7 +311,7 @@ impl Inner {
 
     /// The `podman run` of a container job.  The container is the sandbox, so the starter's Gleipnir spec is not used;
     /// the hub pulls the image first, the job never does.
-    async fn container_spec(&self, spec: &ExecSpec) -> Result<draugr::Spec, Refusal> {
+    async fn container_spec(&self, id: &str, spec: &ExecSpec) -> Result<draugr::Spec, Refusal> {
         let job = spec.container.as_ref().expect("a container job");
         let podman = self
             .hooks
@@ -330,6 +330,7 @@ impl Inner {
             image: job.image.clone(),
             argv: spec.argv.clone(),
             worktree: spec.cwd.clone(),
+            job: id.to_string(),
             net: job.net,
         };
         let args = container::argv(&req, &caps)?;
@@ -337,9 +338,11 @@ impl Inner {
             podman.clone(),
             container::resolve(&caps, &job.image)?.to_string(),
         );
-        tokio::task::spawn_blocking(move || container::ensure_image(&p, &reference))
-            .await
-            .map_err(|e| setup(format!("pulling the image: {e}")))??;
+        tokio::task::spawn_blocking(move || {
+            container::ensure_image(&p, &reference, container::PULL_TIMEOUT)
+        })
+        .await
+        .map_err(|e| setup(format!("pulling the image: {e}")))??;
         Ok(draugr::Spec {
             program: podman,
             args,
@@ -358,7 +361,7 @@ impl Inner {
     async fn launch(self: Arc<Self>, id: &str, dir: &Path, spec: ExecSpec) -> Result<(), Refusal> {
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let (inner, status) = match &spec.starter {
-            _ if spec.container.is_some() => (self.container_spec(&spec).await?, None),
+            _ if spec.container.is_some() => (self.container_spec(id, &spec).await?, None),
             Starter::Session(sid) => {
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
@@ -613,12 +616,18 @@ impl Inner {
         let Ok(rd) = std::fs::read_dir(&self.root) else {
             return;
         };
+        let mut running = HashSet::new();
         for e in rd.flatten() {
             let id = e.file_name().to_string_lossy().to_string();
             if self.meta(&id).is_some() && self.end(&id).is_none() {
+                running.insert(id.clone());
                 let me = self.clone();
                 tokio::spawn(async move { me.watch(&id, None).await });
             }
+        }
+        // a podman client that died with the last hub leaves its container: remove those no running job owns
+        if let Some(podman) = self.hooks.podman.clone() {
+            tokio::task::spawn_blocking(move || container::remove_leftovers(&podman, &running));
         }
     }
 }
