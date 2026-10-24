@@ -109,7 +109,7 @@ the environment).
 | `:apply` | - |
 | `:runtime` | `"Vec<AgentProfile>"` |
 | `:agents` | `never` |
-| `:schema` | `(alist string (plist (:command (list-of string) "The program and its arguments" :required t) (:env (list-of string) "NAME=value pairs added to its environment") (:mode (enum queue steer interrupt) "What a message to a busy agent does") (:ai symbol "The provider environment it gets") (:model string "The model it asks for") (:doc string "One line")))` |
+| `:schema` | `(alist string (plist (:command (list-of string) "The program and its arguments" :required t) (:env (list-of string) "NAME=value pairs added to its environment") (:mode (enum queue steer interrupt) "What a message to a busy agent does") (:ai symbol "The provider environment it gets") (:model string "The model it asks for") (:tracker-tools (enum on off) "The five tracker tools; on by default") (:doc string "One line")))` |
 
 ## drgnx-agents-routes
 

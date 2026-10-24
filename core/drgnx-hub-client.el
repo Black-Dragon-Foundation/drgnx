@@ -955,8 +955,8 @@ and what they take.  It carries no key.  Sent on every proven connection, beside
   (drgnx-hub-call "config/providers" (list :providers (drgnx-hub--providers-table)) #'drgnx-hub--providers-applied))
 
 (defun drgnx-hub-resend-providers ()
-  "The providers changed (`drgnx-ai-providers' in settings.el, or ai.eld; listeners in drgnx-ai.el): an editor subscribed to a hub that proved
-itself sends the provider table again.  Anywhere else nothing: the next connection sends it."
+  "The providers changed (`drgnx-ai-providers' in settings.el, or ai.eld; listeners in drgnx-ai.el): an editor
+subscribed to a hub that proved itself sends the provider table again.  Anywhere else nothing: the next connection sends it."
   (when (and (not drgnx-hub--behind-front) (process-live-p drgnx-hub--events) (process-get drgnx-hub--events :drgnx-proven))
     (drgnx-hub--send-providers)))
 
