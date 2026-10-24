@@ -11,6 +11,7 @@
 //! - [`providers`]: the AI settings (provider entries, role chains) and the provider table (`ProviderConfig`).
 
 pub mod load;
+pub mod overrides;
 pub mod profiles;
 pub mod providers;
 
@@ -20,6 +21,7 @@ mod conformance;
 mod tests;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use huginn::form::parse_settings;
@@ -299,7 +301,13 @@ fn notice(problem: &Problem) -> Value {
 /// The hub's settings: read at start, and again whenever the file's stamp changed when a session starts (and on
 /// `config/changed`, unified settings Task 21).
 pub struct Settings {
+    /// What is in effect: the file's (and the defaults'), the global overrides over it.
     current: Mutex<Arc<Current>>,
+    /// The last read of the file alone.
+    file: Mutex<Arc<Current>>,
+    /// The editor's sets (`config/settings`).
+    overrides: Mutex<overrides::Overrides>,
+    overrides_loaded: AtomicBool,
     /// One read at a time.
     reading: tokio::sync::Mutex<()>,
     /// The config folder and `runtime.db`, once the server opened it.
@@ -318,17 +326,21 @@ impl Settings {
         let d = defaults();
         let values = d.values.clone();
         let (providers, _) = providers::table(&d.presets, &values.ai_providers);
+        let initial = Arc::new(Current {
+            stamp: None,
+            loaded: Loaded {
+                file: FileState::Absent,
+                values,
+                providers,
+                problems: Vec::new(),
+                kv: Kv::default(),
+            },
+        });
         Settings {
-            current: Mutex::new(Arc::new(Current {
-                stamp: None,
-                loaded: Loaded {
-                    file: FileState::Absent,
-                    values,
-                    providers,
-                    problems: Vec::new(),
-                    kv: Kv::default(),
-                },
-            })),
+            current: Mutex::new(initial.clone()),
+            file: Mutex::new(initial),
+            overrides: Mutex::new(overrides::Overrides::default()),
+            overrides_loaded: AtomicBool::new(false),
             reading: tokio::sync::Mutex::new(()),
             store: OnceLock::new(),
         }
@@ -348,6 +360,83 @@ impl Settings {
         self.current.lock().expect("settings").clone()
     }
 
+    /// Whether [`Settings::open`] was called (the hub; a test front has no config folder).
+    pub fn is_open(&self) -> bool {
+        self.store.get().is_some()
+    }
+
+    /// Put the global overrides over the file's values: what is in effect now.
+    fn compose(&self) {
+        let file = self.file.lock().expect("settings").clone();
+        let overrides = self.overrides.lock().expect("settings");
+        let current = match overrides.scope(None) {
+            None | Some([]) => file,
+            Some(list) => {
+                let mut loaded = file.loaded.clone();
+                overrides::apply(&mut loaded.values, list);
+                let (providers, skipped) =
+                    providers::table(&defaults().presets, &loaded.values.ai_providers);
+                loaded.providers = providers;
+                loaded
+                    .problems
+                    .retain(|p| !(p.setting == Some("drgnx-ai-providers") && p.line.is_none()));
+                loaded.problems.extend(load::skipped_problems(skipped));
+                Arc::new(Current {
+                    stamp: file.stamp,
+                    loaded,
+                })
+            }
+        };
+        *self.current.lock().expect("settings") = current;
+    }
+
+    /// NAME's value in effect for PROJECT (none: global), as JSON of its runtime type, and whether PROJECT has ever
+    /// sent its values (phase 6's card asks).  The project's override, else the global one, else `settings.el`, else
+    /// the shipped default.  None for a name that is not a runtime setting.
+    pub fn effective(&self, name: &str, project: Option<&str>) -> Option<(Value, bool)> {
+        let overrides = self.overrides.lock().expect("settings");
+        let seen = project.is_none_or(|p| overrides.scope(Some(p)).is_some());
+        let own = project
+            .and_then(|p| overrides.scope(Some(p)))
+            .and_then(|l| l.iter().rev().find(|o| o.name == name));
+        let value = match own {
+            Some(o) => o.value.clone(),
+            None => overrides::to_json(name, &self.current().loaded.values)?,
+        };
+        Some((value, seen))
+    }
+
+    /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that
+    /// is not a runtime setting or a value that does not fit its type is refused with its path, and nothing changes.
+    pub async fn set_overrides(
+        &self,
+        project: Option<&str>,
+        list: Vec<overrides::Override>,
+    ) -> Result<u64, runstav::wire::Error> {
+        if project == Some("global") {
+            return Err(runstav::wire::Error {
+                code: runstav::wire::ErrorCode::InvalidParams,
+                message: "global is the name of the global set, not a project".into(),
+                path: Some("project".into()),
+            });
+        }
+        if let Err((i, why)) = overrides::validate(&list) {
+            return Err(runstav::wire::Error {
+                code: runstav::wire::ErrorCode::InvalidParams,
+                message: why.message,
+                path: Some(format!("overrides[{i}].{}", why.path)),
+            });
+        }
+        if let Some((_, db)) = self.store.get() {
+            crate::gateway::kv_set(db, &overrides::kv_key(project), &overrides::to_text(&list))
+                .await;
+        }
+        let n = list.len() as u64;
+        self.overrides.lock().expect("settings").set(project, list);
+        self.compose();
+        Ok(n)
+    }
+
     /// Read `settings.el` again when its stamp changed since the last read (the first time always): the notices of
     /// the problems the last read did not have.  Nothing before [`Settings::open`].
     pub async fn refresh(&self) -> Vec<Value> {
@@ -355,9 +444,22 @@ impl Settings {
             return Vec::new();
         };
         let _one = self.reading.lock().await;
-        let before = self.current();
+        if !self.overrides_loaded.swap(true, Ordering::Relaxed) {
+            let kept = overrides::Overrides::load(db).await;
+            let mut mine = self.overrides.lock().expect("settings");
+            // a set sent before the first read stays
+            for scope in std::iter::once(None).chain(kept.projects().map(Some)) {
+                if mine.scope(scope).is_none()
+                    && let Some(list) = kept.scope(scope)
+                {
+                    mine.set(scope, list.to_vec());
+                }
+            }
+        }
+        let before = self.file.lock().expect("settings").clone();
         let stamp = load::stamp(&dir.join(load::FILE));
         if before.stamp.is_some() && before.stamp == Some(stamp) {
+            self.compose();
             return Vec::new();
         }
         let kv = Kv::from_text(
@@ -385,10 +487,11 @@ impl Settings {
             .filter(|p| !before.loaded.problems.contains(p))
             .map(notice)
             .collect();
-        *self.current.lock().expect("settings") = Arc::new(Current {
+        *self.file.lock().expect("settings") = Arc::new(Current {
             stamp: Some(stamp),
             loaded,
         });
+        self.compose();
         new
     }
 }

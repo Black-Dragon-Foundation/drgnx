@@ -52,8 +52,8 @@
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"entities": "$number"}}}
 {"do": "file", "path": "$ROOT/export/entities.jsonl", "contains": "note:plain"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into entity (id, kind, title, data, origin, source, ver, created_tx, updated_tx) values ('note:past-the-doors', 'note', 'planted past the doors marker-denied-19c', json_object('path', '$HOME/org/notes.org'), 'recorded', 'recorded', 1, 1, 1)"]}
-{"do": "send", "conn": "c", "json": {"id": 5, "method": "config/providers", "params": {"providers": [{"id": "tei", "kind": "tei", "base": "http://127.0.0.1:$port", "auth": "none", "messages": false, "caps": ["embed"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":5,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"tei":{"kind":"tei","url":"http://127.0.0.1:$port","caps":["embed"],"messages":false}}}]}}}
+{"do":"expect","conn":"c","json":{"id":5,"result":{"applied":1}}}
 {"do": "file", "path": "$ROOT/tei.log", "contains": "a plain imported note", "within_ms": 120000}
 {"do": "file_grep", "paths": ["$ROOT/tei.log"], "absent": "marker-denied-19c"}
 {"do": "file_grep", "paths": ["$DATA/work.db", "$DATA/work.db-*", "$STATE/search/*", "$ROOT/export/**", "$ROOT/tei.log", "$STATE/hub/log/*"], "absent": "$notes"}

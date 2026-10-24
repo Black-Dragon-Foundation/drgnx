@@ -9,8 +9,8 @@
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": true}, "within_ms": 30000}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/providers", "params": {"providers": [{"id": "a", "kind": "anthropic", "base": "http://127.0.0.1:$port", "auth": "none", "messages": true, "caps": ["chat"], "price": {"input": 1000, "output": 2000}}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":2,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"a":{"kind":"anthropic","url":"http://127.0.0.1:$port","caps":["chat"],"messages":true,"price":[1000,2000]}}}]}}}
+{"do":"expect","conn":"c","json":{"id":2,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "job/propose", "params": {"plan": "$SCENARIOS/fixtures/plan-budget.md", "repo": "$ROOT/repo", "budget": 0.000001}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "job/approve", "params": {"id": "$job", "budget": 0.000001}}}

@@ -388,7 +388,7 @@ says `backend: {state: running|starting|missing|failed, pid?}` and `gateway: {po
 errors, fallbacks, bytes_in, bytes_out, providers, keys_held, keys_refused?, warnings}`, the front's own gateway
 ([Registrations](#registrations)): `providers` is how many the table has, `keys_held` the providers whose key the hub
 holds (never a key), `keys_refused` why it takes none (only when it could not be hardened), `errors` the requests answered with no status or one of 400 and up. The front also serves the
-gateway's methods, `gateway/{register,unregister,keys,set-budget}`, `config/providers` and `spend`. Every other method
+gateway's methods, `gateway/{register,unregister,keys,set-budget}` and `spend`, and the settings' (`config/settings`, `config/changed`). Every other method
 goes to the Lisp backend (next section).
 
 ## Ratatoskr and the Lisp backend
@@ -775,7 +775,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes | backend |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes | backend |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes | front |
-| `config/providers` | user | `{providers: [{auth: "bearer" \| "x-api-key" \| "none", base: ProviderUrl, caps: ["chat" \| "fim" \| "embed"], id: Id, kind: "openai" \| "ollama" \| "llamacpp" \| "tei" \| "anthropic", messages: boolean, price?: {input: Usd, output: Usd}}]}` | `{applied: natnum, warnings?: [ProviderWarning]}` | no | front |
+| `config/changed` | user | `{}` | `boolean` | no | front |
+| `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no | front |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes | front |
 | `coord/card-create` | user | `{data?: JsonObject, job?: Id, kind?: string, task?: TaskRef, title?: Text}` | `{id: natnum}` | yes | front |
 | `coord/card-set` | user | `{data?: JsonObject, id: natnum, state?: Status, title?: Text}` | `boolean` | yes | front |
@@ -1054,7 +1055,7 @@ Test hooks: `--bridge-backoff-ms N` and `--bridge-give-up-ms N` shorten the timi
 
 The gateway runs in Ratatoskr (`runtime/crates/drgnx-ratatoskr/src/gateway.rs`, forwarding by
 [`bifrost`](runtime.md#bifrost-the-gateway)): the front serves `gateway/register`, `gateway/unregister`,
-`gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `config/providers` and `spend`
+`gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held` and `spend`
 itself, and none of them reaches the Lisp backend.
 
 `gateway/register {chain, job?, task?, agent?, budget?, openrouter?, keys?, owner?, sid?}` returns `{token, url?,
@@ -1084,14 +1085,16 @@ and served until the session closes) instead, for an agent in a sandbox without 
   budget}` sets it for every registration of the job, in memory and in `runtime.db` (the editor's `job resume
   --budget`).
 
-**The provider table** is the editor's: `config/providers {providers: [{id, kind, base, auth, messages, caps,
-price?}]}` (at most 64; `kind` one of `openai ollama llamacpp tei anthropic`, `auth` one of `bearer x-api-key none`)
-replaces it whole and answers `{applied, warnings}`. `base` follows the URL rule (`runstav::url::provider_base`):
-`https`, or `http` for any host, never a user, password, fragment or control character; a bad one is
-`invalid-params` at `providers[N].base` and nothing changes. A keyed provider over `http` off loopback is applied
-with a warning, "ID's key travels in clear text over http://HOST; use https" (the user's answer 4): in the answer, in
+**The provider table** is the settings' ([Settings](#settings)): the presets and the providers of `settings.el` and of
+the editor's global `config/settings` override, replaced whole whenever either changes (there is no `config/providers`
+any more). Each entry becomes `{id, kind, base, auth, messages, caps, price?}` (`kind` one of `openai ollama llamacpp
+tei anthropic`, `auth` one of `bearer x-api-key none`). `base` follows the URL rule (`runstav::url::provider_base`):
+`https`, or `http` for any host, never a user, password, fragment or control character; a provider with a bad one is
+left out with a settings problem (a `notice`). A keyed provider over `http` off loopback is applied
+with a warning, "ID's key travels in clear text over http://HOST; use https" (the user's answer 4): in
 `status`'s and the doctor's `gateway.warnings`, and in the hub log once per provider per start. A keyless one there
-has none. The last good table is kept in `runtime.db`'s `kv` (it holds no key) and applied again at start.
+has none. The last good table is the settings' (`settings-last-good` and `settings-override:*` in `runtime.db`'s
+`kv`; it holds no key), in effect again at start.
 
 ## Forwarding
 
@@ -1134,7 +1137,7 @@ port file — and holds no key:
 
 **The editor's side** (`core/drgnx-hub-client.el`):
 - **The provider table.** Once a subscription is answered (`drgnx-hub--subscribed`), and from `drgnx-hub-ensure`, an
-  editor sends `config/providers` with the effective table — the presets and your own (settings.el's `drgnx-ai-providers`),
+  editor sends (until unified settings Task 22 moves it to `config/settings`) `config/providers`, a method the hub no longer has, with the effective table — the presets and your own (settings.el's `drgnx-ai-providers`),
   as the function `drgnx-ai-providers` resolves them: `{id, kind, base (the :url), auth ("none" without a :key-env,
   "x-api-key" for :auth x-api-key, else "bearer"), messages, caps, price?}` — then its keys. It never carries a key. A
   change to the providers in settings.el sends it again (`drgnx-ai--settings-changed` on
@@ -1231,10 +1234,21 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   x-api-key` / `:key-env` / neither → `auth`, the known `:caps` once each, `:price (IN . OUT)` → `price`. A provider
   with no `:url` or `:kind` is left out silently, as the editor leaves it out; one the gateway would refuse (a URL
   that is not a provider's) is left out with a problem. `settings::conformance::providers_json_equals_lisp` compares
-  the table with the editor's for `test/conformance/settings/providers-settings.el`. The gateway's own table is still
-  the one `config/providers` sends; unified settings Task 21 folds that method into `config/settings`.
-- **When.** At start, before anything is served, and again when the file's stamp (device, inode, size, mtime, mode,
-  owner) changed when a session starts (`mcp/session`); unified settings Task 21 adds `config/changed`.
+  the table with the editor's for `test/conformance/settings/providers-settings.el`. The gateway's table is this one
+  (`Front::apply_settings`): `config/providers` is gone, folded into `config/settings`.
+- **The editor's values** (`config/settings {project: null | NAME, overrides: [{name, value, source}]}` → `{applied: N}`,
+  user class; `settings/overrides.rs`). The editor sends the values its Lisp and its workspaces hold: `name` is one of
+  `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
+  list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
+  global); an empty list clears it (the project still counts as having sent). A name that is not a runtime setting or a
+  value that does not fit is `invalid-params` at `overrides[N].name` or `overrides[N].value[.PATH]`, and nothing
+  changes. Each set is kept as last good in `kv` (`settings-override:global`, `settings-override:<project>`) and read
+  again at start, so a hub with no editor connected still has them. In effect, for a setting and a project
+  (`Settings::effective(name, project) -> (value, seen)`): the project's override, else the global one, else
+  `settings.el`, else the shipped default; `seen` is false when the project never sent a set. The global overrides are
+  also what `Settings::current()` (and so the gateway) reads. `config/changed {}` checks `settings.el`'s stamp now.
+- **When.** At start, before anything is served, again when the file's stamp (device, inode, size, mtime, mode, owner)
+  changed when a session starts (`mcp/session`), and on `config/changed`.
 - **Problems.** Each is a `notice` event (`source` `hub`, `id` `settings-file` or `settings-<setting>`, `life`
   `event`): a read's new problems go to the subscribers, and a new subscriber hears the current ones after its
   `subscribe` answer. They are logged too.

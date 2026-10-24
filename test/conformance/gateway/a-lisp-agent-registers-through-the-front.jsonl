@@ -3,8 +3,8 @@
 {"do": "install_bin", "to": "$DATA/bin/ratatoskr"}
 {"do": "write_file", "path": "$CONFIG/settings.el", "text": "(drgnx-settings :version 1 (drgnx-agents-mcp (coordination)) (drgnx-agents-profiles ((\"mock-acp\" :ai claude-openrouter :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\") :env (\"MOCK_ACP_LOG=$ROOT/acp.log\")))))\n"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "openrouter", "kind": "openai", "base": "https://openrouter.ai/api/v1", "auth": "bearer", "messages": true, "caps": ["chat", "fim", "embed"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"openrouter":{"kind":"openai","url":"https://openrouter.ai/api/v1","caps":["chat","fim","embed"],"messages":true,"key_env":"KEY"}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "canary-key-lisp-agent"}}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-acp", "cwd": "$HOME"}}}

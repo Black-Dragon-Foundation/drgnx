@@ -5,8 +5,8 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/providers", "params": {"providers": [{"id": "mock", "kind": "openai", "base": "http://127.0.0.1:$port", "auth": "none", "messages": false, "caps": ["chat"]}]}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"mock":{"kind":"openai","url":"http://127.0.0.1:$port","caps":["chat"],"messages":false}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
@@ -22,7 +22,7 @@
 {"do": "start", "hub": "h2", "same_root_as": "h"}
 {"do": "connect", "conn": "c2", "hub": "h2"}
 {"do": "send", "conn": "c2", "json": {"id": 1, "method": "status"}}
-{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"gateway": {"port": "$gw", "registrations": 1, "providers": 1}}}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"gateway": {"port": "$gw", "registrations": 1, "providers": 17}}}}
 {"do": "send", "conn": "c2", "json": {"id": 2, "method": "subscribe"}}
 {"do": "expect", "conn": "c2", "json": {"id": 2, "result": true}}
 {"do": "http", "conn": "g2", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"again\"}]}"}

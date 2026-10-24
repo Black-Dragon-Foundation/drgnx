@@ -1,6 +1,5 @@
 //! The gateway in the hub (docs/develop/hub.md, "Registrations", "Forwarding", "Keys"; design §5.6, §6.2): the front
-//! serves `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `config/providers` and
-//! `spend` itself, and `bifrost` forwards the requests.  Nothing of it goes to the Lisp backend but the `budget`
+//! serves `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget` and `spend` itself, and `bifrost` forwards the requests.  Nothing of it goes to the Lisp backend but the `budget`
 //! notification.
 //!
 //! - **Registrations** live in memory (what `bifrost` admits by) and in `runtime.db`'s `registration` table, keyed by
@@ -18,8 +17,8 @@
 //! - **Keys** are held in memory only (`bifrost::keys::Keys`): never `runtime.db`, a file, a log, the environment or
 //!   the backend.  The ids whose key is held are what `status`, the doctor and `gateway/keys-held` name; the front
 //!   tells user subscribers `gateway/keys-changed` when that set changes.
-//! - **The provider table** is the editor's (`config/providers`), replaced whole; its last good copy is kept in
-//!   `runtime.db`'s `kv` (it holds no key).  A keyed provider over clear-text `http` off loopback is applied, with a
+//! - **The provider table** is the settings' (`crate::settings`: `settings.el` and the editor's `config/settings`
+//!   overrides), replaced whole whenever they change; its last good copy is the settings' (it holds no key).  A keyed provider over clear-text `http` off loopback is applied, with a
 //!   warning in the answer, logged once per provider per start (the user's answer 4).
 //! - **The port:** `kv.gateway_port` is tried first, else a free one, and the result stored.
 //! - **Spend** is `work.db`'s `spend` table (`norn`): the engine records a row per request ([`WorkLedger`]), and the
@@ -42,8 +41,8 @@ use norn::store::{CoordDb, CoordError};
 use runstav::methods::Params;
 use runstav::methods::gateway::{
     DataCollection, EditorToken, KeysHeld, OpenrouterRestrictions, ProviderAuth, ProviderCap,
-    ProviderConfig, ProviderKind, ProviderWarning, ProvidersApplied, ProvidersParams,
-    RegisterParams, Registration as Registered, SetBudgetParams, Spend, SpendParams,
+    ProviderConfig, ProviderKind, ProviderWarning, RegisterParams, Registration as Registered,
+    SetBudgetParams, Spend, SpendParams,
 };
 use runstav::methods::hub::GatewayStatus;
 use runstav::types::{Id, ProviderKeys};
@@ -59,7 +58,6 @@ use tokio_util::sync::CancellationToken;
 
 /// The kv keys.
 const KV_PORT: &str = "gateway_port";
-const KV_PROVIDERS: &str = "providers";
 
 fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
     Error {
@@ -317,16 +315,6 @@ impl Gate {
     /// to tell each new subscriber.
     pub async fn restore(&self, sessions: &Sessions) {
         let Ok(db) = self.db() else { return };
-        if let Some(text) = kv_get(db, KV_PROVIDERS).await {
-            match serde_json::from_str::<Vec<ProviderConfig>>(&text) {
-                Ok(table) => {
-                    if let Err(e) = self.apply(&table) {
-                        tracing::warn!("the kept provider table does not apply: {}", e.message);
-                    }
-                }
-                Err(e) => tracing::warn!("the kept provider table does not read: {e}"),
-            }
-        }
         let rows = match rows(db).await {
             Ok(r) => r,
             Err(e) => {
@@ -667,23 +655,10 @@ impl Gate {
         Ok(true)
     }
 
-    /// `config/providers`: the table replaced, its copy kept, the clear-text warnings answered (and logged once per
-    /// provider per start).
-    pub async fn config_providers(&self, p: ProvidersParams) -> Result<ProvidersApplied, Error> {
-        let table = p.providers.into_inner();
-        let warnings = self.apply(&table)?;
-        if let Ok(db) = self.db() {
-            let text = serde_json::to_string(&table).expect("a provider table serializes");
-            kv_set(db, KV_PROVIDERS, &text).await;
-        }
-        Ok(ProvidersApplied {
-            applied: table.len() as u64,
-            warnings,
-        })
-    }
-
-    /// TABLE made the provider table: its warnings, or the first provider that does not convert (nothing changed).
-    fn apply(&self, table: &[ProviderConfig]) -> Result<Vec<ProviderWarning>, Error> {
+    /// TABLE made the provider table (the settings', [`crate::front::Front::apply_settings`]): its warnings, or the
+    /// first provider that does not convert (nothing changed).  The clear-text warnings are logged once per provider
+    /// per start.
+    pub(crate) fn apply(&self, table: &[ProviderConfig]) -> Result<Vec<ProviderWarning>, Error> {
         let mut next = BTreeMap::new();
         let mut warnings = Vec::new();
         for (i, c) in table.iter().enumerate() {
@@ -1087,10 +1062,11 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<(String, Row)>> {
 }
 
 /// KEY's value in `runtime.db`'s `kv` (the settings' last good values too); none when it has none or does not read.
-pub(crate) async fn kv_get(db: &urdr::Handle, key: &'static str) -> Option<String> {
+pub(crate) async fn kv_get(db: &urdr::Handle, key: &str) -> Option<String> {
+    let owned = key.to_owned();
     let got = db
         .read(move |c| {
-            match c.query_row("select value from kv where key = ?1", [key], |r| r.get(0)) {
+            match c.query_row("select value from kv where key = ?1", [owned], |r| r.get(0)) {
                 Ok(v) => Ok(Some(v)),
                 Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(e.into()),
@@ -1106,13 +1082,13 @@ pub(crate) async fn kv_get(db: &urdr::Handle, key: &'static str) -> Option<Strin
     }
 }
 
-pub(crate) async fn kv_set(db: &urdr::Handle, key: &'static str, value: &str) {
-    let v = value.to_owned();
+pub(crate) async fn kv_set(db: &urdr::Handle, key: &str, value: &str) {
+    let (k, v) = (key.to_owned(), value.to_owned());
     if let Err(e) = db
         .write(move |c| {
             Ok(c.execute(
                 "insert or replace into kv(key, value) values (?1, ?2)",
-                (key, v),
+                (k, v),
             )?)
         })
         .await
@@ -1227,17 +1203,15 @@ mod tests {
 
     /// The table: `local` (keyless, Messages), `keyed` (bearer, Messages), `chat` (keyless, no Messages).
     async fn table(g: &Gate) {
-        let p: ProvidersParams = decoded(
-            "config/providers",
-            json!({"providers": [
-                {"id": "local", "kind": "anthropic", "base": "http://127.0.0.1:9", "auth": "none",
-                 "messages": true, "caps": ["chat"]},
-                {"id": "keyed", "kind": "anthropic", "base": "https://api.example.com", "auth": "x-api-key",
-                 "messages": true, "caps": ["chat"]},
-                {"id": "chat", "kind": "openai", "base": "http://127.0.0.1:8", "auth": "none",
-                 "messages": false, "caps": ["chat"]}]}),
-        );
-        assert_eq!(g.config_providers(p).await.unwrap().applied, 3);
+        let t: Vec<ProviderConfig> = serde_json::from_value(json!([
+            {"id": "local", "kind": "anthropic", "base": "http://127.0.0.1:9", "auth": "none",
+             "messages": true, "caps": ["chat"]},
+            {"id": "keyed", "kind": "anthropic", "base": "https://api.example.com", "auth": "x-api-key",
+             "messages": true, "caps": ["chat"]},
+            {"id": "chat", "kind": "openai", "base": "http://127.0.0.1:8", "auth": "none",
+             "messages": false, "caps": ["chat"]}]))
+        .unwrap();
+        g.apply(&t).unwrap();
     }
 
     fn register_params(v: Value) -> RegisterParams {
@@ -1768,35 +1742,24 @@ mod tests {
     async fn a_clear_text_keyed_provider_is_applied_with_a_warning() {
         let h = hub().await;
         let g = &h.front.gate;
-        let p: ProvidersParams = decoded(
-            "config/providers",
-            json!({"providers": [
-                {"id": "lan", "kind": "openai", "base": "http://192.0.2.10:8080", "auth": "bearer",
-                 "messages": false, "caps": ["chat"]},
-                {"id": "lan-free", "kind": "ollama", "base": "http://192.0.2.11:11434", "auth": "none",
-                 "messages": false, "caps": ["chat"]},
-                {"id": "local", "kind": "ollama", "base": "http://127.0.0.1:11434", "auth": "bearer",
-                 "messages": false, "caps": ["chat"]}]}),
-        );
-        let a = g.config_providers(p).await.unwrap();
+        let t: Vec<ProviderConfig> = serde_json::from_value(json!([
+            {"id": "lan", "kind": "openai", "base": "http://192.0.2.10:8080", "auth": "bearer",
+             "messages": false, "caps": ["chat"]},
+            {"id": "lan-free", "kind": "ollama", "base": "http://192.0.2.11:11434", "auth": "none",
+             "messages": false, "caps": ["chat"]},
+            {"id": "local", "kind": "ollama", "base": "http://127.0.0.1:11434", "auth": "bearer",
+             "messages": false, "caps": ["chat"]}]))
+        .unwrap();
+        let warnings = g.apply(&t).unwrap();
         assert_eq!(
-            (a.applied, a.warnings),
-            (
-                3,
-                vec![ProviderWarning {
-                    provider: "lan".into(),
-                    text: "lan's key travels in clear text over http://192.0.2.10; use https"
-                        .into()
-                }]
-            )
+            warnings,
+            vec![ProviderWarning {
+                provider: "lan".into(),
+                text: "lan's key travels in clear text over http://192.0.2.10; use https".into()
+            }]
         );
-        assert_eq!(g.status().warnings.len(), 1);
-        // the table is kept without a key, and comes back at start
-        let kv = rows_of(h.dir.path(), "select value from kv where key = 'providers'");
-        assert!(kv[0][0].as_str().unwrap().contains("192.0.2.10"));
-        *write(&g.providers) = BTreeMap::new();
-        g.restore(&h.front.mcp).await;
         assert_eq!(g.status().providers, 3);
+        assert_eq!(g.status().warnings.len(), 1);
     }
 
     #[tokio::test]

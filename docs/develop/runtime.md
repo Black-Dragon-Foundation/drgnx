@@ -698,7 +698,7 @@ quiet machine.
 
 `test/conformance/gateway/*.jsonl` drive the real gateway (`ratatoskr`'s front, [bifrost](#bifrost-the-gateway)) with
 `ratatoskr-mock llm` as the only mock, standing in for the provider (and `ratatoskr-mock proxy` for the proxy). A row
-starts the mock with `spawn` and `capture_stdout`, hands the hub the provider table (`config/providers`) and, where the
+starts the mock with `spawn` and `capture_stdout`, hands the hub the provider table (`config/settings`, a global `drgnx-ai-providers` override) and, where the
 provider takes a key, a canary (`gateway/keys`), takes a token (`gateway/register`, or `gateway/editor-token` for the
 editor), and acts as the agent or the editor with `http`. The mock's JSONL log is what reached the provider; the
 mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows are `v1`; run them with one glob per
