@@ -242,6 +242,8 @@ no provider key; the mock got the hub's key and never the editor's token."
            (out (with-temp-buffer
                   (list (call-process (expand-file-name invocation-name invocation-directory) nil t nil
                                       "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" core "-l" "drgnx-ai-client"
+                                      ;; as the indexer's entry does: settings.el's providers and roles are the user's
+                                      "-l" "drgnx-settings-defaults" "--eval" "(drgnx-settings-defaults-apply)"
                                       "--eval" "(princ (format \"DIMS %d\" (length (aref (drgnx-ai-embed-sync (vector \"x\") :timeout 10 :chain '((a . \"e\"))) 0))))")
                         (buffer-string)))))
       (should (string-search "DIMS 2" (cadr out)))
