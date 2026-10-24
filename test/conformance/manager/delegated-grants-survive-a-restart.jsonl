@@ -19,6 +19,10 @@
 {"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
 {"do": "start", "hub": "h2", "same_root_as": "h"}
 {"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "connect", "conn": "e2", "hub": "h2"}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "expect", "conn": "e2", "json": {"event": "agent", "data": {"session": {"role": "worker", "parent": "$sid"}}}, "within_ms": 60000}
 {"do": "send", "conn": "c2", "json": {"id": 1, "method": "agents/list"}}
 {"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$sid", "role": "manager"}, {"id": "$string", "parent": "$sid", "role": "worker"}]}}}, "within_ms": 60000}
 {"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from delegation", "rows": [[1]]}
@@ -28,6 +32,10 @@
 {"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["delete from delegation"]}
 {"do": "start", "hub": "h3", "same_root_as": "h"}
 {"do": "connect", "conn": "c3", "hub": "h3"}
+{"do": "connect", "conn": "e3", "hub": "h3"}
+{"do": "send", "conn": "e3", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e3", "json": {"id": 1, "result": true}}
+{"do": "expect", "conn": "e3", "json": {"event": "agent", "data": {"session": {"role": "worker", "parent": "$sid"}}}, "within_ms": 60000}
 {"do": "send", "conn": "c3", "json": {"id": 1, "method": "agents/list"}}
 {"do": "expect", "conn": "c3", "json": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$string", "parent": "$sid", "role": "worker"}]}}}, "within_ms": 60000}
 {"do": "sql_expect", "sql": "select count(*) from card where title like 'grants of % were lost%'", "rows": [[1]]}
