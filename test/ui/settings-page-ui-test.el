@@ -41,5 +41,23 @@
               (should (= (length drgnx-jank-guard-log) log-before)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-settings-page-ui/a-row-shows-its-editor ()
+  ;; Task 27: each row has the value at the tab and an Edit button (`drgnx-settings-editors-draw'); a screenshot
+  (let ((root (drgnx-uitest-root-frame)) (dir (make-temp-file "drgnx-settings-shot" t)))
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (with-current-buffer (drgnx-settings-page 'look)
+            (switch-to-buffer (current-buffer))
+            (drgnx-settings-page-search "fill-column")
+            (should (drgnx-test-wait (lambda () (and (not (drgnx-view-pending-p drgnx-view))
+                                                     (string-search "Fill Column" (buffer-string))))
+                                     :secs 60 :what "the search result"))
+            (redisplay t)
+            (should (string-search "Value: " (buffer-string)))
+            (should (string-search "Edit" (buffer-string)))
+            (should (file-exists-p (plist-get (drgnx-uitest-capture dir) :root)))))
+      (delete-directory dir t))))
+
 (provide 'settings-page-ui-test)
 ;;; settings-page-ui-test.el ends here

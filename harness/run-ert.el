@@ -1009,7 +1009,11 @@ trampoline (each replaced primitive has its own already); the test's definitions
     (mapatoms (lambda (sym)
                 (when (and (fboundp sym) (subr-primitive-p (symbol-function sym)))
                   (push (cons sym (symbol-function sym)) drgnx-run-ert--primitives))))
-    (advice-add 'comp-subr-trampoline-install :around #'drgnx-run-ert--install-with-real-primitives)))
+    (advice-add 'comp-subr-trampoline-install :around #'drgnx-run-ert--install-with-real-primitives)
+    ;; DX-CONTAINER-AS-1: a test that stubs one of these under a PATH of its own would compile its trampoline
+    ;; then, and gcc finds no `as'; compile it now, with the run's PATH
+    (when (fboundp 'comp-subr-trampoline-install)
+      (dolist (s '(make-process read-from-minibuffer)) (ignore-errors (comp-subr-trampoline-install s))))))
 
 (defun drgnx-run-ert-batch ()
   "Batch entry point: run the suite in the remaining arguments — a directory, or test files (a shard) —
