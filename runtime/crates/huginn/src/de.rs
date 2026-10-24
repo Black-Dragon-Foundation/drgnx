@@ -754,10 +754,7 @@ mod tests {
         // An alist entry's value is the rest of the entry: its span runs from the first to the last element.
         let src = "((a 1 2 3))";
         let err = from_node::<BTreeMap<String, (i64, i64)>>(&node(src)).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "expected 2 elements, found 3 (bytes 4..9)"
-        );
+        assert_eq!(err.to_string(), "expected 2 elements, found 3 (bytes 4..9)");
     }
 
     #[test]

@@ -1333,7 +1333,11 @@ mod tests {
         refuses_bytes(b"ok \xe9", RefusalKind::NotUtf8, 3);
         refuses_bytes(b"\xed\xa0\x80", RefusalKind::NotUtf8, 0);
         // The span is the bad sequence: one byte, or what is left of a sequence the file cuts short.
-        let span = |bytes: &[u8]| read_all(bytes, Limits::default()).expect_err("not UTF-8").span;
+        let span = |bytes: &[u8]| {
+            read_all(bytes, Limits::default())
+                .expect_err("not UTF-8")
+                .span
+        };
         assert_eq!(span(b"(a \xff)"), Span { start: 3, end: 4 });
         assert_eq!(span(b"ok \xe2\x82"), Span { start: 3, end: 5 });
     }
