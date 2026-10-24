@@ -12,7 +12,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job search keys safe help shell secrets bootstrap update coord'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job search keys safe help shell secrets bootstrap update coord graph childframe-elpa'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -62,7 +62,7 @@ _drgnx() {
         case "$cmd $sub" in
           'open '*) words='--check --wait -t --gui' ;;
           'doctor '*) words='--json --dev' ;;
-          'test '*) words='--one-process --leaks --shuffle --find-polluter --stress --load --ui --compositor --tty --scenario --config --bench --perf --audit --ab --n --soak --container --install --bootstrap --fedora' ;;
+          'test '*) words='--one-process --leaks --shuffle --find-polluter --stress --load --ui --compositor --tty --scenario --config --bench --perf --audit --ab --ab-env --n --soak --container --install --bootstrap --fedora' ;;
           'sync '*) words='--offline --seed --prune --dry-run' ;;
           'lock '*) words='--ship' ;;
           'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;
@@ -104,6 +104,7 @@ _drgnx() {
           shell) words='install line' ;;
           secrets) words='export import ls' ;;
           coord) words='mcp' ;;
+          graph) words='export import backup revert excise scrub grants sql compact proposed' ;;
           service-unit) words='--refresh' ;;
         esac
       elif [[ $cmd == test ]]; then   # test --install NAME…
