@@ -6,7 +6,7 @@
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "worker"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"message": {"$contains": "not enforced"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$string"}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}

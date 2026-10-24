@@ -555,7 +555,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
-- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]` is a scripted ACP agent on stdio
+- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
   =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
@@ -564,7 +564,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
   `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
-  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--log` is JSONL; `--llm URL` POSTs
+  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests.
 - `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
   provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`). With `--tls` it makes a certificate authority and a

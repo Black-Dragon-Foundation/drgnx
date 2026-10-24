@@ -61,7 +61,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 9] = [
+pub const TAGS: [&str; 10] = [
     "v0",
     "v1",
     "fake-backend",
@@ -71,6 +71,7 @@ pub const TAGS: [&str; 9] = [
     "linux",
     "macos",
     "perf",
+    "agent-locks",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {

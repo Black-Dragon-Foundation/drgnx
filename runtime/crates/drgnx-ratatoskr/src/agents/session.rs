@@ -9,16 +9,19 @@
 //! design document).  Changes reach the editors as `agent` and `agent-entries` events, at most one pair per session
 //! per 50 ms.
 
+use super::launch;
+use super::lock as plock;
 use super::queue::{Origin, Queue, Queued};
 use super::transcript;
 use crate::agent_core::not_yet;
 use crate::dispatch::Caller;
 use crate::front::Front;
-use crate::matrix_gate::Gate;
+use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
 use crate::settings::AgentProfile;
 use crate::settings::profiles::Mode as ProfileMode;
 use hermod::schema::v1::{ReadTextFileResponse, RequestPermissionResponse, WriteTextFileResponse};
 use hermod::{Conn, ConnOpts, Event, Incoming, SessionId};
+use norn::matrix::{Action, Who};
 use runstav::methods::Empty;
 use runstav::methods::agents::{
     AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
@@ -429,6 +432,10 @@ pub struct Session {
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
+    /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
+    gate: MatrixGate,
+    settings: Arc<crate::settings::Settings>,
+    writer: crate::coord::Writer,
     scheduled: AtomicBool,
     next_request: AtomicU64,
     state: Mutex<State>,
@@ -551,24 +558,54 @@ fn find_profile(front: &Front, name: &str) -> Option<AgentProfile> {
         .cloned()
 }
 
-/// The launch of a test session: the profile's command, unsandboxed, with a short allowlisted environment.  Only
-/// tests and `test-hooks` builds have it; no shipped path starts a session outside Gleipnir (Task 10 replaces it
-/// with `launch::spawn`).
+/// A launch ready to spawn: the process, the sandbox helper's status pipe, and whether the lock is enforced.
+struct Prepared {
+    spec: draugr::Spec,
+    status: Option<std::os::fd::OwnedFd>,
+    plan: plock::LaunchPlan,
+    enforced: bool,
+    enforced_why: Option<String>,
+}
+
+/// WHO a session is, for the matrix's columns.
+fn who_of(role: Role, profile: &AgentProfile) -> Who {
+    Who {
+        role: Some(role),
+        agent: Some(profile.name.clone()),
+        provider: profile.ai.clone(),
+    }
+}
+
+/// The launch of a test session: the plan's command, unsandboxed, with a short allowlisted environment.  Only tests
+/// and `test-hooks` builds have it (the mock agent lives outside any sandbox's reach); a shipped build always goes
+/// through `launch::spawn` and Gleipnir.
 #[cfg(any(test, feature = "test-hooks"))]
-fn launch_spec(
+fn spawn_spec(
     p: &AgentProfile,
+    plan: &plock::LaunchPlan,
+    _: &Path,
     cwd: &Path,
-) -> Result<(draugr::Spec, bool, Option<String>), Error> {
-    let (prog, args) = p
-        .command
+    _: &str,
+    _: Role,
+) -> Result<
+    (
+        draugr::Spec,
+        Option<std::os::fd::OwnedFd>,
+        Option<&'static str>,
+    ),
+    Error,
+> {
+    let (prog, args) = plan
+        .argv
         .split_first()
         .ok_or_else(|| invalid("profile", "the profile has no command"))?;
-    let pairs: Vec<(String, std::ffi::OsString)> = p
+    let mut pairs: Vec<(String, std::ffi::OsString)> = p
         .env
         .iter()
         .filter_map(|e| e.split_once('='))
         .map(|(k, v)| (k.to_string(), v.into()))
         .collect();
+    pairs.extend(plan.env.iter().map(|(k, v)| (k.clone(), v.into())));
     let set: Vec<(&str, &std::ffi::OsStr)> = pairs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_os_str()))
@@ -576,25 +613,98 @@ fn launch_spec(
     let env = draugr::env::build(&["PATH", "HOME", "LANG", "TMPDIR"], &[], &set);
     let spec = draugr::Spec {
         program: PathBuf::from(prog),
-        args: args.iter().map(Into::into).collect(),
+        args: args.to_vec(),
         env,
         cwd: Some(cwd.to_path_buf()),
         stdin_null: false,
         pass_fds: Vec::new(),
         new_session: false,
     };
-    Ok((
-        spec,
-        false,
-        Some("a test launch: unsandboxed, no provider lock".into()),
-    ))
+    Ok((spec, None, Some("a test launch: unsandboxed")))
 }
 
+/// The sandboxed launch: a worktree session writes its worktree only; a chat in its own scratch directory
+/// (`launch::scratch_dir`) is the plain one.  The network is the provider's alone: `Open` is never granted here.
 #[cfg(not(any(test, feature = "test-hooks")))]
-fn launch_spec(_: &AgentProfile, _: &Path) -> Result<(draugr::Spec, bool, Option<String>), Error> {
-    Err(internal(
-        "agents/start: the sandboxed launch is not there yet (agent system part 1, Task 10)",
-    ))
+fn spawn_spec(
+    _: &AgentProfile,
+    plan: &plock::LaunchPlan,
+    scratch: &Path,
+    cwd: &Path,
+    sid: &str,
+    role: Role,
+) -> Result<
+    (
+        draugr::Spec,
+        Option<std::os::fd::OwnedFd>,
+        Option<&'static str>,
+    ),
+    Error,
+> {
+    let launched = if cwd == scratch {
+        launch::spawn_plain(plan, sid)
+    } else {
+        launch::spawn(
+            plan,
+            &launch::SandboxReq {
+                sid: sid.to_string(),
+                worktree: cwd.to_path_buf(),
+                read: Vec::new(),
+                net: launch::NetCell::ProviderOnly,
+                role,
+            },
+        )
+    }
+    .map_err(|r| refuse(&format!("the sandbox refused the launch: {}", r.message)))?;
+    Ok((launched.spec, launched.status, None))
+}
+
+/// Everything before the process: the matrix's cells, the provider's lock plan, the refusal of a lock that is not
+/// enforced for a worker or a manager under any preset but the autonomous one, and the spawn spec.
+async fn prepare(
+    front: &Front,
+    profile: &AgentProfile,
+    role: Role,
+    sid: &str,
+    cwd: &Path,
+) -> Result<Prepared, Error> {
+    let who = who_of(role, profile);
+    let eff = front
+        .core
+        .matrix
+        .effective_now(&front.settings, &front.writer, who, ActionCtx::default())
+        .await
+        .map_err(|e| internal(format!("the matrix: {e:?}")))?;
+    let mut plan = plock::plan(profile, role, &eff);
+    if profile.provider() == Some(crate::settings::profiles::Provider::Claude)
+        && let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty())
+    {
+        let (deny, ask) = plock::claude_deny_ask(&PathBuf::from(home).join(".claude"), cwd);
+        plan = plan.with_claude_rules(deny, ask);
+    }
+    plan = plan.with_codex_untrusted(profile, cwd);
+    let why = match plan.enforced {
+        plock::Enforced::Yes => None,
+        plock::Enforced::No(why) => Some(why),
+    };
+    if let Some(why) = why
+        && matches!(role, Role::Worker | Role::Manager)
+        && front.core.matrix.active_preset(now()) != runstav::methods::matrix::Preset::Autonomous
+    {
+        return Err(refuse(&format!(
+            "{}'s lock is not enforced, so it may not work here: {why}",
+            profile.name
+        )));
+    }
+    let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
+    let (spec, status, unsandboxed) = spawn_spec(profile, &plan, &scratch, cwd, sid, role)?;
+    Ok(Prepared {
+        spec,
+        status,
+        enforced: why.is_none() && unsandboxed.is_none(),
+        enforced_why: unsandboxed.or(why).map(str::to_string),
+        plan,
+    })
 }
 
 pub(crate) async fn open(
@@ -636,18 +746,10 @@ pub(crate) async fn open(
     });
     let cwd = match &p.cwd {
         Some(c) => PathBuf::from(c.as_str()),
-        None => {
-            let hub_dir = front
-                .dirs
-                .get()
-                .map(|d| d.hub.clone())
-                .ok_or_else(|| internal("no hub directory"))?;
-            let d = hub_dir.join("scratch").join(&sid);
-            std::fs::create_dir_all(&d).map_err(|e| internal(format!("scratch directory: {e}")))?;
-            d
-        }
+        None => launch::scratch_dir(&runstav::paths::Env::process(), &sid)
+            .map_err(|r| internal(format!("scratch directory: {}", r.message)))?,
     };
-    let (l, rx) = launch(&profile, &cwd, None).await?;
+    let (l, rx) = launch(front, &profile, role, &sid, &cwd, None).await?;
     let ident = Ident {
         id: sid.clone(),
         name: name.clone(),
@@ -675,17 +777,41 @@ pub(crate) async fn open(
     Ok(Started { id: sid, name })
 }
 
-/// PROFILE's agent in CWD: started, initialized, and on a session: a new one, or EXISTING (the ACP id) by
-/// `session/resume`, else `session/load` when the agent can only load.
+/// PROFILE's agent in CWD: started in its sandbox, initialized, on a session (a new one, or EXISTING by
+/// `session/resume`, else `session/load` when the agent can only load) and its lock verified: a lock that does not
+/// hold kills the session.
 async fn launch(
+    front: &Front,
     profile: &AgentProfile,
+    role: Role,
+    sid: &str,
     cwd: &Path,
     existing: Option<&str>,
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
-    let (spec, enforced, enforced_why) = launch_spec(profile, cwd)?;
-    let (conn, rx) = Conn::spawn(spec, ConnOpts::default())
+    let prep = prepare(front, profile, role, sid, cwd).await?;
+    let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
+    let kill = || draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller);
+    // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
+    if let Some(fd) = prep.status {
+        let read = tokio::task::spawn_blocking(move || {
+            gleipnir::read_status(fd, &String::new, Duration::from_secs(20))
+        })
+        .await;
+        match read {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                kill().await;
+                return Err(refuse(&format!("the sandbox did not start: {}", e.message)));
+            }
+            Err(e) => {
+                kill().await;
+                return Err(internal(format!("reading the sandbox status: {e}")));
+            }
+        }
+    }
+    let meta = prep.plan.session_meta.clone();
     let init = async {
         let caps =
             serde_json::from_value(json!({"fs": {"readTextFile": true, "writeTextFile": true}}))
@@ -693,7 +819,7 @@ async fn launch(
         let info = conn.initialize(caps).await?;
         let caps = serde_json::to_value(&info.caps).ok();
         let acp = match existing {
-            None => conn.new_session(cwd, Vec::new(), None).await?,
+            None => conn.new_session(cwd, Vec::new(), meta).await?,
             Some(id) => {
                 let sid = SessionId::new(id.to_string());
                 let can = |p: &str| {
@@ -715,22 +841,29 @@ async fn launch(
         };
         Ok::<_, hermod::Error>((caps, acp))
     };
-    match init.await {
-        Ok((capabilities, acp)) => Ok((
-            Launched {
-                conn,
-                acp,
-                caps: capabilities,
-                enforced,
-                enforced_why,
-            },
-            rx,
-        )),
+    let (capabilities, acp) = match init.await {
+        Ok(x) => x,
         Err(e) => {
-            draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller).await;
-            Err(internal(format!("{}: {e}", profile.name)))
+            kill().await;
+            return Err(internal(format!("{}: {e}", profile.name)));
         }
+    };
+    if prep.plan.enforced == plock::Enforced::Yes
+        && let Err(e) = plock::verify(&conn, &acp, profile).await
+    {
+        kill().await;
+        return Err(refuse(&format!("{}: {e}", profile.name)));
     }
+    Ok((
+        Launched {
+            conn,
+            acp,
+            caps: capabilities,
+            enforced: prep.enforced,
+            enforced_why: prep.enforced_why,
+        },
+        rx,
+    ))
 }
 
 /// The session for IDENT on a launched agent: idle state, its step writer running.
@@ -787,6 +920,9 @@ fn assemble(
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
+        gate: front.core.matrix.clone(),
+        settings: front.settings.clone(),
+        writer: front.writer.clone(),
         scheduled: AtomicBool::new(false),
         next_request: AtomicU64::new(1),
         state: Mutex::new(State::new()),
@@ -868,7 +1004,16 @@ pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
                 .and_then(Value::as_str)
                 .map(PathBuf::from),
         };
-        let (l, rx) = match launch(&profile, Path::new(&cwd), Some(&acp)).await {
+        let (l, rx) = match launch(
+            front,
+            &profile,
+            serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
+            &sid,
+            Path::new(&cwd),
+            Some(&acp),
+        )
+        .await
+        {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!(sid, "session not resumed: {}", e.message);
@@ -1104,6 +1249,15 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
 }
 
 impl Session {
+    /// Who this session is, for the matrix's columns.
+    pub(crate) fn who(&self) -> Who {
+        Who {
+            role: Some(self.role),
+            agent: Some(self.profile.clone()),
+            provider: self.provider.clone(),
+        }
+    }
+
     /// The change number up by one, and an event pair scheduled (at most one per [`EMIT_EVERY`]).
     fn changed(self: &Arc<Self>) {
         lock(&self.state).seq += 1;
@@ -1340,9 +1494,6 @@ impl Session {
         req: Value,
         resp: hermod::Responder<RequestPermissionResponse>,
     ) {
-        // the matrix (Task 12) decides first: a no-op Allow until then
-        let gate = Gate::Allow;
-        let tool = req.get("toolCall").cloned();
         let options: Vec<(String, String)> = req
             .get("options")
             .and_then(Value::as_array)
@@ -1360,10 +1511,35 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        if let Gate::Never(_) = gate {
-            reply(resp, pick_reject(&options));
-            return;
-        }
+        // The matrix decides first: allowed answers at once, never refuses at once, an ask waits for the user.
+        let s = self.clone();
+        tokio::spawn(async move {
+            let (action, facts) = classify(req.get("toolCall"));
+            let ctx = ActionCtx {
+                session: Some(s.id.clone()),
+                facts,
+                ..ActionCtx::default()
+            };
+            let gate = s
+                .gate
+                .decide(&s.settings, &s.writer, s.who(), action, ctx)
+                .await;
+            match gate {
+                Gate::Never(_) => reply(resp, pick_reject(&options)),
+                Gate::Allow if pick_allow(&options).is_some() => reply(resp, pick_allow(&options)),
+                _ => s.hold_permission(&req, options, resp),
+            }
+        });
+    }
+
+    /// A request the user answers: it waits in the snapshot.
+    fn hold_permission(
+        self: &Arc<Self>,
+        req: &Value,
+        options: Vec<(String, String)>,
+        resp: hermod::Responder<RequestPermissionResponse>,
+    ) {
+        let tool = req.get("toolCall").cloned();
         let request = self.next_request.fetch_add(1, Ordering::Relaxed);
         let public = Permission {
             id: Some(RpcId::Int(request as i64)),
@@ -1704,6 +1880,59 @@ fn pick_reject(options: &[(String, String)]) -> Option<String> {
         .find(|(_, k)| k == "reject_once")
         .or_else(|| options.iter().find(|(_, k)| k.starts_with("reject")))
         .map(|(id, _)| id.clone())
+}
+
+/// The option that allows once (else any allowing one); none when the agent offered no way to say yes.
+fn pick_allow(options: &[(String, String)]) -> Option<String> {
+    options
+        .iter()
+        .find(|(_, k)| k == "allow_once")
+        .or_else(|| options.iter().find(|(_, k)| k.starts_with("allow")))
+        .map(|(id, _)| id.clone())
+}
+
+/// What a tool call is in the matrix's words, and the facts a card shows (the hub's own reading of it).
+fn classify(tool: Option<&Value>) -> (Action, runstav::methods::matrix::Facts) {
+    let kind = tool
+        .and_then(|t| t.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let command = tool
+        .and_then(|t| t.pointer("/rawInput/command").or_else(|| t.get("title")))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let paths: Vec<&str> = tool
+        .and_then(|t| t.get("locations"))
+        .and_then(Value::as_array)
+        .map(|l| {
+            l.iter()
+                .filter_map(|p| p.get("path").and_then(Value::as_str))
+                .filter(|p| p.starts_with('/'))
+                .collect()
+        })
+        .unwrap_or_default();
+    let action = match kind {
+        "read" | "search" | "think" | "switch_mode" => Action::CodeRead,
+        "fetch" => Action::Network,
+        "execute" => {
+            let c = command.as_deref().unwrap_or("");
+            if c.contains("git push") {
+                if c.contains("main") || c.contains("master") {
+                    Action::PushMain
+                } else {
+                    Action::PushCi
+                }
+            } else if c.contains("git commit") {
+                Action::Commit
+            } else {
+                Action::CodeEdit
+            }
+        }
+        _ => Action::CodeEdit,
+    };
+    let facts =
+        serde_json::from_value(json!({"command": command, "paths": paths})).unwrap_or_default();
+    (action, facts)
 }
 
 fn reply(resp: hermod::Responder<RequestPermissionResponse>, option: Option<String>) {

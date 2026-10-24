@@ -357,9 +357,62 @@ impl MatrixGate {
 
     /// Read the setting from the front's settings (none until the setting is declared: Balanced).
     fn refresh(&self, f: &Front) {
-        if let Some((v, _)) = f.settings.effective("agents-matrix", None) {
+        self.refresh_from(&f.settings);
+    }
+
+    /// [`Self::refresh`] from the settings alone (a session holds those, not the front).
+    pub fn refresh_from(&self, settings: &crate::settings::Settings) {
+        if let Some((v, _)) = settings.effective("drgnx-agents-matrix", None) {
             let _ = self.apply_setting(&v);
         }
+    }
+
+    /// The preset in force now (the time presets and the away flag applied).
+    pub fn active_preset(&self, now: f64) -> Preset {
+        self.preset_now(now).1
+    }
+
+    /// WHO's effective cells for CTX now, read from the store.
+    pub async fn effective_now(
+        &self,
+        settings: &crate::settings::Settings,
+        writer: &crate::coord::Writer,
+        who: Who,
+        ctx: ActionCtx,
+    ) -> Result<Effective, CoordError> {
+        self.refresh_from(settings);
+        let (g, now) = (self.clone(), now_secs());
+        writer
+            .db
+            .read(move |c| Ok(g.effective_for(c, &who, &ctx, now)))
+            .await
+    }
+
+    /// The gate for WHO doing A (the matrix as the settings say it now); an Ask makes the card.  A store that fails
+    /// asks the user (`Ask(0)`, no card) rather than allow.
+    pub async fn decide(
+        &self,
+        settings: &crate::settings::Settings,
+        writer: &crate::coord::Writer,
+        who: Who,
+        a: Action,
+        ctx: ActionCtx,
+    ) -> Gate {
+        self.refresh_from(settings);
+        let (g, now) = (self.clone(), now_secs());
+        let system = Caller {
+            class: runstav::registry::Class::Agent,
+            sid: None,
+            job: None,
+            conn_id: 0,
+            backend: false,
+        };
+        writer
+            .write(&system, "coord/matrix-check", move |tx| {
+                g.check(tx, &who, a, &ctx, now)
+            })
+            .await
+            .unwrap_or(Gate::Ask(0))
     }
 }
 

@@ -691,6 +691,17 @@ counts reach the status bar (`drgnx-statusbar-note-tests`) through `drgnx-status
 `drgnx-statusbar-mode` adds to `drgnx-hub-event-functions` and removes when it is off; the hub client knows nothing of
 the status bar.
 
+## Session start: lock, sandbox and matrix
+
+A session starts in this order (`agents/session.rs`): the matrix's cells for the session's columns, `lock::plan` (Claude's
+managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `-c` overrides plus
+`projects."<cwd>".trust_level="untrusted"`, Gemini's `--approval-mode default`), a refusal of a worker or manager whose
+lock is not enforced unless the preset is autonomous, `launch::spawn` (`spawn_plain` for a chat in its own scratch
+directory; test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
+handshake, `lock::verify` (a lock that does not hold kills the session). Every permission request then goes through
+`MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
+refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way.
+
 ## Sessions across a restart
 
 On each change to a session the hub keeps `<state>/hub/sessions.eld` (mode 0600, written like registrations.eld,

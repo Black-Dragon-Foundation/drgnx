@@ -20,6 +20,7 @@
 //! the last line runs its own words).  `--log FILE`: JSONL of `{"initialize"|"session/new"|"session/fork"|
 //! "prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
 //! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
+//! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted.
 //!
 //! Every prompt answer carries `_meta.turnId` ("t1", "t2", ...).  Messages have ids (`messageId` of chunks); a
 //! fork's `_meta.jetbrains.air.fork.messageId` cuts the history: Claude after that message, Codex after its turn.
@@ -82,7 +83,7 @@ pub fn run(args: &[String]) -> ! {
         Some("codex") => Kind::Codex,
         Some("gemini") => Kind::Gemini,
         _ => crate::die(
-            "usage: ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]",
+            "usage: ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]",
         ),
     };
     let script = flag(args, "--script")
@@ -328,6 +329,19 @@ impl Agent {
             }
             "session/fork" if self.kind != Kind::Gemini => self.fork(&id, &params),
             "session/prompt" => self.prompt(&id, &params),
+            "session/set_mode" => {
+                let mode = params["modeId"].as_str().unwrap_or_default();
+                let refused = self
+                    .argv
+                    .iter()
+                    .position(|a| a == "--refuse-mode")
+                    .and_then(|i| self.argv.get(i + 1));
+                if refused.is_some_and(|r| r == mode) {
+                    rpc_error(&id, -32602, &format!("mode {mode:?} refused"));
+                } else {
+                    reply(json!({}));
+                }
+            }
             _ => rpc_error(&id, -32601, &format!("method not found: {method}")),
         }
     }

@@ -116,6 +116,27 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
             values.ai_providers = out;
         }
         "drgnx-ai-roles" => values.ai_roles = de::<Vec<RoleChain>>(v)?,
+        "drgnx-agents-matrix" => {
+            super::check_matrix(v).map_err(|m| refused("", m))?;
+            values.agents_matrix = v.clone();
+        }
+        "drgnx-agents-away-after" => values.agents_away_after = de(v)?,
+        "drgnx-agents-wait-refusals" => values.agents_wait_refusals = de(v)?,
+        "drgnx-agents-close-idle-after" => values.agents_close_idle_after = de(v)?,
+        "drgnx-agents-checkpoint-cap" => values.agents_checkpoint_cap = de(v)?,
+        "drgnx-agents-job-memory" => values.agents_job_memory = de(v)?,
+        "drgnx-agents-job-cpus" => values.agents_job_cpus = de(v)?,
+        "drgnx-agents-container-images" => {
+            let Alist(pairs) = de::<Alist<String>>(v)?;
+            values.agents_container_images = super::images(pairs);
+        }
+        "drgnx-agents-silent-after" => {
+            let Alist(pairs) = de::<Alist<u64>>(v)?;
+            values.agents_silent_after = pairs;
+        }
+        "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(v)?,
+        "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(v)?,
+        "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
         other => return Err(refused("", format!("{other} is not a runtime setting"))),
     }
     Ok(())
@@ -164,6 +185,30 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
                 .collect(),
         ),
         "drgnx-ai-roles" => json!(values.ai_roles),
+        "drgnx-agents-matrix" => values.agents_matrix.clone(),
+        "drgnx-agents-away-after" => json!(values.agents_away_after),
+        "drgnx-agents-wait-refusals" => json!(values.agents_wait_refusals),
+        "drgnx-agents-close-idle-after" => json!(values.agents_close_idle_after),
+        "drgnx-agents-checkpoint-cap" => json!(values.agents_checkpoint_cap),
+        "drgnx-agents-job-memory" => json!(values.agents_job_memory),
+        "drgnx-agents-job-cpus" => json!(values.agents_job_cpus),
+        "drgnx-agents-container-images" => object(
+            values
+                .agents_container_images
+                .iter()
+                .map(|c| (c.name.as_str(), json!(c.image)))
+                .collect(),
+        ),
+        "drgnx-agents-silent-after" => object(
+            values
+                .agents_silent_after
+                .iter()
+                .map(|(k, n)| (k.as_str(), json!(n)))
+                .collect(),
+        ),
+        "drgnx-agents-repeat-limit" => json!(values.agents_repeat_limit),
+        "drgnx-agents-no-progress-tokens" => json!(values.agents_no_progress_tokens),
+        "drgnx-agents-manager-context" => json!(values.agents_manager_context),
         _ => return None,
     })
 }

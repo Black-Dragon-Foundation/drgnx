@@ -624,6 +624,49 @@ fn check_machine(p: &StartParams) -> Result<(), Error> {
     }
 }
 
+/// A session's job runs commands in its worktree: the matrix's `code.edit` decides, as for the session's own tool
+/// calls.  An ask is refused here with its card, so the agent tries again once the user said yes.
+async fn gate_session_job(
+    f: &Front,
+    sid: &str,
+    cwd: &std::path::Path,
+    argv: &[String],
+) -> Result<(), Error> {
+    use crate::matrix_gate::{ActionCtx, Gate};
+    let who = f.core.agents.who(sid).unwrap_or(norn::matrix::Who {
+        role: Some(runstav::methods::matrix::Role::Worker),
+        ..Default::default()
+    });
+    let command = argv.join(" ");
+    let ctx = ActionCtx {
+        session: Some(sid.to_string()),
+        facts: serde_json::from_value(
+            serde_json::json!({"command": command, "paths": [cwd.to_string_lossy()]}),
+        )
+        .unwrap_or_default(),
+        ..ActionCtx::default()
+    };
+    match f
+        .core
+        .matrix
+        .decide(
+            &f.settings,
+            &f.writer,
+            who,
+            norn::matrix::Action::CodeEdit,
+            ctx,
+        )
+        .await
+    {
+        Gate::Allow => Ok(()),
+        Gate::Never(why) => Err(error(ErrorCode::NotAllowed, why)),
+        Gate::Ask(card) => Err(error(
+            ErrorCode::NotAllowed,
+            format!("running this job needs the user's yes (matrix card {card})"),
+        )),
+    }
+}
+
 pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Error> {
     check_machine(&p)?;
     let kind = match p.kind.unwrap_or(ExecKind::Other) {
@@ -640,6 +683,10 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .as_ref()
         .map(|c| PathBuf::from(c.as_str()))
         .ok_or_else(|| error(ErrorCode::InvalidParams, "cwd: the folder the job runs in"))?;
+    if let Some(sid) = &c.sid {
+        let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        gate_session_job(f, sid, &cwd, &argv).await?;
+    }
     let spec = ExecSpec {
         starter: c.sid.clone().map_or(Starter::User, Starter::Session),
         cwd,
