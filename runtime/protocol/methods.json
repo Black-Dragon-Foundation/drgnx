@@ -70,6 +70,15 @@
             },
             "type": "object"
           },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          },
           "RpcId": {
             "anyOf": [
               {
@@ -83,18 +92,34 @@
             "description": "A JSON-RPC id, as the agent chose it."
           },
           "SessionStatus": {
-            "enum": [
-              "starting",
-              "idle",
-              "busy",
-              "exited"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "starting",
+                  "idle",
+                  "busy",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "waiting",
+                "description": "Waiting on a job it started (no model request until the wake).",
+                "type": "string"
+              }
+            ]
           },
           "Snapshot": {
             "additionalProperties": false,
             "description": "What an editor mirrors of a session, everything but its transcript.  A `service` or `agent` caller of\n`agents/list` gets only `{id, name, job, task}`.",
             "properties": {
+              "about": {
+                "description": "A brainstorm's topic note.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -110,6 +135,13 @@
               "enforced": {
                 "type": [
                   "boolean",
+                  "null"
+                ]
+              },
+              "enforced_why": {
+                "description": "Why the provider's lock is not enforced (shown \"not enforced\").",
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -154,6 +186,13 @@
                   "null"
                 ]
               },
+              "parent": {
+                "description": "The manager session that started it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "paused": {
                 "type": [
                   "boolean",
@@ -173,6 +212,12 @@
                   "null"
                 ]
               },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "queue": {
                 "default": [],
                 "description": "Messages waiting for the turn to end.",
@@ -187,6 +232,16 @@
                   "$ref": "#/$defs/Review"
                 },
                 "type": "array"
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Role"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "anyOf": [
@@ -228,6 +283,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "waiting-on": {
+                "description": "The job it waits on.",
+                "type": [
+                  "string",
+                  "null"
                 ]
               }
             },
@@ -291,7 +353,7 @@
         "type": "object"
       },
       "doc": "a session's snapshot changed (at most one per session per 50 ms)",
-      "from": "backend",
+      "from": "front",
       "name": "agent"
     },
     {
@@ -367,8 +429,263 @@
         "type": "object"
       },
       "doc": "a session's entries new or changed since the last time",
-      "from": "backend",
+      "from": "front",
       "name": "agent-entries"
+    },
+    {
+      "data": {
+        "$defs": {
+          "Step": {
+            "additionalProperties": false,
+            "description": "One row of the `step` table.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cache_read": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cache_write": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "class": {
+                "$ref": "#/$defs/StepClass"
+              },
+              "cost": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cost_unit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Unit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "end": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "log_version": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "message_id": {
+                "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "seq": {
+                "description": "The step's place in its session.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session": {
+                "type": "string"
+              },
+              "snapshot": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "description": "When it started and ended (seconds since the epoch, the hub's stamps); none: still open.",
+                "format": "double",
+                "type": "number"
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tokens_in": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tokens_out": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tool": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool_kind": {
+                "description": "ACP's tool kind (`read`, `edit`, `execute`, …).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "turn_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "session",
+              "seq",
+              "class",
+              "start"
+            ],
+            "type": "object"
+          },
+          "StepClass": {
+            "description": "What a step was spent on.",
+            "oneOf": [
+              {
+                "enum": [
+                  "paused",
+                  "stalled"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "think",
+                "description": "Thinking or generating: the updates between tool calls.",
+                "type": "string"
+              },
+              {
+                "const": "tool",
+                "description": "A tool call, from `in_progress` to `completed` (its permission wait split out).",
+                "type": "string"
+              },
+              {
+                "const": "job-wait",
+                "description": "Waiting on a job (no model request).",
+                "type": "string"
+              },
+              {
+                "const": "machine-queue",
+                "description": "Waiting for a machine.",
+                "type": "string"
+              },
+              {
+                "const": "user-wait",
+                "description": "Waiting for the user (a permission or a card).",
+                "type": "string"
+              }
+            ]
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `agent-step` event: a step opened or closed.",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "step": {
+            "$ref": "#/$defs/Step"
+          }
+        },
+        "required": [
+          "session",
+          "step"
+        ],
+        "title": "AgentStep",
+        "type": "object"
+      },
+      "doc": "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)",
+      "from": "front",
+      "name": "agent-step"
     },
     {
       "data": {
@@ -574,6 +891,116 @@
     },
     {
       "data": {
+        "$defs": {
+          "ExecStatus": {
+            "description": "Where a job is.",
+            "oneOf": [
+              {
+                "enum": [
+                  "running"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "Ended by itself (any exit code).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "Ended by `exec/stop` or `job_stop`.",
+                "type": "string"
+              },
+              {
+                "const": "timed-out",
+                "description": "Ended by its time box.",
+                "type": "string"
+              },
+              {
+                "const": "lost",
+                "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              }
+            ]
+          },
+          "ExecSummary": {
+            "additionalProperties": false,
+            "description": "A job's end, as the wake and `exec/get` give it: at most 20 lines.",
+            "properties": {
+              "exit": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "failing": {
+                "default": [],
+                "description": "The failing tests' names the parser found (cargo test, ERT, domr).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lines": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "log": {
+                "description": "The whole log's path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "log"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `exec-done` event: a job ended.",
+        "properties": {
+          "exit": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/ExecStatus"
+          },
+          "summary": {
+            "$ref": "#/$defs/ExecSummary"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "summary"
+        ],
+        "title": "ExecDone",
+        "type": "object"
+      },
+      "doc": "a job ended: its status, exit and summary",
+      "from": "front",
+      "name": "exec-done"
+    },
+    {
+      "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A request or a task moved to the next provider or profile: the gateway's `{agent, from, to, why}`, a job's with\n`job` and `task` too.",
@@ -689,7 +1116,7 @@
         "type": "object"
       },
       "doc": "a job's status, tasks or open cards changed",
-      "from": "backend",
+      "from": "front",
       "name": "job"
     },
     {
@@ -953,6 +1380,143 @@
       "doc": "an agent's granted settings change, as a proposed tx: the editor checks it, writes the file and answers settings/confirm",
       "from": "front",
       "name": "settings/proposed"
+    },
+    {
+      "data": {
+        "$defs": {
+          "SupervisorRule": {
+            "description": "The supervisor's rules (thresholds are settings, per kind of work).",
+            "enum": [
+              "silent",
+              "repeat",
+              "no-progress",
+              "dead-wait",
+              "lease",
+              "refusals",
+              "unrecorded",
+              "manager-context"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `supervisor` event: an agent was paused by a rule, with its card.",
+        "properties": {
+          "card": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exec": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule": {
+            "$ref": "#/$defs/SupervisorRule"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "text"
+        ],
+        "title": "SupervisorEvent",
+        "type": "object"
+      },
+      "doc": "the supervisor paused an agent by a rule, with its card",
+      "from": "front",
+      "name": "supervisor"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `view-proposal` event: a hand edit became (or replaced) a proposal.",
+        "properties": {
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path"
+        ],
+        "title": "ViewProposal",
+        "type": "object"
+      },
+      "doc": "a hand edit to a view became a proposal (Records: Review Proposal)",
+      "from": "front",
+      "name": "view-proposal"
+    },
+    {
+      "data": {
+        "$defs": {
+          "RecordKind": {
+            "description": "A kind of record file.",
+            "enum": [
+              "plans",
+              "ledgers",
+              "deferred",
+              "build-board",
+              "board"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `view-written` event.",
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/RecordKind"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "hash"
+        ],
+        "title": "ViewWritten",
+        "type": "object"
+      },
+      "doc": "the hub wrote a record view file (never committed)",
+      "from": "front",
+      "name": "view-written"
     }
   ],
   "methods": [
@@ -961,7 +1525,7 @@
         "user"
       ],
       "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
-      "home": "backend",
+      "home": "front",
       "name": "agents/do",
       "params": {
         "$defs": {
@@ -1061,7 +1625,7 @@
         "user"
       ],
       "doc": "a session's snapshot, whole transcript and change number",
-      "home": "backend",
+      "home": "front",
       "name": "agents/get",
       "params": {
         "$defs": {
@@ -1182,6 +1746,15 @@
             },
             "type": "object"
           },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          },
           "RpcId": {
             "anyOf": [
               {
@@ -1195,18 +1768,34 @@
             "description": "A JSON-RPC id, as the agent chose it."
           },
           "SessionStatus": {
-            "enum": [
-              "starting",
-              "idle",
-              "busy",
-              "exited"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "starting",
+                  "idle",
+                  "busy",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "waiting",
+                "description": "Waiting on a job it started (no model request until the wake).",
+                "type": "string"
+              }
+            ]
           },
           "Snapshot": {
             "additionalProperties": false,
             "description": "What an editor mirrors of a session, everything but its transcript.  A `service` or `agent` caller of\n`agents/list` gets only `{id, name, job, task}`.",
             "properties": {
+              "about": {
+                "description": "A brainstorm's topic note.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -1222,6 +1811,13 @@
               "enforced": {
                 "type": [
                   "boolean",
+                  "null"
+                ]
+              },
+              "enforced_why": {
+                "description": "Why the provider's lock is not enforced (shown \"not enforced\").",
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -1266,6 +1862,13 @@
                   "null"
                 ]
               },
+              "parent": {
+                "description": "The manager session that started it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "paused": {
                 "type": [
                   "boolean",
@@ -1285,6 +1888,12 @@
                   "null"
                 ]
               },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "queue": {
                 "default": [],
                 "description": "Messages waiting for the turn to end.",
@@ -1299,6 +1908,16 @@
                   "$ref": "#/$defs/Review"
                 },
                 "type": "array"
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Role"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "anyOf": [
@@ -1340,6 +1959,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "waiting-on": {
+                "description": "The job it waits on.",
+                "type": [
+                  "string",
+                  "null"
                 ]
               }
             },
@@ -1412,7 +2038,7 @@
         "user"
       ],
       "doc": "the session ends",
-      "home": "backend",
+      "home": "front",
       "name": "agents/kill",
       "params": {
         "$defs": {
@@ -1449,7 +2075,7 @@
         "service"
       ],
       "doc": "the sessions: snapshots for the user, {id, name, job, task} for the others (an agent: its own job's)",
-      "home": "backend",
+      "home": "front",
       "name": "agents/list",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1526,6 +2152,15 @@
             },
             "type": "object"
           },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          },
           "RpcId": {
             "anyOf": [
               {
@@ -1539,18 +2174,34 @@
             "description": "A JSON-RPC id, as the agent chose it."
           },
           "SessionStatus": {
-            "enum": [
-              "starting",
-              "idle",
-              "busy",
-              "exited"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "starting",
+                  "idle",
+                  "busy",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "waiting",
+                "description": "Waiting on a job it started (no model request until the wake).",
+                "type": "string"
+              }
+            ]
           },
           "Snapshot": {
             "additionalProperties": false,
             "description": "What an editor mirrors of a session, everything but its transcript.  A `service` or `agent` caller of\n`agents/list` gets only `{id, name, job, task}`.",
             "properties": {
+              "about": {
+                "description": "A brainstorm's topic note.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "capabilities": true,
               "commands": {
                 "default": [],
@@ -1566,6 +2217,13 @@
               "enforced": {
                 "type": [
                   "boolean",
+                  "null"
+                ]
+              },
+              "enforced_why": {
+                "description": "Why the provider's lock is not enforced (shown \"not enforced\").",
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -1610,6 +2268,13 @@
                   "null"
                 ]
               },
+              "parent": {
+                "description": "The manager session that started it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "paused": {
                 "type": [
                   "boolean",
@@ -1629,6 +2294,12 @@
                   "null"
                 ]
               },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "queue": {
                 "default": [],
                 "description": "Messages waiting for the turn to end.",
@@ -1643,6 +2314,16 @@
                   "$ref": "#/$defs/Review"
                 },
                 "type": "array"
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Role"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "anyOf": [
@@ -1684,6 +2365,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "waiting-on": {
+                "description": "The job it waits on.",
+                "type": [
+                  "string",
+                  "null"
                 ]
               }
             },
@@ -1742,8 +2430,62 @@
       "classes": [
         "user"
       ],
+      "doc": "a session moved to another profile: stopped after its tool call, the new one started in the same worktree with a summary handoff",
+      "home": "front",
+      "name": "agents/move",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "profile": {
+            "description": "The profile it moves to (same worktree, from its last step snapshot, with a summary handoff).",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "profile"
+        ],
+        "title": "MoveParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "Started",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's answer to a permission request: the only way one is answered",
-      "home": "backend",
+      "home": "front",
       "name": "agents/permission",
       "params": {
         "$defs": {
@@ -1802,8 +2544,56 @@
       "classes": [
         "user"
       ],
+      "doc": "a session's role (its matrix column): the user's only, the one way to make a manager",
+      "home": "front",
+      "name": "agents/role",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "role": {
+            "$ref": "#/$defs/Role"
+          }
+        },
+        "required": [
+          "id",
+          "role"
+        ],
+        "title": "RoleParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a prompt to the session (queued or steering as its mode says)",
-      "home": "backend",
+      "home": "front",
       "name": "agents/send",
       "params": {
         "$defs": {
@@ -1846,8 +2636,364 @@
       "classes": [
         "user"
       ],
+      "doc": "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
+      "home": "front",
+      "name": "agents/slice",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from_step": {
+            "description": "The first step (its `seq`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "n": {
+            "description": "At most 50 steps (default 20).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "from_step"
+        ],
+        "title": "SliceParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Entry": {
+            "additionalProperties": true,
+            "description": "One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).",
+            "properties": {
+              "type": {
+                "$ref": "#/$defs/EntryType"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "EntryType": {
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "enum": [
+              "user",
+              "agent",
+              "thought",
+              "tool",
+              "plan",
+              "stop",
+              "error",
+              "usage",
+              "notice",
+              "compaction"
+            ],
+            "type": "string"
+          },
+          "Step": {
+            "additionalProperties": false,
+            "description": "One row of the `step` table.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cache_read": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cache_write": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "class": {
+                "$ref": "#/$defs/StepClass"
+              },
+              "cost": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cost_unit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Unit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "end": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "log_version": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "message_id": {
+                "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "seq": {
+                "description": "The step's place in its session.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session": {
+                "type": "string"
+              },
+              "snapshot": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "description": "When it started and ended (seconds since the epoch, the hub's stamps); none: still open.",
+                "format": "double",
+                "type": "number"
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tokens_in": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tokens_out": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tool": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool_kind": {
+                "description": "ACP's tool kind (`read`, `edit`, `execute`, …).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "turn_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "session",
+              "seq",
+              "class",
+              "start"
+            ],
+            "type": "object"
+          },
+          "StepClass": {
+            "description": "What a step was spent on.",
+            "oneOf": [
+              {
+                "enum": [
+                  "paused",
+                  "stalled"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "think",
+                "description": "Thinking or generating: the updates between tool calls.",
+                "type": "string"
+              },
+              {
+                "const": "tool",
+                "description": "A tool call, from `in_progress` to `completed` (its permission wait split out).",
+                "type": "string"
+              },
+              {
+                "const": "job-wait",
+                "description": "Waiting on a job (no model request).",
+                "type": "string"
+              },
+              {
+                "const": "machine-queue",
+                "description": "Waiting for a machine.",
+                "type": "string"
+              },
+              {
+                "const": "user-wait",
+                "description": "Waiting for the user (a permission or a card).",
+                "type": "string"
+              }
+            ]
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A slice of a session's transcript by steps (never a whole transcript): the steps and their entries.",
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/$defs/Entry"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "next": {
+            "description": "The step after the slice, when there is more.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Step"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "Slice",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a session the hub holds",
-      "home": "backend",
+      "home": "front",
       "name": "agents/start",
       "params": {
         "$defs": {
@@ -1863,6 +3009,15 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          },
           "TaskRef": {
             "description": "a task: no control characters, 1 to 512 characters",
             "maxLength": 512,
@@ -1872,6 +3027,14 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "about": {
+            "description": "A brainstorm session: its topic note (the project read-only, only `document` writable).",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cwd": {
             "anyOf": [
               {
@@ -1881,6 +3044,17 @@
                 "type": "null"
               }
             ]
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A brainstorm's design document."
           },
           "job": {
             "anyOf": [
@@ -1896,6 +3070,17 @@
             "description": "The agent profile's name.",
             "maxLength": 128,
             "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Role"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its matrix column (default: `worker` with a task or job, else `chat`); `manager` only through `agents/role`."
           },
           "task": {
             "anyOf": [
@@ -1939,7 +3124,7 @@
         "user"
       ],
       "doc": "the session's turn stops",
-      "home": "backend",
+      "home": "front",
       "name": "agents/stop",
       "params": {
         "$defs": {
@@ -1966,6 +3151,700 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a task's brief from the graph (plan section, AGENTS.md, the matrix as it applies, base branch, earlier interfaces, the check), or the user's edited one",
+      "home": "front",
+      "name": "brief/build",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "task": {
+            "maxLength": 4352,
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "ByTask",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BriefPart": {
+            "description": "A part of a brief, in the order the brief has them.",
+            "oneOf": [
+              {
+                "enum": [
+                  "base-branch"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "plan-section",
+                "description": "The plan's section for the task (by its heading).",
+                "type": "string"
+              },
+              {
+                "const": "agents-md",
+                "description": "The project's AGENTS.md.",
+                "type": "string"
+              },
+              {
+                "const": "matrix",
+                "description": "The matrix as it applies: one line per cell that is not Never.",
+                "type": "string"
+              },
+              {
+                "const": "interfaces",
+                "description": "The interfaces earlier tasks' reports name.",
+                "type": "string"
+              },
+              {
+                "const": "check",
+                "description": "The check to run before reporting.",
+                "type": "string"
+              },
+              {
+                "const": "view-path",
+                "description": "The view's path, for an agent without drgnx's tools.",
+                "type": "string"
+              }
+            ]
+          },
+          "BriefPartText": {
+            "additionalProperties": false,
+            "properties": {
+              "part": {
+                "$ref": "#/$defs/BriefPart"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "part",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A task's brief (at most 16 KiB; over it the plan section is cut at a heading with a pointer).",
+        "properties": {
+          "cut": {
+            "description": "The plan section was cut to fit.",
+            "type": "boolean"
+          },
+          "edited": {
+            "description": "The user's edited brief (a `brief` note) is used instead of the built one.",
+            "type": "boolean"
+          },
+          "parts": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BriefPartText"
+            },
+            "type": "array"
+          },
+          "task": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "text",
+          "edited",
+          "cut"
+        ],
+        "title": "Brief",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's edited brief for a task (a brief note the runner uses at dispatch)",
+      "home": "front",
+      "name": "brief/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "task": {
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "text": {
+            "description": "The brief as the user edited it (at most 16 KiB).",
+            "maxLength": 16384,
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "text"
+        ],
+        "title": "BriefSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "description": "The `brief` note's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "title": "BriefSet",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a scope's budget: its limits, spend and what remains (the least over its ancestors), by unit",
+      "home": "front",
+      "name": "budget/get",
+      "params": {
+        "$defs": {
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "scope": {
+            "$ref": "#/$defs/BudgetScope"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "BudgetGetParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A scope's budget: its own limits, what it spent and what remains (least over its ancestors), each by unit.",
+        "properties": {
+          "limits": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
+          },
+          "remaining": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "$ref": "#/$defs/BudgetScope"
+          },
+          "spent": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "BudgetView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a scope's limits, one per unit (empty clears); the gateway admits usd against the nested minimum",
+      "home": "front",
+      "name": "budget/set",
+      "params": {
+        "$defs": {
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "limits": {
+            "default": [],
+            "description": "One limit per unit (at most 5); empty clears the scope's budget.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "maxItems": 5,
+            "type": "array"
+          },
+          "scope": {
+            "$ref": "#/$defs/BudgetScope"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "BudgetSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A scope's budget: its own limits, what it spent and what remains (least over its ancestors), each by unit.",
+        "properties": {
+          "limits": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
+          },
+          "remaining": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "$ref": "#/$defs/BudgetScope"
+          },
+          "spent": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "BudgetView",
+        "type": "object"
       },
       "writes": true
     },
@@ -3183,6 +5062,101 @@
       "classes": [
         "user"
       ],
+      "doc": "a decision's commits and the later hunks that overlap its lines (computed from git)",
+      "home": "front",
+      "name": "decisions/effects",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "decision": {
+            "maxLength": 4352,
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "EffectsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hunk": {
+            "additionalProperties": false,
+            "description": "A later change that overlaps a decision's lines.",
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "lines": {
+                "description": "The first and last line of the hunk.",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "commit",
+              "path",
+              "lines"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a decision's commits went on to touch, computed from git (nothing inferred): labelled `computed`.",
+        "properties": {
+          "commits": {
+            "default": [],
+            "description": "The commits that implement it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "later_hunks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Hunk"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision",
+          "label"
+        ],
+        "title": "Effects",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's login-shell variables the hub allows, for the agents and jobs it starts next",
       "home": "backend",
       "name": "env/set",
@@ -3521,6 +5495,841 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one job: its status and, once it ended, its summary",
+      "home": "front",
+      "name": "exec/get",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExecKind": {
+            "description": "What a job runs, for its summary's parser; `container` runs an allowed image (Task 11b).",
+            "enum": [
+              "cargo",
+              "ert",
+              "domr",
+              "other",
+              "container"
+            ],
+            "type": "string"
+          },
+          "ExecStatus": {
+            "description": "Where a job is.",
+            "oneOf": [
+              {
+                "enum": [
+                  "running"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "Ended by itself (any exit code).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "Ended by `exec/stop` or `job_stop`.",
+                "type": "string"
+              },
+              {
+                "const": "timed-out",
+                "description": "Ended by its time box.",
+                "type": "string"
+              },
+              {
+                "const": "lost",
+                "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              }
+            ]
+          },
+          "ExecSummary": {
+            "additionalProperties": false,
+            "description": "A job's end, as the wake and `exec/get` give it: at most 20 lines.",
+            "properties": {
+              "exit": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "failing": {
+                "default": [],
+                "description": "The failing tests' names the parser found (cargo test, ERT, domr).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lines": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "log": {
+                "description": "The whole log's path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "log"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One job.",
+        "properties": {
+          "argv": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "ended": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "description": "A container job's image, by digest.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/ExecKind"
+          },
+          "session": {
+            "description": "The session that started it; none: the user.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started": {
+            "description": "When it started and ended (seconds since the epoch).",
+            "format": "double",
+            "type": "number"
+          },
+          "status": {
+            "$ref": "#/$defs/ExecStatus"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExecSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timebox_s": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unit": {
+            "description": "The transient unit's name (Linux), or none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "cwd",
+          "status",
+          "started",
+          "timebox_s"
+        ],
+        "title": "ExecRow",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the jobs (a session's, or the running ones), newest first",
+      "home": "front",
+      "name": "exec/list",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "running": {
+            "description": "Only running jobs.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only the jobs this session started."
+          }
+        },
+        "title": "ListParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExecKind": {
+            "description": "What a job runs, for its summary's parser; `container` runs an allowed image (Task 11b).",
+            "enum": [
+              "cargo",
+              "ert",
+              "domr",
+              "other",
+              "container"
+            ],
+            "type": "string"
+          },
+          "ExecRow": {
+            "additionalProperties": false,
+            "description": "One job.",
+            "properties": {
+              "argv": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "ended": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "image": {
+                "description": "A container job's image, by digest.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ExecKind"
+              },
+              "session": {
+                "description": "The session that started it; none: the user.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "started": {
+                "description": "When it started and ended (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "status": {
+                "$ref": "#/$defs/ExecStatus"
+              },
+              "summary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExecSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timebox_s": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "unit": {
+                "description": "The transient unit's name (Linux), or none.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "cwd",
+              "status",
+              "started",
+              "timebox_s"
+            ],
+            "type": "object"
+          },
+          "ExecStatus": {
+            "description": "Where a job is.",
+            "oneOf": [
+              {
+                "enum": [
+                  "running"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "Ended by itself (any exit code).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "Ended by `exec/stop` or `job_stop`.",
+                "type": "string"
+              },
+              {
+                "const": "timed-out",
+                "description": "Ended by its time box.",
+                "type": "string"
+              },
+              {
+                "const": "lost",
+                "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              }
+            ]
+          },
+          "ExecSummary": {
+            "additionalProperties": false,
+            "description": "A job's end, as the wake and `exec/get` give it: at most 20 lines.",
+            "properties": {
+              "exit": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "failing": {
+                "default": [],
+                "description": "The failing tests' names the parser found (cargo test, ERT, domr).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lines": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "log": {
+                "description": "The whole log's path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "log"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "jobs": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ExecRow"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Jobs",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "lines of a job's log (at most 1000 a call)",
+      "home": "front",
+      "name": "exec/log",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from": {
+            "description": "The first line (0-based).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "n": {
+            "description": "At most 1000 lines (default 200).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "LogParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A slice of a job's log.",
+        "properties": {
+          "from": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lines": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "The line after the slice, when there is more.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "running": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "running"
+        ],
+        "title": "LogSlice",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a job the hub runs as a unit of its own (in a project folder; a container job from the allowed images only); local only",
+      "home": "front",
+      "name": "exec/start",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "ExecKind": {
+            "description": "What a job runs, for its summary's parser; `container` runs an allowed image (Task 11b).",
+            "enum": [
+              "cargo",
+              "ert",
+              "domr",
+              "other",
+              "container"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "argv": {
+            "description": "The command and its arguments (at most 256); never run through a shell by the hub.",
+            "items": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The folder it runs in: the starter's worktree or a folder under it (the user's: any project folder)."
+          },
+          "image": {
+            "description": "A container job's image: a name on `agents-container-images` (kind container only).",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExecKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "machine": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The machine: only `local` in part 1 (any other is refused: Calls made 3)."
+          },
+          "timebox_s": {
+            "description": "Seconds before it is ended: 1 to 86400 (default 3600).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "argv"
+        ],
+        "title": "StartParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`exec/start`'s answer (and `job_start`'s): the job's id and what the agent does now.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "Started",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a running job ended (its unit stopped); its starter is woken as for any end",
+      "home": "front",
+      "name": "exec/stop",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExecKind": {
+            "description": "What a job runs, for its summary's parser; `container` runs an allowed image (Task 11b).",
+            "enum": [
+              "cargo",
+              "ert",
+              "domr",
+              "other",
+              "container"
+            ],
+            "type": "string"
+          },
+          "ExecStatus": {
+            "description": "Where a job is.",
+            "oneOf": [
+              {
+                "enum": [
+                  "running"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "description": "Ended by itself (any exit code).",
+                "type": "string"
+              },
+              {
+                "const": "stopped",
+                "description": "Ended by `exec/stop` or `job_stop`.",
+                "type": "string"
+              },
+              {
+                "const": "timed-out",
+                "description": "Ended by its time box.",
+                "type": "string"
+              },
+              {
+                "const": "lost",
+                "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              }
+            ]
+          },
+          "ExecSummary": {
+            "additionalProperties": false,
+            "description": "A job's end, as the wake and `exec/get` give it: at most 20 lines.",
+            "properties": {
+              "exit": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "failing": {
+                "default": [],
+                "description": "The failing tests' names the parser found (cargo test, ERT, domr).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "lines": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "log": {
+                "description": "The whole log's path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "log"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One job.",
+        "properties": {
+          "argv": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "ended": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "description": "A container job's image, by digest.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/ExecKind"
+          },
+          "session": {
+            "description": "The session that started it; none: the user.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started": {
+            "description": "When it started and ended (seconds since the epoch).",
+            "format": "double",
+            "type": "number"
+          },
+          "status": {
+            "$ref": "#/$defs/ExecStatus"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExecSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timebox_s": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unit": {
+            "description": "The transient unit's name (Linux), or none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "cwd",
+          "status",
+          "started",
+          "timebox_s"
+        ],
+        "title": "ExecRow",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -6287,7 +9096,7 @@
         "user"
       ],
       "doc": "a proposed job runs, with an optional budget",
-      "home": "backend",
+      "home": "front",
       "name": "job/approve",
       "params": {
         "$defs": {
@@ -6430,7 +9239,7 @@
         "user"
       ],
       "doc": "a task waits for the user, with a reason (the Work graph)",
-      "home": "backend",
+      "home": "front",
       "name": "job/block",
       "params": {
         "$defs": {
@@ -6572,7 +9381,7 @@
         "user"
       ],
       "doc": "the user's action on a card (once: a settled card is an error)",
-      "home": "backend",
+      "home": "front",
       "name": "job/card",
       "params": {
         "$defs": {
@@ -6726,7 +9535,7 @@
         "user"
       ],
       "doc": "a message acted on without an answer",
-      "home": "backend",
+      "home": "front",
       "name": "job/dismiss",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6755,7 +9564,7 @@
         "user"
       ],
       "doc": "a task moves in its job's run order (the Work graph)",
-      "home": "backend",
+      "home": "front",
       "name": "job/order",
       "params": {
         "$defs": {
@@ -6892,7 +9701,7 @@
         "user"
       ],
       "doc": "a job from a plan, proposed (approved at once with auto)",
-      "home": "backend",
+      "home": "front",
       "name": "job/propose",
       "params": {
         "$defs": {
@@ -6909,6 +9718,18 @@
               "review+accept"
             ],
             "type": "string"
+          },
+          "PlanRef": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "maxLength": 4352,
+                "type": "string"
+              }
+            ],
+            "description": "A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports\nfirst."
           },
           "Usd": {
             "description": "an amount of US dollars",
@@ -6947,8 +9768,8 @@
             ]
           },
           "plan": {
-            "$ref": "#/$defs/AbsPath",
-            "description": "The plan's file."
+            "$ref": "#/$defs/PlanRef",
+            "description": "The plan."
           },
           "repo": {
             "anyOf": [
@@ -7071,7 +9892,7 @@
         "user"
       ],
       "doc": "a task goes to another profile (the Work graph)",
-      "home": "backend",
+      "home": "front",
       "name": "job/reassign",
       "params": {
         "$defs": {
@@ -7203,7 +10024,7 @@
         "user"
       ],
       "doc": "the user's answer to an agent's message",
-      "home": "backend",
+      "home": "front",
       "name": "job/reply",
       "params": {
         "$defs": {
@@ -7243,7 +10064,7 @@
         "user"
       ],
       "doc": "a stopped job runs again, with an optional new budget",
-      "home": "backend",
+      "home": "front",
       "name": "job/resume",
       "params": {
         "$defs": {
@@ -7386,7 +10207,7 @@
         "user"
       ],
       "doc": "Start as Job: task n of a plan and the tasks it needs, proposed; the plan is only read",
-      "home": "backend",
+      "home": "front",
       "name": "job/start-task",
       "params": {
         "$defs": {
@@ -7403,6 +10224,32 @@
               "review+accept"
             ],
             "type": "string"
+          },
+          "PlanRef": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "maxLength": 4352,
+                "type": "string"
+              }
+            ],
+            "description": "A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports\nfirst."
+          },
+          "TaskNo": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "maxLength": 16,
+                "type": "string"
+              }
+            ],
+            "description": "A task's number in its plan: `8`, or `22b`."
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7424,13 +10271,11 @@
             ]
           },
           "n": {
-            "description": "The task's number in the plan.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+            "$ref": "#/$defs/TaskNo",
+            "description": "The task's number in the plan."
           },
           "plan": {
-            "$ref": "#/$defs/AbsPath"
+            "$ref": "#/$defs/PlanRef"
           }
         },
         "required": [
@@ -7544,7 +10389,7 @@
         "user"
       ],
       "doc": "one job (with its decision log when asked), or every job",
-      "home": "backend",
+      "home": "front",
       "name": "job/status",
       "params": {
         "$defs": {
@@ -7705,7 +10550,7 @@
         "user"
       ],
       "doc": "a job's agents stop and it waits",
-      "home": "backend",
+      "home": "front",
       "name": "job/stop",
       "params": {
         "$defs": {
@@ -7832,7 +10677,7 @@
         "user"
       ],
       "doc": "a blocked task may run again (the Work graph)",
-      "home": "backend",
+      "home": "front",
       "name": "job/unblock",
       "params": {
         "$defs": {
@@ -7953,6 +10798,550 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what the matrix decides for who doing action (no card is made)",
+      "home": "front",
+      "name": "matrix/check",
+      "params": {
+        "$defs": {
+          "Action": {
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "enum": [
+              "agents.start",
+              "agents.model",
+              "agents.control",
+              "graph.change",
+              "task.done",
+              "spend",
+              "spend.over",
+              "code.read",
+              "code.edit",
+              "commit",
+              "merge.integration",
+              "push.ci",
+              "push.main",
+              "code.ci-config",
+              "machines",
+              "job.container",
+              "network",
+              "unsandboxed",
+              "settings.change",
+              "user.private",
+              "user.emacs",
+              "chat.project-read"
+            ],
+            "type": "string"
+          },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          },
+          "WhoParam": {
+            "additionalProperties": false,
+            "description": "Who acts: the columns that match it.",
+            "properties": {
+              "agent": {
+                "description": "The agent profile's name.",
+                "maxLength": 128,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Role"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/Action"
+          },
+          "amount": {
+            "description": "The amount the action would spend or start, in the cell's unit.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "plan": {
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "who": {
+            "$ref": "#/$defs/WhoParam"
+          }
+        },
+        "required": [
+          "action",
+          "who"
+        ],
+        "title": "CheckParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Verdict": {
+            "description": "A cell's verdict, ordered `Allow < Ask < Never`: combining columns takes the greatest.",
+            "enum": [
+              "allow",
+              "ask",
+              "never"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What the matrix decides, and why when it is not Allow (no card is made by a check).",
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/Verdict"
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "title": "CheckAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the permissions matrix: the preset, the one in force, the layers' cells, and the effective verdicts for who",
+      "home": "front",
+      "name": "matrix/get",
+      "params": {
+        "$defs": {
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          },
+          "WhoParam": {
+            "additionalProperties": false,
+            "description": "Who acts: the columns that match it.",
+            "properties": {
+              "agent": {
+                "description": "The agent profile's name.",
+                "maxLength": 128,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "maxLength": 64,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Role"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "plan": {
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "who": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WhoParam"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With WHO, the answer has the effective verdict of every action for it."
+          }
+        },
+        "title": "GetParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Action": {
+            "description": "A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of\nevery preset and no override changes them.",
+            "enum": [
+              "agents.start",
+              "agents.model",
+              "agents.control",
+              "graph.change",
+              "task.done",
+              "spend",
+              "spend.over",
+              "code.read",
+              "code.edit",
+              "commit",
+              "merge.integration",
+              "push.ci",
+              "push.main",
+              "code.ci-config",
+              "machines",
+              "job.container",
+              "network",
+              "unsandboxed",
+              "settings.change",
+              "user.private",
+              "user.emacs",
+              "chat.project-read"
+            ],
+            "type": "string"
+          },
+          "CellRow": {
+            "additionalProperties": false,
+            "description": "One cell of a layer: ACTION in COLUMN.",
+            "properties": {
+              "action": {
+                "$ref": "#/$defs/Action"
+              },
+              "column": {
+                "$ref": "#/$defs/Column"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Limit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "verdict": {
+                "$ref": "#/$defs/Verdict"
+              }
+            },
+            "required": [
+              "action",
+              "column",
+              "verdict"
+            ],
+            "type": "object"
+          },
+          "Column": {
+            "description": "A matrix column: a role, a named agent (profile) or a provider.  The most restrictive of every matching column\nwins; specificity never widens.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "role": {
+                    "$ref": "#/$defs/Role"
+                  }
+                },
+                "required": [
+                  "role"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "agent": {
+                    "maxLength": 128,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "maxLength": 64,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "EffectiveRow": {
+            "additionalProperties": false,
+            "description": "One action's effective cell for a caller.",
+            "properties": {
+              "action": {
+                "$ref": "#/$defs/Action"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Limit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "verdict": {
+                "$ref": "#/$defs/Verdict"
+              }
+            },
+            "required": [
+              "action",
+              "verdict"
+            ],
+            "type": "object"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Preset": {
+            "description": "The three shipped presets.",
+            "enum": [
+              "cautious",
+              "balanced",
+              "autonomous"
+            ],
+            "type": "string"
+          },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          },
+          "TimePreset": {
+            "additionalProperties": false,
+            "description": "A preset that replaces the base one at some times.",
+            "properties": {
+              "preset": {
+                "$ref": "#/$defs/Preset"
+              },
+              "when": {
+                "$ref": "#/$defs/When"
+              }
+            },
+            "required": [
+              "when",
+              "preset"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          },
+          "Verdict": {
+            "description": "A cell's verdict, ordered `Allow < Ask < Never`: combining columns takes the greatest.",
+            "enum": [
+              "allow",
+              "ask",
+              "never"
+            ],
+            "type": "string"
+          },
+          "When": {
+            "description": "When a time preset applies: while the user is away, or between two minutes of the day (`[from, to)`, local time;\n`from > to` wraps past midnight).",
+            "oneOf": [
+              {
+                "enum": [
+                  "away"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "between": {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "format": "uint16",
+                        "maximum": 65535,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "format": "uint16",
+                        "maximum": 65535,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    ],
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "between"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The matrix as it stands: the base preset, the one in force now, the layers' cells, and (asked with `who`) the\neffective verdicts.",
+        "properties": {
+          "active": {
+            "$ref": "#/$defs/Preset",
+            "description": "The preset in force now (a time preset may replace the base)."
+          },
+          "away": {
+            "type": "boolean"
+          },
+          "cells": {
+            "default": [],
+            "description": "The preset's cells with the user's, the project's and the plan's overrides applied.",
+            "items": {
+              "$ref": "#/$defs/CellRow"
+            },
+            "type": "array"
+          },
+          "effective": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/EffectiveRow"
+            },
+            "type": "array"
+          },
+          "preset": {
+            "$ref": "#/$defs/Preset"
+          },
+          "time_presets": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TimePreset"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "preset",
+          "active",
+          "away"
+        ],
+        "title": "MatrixView",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -8250,6 +11639,50 @@
       "classes": [
         "user"
       ],
+      "doc": "the user's message taken back while it is still queued (never once delivered)",
+      "home": "front",
+      "name": "messages/retract",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "The message's id.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "RetractParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`messages/retract`'s answer: taken back only while it was still queued; else the status it had.",
+        "properties": {
+          "retracted": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "retracted",
+          "status"
+        ],
+        "title": "Retracted",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a message, from the user (only the backend names another sender); held when seen is behind the decision log (drgnx-coord-send)",
       "home": "front",
       "name": "messages/send",
@@ -8477,6 +11910,90 @@
     },
     {
       "classes": [
+        "user"
+      ],
+      "doc": "the subscriptions' meters: share used, rate per hour and when it runs out at that rate (estimates)",
+      "home": "front",
+      "name": "pace/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "provider": {
+            "description": "One provider's meter; none: every meter the hub reads.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "PaceParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Pace": {
+            "additionalProperties": false,
+            "description": "A subscription meter's pace, linear over the last 24 h (an estimate).",
+            "properties": {
+              "estimate": {
+                "type": "boolean"
+              },
+              "exhausted_at": {
+                "description": "When the share reaches 1 at this rate, if before the window resets.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "rate_per_hour": {
+                "format": "double",
+                "type": "number"
+              },
+              "resets_at": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "used_share": {
+                "description": "The share of the window's limit used, 0 to 1.",
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "provider",
+              "used_share",
+              "rate_per_hour",
+              "estimate"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "meters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Pace"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Paces",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
         "user",
         "agent",
         "service"
@@ -8504,6 +12021,1096 @@
           "pid"
         ],
         "title": "PingResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a plan from the graph: its tasks with status, deps, interfaces, steps and their reports' interfaces",
+      "home": "front",
+      "name": "plans/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "plan": {
+            "maxLength": 4352,
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "ByPlan",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PlanStep": {
+            "additionalProperties": false,
+            "description": "One checkbox step of a task.",
+            "properties": {
+              "done": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "done",
+              "text"
+            ],
+            "type": "object"
+          },
+          "PlanTask": {
+            "additionalProperties": false,
+            "description": "A plan's task as `plan_read` gives it.",
+            "properties": {
+              "deps": {
+                "default": [],
+                "description": "The tasks it waits on (`blocks` links), by number.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "interfaces": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "number": {
+                "type": "string"
+              },
+              "report_interfaces": {
+                "description": "What its latest report says it produced for later tasks.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reports": {
+                "default": [],
+                "description": "Its reports' ids, newest first.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "status": {
+                "type": "string"
+              },
+              "steps": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/PlanStep"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "number",
+              "title",
+              "status"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A plan in the graph.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PlanTask"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "description": "The graph version it was read at (`plans/write`'s `base_version`).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "version"
+        ],
+        "title": "PlanView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a plan created or changed with its tasks, steps and blocks links, in one tx (refused when base_version is behind)",
+      "home": "front",
+      "name": "plans/write",
+      "params": {
+        "$defs": {
+          "Status": {
+            "description": "a status: lowercase letters and -, a letter first, at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z-]*$",
+            "type": "string"
+          },
+          "StepWrite": {
+            "description": "One step of a task, written.",
+            "properties": {
+              "done": {
+                "type": "boolean"
+              },
+              "text": {
+                "maxLength": 2000,
+                "type": "string"
+              }
+            },
+            "required": [
+              "done",
+              "text"
+            ],
+            "type": "object"
+          },
+          "TaskWrite": {
+            "description": "One task, created or changed (by number); absent fields stay as they are.",
+            "properties": {
+              "blocks": {
+                "description": "The tasks it waits on, by number (replaces its `blocks` links).",
+                "items": {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "interfaces": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "model": {
+                "maxLength": 128,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "number": {
+                "maxLength": 16,
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Status"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "steps": {
+                "items": {
+                  "$ref": "#/$defs/StepWrite"
+                },
+                "maxItems": 64,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "title": {
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "number"
+            ],
+            "type": "object"
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "base_version": {
+            "description": "The version the writer read (`plans/get`): a later change to the same records refuses the write.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "plan": {
+            "description": "The plan; none creates one (then `title` and `project` are needed).",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TaskWrite"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "WriteParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "TaskId": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "number": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "number",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "plan": {
+            "type": "string"
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "type": "array"
+          },
+          "tx": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plan",
+          "tx"
+        ],
+        "title": "PlanWritten",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor says the user is away or back (never an agent): the time presets follow from the next action",
+      "home": "front",
+      "name": "presence/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "away": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "away"
+        ],
+        "title": "PresenceParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a proposal accepted (its ops applied if its base still holds, else stale) or rejected (the edit backed up); then the view is rewritten",
+      "home": "front",
+      "name": "records/decide",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "accept": {
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id",
+          "accept"
+        ],
+        "title": "DecideParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ProposalStatus": {
+            "description": "Where a proposal is.",
+            "oneOf": [
+              {
+                "enum": [
+                  "open",
+                  "accepted",
+                  "rejected"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stale",
+                "description": "The records it touches changed since it was read: read the file again.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a decision did: the proposal's new status, the note its unmapped parts became, the backup of a rejected edit.",
+        "properties": {
+          "backup": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/ProposalStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "Decided",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the org folder's record files into the graph (a backup of each first; idempotent), their views written; the hub never commits",
+      "home": "front",
+      "name": "records/import",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "RecordKind": {
+            "description": "A kind of record file.",
+            "enum": [
+              "plans",
+              "ledgers",
+              "deferred",
+              "build-board",
+              "board"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dry_run": {
+            "description": "Read and count, write nothing (no backup, no graph, no view).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "only": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RecordKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only one kind of file (`board` is never imported unless named)."
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The org folder."
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "ImportParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ImportedFile": {
+            "additionalProperties": false,
+            "description": "One file the importer read.",
+            "properties": {
+              "entities": {
+                "description": "Entities created or changed, and graph operations applied (or that would be, on a dry run).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "entity": {
+                "description": "The entity the file became (its plan, ledger or register).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/RecordKind"
+              },
+              "ops": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "kind",
+              "entities",
+              "ops"
+            ],
+            "type": "object"
+          },
+          "RecordKind": {
+            "description": "A kind of record file.",
+            "enum": [
+              "plans",
+              "ledgers",
+              "deferred",
+              "build-board",
+              "board"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "backup": {
+            "description": "Where every file was copied before the import (none on a dry run).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "files": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ImportedFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dry_run"
+        ],
+        "title": "ImportReport",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the proposals hand edits to views became (a view's, or every open one)",
+      "home": "front",
+      "name": "records/proposals",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One view's file; none: every view."
+          }
+        },
+        "title": "ByPath",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Proposal": {
+            "additionalProperties": false,
+            "description": "A hand edit to a view, read back.",
+            "properties": {
+              "at": {
+                "format": "double",
+                "type": "number"
+              },
+              "base_version": {
+                "description": "The graph version it was read against.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "by": {
+                "description": "Who edited it, when known.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "diff": {
+                "description": "A unified diff of the edited file against the view.",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "ops": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ProposedOp"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/ProposalStatus"
+              },
+              "unmapped": {
+                "default": [],
+                "description": "Byte ranges of the edited file that map to no operation (they become a note on accept).",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "path",
+              "status",
+              "diff",
+              "base_version",
+              "at"
+            ],
+            "type": "object"
+          },
+          "ProposalStatus": {
+            "description": "Where a proposal is.",
+            "oneOf": [
+              {
+                "enum": [
+                  "open",
+                  "accepted",
+                  "rejected"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "stale",
+                "description": "The records it touches changed since it was read: read the file again.",
+                "type": "string"
+              }
+            ]
+          },
+          "ProposedOp": {
+            "additionalProperties": false,
+            "description": "A graph operation a proposal would apply, as the user reads it.",
+            "properties": {
+              "entity": {
+                "type": "string"
+              },
+              "fields": {
+                "default": [],
+                "description": "The fields it sets, by name (`status`, `title`, `body`, …).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "op": {
+                "description": "`create`, `update`, `link` or `unlink`.",
+                "type": "string"
+              },
+              "user_only": {
+                "description": "A field only the user may set (a plan's `matrix`): a manager cannot accept it.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "entity"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "proposals": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Proposal"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Proposals",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the view files: when each was written, whether it changed by hand, the proposal holding it",
+      "home": "front",
+      "name": "records/status",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One view's file; none: every view."
+          }
+        },
+        "title": "ByPath",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "RecordKind": {
+            "description": "A kind of record file.",
+            "enum": [
+              "plans",
+              "ledgers",
+              "deferred",
+              "build-board",
+              "board"
+            ],
+            "type": "string"
+          },
+          "ViewStatus": {
+            "additionalProperties": false,
+            "description": "One view file and where it stands.",
+            "properties": {
+              "changed": {
+                "description": "The file differs from what the hub last wrote.",
+                "type": "boolean"
+              },
+              "entity": {
+                "description": "The entity the view shows.",
+                "type": "string"
+              },
+              "hash": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/RecordKind"
+              },
+              "path": {
+                "type": "string"
+              },
+              "pending": {
+                "description": "The open proposal holding the view (it is not rewritten while one is open).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "written": {
+                "description": "When the hub last wrote it, and the hash it wrote.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "kind",
+              "entity",
+              "changed"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "views": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ViewStatus"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Views",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a task's structured reports, or one by id",
+      "home": "front",
+      "name": "reports/get",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "One report.",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "description": "A task's reports, newest first.",
+            "maxLength": 4352,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "ReportsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "CheckRun": {
+            "additionalProperties": false,
+            "description": "A check the agent ran, with its counts.",
+            "properties": {
+              "failed": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "passed": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "passed",
+              "failed"
+            ],
+            "type": "object"
+          },
+          "DecisionOrigin": {
+            "description": "Where a decision a report lists came from.",
+            "oneOf": [
+              {
+                "const": "from-brief",
+                "description": "The brief decided it.",
+                "type": "string"
+              },
+              {
+                "const": "own",
+                "description": "The agent decided it.",
+                "type": "string"
+              },
+              {
+                "const": "needs-user",
+                "description": "It needs the user.",
+                "type": "string"
+              }
+            ]
+          },
+          "DecisionRef": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "origin": {
+                "$ref": "#/$defs/DecisionOrigin"
+              }
+            },
+            "required": [
+              "id",
+              "origin"
+            ],
+            "type": "object"
+          },
+          "Report": {
+            "additionalProperties": false,
+            "description": "A report as the graph keeps it.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "format": "double",
+                "type": "number"
+              },
+              "checks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/CheckRun"
+                },
+                "type": "array"
+              },
+              "commits": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "decisions": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DecisionRef"
+                },
+                "type": "array"
+              },
+              "differences": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "followups": {
+                "default": [],
+                "description": "The follow-up tasks it filed.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "interfaces": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": "string"
+              },
+              "tip": {
+                "type": "string"
+              },
+              "unrecorded": {
+                "default": [],
+                "description": "Decisions it lists that were never recorded (for the supervisor).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "task",
+              "at",
+              "tip"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "reports": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Report"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Reports",
         "type": "object"
       },
       "writes": false
@@ -10016,6 +14623,421 @@
         "title": "AnyValue"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the steps of a session, task, plan or project (500 a page), or their rollup: time by class, cost by unit, tokens",
+      "home": "front",
+      "name": "timeline/get",
+      "params": {
+        "$defs": {
+          "Scope": {
+            "description": "What a timeline covers.",
+            "enum": [
+              "session",
+              "task",
+              "plan",
+              "project"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "The session's id, or the task's, plan's or project's entity id.",
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "rollup": {
+            "description": "The rollup only, no steps.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/$defs/Scope"
+          },
+          "since": {
+            "description": "Steps after this one (a session's `seq`, else a step id).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scope",
+          "id"
+        ],
+        "title": "TimelineParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ClassSecs": {
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "$ref": "#/$defs/StepClass"
+              },
+              "secs": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "class",
+              "secs"
+            ],
+            "type": "object"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Rollup": {
+            "additionalProperties": false,
+            "description": "Time by class, cost by unit (never summed across units) and tokens.",
+            "properties": {
+              "cost": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "secs": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/ClassSecs"
+                },
+                "type": "array"
+              },
+              "tokens": {
+                "$ref": "#/$defs/Tokens"
+              }
+            },
+            "required": [
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "Step": {
+            "additionalProperties": false,
+            "description": "One row of the `step` table.",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cache_read": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cache_write": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "class": {
+                "$ref": "#/$defs/StepClass"
+              },
+              "cost": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cost_unit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Unit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "end": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "log_version": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "message_id": {
+                "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "seq": {
+                "description": "The step's place in its session.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session": {
+                "type": "string"
+              },
+              "snapshot": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "description": "When it started and ended (seconds since the epoch, the hub's stamps); none: still open.",
+                "format": "double",
+                "type": "number"
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tokens_in": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tokens_out": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tool": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool_kind": {
+                "description": "ACP's tool kind (`read`, `edit`, `execute`, …).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "turn_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "session",
+              "seq",
+              "class",
+              "start"
+            ],
+            "type": "object"
+          },
+          "StepClass": {
+            "description": "What a step was spent on.",
+            "oneOf": [
+              {
+                "enum": [
+                  "paused",
+                  "stalled"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "think",
+                "description": "Thinking or generating: the updates between tool calls.",
+                "type": "string"
+              },
+              {
+                "const": "tool",
+                "description": "A tool call, from `in_progress` to `completed` (its permission wait split out).",
+                "type": "string"
+              },
+              {
+                "const": "job-wait",
+                "description": "Waiting on a job (no model request).",
+                "type": "string"
+              },
+              {
+                "const": "machine-queue",
+                "description": "Waiting for a machine.",
+                "type": "string"
+              },
+              {
+                "const": "user-wait",
+                "description": "Waiting for the user (a permission or a card).",
+                "type": "string"
+              }
+            ]
+          },
+          "Tokens": {
+            "additionalProperties": false,
+            "properties": {
+              "cache_read": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cache_write": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "in": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "out": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "in",
+              "out",
+              "cache_read",
+              "cache_write"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "At most 500 steps a call; `next` continues.",
+        "properties": {
+          "next": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rollup": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rollup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Step"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Timeline",
+        "type": "object"
+      },
+      "writes": false
     }
   ],
   "proto": 1,

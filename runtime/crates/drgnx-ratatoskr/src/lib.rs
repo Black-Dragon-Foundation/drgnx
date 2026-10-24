@@ -41,10 +41,27 @@
 //!   settings only, their fallbacks, `status.settings`.
 //! - [`shape`]: what a caller of each class may ask and see of a forwarded method.
 //! - [`version`]: what `version --json` says.
+//!
+//! The agent core (agent system part 1; [`agent_core`] routes its methods to these):
+//!
+//! - [`agents`]: sessions in the hub (lifecycle, permissions, prompts, delivery, locks, the sandboxed launch).
+//! - [`exec`]: jobs (`exec/*`), each a unit of its own in its starter's sandbox.
+//! - [`runner`]: plan runs (`job/*`): the tick, git and the merge gate, clashes, plans and reports.
+//! - [`matrix_gate`]: the permissions matrix checked on every action.
+//! - [`timeline`]: every step timed, classified and anchored.
+//! - [`budget`]: budgets in named units, nested; the subscriptions' pace.
+//! - [`supervisor`]: stuck agents paused with a card.
+//! - [`brief`]: briefs built from the graph.
+//! - [`manager`]: the manager role.
+//! - [`records`]: the records importer and their views.
 
+pub mod agent_core;
+pub mod agents;
 pub mod backend;
 pub mod backup_timer;
 pub mod bridge;
+pub mod brief;
+pub mod budget;
 pub mod cli;
 pub mod client;
 pub mod conn;
@@ -52,6 +69,7 @@ pub mod coord;
 pub mod dispatch;
 pub mod doctor;
 pub mod embed;
+pub mod exec;
 pub mod forward;
 pub mod front;
 pub mod gateway;
@@ -61,8 +79,12 @@ pub mod hello;
 pub mod idle;
 pub mod lock;
 pub mod log;
+pub mod manager;
+pub mod matrix_gate;
 pub mod peer;
+pub mod records;
 pub mod relay;
+pub mod runner;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
@@ -73,6 +95,8 @@ pub mod shape;
 pub mod store;
 pub mod store_cli;
 pub mod supervise;
+pub mod supervisor;
+pub mod timeline;
 pub mod version;
 
 /// How the process ends (design 3.2): supervisors restart on 75 and never on 1, 2 or 3.

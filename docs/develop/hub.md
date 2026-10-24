@@ -396,6 +396,12 @@ goes to the Lisp backend (next section).
 Until each part moves to Rust, Ratatoskr runs the Lisp hub as its child, the **backend**, and forwards to it every
 method the front does not serve (`runtime/crates/drgnx-ratatoskr/src/{backend,forward,relay,shape}.rs`).
 
+**The agent core is the front's** (agent system part 1): `agents/*` and `job/*`, and every method the agent core adds
+(`exec/*`, `matrix/*`, `presence/set`, `messages/retract`, `plans/*`, `brief/*`, `reports/get`, `decisions/effects`,
+`timeline/get`, `budget/*`, `pace/get`, `records/*`), are routed by `src/agent_core.rs` to the module that serves
+each. Until its task lands, such a method answers `internal` "METHOD: not yet (agent system part 1, Task N)"; the
+backend serves none of them.
+
 **The command.** `DRGNX_RATATOSKR_BACKEND` when set (an absolute executable, no arguments: the tests' fake backend or
 `test/conformance/lisp-hub.sh`), else `EMACS --batch -Q --eval "(setq load-prefer-newer t)" -L DRGNX/core -l
 drgnx-hub -f drgnx-hub-main` with HOME as its directory. EMACS is `DRGNX_EMACS` (absolute), else the first line of
@@ -803,14 +809,21 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes | Home |
 |---|---|---|---|---|---|
-| `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes | backend |
-| `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no | backend |
-| `agents/kill` | user | `{id: Id}` | `boolean` | yes | backend |
-| `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no | backend |
-| `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes | backend |
-| `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | backend |
-| `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes | backend |
-| `agents/stop` | user | `{id: Id}` | `boolean` | yes | backend |
+| `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes | front |
+| `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no | front |
+| `agents/kill` | user | `{id: Id}` | `boolean` | yes | front |
+| `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no | front |
+| `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes | front |
+| `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes | front |
+| `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes | front |
+| `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | front |
+| `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no | front |
+| `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes | front |
+| `agents/stop` | user | `{id: Id}` | `boolean` | yes | front |
+| `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no | front |
+| `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes | front |
+| `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no | front |
+| `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes | front |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes | front |
 | `config/changed` | user | `{}` | `boolean` | no | front |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no | front |
@@ -825,9 +838,15 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no | front |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes | front |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes | front |
+| `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no | front |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | backend |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes | front |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no | front |
+| `exec/get` | user | `{id: Id}` | `ExecRow` | no | front |
+| `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no | front |
+| `exec/log` | user | `{from?: natnum, id: Id, n?: natnum}` | `{from: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no | front |
+| `exec/start` | user | `{argv: [string], cwd?: AbsPath, image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, timebox_s?: natnum}` | `{id: string, text: string}` | yes | front |
+| `exec/stop` | user | `{id: Id}` | `ExecRow` | yes | front |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no | front |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | front |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no | front |
@@ -853,25 +872,37 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes | front |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no | front |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
-| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
-| `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | backend |
-| `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes | backend |
-| `job/dismiss` | user | `{message: natnum}` | `boolean` | yes | backend |
-| `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes | backend |
-| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: AbsPath, repo?: AbsPath}` | `JobSummary` | yes | backend |
-| `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes | backend |
-| `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes | backend |
-| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
-| `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: natnum, plan: AbsPath}` | `JobSummary` | yes | backend |
-| `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no | backend |
-| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |
-| `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes | backend |
+| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | front |
+| `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | front |
+| `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes | front |
+| `job/dismiss` | user | `{message: natnum}` | `boolean` | yes | front |
+| `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes | front |
+| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: PlanRef, repo?: AbsPath}` | `JobSummary` | yes | front |
+| `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes | front |
+| `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes | front |
+| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | front |
+| `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: TaskNo, plan: PlanRef}` | `JobSummary` | yes | front |
+| `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no | front |
+| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | front |
+| `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes | front |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no | front |
+| `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no | front |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no | front |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no | front |
 | `mcp/session-close` | user | `{sid: SessionId}` | `boolean` | no | front |
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes | front |
+| `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes | front |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes | front |
+| `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no | front |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |
+| `plans/get` | user | `{plan: string}` | `PlanView` | no | front |
+| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], interfaces?: Text, model?: string, number: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes | front |
+| `presence/set` | user | `{away: boolean}` | `boolean` | no | front |
+| `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes | front |
+| `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes | front |
+| `records/proposals` | user | `{path?: AbsPath}` | `{proposals?: [Proposal]}` | no | front |
+| `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no | front |
+| `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no | front |
 | `restart` | user | `{}` | `boolean` | no | front |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes | front |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes | front |
@@ -884,6 +915,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no | front |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no | front |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes | front |
+| `timeline/get` | user | `{id: string, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no | front |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -966,9 +998,15 @@ result is (`event(NAME).check`):
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
 | `settings/proposed` | the front (`settings_change`) | `{tx, scope, name, value, root?, agent, reason}`: the editor checks it, writes the file, answers `settings/confirm` ([Agents change settings](#agents-change-settings)) |
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
+| `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
+| `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
+| `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
+| `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
 
-Each event type says which side sends it (`from`, in `methods.json`): `events`, `challenge` and `notice` the front,
-the rest the backend. The first nine are what the Lisp backend broadcasts on main (its `events` is dropped under
+Each event type says which side sends it (`from`, in `methods.json`): `card` and `lease-released` the backend, the
+rest the front (`agent`, `agent-entries` and `job` since the hub serves `agents/*` and `job/*`: agent system part 1).
+The first nine are what the Lisp backend broadcasts on main (its `events` is dropped under
 Ratatoskr until it stops sending it); a test reads `core/*.el` for its `(drgnx-hub--broadcast
 'NAME`, `(drgnx-job--broadcast 'NAME` and `drgnx-gateway--emit 'NAME` calls and fails when the two lists differ.
 

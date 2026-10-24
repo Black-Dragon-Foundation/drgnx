@@ -16,8 +16,13 @@ pub mod graph;
 pub mod guard;
 pub mod identity;
 pub mod job;
+pub mod jobs;
+pub mod manager;
+pub mod plan;
 pub mod read;
+pub mod records;
 pub mod report;
+pub mod reports;
 pub mod settings;
 pub mod tracker;
 
@@ -195,4 +200,129 @@ pub fn tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     all.extend(graph::tools());
     all.extend(settings::tools());
     all
+}
+
+/// The agent core's tools every worker gets (agent system part 1): jobs (Task 15), the structured report and the
+/// plan tools (Task 21), view proposals (Task 14b).  Not yet in [`tools`] or [`tools_for`]: Task 15 adds them to
+/// `tools_for` (and the `tools/list` budget) once its job tools are filled; until then each answers "not yet".
+pub const CORE_TOOLS: [&str; 9] = [
+    "job_start",
+    "job_result",
+    "job_log",
+    "job_stop",
+    "report_submit",
+    "plan_read",
+    "plan_write",
+    "proposal_read",
+    "proposal_decide",
+];
+
+/// The manager's tools, served on a manager session's socket only (Task 25), each checked by the hub's matrix with
+/// the manager's column.
+pub const MANAGER_TOOLS: [&str; 9] = [
+    "agent_start",
+    "agent_message",
+    "agent_pause",
+    "agent_stop",
+    "agent_move",
+    "report_read",
+    "transcript_slice",
+    "trial_merge",
+    "merge",
+];
+
+/// The tools of [`CORE_TOOLS`], in that order.
+pub fn core_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
+    let mut all = jobs::tools();
+    all.extend(reports::tools());
+    all.extend(plan::tools());
+    all.extend(records::tools());
+    all
+}
+
+/// The tools of [`MANAGER_TOOLS`], in that order.
+pub fn manager_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
+    manager::tools()
+}
+
+/// The answer of a tool whose task has not filled it yet.
+pub(crate) fn not_yet(tool: &str, task: &str) -> String {
+    format!("{tool}: not yet (agent system part 1, Task {task})")
+}
+
+/// A tool that answers [`not_yet`] until TASK fills it: `stub_tool!(Name, "name", Args, "task", "description")`.
+macro_rules! stub_tool {
+    ($ty:ident, $name:literal, $args:ty, $task:literal, $doc:literal) => {
+        pub struct $ty;
+
+        impl $crate::tools::guard::CoordTool for $ty {
+            type Args = $args;
+            const NAME: &'static str = $name;
+            const DESCRIPTION: &'static str = $doc;
+            fn run<'a>(
+                &'a self,
+                _: &'a $crate::tools::Coord,
+                _: &'a $crate::tools::Identity,
+                _: Self::Args,
+            ) -> mimir::BoxFuture<'a, Result<String, String>> {
+                Box::pin(async { Err($crate::tools::not_yet($name, $task)) })
+            }
+        }
+    };
+}
+pub(crate) use stub_tool;
+
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+    use mimir::{Tool, ToolResult};
+
+    #[test]
+    fn the_core_and_manager_tools_are_their_lists_and_new_names() {
+        let names = |v: Vec<Box<dyn Tool<Ctx>>>| v.iter().map(|t| t.name()).collect::<Vec<_>>();
+        assert_eq!(names(core_tools()), CORE_TOOLS);
+        assert_eq!(names(manager_tools()), MANAGER_TOOLS);
+        let served = names(tools());
+        for n in CORE_TOOLS.iter().chain(&MANAGER_TOOLS) {
+            assert!(!served.contains(n), "{n} is already a tool");
+        }
+        for t in core_tools().iter().chain(&manager_tools()) {
+            assert!(t.input_schema().is_object(), "{}", t.name());
+        }
+    }
+
+    struct NoHub;
+    impl Hub for NoHub {
+        fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
+            Box::pin(async { None })
+        }
+        fn notify(&self) {}
+    }
+
+    #[tokio::test]
+    async fn a_stub_answers_not_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord = Arc::new(Coord::new(
+            CoordDb::spawn(dir.path().join("work.db")),
+            Arc::new(NoHub),
+        ));
+        let who = Identity::Session {
+            agent: "a".into(),
+            sid: "s".into(),
+            profile: None,
+            job: None,
+            task: None,
+            home: dir.path().to_path_buf(),
+        };
+        let all = core_tools();
+        let stop = all.iter().find(|t| t.name() == "job_stop").unwrap();
+        let args = serde_json::json!({"id": "x1"});
+        stop.check(&args).unwrap();
+        match stop.call(&(coord, who), args).await {
+            ToolResult::Err(text) => {
+                assert_eq!(text, "job_stop: not yet (agent system part 1, Task 15)")
+            }
+            _ => panic!("a stub answered"),
+        }
+    }
 }

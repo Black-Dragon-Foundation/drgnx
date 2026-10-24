@@ -277,7 +277,7 @@ impl<T> Bound for Vec<T> {
 }
 
 /// A string or a list of at most `MAX` (every `:max` of the contract's schemas, such as `env/set`'s 16).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct Bounded<T, const MAX: usize>(pub T);
 

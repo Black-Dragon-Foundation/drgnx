@@ -42,6 +42,8 @@ runtime/
 | `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
 | `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
+| `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
+| `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.

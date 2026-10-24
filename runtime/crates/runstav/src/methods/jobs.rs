@@ -1,6 +1,7 @@
 //! Jobs (`core/drgnx-job.el`): every change answers the job as `drgnx-job-summary` has it.
 
 use super::agents::ById;
+use super::graph::ParsedId;
 use super::method;
 use crate::registry::Method;
 use crate::types::{
@@ -97,10 +98,27 @@ impl<'de> Deserialize<'de> for JobStatusResult {
     }
 }
 
+/// A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports
+/// first.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PlanRef {
+    File(AbsPath),
+    Entity(ParsedId),
+}
+
+/// A task's number in its plan: `8`, or `22b`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum TaskNo {
+    Num(u64),
+    Name(Bounded<String, 16>),
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProposeParams {
-    /// The plan's file.
-    pub plan: AbsPath,
+    /// The plan.
+    pub plan: PlanRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<AbsPath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,9 +132,9 @@ pub struct ProposeParams {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct StartTaskParams {
-    pub plan: AbsPath,
+    pub plan: PlanRef,
     /// The task's number in the plan.
-    pub n: u64,
+    pub n: TaskNo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,67 +205,67 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "job/propose", JobPropose(ProposeParams) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a job from a plan, proposed (approved at once with auto)",
         ),
         method!(
             "job/start-task", JobStartTask(StartTaskParams) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "Start as Job: task n of a plan and the tasks it needs, proposed; the plan is only read",
         ),
         method!(
             "job/reassign", JobReassign(ReassignParams) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a task goes to another profile (the Work graph)",
         ),
         method!(
             "job/block", JobBlock(BlockParams) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a task waits for the user, with a reason (the Work graph)",
         ),
         method!(
             "job/unblock", JobUnblock(ByTask) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a blocked task may run again (the Work graph)",
         ),
         method!(
             "job/order", JobOrder(OrderParams) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a task moves in its job's run order (the Work graph)",
         ),
         method!(
             "job/approve", JobApprove(WithBudget) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a proposed job runs, with an optional budget",
         ),
         method!(
             "job/stop", JobStop(ById) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a job's agents stop and it waits",
         ),
         method!(
             "job/resume", JobResume(WithBudget) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a stopped job runs again, with an optional new budget",
         ),
         method!(
             "job/card", JobCard(CardParams) -> JobSummary,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "the user's action on a card (once: a settled card is an error)",
         ),
         method!(
             "job/reply", JobReply(ReplyParams) -> bool,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "the user's answer to an agent's message",
         ),
         method!(
             "job/dismiss", JobDismiss(ByMessage) -> bool,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a message acted on without an answer",
         ),
         method!(
             "job/status", JobStatus(StatusParams) -> JobStatusResult,
-            classes: [User], writes: false,
+            classes: [User], writes: false, home: Front,
             doc: "one job (with its decision log when asked), or every job",
         ),
     ]

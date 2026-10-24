@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 81, "{names:?}");
+        assert_eq!(names.len(), 107, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -410,6 +410,7 @@ mod tests {
             "agents/stop",
         ];
         want.extend(FRONT_WRITES);
+        want.extend(CORE_WRITES);
         want.extend(
             registry()
                 .iter()
@@ -455,6 +456,39 @@ mod tests {
         "settings/record",
         // the editor's answer to an agent's settings change (unified-settings Task 32)
         "settings/confirm",
+    ];
+
+    /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
+    const CORE_WRITES: [&str; 10] = [
+        "agents/move",
+        "agents/role",
+        "exec/start",
+        "exec/stop",
+        "messages/retract",
+        "plans/write",
+        "brief/set",
+        "budget/set",
+        "records/import",
+        "records/decide",
+    ];
+
+    /// The agent core's methods that read only.
+    const CORE_READS: [&str; 15] = [
+        "agents/slice",
+        "exec/get",
+        "exec/list",
+        "exec/log",
+        "matrix/get",
+        "matrix/check",
+        "presence/set",
+        "plans/get",
+        "brief/build",
+        "reports/get",
+        "decisions/effects",
+        "timeline/get",
+        "budget/get",
+        "pace/get",
+        "records/status",
     ];
 
     /// The store's methods that read only (Urdr Task 15b), the front's too.
@@ -506,6 +540,17 @@ mod tests {
         ];
         want.extend(FRONT_WRITES);
         want.extend(FRONT_READS);
+        // the agent core (agent system part 1): the hub serves every session and plan run itself
+        want.extend(CORE_WRITES);
+        want.extend(CORE_READS);
+        want.push("records/proposals");
+        want.extend(
+            registry()
+                .iter()
+                .map(|m| m.name)
+                .filter(|n| n.starts_with("agents/") || n.starts_with("job/"))
+                .filter(|n| !CORE_WRITES.contains(n) && !CORE_READS.contains(n)),
+        );
         want.sort();
         assert_eq!(front, want, "the methods the front serves itself");
         // every method of the store is the user's alone
@@ -534,15 +579,17 @@ mod tests {
         let from = |name| events().iter().find(|e| e.name == name).map(|e| e.from);
         assert_eq!(from("events"), Some(Home::Front));
         assert_eq!(from("challenge"), Some(Home::Front));
-        assert_eq!(from("job"), Some(Home::Backend));
+        assert_eq!(from("job"), Some(Home::Front));
+        assert_eq!(from("card"), Some(Home::Backend));
         assert_eq!(from("budget"), Some(Home::Front));
         let methods = methods_json();
-        assert_eq!(
-            methods["methods"][0]["home"],
-            json!("backend"),
-            "{}",
-            methods["methods"][0]
-        );
+        let env_set = methods["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "env/set")
+            .unwrap();
+        assert_eq!(env_set["home"], json!("backend"), "{env_set}");
     }
 
     #[test]
@@ -647,6 +694,8 @@ mod tests {
                 "graph/grants",
                 "graph/proposed",
                 "graph/settings",
+                "plans/write",
+                "reports/get",
             ]
             .contains(&m.name)
             {
@@ -669,7 +718,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 53);
+        assert_eq!(with, 72);
     }
 
     #[test]
@@ -820,7 +869,7 @@ mod tests {
             "{t}"
         );
         assert!(
-            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |"),
+            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | front |"),
             "{t}"
         );
         assert!(

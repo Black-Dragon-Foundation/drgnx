@@ -1,0 +1,17 @@
+[package]
+name = "hermod"
+description = "An ACP client on the schema crate: stamped updates, message ids, fork at a message, exactly-once exit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+runstav = { path = "../runstav", version = "0.1.0" }
+draugr = { path = "../draugr", version = "0.1.0" }
+agent-client-protocol-schema.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

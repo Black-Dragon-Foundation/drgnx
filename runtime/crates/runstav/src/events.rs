@@ -1,10 +1,12 @@
 //! The events a hub sends unasked, `{event, data}`: the nine the Lisp backend broadcast on main (`core/drgnx-hub.el`,
 //! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice`, `gateway/need-keys`,
-//! `gateway/keys-changed`, `settings/proposed` and `settings/explain` (the agents' settings tools, to the editor).
-//! Each names
+//! `gateway/keys-changed`, `settings/proposed` and `settings/explain` (the agents' settings tools, to the editor),
+//! and the agent core's `agent-step`, `exec-done`, `supervisor`, `view-written` and `view-proposal` (agent system
+//! part 1).  Each names
 //! the side that sends it ([`EventType::from`]): `events` is the front's since the front writes work.db (its writer's
 //! new rows), and the gateway's `request`, `budget` and `fallback` since the front serves the gateway (Task 22; a
-//! job's `fallback`, with its `job`, still comes from the backend's job runner); the other five are the backend's.
+//! job's `fallback`, with its `job`, still comes from the backend's job runner); `agent`, `agent-entries` and `job`
+//! since the hub serves `agents/*` and `job/*` (agent system part 1); `card` and `lease-released` are the backend's.
 //! The front relays a backend event only when it decodes as its type (strict: an unknown key is an error with its
 //! path).
 
@@ -180,13 +182,13 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "agent",
             AgentEvent,
-            Backend,
+            Front,
             "a session's snapshot changed (at most one per session per 50 ms)"
         ),
         event!(
             "agent-entries",
             AgentEntries,
-            Backend,
+            Front,
             "a session's entries new or changed since the last time"
         ),
         event!(
@@ -211,7 +213,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "job",
             JobChanged,
-            Backend,
+            Front,
             "a job's status, tasks or open cards changed"
         ),
         event!("budget", Budget, Front, "a job's spend reached its budget"),
@@ -256,6 +258,36 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             crate::methods::settings::Explain,
             Front,
             "an agent's settings_get: the editor answers settings/explained with the same req"
+        ),
+        event!(
+            "agent-step",
+            crate::methods::timeline::AgentStep,
+            Front,
+            "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)"
+        ),
+        event!(
+            "exec-done",
+            crate::methods::exec::ExecDone,
+            Front,
+            "a job ended: its status, exit and summary"
+        ),
+        event!(
+            "supervisor",
+            crate::methods::timeline::SupervisorEvent,
+            Front,
+            "the supervisor paused an agent by a rule, with its card"
+        ),
+        event!(
+            "view-written",
+            crate::methods::records::ViewWritten,
+            Front,
+            "the hub wrote a record view file (never committed)"
+        ),
+        event!(
+            "view-proposal",
+            crate::methods::records::ViewProposal,
+            Front,
+            "a hand edit to a view became a proposal (Records: Review Proposal)"
         ),
     ];
     v.sort_by_key(|e| e.name);
@@ -321,6 +353,12 @@ mod tests {
                     "gateway/keys-changed",
                     "settings/proposed",
                     "settings/explain",
+                    // the agent core's (agent system part 1): the Lisp never sends them
+                    "agent-step",
+                    "exec-done",
+                    "supervisor",
+                    "view-written",
+                    "view-proposal",
                 ]
                 .contains(&n.as_str())
             })
@@ -335,7 +373,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 15);
+        assert_eq!(events().len(), 20);
         assert_eq!(
             event("settings/proposed").map(|e| e.from),
             Some(Home::Front)
