@@ -186,7 +186,7 @@ B's is round 1 (+/-4 ms)."
           (should (equal (plist-get (plist-get r :present) :p50) 4.0)))))))
 
 (ert-deftest drgnx-perf/compose-probe-absent-on-stock ()
-  (should-not (fboundp 'glitnir-stats))
+  (skip-unless (not (fboundp 'glitnir-stats)))                          ; a stock build: a Glitnir one has the probe
   (drgnx-perf-begin)
   (should-not (plist-member (drgnx-perf-end) :compose))
   (should-not (plist-member (drgnx-perf-end) :present))

@@ -166,6 +166,7 @@ feature; each `glitnir-refresh' pushes the option's value at that moment onto RE
     (should (equal (car refreshes) (drgnx-look-test--before)))))     ; refreshed after the old value is back
 
 (ert-deftest drgnx-look/no-glitnir-no-chrome ()
+  (skip-unless (not (featurep 'glitnir)))                               ; a stock build: Glitnir's turns the chrome on
   (let ((child-frame-chrome '((corner-radius . 1))) (called nil))
     (cl-letf (((symbol-function 'glitnir-refresh) (lambda (&rest _) (setq called t))))
       (drgnx-test-with-modules '(ui/look) :strict t
