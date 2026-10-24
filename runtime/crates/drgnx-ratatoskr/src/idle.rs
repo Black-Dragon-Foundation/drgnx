@@ -293,6 +293,8 @@ pub fn notice(n: Option<u64>) -> Value {
 struct Real {
     watch: ExeWatch,
     backend: Arc<Backend>,
+    /// The hub's own sessions: a running turn of theirs delays a restart, an idle chat does not.
+    front: Arc<Front>,
 }
 
 impl Source for Real {
@@ -305,7 +307,8 @@ impl Source for Real {
     }
 
     async fn busy(&self) -> Option<u64> {
-        self.backend.busy().await
+        let mine = self.front.core.agents.busy_count();
+        self.backend.busy().await.map(|b| b + mine)
     }
 }
 
@@ -326,7 +329,11 @@ pub async fn run(front: Arc<Front>, backend: Arc<Backend>, tick: Duration) {
         }
     };
     let mut state = Watcher::new(Some(watch.start()));
-    let src = Real { watch, backend };
+    let src = Real {
+        watch,
+        backend,
+        front: front.clone(),
+    };
     let mut every = tokio::time::interval(tick);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     every.tick().await;

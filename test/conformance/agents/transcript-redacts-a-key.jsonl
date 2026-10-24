@@ -1,0 +1,17 @@
+{"scenario": "agents/transcript-redacts-a-key", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: the session transcript <state>/hub/transcripts/<sid>.jsonl is mode 0600 and holds no key: a key-shaped token a message carries is replaced by [redacted: KIND] before it is written."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "my token=Zk3Qw9Lm2Xv8Rt5Yp7Hn for it"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 10000}
+{"do": "file", "path": "$STATE/hub/transcripts/$sid.jsonl", "exists": true, "mode": "0600"}
+{"do": "file_grep", "paths": ["$STATE/hub/transcripts/*.jsonl"], "absent": "Zk3Qw9Lm2Xv8"}

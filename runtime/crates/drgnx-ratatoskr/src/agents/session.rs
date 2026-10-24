@@ -9,6 +9,8 @@
 //! design document).  Changes reach the editors as `agent` and `agent-entries` events, at most one pair per session
 //! per 50 ms.
 
+use super::queue::{Origin, Queue, Queued};
+use super::transcript;
 use crate::agent_core::not_yet;
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -20,9 +22,11 @@ use hermod::{Conn, ConnOpts, Event, Incoming, SessionId};
 use runstav::methods::Empty;
 use runstav::methods::agents::{
     AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
-    RpcId, SendParams, Sessions, Snapshot, StartParams, Started, Transcript, Usage, Via,
+    RpcId, SendParams, SessionStatus, Sessions, Snapshot, StartParams, Started, Transcript, Usage,
+    Via,
 };
 use runstav::methods::matrix::Role;
+use runstav::methods::timeline::{AgentStep, Step, StepClass};
 use runstav::registry::Class;
 use runstav::types::RequestId;
 use runstav::wire::{Error, ErrorCode};
@@ -37,6 +41,8 @@ use std::time::Duration;
 const EMIT_EVERY: Duration = Duration::from_millis(50);
 /// SIGTERM, then SIGKILL after this.
 const STOP_GRACE: Duration = Duration::from_secs(3);
+/// A Stop that the agent has not answered by then ends its process.
+const STOP_ANSWER: Duration = Duration::from_secs(2);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -99,11 +105,75 @@ struct State {
     commands: Vec<Value>,
     exit: Option<i64>,
     stderr: Option<String>,
+    /// Prompts waiting for the turn to end (or held after a Stop).
+    queue: Queue,
+    /// The queue is held (a Stop, or the pause after a tool call) until delivered or something new is sent.
+    paused: bool,
+    /// Cancel once the running tool call completes (`Hub::cancel_after_tool`).
+    hold: bool,
+    /// The reader should cancel the turn now (a hold met its tool call's end).
+    cancel_wanted: bool,
+    /// Entries before this index are in the transcript file.
+    flushed: usize,
+    /// The turn running (counts from 1), so a late timer knows it is the same one.
+    turn: u64,
+    /// The hub is ending: the turn's end is not the user's Stop, and nothing is held for it.
+    ending: bool,
+    /// The step running, and the steps closed since the last drain.
+    cur: Option<OpenStep>,
+    stash: Option<OpenStep>,
+    closed: Vec<ClosedStep>,
+}
+
+/// A step that has begun.
+#[derive(Clone, Debug)]
+struct OpenStep {
+    class: StepClass,
+    start: f64,
+    tool: Option<String>,
+    tool_kind: Option<String>,
+    tool_id: Option<String>,
+    message_id: Option<String>,
+}
+
+/// A step that ended, waiting to be written to the `step` table and announced.
+#[derive(Clone, Debug)]
+struct ClosedStep {
+    open: OpenStep,
+    end: f64,
+    /// Set on a turn's last step.
+    turn_id: Option<String>,
+    tokens_in: i64,
+    tokens_out: i64,
+    cache_read: i64,
+    cache_write: i64,
+    cost: Option<f64>,
+}
+
+/// What a turn used (the last step carries it).
+#[derive(Clone, Debug, Default)]
+struct TurnUse {
+    turn_id: Option<String>,
+    tokens_in: i64,
+    tokens_out: i64,
+    cache_read: i64,
+    cache_write: i64,
+    cost: Option<f64>,
 }
 
 impl State {
     fn new() -> State {
         State {
+            queue: Queue::default(),
+            paused: false,
+            hold: false,
+            cancel_wanted: false,
+            flushed: 0,
+            turn: 0,
+            ending: false,
+            cur: None,
+            stash: None,
+            closed: Vec::new(),
             status: runstav::methods::agents::SessionStatus::Starting,
             seq: 0,
             entries: Vec::new(),
@@ -115,6 +185,69 @@ impl State {
             commands: Vec::new(),
             exit: None,
             stderr: None,
+        }
+    }
+
+    /// Close the step running (if any) at END, carrying USE.
+    fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
+        if let Some(open) = self.cur.take() {
+            let u = turn_use.unwrap_or_default();
+            self.closed.push(ClosedStep {
+                open,
+                end,
+                turn_id: u.turn_id,
+                tokens_in: u.tokens_in,
+                tokens_out: u.tokens_out,
+                cache_read: u.cache_read,
+                cache_write: u.cache_write,
+                cost: u.cost,
+            });
+        }
+    }
+
+    /// The running step ends and a step of CLASS begins.
+    fn step_begin(&mut self, class: StepClass, tool: Option<(&str, Option<&str>, Option<&str>)>) {
+        let at = now();
+        self.step_close(at, None);
+        self.cur = Some(OpenStep {
+            class,
+            start: at,
+            tool: tool.map(|t| t.0.to_string()),
+            tool_kind: tool.and_then(|t| t.1).map(str::to_string),
+            tool_id: tool.and_then(|t| t.2).map(str::to_string),
+            message_id: None,
+        });
+    }
+
+    /// A step of thinking when none runs (text arriving between tool calls).
+    fn step_think(&mut self, message_id: Option<&str>) {
+        if self.cur.is_none() {
+            self.step_begin(StepClass::Think, None);
+        }
+        if let Some(c) = self.cur.as_mut()
+            && c.message_id.is_none()
+        {
+            c.message_id = message_id.map(str::to_string);
+        }
+    }
+
+    /// A permission request makes the step wait for the user; the step it interrupted comes back after.
+    fn wait_begin(&mut self) {
+        if self.stash.is_none() {
+            self.stash = self.cur.clone();
+        }
+        self.step_begin(StepClass::UserWait, None);
+    }
+
+    fn wait_end(&mut self) {
+        if !self.permissions.is_empty() {
+            return;
+        }
+        let at = now();
+        self.step_close(at, None);
+        if let Some(mut prev) = self.stash.take() {
+            prev.start = at;
+            self.cur = Some(prev);
         }
     }
 
@@ -163,8 +296,14 @@ impl State {
         let mid = u.get("messageId").and_then(Value::as_str);
         match kind {
             "user_message_chunk" => self.text(EntryType::User, &text_of(u), mid),
-            "agent_message_chunk" => self.text(EntryType::Agent, &text_of(u), mid),
-            "agent_thought_chunk" => self.text(EntryType::Thought, &text_of(u), mid),
+            "agent_message_chunk" => {
+                self.step_think(mid);
+                self.text(EntryType::Agent, &text_of(u), mid);
+            }
+            "agent_thought_chunk" => {
+                self.step_think(mid);
+                self.text(EntryType::Thought, &text_of(u), mid);
+            }
             "tool_call" | "tool_call_update" => {
                 self.open = None;
                 let id = u
@@ -196,6 +335,34 @@ impl State {
                     }
                 }
                 self.dirty.insert(idx);
+                let (title, tkind, status) = {
+                    let r = &self.entries[idx].rest;
+                    let s = |k: &str| r.get(k).and_then(Value::as_str).map(str::to_string);
+                    (s("title"), s("kind"), s("status"))
+                };
+                let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
+                if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) != Some(id)
+                    && !matches!(status.as_deref(), Some("completed" | "failed"))
+                {
+                    self.step_begin(
+                        StepClass::Tool,
+                        Some((
+                            title.as_deref().unwrap_or("tool"),
+                            tkind.as_deref(),
+                            Some(id),
+                        )),
+                    );
+                }
+                if matches!(status.as_deref(), Some("completed" | "failed")) {
+                    if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) == Some(id) {
+                        self.step_begin(StepClass::Think, None);
+                    }
+                    if self.hold {
+                        self.hold = false;
+                        self.paused = true;
+                        self.cancel_wanted = true;
+                    }
+                }
             }
             "plan" => {
                 self.open = None;
@@ -265,6 +432,46 @@ pub struct Session {
     scheduled: AtomicBool,
     next_request: AtomicU64,
     state: Mutex<State>,
+    /// Transcripts and the held queue on disk (none in unit tests).
+    store: Option<transcript::Store>,
+    /// Closed steps, in order, to the task that writes them to the `step` table.
+    steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
+    /// How a turn ended, to the reader task.
+    done: tokio::sync::mpsc::UnboundedSender<TurnEnd>,
+}
+
+/// What `Conn::prompt` answered.
+struct TurnEnd(Result<hermod::PromptOutcome, hermod::Error>);
+
+/// Where a session's steps are written and announced.
+#[derive(Clone)]
+pub(crate) struct StepSink {
+    pub writer: crate::coord::Writer,
+    pub editors: Arc<crate::settings::agents::Editors>,
+    pub bus: tokio::sync::broadcast::Sender<AgentStep>,
+}
+
+/// What `open` and `resume` know of a session before its agent is running.
+struct Ident {
+    id: String,
+    name: String,
+    started: f64,
+    role: Role,
+    cwd: PathBuf,
+    task: Option<String>,
+    job: Option<String>,
+    parent: Option<String>,
+    about: Option<String>,
+    document: Option<PathBuf>,
+}
+
+/// A launched agent with its handshake done.
+struct Launched {
+    conn: Conn,
+    acp: SessionId,
+    caps: Option<Value>,
+    enforced: bool,
+    enforced_why: Option<String>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only.
@@ -440,7 +647,42 @@ pub(crate) async fn open(
             d
         }
     };
-    let (spec, enforced, enforced_why) = launch_spec(&profile, &cwd)?;
+    let (l, rx) = launch(&profile, &cwd, None).await?;
+    let ident = Ident {
+        id: sid.clone(),
+        name: name.clone(),
+        started: now(),
+        role,
+        cwd,
+        task: p.task.as_ref().map(|t| t.as_str().to_string()),
+        job: p.job.as_ref().map(|j| j.as_str().to_string()),
+        parent: None,
+        about: p.about.as_ref().map(|a| a.to_string()),
+        document: p.document.as_ref().map(|d| PathBuf::from(d.as_str())),
+    };
+    let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
+    if let Some(store) = &s.store {
+        store.save_meta(&s.id, &json!({"about": s.about, "document": s.document}));
+    }
+    lock(&s.state).status = SessionStatus::Idle;
+    hub.insert(s.clone());
+    tokio::spawn(s.clone().run(rx, done));
+    if let Some(db) = hub.db() {
+        insert_row(db, &s).await;
+    }
+    record_entities(front, caller, &s).await;
+    s.changed();
+    Ok(Started { id: sid, name })
+}
+
+/// PROFILE's agent in CWD: started, initialized, and on a session: a new one, or EXISTING (the ACP id) by
+/// `session/resume`, else `session/load` when the agent can only load.
+async fn launch(
+    profile: &AgentProfile,
+    cwd: &Path,
+    existing: Option<&str>,
+) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
+    let (spec, enforced, enforced_why) = launch_spec(profile, cwd)?;
     let (conn, rx) = Conn::spawn(spec, ConnOpts::default())
         .await
         .map_err(|e| internal(e.to_string()))?;
@@ -449,28 +691,85 @@ pub(crate) async fn open(
             serde_json::from_value(json!({"fs": {"readTextFile": true, "writeTextFile": true}}))
                 .map_err(|e| hermod::Error::Decode(e.to_string()))?;
         let info = conn.initialize(caps).await?;
-        let acp = conn.new_session(&cwd, Vec::new(), None).await?;
-        Ok::<_, hermod::Error>((info, acp))
+        let caps = serde_json::to_value(&info.caps).ok();
+        let acp = match existing {
+            None => conn.new_session(cwd, Vec::new(), None).await?,
+            Some(id) => {
+                let sid = SessionId::new(id.to_string());
+                let can = |p: &str| {
+                    caps.as_ref()
+                        .and_then(|c| c.pointer(p))
+                        .is_some_and(|v| !v.is_null() && *v != json!(false))
+                };
+                if can("/sessionCapabilities/resume") {
+                    conn.resume_session(&sid, cwd, Vec::new()).await?;
+                } else if can("/loadSession") {
+                    conn.load_session(&sid, cwd, Vec::new()).await?;
+                } else {
+                    return Err(hermod::Error::Decode(
+                        "the agent can neither resume nor load a session".into(),
+                    ));
+                }
+                sid
+            }
+        };
+        Ok::<_, hermod::Error>((caps, acp))
     };
-    let (info, acp) = match init.await {
-        Ok(x) => x,
+    match init.await {
+        Ok((capabilities, acp)) => Ok((
+            Launched {
+                conn,
+                acp,
+                caps: capabilities,
+                enforced,
+                enforced_why,
+            },
+            rx,
+        )),
         Err(e) => {
             draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller).await;
-            return Err(internal(format!("{}: {e}", profile.name)));
+            Err(internal(format!("{}: {e}", profile.name)))
         }
+    }
+}
+
+/// The session for IDENT on a launched agent: idle state, its step writer running.
+fn assemble(
+    i: Ident,
+    profile: &AgentProfile,
+    l: Launched,
+    front: &Front,
+    bus: tokio::sync::broadcast::Sender<AgentStep>,
+) -> (Arc<Session>, tokio::sync::mpsc::UnboundedReceiver<TurnEnd>) {
+    let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
+    let ctx = StepCtx {
+        session: i.id.clone(),
+        task: i.task.clone(),
+        agent: profile.name.clone(),
+        provider: profile.ai.clone(),
     };
+    tokio::spawn(write_steps(
+        rx,
+        StepSink {
+            writer: front.writer.clone(),
+            editors: front.editors.clone(),
+            bus,
+        },
+        ctx,
+    ));
     let s = Arc::new(Session {
-        id: sid.clone(),
-        started: now(),
-        name: name.clone(),
+        id: i.id,
+        started: i.started,
+        name: i.name,
         profile: profile.name.clone(),
-        role,
-        cwd,
-        task: p.task.as_ref().map(|t| t.as_str().to_string()),
-        job: p.job.as_ref().map(|j| j.as_str().to_string()),
-        parent: None,
-        about: p.about.as_ref().map(|a| a.to_string()),
-        document: p.document.as_ref().map(|d| PathBuf::from(d.as_str())),
+        role: i.role,
+        cwd: i.cwd,
+        task: i.task,
+        job: i.job,
+        parent: i.parent,
+        about: i.about,
+        document: i.document,
         via: if profile.ai.is_some() {
             Via::Gateway
         } else {
@@ -482,29 +781,225 @@ pub(crate) async fn open(
             ProfileMode::Interrupt => Mode::Interrupt,
         }),
         provider: profile.ai.clone(),
-        enforced,
-        enforced_why,
-        capabilities: serde_json::to_value(&info.caps).ok(),
-        conn,
-        acp,
+        enforced: l.enforced,
+        enforced_why: l.enforced_why,
+        capabilities: l.caps,
+        conn: l.conn,
+        acp: l.acp,
         editors: front.editors.clone(),
         scheduled: AtomicBool::new(false),
         next_request: AtomicU64::new(1),
         state: Mutex::new(State::new()),
+        store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
+        steps,
+        done,
     });
+    (s, done_rx)
+}
+
+/// The rows `asession` kept, as sessions again after a restart (`session/resume`, else `session/load`): the
+/// transcript read back, the held queue restored and its first prompt delivered.  A session whose profile is gone,
+/// or whose agent will not resume, stays in the table for the next start.
+pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
+    let Some(db) = hub.db() else { return };
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        f64,
+    );
+    let rows: Vec<Row> = match db
+        .read(|c| {
+            let mut q = c.prepare(
+                "select sid, name, profile, role, cwd, task, job, acp, parent, at from asession order by at",
+            )?;
+            let it = q.query_map([], |r| {
+                Ok((
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
+                ))
+            })?;
+            it.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        })
+        .await
     {
-        let mut st = lock(&s.state);
-        st.status = runstav::methods::agents::SessionStatus::Idle;
-        st.seq += 1;
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("cannot read the recorded sessions: {e}");
+            return;
+        }
+    };
+    for (sid, name, profile_name, role, cwd, task, job, acp, parent, at) in rows {
+        if hub.find(&sid).is_ok() {
+            continue;
+        }
+        let Some(profile) = find_profile(front, &profile_name) else {
+            tracing::warn!(
+                sid,
+                "session not resumed: no agent profile {profile_name:?}"
+            );
+            continue;
+        };
+        let store = front.dirs.get().map(|d| transcript::Store::new(&d.hub));
+        let meta = store
+            .as_ref()
+            .map(|s| s.load_meta(&sid))
+            .unwrap_or(Value::Null);
+        let ident = Ident {
+            id: sid.clone(),
+            name,
+            started: at,
+            role: serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
+            cwd: PathBuf::from(&cwd),
+            task,
+            job,
+            parent,
+            about: meta
+                .get("about")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            document: meta
+                .get("document")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
+        };
+        let (l, rx) = match launch(&profile, Path::new(&cwd), Some(&acp)).await {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(sid, "session not resumed: {}", e.message);
+                continue;
+            }
+        };
+        let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
+        if let Some(store) = &s.store {
+            let entries = store.load(&sid);
+            let (queue, paused) = store.load_queue(&sid);
+            let mut st = lock(&s.state);
+            st.flushed = entries.len();
+            st.entries = entries;
+            st.queue = queue;
+            st.paused = paused;
+        }
+        lock(&s.state).status = SessionStatus::Idle;
+        hub.insert(s.clone());
+        tokio::spawn(s.clone().run(rx, done));
+        s.changed();
+        s.next();
     }
-    hub.insert(s.clone());
-    tokio::spawn(s.clone().run(rx));
-    if let Some(db) = hub.db() {
-        insert_row(db, &s).await;
+}
+
+/// What a session's step rows say of it.
+struct StepCtx {
+    session: String,
+    task: Option<String>,
+    agent: String,
+    provider: Option<String>,
+}
+
+/// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
+/// and on the hub's step channel.  Best effort: a store that is not ready loses the row, not the announcement.
+async fn write_steps(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<ClosedStep>,
+    sink: StepSink,
+    ctx: StepCtx,
+) {
+    use norn::write::steps as table;
+    let caller = Caller {
+        class: Class::Service,
+        sid: None,
+        job: None,
+        conn_id: 0,
+        backend: false,
+    };
+    let mut local = 0u64;
+    while let Some(c) = rx.recv().await {
+        local += 1;
+        let class_name = serde_json::to_value(c.open.class)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let new = table::StepNew {
+            session: format!("session:{}", ctx.session),
+            task: ctx.task.clone(),
+            plan: None,
+            project: None,
+            agent: Some(format!("agent:{}", ctx.agent)),
+            provider: ctx.provider.clone(),
+            class: table::StepClass::parse(&class_name).unwrap_or(table::StepClass::Think),
+            start: c.open.start,
+            tool: c.open.tool.clone(),
+            tool_kind: c.open.tool_kind.clone(),
+            message_id: c.open.message_id.clone(),
+            turn_id: c.turn_id.clone(),
+            snapshot: None,
+            log_version: None,
+        };
+        let end = table::StepEnd {
+            end: c.end,
+            tokens_in: c.tokens_in,
+            tokens_out: c.tokens_out,
+            cache_read: c.cache_read,
+            cache_write: c.cache_write,
+            cost: c.cost,
+            cost_unit: c.cost.map(|_| "usd".to_string()),
+            snapshot: None,
+            log_version: None,
+        };
+        let (id, seq) = match sink
+            .writer
+            .write(&caller, "agents/step", move |tx| {
+                let id = table::open(tx, new)?;
+                table::close(tx, id, end)?;
+                let seq: i64 =
+                    tx.sql()
+                        .query_row("select seq from step where id = ?1", [id], |r| r.get(0))?;
+                Ok((id, seq))
+            })
+            .await
+        {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(sid = ctx.session, "step not recorded: {e}");
+                (0, local as i64)
+            }
+        };
+        let step = Step {
+            id,
+            session: ctx.session.clone(),
+            task: ctx.task.clone(),
+            plan: None,
+            project: None,
+            agent: Some(ctx.agent.clone()),
+            provider: ctx.provider.clone(),
+            seq: seq as u64,
+            class: c.open.class,
+            start: c.open.start,
+            end: Some(c.end),
+            tool: c.open.tool,
+            tool_kind: c.open.tool_kind,
+            message_id: c.open.message_id,
+            turn_id: c.turn_id,
+            snapshot: None,
+            log_version: None,
+            tokens_in: Some(c.tokens_in as u64),
+            tokens_out: Some(c.tokens_out as u64),
+            cache_read: Some(c.cache_read as u64),
+            cache_write: Some(c.cache_write as u64),
+            cost: c.cost,
+            cost_unit: None,
+        };
+        let ev = AgentStep {
+            session: ctx.session.clone(),
+            step,
+        };
+        sink.editors.broadcast("agent-step", json!(ev));
+        let _ = sink.bus.send(ev);
     }
-    record_entities(front, caller, &s).await;
-    s.changed();
-    Ok(Started { id: sid, name })
 }
 
 async fn insert_row(db: &urdr::Handle, s: &Session) {
@@ -612,7 +1107,46 @@ impl Session {
     /// The change number up by one, and an event pair scheduled (at most one per [`EMIT_EVERY`]).
     fn changed(self: &Arc<Self>) {
         lock(&self.state).seq += 1;
+        self.drain_steps();
         self.schedule();
+    }
+
+    /// The steps that closed go to the writer task, in order.
+    fn drain_steps(&self) {
+        let closed = std::mem::take(&mut lock(&self.state).closed);
+        for c in closed {
+            let _ = self.steps.send(c);
+        }
+    }
+
+    /// The entries not yet in the transcript file, written (redacted) now.
+    fn flush_transcript(&self) {
+        let Some(store) = &self.store else { return };
+        let fresh: Vec<(u64, Entry)> = {
+            let mut st = lock(&self.state);
+            let from = st.flushed.min(st.entries.len());
+            st.flushed = st.entries.len();
+            st.entries[from..]
+                .iter()
+                .enumerate()
+                .map(|(i, e)| ((from + i) as u64, e.clone()))
+                .collect()
+        };
+        if let Err(e) = store.append(&self.id, &fresh) {
+            tracing::warn!(sid = self.id, "transcript not written: {e}");
+        }
+    }
+
+    /// The held queue and the pause, kept for a restart.
+    fn persist_queue(&self) {
+        let Some(store) = &self.store else { return };
+        let (q, paused) = {
+            let st = lock(&self.state);
+            (st.queue.clone(), st.paused)
+        };
+        if let Err(e) = store.save_queue(&self.id, &q, paused) {
+            tracing::warn!(sid = self.id, "queue not kept: {e}");
+        }
     }
 
     fn schedule(self: &Arc<Self>) {
@@ -661,8 +1195,8 @@ impl Session {
             status: Some(st.status),
             via: Some(self.via),
             mode: self.mode,
-            queue: Vec::new(),
-            paused: None,
+            queue: st.queue.texts(),
+            paused: st.paused.then_some(true),
             permissions: st.permissions.iter().map(|p| p.public.clone()).collect(),
             reviews: Vec::new(),
             usage: st.usage.clone(),
@@ -699,12 +1233,45 @@ impl Session {
     }
 
     /// The reader task: the agent's updates, requests and exit.
-    async fn run(self: Arc<Self>, mut rx: tokio::sync::mpsc::Receiver<Event>) {
-        while let Some(ev) = rx.recv().await {
+    async fn run(
+        self: Arc<Self>,
+        mut rx: tokio::sync::mpsc::Receiver<Event>,
+        mut done: tokio::sync::mpsc::UnboundedReceiver<TurnEnd>,
+    ) {
+        loop {
+            let ev = tokio::select! {
+                biased;
+                Some(end) = done.recv() => {
+                    // the agent queued every update of that turn before it answered: handle them first
+                    while let Ok(ev) = rx.try_recv() {
+                        self.handle(ev).await;
+                    }
+                    self.finish_turn(end);
+                    continue;
+                }
+                ev = rx.recv() => ev,
+            };
+            let Some(ev) = ev else { break };
+            self.handle(ev).await;
+        }
+    }
+
+    async fn handle(self: &Arc<Self>, ev: Event) {
+        {
             match ev {
                 Event::Update { update, .. } => {
                     if let Ok(v) = serde_json::to_value(&update) {
-                        lock(&self.state).apply(&v);
+                        let cancel = {
+                            let mut st = lock(&self.state);
+                            st.apply(&v);
+                            std::mem::take(&mut st.cancel_wanted)
+                        };
+                        self.drain_steps();
+                        if cancel {
+                            // the pause after a tool call: the turn ends here, the queue waits
+                            let _ = self.conn.cancel(&self.acp);
+                            self.persist_queue();
+                        }
                         self.schedule();
                     }
                 }
@@ -756,8 +1323,12 @@ impl Session {
                             ));
                         st.stderr = Some(stderr).filter(|s| !s.is_empty());
                         st.permissions.clear();
+                        st.stash = None;
+                        st.step_close(now(), None);
                         st.seq += 1;
                     }
+                    self.drain_steps();
+                    self.flush_transcript();
                     self.schedule();
                 }
             }
@@ -808,12 +1379,16 @@ impl Session {
                 .cloned()
                 .unwrap_or_default(),
         };
-        lock(&self.state).permissions.push(Pending {
-            request,
-            public,
-            options,
-            resp,
-        });
+        {
+            let mut st = lock(&self.state);
+            st.permissions.push(Pending {
+                request,
+                public,
+                options,
+                resp,
+            });
+            st.wait_begin();
+        }
         self.changed();
     }
 
@@ -841,6 +1416,7 @@ impl Session {
             ));
         }
         let p = st.permissions.remove(at);
+        st.wait_end();
         drop(st);
         let chosen = match option {
             Some(o) => Some(o.to_string()),
@@ -852,13 +1428,102 @@ impl Session {
     }
 
     pub(crate) fn do_op(self: &Arc<Self>, p: DoParams) -> Result<bool, Error> {
+        let nth = |what: &str| {
+            p.n.ok_or_else(|| invalid("n", format!("{what} needs n, the queued message's place")))
+        };
         match p.op {
             AgentOp::Review => Err(invalid(
                 "item",
                 "no such review (no write is held for review)",
             )),
-            _ => Err(not_yet("agents/do", "8b")),
+            AgentOp::DeliverQueue => {
+                lock(&self.state).paused = false;
+                self.persist_queue();
+                self.next();
+                self.changed();
+                Ok(true)
+            }
+            AgentOp::Unqueue => {
+                let n = nth("unqueue")?;
+                let gone = lock(&self.state).queue.remove(n as usize);
+                self.queue_edited(gone.is_some(), n)
+            }
+            AgentOp::Requeue => {
+                let n = nth("requeue")?;
+                let text = p.text.as_ref().map_or("", |t| t.as_str());
+                let done = if text.trim().is_empty() {
+                    lock(&self.state).queue.remove(n as usize).is_some()
+                } else {
+                    lock(&self.state)
+                        .queue
+                        .replace(n as usize, text.to_string())
+                };
+                self.queue_edited(done, n)
+            }
         }
+    }
+
+    fn queue_edited(self: &Arc<Self>, done: bool, n: u64) -> Result<bool, Error> {
+        if !done {
+            return Err(invalid("n", format!("no queued message {n}")));
+        }
+        self.persist_queue();
+        self.changed();
+        Ok(true)
+    }
+
+    /// The running turn, if any, is the only thing Stop cancels: the permission requests it waits on are answered
+    /// cancelled, the queue is held, and an agent that has not ended the turn after STOP_ANSWER loses its process.
+    pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
+        let (turn, pending) = {
+            let mut st = lock(&self.state);
+            if st.status != SessionStatus::Busy {
+                return false;
+            }
+            st.paused = true;
+            st.hold = false;
+            let pending: Vec<Pending> = st.permissions.drain(..).collect();
+            st.wait_end();
+            (st.turn, pending)
+        };
+        for p in pending {
+            reply(p.resp, None);
+        }
+        let _ = self.conn.cancel(&self.acp);
+        self.persist_queue();
+        self.changed();
+        let me = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(STOP_ANSWER).await;
+            let same = {
+                let st = lock(&me.state);
+                st.status == SessionStatus::Busy && st.turn == turn
+            };
+            if same {
+                draugr::kill_group(me.conn.pid(), STOP_GRACE, &draugr::RealSignaller).await;
+            }
+        });
+        true
+    }
+
+    /// Pause: cancel once the tool call running now completes and hold the queue; with no turn running, hold the
+    /// queue.
+    pub(crate) fn pause_after_tool(self: &Arc<Self>) -> Result<(), Error> {
+        {
+            let mut st = lock(&self.state);
+            match st.status {
+                SessionStatus::Exited => return Err(invalid("id", "the session has exited")),
+                SessionStatus::Busy => st.hold = true,
+                _ => st.paused = true,
+            }
+        }
+        self.persist_queue();
+        self.changed();
+        Ok(())
+    }
+
+    pub(crate) fn status(&self) -> SessionStatus {
+        lock(&self.state).status
     }
 
     async fn read_file(&self, req: &Value) -> Result<String, String> {
@@ -895,54 +1560,140 @@ impl Session {
         draugr::kill_group(self.conn.pid(), grace, &draugr::RealSignaller).await;
     }
 
-    /// One turn of TEXT while idle.  The queue, steering and the other origins are Task 8b's.
-    pub(crate) fn begin_turn(self: &Arc<Self>, text: String) -> Result<(), Error> {
-        {
+    /// A prompt from ORIGIN.  Idle, it goes behind whatever a Stop held back and the queue is delivered; during a
+    /// turn it waits in the queue (ahead of the ordinary ones when the profile's mode is `steer`).  It never
+    /// cancels: `interrupt` mode queues too, and only Stop cancels.
+    pub(crate) fn prompt(self: &Arc<Self>, text: String, origin: Origin) -> Result<(), Error> {
+        let idle = {
             let mut st = lock(&self.state);
-            use runstav::methods::agents::SessionStatus as S;
-            match st.status {
-                S::Idle => {}
-                S::Exited => return Err(invalid("id", "the session has exited")),
-                _ => {
-                    return Err(invalid(
-                        "id",
-                        "the session is busy (queued prompts arrive with agent system part 1, Task 8b)",
-                    ));
-                }
+            if st.status == SessionStatus::Exited {
+                return Err(invalid("id", "the session has exited"));
             }
-            st.status = S::Busy;
-            st.open = None;
-            st.text(EntryType::User, &text, None);
-            st.open = None;
+            let idle = st.status == SessionStatus::Idle;
+            let steer = !idle && self.mode == Some(Mode::Steer);
+            st.queue.push(text, origin, steer);
+            if idle {
+                st.paused = false;
+            }
+            idle
+        };
+        self.persist_queue();
+        if idle {
+            self.next();
         }
         self.changed();
-        let me = self.clone();
-        tokio::spawn(async move {
-            let block = json!({"type": "text", "text": text});
-            let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
-            let out = me.conn.prompt(&me.acp, blocks, None).await;
-            {
-                let mut st = lock(&me.state);
-                st.open = None;
-                let mut rest = Map::new();
-                match &out {
-                    Ok(o) => {
-                        rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
-                        st.push(EntryType::Stop, rest);
-                    }
-                    Err(hermod::Error::Closed) => {}
-                    Err(e) => {
-                        rest.insert("text".into(), json!(e.to_string()));
-                        st.push(EntryType::Error, rest);
-                    }
+        Ok(())
+    }
+
+    /// Start the next queued prompt when the session is idle and the queue is not held.
+    fn next(self: &Arc<Self>) {
+        let item = {
+            let mut st = lock(&self.state);
+            if st.status != SessionStatus::Idle || st.paused {
+                return;
+            }
+            let Some(item) = st.queue.pop() else { return };
+            st.status = SessionStatus::Busy;
+            st.turn += 1;
+            st.open = None;
+            st.text(EntryType::User, &item.text, None);
+            if let Some(e) = st.entries.last_mut() {
+                if let Some(tag) = item.origin.tag() {
+                    e.rest.insert("origin".into(), json!(tag));
                 }
-                if st.status == runstav::methods::agents::SessionStatus::Busy {
-                    st.status = runstav::methods::agents::SessionStatus::Idle;
+                if item.steer {
+                    e.rest.insert("steer".into(), json!(true));
                 }
             }
-            me.changed();
-        });
-        Ok(())
+            st.open = None;
+            st.step_begin(StepClass::Think, None);
+            item
+        };
+        self.persist_queue();
+        self.flush_transcript();
+        self.changed();
+        tokio::spawn(self.clone().turn(item));
+    }
+
+    /// One turn of ITEM, and what follows it: the stop entry, the steps closed, the transcript written, the next
+    /// queued prompt unless a Stop or a pause holds it.
+    async fn turn(self: Arc<Self>, item: Queued) {
+        let block = json!({"type": "text", "text": item.origin.frame(&item.text)});
+        let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
+        let out = self.conn.prompt(&self.acp, blocks, None).await;
+        // the reader task ends the turn, after the updates the agent sent before its answer
+        let _ = self.done.send(TurnEnd(out));
+    }
+
+    fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
+        let out = end.0;
+        {
+            let mut st = lock(&self.state);
+            st.open = None;
+            st.hold = false;
+            let mut rest = Map::new();
+            let mut used = TurnUse::default();
+            match &out {
+                Ok(o) => {
+                    rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
+                    st.push(EntryType::Stop, rest);
+                    if serde_json::to_value(o.stop).ok() == Some(json!("cancelled")) && !st.ending {
+                        st.paused = true;
+                    }
+                    used = turn_use(o);
+                }
+                Err(hermod::Error::Closed) => {}
+                Err(e) => {
+                    rest.insert("text".into(), json!(e.to_string()));
+                    st.push(EntryType::Error, rest);
+                    st.paused = !st.ending;
+                }
+            }
+            st.stash = None;
+            st.step_close(now(), Some(used));
+            if st.status == SessionStatus::Busy {
+                st.status = SessionStatus::Idle;
+                if st.paused {
+                    st.step_begin(StepClass::Paused, None);
+                }
+            }
+        }
+        if lock(&self.state).ending {
+            self.drain_steps();
+            self.flush_transcript();
+            return;
+        }
+        self.persist_queue();
+        self.flush_transcript();
+        self.changed();
+        self.next();
+    }
+
+    /// The hub ends: the transcript written, the agent's process group ended, the queue left as it is on disk for
+    /// the next start.
+    pub(crate) async fn shutdown(&self) {
+        lock(&self.state).ending = true;
+        self.flush_transcript();
+        draugr::kill_group(
+            self.conn.pid(),
+            Duration::from_secs(1),
+            &draugr::RealSignaller,
+        )
+        .await;
+    }
+}
+
+/// What a finished turn used, from ACP's `usage` and `_meta.turnId`.
+fn turn_use(o: &hermod::PromptOutcome) -> TurnUse {
+    let u = serde_json::to_value(&o.usage).unwrap_or(Value::Null);
+    let n = |k: &str| u.get(k).and_then(Value::as_i64).unwrap_or(0);
+    TurnUse {
+        turn_id: o.turn_id.clone(),
+        tokens_in: n("inputTokens"),
+        tokens_out: n("outputTokens"),
+        cache_read: n("cachedReadTokens"),
+        cache_write: n("cachedWriteTokens"),
+        cost: None,
     }
 }
 
@@ -977,15 +1728,14 @@ pub async fn get(f: &Front, _: &Caller, p: ById) -> Result<Transcript, Error> {
     f.core.agents.get(p.id.as_str())
 }
 
-/// A prompt while idle starts a turn; the queue, steering and origins arrive with Task 8b.
+/// The user's prompt: a turn while idle, else queued (or steered); it never cancels.
 pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
     if c.class != Class::User {
         return Err(refuse("only the user sends a message here"));
     }
     f.core
         .agents
-        .find(p.id.as_str())?
-        .begin_turn(p.text.as_str().to_string())?;
+        .send(p.id.as_str(), p.text.as_str().to_string())?;
     Ok(true)
 }
 
@@ -1059,6 +1809,145 @@ mod tests {
         assert_eq!(st.entries[0].rest["status"], "completed");
         assert_eq!(st.entries[0].rest["title"], "Read x");
         assert_eq!(st.entries[0].rest["id"], "t1");
+    }
+
+    #[test]
+    fn a_turn_is_think_tool_think_and_a_wait_is_split_out() {
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
+            "title": "Read x", "kind": "read", "status": "pending"}),
+        ));
+        st.wait_begin();
+        st.wait_end();
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1",
+            "status": "completed"}),
+        ));
+        st.step_close(
+            now(),
+            Some(TurnUse {
+                tokens_out: 7,
+                ..TurnUse::default()
+            }),
+        );
+        let got: Vec<(StepClass, Option<&str>)> = st
+            .closed
+            .iter()
+            .map(|c| (c.open.class, c.open.tool.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (StepClass::Think, None),
+                (StepClass::Tool, Some("Read x")),
+                (StepClass::UserWait, None),
+                (StepClass::Tool, Some("Read x")),
+                (StepClass::Think, None),
+            ]
+        );
+        assert_eq!(st.closed.last().unwrap().tokens_out, 7);
+        assert_eq!(st.closed[1].open.tool_kind.as_deref(), Some("read"));
+    }
+
+    #[tokio::test]
+    async fn closed_steps_reach_the_step_table_in_order_and_are_announced() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let editors = Arc::new(crate::settings::agents::Editors::default());
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            session: "a1".into(),
+            task: Some("task:7".into()),
+            agent: "mock".into(),
+            provider: None,
+        };
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors,
+            bus,
+        };
+        tokio::spawn(write_steps(rx, sink, ctx));
+        let open = |class, tool: Option<&str>| OpenStep {
+            class,
+            start: 10.0,
+            tool: tool.map(str::to_string),
+            tool_kind: None,
+            tool_id: None,
+            message_id: None,
+        };
+        for (class, tool, turn) in [
+            (StepClass::Think, None, None),
+            (StepClass::Tool, Some("Read x"), Some("t1".to_string())),
+        ] {
+            tx.send(ClosedStep {
+                open: open(class, tool),
+                end: 11.0,
+                turn_id: turn,
+                tokens_in: 10,
+                tokens_out: 5,
+                cache_read: 0,
+                cache_write: 0,
+                cost: None,
+            })
+            .unwrap();
+        }
+        let first = seen.recv().await.unwrap();
+        let second = seen.recv().await.unwrap();
+        assert_eq!((first.step.seq, first.step.class), (1, StepClass::Think));
+        assert_eq!((second.step.seq, second.step.class), (2, StepClass::Tool));
+        assert_eq!(second.step.turn_id.as_deref(), Some("t1"));
+        assert_eq!(second.step.tokens_out, Some(5));
+        let caller = Caller {
+            class: Class::Service,
+            sid: None,
+            job: None,
+            conn_id: 0,
+            backend: false,
+        };
+        let rows: Vec<(String, i64, String, Option<String>)> = writer
+            .write(&caller, "agents/step", |tx| {
+                let mut q = tx
+                    .sql()
+                    .prepare("select session, seq, class, tool from step order by seq")?;
+                let it = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+                Ok(it.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("session:a1".to_string(), 1, "think".to_string(), None),
+                (
+                    "session:a1".to_string(),
+                    2,
+                    "tool".to_string(),
+                    Some("Read x".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_hold_cancels_when_the_tool_call_completes_and_holds_the_queue() {
+        let mut st = State::new();
+        st.hold = true;
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
+            "title": "Run", "kind": "execute", "status": "in_progress"}),
+        ));
+        assert!(!st.cancel_wanted && st.hold);
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1",
+            "status": "completed"}),
+        ));
+        assert!(st.cancel_wanted && st.paused && !st.hold);
     }
 
     #[test]

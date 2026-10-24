@@ -1072,11 +1072,50 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   resolved first). A brainstorm session may read the project and write only its design document.
 - **Launch.** Until Task 10, only test builds (and `test-hooks`) start a session, unsandboxed; no shipped path
   starts one outside Gleipnir.
-- **Stop and kill.** `agents/stop` cancels the turn and ends the agent's process group (SIGTERM, SIGKILL after 3 s);
-  `agents/kill` at once.
+- **Stop and kill.** `agents/stop` on a running turn cancels it (`session/cancel`), answers the pending permission
+  requests cancelled and holds the queue (`paused`); an agent that has not ended the turn after 2 s loses its process
+  group. On a session with no turn running it ends the session (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it
+  at once.
 
-Prompts that queue or steer, transcripts and the step stream are Task 8b's; until then `agents/send` starts a turn
-when the session is idle and refuses when it is busy.
+### Prompts, queue and steer (Task 8b)
+
+`Hub::prompt(sid, text, Origin::{User, Peer(name), Hub})` (`Hub::send` is the user's). Idle, the prompt goes behind
+whatever a Stop held back and the queue is delivered; during a turn it is queued, and nothing but Stop cancels:
+`:mode interrupt` is `queue`, and `:mode steer` puts the prompt ahead of the ordinary queued ones (a steer into the
+running turn needs an adapter request `hermod` does not send yet). A peer's prompt is quoted under a header naming the
+peer; its entry carries `origin: "peer:NAME"`. `agents/do`: `deliver-queue` releases the hold and sends the next
+prompt; `unqueue` (`n`) removes the Nth waiting prompt; `requeue` (`n`, `text`) replaces it (empty removes it). The
+snapshot's `queue` lists the waiting texts and `paused` is true while they are held. `Hub::cancel_after_tool(sid)` is
+the pause: the running tool call completes, then the turn is cancelled and the queue held.
+
+A turn ending as cancelled holds the queue, an error does too; an end-of-turn stop delivers the next prompt at once.
+
+### Transcripts
+
+`<state>/hub/transcripts/<sid>.jsonl` (0600; the folder 0700): one line `{"n": INDEX, "entry": ENTRY}` per entry,
+written when a turn starts and ends and when the agent exits; a later line for an index replaces the earlier one.
+Every string goes through `runstav::secrets::looks_like_secret` first: a private key replaces the whole text, any
+other hit the word (or the line) with `[redacted: KIND]`. Beside it: `<sid>.queue.json` (the held queue and the
+pause, unredacted because the prompts are still to be sent; removed when empty) and `<sid>.meta.json` (a brainstorm's
+topic note and design document, so that a resumed brainstorm keeps its write fence).
+
+### Steps
+
+The hub cuts each turn into steps from its own clock (`think` between tool calls, `tool` from the tool call to its
+`completed`/`failed` with the title and ACP kind, `user-wait` while a permission request waits, `paused` while the
+queue is held) and writes each closed step to schema 8's `step` table (`norn::write::steps`), in order, from one
+writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). Each write is
+announced as an `agent-step` event (`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready
+loses the row (logged), not the event.
+
+### After a restart
+
+`Hub::shutdown` (server end) ends every session's process group and leaves the rows, transcripts and queues.
+`Hub::resume_all` (a background task after the settings are read) reads `asession`, starts each profile's agent and
+brings the session back: `session/resume` when the agent advertises it, else `session/load` (the agent replays its
+history, and the transcript is not used), else the row stays for the next start. The transcript and the queue are
+read back, and the first queued prompt is delivered. `restart-when-idle` counts the hub's busy sessions with the
+backend's: a running turn delays the restart, an idle session does not.
 
 ## Sessions and their sockets
 

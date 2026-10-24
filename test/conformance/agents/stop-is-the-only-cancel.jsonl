@@ -1,0 +1,27 @@
+{"scenario": "agents/stop-is-the-only-cancel", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: only agents/stop cancels a turn. It ends the running turn as cancelled, holds the queued message (paused) and keeps the session; deliver-queue then sends the held message as the next turn."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "silent 30"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy"}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "kept"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/stop", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "paused": true, "queue": ["kept"]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"session": {"status": "idle", "paused": true}, "seq": "$number", "entries": {"$contains": [{"type": "stop", "stop": "Cancelled"}]}}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/do", "params": {"id": "$sid", "op": "requeue", "n": 5, "text": "x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "invalid-params"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/do", "params": {"id": "$sid", "op": "deliver-queue"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "You said: kept"}]]}}}, "within_ms": 10000}
