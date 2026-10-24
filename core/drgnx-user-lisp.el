@@ -27,7 +27,9 @@
   (let ((load-path (cons drgnx-user-lisp--dir load-path)))
     (require feature)))
 
-(eval-when-compile (require 'drgnx-setting))
+(eval-when-compile                      ; early-init.el loads this source before `load-path' has core/
+  (let ((load-path (cons (file-name-directory (or load-file-name buffer-file-name default-directory)) load-path)))
+    (require 'drgnx-setting)))
 (drgnx-user-lisp--require 'drgnx-paths)
 (drgnx-user-lisp--require 'drgnx-setting)
 
