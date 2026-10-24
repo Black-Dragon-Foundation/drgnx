@@ -53,6 +53,21 @@ async fn write<R: Send + 'static>(
     }
 }
 
+/// File the end of a job as a wake to deliver (once).
+async fn record(front: &Front, done: &ExecDone) {
+    let Some(sid) = done.session.clone() else {
+        return;
+    };
+    let (job, at) = (done.id.clone(), now());
+    write(front, move |c| {
+        Ok(c.execute(
+            "insert or ignore into wake(job, session, state, at) values (?1, ?2, 'pending', ?3)",
+            (job, sid, at),
+        )?)
+    })
+    .await;
+}
+
 /// Take the wake of JOB for delivery; false when another delivery has it, or it is gone.
 async fn claim(front: &Front, job: &str) -> bool {
     let job = job.to_string();
@@ -79,7 +94,7 @@ async fn deliver(front: &Front, done: &ExecDone) {
     match front.core.agents.wake(front, &sid, wake_text(done)).await {
         Ok(()) => {
             write(front, move |c| {
-                Ok(c.execute("delete from wake where job = ?1", [job])?)
+                Ok(c.execute("update wake set state = 'done' where job = ?1", [job])?)
             })
             .await;
         }
@@ -107,6 +122,7 @@ pub async fn recover(front: &Front) {
     else {
         return;
     };
+    let known: std::collections::HashSet<String> = rows.iter().map(|r| r.0.clone()).collect();
     for (job, sid, state) in rows {
         let Some(done) = front.core.exec.done(&job) else {
             let job = job.clone();
@@ -116,6 +132,9 @@ pub async fn recover(front: &Front) {
             .await;
             continue;
         };
+        if state == "done" {
+            continue;
+        }
         if state == "sending" {
             let held = front
                 .core
@@ -125,7 +144,7 @@ pub async fn recover(front: &Front) {
             let job = job.clone();
             if held {
                 write(front, move |c| {
-                    Ok(c.execute("delete from wake where job = ?1", [job])?)
+                    Ok(c.execute("update wake set state = 'done' where job = ?1", [job])?)
                 })
                 .await;
                 continue;
@@ -135,6 +154,28 @@ pub async fn recover(front: &Front) {
             })
             .await;
         }
+        deliver(front, &done).await;
+    }
+    // a job that ended with no row on file: the hub died between its result and the row
+    for r in front.core.exec.list(None, false) {
+        let Some(sid) = r.session.clone() else {
+            continue;
+        };
+        if r.status == ExecStatus::Running || known.contains(&r.id) {
+            continue;
+        }
+        let held = front
+            .core
+            .agents
+            .find(&sid)
+            .map_or(true, |s| s.holds_text(&format!("[job {} finished", r.id)));
+        let Some(done) = front.core.exec.done(&r.id) else {
+            continue;
+        };
+        if held {
+            continue;
+        }
+        record(front, &done).await;
         deliver(front, &done).await;
     }
 }
@@ -159,17 +200,11 @@ pub async fn run(front: Arc<Front>, mut events: tokio::sync::broadcast::Receiver
                 }
             }
             Ok(JobEvent::Done(done)) => {
-                if let Some(sid) = done.session.clone() {
+                if done.session.is_some() {
                     let front = front.clone();
                     tokio::spawn(async move {
-                        let (job, at) = (done.id.clone(), now());
-                        write(&front, move |c| {
-                            Ok(c.execute(
-                                "insert or ignore into wake(job, session, state, at) values (?1, ?2, 'pending', ?3)",
-                                (job, sid, at),
-                            )?)
-                        })
-                        .await;
+                        super::die_at("before-wake-row");
+                        record(&front, &done).await;
                         deliver(&front, &done).await;
                     });
                 }

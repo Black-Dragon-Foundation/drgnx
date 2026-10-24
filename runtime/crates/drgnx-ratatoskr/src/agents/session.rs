@@ -2239,17 +2239,17 @@ impl Session {
             && !self.closed.load(Ordering::SeqCst)
     }
 
-    /// Does a prompt starting with PREFIX wait in the queue or stand in the transcript?  (A wake that was delivered
+    /// Does a prompt containing NEEDLE wait in the queue or stand in the transcript?  (A wake that was delivered
     /// before a restart is not delivered again.)
-    pub(crate) fn holds_text(&self, prefix: &str) -> bool {
+    pub(crate) fn holds_text(&self, needle: &str) -> bool {
         let st = lock(&self.state);
-        st.queue.texts().iter().any(|t| t.starts_with(prefix))
+        st.queue.texts().iter().any(|t| t.contains(needle))
             || st.entries.iter().any(|e| {
                 e.kind == EntryType::User
                     && e.rest
                         .get("text")
                         .and_then(Value::as_str)
-                        .is_some_and(|t| t.starts_with(prefix))
+                        .is_some_and(|t| t.contains(needle))
             })
     }
 

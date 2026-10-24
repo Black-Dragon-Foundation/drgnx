@@ -15,7 +15,8 @@
 //!   git never runs there, across restarts ([`crate::runner::git`]).
 //!
 //! - `wake` (7): a job's end that has to reach the session that started it, `pending` until the hub prompts it,
-//!   `sending` while it does; deleted once delivered, so a restart wakes once ([`crate::agents::wake`]).
+//!   `sending` while it does, `done` once the session has the prompt (the mark that tells a restart it was woken; pruned
+//!   with the job), so a restart wakes once ([`crate::agents::wake`]).
 //!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:

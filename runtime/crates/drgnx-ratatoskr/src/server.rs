@@ -237,6 +237,7 @@ pub async fn run(args: ServeArgs) -> Exit {
             f.core.agents.resume_all(&f).await;
             f.core.runs.set_recovering(false);
             crate::agents::wake::recover(&f).await;
+            crate::agents::deliver::recover(&f).await;
         });
     }
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept

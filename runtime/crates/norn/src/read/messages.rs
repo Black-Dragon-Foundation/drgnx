@@ -87,6 +87,15 @@ pub fn queued(conn: &Tx) -> Result<Vec<Message>, CoordError> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Every message being given to a session (`sending`), oldest first: what a crash left half-done.
+pub fn sending(conn: &Tx) -> Result<Vec<Message>, CoordError> {
+    let mut st = conn.prepare(&format!(
+        "select {COLS} from message where state = 'sending' order by id"
+    ))?;
+    let rows = st.query_map([], row!())?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// The question the user's message `id` answers (`drgnx-coord-message-answers`): the message from `id`'s recipient
 /// to `user`.  `None` for another agent's message, for a question of someone else's, or when none was named.
 pub fn message_answers(conn: &Tx, id: i64) -> Result<Option<Message>, CoordError> {

@@ -13,7 +13,7 @@ pub const QUEUE_LIMIT: i64 = 20;
 /// Messages from one agent to another per minute (`drgnx-coord-pair-rate`).
 pub const PAIR_RATE: i64 = 6;
 /// Message states in order; `held` stands apart (`drgnx-coord--states`).
-const STATES: [&str; 4] = ["queued", "delivered", "read", "acted"];
+const STATES: [&str; 5] = ["queued", "sending", "delivered", "read", "acted"];
 
 /// What `drgnx-coord-send` takes.  `sender` `None` is the user's own Emacs.
 #[derive(Debug, Clone, Default)]
@@ -160,6 +160,25 @@ pub fn mark(tx: &mut WTx<'_>, id: i64, state: &str, now: f64) -> Result<bool, Co
         }
         _ => Ok(false),
     }
+}
+
+/// Message `id` is being given to its session (Task 24): `queued` to `sending` before the prompt is queued, so a hub that
+/// dies in between can tell at the next start whether the session got it.  Whether it moved.
+pub fn sending(tx: &mut WTx<'_>, id: i64) -> Result<bool, CoordError> {
+    let by = tx.id();
+    Ok(tx.sql().execute(
+        "update message set state = 'sending', tx = ?2 where id = ?1 and state = 'queued'",
+        (id, by),
+    )? > 0)
+}
+
+/// A `sending` message goes back to `queued` (its prompt never reached the session).
+pub fn unsend(tx: &mut WTx<'_>, id: i64) -> Result<(), CoordError> {
+    tx.sql().execute(
+        "update message set state = 'queued' where id = ?1 and state = 'sending'",
+        [id],
+    )?;
+    Ok(())
 }
 
 /// Take message `id` back (Task 24): only while it is `queued` (nobody was given it yet); it becomes `retracted` and
@@ -377,6 +396,12 @@ mod tests {
         let SendResult::Ok { id: id2, .. } = send(&mut tx, msg("a", "b", "y"), 2.0).unwrap() else {
             panic!("held")
         };
+        assert!(sending(&mut tx, id2).unwrap());
+        assert!(!sending(&mut tx, id2).unwrap());
+        assert_eq!(
+            retract(&mut tx, id2).unwrap(),
+            Some((false, "sending".into()))
+        );
         assert!(mark(&mut tx, id2, "delivered", 3.0).unwrap());
         assert_eq!(
             retract(&mut tx, id2).unwrap(),

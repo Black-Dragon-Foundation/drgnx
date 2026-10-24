@@ -729,10 +729,12 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`). A manager is restarted from the
   graph by Task 25 (`restart_manager_from_graph`, none yet).
 - **A job's end wakes once.** `runtime.db` table `wake` (migration 7): a row `pending` when the end is announced,
-  `sending` while it is delivered, deleted once the session has the prompt. After the sessions are back
-  (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's queue and transcript
-  do not hold the `[job ID finished` prompt, one of a job that is gone is dropped. The gap left: a hub that dies
-  between the job's result file and the row never wakes that session (it reads the job with `job_result`).
+  `sending` while it is delivered, `done` once the session has the prompt (the mark; pruned with the job). After the
+  sessions are back (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's
+  queue and transcript do not hold the `[job ID finished` prompt, one of a job that is gone is dropped, and a finished
+  job of a live session with no row and no such prompt (the hub died between its result and the row) is woken.
+- **A message is `sending` before its prompt is queued**; at the next start (`deliver::recover`) a `sending` one whose
+  prompt the session holds is marked `read`, else it is `queued` again: delivered once across a crash.
 - **A queued message stays in the store** and is delivered after the sessions are back
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.

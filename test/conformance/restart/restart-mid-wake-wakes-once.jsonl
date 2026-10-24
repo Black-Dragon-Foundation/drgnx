@@ -1,4 +1,4 @@
-{"scenario": "restart/restart-mid-wake-wakes-once", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: a wake the hub went down with (a wake row of runtime.db left sending, the prompt already in the session transcript) is not delivered again at the next start, and a wake row of a job that is gone is dropped; the table is empty and the session was woken once."}
+{"scenario": "restart/restart-mid-wake-wakes-once", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: a wake the hub went down with (a wake row of runtime.db left sending, the prompt already in the session transcript) is not delivered again at the next start, and a wake row of a job that is gone is dropped; nothing is left undelivered and the session was woken once. A wake row left pending is delivered at the next start, once, and kept as done."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
@@ -14,14 +14,23 @@
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"jobs": [{"id": "$capture:job"}]}}}
 {"do": "connect", "conn": "q0", "hub": "h"}
 {"do": "expect_silent", "conn": "q0", "for_ms": 2000}
-{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from wake", "rows": [[0]]}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from wake where state != 'done'", "rows": [[0]]}
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
-{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["insert into wake(job, session, state, at) values ('$job', '$sid', 'sending', 1.0)", "insert into wake(job, session, state, at) values ('gone', '$sid', 'pending', 1.0)"]}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["insert or replace into wake(job, session, state, at) values ('$job', '$sid', 'sending', 1.0)", "insert into wake(job, session, state, at) values ('gone', '$sid', 'pending', 1.0)"]}
 {"do": "start", "hub": "h2", "same_root_as": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
 {"do": "connect", "conn": "c2", "hub": "h2"}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/resume\"", "within_ms": 30000}
 {"do": "connect", "conn": "q", "hub": "h2"}
 {"do": "expect_silent", "conn": "q", "for_ms": 5000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "count": 1, "at_most": 1}
-{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from wake", "rows": [[0]]}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from wake where state != 'done'", "rows": [[0]]}
+{"do": "kill", "hub": "h2", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h2", "code": 0, "within_ms": 15000}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["update wake set state = 'pending' where job = '$job'"]}
+{"do": "start", "hub": "h3", "same_root_as": "h2", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "count": 2, "within_ms": 30000}
+{"do": "connect", "conn": "q3", "hub": "h3"}
+{"do": "expect_silent", "conn": "q3", "for_ms": 5000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "count": 2, "at_most": 2}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select state from wake", "rows": [["done"]]}

@@ -237,3 +237,13 @@ impl Hub {
         )
     }
 }
+
+/// Test hook (`test-hooks` builds only): the hub dies here, at once, when `DRGNX_TEST_DIE_AT` names POINT, so a row
+/// can stop it between two writes instead of timing it.
+#[allow(unused_variables)]
+pub(crate) fn die_at(point: &str) {
+    #[cfg(feature = "test-hooks")]
+    if std::env::var("DRGNX_TEST_DIE_AT").as_deref() == Ok(point) {
+        std::process::exit(9);
+    }
+}

@@ -1,0 +1,21 @@
+{"scenario": "restart/message-delivered-once-across-a-crash", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: the hub dies (test hook) after a message prompt is queued in its session and before the message is marked read. At the next start the message is found sending, the session already holds its prompt, so it is marked read and not delivered again."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-agent\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_DIE_AT": "after-queue-before-mark"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-agent", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "messages/send", "params": {"recipient": "$sid", "text": "once only"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"ok": true, "id": "$capture:m", "state": "queued"}}}
+{"do": "expect_exit", "hub": "h", "code": 9, "within_ms": 30000}
+{"do": "sql_expect", "sql": "select state from message where id = $m", "rows": [["sending"]]}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "connect", "conn": "q", "hub": "h2"}
+{"do": "expect_silent", "conn": "q", "for_ms": 6000}
+{"do": "sql_expect", "sql": "select state from message where id = $m", "rows": [["read"]]}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "once only", "count": 0, "at_most": 1}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"session": {"id": "$sid"}, "seq": "$number", "entries": {"$contains": [{"type": "user", "text": "$string"}]}}}}

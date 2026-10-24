@@ -146,14 +146,30 @@ pub(crate) async fn pass(front: &Front, told: &mut HashMap<String, u64>) {
             None | Some("user") => Origin::User,
             Some(from) => Origin::Peer(from.to_string()),
         };
-        // the prompt is queued (and kept on disk) before the message is marked: a restart between the two delivers it
-        // twice rather than never
+        // `sending` first, then the prompt (queued and kept on disk), then read: a hub that dies in between finds the
+        // message `sending` at the next start and [`recover`] asks the session whether it got the prompt
+        let id = m.id;
+        let moved = front
+            .writer
+            .write(&hub_caller(), "coord/deliver", move |tx| {
+                messages::sending(tx, id)
+            })
+            .await;
+        if !matches!(moved, Ok(true)) {
+            continue;
+        }
         if s.prompt(messages::message_prompt(&m, q.as_ref()), origin)
             .is_err()
         {
+            let _ = front
+                .writer
+                .write(&hub_caller(), "coord/deliver", move |tx| {
+                    messages::unsend(tx, id)
+                })
+                .await;
             continue;
         }
-        let id = m.id;
+        super::die_at("after-queue-before-mark");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64());
@@ -193,5 +209,47 @@ pub async fn run(front: Arc<Front>) {
             () = tokio::time::sleep(EVERY) => {}
         }
         pass(&front, &mut told).await;
+    }
+}
+
+/// After the sessions are back: a message left `sending` (the hub died while giving it) is `read` when its session
+/// already holds the prompt (queued or in its transcript), else `queued` again.
+pub async fn recover(front: &Front) {
+    let Ok(sending) = front.writer.db.read(read::sending).await else {
+        return;
+    };
+    for m in sending {
+        let held = m
+            .recipient
+            .as_deref()
+            .and_then(|r| {
+                front
+                    .core
+                    .agents
+                    .live_sessions()
+                    .into_iter()
+                    .find(|s| s.is_for(r))
+            })
+            .is_some_and(|s| s.holds_text(&format!("#{} \u{2014} ", m.id)));
+        let (id, now) = (
+            m.id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64()),
+        );
+        let r = front
+            .writer
+            .write(&hub_caller(), "coord/deliver", move |tx| {
+                if held {
+                    messages::mark(tx, id, "delivered", now)?;
+                    messages::mark(tx, id, "read", now).map(|_| ())
+                } else {
+                    messages::unsend(tx, id)
+                }
+            })
+            .await;
+        if let Err(e) = r {
+            tracing::warn!(message = id, "sending message not settled: {e}");
+        }
     }
 }
