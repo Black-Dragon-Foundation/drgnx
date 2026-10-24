@@ -775,7 +775,7 @@ keys); every binding is undone after."
                                  (file-close-window "s-W") (move-editor-to-next-group "C-s-<right>")
                                  (edit-expand "C-S-s-<right>") (edit-shrink "C-S-s-<left>")
                                  (explorer-copy-path "M-s-c") (explorer-reveal-externally "M-s-r") (quit "s-q")
-                                 (preferences "s-,") (palette "s-P") (edit-select-all "s-a") (save-all "M-s-s")
+                                 (preferences-settings "s-,") (palette "s-P") (edit-select-all "s-a") (save-all "M-s-s")
                                  (scm-view "C-S-g") (edit-fold "M-s-[") (edit-unfold "M-s-]") (close-tab "s-w")
                                  (org-capture "C-c c") (explorer-copy-relative-path "M-s-C")
                                  (toggle-right-dock "M-s-b") (explorer-delete "s-<backspace>")))
@@ -851,7 +851,7 @@ keys); every binding is undone after."
                      '("s-L"))))))
 
 (defconst drgnx-keys-test--linux-snapshot
-  '((open-folder "C-k C-o" nil) (palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-r" nil) (preferences-modules "C-," nil)
+  '((open-folder "C-k C-o" nil) (palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-r" nil)
     (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
     (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
     (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)
@@ -959,7 +959,10 @@ The commands of modules that need no installed package are in it, the later stag
                               quick-help quick-help-close             ; M12f's quick help
                               close-pane                              ; M12f's Esc and q in a pane
                               settings-lisp-files-open           ; settings Task 28: RET on the Lisp files page
-                              settings-lisp-files-toggle settings-add-lisp-file))   ; settings Task 29: t and a there
+                              settings-lisp-files-toggle settings-add-lisp-file   ; settings Task 29: t and a there
+                              ;; settings Task 26: the Settings page took C-, from Modules, and its own keys
+                              preferences-settings settings-page-tab settings-page-group settings-page-search
+                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

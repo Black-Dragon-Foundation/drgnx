@@ -108,6 +108,13 @@ put it above the entry.
 `r` removes the command's entry from `drgnx-keys-bind` and `drgnx-keys-unbind`, so it has its profile's keys again.
 `R` does that for every command (`drgnx-keys-layers` and your comments stay); Undo brings them back.
 
+## From the Settings page
+
+On the Settings page (Preferences: Settings; `C-,` in the VS Code profile) the group Keys opens this page, and the
+group Modules opens Preferences: Modules; both are pages of Settings. Preferences: Modules itself is still a command in
+the palette and the Options menu. On the Settings page: `T` scope tab, `G` group, `/` search, `r` reset, `h` row
+history, `RET` open the source, `C` convert old project files.
+
 ## How it works
 
 `modules/tools/drgnx-shortcuts.el` reads the last key resolution (`drgnx-keys-last`: bindings, conflicts, layers),

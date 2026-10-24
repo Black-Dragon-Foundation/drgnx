@@ -976,7 +976,46 @@ Line), Move into Settings…, Move to My Lisp…, Undo Move, Tidy custom.el and 
                         :doc "Drop custom.el's entries equal to the default, print it as Customize does: a diff, one Undo")
   (drgnx-command-define 'settings-tidy-undo :category "Settings" :title "Undo Tidy"
                         :command #'drgnx-settings-tidy-undo
-                        :doc "Put custom.el back as it was before the last Tidy custom.el"))
+                        :doc "Put custom.el back as it was before the last Tidy custom.el")
+  (drgnx-config-register-page-commands))
+
+(autoload 'drgnx-settings-page "drgnx-settings-page" "Preferences: Settings, every setting by scope, group and search." t)
+(autoload 'drgnx-settings-page-tab "drgnx-settings-page" "Cycle the Settings page's scope tab." t)
+(autoload 'drgnx-settings-page-group "drgnx-settings-page" "Choose the Settings page's group." t)
+(autoload 'drgnx-settings-page-search "drgnx-settings-page" "Search the Settings page." t)
+(autoload 'drgnx-settings-page-reset-at-point "drgnx-settings-page" "Reset the setting of this row." t)
+(autoload 'drgnx-settings-page-history-at-point "drgnx-settings-page" "The history of this row's setting." t)
+(autoload 'drgnx-settings-page-open-source "drgnx-settings-page" "Open the source of this row's value." t)
+(autoload 'drgnx-settings-page-convert-old-files "drgnx-settings-page" "Convert old project files." t)
+(autoload 'drgnx-settings-page-undo "drgnx-settings-page" "Undo the latest change of a setting." t)
+
+(defun drgnx-config-register-page-commands ()
+  "Preferences: Settings and the Settings page's own commands, and Settings: Undo, in the registry."
+  (drgnx-command-define 'preferences-settings :category "Preferences" :title "Settings"
+                        :command #'drgnx-settings-page :menu '("Options")
+                        :doc "Every setting in one page: scope tabs, groups, search and filters, where each value comes from")
+  (let ((map '(drgnx-settings-page . drgnx-settings-page-mode-map))
+        (when (lambda () (derived-mode-p 'drgnx-settings-page-mode))))
+    (drgnx-command-define 'settings-page-tab :category "Settings" :title "Scope Tab" :command #'drgnx-settings-page-tab
+                          :map map :when when :doc "Cycle the tab: each row's own, User, Workspace, Shared")
+    (drgnx-command-define 'settings-page-group :category "Settings" :title "Group…" :command #'drgnx-settings-page-group
+                          :map map :when when :doc "Choose the group of settings to list")
+    (drgnx-command-define 'settings-page-search :category "Settings" :title "Search…" :command #'drgnx-settings-page-search
+                          :map map :when when :doc "Search names, titles, documentation and values; @modified @overridden @source:… filters")
+    (drgnx-command-define 'settings-page-reset :category "Settings" :title "Reset" :command #'drgnx-settings-page-reset-at-point
+                          :map map :when when :doc "Remove this scope's entry of the setting on this row")
+    (drgnx-command-define 'settings-page-history :category "Settings" :title "Row History"
+                          :command #'drgnx-settings-page-history-at-point
+                          :map map :when when :doc "The recorded changes of the setting on this row")
+    (drgnx-command-define 'settings-page-open-source :category "Settings" :title "Open Source"
+                          :command #'drgnx-settings-page-open-source
+                          :map map :when when :doc "Open the file and line the value of this row comes from")
+    (drgnx-command-define 'settings-page-convert :category "Settings" :title "Convert to .drgnx/settings.el"
+                          :command #'drgnx-settings-page-convert-old-files
+                          :map map :when when :doc "Write the project's old .drgnx files as entries of the shared settings file"))
+  (drgnx-command-define 'settings-undo :category "Settings" :title "Undo"
+                        :command #'drgnx-settings-page-undo
+                        :doc "Put the previous value of a setting back (the row at point on the Settings page, else you choose)"))
 
 (provide 'drgnx-config)
 ;;; drgnx-config.el ends here
