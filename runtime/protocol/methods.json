@@ -9719,17 +9719,22 @@
             ],
             "type": "string"
           },
+          "PlanId": {
+            "description": "a plan's entity id: plan: and a name, no control characters, at most 4352",
+            "maxLength": 4352,
+            "pattern": "^plan:[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
           "PlanRef": {
             "anyOf": [
               {
                 "$ref": "#/$defs/AbsPath"
               },
               {
-                "maxLength": 4352,
-                "type": "string"
+                "$ref": "#/$defs/PlanId"
               }
             ],
-            "description": "A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports\nfirst."
+            "description": "A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports\nfirst.  The entity is a `plan:` id, so what is neither (a remote (TRAMP) name, a relative path) is refused."
           },
           "Usd": {
             "description": "an amount of US dollars",
@@ -10225,17 +10230,22 @@
             ],
             "type": "string"
           },
+          "PlanId": {
+            "description": "a plan's entity id: plan: and a name, no control characters, at most 4352",
+            "maxLength": 4352,
+            "pattern": "^plan:[^\\u0000-\\u001f\\u007f]+$",
+            "type": "string"
+          },
           "PlanRef": {
             "anyOf": [
               {
                 "$ref": "#/$defs/AbsPath"
               },
               {
-                "maxLength": 4352,
-                "type": "string"
+                "$ref": "#/$defs/PlanId"
               }
             ],
-            "description": "A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports\nfirst."
+            "description": "A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports\nfirst.  The entity is a `plan:` id, so what is neither (a remote (TRAMP) name, a relative path) is refused."
           },
           "TaskNo": {
             "anyOf": [

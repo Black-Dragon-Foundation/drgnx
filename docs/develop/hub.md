@@ -974,6 +974,8 @@ type's schema carries the same `pattern` and `maxLength`.
 |---|---|
 | `Id` | `^[A-Za-z0-9][A-Za-z0-9._:+-]*$`, at most 128 |
 | `AbsPath` | `^/[^/:\0]*(/[^\0]*)?$`, at most 4096: absolute, no NUL, and no `:` in the first component, so a TRAMP name (`/ssh:host:/x`) is refused |
+| `PlanId` | `plan:` and a name, no control characters, at most 4352 (the scan's plan entity id) |
+| `PlanRef` | an `AbsPath` (the plan's file, imported first) or a `PlanId`: anything else, a TRAMP name included, is refused |
 | `EnvName` | `^[A-Za-z_][A-Za-z0-9_]*$`, at most 128 |
 | `Prompt` | at most 1 MiB (1048576 characters) |
 | `Text` | at most 64 KiB (65536 characters) |
