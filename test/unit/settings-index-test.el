@@ -121,6 +121,14 @@
     (defvar drgnx-settings-index-test--other 1 "x")
     (should-not (drgnx-settings-described-defvar-p 'drgnx-settings-index-test--other))))
 
+(ert-deftest drgnx-settings-index/editing-a-description-applies-at-once ()
+  "US-T31-META-CACHE-1: the meta cache of a looked-up symbol follows the description files."
+  (drgnx-settings-index-test--with-described "(drgnx-described (tab-width :scope global))"
+    (should (eq 'global (plist-get (drgnx-setting-meta 'tab-width) :scope)))
+    (with-temp-file (car (drgnx-settings-described-files))
+      (insert "(drgnx-described (tab-width :scope workspace :merge alist))   "))
+    (should (eq 'alist (plist-get (drgnx-setting-meta 'tab-width) :merge)))))
+
 (ert-deftest drgnx-settings-index/descriptions-refine-defcustoms ()
   (drgnx-settings-index-test--with-described
       "(drgnx-described (fill-column :workspace never :merge alist) (tab-width :scope global))"

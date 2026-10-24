@@ -126,9 +126,11 @@ ARGS are `defcustom' keywords and drgnx's: `:scope', `:workspace', `:merge', `:o
 
 (defun drgnx-setting--stamp (var)
   "What the metadata of VAR depends on; the cache entry is valid while every part is `eq'.
-A new `defcustom' of VAR makes fresh `standard-value' and `custom-type' objects, which clears the cache entry."
+A new `defcustom' of VAR makes fresh `standard-value' and `custom-type' objects, which clears the cache entry; so
+does an edit to a description file, which makes the descriptions' table a fresh object."
   (list (get var 'standard-value) (get var 'custom-type) (get var 'drgnx-setting) (get var 'custom-set)
-        (get var 'risky-local-variable) drgnx-setting-meta-functions))
+        (get var 'risky-local-variable) drgnx-setting-meta-functions
+        (and (fboundp 'drgnx-settings-described--table) (drgnx-settings-described--table))))
 
 (defun drgnx-setting--stamp-equal (a b)
   "Non-nil when the stamps A and B have `eq' parts."
@@ -150,6 +152,7 @@ symbol; a new declaration of VAR clears it."
         (puthash var (cons stamp meta) drgnx-setting--cache)
         meta))))
 
+(declare-function drgnx-settings-described--table "drgnx-settings-described" ())
 (declare-function drgnx-settings-described-type "drgnx-settings-described" (var))
 (declare-function drgnx-settings-index-type "drgnx-settings-index" (var))
 
