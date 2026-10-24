@@ -1,11 +1,10 @@
 //! Jobs (`core/drgnx-job.el`): every change answers the job as `drgnx-job-summary` has it.
 
 use super::agents::ById;
-use super::graph::ParsedId;
 use super::method;
 use crate::registry::Method;
 use crate::types::{
-    AbsPath, Bounded, CardAction, Delta, Id, Prompt, StringOrNumber, TaskRef, Text, Usd,
+    AbsPath, Bounded, CardAction, Delta, Id, PlanId, Prompt, StringOrNumber, TaskRef, Text, Usd,
     null_as_empty,
 };
 use schemars::JsonSchema;
@@ -99,12 +98,12 @@ impl<'de> Deserialize<'de> for JobStatusResult {
 }
 
 /// A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports
-/// first.
+/// first.  The entity is a `plan:` id, so what is neither (a remote (TRAMP) name, a relative path) is refused.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum PlanRef {
     File(AbsPath),
-    Entity(ParsedId),
+    Entity(PlanId),
 }
 
 /// A task's number in its plan: `8`, or `22b`.

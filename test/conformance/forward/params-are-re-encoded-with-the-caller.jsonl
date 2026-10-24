@@ -1,6 +1,6 @@
-{"scenario": "forward/params-are-re-encoded-with-the-caller", "requires": ["v1", "fake-backend"], "doc": "The backend gets the typed params re-encoded (a key the method does not know is dropped, and listed in the client's answer) and the caller's class, never the client's line."}
-{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"result\": {\"id\": \"j\"}}}"}}
+{"scenario": "forward/params-are-re-encoded-with-the-caller", "requires": ["v1", "fake-backend"], "doc": "The backend gets the typed params re-encoded (a key the method does not know is dropped, and listed in the client's answer) and the caller's class, never the client's line. The vehicle is env/set, a method the backend still serves."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"result\": {\"applied\": []}}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/stop", "params": {"id": "j", "x": 1}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "j"}, "ignored": ["x"]}}
-{"do": "backend_log", "hub": "h", "expect_line": {"id": "$number", "method": "job/stop", "params": {"id": "j", "x": "$absent"}, "caller": {"class": "user", "sid": "$absent", "job": "$absent"}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": [{"name": "PATH", "value": "/bin"}], "x": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": []}, "ignored": ["x"]}}
+{"do": "backend_log", "hub": "h", "expect_line": {"id": "$number", "method": "env/set", "params": {"env": [{"name": "PATH", "value": "/bin"}], "x": "$absent"}, "caller": {"class": "user", "sid": "$absent", "job": "$absent"}}}

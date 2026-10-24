@@ -203,7 +203,8 @@ fn sorted(v: Value) -> Value {
 }
 
 /// The Markdown table of the registry that `docs/develop/hub.md` holds between `<!-- hub-methods:begin -->` and
-/// `<!-- hub-methods:end -->`.
+/// `<!-- hub-methods:end -->`.  The schemas' keys are sorted first (as `methods.json`'s are): a build where serde_json
+/// keeps insertion order (the ACP schema crate turns its `preserve_order` on in the hub's build) prints the same table.
 pub fn markdown_table() -> String {
     let mut s = String::from(
         "| Method | Class | Params | Result | Writes | Home |\n|---|---|---|---|---|---|\n",
@@ -214,8 +215,8 @@ pub fn markdown_table() -> String {
             "| `{}` | {} | `{}` | `{}` | {} | {} |\n",
             m.name,
             classes.join(", "),
-            cell(&schema_words((m.params)().as_value(), true)),
-            cell(&schema_words((m.result)().as_value(), false)),
+            cell(&schema_words(&sorted((m.params)().to_value()), true)),
+            cell(&schema_words(&sorted((m.result)().to_value()), false)),
             if m.writes { "yes" } else { "no" },
             m.home.name()
         ));

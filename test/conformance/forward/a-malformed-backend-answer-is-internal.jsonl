@@ -1,12 +1,16 @@
-{"scenario": "forward/a-malformed-backend-answer-is-internal", "requires": ["v1", "fake-backend"], "doc": "A backend result that does not fit the method's result type is internal (logged with its path), never passed on; the backend's error is internal with its message; the hub keeps serving."}
-{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/status\": {\"result\": {\"jobs\": [{\"id\": \"j\", \"bogus\": 1}]}}, \"agents/list\": \"{\\\"id\\\": $ID, \\\"result\\\": {\\\"sessions\\\": [{\\\"name\\\": \\\"no id\\\"}]}}\", \"job/stop\": {\"error\": {\"message\": \"No job j\"}}}"}}
+{"scenario": "forward/a-malformed-backend-answer-is-internal", "requires": ["v1", "fake-backend"], "doc": "A backend result that does not fit the method's result type is internal (logged with its path), never passed on; the backend's error is internal with its message; the hub keeps serving. The vehicle is env/set, a method the backend still serves (its answer file is rewritten between the calls); agents/list is the hub's own since agent system part 1."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/answers/env.json", "json": {"result": {"applied": "PATH", "bogus": 1}}}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"from_file\": \"$ROOT/answers/env.json\"}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status"}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "internal", "message": "$string"}, "result": "$absent"}}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "internal", "message": "the backend's answer to agents/list does not match its schema: sessions[0].id"}}}
-{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/stop", "params": {"id": "j"}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "internal", "message": "No job j"}}}
+{"do": "write_file", "path": "$ROOT/answers/env.json", "json": {"result": {"applied": ["PATH", 7]}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "env/set", "params": {"env": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "internal", "message": "the backend's answer to env/set does not match its schema: applied[1]"}}}
+{"do": "write_file", "path": "$ROOT/answers/env.json", "json": {"error": {"message": "No env e"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "env/set", "params": {"env": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "internal", "message": "No env e"}}}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "ping"}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"pid": "$PID(h)"}}}
 {"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "does not match its schema"}

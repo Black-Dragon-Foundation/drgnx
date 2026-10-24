@@ -2,7 +2,7 @@
 {"do": "start", "hub": "h"}
 {"do": "file", "path": "$DATA/work.db", "mode": "600"}
 {"do": "file", "path": "$DATA/backup", "exists": false}
-{"do": "sql_expect", "sql": "select key, value from kv where key in ('schema', 'compat-read') order by key", "rows": [["compat-read", "6"], ["schema", "7"]]}
+{"do": "sql_expect", "sql": "select key, value from kv where key in ('schema', 'compat-read') order by key", "rows": [["compat-read", "6"], ["schema", "8"]]}
 {"do": "sql_expect", "sql": "select count(*) from entity", "rows": [[0]]}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "events/add", "params": {"kind": "comment", "summary": "first"}}}

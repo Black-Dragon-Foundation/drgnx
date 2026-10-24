@@ -1,10 +1,13 @@
-{"scenario": "seam/the-backend-may-call-only-what-the-front-serves", "requires": ["v1", "fake-backend"], "doc": "The seam rule (call 2): the backend's own connection (its peer pid) is not-allowed a method the backend serves, and subscribe (it hears the front through notifications); a call can never wait on the backend that made it."}
-{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"call_front\": {\"method\": \"job/status\"}, \"then\": {\"result\": {\"id\": \"j1\"}}}, \"job/resume\": {\"call_front\": {\"method\": \"subscribe\"}, \"then\": {\"result\": {\"id\": \"j1\"}}}}"}}
+{"scenario": "seam/the-backend-may-call-only-what-the-front-serves", "requires": ["v1", "fake-backend"], "doc": "The seam rule (call 2): the backend's own connection (its peer pid) is not-allowed a method the backend serves, and subscribe (it hears the front through notifications); a call can never wait on the backend that made it. The vehicle is env/set, the method the backend still serves; its entry file is rewritten between the two calls."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/answers/env.json", "json": {"call_front": {"method": "env/set", "params": {"env": []}}, "then": {"result": {"applied": []}}}}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"from_file\": \"$ROOT/answers/env.json\"}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/stop", "params": {"id": "j1"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "j1"}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": []}}}
 {"do": "backend_log", "expect_line": "the backend may call only what the front serves"}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/resume", "params": {"id": "j1"}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "j1"}}}
+{"do": "write_file", "path": "$ROOT/answers/env.json", "json": {"call_front": {"method": "subscribe"}, "then": {"result": {"applied": []}}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "env/set", "params": {"env": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"applied": []}}}
 {"do": "backend_log", "expect_line": "the backend hears the front through notifications"}
-{"do": "backend_log", "expect_no_line": "\"method\":\"job/status\"", "for_ms": 300}
+{"do": "backend_log", "count": "\"method\":\"env/set\"", "at_least": 2, "at_most": 2, "for_ms": 300}

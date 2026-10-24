@@ -121,6 +121,13 @@ named_string!(
 );
 
 named_string!(
+    /// A plan's entity id as the scan makes it (`plan:…`): no control characters, at most 4352.
+    PlanId, max: 4352, pattern: Some("^plan:[^\\u0000-\\u001f\\u007f]+$"),
+    ok: |s| s.strip_prefix("plan:").is_some_and(|r| !r.is_empty()) && no_control(s),
+    what: "a plan's entity id: plan: and a name, no control characters, at most 4352"
+);
+
+named_string!(
     /// An environment variable's name.
     EnvName, max: 128, pattern: Some("^[A-Za-z_][A-Za-z0-9_]*$"),
     ok: |s| {
@@ -568,6 +575,12 @@ mod tests {
         refuses::<AbsPath>(json!("x/y"), json!("/x/y"));
         refuses::<AbsPath>(json!("/ssh:canary:/x"), json!("/a/b:c"));
         refuses::<AbsPath>(json!("/a\u{0}b"), json!("/ab"));
+        refuses::<PlanId>(json!("/ssh:canary:/x"), json!("plan:/w/p.md"));
+        refuses::<PlanId>(json!("plan:"), json!("plan:p"));
+        refuses::<PlanId>(json!("plan:a\nb"), json!("plan:a b"));
+        // a plan is its file or its entity: a remote name is neither (the untagged enum tries both)
+        refuses::<crate::methods::jobs::PlanRef>(json!("/ssh:canary:/x"), json!("/w/p.md"));
+        refuses::<crate::methods::jobs::PlanRef>(json!("p.md"), json!("plan:/w/p.md"));
         refuses::<EnvName>(json!("1X"), json!("_X1"));
         refuses::<Nonce>(
             json!("0123456789ABCDEF0123456789abcdef"),

@@ -1,4 +1,4 @@
-{"scenario": "store/the-lisp-backend-starts-on-schema-7", "requires": ["v1", "lisp-backend"], "doc": "Task 16b: a schema-6 work.db with a job; the hub migrates it to schema 7, then the Lisp backend starts on it and answers a Home::Backend method (the jobs list) through its read-only handle. It never opens work.db read-write (drgnx-work-db refuses outside the local writer mode), so the hub log has no \"newer than this drgnx\" nor a refused open, and the jobs list adds nothing to status.store.writes."}
+{"scenario": "store/the-lisp-backend-starts-on-schema-7", "requires": ["v1", "lisp-backend"], "pending": "Task 16a: job/status is the hub's own, not yet ported from the frozen Lisp", "doc": "Task 16b: a schema-6 work.db with a job; the hub migrates it to schema 7, then the Lisp backend starts on it and answers a Home::Backend method (the jobs list) through its read-only handle. It never opens work.db read-write (drgnx-work-db refuses outside the local writer mode), so the hub log has no \"newer than this drgnx\" nor a refused open, and the jobs list adds nothing to status.store.writes."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into job (id, title, plan, repo, status, created, data) values ('j1', 'One job', '/p.md', '/r', 'stopped', 1.5, null)", "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'the task', 'implement', 'ready')"]}
 {"do": "start", "hub": "h"}
@@ -13,6 +13,6 @@
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "j1", "tasks": [{"n": 1, "status": "ready"}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": {"backend": {"state": "running"}, "store": {"writes": "$writes"}}}}
-{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["8"]]}
 {"do": "file_grep", "paths": ["$STATE/hub/log/hub-*.jsonl"], "absent": "newer than this drgnx"}
 {"do": "file_grep", "paths": ["$STATE/hub/log/hub-*.jsonl"], "absent": "written by the drgnx hub"}

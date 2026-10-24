@@ -1,10 +1,10 @@
-{"scenario": "forward/an-oversized-forward-is-refused", "requires": ["v1", "fake-backend"], "doc": "A call whose forwarded line would be over 1 MiB (the Lisp backend's limit; the client's line is within its own) is invalid-params and never sent: the backend's connection stays, and the hub keeps serving."}
+{"scenario": "forward/an-oversized-forward-is-refused", "requires": ["v1", "fake-backend"], "doc": "A call whose forwarded line would be over 1 MiB (the Lisp backend's limit; the client's line is within its own) is invalid-params and never sent: the backend's connection stays, and the hub keeps serving. The vehicle is env/set, a method the backend still serves: 9 values of 4-byte characters within their 32768-character bounds make a client line of 1048568 bytes, and the caller the front adds takes the forward over."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "backend_log", "hub": "h", "expect_line": {"method": "subscribe"}}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/send", "params": {"id": "s1", "text": {"$repeat": "x", "times": 1048504}}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": [{"name": "A", "value": {"$repeat": "𝔸", "times": 32768}}, {"name": "A", "value": {"$repeat": "𝔸", "times": 32768}}, {"name": "A", "value": {"$repeat": "𝔸", "times": 32768}}, {"name": "A", "value": {"$repeat": "𝔸", "times": 32768}}, {"name": "A", "value": {"$repeat": "𝔸", "times": 32768}}, {"name": "A", "value": {"$repeat": "𝔸", "times": 32768}}, {"name": "A", "value": {"$repeat": "𝔸", "times": 32768}}, {"name": "B", "value": {"$repeat": "𝔸", "times": 32700}}, {"name": "C", "value": "xx"}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "message": "the request is too large for the Lisp backend"}}, "within_ms": 10000}
-{"do": "backend_log", "hub": "h", "expect_no_line": "agents/send"}
+{"do": "backend_log", "hub": "h", "expect_no_line": "env/set"}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "ping"}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"pid": "$PID(h)"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}

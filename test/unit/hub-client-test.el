@@ -184,7 +184,10 @@ without the binary."
 (ert-deftest drgnx-hub-client/editor-traffic-over-ratatoskr ()
   ;; binary + the Lisp backend (review I6): the calls the cockpit, the job UI, the agents mirror and `drgnx job' make,
   ;; with the params their own code builds, over a store with a proposed job, a card and a mock-acp session: none is
-  ;; refused for its params, and none fails inside
+  ;; refused for its params, and none fails inside.  :frozen until agent system part 1's Task 16a: the hub serves
+  ;; job/* itself and answers "not yet" until 16a ports plan runs from the frozen Lisp (the job UI and cockpit are
+  ;; frozen Lisp too)
+  :tags '(:frozen)
   (let ((load-path (append (list (expand-file-name "modules/tools" drgnx-dir) (expand-file-name "modules/ui" drgnx-dir))
                            load-path)))
     (dolist (f '(drgnx-job drgnx-job-ui drgnx-cockpit-cards drgnx-cockpit-feed drgnx-agents-ui)) (require f)))

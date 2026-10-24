@@ -52,6 +52,9 @@ pub struct Scenario {
     /// What the row pins, for whoever reads the file (the runner does not use it).
     #[allow(dead_code)]
     pub doc: String,
+    /// `"pending": REASON`: a known red on Ratatoskr until REASON's task lands (a failure counts as expected, a pass
+    /// fails the run so the mark goes); ignored with `--target lisp`.
+    pub pending: Option<String>,
     pub steps: Vec<Step>,
 }
 
@@ -122,6 +125,16 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let pending = match h.get("pending") {
+        None => None,
+        Some(Value::String(r)) if !r.trim().is_empty() => Some(r.clone()),
+        Some(_) => {
+            return Err(err(
+                hl,
+                "\"pending\" is a reason: the task that turns the row green",
+            ));
+        }
+    };
     let mut steps = Vec::new();
     for (line, text) in lines {
         let v: Value =
@@ -143,6 +156,7 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
         name: name.to_string(),
         requires,
         doc,
+        pending,
         steps,
     })
 }
@@ -390,6 +404,19 @@ mod tests {
             parse("{\"scenario\": \"t/x\", \"requires\": [\"nonsense\"]}").is_err(),
             "an unknown tag is an error"
         );
+    }
+
+    #[test]
+    fn pending_is_a_reason() {
+        let s = parse("{\"scenario\": \"t/p\", \"pending\": \"Task 16a\"}\n").unwrap();
+        assert_eq!(s.pending.as_deref(), Some("Task 16a"));
+        assert_eq!(parse("{\"scenario\": \"t/p\"}\n").unwrap().pending, None);
+        for bad in ["true", "\"\"", "[\"x\"]"] {
+            assert!(
+                parse(&format!("{{\"scenario\": \"t/p\", \"pending\": {bad}}}\n")).is_err(),
+                "pending {bad} is an error"
+            );
+        }
     }
 
     fn row(requires: &str) -> Scenario {

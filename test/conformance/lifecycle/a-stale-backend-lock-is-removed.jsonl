@@ -1,7 +1,7 @@
-{"scenario": "lifecycle/a-stale-backend-lock-is-removed", "requires": ["v1", "lisp-backend"], "doc": "Review S1: a Lisp backend killed before it removed its lock directory left backend.sock.lock/pid, and the pid now names a live process that is no hub (here the harness). Ratatoskr removes that directory before it starts the backend, so the backend starts and a forwarded call is answered (before the fix the backend exited 3 at every start)."}
+{"scenario": "lifecycle/a-stale-backend-lock-is-removed", "requires": ["v1", "lisp-backend"], "doc": "Review S1: a Lisp backend killed before it removed its lock directory left backend.sock.lock/pid, and the pid now names a live process that is no hub (here the harness). Ratatoskr removes that directory before it starts the backend, so the backend starts and a forwarded call (env/set, a method it still serves) is answered (before the fix the backend exited 3 at every start)."}
 {"do": "root"}
 {"do": "write_file", "path": "$BACKEND_SOCKET.lock/pid", "text": "$HARNESS_PID"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status"}}
-{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"jobs": []}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}
+{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"applied": []}}, "within_ms": 30000}

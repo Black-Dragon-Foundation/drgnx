@@ -974,6 +974,8 @@ type's schema carries the same `pattern` and `maxLength`.
 |---|---|
 | `Id` | `^[A-Za-z0-9][A-Za-z0-9._:+-]*$`, at most 128 |
 | `AbsPath` | `^/[^/:\0]*(/[^\0]*)?$`, at most 4096: absolute, no NUL, and no `:` in the first component, so a TRAMP name (`/ssh:host:/x`) is refused |
+| `PlanId` | `plan:` and a name, no control characters, at most 4352 (the scan's plan entity id) |
+| `PlanRef` | an `AbsPath` (the plan's file, imported first) or a `PlanId`: anything else, a TRAMP name included, is refused |
 | `EnvName` | `^[A-Za-z_][A-Za-z0-9_]*$`, at most 128 |
 | `Prompt` | at most 1 MiB (1048576 characters) |
 | `Text` | at most 64 KiB (65536 characters) |
@@ -1416,7 +1418,8 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `settings.el`, else the shipped default; `seen` is false when the project never sent a set. The global overrides are
   also what `Settings::current()` (and so the gateway) reads. `config/changed {}` checks `settings.el`'s stamp now.
 - **When.** At start, before anything is served, again when the file's stamp (device, inode, size, mtime, mode, owner)
-  changed when a session starts (`mcp/session`), and on `config/changed`.
+  changed when a session starts (`mcp/session`, and `agents/start` before it looks up the profile), and on
+  `config/changed`.
 - **Problems.** Each is a `notice` event (`source` `hub`, `id` `settings-file` or `settings-<setting>`, `life`
   `event`): a read's new problems go to the subscribers, and a new subscriber hears the current ones after its
   `subscribe` answer. They are logged too.
