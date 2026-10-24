@@ -25,8 +25,7 @@ use norn::matrix::{Action, Who};
 use runstav::methods::Empty;
 use runstav::methods::agents::{
     AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
-    RpcId, SendParams, SessionStatus, Sessions, Snapshot, StartParams, Started, Transcript, Usage,
-    Via,
+    RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript, Usage, Via,
 };
 use runstav::methods::matrix::Role;
 use runstav::methods::timeline::{AgentStep, Step, StepClass};
@@ -1945,7 +1944,7 @@ fn reply(resp: hermod::Responder<RequestPermissionResponse>, option: Option<Stri
     }
 }
 
-pub async fn list(f: &Front, c: &Caller, _: Empty) -> Result<Sessions, Error> {
+pub async fn list(f: &Front, c: &Caller, _: Empty) -> Result<serde_json::Value, Error> {
     Ok(f.core.agents.list(c))
 }
 

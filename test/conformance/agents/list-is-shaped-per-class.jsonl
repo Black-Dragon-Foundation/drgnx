@@ -1,0 +1,19 @@
+{"scenario": "agents/list-is-shaped-per-class", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "agents/list, served by the hub's sessions (Task 8a; was forward/agents-list-is-shaped-per-class when the backend served it): the user gets the full snapshots; a service connection {id, name, job, task} of each and nothing else; an agent only its own job's sessions, the same way."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "s", "hub": "h", "as": "service"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "job": "j1", "task": "T#1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a1", "name": "$capture:n1"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "job": "j2"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:a2", "name": "$capture:n2"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": [{"id": "$a1", "profile": "mock-claude", "cwd": "$ROOT/work", "job": "j1", "task": "T#1", "status": "$string"}, {"id": "$a2", "profile": "mock-claude", "job": "j2"}]}}}
+{"do": "send", "conn": "s", "json": {"id": 4, "method": "agents/list"}}
+{"do": "expect", "conn": "s", "json": {"id": 4, "result": {"sessions": [{"id": "$a1", "name": "$n1", "job": "j1", "task": "T#1", "profile": "$absent", "cwd": "$absent", "status": "$absent", "queue": "$absent", "permissions": "$absent"}, {"id": "$a2", "name": "$n2", "job": "j2", "profile": "$absent", "queue": "$absent"}]}}}
+{"do": "send", "conn": "a", "json": {"id": 5, "method": "agents/list"}}
+{"do": "expect", "conn": "a", "json": {"id": 5, "result": {"sessions": [{"id": "$a1", "name": "$n1", "job": "j1", "task": "T#1", "profile": "$absent", "queue": "$absent"}]}}}

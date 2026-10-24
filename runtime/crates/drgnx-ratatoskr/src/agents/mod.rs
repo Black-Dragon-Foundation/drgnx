@@ -192,14 +192,16 @@ impl Hub {
         Ok(self.find(id)?.transcript())
     }
 
-    pub fn list(&self, caller: &Caller) -> Sessions {
+    /// The sessions as CALLER may see them ([`crate::shape::result`]): the shaped JSON itself, since a summary read
+    /// back into a `Snapshot` would gain its empty lists again.
+    pub fn list(&self, caller: &Caller) -> serde_json::Value {
         let mut all: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();
         all.sort_by(|a, b| a.started.total_cmp(&b.started).then(a.id.cmp(&b.id)));
         let sessions = all.iter().map(|s| s.snapshot()).collect();
-        let v = serde_json::json!(Sessions { sessions });
-        let shaped = crate::shape::result(caller, "agents/list", v);
-        serde_json::from_value(shaped).unwrap_or(Sessions {
-            sessions: Vec::new(),
-        })
+        crate::shape::result(
+            caller,
+            "agents/list",
+            serde_json::json!(Sessions { sessions }),
+        )
     }
 }
