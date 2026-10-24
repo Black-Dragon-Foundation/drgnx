@@ -1,0 +1,11 @@
+{"scenario": "agents/start-gemini", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8a: the hub starts a gemini-shaped mock ACP agent as a session it holds: agents/start answers the id and name, agents/list shows it idle on its profile, in its cwd, with the agent's capabilities and an enforced flag (false: a test launch)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-gemini\" :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": {"$contains": [{"id": "$sid", "profile": "mock-gemini", "cwd": "$ROOT/work", "status": "idle", "enforced": false, "role": "chat", "capabilities": "$any"}]}}}}

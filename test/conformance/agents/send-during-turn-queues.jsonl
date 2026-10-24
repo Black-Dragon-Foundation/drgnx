@@ -1,0 +1,22 @@
+{"scenario": "agents/send-during-turn-queues", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: a message sent while a turn runs waits in the session queue (the snapshot lists it) and never cancels the turn: the first turn ends end_turn, then the queued message becomes the next turn on its own."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "silent 3"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy"}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"session": {"status": "busy", "queue": ["second"]}, "seq": "$number", "entries": {"$contains": [{"type": "user", "text": "silent 3"}]}}}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "queue": []}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"session": {"status": "idle"}, "seq": "$number", "entries": [{"type": "user", "text": "silent 3"}, {"type": "stop", "stop": "EndTurn"}, {"type": "user", "text": "second"}, {"type": "agent", "text": "You said: second"}, {"type": "stop", "stop": "EndTurn"}]}}}

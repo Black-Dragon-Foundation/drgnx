@@ -1,0 +1,30 @@
+{"scenario": "agents/resume-after-restart", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: a hub restart (TERM, then a start on the same root) keeps the session: it is listed again on the same profile and directory, resumed with session/resume, its transcript read back (earlier turns still there) and the prompt that was queued when the hub went down is delivered as the next turn."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-agent\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-agent", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "silent 30"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy"}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "silent 2"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "connect", "conn": "e2", "hub": "h2"}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "expect", "conn": "e2", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"session": {"id": "$sid", "profile": "mock-agent", "cwd": "$ROOT/work"}, "seq": "$number", "entries": {"$contains": [{"type": "user", "text": "hello"}, {"type": "user", "text": "silent 30"}, {"type": "user", "text": "silent 2"}]}}}}

@@ -1,0 +1,20 @@
+{"scenario": "agents/update-waits-only-for-a-running-turn", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: a new build on disk waits for a session's running turn (the notice counts it), not for the session: when the turn ends the hub restarts (exit 75) although the idle chat is still there."}
+{"do": "root"}
+{"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "bin": "$ROOT/bin/ratatoskr", "args": ["--idle-tick-ms", "200"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"agents/list\": {\"result\": {\"sessions\": []}}, \"job/status\": {\"result\": {\"jobs\": []}}}"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "silent 4"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "write_file", "path": "$ROOT/bin/ratatoskr.new", "text": "#!/bin/sh\necho '{\"commit\": \"another-build\"}'\n", "mode": "755"}
+{"do": "rename", "from": "$ROOT/bin/ratatoskr.new", "to": "$ROOT/bin/ratatoskr"}
+{"do": "expect", "conn": "c", "json": {"event": "notice", "data": {"id": "restart-when-idle", "text": "drgnx was updated; the hub restarts when its 1 running turn finishes"}}, "within_ms": 5000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"pid": "$PID(h)"}}}
+{"do": "expect_exit", "hub": "h", "code": 75, "within_ms": 10000}

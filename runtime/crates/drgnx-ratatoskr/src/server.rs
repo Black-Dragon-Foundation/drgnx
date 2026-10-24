@@ -210,12 +210,19 @@ pub async fn run(args: ServeArgs) -> Exit {
         .mcp
         .open_store(env.clone(), socket.clone(), runtime.clone());
     front.mcp.restore().await;
+    front.core.agents.open_store(runtime.clone());
     tokio::spawn(sessions::watch(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
         .open(paths::config_dir(&env), runtime.clone());
     front.refresh_settings().await;
+    // the sessions recorded before this start: resumed (their profiles are in the settings now), queues delivered
+    // (in the background: a slow agent never delays serving)
+    {
+        let f = front.clone();
+        tokio::spawn(async move { f.core.agents.resume_all(&f).await });
+    }
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept
     front.gate.open_store(runtime);
     match front.gate.listen(gateway_port).await {
@@ -319,6 +326,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     {
         tracing::warn!("the Lisp backend did not stop within 10 s");
     }
+    // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
+    front.core.agents.shutdown().await;
     // the lock is still held: these are ours (the sessions' rows stay for the next start)
     front.mcp.unbind_all();
     remove_all(&agent_paths);

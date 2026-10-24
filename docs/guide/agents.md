@@ -32,7 +32,8 @@ settings, and a buffer-local value is never read: a profile is a program, and a 
 
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
-`interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so.
+`interrupt` (stop the turn, then send; in a durable session, which the hub runs, a message never cancels a turn, so
+`interrupt` queues there, and `steer` puts the message ahead of the other queued ones). A profile whose program is not installed gives a session that says so.
 `:mcp-servers` lists MCP servers of your own for every session of the profile, job sessions included, after drgnx's
 own: ACP `mcpServers` entries, written with vectors where ACP has arrays, e.g.
 `:mcp-servers ((:name "docs" :command "docs-mcp" :args ["--read-only"] :env []))`. An entry named `drgnx` or
@@ -110,6 +111,11 @@ the count when you answer it, when the turn is stopped, or when the session ends
 agent streams: the set is rebuilt only when a session's permissions or edits to review change.
 
 Each agent's own settings (its routes and billing, MCP servers, hooks and skills) are on its settings page: `,` on a session's row, or Agents: Settings ([agent-settings.md](agent-settings.md)).
+
+The hub holds your agent sessions itself: it starts the agent, keeps its transcript, and lists what it asks. A
+permission request stays on the session until you answer it; nothing another agent says counts as your answer. An
+agent reads and writes files inside its session's folder only, and a brainstorm session writes only its design
+document.
 
 ## Reviewing an agent's edits
 
@@ -273,11 +279,24 @@ requests and edits to review — and drives it the same way (send, Stop, answer,
 sessions when it is idle whenever a hub is running (and looks again every 30 s of idleness); it never starts a hub for that.
 Turning `tools/agents` off (Preferences: Modules) stops the mirroring and closes this Emacs's connection to the hub;
 the hub and its sessions go on.
-Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
-Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
-hub start`) resumes them when their agent can load sessions: each comes back idle with its history,
-though a turn that was running when the hub ended is lost; a job's agents are not resumed (the job starts their
-tasks again).
+Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its agent processes end too.
+The next hub (the next durable session, an agent that needs the gateway, or `drgnx hub start`) brings each session
+back when its agent can resume or load sessions: idle, with its history read from the transcript, and with the
+messages that were queued when the hub ended delivered as the next turn; a turn that was running when the hub ended
+is lost; a job's agents are not resumed (the job starts their tasks again). An update of drgnx waits for a durable
+session's *running turn* to end, never for an idle chat.
+
+A durable session's messages and Stop work like this:
+
+- A message sent while the agent works is **queued** (or put ahead of the queue by `:mode steer`); it never cancels
+  the turn. Only **Stop** cancels: the turn ends as cancelled, pending permission requests are answered "cancelled",
+  and the queue is held until you press Deliver or send something new (a Stop on a session with no turn running
+  ends the session). **Pause** cancels once the tool call running now completes, and holds the queue the same way.
+- The hub keeps each durable session's transcript in `<state>/hub/transcripts/<id>.jsonl` (private to you, mode
+  0600). Anything that looks like a key or token is replaced by `[redacted: kind]` before it is written, so a key
+  you pasted into a message never rests in a file.
+- The hub cuts every turn into **steps** (thinking, a tool call, waiting for you, paused) from its own clock and
+  records them in `work.db` with the tokens each used; the timeline views read them.
 
 ## What agents get
 
