@@ -44,7 +44,12 @@
                        (list 'image (drgnx-perf--round 5.6) 'treesit-wait (drgnx-perf--round 2.0)
                              'worker-wait (drgnx-perf--round 203.25) 'worker-wait-display (drgnx-perf--round 200.25)
                              'worker-wait-image-pixels (drgnx-perf--round 3.0) 'worker-wait-drain (drgnx-perf--round 0.0))))
-        (should (equal (plist-get w :wait-ms) (drgnx-perf--round 205.25))))))
+        (should (equal (plist-get w :wait-ms) (drgnx-perf--round 205.25)))))
+    ;; treesit-with-waits: the synchronous parses plus the waits for nh-parse
+    (cl-letf (((symbol-function 'nidhogg-workers-stats)
+               (lambda (&rest _) (list :phase-ms (list 'treesit 40.5 'treesit-wait 12.25)))))
+      (should (equal (plist-get (plist-get (plist-get (drgnx-perf--workers-end) :workers) :phase-ms) 'treesit-with-waits)
+                     (drgnx-perf--round (+ 40.5 (drgnx-perf--round 12.25)))))))   ; each rounded first
   ;; a phase explains, it does not decide: no verdict for it, a line in the explain block
   (let* ((run (lambda (wait) (list :workers (list :phase-ms (list 'image 1.0 'worker-wait wait)) :input (list :p95 4.0))))
          (rounds (cl-loop for i below 8 collect (list :a (funcall run 0.0) :b (funcall run (+ 200.0 i)))))

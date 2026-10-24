@@ -245,6 +245,11 @@ Nidhogg reports `worker-wait' by reason (a plist): the probe gives its total as 
   (if (not (drgnx-perf--workers-p))
       (list :workers nil)
     (let* ((s (nidhogg-workers-stats)) (ph (drgnx-perf--workers-phases (plist-get s :phase-ms))))
+      ;; the main thread's whole tree-sitter time: its synchronous parses (Nidhogg counts them in `treesit' with the
+      ;; workers on or off) and its waits for nh-parse, so a parse moved into a wait is not counted as gone
+      (when (numberp (plist-get ph 'treesit))
+        (setq ph (append ph (list 'treesit-with-waits
+                                  (drgnx-perf--round (+ (plist-get ph 'treesit) (or (plist-get ph 'treesit-wait) 0)))))))
       (list :workers (list :phase-ms ph
                            :wait-ms (drgnx-perf--round (+ (or (plist-get ph 'treesit-wait) 0) (or (plist-get ph 'worker-wait) 0)))
                            :fallbacks (drgnx-perf--workers-fallbacks s)
