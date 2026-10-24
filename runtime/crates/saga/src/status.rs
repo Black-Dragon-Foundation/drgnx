@@ -65,6 +65,24 @@ pub fn normalize(raw: &str) -> String {
     s.to_string()
 }
 
+/// RAW (the first word of a DEFERRED row's status cell or entry bullet) as one of [`STATUSES`]: `open` is open;
+/// `fixed closed done decided mitigated` are done; `dropped moot` dropped; any other word is open (an item is never
+/// hidden by a word this does not know).
+pub fn normalize_deferred(raw: &str) -> String {
+    let w = raw
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    match w.as_str() {
+        "fixed" | "closed" | "done" | "decided" | "mitigated" => "done",
+        "dropped" | "moot" => "dropped",
+        _ => "open",
+    }
+    .to_string()
+}
+
 fn is_step_line(l: &str) -> Option<bool> {
     let t = l.trim_start();
     let t = t.strip_prefix(['-', '*', '+'])?.strip_prefix(' ')?;
@@ -89,7 +107,11 @@ pub fn status_of(kind: &str, role: &str, body: &str) -> Option<String> {
             } else {
                 &joined
             });
-            cells.get(3).map(|c| normalize(c))
+            cells.get(3).map(|c| normalize_deferred(c))
+        }
+        ("todo", "entry") => {
+            let w = crate::deferred::status_word(body).map_or("", |r| &body[r]);
+            Some(normalize_deferred(w))
         }
         ("task", "item") => {
             let line = body.lines().next().unwrap_or("");
@@ -154,6 +176,10 @@ pub fn with_status(kind: &str, role: &str, body: &str, status: &str) -> Option<S
                 &inner[..cut],
                 if closed { " |" } else { "" }
             ))
+        }
+        ("todo", "entry") => {
+            let r = crate::deferred::status_word(body)?;
+            Some(format!("{}{status}{}", &body[..r.start], &body[r.end..]))
         }
         ("task", "item") => {
             let (first, rest) = match body.split_once('\n') {

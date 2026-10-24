@@ -209,18 +209,22 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
             }
         }
         AnyDoc::Deferred(d) => {
-            o.push("note", "head", title(&d.preamble), None, d.preamble.clone());
-            for r in &d.rows {
-                o.push(
-                    "todo",
-                    "row",
-                    title(&format!("{} {}", r.id, r.text)),
-                    Some(crate::status::normalize(&r.status)),
-                    r.raw.clone(),
-                );
-            }
-            if !d.rest.is_empty() {
-                o.push("note", "rest", None, None, d.rest.clone());
+            for (i, p) in d.pieces.iter().enumerate() {
+                match p {
+                    deferred::DeferredPiece::Prose(s) if i == 0 => {
+                        o.push("note", "head", title(s), None, s.clone());
+                    }
+                    deferred::DeferredPiece::Prose(s) => {
+                        o.push("note", "rest", None, None, s.clone())
+                    }
+                    deferred::DeferredPiece::Row(r) => o.push(
+                        "todo",
+                        if r.entry { "entry" } else { "row" },
+                        title(&format!("{} {}", r.id, r.text)),
+                        Some(crate::status::normalize_deferred(&r.status)),
+                        r.raw.clone(),
+                    ),
+                }
             }
         }
         AnyDoc::Board(b) => {

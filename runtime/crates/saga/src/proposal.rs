@@ -171,6 +171,7 @@ fn static_role(r: &str) -> &'static str {
         "task" => "task",
         "section" => "section",
         "row" => "row",
+        "entry" => "entry",
         "block" => "block",
         "item" => "item",
         _ => "rest",

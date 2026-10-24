@@ -31,25 +31,35 @@ fn render_of_parse_is_identity() {
 #[test]
 fn deferred_rows_parse() {
     let d = deferred::parse(DEFERRED);
-    assert!(d.preamble.ends_with("|---|---|---|---|\n"));
-    assert!(d.rest.starts_with("\nClosing note"));
-    assert!(d.rest.contains("| 1 | build | done |"));
-    let ids: Vec<&str> = d.rows.iter().map(|r| r.id.as_str()).collect();
+    let rows = d.rows();
+    let prose: Vec<&str> = d
+        .pieces
+        .iter()
+        .filter_map(|p| match p {
+            deferred::DeferredPiece::Prose(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(prose[0].ends_with("|---|---|---|---|\n"));
+    assert!(prose[1].starts_with("\nClosing note"));
+    assert!(prose[1].contains("| 1 | build | done |"));
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, ["M1-1", "M1-2", "M2-1"]);
-    assert_eq!(d.rows[0].area, "harness");
-    assert_eq!(d.rows[0].status, "fixed in M2");
-    assert_eq!(d.rows[2].status, "closed: not needed");
+    assert_eq!(rows[0].area, "harness");
+    assert_eq!(rows[0].status, "fixed in M2");
+    assert_eq!(rows[2].status, "closed: not needed");
     // a row of two lines is one row, kept as written
-    assert!(d.rows[1].raw.contains("\n  and the note continues"));
-    assert_eq!(d.rows[1].status, "open");
-    assert_eq!(&DEFERRED[d.rows[1].span.clone()], d.rows[1].raw);
+    assert!(rows[1].raw.contains("\n  and the note continues"));
+    assert_eq!(rows[1].status, "open");
+    assert_eq!(&DEFERRED[rows[1].span.clone()], rows[1].raw);
 }
 
 #[test]
 fn escaped_pipes_survive() {
     let d = deferred::parse(DEFERRED);
-    assert!(d.rows[0].text.contains(r"`a\|b`"));
-    assert!(d.rows[2].text.starts_with(r"Pipes \| in prose"));
+    let rows = d.rows();
+    assert!(rows[0].text.contains(r"`a\|b`"));
+    assert!(rows[2].text.starts_with(r"Pipes \| in prose"));
     let b = board_md::parse(BOARD);
     assert_eq!(b.tables()[0].rows[1].cells[3], r"review `x\|y`");
     assert_eq!(b.tables()[0].rows[1].cells.len(), 4);
@@ -123,7 +133,7 @@ fn a_1600_row_table_parses_under_50_ms() {
     let out = deferred::render(&d);
     let b = board_md::parse(&text);
     let elapsed = start.elapsed();
-    assert_eq!(d.rows.len(), 1600);
+    assert_eq!(d.rows().len(), 1600);
     assert_eq!(out, text);
     assert_eq!(b.tables()[0].rows.len(), 1600);
     assert!(elapsed.as_millis() < 50, "took {elapsed:?}");

@@ -53,7 +53,7 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
 - **Pieces.** `saga::import::ops(doc, source)` turns a file into ordered pieces; each piece is one entity
   (`Origin::Imported`, `source = records:<hash of the path>`) whose `body` is the piece's raw text: a plan is its head
   (`plan`), one `task` per task (heading, body and the sections after it) and its tail; a ledger a head and one
-  `note` per section; DEFERRED a head, one `todo` per row and a tail; the board a `note` per text or table block;
+  `note` per section; DEFERRED prose pieces (a head first) and one `todo` per row of every four-cell register table (`#`/`id` first, `status`/`state` last) and per `### <ID> — title` entry (role `entry`, status the first word of its `- **Status:**` bullet); the board a `note` per text or table block;
   `board.org` a head and one `task` per headline. Ids are `<kind>:rec-<hash>-<seq>`, so importing twice changes
   nothing (the second report says 0 operations and adds no `tx` row); pieces that disappeared from the file are
   retired.
@@ -61,11 +61,11 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
   file byte for byte. The hub writes the file back at its path (tmp file + rename) with a one-line header comment,
   which the importer strips.
 - **Statuses.** `saga::status::normalize` maps a file's word to the graph's (`open running needs-input in-review
-  blocked waiting done dropped`): a DEFERRED row's status text (`fixed in M2` is `done`), an Org keyword (`STARTED`
+  blocked waiting done dropped`): a DEFERRED row's or entry's first status word (`saga::status::normalize_deferred`: `open` is open, `fixed closed done decided mitigated` are `done`, `dropped moot` `dropped`, any other word like `moved` or `kept` stays `open`; `fixed in M2` is `done`), an Org keyword (`STARTED`
   is `running`, `CANCELLED` `dropped`; a keyword of the file's own like `BLOCKED` maps by its word), a plan task by
   its ticks. The raw text stays in the piece's body.
 - **Views follow the graph.** `Views::flush` first writes each piece's graph status into its text
-  (`saga::status::with_status`: a DEFERRED row's status cell, an Org keyword, a plan task's ticks; a text that
+  (`saga::status::with_status`: a DEFERRED row's status/state cell or an entry's `Status:` bullet word, an Org keyword, a plan task's ticks; a text that
   already says it, a row of several lines and a keyword of the file's own are left alone), then rewrites the file.
   The follower (`records::follow`) flushes every view 2 s after the last write of the front's methods; writes by
   agent tools (their own connection) reach the file at the next such write, a `records/proposals` call or an import.
