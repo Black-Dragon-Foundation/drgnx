@@ -64,7 +64,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 10] = [
+pub const TAGS: [&str; 11] = [
     "v0",
     "v1",
     "fake-backend",
@@ -75,6 +75,7 @@ pub const TAGS: [&str; 10] = [
     "macos",
     "perf",
     "agent-locks",
+    "podman",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {
@@ -210,6 +211,8 @@ pub struct Host {
     pub fake_backend: bool,
     pub lisp_backend: bool,
     pub perf: bool,
+    /// `podman` is on the PATH.
+    pub podman: bool,
     /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
     pub ptrace_stays: bool,
 }
@@ -252,6 +255,9 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     }
     if has("test-hooks") && !h.test_hooks {
         return skip("the hub binary is built without test-hooks", false);
+    }
+    if has("podman") && !h.podman {
+        return skip("needs podman on the PATH", true);
     }
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
@@ -299,6 +305,12 @@ pub fn probe_sudo(cmd: &str) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// Is `podman` on the PATH?
+pub fn podman_available() -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("podman").is_file()))
 }
 
 /// May another uid be used?  Root can; otherwise passwordless sudo (the command is $SUDO, default `sudo`).

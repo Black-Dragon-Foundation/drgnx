@@ -23,7 +23,7 @@ pub fn failing(kind: CheckKind, text: &str) -> Vec<String> {
             CheckKind::Cargo => cargo_name(line),
             CheckKind::Ert => ert_name(line),
             CheckKind::Domr => domr_name(line),
-            CheckKind::Other => None,
+            CheckKind::Other | CheckKind::Container => None,
         };
         if let Some(n) = name
             && !out.iter().any(|o| o == n)

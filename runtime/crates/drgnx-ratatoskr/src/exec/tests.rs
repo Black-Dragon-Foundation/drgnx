@@ -17,6 +17,7 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
         argv: vec!["sh".into(), "-c".into(), script.into()],
         timebox,
         kind: CheckKind::Other,
+        container: None,
     }
 }
 
@@ -171,6 +172,7 @@ fn a_job_whose_process_is_gone_is_lost() {
         pid: Some(i32::MAX - 1),
         start_time: Some(1),
         entity: None,
+        image: None,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -221,4 +223,77 @@ async fn exec_runs_in_the_starters_sandbox() {
     assert!(lines.contains(&"wrote-inside".to_string()), "{lines:?}");
     assert!(lines.contains(&"denied-outside".to_string()), "{lines:?}");
     assert!(wt.join("inside").exists());
+}
+
+const REF: &str = "registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn container_spec(cwd: &Path) -> ExecSpec {
+    ExecSpec {
+        starter: Starter::User,
+        cwd: cwd.to_path_buf(),
+        argv: vec!["make".into(), "test".into()],
+        timebox: Duration::from_secs(30),
+        kind: CheckKind::Container,
+        container: Some(ContainerJob {
+            image: "tools".into(),
+            caps: container::Caps {
+                images: vec![crate::settings::ContainerImage {
+                    name: "tools".into(),
+                    image: REF.into(),
+                }],
+                memory: "1G".into(),
+                cpus: 1,
+                pids: container::PIDS,
+                proxy_network: None,
+            },
+            net: None,
+        }),
+    }
+}
+
+#[tokio::test]
+async fn container_jobs_without_podman_are_refused_with_a_doctor_hint() {
+    let d = tempfile::tempdir().unwrap();
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        Hooks {
+            podman: None,
+            ..hooks()
+        },
+    );
+    let e = r.start(container_spec(d.path())).await.unwrap_err();
+    assert!(e.message.contains("drgnx doctor"), "{}", e.message);
+    assert!(r.list(None, false).is_empty());
+}
+
+#[tokio::test]
+async fn a_container_job_runs_the_fixed_podman_line() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    // a stand-in for podman: the image is "present", and `run` prints the line it was given
+    let fake = d.path().join("podman");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nif [ \"$1\" = image ]; then exit 0; fi\nprintf '%s\\n' \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        Hooks {
+            podman: Some(fake),
+            ..hooks()
+        },
+    );
+    let id = r.start(container_spec(d.path())).await.unwrap();
+    let row = ended(&r, &id).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert_eq!(row.kind, ExecKind::Container);
+    assert_eq!(row.image.as_deref(), Some("tools"));
+    let log = r.log_slice(&id, 0, 100);
+    assert_eq!(log.first().map(String::as_str), Some("run"));
+    assert!(log.contains(&"--network=none".to_string()));
+    assert_eq!(&log[log.len() - 3..], [REF, "make", "test"]);
 }

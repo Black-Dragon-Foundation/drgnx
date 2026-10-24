@@ -12,6 +12,7 @@
 //! - [`agents`]: the editor as the agents' settings tools reach it (`settings/proposed`, `settings/explain`).
 
 pub mod agents;
+pub mod containers;
 pub mod load;
 pub mod matrix;
 pub mod overrides;

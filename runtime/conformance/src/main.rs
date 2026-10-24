@@ -165,6 +165,7 @@ fn main() -> ExitCode {
         fake_backend: args.fake_backend.is_some(),
         lisp_backend: args.lisp_hub.is_some(),
         perf: args.perf.is_some(),
+        podman: scenario::podman_available(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
     };
     let cfg = exec::Config {

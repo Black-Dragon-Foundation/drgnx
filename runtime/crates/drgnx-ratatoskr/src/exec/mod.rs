@@ -10,6 +10,7 @@
 //! `timed-out`, written before the hub kills it) and, once it ended, `result.json`.  A folder without `result.json` is
 //! running; the hub's monitor (or, after a restart, the re-attached one) writes the result once.
 
+pub mod container;
 pub mod summary;
 pub mod unit;
 
@@ -49,6 +50,7 @@ pub enum CheckKind {
     Ert,
     Domr,
     Other,
+    Container,
 }
 
 impl CheckKind {
@@ -58,6 +60,7 @@ impl CheckKind {
             CheckKind::Ert => "ert",
             CheckKind::Domr => "domr",
             CheckKind::Other => "other",
+            CheckKind::Container => "container",
         }
     }
 
@@ -65,6 +68,7 @@ impl CheckKind {
         match s {
             "cargo" => CheckKind::Cargo,
             "ert" => CheckKind::Ert,
+            "container" => CheckKind::Container,
             "domr" => CheckKind::Domr,
             _ => CheckKind::Other,
         }
@@ -79,6 +83,16 @@ pub struct ExecSpec {
     pub argv: Vec<String>,
     pub timebox: Duration,
     pub kind: CheckKind,
+    /// A container job: `argv` is the command inside the image (kind [`CheckKind::Container`]).
+    pub container: Option<ContainerJob>,
+}
+
+/// What makes a job a container job: the allow-list name, the caps from settings, the network the matrix granted.
+#[derive(Clone, Debug)]
+pub struct ContainerJob {
+    pub image: String,
+    pub caps: container::Caps,
+    pub net: Option<NetCell>,
 }
 
 /// What the runner reaches beyond its own folder: the store (a job is an entity), the subscribers (`exec-done`), the
@@ -90,6 +104,8 @@ pub struct Hooks {
     /// `MemoryMax` of a unit (`agents-job-memory`).
     pub memory: String,
     pub systemd: bool,
+    /// `podman`, found on the PATH when the hub started; none: container jobs are refused.
+    pub podman: Option<PathBuf>,
 }
 
 impl Default for Hooks {
@@ -99,6 +115,7 @@ impl Default for Hooks {
             editors: None,
             memory: "4G".into(),
             systemd: unit::systemd_user(),
+            podman: unit::find_on_path("podman"),
         }
     }
 }
@@ -246,7 +263,7 @@ impl Inner {
             kind,
             argv: m.argv,
             cwd: m.cwd,
-            image: None,
+            image: m.image,
             status: end.as_ref().map_or(ExecStatus::Running, |e| e.status),
             started: m.started,
             ended: end.as_ref().map(|e| e.ended),
@@ -292,9 +309,56 @@ impl Inner {
         r.map(|()| id)
     }
 
+    /// The `podman run` of a container job.  The container is the sandbox, so the starter's Gleipnir spec is not used;
+    /// the hub pulls the image first, the job never does.
+    async fn container_spec(&self, spec: &ExecSpec) -> Result<draugr::Spec, Refusal> {
+        let job = spec.container.as_ref().expect("a container job");
+        let podman = self
+            .hooks
+            .podman
+            .clone()
+            .ok_or_else(container::podman_missing)?;
+        let mut caps = job.caps.clone();
+        if job.net.is_some() {
+            let sid = match &spec.starter {
+                Starter::Session(s) => s.as_str(),
+                Starter::User => "user",
+            };
+            caps.proxy_network = Some(container::proxy_network(sid)?);
+        }
+        let req = container::ContainerReq {
+            image: job.image.clone(),
+            argv: spec.argv.clone(),
+            worktree: spec.cwd.clone(),
+            net: job.net,
+        };
+        let args = container::argv(&req, &caps)?;
+        let (p, reference) = (
+            podman.clone(),
+            container::resolve(&caps, &job.image)?.to_string(),
+        );
+        tokio::task::spawn_blocking(move || container::ensure_image(&p, &reference))
+            .await
+            .map_err(|e| setup(format!("pulling the image: {e}")))??;
+        Ok(draugr::Spec {
+            program: podman,
+            args,
+            env: draugr::env::build(
+                &["PATH", "HOME", "USER", "LOGNAME", "LANG", "XDG_RUNTIME_DIR"],
+                &[],
+                &[],
+            ),
+            cwd: Some(spec.cwd.clone()),
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        })
+    }
+
     async fn launch(self: Arc<Self>, id: &str, dir: &Path, spec: ExecSpec) -> Result<(), Refusal> {
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let (inner, status) = match &spec.starter {
+            _ if spec.container.is_some() => (self.container_spec(&spec).await?, None),
             Starter::Session(sid) => {
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
@@ -381,6 +445,7 @@ impl Inner {
             pid: Some(pid),
             start_time: draugr::start_time(pid).ok(),
             entity: None,
+            image: spec.container.as_ref().map(|c| c.image.clone()),
         };
         self.save_meta(&meta)?;
         meta.entity = self.record_start(&meta).await;
@@ -631,6 +696,7 @@ async fn gate_session_job(
     sid: &str,
     cwd: &std::path::Path,
     argv: &[String],
+    action: norn::matrix::Action,
 ) -> Result<(), Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
     let who = f.core.agents.who(sid).unwrap_or(norn::matrix::Who {
@@ -649,13 +715,7 @@ async fn gate_session_job(
     match f
         .core
         .matrix
-        .decide(
-            &f.settings,
-            &f.writer,
-            who,
-            norn::matrix::Action::CodeEdit,
-            ctx,
-        )
+        .decide(&f.settings, &f.writer, who, action, ctx)
         .await
     {
         Gate::Allow => Ok(()),
@@ -674,9 +734,12 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         ExecKind::Ert => CheckKind::Ert,
         ExecKind::Domr => CheckKind::Domr,
         ExecKind::Other => CheckKind::Other,
-        ExecKind::Container => {
-            return Err(crate::agent_core::not_yet("exec/start container", "11b"));
-        }
+        ExecKind::Container => CheckKind::Container,
+    };
+    let action = if kind == CheckKind::Container {
+        norn::matrix::Action::JobContainer
+    } else {
+        norn::matrix::Action::CodeEdit
     };
     let cwd = p
         .cwd
@@ -685,14 +748,30 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .ok_or_else(|| error(ErrorCode::InvalidParams, "cwd: the folder the job runs in"))?;
     if let Some(sid) = &c.sid {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
-        gate_session_job(f, sid, &cwd, &argv).await?;
+        gate_session_job(f, sid, &cwd, &argv, action).await?;
     }
+    let container = match (&p.image, kind) {
+        (Some(image), CheckKind::Container) => Some(ContainerJob {
+            image: image.to_string(),
+            caps: crate::settings::containers::caps(&f.settings.current().loaded.values),
+            // no network until the Network cell's grant has a proxy network to go through (container::proxy_network)
+            net: None,
+        }),
+        (None, CheckKind::Container) => {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "image: a container job names an image",
+            ));
+        }
+        _ => None,
+    };
     let spec = ExecSpec {
         starter: c.sid.clone().map_or(Starter::User, Starter::Session),
         cwd,
         argv: p.argv.iter().map(|a| a.to_string()).collect(),
         timebox: Duration::from_secs(p.timebox_s.unwrap_or(3600)),
         kind,
+        container,
     };
     let id = runner(f)?
         .start(spec)

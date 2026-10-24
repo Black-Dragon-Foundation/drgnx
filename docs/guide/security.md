@@ -391,6 +391,10 @@ restrictive wins, and a more specific column never widens. `unsandboxed` and `us
   next action.
 - **Managers** may hand a worker less than they have, never more.
 - A plan's override counts only when you wrote it; an agent's write of it is ignored.
+- **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
+  builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
+  mount, no network, limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
+  command and nothing else; the command is never read as a podman option.
 
 ## Checking it
 

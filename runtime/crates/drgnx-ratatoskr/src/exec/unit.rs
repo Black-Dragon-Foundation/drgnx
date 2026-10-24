@@ -29,6 +29,9 @@ pub struct Meta {
     pub start_time: Option<u64>,
     /// The graph entity (`exec:…`), once recorded.
     pub entity: Option<String>,
+    /// A container job's image name (`agents-container-images`).
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 /// The shell that wraps the command: `sh -c SCRIPT sh DIR PROGRAM ARGS…`.
@@ -41,8 +44,15 @@ pub fn systemd_user() -> bool {
 }
 
 fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
+    find_on_path(program).is_some()
+}
+
+/// PROGRAM's file on the PATH.
+pub fn find_on_path(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(program))
+        .find(|f| f.is_file())
 }
 
 /// The unit's name for job ID.
