@@ -6,7 +6,7 @@
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
-{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["8"]]}
 {"do": "sql_expect", "sql": "select count(*) from node", "rows": [[967]]}
 {"do": "sql_expect", "sql": "select count(*) from edge", "rows": [[165]]}
 {"do": "sql_expect", "sql": "select count(*) from entity where kind = 'decision'", "rows": [[4]]}

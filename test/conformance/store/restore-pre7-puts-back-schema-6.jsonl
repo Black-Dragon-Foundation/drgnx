@@ -3,7 +3,7 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6-shaped.sql", "sql": ["update node set id = replace(id, '$' || 'HOME', '$HOME'), path = replace(path, '$' || 'HOME', '$HOME'), parent = replace(parent, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME'), data = replace(data, '$' || 'HOME', '$HOME')", "update edge set src = replace(src, '$' || 'HOME', '$HOME'), dst = replace(dst, '$' || 'HOME', '$HOME'), source = replace(source, '$' || 'HOME', '$HOME')", "update file set path = replace(path, '$' || 'HOME', '$HOME')", "update job set plan = replace(plan, '$' || 'HOME', '$HOME'), repo = replace(repo, '$' || 'HOME', '$HOME')", "update agent set cwd = replace(cwd, '$' || 'HOME', '$HOME'), worktree = replace(worktree, '$' || 'HOME', '$HOME'), plan = replace(plan, '$' || 'HOME', '$HOME'), task = replace(task, '$' || 'HOME', '$HOME')"]}
 {"do": "start", "hub": "h"}
-{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["8"]]}
 {"do": "run", "args": ["store", "restore-pre7", "--yes"], "expect_code": 1, "expect_stderr": "the hub is running"}
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0}

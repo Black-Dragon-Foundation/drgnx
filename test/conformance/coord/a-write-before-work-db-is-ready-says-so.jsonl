@@ -6,4 +6,4 @@
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 8, "store": {"schema": 8, "writer": "ready", "writes": 1, "migrated_at": "$absent", "failed": "$absent"}}}}
 {"do": "sql_expect", "sql": "select kind, summary from event", "rows": [["comment", "early"]]}
-{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["8"]]}
