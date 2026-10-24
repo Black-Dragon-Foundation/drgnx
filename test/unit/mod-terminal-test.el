@@ -219,6 +219,19 @@ panel's rules on."
       (let ((eat-term-terminfo-directory "/nonexistent/drgnx-terminfo"))
         (should (member "eat's terminfo is missing: drgnx sync" (funcall doctor)))))))
 
+(ert-deftest drgnx-terminal/the-doctor-runs-with-eat-unloaded ()
+  "The doctor reads eat's options only once eat defines them (`bin/drgnx doctor' signalled void-variable)."
+  (unless (featurep 'drgnx-terminal-eat) (load (expand-file-name "modules/tools/drgnx-terminal-eat" drgnx-dir) nil t))
+  (let* ((doctor #'drgnx-terminal-eat--doctor)
+         (bound (boundp 'eat-eshell-fallback-if-stty-not-available))
+         (old (and bound eat-eshell-fallback-if-stty-not-available)))
+    (unwind-protect
+        (progn
+          (makunbound 'eat-eshell-fallback-if-stty-not-available)
+          (should-not (member "eat would ask when stty is missing (eat-eshell-fallback-if-stty-not-available is ask)"
+                              (funcall doctor))))
+      (when bound (set 'eat-eshell-fallback-if-stty-not-available old)))))
+
 ;;;; An idle shell is never a running program; a busy one is (the quit and close-buffer questions)
 
 (defun drgnx-terminal-test--running ()
