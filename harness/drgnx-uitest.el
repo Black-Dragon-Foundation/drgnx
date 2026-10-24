@@ -601,7 +601,23 @@ with redisplay between them, while the test waits.  The plist has :settled."
     (with-temp-buffer
       (set-buffer-multibyte nil)
       (insert (x-export-frames frame 'png))
-      (write-region nil nil file nil 'silent))))
+      (write-region nil nil file nil 'silent)))
+  (drgnx-uitest--evidence file))
+
+(defvar drgnx-uitest--evidence-count 0 "Screenshots copied out so far (their names stay unique).")
+
+(defun drgnx-uitest--evidence (file)
+  "Copy the screenshot FILE to the folder DRGNX_UI_EVIDENCE names, when set (`bin/drgnx test --container --ui').
+Never signals."
+  (when-let* ((dir (getenv "DRGNX_UI_EVIDENCE"))
+              ((file-directory-p dir)))
+    (ignore-errors
+      (copy-file file (expand-file-name
+                       (format "%s-%03d-%s-%s" (format-time-string "%H%M%S") (cl-incf drgnx-uitest--evidence-count)
+                               (file-name-nondirectory (directory-file-name (file-name-directory file)))
+                               (file-name-nondirectory file))
+                       dir)
+                 t))))
 
 (defun drgnx-uitest-capture (dir)
   "Export the root frame and its visible child frames as PNGs into DIR.

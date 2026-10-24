@@ -408,6 +408,17 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
       args+=(-v "$gmount")
     fi
   fi
+  if [ "$tier" = ui ]; then
+    # the run's screenshots (every PNG the harness exports, `drgnx-uitest--export') are copied to /evidence as they are
+    # taken: DRGNX_UI_EVIDENCE_DIR (default .claude/tmp/ui-evidence/<time> in the checkout); a session's own folder is
+    # removed when the session stops
+    local evid="${DRGNX_UI_EVIDENCE_DIR:-$here/.claude/tmp/ui-evidence/$(date +%Y%m%d-%H%M%S)}"
+    mkdir -p "$evid" && evid="$(cd "$evid" && pwd -P)"
+    case "$evid" in *:*) echo "drgnx: DRGNX_UI_EVIDENCE_DIR must not contain ':' (it is mounted with -v): $evid" >&2; return 2 ;; esac
+    local emount="$evid:/evidence"; [ "$rt" = podman ] && emount="$emount:Z"
+    args+=(-v "$emount" -e DRGNX_UI_EVIDENCE=/evidence)
+    echo "ui evidence (screenshots): $evid" >&2
+  fi
   "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
