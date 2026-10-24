@@ -24,7 +24,9 @@
                         "DRGNX_PERF_RESULTS: perf-results.json" "if: always()" "name: perf-results")
     ;; the ui job leaves the :timing tests out too (no CI job runs one)
     (should (string-match-p "bin/drgnx test --container --ui" gui))
-    (should (string-match-p "DRGNX_TEST_NO_TIMING: \"1\"\n        run: bin/drgnx test --container --ui" gui))
+    (should (string-match-p (concat "DRGNX_TEST_NO_TIMING: \"1\"\n\\(?:          [A-Z_]+: .*\n\\)*"
+                                    "        run: bin/drgnx test --container --ui")
+                            gui))
     (should (= 3 (with-temp-buffer (insert gui) (goto-char (point-min)) (let ((n 0)) (while (re-search-forward "^  \\(ui\\|scenario\\|perf\\):$" nil t) (cl-incf n)) n))))))
 
 (ert-deftest drgnx-ci/unit-jobs-rerun-and-skip-wall-clock ()
