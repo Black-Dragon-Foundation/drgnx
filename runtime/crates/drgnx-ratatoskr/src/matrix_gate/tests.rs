@@ -804,7 +804,11 @@ async fn the_gate_reads_the_real_clock_for_the_time_presets() {
     let dir = tempfile::tempdir().unwrap();
     let f = front(dir.path());
     // a window around the real local minute (wide enough that a minute boundary cannot flip it, wrapping at midnight)
-    let m = i32::from(minute(now_secs()));
+    let real = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let m = i32::from(minute(real));
     let (from, to) = ((m + 1440 - 10) % 1440, (m + 10) % 1440);
     set_matrix(
         &f,
