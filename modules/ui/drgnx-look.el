@@ -13,6 +13,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-wb)
+(require 'drgnx-decor)
 
 ;;;; Chrome (Glitnir, the compositor)
 
@@ -31,6 +32,7 @@ restores the old value, and the refresh recorded before it runs after that).  Wi
   (when (featurep 'glitnir)
     (drgnx-modules-push-undo "glitnir chrome refresh" (lambda () (glitnir-refresh)))
     (drgnx-module-set 'child-frame-chrome drgnx-look-chrome)
+    (drgnx-decor-faces-on)
     (glitnir-refresh)))
 
 ;;;; Theme
