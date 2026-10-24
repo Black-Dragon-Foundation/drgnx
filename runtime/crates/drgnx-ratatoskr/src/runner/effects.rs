@@ -620,7 +620,11 @@ async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error>
         None => ActionCtx::default(),
     };
     let ctx = ActionCtx {
-        plan: p.plan.as_ref().map(|i| i.as_str().to_owned()).or(base.plan.clone()),
+        plan: p
+            .plan
+            .as_ref()
+            .map(|i| i.as_str().to_owned())
+            .or(base.plan.clone()),
         ..base
     };
     match f
