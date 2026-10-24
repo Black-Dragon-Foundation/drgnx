@@ -799,7 +799,7 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   needs `task.done` (never for a worker). An agent reaches its own project's plans, reports and tasks only (its
   session's project: the plan run's, else the one its folder is in): `plans/get`, `plans/write`, `reports/get` and the
   manager's `report_read` refuse another project's records, and a new plan lands in the agent's project (naming
-  another is refused); records of no project, such as a job's tasks, stay open. `job/propose` takes the
+  another is refused); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
   entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job.
 - **Imported plans** get the same shape: `graph import-records` puts each `### Task N:` piece under the plan's head
   (`parent_of`), with `data.{number, role, model, interfaces, steps}`, `**Depends:** Task M` as `blocks` links and the

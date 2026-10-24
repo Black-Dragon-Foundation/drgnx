@@ -1387,6 +1387,8 @@ async fn tool_call(
     .unwrap_or(crate::runner::effects::Scope::Project {
         id: None,
         root: None,
+        jobs: Vec::new(),
+        sessions: Vec::new(),
     });
     let all = proposals_core(db, None).await?;
     let p = all
