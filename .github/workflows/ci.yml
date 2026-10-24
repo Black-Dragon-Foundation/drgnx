@@ -113,6 +113,11 @@ jobs:
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr \
             --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
           echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
+      # as emacs-31's: the differential test must run here too (test/no-skip.eld)
+      - name: huginn's dump example (DRGNX_HUGINN_DUMP)
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p huginn --example dump
+          echo "DRGNX_HUGINN_DUMP=$GITHUB_WORKSPACE/runtime/target/debug/examples/dump" >> "$GITHUB_ENV"
       - name: Prebuilt image for this Containerfile (else the suite builds it)
         if: ${{ !cancelled() }}
         env:
