@@ -742,7 +742,7 @@ answers with two methods.
   deny-list check (`norn::options::deny`), then the store's rule for kind `option` (`norn::options::may_write`:
   outside agents never; an active `options` grant of the scope whose `names` match; the deny-list again). Under a
   grant the change is a **proposed** tx of the agent's (tool `mcp:settings_change`, the reason as its `note`), the
-  store's guard checking it once more, then the event **`settings/proposed {tx, scope, name, value, root, agent,
+  store's guard checking it once more, then the event (to one editor, the first subscribed) **`settings/proposed {tx, scope, name, value, root, agent,
   reason}`** (`root`: the session's folder); the tool waits up to 5 s for **`settings/confirm {tx, ok, error?}`** →
   `{state: accepted | reverted | blocked}` (user class; only a proposed tx of `mcp:settings_change`): `ok` accepts
   the tx, else it is reverted (`blocked`, nothing written, when a later change of the setting came first). The agent

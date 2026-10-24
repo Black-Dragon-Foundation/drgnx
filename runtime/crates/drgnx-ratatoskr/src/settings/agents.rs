@@ -48,12 +48,29 @@ impl Editors {
         lock(&self.subscribers).retain(|_, out| out.push(line.clone()));
     }
 
+    /// EVENT with DATA to one subscriber, the first (the oldest connection): a change is written by one editor, not
+    /// by each open one. A closed connection is dropped and the next one tried; false when none took it.
+    fn send_one(&self, event: &str, data: Value) -> bool {
+        let Some(line) = crate::front::event_line(event, data) else {
+            return false;
+        };
+        let mut subs = lock(&self.subscribers);
+        while let Some((&conn, out)) = subs.iter().next() {
+            if out.push(line.clone()) {
+                return true;
+            }
+            subs.remove(&conn);
+        }
+        false
+    }
+
     /// Whether an editor is connected.
     pub fn present(&self) -> bool {
         !lock(&self.subscribers).is_empty()
     }
 
-    /// `settings/proposed` P to the editors, and the first `settings/confirm` of its tx waited for at most WAIT.
+    /// `settings/proposed` P to one editor (the first subscribed), and its `settings/confirm` waited for at most WAIT;
+    /// unconfirmed in time, the change stays pending.
     pub async fn propose(&self, p: Proposed, wait: Duration) -> EditorAnswer {
         if !self.present() {
             return EditorAnswer::NoEditor;
@@ -65,7 +82,10 @@ impl Editors {
             lock(&self.confirms).insert(tx, s);
             r
         });
-        self.broadcast("settings/proposed", json!(p));
+        if !self.send_one("settings/proposed", json!(p)) {
+            lock(&self.confirms).remove(&tx);
+            return EditorAnswer::NoEditor;
+        }
         let Some(rx) = rx else {
             return EditorAnswer::Sent;
         };
@@ -204,6 +224,20 @@ mod tests {
         assert!(lock(&e.confirms).is_empty());
         e.gone(7);
         assert!(!e.present());
+    }
+
+    #[tokio::test]
+    async fn a_proposal_goes_to_one_editor() {
+        let e = Editors::default();
+        let (a, b) = (Arc::new(Outbox::new(1)), Arc::new(Outbox::new(2)));
+        e.subscribe(2, b.clone());
+        e.subscribe(1, a.clone());
+        assert_eq!(
+            e.propose(proposed(9), Duration::ZERO).await,
+            EditorAnswer::Sent
+        );
+        assert_eq!(lines(&a).len(), 1);
+        assert!(lines(&b).is_empty());
     }
 
     #[tokio::test]
