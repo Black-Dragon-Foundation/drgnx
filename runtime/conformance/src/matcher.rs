@@ -3,7 +3,8 @@
 //! An object pattern matches an object that has every key of the pattern (extra keys are fine). An array pattern matches
 //! an array element by element and in length, unless the pattern is `{"$contains": [...]}` (every element of the
 //! list matches some element). Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (the key
-//! must be missing), `"$capture:NAME"` (match anything and remember it) and `"$NAME"` (equal to a value captured earlier).
+//! must be missing), `"$capture:NAME"` (match anything and remember it) and `"$NAME"` (equal to a value captured earlier);
+//! `"$NAME#1"` (a captured string followed by more text, such as a task id `JOB#1`) matches the capture and that text.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -173,16 +174,52 @@ fn special(here: &str, s: &str, actual: &Value, caps: &mut Captures) -> Result<(
                     show(actual)
                 )),
                 None if actual.as_str() == Some(s) => Ok(()),
-                None => Err(format!("{here}: wanted {s:?}, got {}", show(actual))),
+                None => match captured_then_text(s, caps) {
+                    Some(want) if actual.as_str() == Some(want.as_str()) => Ok(()),
+                    Some(want) => Err(format!(
+                        "{here}: wanted {s:?} = {want:?}, got {}",
+                        show(actual)
+                    )),
+                    None => Err(format!("{here}: wanted {s:?}, got {}", show(actual))),
+                },
             }
         }
     }
+}
+
+/// `"$NAME#1"`: the string captured as NAME with the text after the name (`#1`) appended; none when NAME is not a
+/// captured string or nothing follows it.
+fn captured_then_text(s: &str, caps: &Captures) -> Option<String> {
+    let rest = s.strip_prefix('$')?;
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|e| *e > 0)?;
+    let (name, tail) = rest.split_at(end);
+    Some(format!("{}{tail}", caps.0.get(name)?.as_str()?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_capture_followed_by_text_expands() {
+        let mut caps = Captures::default();
+        matches(&json!("$capture:job"), &json!("job-7"), &mut caps).unwrap();
+        assert!(
+            matches(
+                &json!({"id": "$job#1"}),
+                &json!({"id": "job-7#1"}),
+                &mut caps
+            )
+            .is_ok()
+        );
+        assert!(matches(&json!("$job#1"), &json!("job-7#2"), &mut caps).is_err());
+        // a name that was never captured stays a literal
+        assert!(matches(&json!("$nope#1"), &json!("$nope#1"), &mut caps).is_ok());
+        assert!(matches(&json!("$job"), &json!("job-7"), &mut caps).is_ok());
+    }
 
     fn ok(p: Value, a: Value) -> bool {
         matches(&p, &a, &mut Captures::default()).is_ok()

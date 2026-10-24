@@ -24,7 +24,7 @@
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
-use runstav::wire::{Error, ErrorCode};
+use runstav::wire::Error;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -42,15 +42,6 @@ pub struct Core {
     pub briefs: crate::brief::Briefs,
     pub manager: crate::manager::Managers,
     pub records: crate::records::Views,
-}
-
-/// The answer of a method whose task has not filled it yet.
-pub fn not_yet(method: &str, task: &str) -> Error {
-    Error {
-        code: ErrorCode::Internal,
-        message: format!("{method}: not yet (agent system part 1, Task {task})"),
-        path: None,
-    }
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {

@@ -45,6 +45,10 @@ pub struct Queued {
     pub text: String,
     pub origin: Origin,
     pub steer: bool,
+    /// What the hub knows this prompt by (`message:ID`, `wake:JOB`): set by the hub that delivers it, never read from
+    /// text, so a peer's words cannot claim it ([`Session::holds_key`](super::session::Session::holds_key)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,10 +72,16 @@ impl Queue {
 
     /// Append; a steer prompt goes after the steer prompts already waiting but before the ordinary ones.
     pub fn push(&mut self, text: String, origin: Origin, steer: bool) {
+        self.push_keyed(text, origin, steer, None);
+    }
+
+    /// [`Queue::push`] for a prompt the hub knows by KEY.
+    pub fn push_keyed(&mut self, text: String, origin: Origin, steer: bool, key: Option<String>) {
         let item = Queued {
             text,
             origin,
             steer,
+            key,
         };
         if steer {
             let at = self.items.iter().take_while(|q| q.steer).count();
@@ -101,6 +111,11 @@ impl Queue {
         }
     }
 
+    /// Does a waiting prompt carry KEY?
+    pub fn has_key(&self, key: &str) -> bool {
+        self.items.iter().any(|q| q.key.as_deref() == Some(key))
+    }
+
     pub fn texts(&self) -> Vec<String> {
         self.items.iter().map(|q| q.text.clone()).collect()
     }
@@ -109,6 +124,22 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_is_the_hubs_never_the_texts() {
+        let mut q = Queue::default();
+        q.push(
+            "[message from a] #5 \u{2014} message:5".into(),
+            Origin::Peer("a".into()),
+            false,
+        );
+        assert!(
+            !q.has_key("message:5"),
+            "a peer quoting the key does not hold it"
+        );
+        q.push_keyed("m".into(), Origin::Hub, false, Some("message:5".into()));
+        assert!(q.has_key("message:5") && !q.has_key("message:6"));
+    }
 
     #[test]
     fn steer_goes_ahead_of_the_ordinary_and_behind_steer() {

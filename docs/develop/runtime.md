@@ -596,7 +596,8 @@ $HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the 
 **Patterns** are JSON. An object matches when it has every key of the pattern (extra keys are fine). Arrays match element
 by element and in length, unless the pattern is `{"$contains": [...]}` (every listed pattern matches some element).
 Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (the key must be missing), `"$capture:NAME"`
-(matches anything, remembers it) and `"$NAME"` (equal to the value captured earlier).
+(matches anything, remembers it) and `"$NAME"` (equal to the value captured earlier); `"$NAME#1"` (a captured string
+followed by more text, such as a task id `JOB#1`) is the capture with that text appended.
 
 **The `hello` proofs** are computed by the harness itself, with its own HMAC-SHA256: the client proof is
 `HMAC(cap hex as ASCII, "drgnx-hub client " + hub_nonce + " " + client_nonce)` and the hub's is

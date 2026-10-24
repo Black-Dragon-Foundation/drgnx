@@ -115,3 +115,13 @@ fn a_user_only_field_is_flagged() {
     let p = read(&view, &view.replace("h\n", "h\nmatrix: allow\n"), &m);
     assert_eq!(p.user_only, ["e0"]);
 }
+
+/// A piece whose original already had a `matrix` line is flagged too when an edit touches it: the line is the
+/// user's whatever the piece held before.
+#[test]
+fn a_user_only_field_is_flagged_when_the_piece_already_had_one() {
+    let m = model(&["h\nmatrix: ask\n"], &["plan"], &["head"]);
+    let view = file_text(Path::new("x.md"), &m);
+    let p = read(&view, &view.replace("matrix: ask", "matrix: allow"), &m);
+    assert_eq!(p.user_only, ["e0"]);
+}

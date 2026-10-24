@@ -813,7 +813,11 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
         "report_read" => {
             let a = serde_json::from_value(args).map_err(bad)?;
             gate(f, sid, &who, Action::CodeRead, None, &facts).await?;
-            let r = runner::effects::reports_get(f, &runner::user(), a)
+            // the manager's own project's reports only
+            let scope = runner::effects::scope_of_session(f, sid)
+                .await
+                .map_err(|e| e.message)?;
+            let r = runner::effects::reports_get_in(f, scope, a)
                 .await
                 .map_err(|e| e.message)?;
             Ok(json!(r).to_string())

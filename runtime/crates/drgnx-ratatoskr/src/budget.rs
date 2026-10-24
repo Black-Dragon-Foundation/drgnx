@@ -15,7 +15,6 @@
 //!   spend, so a request over the nested minimum is refused with `budget_exceeded`.
 //! - **Pace** is linear over the last 24 h of a meter's readings; the clock is an argument, never read here.
 
-use crate::agent_core::not_yet;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::matrix::{Limit, Unit};
@@ -610,7 +609,6 @@ pub async fn set(f: &Front, _: &Caller, p: BudgetSetParams) -> Result<BudgetView
 }
 
 pub async fn pace(f: &Front, _: &Caller, p: PaceParams) -> Result<Paces, Error> {
-    let _ = not_yet;
     Ok(Paces {
         meters: f
             .core

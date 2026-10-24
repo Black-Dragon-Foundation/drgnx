@@ -8,6 +8,11 @@ use runstav::methods::exec::{ExecDone, ExecStatus};
 use std::sync::Arc;
 
 /// What the woken agent reads: the job, how it ended, the parsed summary and where the whole log is.
+/// What the session's prompt for JOB's end is keyed by.
+fn wake_key(job: &str) -> String {
+    format!("wake:{job}")
+}
+
 pub fn wake_text(d: &ExecDone) -> String {
     let how = match (d.status, d.exit) {
         (ExecStatus::Done, Some(n)) => format!("exit {n}"),
@@ -91,7 +96,12 @@ async fn deliver(front: &Front, done: &ExecDone) {
         return;
     }
     let job = done.id.clone();
-    match front.core.agents.wake(front, &sid, wake_text(done)).await {
+    match front
+        .core
+        .agents
+        .wake(front, &sid, wake_text(done), wake_key(&done.id))
+        .await
+    {
         Ok(()) => {
             write(front, move |c| {
                 Ok(c.execute("update wake set state = 'done' where job = ?1", [job])?)
@@ -140,7 +150,7 @@ pub async fn recover(front: &Front) {
                 .core
                 .agents
                 .find(&sid)
-                .is_ok_and(|s| s.holds_text(&format!("[job {job} finished")));
+                .is_ok_and(|s| s.holds_key(&wake_key(&job)));
             let job = job.clone();
             if held {
                 write(front, move |c| {
@@ -168,7 +178,7 @@ pub async fn recover(front: &Front) {
             .core
             .agents
             .find(&sid)
-            .map_or(true, |s| s.holds_text(&format!("[job {} finished", r.id)));
+            .map_or(true, |s| s.holds_key(&wake_key(&r.id)));
         let Some(done) = front.core.exec.done(&r.id) else {
             continue;
         };

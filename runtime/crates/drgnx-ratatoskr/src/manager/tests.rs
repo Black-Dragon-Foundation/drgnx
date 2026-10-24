@@ -91,55 +91,81 @@ fn no_grant_ever_opens_what_is_never_for_everyone() {
     );
 }
 
+/// A graph file with urdr's real tables, written through urdr's primitives ([`urdr::graph::Tx::for_test`] and
+/// `entity::create`), and the one table the digest also reads that urdr does not own: norn's `card`.
 fn graph_stub() -> urdr::Connection {
     let c = urdr::Connection::open_in_memory().unwrap();
-    c.execute_batch(
-        "create table tx (id integer primary key, session text);
-         create table entity (n integer primary key, id text, kind text, title text, status text, updated_tx integer);
-         create table card (id integer primary key, kind text, title text, state text, tx integer);",
-    )
-    .unwrap();
+    c.execute_batch(urdr::graph::schema::GRAPH_DDL).unwrap();
+    c.execute_batch("create table card (id integer primary key, kind text, title text, state text, tx integer);")
+        .unwrap();
     c
+}
+
+/// A tx of SESSION that creates the entities (id, kind, title, status); answers its id.
+fn write_entities(
+    c: &mut urdr::Connection,
+    session: &str,
+    rows: &[(String, &str, String, &str)],
+) -> i64 {
+    use urdr::graph::{Class, Tx, TxMeta, entity, guard::Guard};
+    let mut meta = TxMeta::new(format!("agent:{session}"), Class::Agent, "test");
+    meta.session = Some(format!("session:{session}"));
+    let mut tx = Tx::for_test(c, meta, std::sync::Arc::new(Guard::default()));
+    for (id, kind, title, status) in rows {
+        entity::create(
+            &mut tx,
+            entity::EntityNew {
+                id: id.clone(),
+                kind: (*kind).to_owned(),
+                project: None,
+                title: Some(title.clone()),
+                status: Some((*status).to_owned()),
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({}),
+                origin: entity::Origin::Recorded,
+                source: None,
+            },
+        )
+        .unwrap();
+    }
+    let id = tx.id();
+    tx.commit_for_test().unwrap();
+    id
 }
 
 #[test]
 fn a_digest_is_at_most_4_kib_and_says_what_it_left_out() {
-    let c = graph_stub();
-    c.execute(
-        "insert into tx (id, session) values (1, 'session:other')",
-        [],
-    )
-    .unwrap();
-    for n in 0..400 {
-        c.execute(
-            "insert into entity (id, kind, title, status, updated_tx) values (?1, 'report', ?2, 'done', 1)",
-            (format!("report:{n}"), "x".repeat(300)),
-        )
-        .unwrap();
-    }
+    let mut c = graph_stub();
+    let rows: Vec<_> = (0..400)
+        .map(|n| (format!("report:{n}"), "report", "x".repeat(300), "done"))
+        .collect();
+    let tx = write_entities(&mut c, "other", &rows);
     let (text, upto) = digest(&c, 0, "mgr", &[]).unwrap();
     assert!(text.len() <= DIGEST_MAX, "{} bytes", text.len());
     assert!(text.contains("and "), "{text}");
-    assert_eq!(upto, 1);
+    assert_eq!(upto, tx);
     // nothing after the last look: nothing to say
-    assert_eq!(digest(&c, 1, "mgr", &[]).unwrap().0, "");
+    assert_eq!(digest(&c, tx, "mgr", &[]).unwrap().0, "");
 }
 
 #[test]
 fn a_digest_leaves_out_what_the_manager_wrote_itself() {
-    let c = graph_stub();
-    c.execute("insert into tx (id, session) values (1, 'session:mgr')", [])
-        .unwrap();
-    c.execute("insert into tx (id, session) values (2, 'session:w1')", [])
-        .unwrap();
+    let mut c = graph_stub();
+    write_entities(
+        &mut c,
+        "mgr",
+        &[("task:a".into(), "task", "mine".into(), "open")],
+    );
+    let theirs = write_entities(
+        &mut c,
+        "w1",
+        &[("report:b".into(), "report", "theirs".into(), "done")],
+    );
     c.execute(
-        "insert into entity (id, kind, title, status, updated_tx) values ('task:a', 'task', 'mine', 'open', 1), ('report:b', 'report', 'theirs', 'done', 2)",
-        [],
-    )
-    .unwrap();
-    c.execute(
-        "insert into card (id, kind, title, state, tx) values (7, 'matrix', 'push', 'open', 2)",
-        [],
+        "insert into card (id, kind, title, state, tx) values (7, 'matrix', 'push', 'open', ?1)",
+        [theirs],
     )
     .unwrap();
     let (text, _) = digest(&c, 0, "mgr", &["job j1 Done".into()]).unwrap();

@@ -263,7 +263,7 @@ pub fn read(view: &str, edited: &str, model: &ViewModel) -> Proposal {
         let (kind, role) = (&model.kinds[k], &model.roles[k]);
         let new_status = status::status_of(kind, role, &text[k]);
         let old_status = status::status_of(kind, role, &model.parts[k]);
-        if touches_user_only(&text[k]) && !touches_user_only(&model.parts[k]) {
+        if touches_user_only(&text[k]) {
             user_only.push(model.ids[k].clone());
         }
         ops.push(crate::import::GraphOp {

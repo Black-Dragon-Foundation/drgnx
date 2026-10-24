@@ -1,0 +1,26 @@
+{"scenario": "scope/an-agent-cannot-write-another-projects-records", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "S4: a worker whose folder is in project alpha calls plan_write on a plan of project beta (naming the task done) and on a plan of its own project alpha. Beta's plan keeps its task's title and status; alpha's takes the change (so the calls reached the hub). Another job's tasks, which have no project, are the unit test an_agent_reaches_its_own_jobs_tasks_only: a plan needs a project, so no row can name one. What makes it fail: a scope that lets an agent name any plan id."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/beta && cd $ROOT/work/beta && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000100 +0000' GIT_COMMITTER_DATE='@1700000100 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m beta"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/w.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "alpha work", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$any"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "tasks/write", "params": {"op": "create", "title": "beta work", "cwd": "$ROOT/work/beta"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$any"}}}
+{"do": "sql_expect", "sql": "select id from entity where kind = 'project' order by n", "rows": [["$capture:pa"], ["$capture:pb"]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "plans/write", "params": {"project": "$pb", "title": "B plan", "tasks": [{"number": "1", "title": "b task"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"plan": "$capture:planb"}}}
+{"do": "send", "conn": "c", "json": {"id": 30, "method": "plans/write", "params": {"project": "$pa", "title": "A plan", "tasks": [{"number": "1", "title": "a task"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 30, "result": {"plan": "$capture:plana"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work/alpha", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/send", "params": {"id": "$sid", "text": "call:plan_write {\"plan\": \"$planb\", \"tasks\": [{\"number\": \"1\", \"title\": \"hacked\", \"status\": \"done\"}]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/send", "params": {"id": "$sid", "text": "call:plan_write {\"plan\": \"$plana\", \"tasks\": [{\"number\": \"1\", \"title\": \"a edited\"}]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "file", "path": "$ROOT/w.log", "contains": "a edited", "within_ms": 30000}
+{"do": "run", "bin": "/bin/sleep", "args": ["4"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select title, status from entity where title in ('a task', 'a edited', 'b task', 'hacked') order by title", "rows": [["a edited", "open"], ["b task", "open"]]}

@@ -81,12 +81,23 @@
     (drgnx-hub--presence-tick)
     (drgnx-hub--presence-tick)          ; the same state again: nothing
     (should (equal calls '(("presence/set" :away t))))
-    (should (drgnx-timer-active-p 'hub-presence-back))
+    (should (memq #'drgnx-hub--presence-back pre-command-hook))
     (setq idle 2)
     (drgnx-hub--presence-tick)
     (drgnx-hub--presence-tick)
     (should (equal (mapcar #'cdr calls) '((:away :false) (:away t))))
-    (should-not (drgnx-timer-active-p 'hub-presence-back))))
+    (should-not (memq #'drgnx-hub--presence-back pre-command-hook))))
+
+(ert-deftest drgnx-agents-matrix/the-next-command-says-back ()
+  (drgnx-agents-matrix-test--presence 700
+    (drgnx-hub--presence-tick)
+    (should (equal calls '(("presence/set" :away t))))
+    ;; no input yet: nothing but the hook waits; the first command says back, once, and the hook is gone
+    (drgnx-hub--presence-back)
+    (should (equal (mapcar #'cdr calls) '((:away :false) (:away t))))
+    (should-not (memq #'drgnx-hub--presence-back pre-command-hook))
+    (drgnx-hub--presence-back)
+    (should (= (length calls) 2))))
 
 (ert-deftest drgnx-agents-matrix/away-without-a-subscription-sends-nothing ()
   (drgnx-agents-matrix-test--presence 700
