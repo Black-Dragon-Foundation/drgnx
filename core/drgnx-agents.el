@@ -71,8 +71,8 @@ The settings below use its parts.")
 
 (drgnx-defsetting drgnx-agents-profiles nil
   "Your agent profiles: an alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt
-:ai PROVIDER-ENVIRONMENT :model MODEL :doc LINE).  The built-in ones need none; never holds secrets (keys come from
-the environment)."
+:ai PROVIDER-ENVIRONMENT :model MODEL :tracker-tools on|off :doc LINE).  The built-in ones need none; never holds
+secrets (keys come from the environment)."
   :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "Vec<AgentProfile>" :schema (drgnx-agents--key-schema :profiles))
 
