@@ -51,15 +51,13 @@ pub fn spawn(plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
     launch(&env, &plan, &shape)
 }
 
-/// The plan and shape of a worker's or manager's launch: its worktree writable and, for a git worktree, git's folders
-/// ([`sandbox::git_access`]): the common folder writable for commits, with the hooks and config in it pinned
-/// read-only next to the lock's protected paths.
+/// The plan and shape of a worker's or manager's launch: its worktree writable, and the hooks and config of the git
+/// folder inside it pinned read-only next to the lock's protected paths ([`sandbox::git_access`]).  The user's
+/// repository is never writable: a plan run's or a manager worker's tree is a snapshot with a `.git` of its own.
 pub fn worktree_launch(plan: &LaunchPlan, req: &SandboxReq) -> (LaunchPlan, SessionShape) {
-    let (git_write, git_pins) = sandbox::git_access(&req.worktree);
     let mut plan = plan.clone();
-    plan.protected_ro.extend(git_pins);
-    let mut write = vec![req.worktree.clone()];
-    write.extend(git_write);
+    plan.protected_ro.extend(sandbox::git_access(&req.worktree));
+    let write = vec![req.worktree.clone()];
     let shape = SessionShape {
         sid: req.sid.clone(),
         cwd: req.worktree.clone(),

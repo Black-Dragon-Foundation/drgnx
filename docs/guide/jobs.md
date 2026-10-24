@@ -9,9 +9,12 @@ it does not depend on the agent that started it or on the editor, and it survive
   project folder it can write, and the lock's protected files in it stay read-only: `.claude`, `.codex`, `.gemini`,
   `.envrc`, `mise.toml` and `.git/hooks`, a missing one made empty so it can be pinned; the empty ones the hub made are
   removed when the session ends, and a branch that adds or changes any of them is refused at the merge gate with the
-  paths on the card). A session in a git worktree can commit: git's common folder is writable (objects, refs, its
-  worktree's own folder), but the `hooks` folder, the `config` file, each `config.worktree` and the same of every
-  submodule's folder in it are read-only, since git runs what it finds there; the network its matrix grants). An agent's job works in its session's
+  paths on the card). The tree of a plan-run task or a manager's worker is always a **snapshot**: its own `.git`, a
+  reflink copy of a store the hub keeps per run (a plain copy where the filesystem cannot reflink: it then costs the
+  store's size per task). The agent commits there; the hub fetches the branch back as a bundle (verified, fsck'd) when
+  it reviews, trial-merges or merges it. The user's own repository is never writable to a sandboxed agent. In the
+  snapshot's `.git` the `hooks` folder, `config`, `config.worktree` and those of each submodule are read-only, since
+  git runs what it finds there; the network its matrix grants). An agent's job works in its session's
   worktree or in a folder inside it: the hub resolves the `cwd` the agent names (links and `..` included) and refuses
   any other ("… is outside your worktree …"); `job_start` without a `cwd` uses the worktree. Your own jobs run with
   your rights, in the folder they name. On Linux the job is

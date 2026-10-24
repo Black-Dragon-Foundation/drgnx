@@ -594,6 +594,9 @@ fn pin_protected(
     let (mut out, mut made_here) = (Vec::new(), Vec::new());
     for rel in protected {
         let p = cwd.join(rel);
+        if out.contains(&p) {
+            continue;
+        }
         if p.symlink_metadata().is_err() {
             if !p.parent().is_some_and(Path::is_dir) {
                 continue;
@@ -691,16 +694,19 @@ pub fn git_dirs(worktree: &Path) -> Option<GitDirs> {
     Some(GitDirs { gitdir, common })
 }
 
-/// What a sandboxed agent in WORKTREE needs of git's folders, and what it must not write there.  A linked worktree
-/// commits into the common folder, so that is writable as a whole (objects, refs, the worktree's own folder); but
-/// git runs code it finds there: `hooks`, `config`, the per-worktree `config.worktree` of every worktree, and the
-/// same of each submodule's folder under `modules/`.  Those are pinned read-only (an agent that could write them
-/// would have the user's next git command run its code).  Returns (writable folders, pinned paths); every pin
-/// exists (a missing `hooks` folder is made).
-pub fn git_access(worktree: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let Some(g) = git_dirs(worktree) else {
-        return (vec![], vec![]);
+/// What a sandboxed agent must not write in the git folders of WORKTREE: git runs code it finds in `hooks`, in
+/// `config` and in `config.worktree` (the worktree's, and each submodule's folder under `modules/`), so the user's
+/// next git command would run what the agent left there.  Those are pinned read-only.  Only a git folder inside the
+/// worktree is the agent's to write (a snapshot task has its own `.git`, a copy of the run's store); the common folder
+/// of a linked worktree is the user's repository and is not given to a sandboxed agent at all (it could rewrite
+/// the user's branches), so nothing there is pinned or opened.  Every pin exists (a missing `hooks` folder is made).
+pub fn git_access(worktree: &Path) -> Vec<PathBuf> {
+    let (Some(g), Ok(real)) = (git_dirs(worktree), std::fs::canonicalize(worktree)) else {
+        return vec![];
     };
+    if !g.gitdir.starts_with(&real) || !g.common.starts_with(&real) {
+        return vec![];
+    }
     let mut pins: Vec<PathBuf> = Vec::new();
     let mut add = |p: PathBuf| {
         if p.symlink_metadata().is_ok() && !pins.contains(&p) {
@@ -738,11 +744,7 @@ pub fn git_access(worktree: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
             }
         }
     }
-    let mut write = vec![g.common.clone()];
-    if !g.gitdir.starts_with(&g.common) {
-        write.push(g.gitdir);
-    }
-    (write, pins)
+    pins
 }
 
 /// Where the hub makes the worktrees of plan runs and manager-started workers (`<state>/hub/runs`).  It lies inside

@@ -205,6 +205,47 @@ async fn a_protected_file_stub_in_the_branch_is_refused() {
     }
 }
 
+/// A snapshot task asked for again (a review begins, a mark is made) is the same tree: the agent's commits survive,
+/// and its branch, which is not in the trusted repository yet, is found in the tree's own `.git`.  A manager's trial
+/// merge of snapshot workers imports their branches first.
+#[tokio::test]
+async fn a_snapshot_task_is_not_remade_and_its_branch_is_imported_for_a_trial() {
+    let e = env();
+    let (h, _) = shared(&e, TreeMode::Snapshot, Policy::default(), None);
+    let a = h
+        .task_worktree(&e.repo, "r1", "a", &base(&e))
+        .await
+        .unwrap();
+    commit(&e, &a, "a.txt", "A\n");
+    let again = h
+        .task_worktree(&e.repo, "r1", "a", &base(&e))
+        .await
+        .unwrap();
+    assert_eq!(again, a);
+    assert!(a.path.join("a.txt").is_file(), "the agent's work was reset");
+    let b = h
+        .task_worktree(&e.repo, "r1", "b", &base(&e))
+        .await
+        .unwrap();
+    commit(&e, &b, "b.txt", "B\n");
+    assert!(
+        h.trial_merge(&e.repo, std::slice::from_ref(&a.branch))
+            .await
+            .is_err(),
+        "a snapshot branch is not in the repository before it is imported"
+    );
+    for t in [&a, &b] {
+        h.import(&e.repo, t).await.unwrap();
+    }
+    let r = h
+        .trial_merge(&e.repo, &[a.branch.clone(), b.branch.clone()])
+        .await
+        .unwrap();
+    assert!(r.clean, "{r:?}");
+    // the source repository got the two branches and nothing else
+    assert_eq!(sh(&e.home, &e.repo, &["status", "--porcelain"]), "");
+}
+
 #[tokio::test]
 async fn tip_moved_after_check_refused() {
     let e = env();

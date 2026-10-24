@@ -285,35 +285,22 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
     );
 }
 
-/// The shipped layout of a linked worktree: the tree under `<state>/hub/runs`, git's common folder in the user's
-/// repository.  Commits need the common folder writable; the hooks and config in it (and the worktree's
-/// `config.worktree`, and a submodule's) are pinned read-only, objects and refs are not.
+/// The shipped layout: a plan run's or manager worker's tree is a snapshot, `.git` a copy of the run's store inside
+/// the tree under `<state>/hub/runs`.  The hooks and config in it (and a submodule's) are pinned read-only; the
+/// source repository's `.git` is nowhere in the spec, readable or writable.
 #[test]
-fn a_linked_worktrees_git_folders_are_writable_except_what_git_runs() {
+fn a_snapshot_workers_git_folder_is_its_own_and_the_source_repo_is_not_given() {
     use crate::agents::lock::PROTECTED_RO;
     let fx = Fx::new();
     let env = fx.env();
-    let common = fx.p("repo/.git");
-    for d in [
-        "objects",
-        "refs/heads",
-        "hooks",
-        "worktrees/w1",
-        "modules/sub/hooks",
-    ] {
-        fs::create_dir_all(common.join(d)).unwrap();
-    }
-    fs::write(common.join("config"), "[core]\n").unwrap();
-    fs::write(common.join("modules/sub/config"), "[core]\n").unwrap();
-    fs::write(common.join("worktrees/w1/config.worktree"), "").unwrap();
-    fs::write(common.join("worktrees/w1/commondir"), "../..\n").unwrap();
+    let source = fx.p("repo/.git");
+    fs::create_dir_all(source.join("refs/heads")).unwrap();
     let wt = paths::state_dir(&env).join("hub/runs/w1");
-    fs::create_dir_all(&wt).unwrap();
-    fs::write(
-        wt.join(".git"),
-        format!("gitdir: {}\n", common.join("worktrees/w1").display()),
-    )
-    .unwrap();
+    for d in ["objects", "refs/heads", "hooks", "modules/sub/hooks"] {
+        fs::create_dir_all(wt.join(".git").join(d)).unwrap();
+    }
+    fs::write(wt.join(".git/config"), "[core]\n").unwrap();
+    fs::write(wt.join(".git/modules/sub/config"), "[core]\n").unwrap();
     let mut plan = fx.plan(".claude");
     plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
     let req = SandboxReq {
@@ -325,15 +312,14 @@ fn a_linked_worktrees_git_folders_are_writable_except_what_git_runs() {
     };
     let (plan, shape) = worktree_launch(&plan, &req);
     let spec = fx.spec(&plan, &shape);
-    assert!(spec.write.contains(&wt) && spec.write.contains(&common));
+    assert_eq!(spec.write[0], wt);
     for pinned in [
-        "hooks",
-        "config",
-        "worktrees/w1/config.worktree",
-        "modules/sub/hooks",
-        "modules/sub/config",
+        ".git/hooks",
+        ".git/config",
+        ".git/modules/sub/hooks",
+        ".git/modules/sub/config",
     ] {
-        let pin = spec.binds.iter().find(|b| b.source == common.join(pinned));
+        let pin = spec.binds.iter().find(|b| b.source == wt.join(pinned));
         assert_eq!(
             pin.map(|b| b.mode),
             Some(Mode::Ro),
@@ -341,17 +327,49 @@ fn a_linked_worktrees_git_folders_are_writable_except_what_git_runs() {
             spec.binds
         );
     }
-    for open in ["objects", "refs", "worktrees/w1"] {
+    assert!(
+        spec.binds
+            .iter()
+            .all(|b| b.source != wt.join(".git/objects"))
+    );
+    let named = spec
+        .read
+        .iter()
+        .chain(&spec.write)
+        .chain(spec.binds.iter().map(|b| &b.source));
+    for p in named {
         assert!(
-            spec.binds.iter().all(|b| b.source != common.join(open)),
-            "{open} must stay writable"
+            !p.starts_with(fx.p("repo")),
+            "{} names the source repository",
+            p.display()
         );
     }
+    // the same for a linked worktree of the source (a session the user started in one): its common folder is the
+    // user's repository, so nothing of it is opened or pinned
+    fs::create_dir_all(source.join("worktrees/w2")).unwrap();
+    fs::write(source.join("worktrees/w2/commondir"), "../..\n").unwrap();
+    let linked = paths::state_dir(&env).join("hub/runs/w2");
+    fs::create_dir_all(&linked).unwrap();
+    fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", source.join("worktrees/w2").display()),
+    )
+    .unwrap();
+    let req = SandboxReq {
+        worktree: linked.clone(),
+        ..req
+    };
+    let (plan, shape) = worktree_launch(&fx.plan(".claude"), &req);
+    assert_eq!(shape.write, vec![linked]);
+    assert!(
+        plan.protected_ro
+            .iter()
+            .all(|p| !p.starts_with(fx.p("repo")))
+    );
     // the stubs the hub made for the lock's files go with the session, unless the agent filled them
     assert!(wt.join(".envrc").is_file() && wt.join("mise.toml").is_file());
     fs::write(wt.join("mise.toml"), "[tools]\n").unwrap();
     crate::sandbox::remove_stubs(&scratch_path(&env, "S1"), &wt);
     assert!(!wt.join(".envrc").exists(), "an empty stub is removed");
     assert!(wt.join("mise.toml").exists(), "a file with content stays");
-    assert!(!wt.join(".claude").exists());
 }

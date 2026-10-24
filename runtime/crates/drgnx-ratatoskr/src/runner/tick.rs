@@ -369,7 +369,7 @@ pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::
                 .unwrap_or_default(),
             branch: format!("job/{id}-{}", t.row.n),
             base: base.to_owned(),
-            mode: TreeMode::Worktree,
+            mode: git.mode(),
         };
         if let Ok(files) = git.diffs(&repo, &tree).await {
             diffs.insert(t.row.id.clone(), files);

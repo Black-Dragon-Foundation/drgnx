@@ -572,18 +572,30 @@ impl HubGit {
             base: base.to_owned(),
             mode: self.mode,
         };
-        let have = self
-            .git_in(
-                repo,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "-q",
-                    &format!("refs/heads/{branch}"),
-                ],
-            )
-            .await
-            .is_ok();
+        // a worktree's branch is in the trusted repository; a snapshot's is in the tree's own `.git`, which the
+        // agent writes: its ref files are looked at, no git runs there
+        let have = match self.mode {
+            TreeMode::Worktree => self
+                .git_in(
+                    repo,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "-q",
+                        &format!("refs/heads/{branch}"),
+                    ],
+                )
+                .await
+                .is_ok(),
+            TreeMode::Snapshot => {
+                let dot = path.join(".git");
+                dot.join("refs/heads").join(&branch).is_file()
+                    || std::fs::read_to_string(dot.join("packed-refs")).is_ok_and(|t| {
+                        t.lines()
+                            .any(|l| l.ends_with(&format!(" refs/heads/{branch}")))
+                    })
+            }
+        };
         if have && path.exists() {
             return Ok(tree);
         }
@@ -761,6 +773,20 @@ impl RunGit for HubGit {
 
     fn clear_gate(&self, branch: &str) {
         self.clear(branch);
+    }
+
+    fn mode(&self) -> TreeMode {
+        self.mode
+    }
+
+    fn import<'a>(&'a self, repo: &'a Path, tree: &'a TaskTree) -> GitFuture<'a, ()> {
+        Box::pin(async move {
+            if tree.mode == TreeMode::Snapshot {
+                self.write_bundle(tree, true).await?;
+                self.inspect(repo, tree).await?;
+            }
+            Ok(())
+        })
     }
 
     fn merge_into<'a>(
