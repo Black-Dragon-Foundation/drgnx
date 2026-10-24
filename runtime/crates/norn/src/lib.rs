@@ -12,6 +12,7 @@
 pub mod deny;
 pub mod grants;
 pub mod kinds;
+pub mod matrix;
 pub mod migrate7;
 pub mod options;
 pub mod parsed;

@@ -704,6 +704,33 @@ decision; for work against a decision, the task back to an agent told which file
 replaced and the review going on (B) — and the log's delivery tells every agent of the job.
 `drgnx-job-clash-auto-accept` (nil): a short clash's recommendation accepted without the user.
 
+## The permissions matrix
+
+`norn::matrix` (`runtime/crates/norn/src/matrix/`) is the policy on the wire's vocabulary
+(`runstav::methods::matrix`). Rows are the 22 `Action`s (ids such as `agents.start`, `push.main`); columns are
+roles (manager, worker, chat), named agents and providers; a cell is `Allow`, `Ask` or `Never` with an optional
+limit (`amount` in a `Unit`).
+
+- **Presets:** `preset(Cautious | Balanced | Autonomous)` builds a layer with every action in the three role columns.
+  Balanced is the design mockup's table. `JobContainer` is Allow for managers and workers under Balanced and
+  Autonomous, Ask under Cautious, Never for chat. A cell has one limit, so Balanced `spend` carries the dollar cap
+  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell.
+- **Combination:** `effective(layers, who)` applies the layers in order (preset, user overrides, project, plan; a
+  later layer replaces a cell), then takes the most restrictive of the columns that match the session: `Never >
+  Ask > Allow`. A provider or agent column can tighten a role, never widen it. At the same verdict a limit beats
+  none and the smaller limit wins; limits in different units do not compare, so the cell becomes Ask with no limit.
+  `unsandboxed` and `user.private` are Never whatever a layer says; an action without a cell is Never.
+- **Deciding:** `decide(effective, action, amount)` is the cell's verdict; over the cell's limit it is Ask if
+  `spend.over` is not Never, else Never.
+- **Narrowing:** `narrow(parent, asked)` returns `asked` only if no cell is wider than the parent's: a verdict at
+  least as restrictive and, where the parent has a limit, a limit in the same unit that is no greater (a child with
+  no limit, or in another unit, is wider). Otherwise `Widening { action }` names the first offender.
+- **Time presets:** `active(base, time_presets, away, minute)` picks the first `Away` preset while the user is away,
+  else the first `Between(from, to)` holding at that minute of day (wrapping past midnight), else the base.
+
+Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, combination, overrides, narrowing as a
+property test, units, time presets).
+
 ## Tests
 
 `test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio; outside
