@@ -157,6 +157,19 @@ moves when it is resized or made fullscreen)."
         (setq y (1+ y)))
       ok)))
 
+(defun drgnx-test-chrome--diff-summary (a b rect excluded)
+  "Where snapshots A and B differ (RGB) on RECT outside EXCLUDED: (:count N :bbox (L T R B) :first PIXELS)."
+  (let ((n 0) (l most-positive-fixnum) (tp most-positive-fixnum) (r -1) (bt -1) first)
+    (cl-loop for y from (nth 1 rect) below (nth 3 rect)
+             do (cl-loop for x from (nth 0 rect) below (nth 2 rect)
+                         unless (seq-some (lambda (e) (and (<= (nth 0 e) x) (< x (nth 2 e)) (<= (nth 1 e) y) (< y (nth 3 e))))
+                                          excluded)
+                         do (let ((pa (cdr (drgnx-uitest-pixel a x y))) (pb (cdr (drgnx-uitest-pixel b x y))))
+                              (unless (equal pa pb)
+                                (setq n (1+ n) l (min l x) tp (min tp y) r (max r (1+ x)) bt (max bt (1+ y)))
+                                (when (< (length first) 12) (push (list x y pa pb) first))))))
+    (list :count n :bbox (list l tp r bt) :first (nreverse first))))
+
 (defun drgnx-test-chrome--corner-cut-p (snap none off x y)
   "The pixel X, Y of SNAP is a cut corner: not the popup's square corner (OFF's) but what lies beneath, which is the
 no-popup pixel in NONE or, under the popup's own shadow, a darker one."
@@ -181,7 +194,10 @@ After the caller hides the popups it checks the no-popup picture with `drgnx-tes
              ;; another popup's shadow falls on this one by design (shadows show on lower popups)
              (others (mapcar (lambda (o) (drgnx-test-chrome--grow (drgnx-test-chrome--rect o root) m))
                              (remq p popups))))
-        (should (drgnx-test-chrome--equal-except-p snap off inner others))
+        (unless (drgnx-test-chrome--equal-except-p snap off inner others)
+          (ert-fail (list "inside the popup differs from the Glitnir-off picture" :popup (frame-parameter p 'name)
+                          :scale s :edges (frame-edges p 'outer-edges) :rect r :inner inner :others others
+                          :diff (drgnx-test-chrome--diff-summary snap off inner others))))
         (dolist (c (list (cons (nth 0 r) (nth 1 r)) (cons (1- (nth 2 r)) (nth 1 r))))
           (when (and (< -1 (car c) (nth 0 snap)) (< -1 (cdr c) (nth 1 snap))
                      (not (seq-some (lambda (e) (and (<= (nth 0 e) (car c)) (< (car c) (nth 2 e))
