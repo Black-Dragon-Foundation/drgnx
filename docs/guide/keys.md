@@ -379,7 +379,7 @@ yours (`:mac "S-s-y"` in `keys.eld` binds `s-Y`).
 | Fold / Unfold | `C-{` / `C-}` | `M-s-[` / `M-s-]` (Option+Cmd+[ / ]) |
 | Select All / Save All | `C-S-a` / `C-k s` | `s-a` / `M-s-s` (Option+Cmd+S) |
 | Source Control | `C-S-g` | Ctrl: `C-S-g` |
-| All Preferences… / Preferences: Modules | — / `C-,` | `s-,` (the palette on every Preferences command) / — |
+| Preferences: Settings / All Preferences… | `C-,` / — | `s-,` / the palette (All Preferences… lists every Preferences command) |
 | Explorer: Copy Path / Reveal in Finder | `M-S-c` / `M-S-r` | `M-s-c` / `M-s-r` (Option+Cmd+C / R) |
 | Explorer: Delete / Delete Permanently | `<delete>` / `S-<delete>` | `s-<backspace>` / `M-s-<backspace>` (and the Linux keys) |
 | Explorer: Select (mark) | `C-SPC` | `C-SPC` (Cmd+Space is Spotlight; with two input sources Ctrl+Space switches them — turn that shortcut off in System Settings → Keyboard → Keyboard Shortcuts → Input Sources) |

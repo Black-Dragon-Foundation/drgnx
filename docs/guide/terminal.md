@@ -263,7 +263,7 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | Chord | Command | Alt+Shift | F6 |
 |---|---|---|---|
 | `C-S-p` | Command Palette | — | `F6 p` |
-| `C-,` | Modules | — | `F6 ,` |
+| `C-,` | Settings | — | `F6 ,` |
 | `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
 | `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
 | `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
