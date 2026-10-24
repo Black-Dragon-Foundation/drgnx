@@ -159,10 +159,11 @@ folder), else DIR.  Nil for a remote DIR.  Allowed pairs are kept per root."
 ;;;; Classes
 
 (defun drgnx-settings-trust-security-settings ()
-  "drgnx's security settings: its own settings declared `:workspace never' or `:agents never', and
-`drgnx-user-lisp-files' and `drgnx-trust-parents' (the deny-list of design §13 that drgnx declares)."
-  (cl-union (cl-remove-if-not (lambda (v) (let ((m (drgnx-setting-meta v)))
-                                            (or (eq (plist-get m :workspace) 'never) (eq (plist-get m :agents) 'never))))
+  "drgnx's security settings for workspaces: its own settings that are `:workspace never', and
+`drgnx-user-lisp-files' and `drgnx-trust-parents' (the deny-list of design §13 that drgnx declares).  An
+`:agents never' setting a workspace may set (`drgnx-ai-roles', `:workspace data') is not one: agents are kept off
+it by their own checks, and a project's value goes through the trust filter like any other."
+  (cl-union (cl-remove-if-not (lambda (v) (eq (plist-get (drgnx-setting-meta v) :workspace) 'never))
                               (drgnx-setting-names))
             '(drgnx-user-lisp-files drgnx-trust-parents)))
 

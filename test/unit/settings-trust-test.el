@@ -31,7 +31,7 @@
 
 (define-minor-mode drgnx-stt-minor-mode "A minor mode a `mode' entry turns on." :lighter nil)
 
-(defconst drgnx-stt--settings '(drgnx-stt--own drgnx-stt--secure)
+(defconst drgnx-stt--settings '(drgnx-stt--own drgnx-stt--secure drgnx-stt--routes)
   "The fixture settings, declared fresh by `drgnx-stt--with'.")
 
 (defun drgnx-stt--declare ()
@@ -39,7 +39,10 @@
            :safe #'integerp)
         t)
   (eval '(drgnx-defsetting drgnx-stt--secure nil "A security setting." :type 'boolean :group 'drgnx-stt
-           :agents 'never)
+           :workspace 'never :agents 'never)
+        t)
+  (eval '(drgnx-defsetting drgnx-stt--routes nil "Never an agent's, but a project's to set (like `drgnx-ai-roles')."
+           :type 'sexp :group 'drgnx-stt :scope 'project :workspace 'data :agents 'never)
         t))
 
 (defun drgnx-stt--undeclare ()
@@ -381,6 +384,28 @@
       (should (memq v (default-value 'ignored-local-variables)))
       (should (get v 'risky-local-variable))
       (should (eq (drgnx-settings-trust-class v nil 'dir-locals) 'never)))))
+
+(ert-deftest drgnx-settings-trust/an-agents-never-project-setting-is-not-guarded ()
+  ;; `:agents never' alone (like `drgnx-ai-roles', `:workspace data') is a project's to set: not in
+  ;; `ignored-local-variables', so its W1 entry goes through the filter (applies when trusted, waits when not)
+  (drgnx-stt--with nil
+    (drgnx-settings-trust--guard)
+    (should-not (memq 'drgnx-stt--routes (default-value 'ignored-local-variables)))
+    (should (memq 'drgnx-stt--secure (default-value 'ignored-local-variables)))
+    (should (eq (drgnx-settings-trust-class 'drgnx-stt--routes '((chat x)) 'shared) 'data))
+    (drgnx-stt--put ".drgnx/settings.el" "(drgnx-workspace-settings\n :version 1\n (drgnx-stt--routes ((chat x))))\n")
+    (should-not (drgnx-setting-for-root 'drgnx-stt--routes drgnx-stt--proj))
+    (setq drgnx-trust-parents (list (list drgnx-stt--ws)) drgnx-settings-trust--data nil)
+    (should (equal (drgnx-setting-for-root 'drgnx-stt--routes drgnx-stt--proj) '((chat x))))))
+
+(ert-deftest drgnx-settings-trust/the-ai-eld-shim-goes-through-the-filter ()
+  (require 'drgnx-ai)
+  (drgnx-stt--with nil
+    (drgnx-stt--put ".drgnx/ai.eld" "(:version 1 :roles ((chat (ollama . \"m\"))))\n")
+    (let ((drgnx-ai-roles nil))
+      (should-not (drgnx-setting-for-root 'drgnx-ai-roles drgnx-stt--proj))   ; untrusted: the roles wait
+      (setq drgnx-trust-parents (list (list drgnx-stt--ws)) drgnx-settings-trust--data nil)
+      (should (equal (drgnx-setting-for-root 'drgnx-ai-roles drgnx-stt--proj) '((chat (ollama . "m"))))))))
 
 (ert-deftest drgnx-settings-trust/enable-local-eval-nil-still-blocks-eval ()
   (drgnx-stt--with (list (list drgnx-stt--ws :code t))

@@ -742,7 +742,7 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
   own settings and no `:eval` (`drgnx-settings-workspace--held-p`, in the groups and in `drgnx-setting-for-root`), as
   L1 does (US-WORKSPACE-SAFE-MODE-1).
 - **`(drgnx-setting-for-root VAR ROOT)`**: the global value, then W1 (the old `.drgnx/{search,ai,large-files}.eld`
-  through the config layer, `drgnx-settings-workspace-old-files`, then `.drgnx/settings.el`'s filtered entries), then
+  through the config layer, `drgnx-settings-workspace-old-files`, ai.eld's roles through W1's filter, then `.drgnx/settings.el`'s filtered entries), then
   W2, each over the one below by its `:merge` (`replace`, `alist`, `append`, `lower-only`: the lower of two numbers,
   anything else keeps the lower layer). `drgnx-search-config` reads `drgnx-search-{include,exclude,off}` this way.
 - **`(drgnx-settings-workspace-file ROOT &optional CREATE)`**: by root, else by `:project` through
@@ -795,8 +795,9 @@ enable/disable call `drgnx-settings-trust-enable`/`-disable`; `drgnx-trust-mode`
 - **Commands:** the registry's `trust-folder` and `untrust-folder` run `drgnx-settings-trust-this-folder (ROOT SHOWN)`
   (interactively: shows the code, asks once, allows exactly that) and `drgnx-settings-trust-untrust (ROOT)` (forgets the
   pairs, records an exception below a location, re-hacks; the re-hack kills values the filter now rejects).
-- **Security settings:** `drgnx-settings-trust-security-settings` (own settings `:workspace never` or `:agents never`,
-  plus `drgnx-user-lisp-files`, `drgnx-trust-parents`) are put `risky-local-variable` and into the default value of
+- **Security settings:** `drgnx-settings-trust-security-settings` (own settings `:workspace never`, plus
+  `drgnx-user-lisp-files`, `drgnx-trust-parents`; an `:agents never` setting a workspace may set, such as
+  `drgnx-ai-roles`, is not one: it goes through the filter) are put `risky-local-variable` and into the default value of
   `ignored-local-variables` by `drgnx-settings-trust--guard`, which re-runs from a depth −100 hook function whenever
   the number of declared settings changed.
 - **Migration:** `drgnx-settings-trust-migrate` turns a version-1 file into version 2 once, recording each trusted
