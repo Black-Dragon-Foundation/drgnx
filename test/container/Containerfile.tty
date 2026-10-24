@@ -6,7 +6,7 @@ ARG FEDORA=45
 FROM registry.fedoraproject.org/fedora:${FEDORA}
 ARG FEDORA
 RUN dnf -y --setopt=tsflags= install info diffutils findutils git tmux kitty kitty-terminfo wl-clipboard \
-        mutter dbus-daemon mesa-dri-drivers procps-ng util-linux ncurses \
+        mutter dbus-daemon mesa-dri-drivers procps-ng util-linux binutils ncurses \
     && dnf clean all
 COPY nidhogg.sh /tmp/nidhogg.sh
 RUN bash /tmp/nidhogg.sh fedora-${FEDORA} && rm /tmp/nidhogg.sh

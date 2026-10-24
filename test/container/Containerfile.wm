@@ -5,7 +5,7 @@
 # Fedora.  kwin_wayland and sway ship with a cap_sys_nice file capability that the container does not grant, so
 # they would not exec; the capability is dropped.  Docs on (tsflags=): as Containerfile.gui.
 FROM registry.fedoraproject.org/fedora:45
-RUN dnf -y --setopt=tsflags= install info diffutils findutils git kwin niri sway dbus-daemon mesa-dri-drivers procps-ng util-linux \
+RUN dnf -y --setopt=tsflags= install info diffutils findutils git kwin niri sway dbus-daemon mesa-dri-drivers procps-ng util-linux binutils \
     && dnf clean all
 RUN setcap -r /usr/bin/kwin_wayland && setcap -r /usr/bin/sway
 # Emacs is Nidhogg 31.1 from its release tarball (nidhogg.sh pins it).

@@ -1,9 +1,9 @@
 # Batch test tier: Nidhogg 31.1 (drgnx's own Emacs build: pgtk, SVG for the Work graph tests, native compilation),
 # from its release tarball (nidhogg.sh pins the version and checksum; it also links it as emacs); diffutils for the
 # review tests; zsh and fish for the shell-file and completion tests (bash is already there); procps-ng for
-# pgrep/pkill (the lease and stress tests).
+# pgrep/pkill (the lease and stress tests); binutils for `as` (native-compiling a trampoline).
 FROM registry.fedoraproject.org/fedora:45
-RUN dnf -y install diffutils git zsh fish procps-ng && dnf clean all
+RUN dnf -y install diffutils git zsh fish procps-ng binutils && dnf clean all
 COPY nidhogg.sh /tmp/nidhogg.sh
 RUN bash /tmp/nidhogg.sh fedora-45 && rm /tmp/nidhogg.sh
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.1/bin/nidhogg
