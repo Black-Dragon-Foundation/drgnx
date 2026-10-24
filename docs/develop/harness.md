@@ -909,7 +909,8 @@ SIGPIPE ignored, in a temp directory of its own; the environment is the caller's
 `test/container/Containerfile.tty` with `--build-arg FEDORA=NN`; the image has tmux, plus kitty and mutter for the exit
 test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
-kkp tests and the kitty exit test run there too; without it they skip.
+kkp tests and the kitty exit test run there too; without it they skip. Every `--container` tier mounts it the same
+way, so the batch tests that load a package (gptel's streaming test, the extras teardown) run in a container too.
 `DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).

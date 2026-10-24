@@ -206,21 +206,25 @@ no provider key; the mock got the hub's key and never the editor's token."
       (should-not (plist-member (cddr spec) :key)))))
 
 (ert-deftest drgnx-ai-gateway/gptel-streams-through-the-gateway ()
-  ;; two chunks a second apart: the first reaches gptel's callback before the second is sent
-  (skip-unless (locate-library "gptel"))
-  (require 'gptel)
-  (drgnx-ai-gateway-test--with
-      (list (list :path "/v1/chat/completions" :content_type "text/event-stream"
-                  :chunks (vector (vector 0 "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n")
-                                  (vector 1000 "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n")
-                                  (vector 0 "data: [DONE]\n\n"))))
-    (let* ((spec (drgnx-ai-gptel-spec 'a "m")) (gptel-backend (apply (car spec) (cdr spec))) (gptel-model 'm)
-           (gptel-stream t) (seen nil))
-      (gptel-request "hi" :stream t :callback (lambda (resp _info) (when (stringp resp) (push (cons (float-time) resp) seen))))
-      (drgnx-test-wait (lambda () (>= (length seen) 2)) :secs 20 :what "both chunks")
-      (let ((first (car (last seen))) (second (car (last seen 2))))
-        (should (equal (cdr first) "one"))
-        (should (>= (- (car second) (car first)) 0.5))))))
+  ;; two chunks a second apart: the first reaches gptel's callback before the second is sent.  gptel comes from the
+  ;; user's ELPA, read-only (DRGNX_USER_ELPA, else ~/.config/emacs/elpa), as mod-extras-teardown-test.el loads it
+  (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+         (load-path (append load-path (and (file-directory-p elpa)
+                                           (seq-filter #'file-directory-p (directory-files elpa t "\\`[^.]"))))))
+    (skip-unless (locate-library "gptel"))
+    (require 'gptel)
+    (drgnx-ai-gateway-test--with
+        (list (list :path "/v1/chat/completions" :content_type "text/event-stream"
+                    :chunks (vector (vector 0 "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n")
+                                    (vector 1000 "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n")
+                                    (vector 0 "data: [DONE]\n\n"))))
+      (let* ((spec (drgnx-ai-gptel-spec 'a "m")) (gptel-backend (apply (car spec) (cdr spec))) (gptel-model 'm)
+             (gptel-stream t) (seen nil))
+        (gptel-request "hi" :stream t :callback (lambda (resp _info) (when (stringp resp) (push (cons (float-time) resp) seen))))
+        (drgnx-test-wait (lambda () (>= (length seen) 2)) :secs 20 :what "both chunks")
+        (let ((first (car (last seen))) (second (car (last seen 2))))
+          (should (equal (cdr first) "one"))
+          (should (>= (- (car second) (car first)) 0.5)))))))
 
 (ert-deftest drgnx-ai-gateway/the-indexer-gets-no-url-and-no-key ()
   ;; no key, no token, and (review m4) no address either: the job's token brings the gateway's current one
