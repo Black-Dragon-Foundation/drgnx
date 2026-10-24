@@ -888,7 +888,7 @@ mod tests {
                 name: name.into(),
                 ..change.clone()
             };
-            let e = propose(&w.coord, &caller, &change, Duration::ZERO)
+            let e = propose(&w.coord, &caller, &change, None, Duration::ZERO)
                 .await
                 .unwrap_err();
             assert_eq!(e, options::DENIED, "{name}");
