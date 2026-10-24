@@ -28,6 +28,15 @@ pub enum TrackerTools {
     Off,
 }
 
+/// Whose CLI a profile starts, so `agents::lock` knows which lock it gets (`:provider claude|codex|gemini`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Claude,
+    Codex,
+    Gemini,
+}
+
 /// An agent profile (call 6): a name → `(:command LIST :env ("NAME=value"…) :mode M :ai ENV :model M
 /// :tracker-tools on|off :doc LINE)`, and the built-in profiles' `:job-safe`.  Consumed by phases 5 and 6.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -46,9 +55,33 @@ pub struct AgentProfile {
     pub model: Option<String>,
     pub tracker_tools: Option<TrackerTools>,
     pub doc: Option<String>,
+    /// Whose CLI it starts (`:provider`); none: `AgentProfile::provider` guesses from the command's file names.
+    pub provider: Option<Provider>,
     /// A job may run it (the built-in Claude profiles).
     #[serde(default)]
     pub job_safe: bool,
+}
+
+impl AgentProfile {
+    /// The provider: `:provider` when set, else the first of claude, codex, gemini that a file name in the command
+    /// contains (the Lisp's `drgnx-agents--command-agent`); none for anything else (no lock, "not enforced").
+    pub fn provider(&self) -> Option<Provider> {
+        self.provider.or_else(|| {
+            self.command.iter().find_map(|a| {
+                let name = std::path::Path::new(a)
+                    .file_name()?
+                    .to_str()?
+                    .to_lowercase();
+                [
+                    ("claude", Provider::Claude),
+                    ("codex", Provider::Codex),
+                    ("gemini", Provider::Gemini),
+                ]
+                .into_iter()
+                .find_map(|(k, p)| name.contains(k).then_some(p))
+            })
+        })
+    }
 }
 
 /// Which profiles do a job role: `(ROLE . "name")` or `(ROLE "a" "b")`.

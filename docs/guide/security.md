@@ -381,3 +381,24 @@ plain `user@host` (an ssh config `Host` alias works for anything ssh accepts).
 `drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)
 and says OK while all of the guards above are on, or WARN naming the ones that are off. If it warns, restart drgnx:
 its startup turns the guards on.
+
+## What each provider obeys
+
+drgnx starts every agent's CLI with a lock: options that make it ask drgnx for each permission instead of deciding
+alone. At the start of a session drgnx checks that the lock holds; if it does not, the session is ended, never run as
+if it were locked.
+
+| Provider | The lock | Where it comes from |
+|---|---|---|
+| Claude Code | policy-tier settings (no bypass or auto mode, only drgnx's hooks and permission rules, plus the deny and ask rules of your Claude settings), strict MCP config, Claude's own sandbox off (drgnx's is the boundary), mode `default` | `_meta.claudeCode.options` of the adapter |
+| Codex | `-c approval_policy={ granular = {…} }` with every category (`sandbox_approval`, `rules`, `mcp_elicitations`, `request_permissions`, `skill_approval`) asked of drgnx, `approvals_reviewer = "user"`, `sandbox_mode = "danger-full-access"` (Gleipnir is the one sandbox) | [Codex configuration reference](https://developers.openai.com/codex/config-reference); codex-acp takes `-c` overrides ([source](https://github.com/zed-industries/codex-acp/blob/main/src/lib.rs)) |
+| Gemini CLI | `--approval-mode default`; any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options) |
+
+Gateway profiles of Claude (a profile with `:ai`) in the worker and manager roles also get
+`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes.
+
+In every worktree `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks` and `mise.toml` are read-only for the agent.
+
+An agent drgnx has no lock for (set `:provider claude|codex|gemini` in its profile, or name the CLI in its command)
+is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex counts as
+enforced only once its lock has passed the sandboxed-launch and laundering checks; until then it is "not enforced".
