@@ -1687,6 +1687,10 @@ runs the live suite in shards).  Return an exit code."
             (princ (format "  FAIL %s: %s\n" (plist-get f :name) (plist-get f :condition)))))
       (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run)))
     (when ok (delete-directory run t))
+    ;; a container run's session log goes with the screenshots: the run's own directory dies with the container
+    (when-let* (((not ok)) (evid (getenv "DRGNX_UI_EVIDENCE")) ((file-directory-p evid))
+                (log (expand-file-name "session.log" run)) ((file-exists-p log)))
+      (ignore-errors (copy-file log (expand-file-name "session.log" evid) t)))
     (if ok 0 1)))
 
 (defun drgnx-ui--config-name (config)
