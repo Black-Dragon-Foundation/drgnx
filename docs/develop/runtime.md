@@ -754,10 +754,11 @@ silent limit, the idle close) and hold the build for a multiple of the limit ins
 
 | Row | Criterion | Fails when |
 |---|---|---|
-| `three-providers-one-plan-under-balanced` | 1, 3 | a task starts on the wrong profile; an in-matrix action makes a card or waits; an ask runs without a card or the user's answer; Codex starts as a worker. Three providers means Claude, Gemini and an API-key `:ai` profile (Codex stays refused until `CODEX_LOCK_PROVEN`). The manager half is Task 25's rows |
-| `mixed-providers-lease-clash-review-spend` | 7, 8 | a task is claimed by the wrong session; the overlap is not carded once; a review is not handed to the reviewer profile; the job does not finish; a step lacks its turn id, log version, plan or task; a worker's rollup differs from its step rows |
+| `three-providers-one-plan-under-balanced` | 1, 3 | a task starts on the wrong profile; an in-matrix action makes a card or waits; an ask runs without a card or the user's answer, or never reaches the event stream; Codex starts as a worker. Three providers means Claude, Gemini and an API-key `:ai` profile (Codex stays refused until `CODEX_LOCK_PROVEN`) |
+| `a-manager-runs-the-plan` | 1 (the manager half) | the manager cannot start a worker per task through `agent_start`; a worker is not its child or not on its task; an in-matrix action makes a card or waits; the Gemini ask runs without a card or the user's answer; a worker the manager asks to fetch (network, which the manager lacks) is allowed or asked; Codex starts |
+| `mixed-providers-lease-clash-review-spend` | 7, 8 | a task is claimed by the wrong session; the overlap (an `overlap` card) is not carded once; a review is not handed to the reviewer profile; the job does not finish; a step lacks its turn id, log version, plan or task, or the two workers' steps do not name two providers; a worker's rollup differs from its step rows |
 | `ten-minute-build-zero-requests` | 4 | any model request (supervisor, reminder, heartbeat) during the wait; the waiting agent is judged silent; the wake opens a new session |
-| `stall-paused` | 5 | the stuck agent is not paused within its limit, or with the wrong rule or limit; the card names another session or is made twice; the waiting agent is judged |
+| `stall-paused` | 5 | the stuck agent is not paused within its limit, or with the wrong rule or limit; the card names another session or is made twice; the waiting agent is judged, or its wait is not one `job-wait` step longer than the limit (steps are written when they close) |
 | `cost-matches-records` | 6 | the budget adds each cumulative cost report to the last; a rollup differs from the step table; gateway request events, spend rows, `spend` and the status count differ |
 
 Criterion 2 is the laundering rows (`exec/`, `locks/`, `grants/`, `matrix/`), 10 the `restart/*` rows. The perf rows
