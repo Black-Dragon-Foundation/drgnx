@@ -147,7 +147,7 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
                     "todo",
                     "row",
                     title(&format!("{} {}", r.id, r.text)),
-                    Some(r.status.clone()),
+                    Some(crate::status::normalize(&r.status)),
                     r.raw.clone(),
                 );
             }
@@ -179,7 +179,7 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
         AnyDoc::Org(g) => {
             o.push("note", "head", title(&g.preamble), None, g.preamble.clone());
             for i in &g.items {
-                let st = i.keyword.as_ref().map(|k| k.to_lowercase());
+                let st = i.keyword.as_ref().map(|k| crate::status::normalize(k));
                 o.push(
                     "task",
                     "item",

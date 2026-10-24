@@ -44,12 +44,25 @@ pub struct Signals {
     events: Notify,
     notify: Notify,
     writes: AtomicU64,
+    /// A write the record views may follow ([`crate::records::follow`]).
+    pub records: Notify,
+    /// What the proposal tools ask of the records (set once the hub's front is built).
+    pub records_tool: std::sync::OnceLock<RecordsTool>,
 }
+
+/// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
+/// and the session asking (always an agent: the user decides through `records/decide`); the answer is the tool's text.
+pub type RecordsTool = Arc<
+    dyn Fn(String, Option<bool>, Option<String>) -> BoxFuture<'static, Result<String, String>>
+        + Send
+        + Sync,
+>;
 
 impl Signals {
     /// A transaction of the front's methods committed: counted, and its events go out.
     pub fn wrote(&self) {
         self.writes.fetch_add(1, Ordering::Relaxed);
+        self.records.notify_one();
         self.events_soon();
     }
 
@@ -622,7 +635,21 @@ impl Hub for ToolHub {
         })
     }
 
+    fn proposal(
+        &self,
+        id: String,
+        accept: Option<bool>,
+        session: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        match self.signals.records_tool.get() {
+            Some(f) => f(id, accept, session),
+            None => Box::pin(async { Err("the records are not open".to_string()) }),
+        }
+    }
+
     fn notify(&self) {
+        // every tool write says so: the record views follow it too
+        self.signals.records.notify_one();
         self.signals.events_soon();
         self.signals.notify_soon();
     }
@@ -898,5 +925,21 @@ mod tests {
             .query_row("select count(*) from message", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn a_tool_write_reaches_the_view() {
+        let signals = Arc::new(Signals::default());
+        let hub = ToolHub {
+            forward: Arc::new(crate::dispatch::NoBackend),
+            signals: signals.clone(),
+            editors: Arc::new(Default::default()),
+            settings: Arc::new(crate::settings::Settings::new()),
+        };
+        // the tools call `notify` after each write: the records' follower wakes
+        hub.notify();
+        tokio::time::timeout(Duration::from_millis(500), signals.records.notified())
+            .await
+            .expect("the follower was not woken");
     }
 }

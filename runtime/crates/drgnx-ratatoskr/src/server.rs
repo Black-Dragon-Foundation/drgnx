@@ -251,6 +251,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     tokio::spawn(watch_schema(front.clone()));
     tokio::spawn(relay::run(events_rx, front.clone()));
     tokio::spawn(coord::broadcast_events(front.clone()));
+    crate::records::install_tool(&front);
+    tokio::spawn(crate::records::follow(front.clone()));
     tokio::spawn(coord::notify_backend(front.clone()));
     tokio::spawn(crate::runner::tick::run(front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());

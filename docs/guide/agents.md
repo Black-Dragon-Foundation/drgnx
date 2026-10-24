@@ -583,6 +583,16 @@ Plans, ledgers, `DEFERRED.md`, `BUILD-BOARD.md` (and `board.org`, only when you 
 graph: drgnx rewrites it when the records change, starts it with a one-line comment saying so, and never overwrites
 a file you edited by hand. drgnx never commits these files; that stays yours.
 
+### Editing a plan file
+
+You can edit these files by hand. drgnx does not refuse and does not overwrite: it reads what you changed as a
+proposal (a diff, and the changes to the records it comes to) and leaves your file as it is. The file waits, with the
+graph's own changes, until you accept or reject the proposal; a second edit replaces it. Accepting applies the
+changes and rewrites the file; if a record changed in the meantime, the proposal is marked stale and read again. Parts
+that match no record (a deleted row, say) become a note. Rejecting keeps a copy of your edit in
+`<state>/hub/records-backup/` and rewrites the file. A manager agent may decide a proposal when the matrix allows it,
+except for settings only you may change (a plan's `matrix`).
+
 ## Budgets
 
 A budget is a limit with a unit, set on a project, a plan, a manager or a worker (`budget/set`, read back with

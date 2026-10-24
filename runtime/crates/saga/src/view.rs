@@ -7,6 +7,12 @@
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ViewModel {
     pub parts: Vec<String>,
+    /// Per part (the same length as `parts`, or empty when only rendering): the entity id, kind and role.
+    pub ids: Vec<String>,
+    pub kinds: Vec<String>,
+    pub roles: Vec<String>,
+    /// The graph version the model was read at (a proposal records it).
+    pub version: u64,
 }
 
 pub fn render(model: &ViewModel) -> String {

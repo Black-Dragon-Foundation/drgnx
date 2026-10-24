@@ -59,11 +59,31 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
   retired.
 - **Views.** `saga::view::render` concatenates the pieces in `seq` order: an unchanged graph renders the imported
   file byte for byte. The hub writes the file back at its path (tmp file + rename) with a one-line header comment,
-  which the importer strips. Task state in a piece is the raw text, so a status changed only in the graph shows in
-  the view once the piece's body is regenerated (Task 14b and the later wiring of graph changes to
-  `Views::on_change`, debounced 2 s).
-- **Never overwritten.** `Views::changed(path)` compares the file with the hash of what the hub last wrote; a changed
-  file is held (`Flush::Held`), not rewritten. Task 14b turns it into a proposal. After an import the file was just
-  read and backed up, so the import writes the view over it.
+  which the importer strips.
+- **Statuses.** `saga::status::normalize` maps a file's word to the graph's (`open running needs-input in-review
+  blocked waiting done dropped`): a DEFERRED row's status text (`fixed in M2` is `done`), an Org keyword (`STARTED`
+  is `running`, `CANCELLED` `dropped`; a keyword of the file's own like `BLOCKED` maps by its word), a plan task by
+  its ticks. The raw text stays in the piece's body.
+- **Views follow the graph.** `Views::flush` first writes each piece's graph status into its text
+  (`saga::status::with_status`: a DEFERRED row's status cell, an Org keyword, a plan task's ticks; a text that
+  already says it, a row of several lines and a keyword of the file's own are left alone), then rewrites the file.
+  The follower (`records::follow`) flushes every view 2 s after the last write of the front's methods; writes by
+  agent tools (their own connection) reach the file at the next such write, a `records/proposals` call or an import.
+- **A hand edit is a proposal.** When the file differs from what the hub last wrote (or, after a restart, from the
+  graph's text), a flush reads it with `saga::proposal::read`: a line diff against the view, one operation per
+  changed piece (its new body, and its status when the new text says another), the parts that map to none
+  (`unmapped`: a piece whose lines were all deleted; a record is never retired by an edit) and the graph version.
+  An inserted line joins the piece before it. The result is a `proposal` entity `proposal:records-<hash>` (one per
+  view; status `open`; `data` holds the ops, the base `ver` of every touched record and the edited text; link
+  `proposes` to the view's head record). The file stays as edited and is not rewritten while the proposal is open
+  (`records/status` shows it as `pending`); a second edit replaces the proposal. Detection happens at a flush (the
+  follower, `records/proposals`, an import), there is no file watcher.
+- **Deciding.** `records/decide` (the user) or the tool `proposal_decide` (a manager or worker, under the matrix's
+  `graph.change`; `proposal_read` shows the diff and ops). Accept applies every op in one transaction if each touched
+  record still has its base version, else the proposal is `stale` (nothing applied; the file is read again at the
+  next flush into a new open proposal); unmapped parts become a `note` related to the record; then the view is
+  rewritten. Reject copies the edited text to `<state>/hub/records-backup/<date>-rejected/` (the file's path
+  below it) and rewrites the view. A manager cannot accept an op on a user-only field
+  (`saga::proposal::USER_ONLY_FIELDS`, now `matrix`: an edited piece with a line `matrix:`); it may reject.
 - **Never committed.** The hub runs no git on view files. The files stay modified in the work tree; committing them
   is the user's.

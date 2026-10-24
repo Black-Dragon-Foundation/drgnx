@@ -10,5 +10,7 @@ pub mod ledger;
 pub mod md;
 pub mod org;
 pub mod plan;
+pub mod proposal;
+pub mod status;
 pub mod table;
 pub mod view;
