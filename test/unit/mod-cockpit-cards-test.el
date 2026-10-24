@@ -195,6 +195,27 @@ their hooks and timers."
                      '("cards/settle" :card 21 :choice "project")))
       (should-not (assoc "job/card" drgnx-cockpit-cards-test--calls)))))
 
+(ert-deftest drgnx-cockpit-cards/a-settings-card-offers-once-session-deny ()
+  ;; an agent's settings_change without a grant (Task 32's card, Task 33's variant): its three answers settle it
+  (drgnx-cockpit-cards-test--with
+    (let ((drgnx-cockpit-cards-test--answer nil)
+          (card '(:id 23 :kind "access" :task :null :title "s1 (p) asks to change fill-column" :actions :null
+                      :data (:session "s1" :profile "p" :project "r1"
+                                      :setting (:scope "global" :name "fill-column" :value "100" :reason "long lines"
+                                                       :root :null)
+                                      :choices ("once" "session" "refuse")))))
+      (drgnx-cockpit-cards--draw "j1" (drgnx-cockpit-cards-test--with-card card))
+      (should (string-search "Change fill-column to 100 in your settings" (drgnx-cockpit-cards-test--text 'cards)))
+      (should (string-search "Why: long lines" (drgnx-cockpit-cards-test--text 'cards)))
+      (should-not (drgnx-cockpit-cards-test--button 'cards "Its project"))
+      (cl-letf (((symbol-function 'drgnx-coord-card-settle) (lambda (&rest _) t)))
+        (pcase-dolist (`(,label . ,choice) '(("Allow once" . "once") ("Allow this setting for this session" . "session")
+                                             ("Deny" . "refuse")))
+          (setq drgnx-cockpit-cards-test--calls nil)
+          (button-activate (drgnx-cockpit-cards-test--button 'cards label))
+          (should (equal (assoc "cards/settle" drgnx-cockpit-cards-test--calls)
+                         (list "cards/settle" :card 23 :choice choice))))))))
+
 (ert-deftest drgnx-cockpit-cards/a-close-card-offers-accept-and-reject ()
   (drgnx-cockpit-cards-test--with
     (let ((drgnx-cockpit-cards-test--answer nil)

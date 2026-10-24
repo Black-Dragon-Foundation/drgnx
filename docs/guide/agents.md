@@ -439,7 +439,18 @@ writes the file (the hub never does), and the change goes into the setting's his
   - **Under a grant** the change is recorded as a *proposed* change of the agent's, and the editor checks it again,
     writes it to the file the scope names and confirms it; the agent's answer says `changed`, or `refused` with the
     editor's reason. With no editor open it stays proposed (`pending`) until you settle it.
-  - **Without a grant** you get a card: **Allow once**, **Allow this setting for this session** (a grant for that one
+  - **The editor's check** is the last gate before a file is written: a setting marked `:agents never`, a security
+    setting (`:workspace never`), code (`:workspace code`: functions, hooks, risky and program-naming settings), an
+    `:eval` section or the `eval` and `mode` pseudo-variables, a value that does not read as data, does not match the
+    setting's type or bounds, or looks like a secret: each is refused and nothing is written.
+  - **Where it lands:** `global` in `settings.el`; `shared` in the `.drgnx/settings.el` of the folder the agent's
+    session works in (a job's task folder, or the checkout it started in), refused when that file's true path leads
+    out of the folder; `private` in that folder's private workspace file (made when there is none).
+  - **You are told** with a notice, "s1 changed fill-column to 100 in drgnx [Undo]". **Undo** writes the earlier value
+    back (or removes the entry the agent added) and records it in the history as an undo of the agent's change; it
+    refuses when the setting changed again since. The change is in the setting's history once, under the agent's name.
+  - **Without a grant** you get a card in What needs you, "Change NAME to VALUE in …" with the agent's reason:
+    **Allow once**, **Allow this setting for this session** (a grant for that one
     setting, until the session ends or a day passes) or **Deny**. The agent goes on meanwhile; your answer comes to
     its inbox.
 
