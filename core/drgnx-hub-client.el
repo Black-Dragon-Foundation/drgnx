@@ -462,17 +462,61 @@ raises is recorded, and the lines after its answer are still read."
     (process-put conn :drgnx-queue nil)
     (dolist (id (sort ids #'<)) (drgnx-hub--settle id nil message))))
 
+(defvar drgnx-hub--asked-disconnect nil
+  "Non-nil when this editor ended its own subscription (`drgnx-hub-disconnect', or a `shutdown' it sent): a hub that
+goes away then is not redialled (`drgnx-hub--resubscribe-schedule').  Cleared by `drgnx-hub-connect'.")
+
+(defvar drgnx-hub--resubscribe-since nil
+  "When the redial of a lost subscription began (`drgnx-timer-now'), or nil when none is under way.")
+
+(defvar drgnx-hub--resubscribe-delay 1 "Seconds until the next redial: 1, doubling to 30.")
+
+(defconst drgnx-hub-resubscribe-give-up 600 "Seconds of redialling after which the editor stops and says so once.")
+
+(defun drgnx-hub--resubscribe-schedule ()
+  "Arm the next redial of the subscription (timer key `hub-resubscribe'): after 1 s, then twice as long each time, up to
+30 s.  After `drgnx-hub-resubscribe-give-up' seconds from the first loss it stops and posts one notice naming
+Hub: Restart Now.  It never runs `ensure': a hub the user stopped stays stopped."
+  (let ((now (drgnx-timer-now)))
+    (unless drgnx-hub--resubscribe-since
+      (setq drgnx-hub--resubscribe-since now drgnx-hub--resubscribe-delay 1))
+    (if (>= (- now drgnx-hub--resubscribe-since) drgnx-hub-resubscribe-give-up)
+        (progn (setq drgnx-hub--resubscribe-since nil drgnx-hub--resubscribe-delay 1)
+               (drgnx-notify 'hub 'warn "the drgnx hub is gone and did not come back; start it with Hub: Restart Now"
+                             :id 'resubscribe-gave-up :command 'hub-restart-now))
+      (drgnx-timer-start 'hub-resubscribe drgnx-hub--resubscribe-delay #'drgnx-hub--resubscribe :owner :core)
+      (setq drgnx-hub--resubscribe-delay (min 30 (* 2 drgnx-hub--resubscribe-delay))))))
+
+(defun drgnx-hub--resubscribe ()
+  "The redial timer: subscribe again (`drgnx-hub-connect'); a dial that fails at once arms the next one, one that
+fails later is found by the sentinel.  Never starts a hub, never asks anything."
+  (unless (or drgnx-hub--asked-disconnect (process-live-p drgnx-hub--events))
+    (condition-case nil (drgnx-hub-connect)
+      (error (drgnx-hub--resubscribe-schedule)))))
+
+(defun drgnx-hub--resubscribe-stop ()
+  "Forget a redial under way: its timer and its clock."
+  (drgnx-timer-cancel 'hub-resubscribe)
+  (setq drgnx-hub--resubscribe-since nil drgnx-hub--resubscribe-delay 1))
+
 (defun drgnx-hub--client-sentinel (conn _event)
-  "A client connection closed: its calls fail; the subscribed one's end is said (`drgnx-hub-disconnect-functions')."
+  "A client connection closed: its calls fail; the subscribed one's end is said (`drgnx-hub-disconnect-functions').
+When the subscription went away without being asked to (a hub restart or crash), the editor token and the held keys are
+forgotten and the subscription is redialled with a backoff (`drgnx-hub--resubscribe-schedule')."
   (unless (process-live-p conn)
     (drgnx-timer-cancel (cons 'hub-challenge conn))
     (drgnx-hub--fail-conn conn "the drgnx hub's connection closed")
     (when (eq drgnx-hub--client conn) (setq drgnx-hub--client nil))
     (when (process-get conn :drgnx-events)
-      (when (eq drgnx-hub--events conn) (setq drgnx-hub--events nil))
-      (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
-      ;; the hub went away (shutdown, a crash, a restart): whoever mirrors it is told
-      (drgnx-guard-run-hook 'drgnx-hub-disconnect-functions))))
+      (let ((lost (or (eq drgnx-hub--events conn) drgnx-hub--resubscribe-since))
+            (asked (or drgnx-hub--asked-disconnect (process-get conn :drgnx-asked))))
+        (when (eq drgnx-hub--events conn) (setq drgnx-hub--events nil))
+        (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
+        (when (and lost (not asked))
+          (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
+          (drgnx-hub--resubscribe-schedule))
+        ;; the hub went away (shutdown, a crash, a restart): whoever mirrors it is told
+        (drgnx-guard-run-hook 'drgnx-hub-disconnect-functions)))))
 
 (defun drgnx-hub--open (events)
   "A new connection to the hub (`drgnx-hub--connect-socket'); EVENTS non-nil: the subscribed connection.  Calls on it
@@ -602,6 +646,9 @@ connection `gateway/keys' fails at once and `gateway/register' goes without its 
   "Call METHOD with PARAMS on CONN (`drgnx-hub-call'); FIRST: send it now (the probe, the hello), else once CONN is
 proven or `legacy'."
   (let ((id (cl-incf drgnx-hub--next-id)))
+    (when (equal method "shutdown")     ; the hub ends at this editor's request: the subscription is not redialled
+      (setq drgnx-hub--asked-disconnect t)
+      (drgnx-hub--resubscribe-stop))
     (puthash id (list :cb callback :conn conn :full full :method method) drgnx-hub--pending)
     (drgnx-timer-start (cons 'hub-call id) (or deadline drgnx-hub-call-deadline) #'drgnx-hub--call-expired
                        :args (list id) :owner :core)
@@ -819,8 +866,11 @@ closes it when this Emacs dies."
 
 (defun drgnx-hub-disconnect ()
   "Close this Emacs's connections to the hub; the calls waiting on them fail (once)."
+  (setq drgnx-hub--asked-disconnect t)
+  (drgnx-hub--resubscribe-stop)
   (dolist (c (list drgnx-hub--client drgnx-hub--events drgnx-hub--subscribing))
     (when (processp c)
+      (process-put c :drgnx-asked t)
       (drgnx-timer-cancel (cons 'hub-challenge c))
       (drgnx-hub--fail-conn c "disconnected from the drgnx hub"))
     (when (process-live-p c) (delete-process c)))
@@ -1190,6 +1240,7 @@ Asynchronous; safe to call again, also before the hub has answered (one subscrip
       (drgnx-hub--fail-conn c "the drgnx hub did not answer subscribe")
       (when (process-live-p c) (delete-process c))))
   (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
+    (setq drgnx-hub--asked-disconnect nil)
     ;; a connection of its own, which proves itself first (`drgnx-hub--open'); its end is said by its sentinel
     (let ((c (drgnx-hub--open t)))
       (setq drgnx-hub--subscribing c)
@@ -1211,6 +1262,8 @@ before them."
   (when (and result (process-live-p conn))
     (setq drgnx-hub--events conn)
     (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
+    (drgnx-hub--resubscribe-stop)
+    (drgnx-notice-clear 'hub 'resubscribe-gave-up)
     (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--hand-over))))
 
 (defun drgnx-hub--note-notice (event data)
