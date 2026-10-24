@@ -530,7 +530,7 @@ row is judged like any other, wall-clock paths included.
 per-command input p50, p95, p99 and max, `:cpu_ms` p50 and p90, `:busy-ms` p50 and p95 (the main thread's busy time
 per command: its latency plus the timers that ran after the screen showed it, up to the next command), `:timer-ms` p95
 (the ms the timers took under each command; only the `:timers t` rows: `terminal-output`, `compile-flood`, `lsp-burst`,
-`lsp-typing`), stalls of 16 and of 100 ms or more, and `:complete-ms` (the statistic over the rounds is the median of
+`lsp-typing`), stalls of 16 and of 100 ms or more, `:complete-ms` and `lsp-burst`'s `:lsp :handler_ms :max` (the statistic over the rounds is the median of
 the per-round differences; same rule: not worse unless the whole 95 % interval is above max (1 ms, 10 % of the REF
 median)). A path a side does not report is left out. A workload whose `:digest` differs between the sides is
 `regressed (digest)`. `--ab-env` counts all of these in the exit code (3 stays "inconclusive").
@@ -581,8 +581,8 @@ only after `DRGNX_PERF_LANDED` names its step.
 
 | Workload | What it does | Budget rows (step) |
 |---|---|---|
-| `lsp-burst` | three jsonrpc connections to `test/fixtures/lsp-replay.el`, replaying recorded rust-analyzer, clangd and tsserver traffic; each sends completion answers of 0.5, 1 and 3 MB, three rounds | input p95 16, no 16 ms stall, `:lsp :handler_ms :max` 50 (ot4) |
-| `lsp-typing` | the same servers flood 300 recorded diagnostics and progress messages a second | input p95 16, max 50 (ot4) |
+| `lsp-burst` | three jsonrpc connections to `test/fixtures/lsp-replay.el`, replaying recorded rust-analyzer, clangd and tsserver traffic; each sends completion answers of 0.5, 1 and 3 MB, three rounds. `:lsp :handler_ms :max` is the slowest handler after the server wrote its answer's last byte (the server sends that time next, `LSP_REPLAY_STAMP`); the workload puts no advice on jsonrpc, which would keep Nidhogg's framing off. `:lsp :framed` counts the framed connections | input p95 16, no 16 ms stall, `:lsp :handler_ms :max` 50 (ot4; the A/B judges it too) |
+| `lsp-typing` | the same servers flood 300 recorded diagnostics and progress messages a second (`:lsp :framed` as above) | input p95 16, max 50 (ot4) |
 | `ts-open` | 1 and 2 MB files in `c-ts-mode`, `typescript-ts-mode`, `python-ts-mode`, opened one after the other in a second window | `:ts :draw_ms` 16 (first draw), `:ts :colored_ms` 500, no 100 ms stall (ot2) |
 | `ts-paste` | `C-y` of 500 KB into a 1 MB C file, then typing (a p95 needs 100 commands over the repeats; every repeat starts from the file on disk) (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
 | `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file; complete (and the digest read) once every typed character's command has run and the colour has settled: no parse job or deferred region for the buffer, and jit-lock's contextual refontification after the last key done | input p95 16 (ot2) |
@@ -603,7 +603,8 @@ recorded once from the real servers by `capture-lsp.sh` (run it in the container
 localhost/drgnx-dev:f45 --memory 6g -- bash test/fixtures/workers/capture-lsp.sh`): a server the image lacks (clangd,
 rust-analyzer, Node and typescript-language-server) is installed for that run only; the corpora are
 `corpus-NAME.eld.gz` and `manifest.eld` gives the message count and byte total a replay must reproduce (a test checks it).
-`lsp-replay.el` serves a corpus (`LSP_REPLAY_CORPUS`), with `LSP_REPLAY_COMPLETION_SIZES` and `LSP_REPLAY_FLOOD`.
+`lsp-replay.el` serves a corpus (`LSP_REPLAY_CORPUS`), with `LSP_REPLAY_COMPLETION_SIZES`, `LSP_REPLAY_FLOOD` and
+`LSP_REPLAY_STAMP` (a `$/replaySent` notification with each answer's id and write time after the answer).
 
 **A report-only run** (the baseline; a Nidhogg with workers, under the lease, no A/B):
 

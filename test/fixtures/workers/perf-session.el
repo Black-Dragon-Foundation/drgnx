@@ -229,24 +229,26 @@ unterminated string)."
 (require 'jsonrpc)
 
 (defvar drgnx-perf-w--lsps nil "The jsonrpc connections, one replay server per recorded corpus (rust, c, ts).")
-(defvar drgnx-perf-w--lsp-chunk nil "When the filter last ran (the last bytes of the message in hand arrived).")
-(defvar drgnx-perf-w--lsp-handled nil "((METHOD COUNT HANDLER-MS)…), newest first: the answers handled.")
+(defvar drgnx-perf-w--lsp-handled nil
+  "((METHOD COUNT HANDLED-AT CONNECTION-NAME ID)…), newest first: the answers handled, HANDLED-AT a `float-time'.")
+(defvar drgnx-perf-w--lsp-sent (make-hash-table :test #'equal)
+  "(CONNECTION-NAME . ID) → when the server wrote the answer's last byte (lsp-replay.el's \"$/replaySent\").
+The handlers are measured from it: advice on jsonrpc's filter would show when the main thread got the bytes, but it
+keeps Nidhogg's framing off (jsonrpc with advice stays on its own filter), and framed, the bytes never reach a filter.")
 (defvar drgnx-perf-w--lsp-notes nil "The server's own messages received, newest first: (METHOD . URI-OR-TOKEN).")
 (defvar drgnx-perf-w--lsp-rounds 3)
-
-(defun drgnx-perf-w--lsp-note-chunk (orig &rest args)
-  (setq drgnx-perf-w--lsp-chunk (float-time))
-  (apply orig args))
 
 (defun drgnx-perf-w--lsp-count (result)
   "How many completion items RESULT (a list, or a list object) holds."
   (cond ((vectorp result) (length result)) ((listp result) (length (plist-get result :items))) (t 0)))
 
 (defun drgnx-perf-w--lsp-note (conn method params)
-  (push (list (jsonrpc-name conn) method
-              (or (ignore-errors (plist-get (plist-get params :textDocument) :uri))
-                  (ignore-errors (format "%s" (plist-get params :token)))))
-        drgnx-perf-w--lsp-notes))
+  (if (equal (format "%s" method) "$/replaySent")
+      (puthash (cons (jsonrpc-name conn) (plist-get params :id)) (plist-get params :t) drgnx-perf-w--lsp-sent)
+    (push (list (jsonrpc-name conn) method
+                (or (ignore-errors (plist-get (plist-get params :textDocument) :uri))
+                    (ignore-errors (format "%s" (plist-get params :token)))))
+          drgnx-perf-w--lsp-notes)))
 
 (defun drgnx-perf-w--lsp-start (corpus env)
   "A jsonrpc connection to a replay server for the recorded CORPUS (rust, c or ts) with ENV (VAR=VALUE strings), initialized.
@@ -269,18 +271,20 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 
 (defun drgnx-perf-w-lsp-setup (env)
   "The three replay servers (rust-analyzer's, clangd's and tsserver's recorded traffic), each started with ENV."
-  (advice-add 'jsonrpc--process-filter :around #'drgnx-perf-w--lsp-note-chunk)
   (setq drgnx-perf-w--lsps (mapcar (lambda (c) (drgnx-perf-w--lsp-start c env)) '("rust" "c" "ts")))
   t)
 
 (defun drgnx-perf-w--lsp-request (conn method params)
-  (jsonrpc-async-request
-   conn method params
-   :success-fn (lambda (result)
-                 (push (list method (drgnx-perf-w--lsp-count result)
-                             (and drgnx-perf-w--lsp-chunk (drgnx-perf-w--ms drgnx-perf-w--lsp-chunk)))
-                       drgnx-perf-w--lsp-handled))
-   :error-fn (lambda (e) (push (list method -1 nil e) drgnx-perf-w--lsp-handled))))
+  (let ((id (1+ (jsonrpc--next-request-id conn))) (name (jsonrpc-name conn)))   ; the id jsonrpc gives this request
+    (jsonrpc-async-request
+     conn method params
+     :success-fn (lambda (result)
+                   (push (list method (drgnx-perf-w--lsp-count result) (float-time) name id) drgnx-perf-w--lsp-handled))
+     :error-fn (lambda (e) (push (list method -1 nil name id e) drgnx-perf-w--lsp-handled)))))
+
+(defun drgnx-perf-w--lsp-stamped-p ()
+  "Non-nil once every answer handled has its server's write time."
+  (seq-every-p (lambda (h) (gethash (cons (nth 3 h) (nth 4 h)) drgnx-perf-w--lsp-sent)) drgnx-perf-w--lsp-handled))
 
 (defun drgnx-perf-w--lsp-burst-round ()
   "One round, per server: three completion answers (0.5, 1 and 3 MB, in turn) and a small request."
@@ -294,17 +298,21 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 
 (defun drgnx-perf-w--lsp-burst-fire ()
   (setq drgnx-perf-w--lsp-handled nil drgnx-perf-w--lsp-notes nil)
+  (clrhash drgnx-perf-w--lsp-sent)
   (drgnx-perf-w--lsp-initialized)
   (dotimes (i drgnx-perf-w--lsp-rounds)
     (run-with-timer (* i 0.4) nil #'drgnx-perf-w--lsp-burst-round)))
 
 (defun drgnx-perf-w-lsp-burst-each ()
   (setq drgnx-perf-w--lsp-handled nil drgnx-perf-w--lsp-notes nil)
+  (clrhash drgnx-perf-w--lsp-sent)
   (drgnx-perf-w--arm #'drgnx-perf-w--lsp-burst-fire)
   t)
 
 (defun drgnx-perf-w-lsp-burst-done ()
-  (>= (length drgnx-perf-w--lsp-handled) (* 4 drgnx-perf-w--lsp-rounds (length drgnx-perf-w--lsps))))
+  "Every answer handled, and the server's write time of each one here (it follows the answer)."
+  (and (>= (length drgnx-perf-w--lsp-handled) (* 4 drgnx-perf-w--lsp-rounds (length drgnx-perf-w--lsps)))
+       (drgnx-perf-w--lsp-stamped-p)))
 
 (defun drgnx-perf-w-lsp-burst-digest ()
   (format "%S %S" (sort (mapcar (lambda (h) (list (symbol-name (car h)) (cadr h))) drgnx-perf-w--lsp-handled)
@@ -312,9 +320,21 @@ The server's own messages wait for `initialized' (the fire function sends it)."
           (length drgnx-perf-w--lsp-notes)))
 
 (defun drgnx-perf-w-lsp-burst-measure ()
-  "The slowest handler start after the last bytes of its answer, in ms (`:lsp :handler_ms :max')."
-  (list :lsp (list :handler_ms (list :max (apply #'max 0 (delq nil (mapcar #'caddr drgnx-perf-w--lsp-handled))))
-                   :answers (length drgnx-perf-w--lsp-handled))))
+  "The slowest handler start after the server wrote the last byte of its answer, in ms (`:lsp :handler_ms :max');
+`:framed', how many connections are framed (`drgnx-perf-w--lsp-framed')."
+  (list :lsp (list :handler_ms
+                   (list :max (apply #'max 0 (delq nil (mapcar (lambda (h)
+                                                                 (when-let* ((at (nth 2 h))
+                                                                             (sent (gethash (cons (nth 3 h) (nth 4 h)) drgnx-perf-w--lsp-sent)))
+                                                                   (drgnx-perf--round (* 1000 (- at sent)))))
+                                                               drgnx-perf-w--lsp-handled))))
+                   :answers (length drgnx-perf-w--lsp-handled)
+                   :framed (drgnx-perf-w--lsp-framed))))
+
+(defun drgnx-perf-w--lsp-framed ()
+  "How many of the connections Nidhogg's reader frames (0 without `nidhogg-workers-framing')."
+  (seq-count (lambda (c) (and (fboundp 'nidhogg-process-framing) (nidhogg-process-framing (jsonrpc--process c))))
+             drgnx-perf-w--lsps))
 
 ;; lsp-typing: after `initialized' the server floods the recorded diagnostics and progress messages at 300 a second.
 
@@ -331,6 +351,8 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 
 (defun drgnx-perf-w-lsp-typing-done () (>= (length drgnx-perf-w--lsp-notes) drgnx-perf-w--lsp-flood-want))
 
+(defun drgnx-perf-w-lsp-typing-measure () (list :lsp (list :framed (drgnx-perf-w--lsp-framed))))
+
 (defun drgnx-perf-w-lsp-typing-digest ()
   "Each server's first 100 messages, in order (the flood goes on, so later ones are not compared)."
   (let (out)
@@ -341,7 +363,6 @@ The server's own messages wait for `initialized' (the fire function sends it)."
 
 (defun drgnx-perf-w-lsp-teardown ()
   (drgnx-perf-w--disarm)
-  (advice-remove 'jsonrpc--process-filter #'drgnx-perf-w--lsp-note-chunk)
   (dolist (conn drgnx-perf-w--lsps) (ignore-errors (jsonrpc-shutdown conn)))
   (setq drgnx-perf-w--lsps nil)
   (dolist (b (buffer-list)) (when (string-prefix-p " *perf-lsp-" (buffer-name b)) (kill-buffer b)))

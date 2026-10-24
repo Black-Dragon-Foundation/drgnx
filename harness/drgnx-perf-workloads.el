@@ -70,7 +70,8 @@ whatever they found)."
      `(;; recorded rust-analyzer, clangd and tsserver traffic through jsonrpc: completion answers of 0.5, 1 and 3 MB
        (lsp-burst
         :setup ,(drgnx-perf-workers--form
-                 (format "(drgnx-perf-w-lsp-setup '(\"LSP_REPLAY_COMPLETION_SIZES=%s\"))" drgnx-perf-workers-lsp-sizes))
+                 (format "(drgnx-perf-w-lsp-setup '(\"LSP_REPLAY_COMPLETION_SIZES=%s\" \"LSP_REPLAY_STAMP=1\"))"
+                         drgnx-perf-workers-lsp-sizes))
         :each ,(concat "(progn " visit " (drgnx-perf-w-lsp-burst-each) t)")
         :timers t
         :actions ,code
@@ -87,6 +88,7 @@ whatever they found)."
         :actions ,code
         :complete-when "(drgnx-perf-w-lsp-typing-done)"
         :digest "(drgnx-perf-w-lsp-typing-digest)"
+        :measure "(drgnx-perf-w-lsp-typing-measure)"
         :check "(drgnx-perf-w-lsp-typing-done)"
         :teardown ,(concat "(progn (drgnx-perf-w-lsp-teardown) " kill-fixture " t)"))
        ;; 1 and 2 MB files in c-ts-mode, typescript-ts-mode and python-ts-mode, visited in a second window one after the other

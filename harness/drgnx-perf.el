@@ -784,10 +784,11 @@ lacks a number at PATH."
 (defconst drgnx-perf-ab-metric-paths
   '((:input :p50) (:input :p95) (:input :p99) (:input :max) (:cpu_ms :p50) (:cpu_ms :p90)
     (:busy-ms :p50) (:busy-ms :p95) (:timer-ms :p95)
-    (:stalls-ge16) (:stalls-ge100) (:complete-ms))
+    (:stalls-ge16) (:stalls-ge100) (:complete-ms) (:lsp :handler_ms :max))
   "The probe values (read from each round's run) whose A/B verdict counts besides the wall samples: per-command input
 p50, p95, p99 and max, the main thread's CPU ms, its busy ms per command (latency plus the timers after it) at p50 and
-p95, the timers' ms per command (p95), the stalls of 16 ms and of 100 ms or more, and the completion metric.  The
+p95, the timers' ms per command (p95), the stalls of 16 ms and of 100 ms or more, and the completion metrics
+(`:complete-ms', lsp-burst's slowest handler after its answer's last byte).  The
 workers' phases get no verdict: `drgnx-perf-ab-phase-paths' lists them for the explain block.")
 
 (defun drgnx-perf-ab-phase-paths (rounds)

@@ -13,7 +13,10 @@
 ;;    with $LSP_REPLAY_FLOOD=N, cycles through them at N a second until the client exits (a diagnostics flood);
 ;;  - $LSP_REPLAY_COMPLETION_SIZES (comma separated bytes, e.g. 500000,1000000,3000000) makes the answers to
 ;;    textDocument/completion that many bytes, in turn: the recorded items are repeated to size, so a 3 MB answer has the
-;;    shape of the real server's items.
+;;    shape of the real server's items;
+;;  - $LSP_REPLAY_STAMP=1 follows every answer with a notification "$/replaySent" {"id": ID, "t": SECONDS}: the time
+;;    (`float-time') its last byte was written, which lsp-burst measures its handlers from (the client cannot see it
+;;    when the reader thread frames the messages).
 ;; $LSP_REPLAY_LIBRARY loads the functions only (the tests use them).
 
 ;;; Code:
@@ -105,7 +108,11 @@
     (cond ((equal method "exit") (kill-emacs 0))
           ((equal method "initialized") (lsp-replay--initialized))
           ((and id method)
-           (lsp-replay--send (format "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}" id (lsp-replay--result method)))))))
+           (lsp-replay--send (format "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}" id (lsp-replay--result method)))
+           ;; written and flushed: the answer's last byte is in the pipe now
+           (when (equal (getenv "LSP_REPLAY_STAMP") "1")
+             (lsp-replay--send (format "{\"jsonrpc\":\"2.0\",\"method\":\"$/replaySent\",\"params\":{\"id\":%s,\"t\":%.6f}}"
+                                       id (float-time))))))))
 
 (defun lsp-replay--input (s)
   "Add the input S to what is pending and answer every whole message in it."
