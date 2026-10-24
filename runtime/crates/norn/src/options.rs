@@ -306,10 +306,29 @@ pub(crate) fn glob_match(pattern: &str, name: &str) -> bool {
 }
 
 /// Whether CALLER may write the option entity TARGET at NOW (the rule of the module doc). Task 32's
-/// `settings_change` asks it before it records a proposed tx; the guard asks it on every write of kind `option`.
+/// `settings_change` asks it before it records a proposed tx; the guard asks it on every write of kind `option`
+/// ([`rule`], with the tx's request key). A card's "Allow once" grant never covers it here.
 pub fn may_write(
     conn: &Connection,
     caller: &Caller,
+    target: Target<'_>,
+    now: f64,
+) -> Result<(), WriteError> {
+    may_write_keyed(conn, caller, None, target, now)
+}
+
+/// The request key of the hub's proposal of settings card CARD's change: the only tx a card's "Allow once" grant
+/// covers ([`crate::grants::create_options_once`]).
+pub fn card_req(card: i64) -> String {
+    format!("settings-card:{card}")
+}
+
+/// [`may_write`] for a tx with request key REQ: a grant bound to a card covers it only when REQ is [`card_req`] of
+/// that card.
+fn may_write_keyed(
+    conn: &Connection,
+    caller: &Caller,
+    req: Option<&str>,
     target: Target<'_>,
     now: f64,
 ) -> Result<(), WriteError> {
@@ -354,6 +373,7 @@ pub fn may_write(
             && g.who.matches(caller)
             && g.what == want
             && g.names_match(&id.var)
+            && g.card.is_none_or(|c| req == Some(card_req(c).as_str()))
     });
     if granted {
         Ok(())
@@ -470,7 +490,7 @@ pub fn rule(
         project: meta.project,
         backend: false,
     };
-    may_write(conn, &caller, target, at)
+    may_write_keyed(conn, &caller, meta.req.as_deref(), target, at)
 }
 
 #[cfg(test)]

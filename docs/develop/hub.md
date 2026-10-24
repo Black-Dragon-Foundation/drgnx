@@ -752,8 +752,10 @@ answers with two methods.
   `{card: N}`.
 - **The card** (`cards/settle`, `drgnx-ratatoskr/src/graph.rs`): `once` and `session` (the user's only: the backend's
   connection only refuses) check the request again and make, in the settle's tx, an `options` grant of the card's one
-  setting for its session (`session`: a day; `once`: 60 s, revoked as soon as the change is proposed); then the change
-  is proposed as above without waiting (the editor that settled the card answers it). A name holding `*` is refused
+  setting for its session (`session`: a day; `once`: 60 s, revoked as soon as the change is proposed, and bound to the
+  card: it covers only the tx whose request key is `settings-card:CARD`, the hub's proposal of the card's value, so
+  the agent's own next `settings_change` gets a card of its own); then the change is proposed as above without
+  waiting (the editor that settled the card answers it). A name holding `*` is refused
   (a grant would read it as a glob).
 - **`settings_get {scope, names?}`**: an `options` grant of the scope or a `read` grant covering it (`*`; its own
   project for `private` and `shared`; `norn::options::may_read`). The event **`settings/explain {req, scope, names?,
