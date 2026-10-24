@@ -1,0 +1,16 @@
+{"scenario": "timeline/cap-prunes-finished-first", "requires": ["v1", "fake-backend", "test-hooks"], "pending": "Task 16a: nothing yet calls Timeline::session_finished when a task finishes (assigned by the manager, 2026-10-24)", "doc": "Task 19: over the cap, a finished task's oldest snapshot refs go before anything else and the repository is collected."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-checkpoint-cap 1))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "hello\ntool:edit note.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1", "class": "think"}}}, "within_ms": 15000}
+{"do": "run", "hub": "h", "bin": "/bin/sh", "args": ["-c", "git --git-dir=$(ls -d $STATE/hub/checkpoints/*.git) for-each-ref --format='%(refname)' | wc -l"], "expect_code": 0, "expect_stdout": "0"}

@@ -35,12 +35,29 @@ pub struct Step {
 
 /// SESSION's steps with `seq` above SINCE_SEQ, in order.
 pub fn for_session(conn: &Tx, session: &str, since_seq: i64) -> Result<Vec<Step>, CoordError> {
-    let mut st = conn.prepare(
+    for_scope(conn, Scope::Session, session, since_seq, i64::MAX)
+}
+
+/// The steps of SCOPE ID after SINCE (a session's `seq`, else a step id), in order, at most LIMIT.
+pub fn for_scope(
+    conn: &Tx,
+    scope: Scope,
+    id: &str,
+    since: i64,
+    limit: i64,
+) -> Result<Vec<Step>, CoordError> {
+    let (col, key) = match scope {
+        Scope::Session => ("session", "seq"),
+        Scope::Task => ("task", "id"),
+        Scope::Plan => ("plan", "id"),
+        Scope::Project => ("project", "id"),
+    };
+    let mut st = conn.prepare(&format!(
         "select id, session, task, plan, project, agent, provider, seq, class, start, end, tool, tool_kind, \
          message_id, turn_id, snapshot, log_version, tokens_in, tokens_out, cache_read, cache_write, cost, \
-         cost_unit from step where session = ?1 and seq > ?2 order by seq",
-    )?;
-    let rows = st.query_map((session, since_seq), |r| {
+         cost_unit from step where {col} = ?1 and {key} > ?2 order by {key} limit ?3",
+    ))?;
+    let rows = st.query_map((id, since, limit), |r| {
         let class: String = r.get(8)?;
         Ok(Step {
             id: r.get(0)?,

@@ -125,6 +125,8 @@ struct State {
     cur: Option<OpenStep>,
     stash: Option<OpenStep>,
     closed: Vec<ClosedStep>,
+    /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
+    last_mid: Option<String>,
 }
 
 /// A step that has begun.
@@ -175,6 +177,7 @@ impl State {
             ending: false,
             cur: None,
             stash: None,
+            last_mid: None,
             closed: Vec::new(),
             status: runstav::methods::agents::SessionStatus::Starting,
             seq: 0,
@@ -217,7 +220,7 @@ impl State {
             tool: tool.map(|t| t.0.to_string()),
             tool_kind: tool.and_then(|t| t.1).map(str::to_string),
             tool_id: tool.and_then(|t| t.2).map(str::to_string),
-            message_id: None,
+            message_id: self.last_mid.clone(),
         });
     }
 
@@ -227,7 +230,8 @@ impl State {
             self.step_begin(StepClass::Think, None);
         }
         if let Some(c) = self.cur.as_mut()
-            && c.message_id.is_none()
+            && c.class == StepClass::Think
+            && message_id.is_some()
         {
             c.message_id = message_id.map(str::to_string);
         }
@@ -296,6 +300,9 @@ impl State {
             }
         };
         let mid = u.get("messageId").and_then(Value::as_str);
+        if mid.is_some() {
+            self.last_mid = mid.map(str::to_string);
+        }
         match kind {
             "user_message_chunk" => self.text(EntryType::User, &text_of(u), mid),
             "agent_message_chunk" => {
@@ -455,6 +462,8 @@ pub(crate) struct StepSink {
     pub writer: crate::coord::Writer,
     pub editors: Arc<crate::settings::agents::Editors>,
     pub bus: tokio::sync::broadcast::Sender<AgentStep>,
+    /// Step snapshots (none: the hub has no state folder, or a test).
+    pub snap: Option<crate::timeline::Snap>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -883,6 +892,7 @@ fn assemble(
         task: i.task.clone(),
         agent: profile.name.clone(),
         provider: profile.ai.clone(),
+        cwd: i.cwd.clone(),
     };
     tokio::spawn(write_steps(
         rx,
@@ -890,6 +900,7 @@ fn assemble(
             writer: front.writer.clone(),
             editors: front.editors.clone(),
             bus,
+            snap: crate::timeline::Snap::of(front),
         },
         ctx,
     ));
@@ -1046,6 +1057,8 @@ struct StepCtx {
     task: Option<String>,
     agent: String,
     provider: Option<String>,
+    /// The worktree its edits are snapshotted from.
+    cwd: PathBuf,
 }
 
 /// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
@@ -1064,6 +1077,7 @@ async fn write_steps(
         backend: false,
     };
     let mut local = 0u64;
+    let mut turn_start = true;
     while let Some(c) = rx.recv().await {
         local += 1;
         let class_name = serde_json::to_value(c.open.class)
@@ -1086,7 +1100,7 @@ async fn write_steps(
             snapshot: None,
             log_version: None,
         };
-        let end = table::StepEnd {
+        let mut end = table::StepEnd {
             end: c.end,
             tokens_in: c.tokens_in,
             tokens_out: c.tokens_out,
@@ -1097,24 +1111,38 @@ async fn write_steps(
             snapshot: None,
             log_version: None,
         };
-        let (id, seq) = match sink
+        let (id, seq, log_version) = match sink
             .writer
             .write(&caller, "agents/step", move |tx| {
                 let id = table::open(tx, new)?;
+                end.log_version = Some(norn::write::meta::version(tx.sql())? as i64);
+                let log_version = end.log_version;
                 table::close(tx, id, end)?;
                 let seq: i64 =
                     tx.sql()
                         .query_row("select seq from step where id = ?1", [id], |r| r.get(0))?;
-                Ok((id, seq))
+                Ok((id, seq, log_version))
             })
             .await
         {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!(sid = ctx.session, "step not recorded: {e}");
-                (0, local as i64)
+                (0, local as i64, None)
             }
         };
+        let snapshot = anchor(
+            &sink,
+            &ctx,
+            &caller,
+            id,
+            seq,
+            c.turn_id.as_deref(),
+            &c.open,
+            turn_start,
+        )
+        .await;
+        turn_start = c.turn_id.is_some();
         let step = Step {
             id,
             session: ctx.session.clone(),
@@ -1131,8 +1159,8 @@ async fn write_steps(
             tool_kind: c.open.tool_kind,
             message_id: c.open.message_id,
             turn_id: c.turn_id,
-            snapshot: None,
-            log_version: None,
+            snapshot,
+            log_version: log_version.map(|v| v as u64),
             tokens_in: Some(c.tokens_in as u64),
             tokens_out: Some(c.tokens_out as u64),
             cache_read: Some(c.cache_read as u64),
@@ -1147,6 +1175,59 @@ async fn write_steps(
         sink.editors.broadcast("agent-step", json!(ev));
         let _ = sink.bus.send(ev);
     }
+}
+
+/// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
+/// last), and a snapshot of the worktree after a completed edit and at the turn's first step.  Best effort.
+async fn anchor(
+    sink: &StepSink,
+    ctx: &StepCtx,
+    caller: &Caller,
+    id: i64,
+    seq: i64,
+    turn: Option<&str>,
+    open: &OpenStep,
+    turn_start: bool,
+) -> Option<String> {
+    if id == 0 {
+        return None;
+    }
+    let edit = open.class == StepClass::Tool
+        && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
+    let snapshot = match (&sink.snap, edit || turn_start) {
+        (Some(s), true) => {
+            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, &sink.editors)
+                .await
+        }
+        _ => None,
+    };
+    if snapshot.is_none() && turn.is_none() {
+        return None;
+    }
+    let (turn, tree, sid) = (
+        turn.map(str::to_string),
+        snapshot.clone(),
+        format!("session:{}", ctx.session),
+    );
+    let r = sink
+        .writer
+        .write(caller, "agents/step", move |tx| {
+            if let Some(t) = &tree {
+                tx.sql().execute("update step set snapshot = ?2 where id = ?1", (id, t))?;
+            }
+            if let Some(t) = &turn {
+                tx.sql().execute(
+                    "update step set turn_id = ?2 where session = ?1 and turn_id is null and id <= ?3",
+                    (&sid, t, id),
+                )?;
+            }
+            Ok(())
+        })
+        .await;
+    if let Err(e) = r {
+        tracing::warn!(sid = ctx.session, "step anchors not recorded: {e}");
+    }
+    snapshot
 }
 
 async fn insert_row(db: &urdr::Handle, s: &Session) {
@@ -2097,11 +2178,13 @@ mod tests {
             task: Some("task:7".into()),
             agent: "mock".into(),
             provider: None,
+            cwd: PathBuf::new(),
         };
         let sink = StepSink {
             writer: writer.clone(),
             editors,
             bus,
+            snap: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -2161,6 +2244,146 @@ mod tests {
                     "tool".to_string(),
                     Some("Read x".to_string())
                 ),
+            ]
+        );
+    }
+
+    /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
+    async fn written_turn(
+        dir: &Path,
+    ) -> (crate::coord::Writer, Vec<norn::read::steps::Step>, PathBuf) {
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let wt = dir.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("a.txt"), "edited").unwrap();
+        std::fs::write(wt.join(".env"), "KEY=1").unwrap();
+        let settings = Arc::new(crate::settings::Settings::new());
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus: tokio::sync::broadcast::channel(16).0,
+            snap: Some(crate::timeline::Snap::for_test(dir.join("cp"), settings)),
+        };
+        let ctx = StepCtx {
+            session: "a1".into(),
+            task: Some("task:7".into()),
+            agent: "mock".into(),
+            provider: None,
+            cwd: wt.clone(),
+        };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let done = tokio::spawn(write_steps(rx, sink, ctx));
+        let open = |class, kind: Option<&str>, start| OpenStep {
+            class,
+            start,
+            tool: kind.map(|_| "Edit a.txt".to_string()),
+            tool_kind: kind.map(str::to_string),
+            tool_id: None,
+            message_id: Some("m1".into()),
+        };
+        for (o, end, turn) in [
+            (open(StepClass::Think, None, 1.0), 2.0, None),
+            (open(StepClass::Tool, Some("edit"), 2.0), 5.0, None),
+            (open(StepClass::Think, None, 5.0), 6.0, Some("turn-1")),
+        ] {
+            tx.send(ClosedStep {
+                open: o,
+                end,
+                turn_id: turn.map(str::to_string),
+                tokens_in: 1,
+                tokens_out: 2,
+                cache_read: 0,
+                cache_write: 0,
+                cost: None,
+            })
+            .unwrap();
+        }
+        drop(tx);
+        done.await.unwrap();
+        let steps = writer
+            .db
+            .read(|c| norn::read::steps::for_session(c, "session:a1", 0))
+            .await
+            .unwrap();
+        (writer, steps, wt)
+    }
+
+    #[tokio::test]
+    async fn timeline_every_step_has_its_anchors() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, steps, _) = written_turn(dir.path()).await;
+        assert_eq!(steps.len(), 3);
+        for s in &steps {
+            assert_eq!(s.message_id.as_deref(), Some("m1"), "{s:?}");
+            assert_eq!(s.turn_id.as_deref(), Some("turn-1"), "{s:?}");
+            assert_eq!(s.log_version, Some(0), "{s:?}");
+        }
+        // a snapshot at the turn's first step and after the completed edit, not after the last think
+        assert!(steps[0].snapshot.is_some() && steps[2].snapshot.is_none());
+        let tree = steps[1].snapshot.clone().expect("the edit's snapshot");
+        let repo =
+            crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &dir.path().join("wt"));
+        let out = std::process::Command::new("git")
+            .args(["--git-dir"])
+            .arg(&repo)
+            .args(["ls-tree", "-r", "--name-only", &tree])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
+    }
+
+    #[tokio::test]
+    async fn timeline_rollup_matches_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, steps, _) = written_turn(dir.path()).await;
+        let roll = writer
+            .db
+            .read(|c| norn::read::steps::rollup(c, norn::read::steps::Scope::Session, "session:a1"))
+            .await
+            .unwrap();
+        let sum = |class: &str| -> f64 {
+            steps
+                .iter()
+                .filter(|s| s.class.as_str() == class)
+                .map(|s| s.end.unwrap() - s.start)
+                .sum()
+        };
+        assert_eq!(roll.secs_by_class["think"], sum("think"));
+        assert_eq!(roll.secs_by_class["tool"], sum("tool"));
+        assert_eq!(roll.tokens.input, 3);
+        assert_eq!(roll.tokens.output, 6);
+    }
+
+    #[test]
+    fn timeline_permission_wait_is_user_wait() {
+        let mut st = State::new();
+        st.apply(&upd(
+            json!({"sessionUpdate": "agent_message_chunk", "messageId": "m9",
+            "content": {"type": "text", "text": "go"}}),
+        ));
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
+            "title": "Edit x", "kind": "edit", "status": "in_progress"}),
+        ));
+        st.wait_begin();
+        st.permissions.clear();
+        st.wait_end();
+        st.step_close(now(), None);
+        let got: Vec<(StepClass, Option<&str>)> = st
+            .closed
+            .iter()
+            .map(|c| (c.open.class, c.open.message_id.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (StepClass::Think, Some("m9")),
+                (StepClass::Tool, Some("m9")),
+                (StepClass::UserWait, Some("m9")),
+                (StepClass::Tool, Some("m9")),
             ]
         );
     }
