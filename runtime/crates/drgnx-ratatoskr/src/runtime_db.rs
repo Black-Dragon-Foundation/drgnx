@@ -11,6 +11,8 @@
 //!
 //! - `asession` (5): the agent sessions the hub holds (id, name, profile, role, cwd, task, job, ACP session id,
 //!   enforced, parent), so a restart knows what it held ([`crate::agents`]).
+//! - `op` (6): the touched-folder ledger (`kind = 'touched'`): the run folders a sandboxed agent worked in, so plain
+//!   git never runs there, across restarts ([`crate::runner::git`]).
 //!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
@@ -46,6 +48,11 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
         "create table asession(sid text primary key, name text not null, profile text not null, role text, \
          cwd text, task text, job text, acp text, enforced integer not null default 0, parent text, \
          at real not null);",
+    ),
+    (
+        6,
+        "create table op(folder text not null, kind text not null, at real not null, \
+         primary key(folder, kind));",
     ),
 ];
 
@@ -119,7 +126,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("5"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("6"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
