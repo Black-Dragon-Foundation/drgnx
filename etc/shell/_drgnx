@@ -36,6 +36,8 @@ commands=(
   'bootstrap:set this machine up from your configuration'
   'update:update this install to GitHub main'
   'coord:the coordination tools for an agent outside drgnx'
+  'graph:the store'"'"'s commands (export, backup, revert, …)'
+  'childframe-elpa:(tests) the pinned child-frame packages into a new folder'
 )
 
 if (( CURRENT == 2 )); then
@@ -64,7 +66,7 @@ case $cmd in
       '--compositor[compositor of the GUI session]:compositor:(mutter sway x11 i3 kwin niri)' '--tty[terminal tests in private tmux servers]' \
       '--config[configuration of the session]:configuration:(drgnx gryphn)' \
       '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \
-      '--audit[what each hook function costs]' '--ab[judge wall clock against a git ref]:ref:' '--n[samples per side for --ab]:samples:' '--soak[the workloads in a loop]' \
+      '--audit[what each hook function costs]' '--ab[judge wall clock against a git ref]:ref:' '--ab-env[paired A/B by an environment variable]:VAR=JUDGED,REF:' '--n[samples per side for --ab]:samples:' '--soak[the workloads in a loop]' \
       '--container[inside a container]' '--install[install.sh in fresh distribution containers]' \
       '--bootstrap[drgnx bootstrap on a fresh Fedora container]' '--fedora[Fedora release for --bootstrap]:release:(44 45)' \
       '*:image:(fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
@@ -200,6 +202,10 @@ case $cmd in
       shift words; (( CURRENT-- ))
       _arguments '--kind[the agent: claude, codex, zed…]:kind:'
     fi ;;
+  graph)
+    (( CURRENT == 2 )) && _values 'graph command' export import backup revert excise scrub grants sql compact proposed ;;
+  childframe-elpa)
+    _arguments '1:new directory:_files -/' ;;
   bootstrap)
     _arguments '(--chezmoi)--config[your configuration repository (https or a path)]:url or directory:_files -/' \
       '(--config)--chezmoi[a chezmoi source repository instead]:url or directory:_files -/' \

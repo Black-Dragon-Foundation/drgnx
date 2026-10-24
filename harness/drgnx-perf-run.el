@@ -574,20 +574,19 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; next one cancels — the most work a keystroke can bring)
       (typing-with-ghost
        :setup ,(format "(progn (load %S nil t)
-                         (when (file-exists-p (drgnx-ai-file)) (error \"An ai.eld exists (%%s): never overwritten\" (drgnx-ai-file)))
                          (let* ((port (+ 20000 (random 20000))) (dir (make-temp-file \"drgnx-perf-llm\" t))
                                 (script (expand-file-name \"llm.eld\" dir)) (log (expand-file-name \"llm.log\" dir)))
                            ;; /api/tags: the probe (drgnx runs one once idle) finds it running
                            (with-temp-file script (prin1 '((:path \"/api/tags\" :body \"{\\\"models\\\":[{\\\"name\\\":\\\"coder\\\"}]}\")
                                                            (:path \"/api/generate\" :body \"{\\\"response\\\":\\\"(message \\\\\\\"%%s\\\\\\\" x)\\\"}\"))
                                                          (current-buffer)))
-                           (make-directory (file-name-directory (drgnx-ai-file)) t)
-                           (with-temp-file (drgnx-ai-file)
-                             (prin1 (list :version 1 :providers (list (list 'perf-llm :name \"Perf\" :kind 'ollama :url (format \"http://127.0.0.1:%%d\" port) :caps '(fim)))
-                                          :roles '((complete (perf-llm . \"coder\"))))
-                                    (current-buffer)))
-                           (setq drgnx-perf--llm (list :proc (drgnx-ai-test-mock-llm port script log) :dir dir :log log :delay drgnx-ai-ghost-delay)
+                           ;; the provider and the role as settings (their default values: what callers read); the
+                           ;; session's own come back in the teardown
+                           (setq drgnx-perf--llm (list :proc (drgnx-ai-test-mock-llm port script log) :dir dir :log log :delay drgnx-ai-ghost-delay
+                                                       :providers (default-value 'drgnx-ai-providers) :roles (default-value 'drgnx-ai-roles))
                                  drgnx-ai-ghost-delay 0.01)
+                           (setq-default drgnx-ai-providers (list (list 'perf-llm :name \"Perf\" :kind 'ollama :url (format \"http://127.0.0.1:%%d\" port) :caps '(fim)))
+                                         drgnx-ai-roles '((complete (perf-llm . \"coder\"))))
                            (push '(perf-llm :up t) drgnx-ai-detected))
                          t)"
                        (expand-file-name "test/fixtures/mock-llm.el" drgnx-ui-repo-dir))
@@ -596,7 +595,9 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :check "(with-temp-buffer (insert-file-contents (plist-get drgnx-perf--llm :log)) (> (how-many \"POST /api/generate\") 0))"   ; it asked
        :teardown ,(concat "(progn (ignore-errors (delete-process (plist-get drgnx-perf--llm :proc)))
                                   (ignore-errors (delete-directory (plist-get drgnx-perf--llm :dir) t))
-                                  (when drgnx-perf--llm (ignore-errors (delete-file (drgnx-ai-file))))   ; the one setup wrote
+                                  (when drgnx-perf--llm
+                                    (setq-default drgnx-ai-providers (plist-get drgnx-perf--llm :providers)
+                                                  drgnx-ai-roles (plist-get drgnx-perf--llm :roles)))
                                   (setq drgnx-ai-ghost-delay (plist-get drgnx-perf--llm :delay)
                                         drgnx-ai-detected (assq-delete-all 'perf-llm drgnx-ai-detected)) "
                           kill-fixture ")"))

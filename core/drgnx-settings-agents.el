@@ -104,8 +104,9 @@ The refused characters are `characters' of test/fixtures/settings-deny.json (the
       (drgnx-hub-call "settings/confirm"
                       (append (list :tx tx :ok (if ok t :false))
                               (and error (list :error (truncate-string-to-width error 4000))))
-                      (lambda (_r e) (when e (message "drgnx settings: the hub took no confirm of tx %s: %s" tx e))))
-    (error (message "drgnx settings: no confirm of tx %s: %s" tx (error-message-string err)))))
+                      (lambda (_r e)
+                        (when e (drgnx-notify 'config 'warn (format "Settings: the hub took no confirm of tx %s: %s" tx e)))))
+    (error (drgnx-notify 'config 'warn (format "Settings: no confirm of tx %s: %s" tx (error-message-string err))))))
 
 (defun drgnx-settings-agents--short (text)
   (truncate-string-to-width (replace-regexp-in-string "[\n\r]+" " " text) 60 nil nil "…"))

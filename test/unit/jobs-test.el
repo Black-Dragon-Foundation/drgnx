@@ -202,9 +202,11 @@ killing the starter's whole process group does not take the job along."
      (unwind-protect
          (progn
            (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
-           (funcall write (time-add start 0.01))
+           ;; as `process-attributes' gives it (a list): the (TICKS . HZ) of `time-add' is beyond 64 bits, which
+           ;; job.eld's reader refuses
+           (funcall write (time-convert (time-add start 0.01) 'list))
            (should (eq (drgnx-jobs-test--status id) 'running))
-           (funcall write (time-add start 5))
+           (funcall write (time-convert (time-add start 5) 'list))
            (should (eq (drgnx-jobs-test--status id) 'gone)))
        ;; the "job" is this Emacs: never left for the fixture's clean-up to stop
        (delete-directory dir t)))))

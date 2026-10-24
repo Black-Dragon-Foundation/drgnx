@@ -11,6 +11,7 @@
 (require 'drgnx-monitors)
 (require 'drgnx-persist)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (unless (fboundp 'drgnx-persist-test--graphical)    ; its helpers: a restore in a batch frame
   (load (expand-file-name "wb-persist-test.el" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (fboundp 'drgnx-platform-test--deftest)
@@ -111,15 +112,15 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
   (seq-some (lambda (m) (string-match-p regexp m)) messages))
 
 (defmacro drgnx-monitors-test--with-core-commands (&rest body)
-  "BODY with a registry holding the core and module commands, nothing else."
+  "BODY with a registry holding the core and module commands, nothing else.  The startup modules are set up for
+BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers would run in the later tests."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+         (drgnx-commands-problems nil)
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
      (drgnx--core-commands)
-     (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
-     (drgnx-modules-run 'startup)
-     ,@body))
+     (drgnx-test-with-modules nil :stages '(startup)
+                              ,@body)))
 
 ;;;; Moving
 

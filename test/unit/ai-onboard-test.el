@@ -204,6 +204,13 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
     (:path "/or/v1/completions" :body "{\"choices\":[{\"text\":\"ok\"}]}"))
   "What the fake LM Studio serves (OpenRouter too, under /or).")
 
+(defun drgnx-ai-onboard-test--openrouter-in-settings ()
+  "The OpenRouter preset `drgnx-ai-onboard-test--with-mac' points at the mock, in settings.el too (an entry replaces
+the preset with its id): the hub's gateway takes its provider table from settings.el, so a preset bound in Lisp
+alone sends the hub to the real OpenRouter (which refuses the test's key).  Before the hub starts."
+  (let ((print-length nil) (print-level nil))
+    (drgnx-test-runtime-settings-put (format "(drgnx-ai-providers (%S))" (assq 'openrouter drgnx-ai-presets)))))
+
 (defun drgnx-ai-onboard-test--stop-jobs ()
   "Stop every running job and wait until each has written its exit file: a stopped job's shell is still writing
 \(head, exit) when the signal returns, and the fixture's clean-up deleting its directory under it fails (macOS)."
@@ -412,6 +419,7 @@ with BODY."
 (ert-deftest drgnx-onboard/openrouter-key-goes-to-the-keychain ()
   ;; binary: the key goes to the Keychain and to the hub, which alone holds it; the features are tested through it
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
+    (drgnx-ai-onboard-test--openrouter-in-settings)
     (drgnx-test-with-ratatoskr root
       (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (prompted 0))
         (unwind-protect
@@ -557,6 +565,7 @@ with BODY."
   ;; OPENROUTER_API_KEY set the environment's key wins over the stored one (it goes to the hub on each connect), it
   ;; stays in the environment, and the result says so.  Binary: the typed key goes to the hub.
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
+    (drgnx-ai-onboard-test--openrouter-in-settings)
     (drgnx-test-with-ratatoskr root
       (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (typed nil))
         (unwind-protect
@@ -626,6 +635,7 @@ with BODY."
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (let ((mock (drgnx-ai-test-mock-llm port script llm-log))
           (process-environment (cons "OPENROUTER_API_KEY=sk-or-test-123" process-environment)))
+      (drgnx-ai-onboard-test--openrouter-in-settings)
       (unwind-protect
           (drgnx-test-with-ratatoskr root
             (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))

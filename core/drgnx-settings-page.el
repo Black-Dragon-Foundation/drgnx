@@ -557,9 +557,7 @@ Ends with a blank line."
                     (if (and root (memq drgnx-settings-page--tab '(workspace shared)))
                         (format ", workspace %s" (abbreviate-file-name root)) "")))))
 
-(defvar-keymap drgnx-settings-page-mode-map
-  :doc "The Settings page's keys: the key profiles bind its commands here (keys/*.eld)."
-  :parent special-mode-map)
+(defvar drgnx-settings-page-mode-map)   ; in drgnx-config, for the keys apply
 
 (define-derived-mode drgnx-settings-page-mode special-mode "Settings"
   "Preferences: Settings, every setting by scope, group and search."

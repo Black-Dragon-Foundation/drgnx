@@ -51,6 +51,8 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a bootstrap -d 'Set this machine up from your configuration'
     complete -c drgnx -n __fish_use_subcommand -a update -d 'Update this install to GitHub main'
     complete -c drgnx -n __fish_use_subcommand -a coord -d 'Serve the coordination tools to an agent outside drgnx'
+    complete -c drgnx -n __fish_use_subcommand -a graph -d 'The store'"'"'s commands (export, backup, revert, …)'
+    complete -c drgnx -n __fish_use_subcommand -a childframe-elpa -d '(Tests) the pinned child-frame packages into a new folder'
     complete -c drgnx -n __fish_use_subcommand -s t -d 'Open in this terminal'
     complete -c drgnx -n __fish_use_subcommand -l gui -d 'Open in a window'
 
@@ -72,6 +74,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l perf -d 'Input latency, redisplay, frames, GC'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l audit -d 'What each hook function costs'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l ab -r -d 'Judge wall clock against a git ref (paired A/B)'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l ab-env -x -d 'Paired A/B by an environment variable (VAR=JUDGED,REF)'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l n -r -d 'Samples per side for --ab'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l soak -d 'The workloads in a loop'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l container -d 'Inside a container'
@@ -172,6 +175,8 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from coord' -f
     complete -c drgnx -n '__fish_seen_subcommand_from coord; and not __fish_seen_subcommand_from mcp' -a mcp -d 'Serve the coordination tools over stdio'
     complete -c drgnx -n '__fish_seen_subcommand_from coord; and __fish_seen_subcommand_from mcp' -l kind -x -d 'The agent: claude, codex, zed…'
+    complete -c drgnx -n '__fish_seen_subcommand_from graph' -f
+    complete -c drgnx -n '__fish_seen_subcommand_from graph; and not __fish_seen_subcommand_from export import backup revert excise scrub grants sql compact proposed' -a 'export import backup revert excise scrub grants sql compact proposed' -d 'The store'"'"'s command'
 
     # bootstrap
     complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l config -r -d 'Your configuration repository (https or a path)'

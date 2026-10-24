@@ -37,6 +37,8 @@
  (:file "core/drgnx-settings-workspace.el" :fn drgnx-settings-workspace--dir-locals-layers :what read-site :why "a user's file: a project's .dir-locals.el, read to explain where a value comes from, never written" :until never)
  (:file "core/drgnx-settings-trust.el" :fn drgnx-settings-trust--read-dir-locals :what read-site :why "a user's file: a project's .dir-locals.el, read to list its code for review, never written" :until never)
  (:file "core/drgnx-settings-trust.el" :fn drgnx-settings-trust--line :what read-site :why "a user's file: a project's .dir-locals.el, read for the line a value is on, never written" :until never)
+ (:file "core/drgnx-settings-index.el" :fn drgnx-settings-index-scan-file :what read-site :why "Lisp source: an installed package's .el files, read for their defcustoms and never run or written" :until never)
+ (:file "core/drgnx-settings-page.el" :fn drgnx-settings-page-convert :what rename-file :why "a directory move: a project's old .drgnx/*.eld moved into .drgnx/migrated-DATE/ after its entries are in settings.el" :until never)
  (:file "core/drgnx-settings-migrate.el" :fn drgnx-settings-migrate--move :what rename-file :why "a directory move: an old settings file moved into <config>/migrated-DATE/ after its copy in <state>/backups/" :until never)
  (:file "core/drgnx-shell.el" :fn drgnx-shell-install :what write-region :why "a user's file: the shell's rc file gains one line, only on a yes" :until never)
  (:file "core/drgnx-startup-trace.el" :fn drgnx-startup-trace--finish :what with-temp-file :why "a developer tool: the startup trace" :until never)
