@@ -26,7 +26,7 @@ async fn ended(r: &Runner, id: &str) -> ExecRow {
     let t = Instant::now();
     loop {
         let row = r.get(id).expect("the job");
-        if row.status != ExecStatus::Running {
+        if !matches!(row.status, ExecStatus::Running | ExecStatus::Queued) {
             return row;
         }
         assert!(
@@ -452,7 +452,9 @@ async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
         .unwrap();
     assert!(t.elapsed() < Duration::from_secs(2), "the start blocked");
     assert!(r.is_queued(&second) && !r.is_queued(&first));
-    assert_eq!(r.get(&second).unwrap().status, ExecStatus::Running);
+    assert_eq!(r.get(&second).unwrap().status, ExecStatus::Queued);
+    assert_eq!(r.get(&first).unwrap().status, ExecStatus::Running);
+    assert_eq!(r.list(None, true).len(), 2, "queued counts as live");
     assert!(r.live().ids("nobody").is_empty());
     std::fs::write(&gate, "").unwrap();
     assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);

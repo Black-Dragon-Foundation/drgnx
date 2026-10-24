@@ -284,3 +284,74 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
         .is_err()
     );
 }
+
+/// The shipped layout of a linked worktree: the tree under `<state>/hub/runs`, git's common folder in the user's
+/// repository.  Commits need the common folder writable; the hooks and config in it (and the worktree's
+/// `config.worktree`, and a submodule's) are pinned read-only, objects and refs are not.
+#[test]
+fn a_linked_worktrees_git_folders_are_writable_except_what_git_runs() {
+    use crate::agents::lock::PROTECTED_RO;
+    let fx = Fx::new();
+    let env = fx.env();
+    let common = fx.p("repo/.git");
+    for d in [
+        "objects",
+        "refs/heads",
+        "hooks",
+        "worktrees/w1",
+        "modules/sub/hooks",
+    ] {
+        fs::create_dir_all(common.join(d)).unwrap();
+    }
+    fs::write(common.join("config"), "[core]\n").unwrap();
+    fs::write(common.join("modules/sub/config"), "[core]\n").unwrap();
+    fs::write(common.join("worktrees/w1/config.worktree"), "").unwrap();
+    fs::write(common.join("worktrees/w1/commondir"), "../..\n").unwrap();
+    let wt = paths::state_dir(&env).join("hub/runs/w1");
+    fs::create_dir_all(&wt).unwrap();
+    fs::write(
+        wt.join(".git"),
+        format!("gitdir: {}\n", common.join("worktrees/w1").display()),
+    )
+    .unwrap();
+    let mut plan = fx.plan(".claude");
+    plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
+    let req = SandboxReq {
+        sid: "S1".into(),
+        worktree: wt.clone(),
+        read: vec![],
+        net: NetCell::ProviderOnly,
+        role: Role::Worker,
+    };
+    let (plan, shape) = worktree_launch(&plan, &req);
+    let spec = fx.spec(&plan, &shape);
+    assert!(spec.write.contains(&wt) && spec.write.contains(&common));
+    for pinned in [
+        "hooks",
+        "config",
+        "worktrees/w1/config.worktree",
+        "modules/sub/hooks",
+        "modules/sub/config",
+    ] {
+        let pin = spec.binds.iter().find(|b| b.source == common.join(pinned));
+        assert_eq!(
+            pin.map(|b| b.mode),
+            Some(Mode::Ro),
+            "{pinned}: {:?}",
+            spec.binds
+        );
+    }
+    for open in ["objects", "refs", "worktrees/w1"] {
+        assert!(
+            spec.binds.iter().all(|b| b.source != common.join(open)),
+            "{open} must stay writable"
+        );
+    }
+    // the stubs the hub made for the lock's files go with the session, unless the agent filled them
+    assert!(wt.join(".envrc").is_file() && wt.join("mise.toml").is_file());
+    fs::write(wt.join("mise.toml"), "[tools]\n").unwrap();
+    crate::sandbox::remove_stubs(&scratch_path(&env, "S1"), &wt);
+    assert!(!wt.join(".envrc").exists(), "an empty stub is removed");
+    assert!(wt.join("mise.toml").exists(), "a file with content stays");
+    assert!(!wt.join(".claude").exists());
+}

@@ -255,8 +255,11 @@ async fn facts_of(f: &Front, o: &Obs, t: &Thresholds) -> Facts {
         for j in &o.jobs {
             let gone = match f.core.exec.get(j) {
                 Some(r) => {
-                    r.status != runstav::methods::exec::ExecStatus::Running
-                        || f.core.exec.process_gone(j)
+                    !matches!(
+                        r.status,
+                        runstav::methods::exec::ExecStatus::Running
+                            | runstav::methods::exec::ExecStatus::Queued
+                    ) || f.core.exec.process_gone(j)
                 }
                 None => true,
             };

@@ -186,6 +186,25 @@ async fn protected_config_change_refused() {
     }
 }
 
+/// The empty `.envrc` and `mise.toml` the sandbox makes to pin them must not reach the user's checkout: a branch that
+/// adds one (or really edits it) is refused at the gate, with the path on the card.
+#[tokio::test]
+async fn a_protected_file_stub_in_the_branch_is_refused() {
+    let e = env();
+    let (h, p) = shared(&e, TreeMode::Worktree, Policy::default(), None);
+    let t = h
+        .task_worktree(&e.repo, "r1", "t1", &base(&e))
+        .await
+        .unwrap();
+    commit(&e, &t, ".envrc", "");
+    commit(&e, &t, "src/a.rs", "fn a() {}\n");
+    accept_all(&h, &e, &t, &p.marks).await;
+    match h.merge_gate(&e.repo, &t).await.unwrap() {
+        Gate::Never(why) => assert!(why.contains(".envrc") && !why.contains("a.rs"), "{why}"),
+        g => panic!("{g:?}"),
+    }
+}
+
 #[tokio::test]
 async fn tip_moved_after_check_refused() {
     let e = env();

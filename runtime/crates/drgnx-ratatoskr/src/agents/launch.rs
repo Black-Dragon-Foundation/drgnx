@@ -47,14 +47,27 @@ pub fn spawn(plan: &LaunchPlan, req: &SandboxReq) -> Result<Launch, Refusal> {
         return Err(refusal("a chat has no worktree: use spawn_plain"));
     }
     let env = Env::process();
+    let (plan, shape) = worktree_launch(plan, req);
+    launch(&env, &plan, &shape)
+}
+
+/// The plan and shape of a worker's or manager's launch: its worktree writable and, for a git worktree, git's folders
+/// ([`sandbox::git_access`]): the common folder writable for commits, with the hooks and config in it pinned
+/// read-only next to the lock's protected paths.
+pub fn worktree_launch(plan: &LaunchPlan, req: &SandboxReq) -> (LaunchPlan, SessionShape) {
+    let (git_write, git_pins) = sandbox::git_access(&req.worktree);
+    let mut plan = plan.clone();
+    plan.protected_ro.extend(git_pins);
+    let mut write = vec![req.worktree.clone()];
+    write.extend(git_write);
     let shape = SessionShape {
         sid: req.sid.clone(),
         cwd: req.worktree.clone(),
-        write: vec![req.worktree.clone()],
+        write,
         read: req.read.clone(),
         net: req.net,
     };
-    launch(&env, plan, &shape)
+    (plan, shape)
 }
 
 /// A chat with no project, still in Gleipnir: its cwd is a scratch dir of its own (`scratch_dir`), nothing of the
@@ -72,8 +85,15 @@ pub fn spawn_plain(plan: &LaunchPlan, sid: &str) -> Result<Launch, Refusal> {
     launch(&env, plan, &shape)
 }
 
-/// A session's scratch dir, `<tmp>/drgnx-scratch-UID/SID` (made private).  It is not in the session dir: that one is
+/// A session's scratch dir, `<tmp>/drgnx-scratch-UID/SID`.  It is not in the session dir: that one is
 /// bound read-only and nothing else may lie in it (Gleipnir's rule 5).
+pub fn scratch_path(env: &Env, sid: &str) -> PathBuf {
+    sandbox::tmp_dir(env)
+        .join(format!("drgnx-scratch-{}", env.uid))
+        .join(sid)
+}
+
+/// [`scratch_path`], made private (the session id is checked like the session dir's).
 pub fn scratch_dir(env: &Env, sid: &str) -> Result<PathBuf, Refusal> {
     // The same name check as the session dir's.
     paths::session_dir(env, &paths::socket_path(env), sid)

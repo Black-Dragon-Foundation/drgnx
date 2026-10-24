@@ -161,7 +161,7 @@ pub async fn recover(front: &Front) {
         let Some(sid) = r.session.clone() else {
             continue;
         };
-        if r.status == ExecStatus::Running || known.contains(&r.id) {
+        if matches!(r.status, ExecStatus::Running | ExecStatus::Queued) || known.contains(&r.id) {
             continue;
         }
         let held = front

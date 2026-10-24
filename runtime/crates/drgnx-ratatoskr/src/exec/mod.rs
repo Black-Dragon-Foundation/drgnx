@@ -429,7 +429,14 @@ impl Inner {
             argv: m.argv,
             cwd: m.cwd,
             image: m.image,
-            status: end.as_ref().map_or(ExecStatus::Running, |e| e.status),
+            status: end.as_ref().map_or(
+                if m.queued {
+                    ExecStatus::Queued
+                } else {
+                    ExecStatus::Running
+                },
+                |e| e.status,
+            ),
             started: m.started,
             ended: end.as_ref().map(|e| e.ended),
             timebox_s: m.timebox_s,
@@ -446,7 +453,7 @@ impl Inner {
             .flatten()
             .filter_map(|e| self.row(&e.file_name().to_string_lossy()))
             .filter(|r| session.is_none_or(|s| r.session.as_deref() == Some(s)))
-            .filter(|r| !running || r.status == ExecStatus::Running)
+            .filter(|r| !running || matches!(r.status, ExecStatus::Running | ExecStatus::Queued))
             .collect();
         rows.sort_by(|a, b| b.started.total_cmp(&a.started));
         rows
@@ -1344,7 +1351,7 @@ pub async fn log(f: &Front, _: &Caller, p: LogParams) -> Result<LogSlice, Error>
         from,
         next: more.then(|| from + n as u64),
         lines,
-        running: row.status == ExecStatus::Running,
+        running: matches!(row.status, ExecStatus::Running | ExecStatus::Queued),
     })
 }
 

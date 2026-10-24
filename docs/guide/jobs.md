@@ -7,8 +7,11 @@ it does not depend on the agent that started it or on the editor, and it survive
 
 - **Where it runs.** In the starter's sandbox: an agent's job gets that agent's Gleipnir rules (its worktree is the only
   project folder it can write, and the lock's protected files in it stay read-only: `.claude`, `.codex`, `.gemini`,
-  `.envrc`, `mise.toml` and `.git/hooks`, a missing one made empty so it can be pinned; `.git/hooks` is left out in a
-  linked worktree, where `.git` is a file; the network its matrix grants). An agent's job works in its session's
+  `.envrc`, `mise.toml` and `.git/hooks`, a missing one made empty so it can be pinned; the empty ones the hub made are
+  removed when the session ends, and a branch that adds or changes any of them is refused at the merge gate with the
+  paths on the card). A session in a git worktree can commit: git's common folder is writable (objects, refs, its
+  worktree's own folder), but the `hooks` folder, the `config` file, each `config.worktree` and the same of every
+  submodule's folder in it are read-only, since git runs what it finds there; the network its matrix grants). An agent's job works in its session's
   worktree or in a folder inside it: the hub resolves the `cwd` the agent names (links and `..` included) and refuses
   any other ("… is outside your worktree …"); `job_start` without a `cwd` uses the worktree. Your own jobs run with
   your rights, in the folder they name. On Linux the job is
@@ -75,7 +78,7 @@ cache for this).
   resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with
   `session/load`).
 - **Machine slots.** This machine runs four jobs at once. A fifth is recorded as queued and `job_start` answers at once
-  ("queued ... you will be woken"): the agent ends its turn like for any job. The queued job (its row says `running`,
+  ("queued ... you will be woken"): the agent ends its turn like for any job. The queued job (its row says `queued`,
   with no unit yet) starts when a slot frees, oldest first, and also after a hub restart; `exec/stop` ends it without
   it ever starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the
   reason in its log, and its starter is woken. Waiting for a job is a `job-wait` step.

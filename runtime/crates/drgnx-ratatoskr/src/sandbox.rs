@@ -587,8 +587,11 @@ pub fn allowed_hosts(
 /// A missing entry is created empty (a file for [`crate::agents::lock::PROTECTED_FILES`], else a folder) when its
 /// parent is a folder; one whose parent is none (`.git/hooks` in a linked worktree, where `.git` is a file; the hooks
 /// live outside the worktree, which is not writable) is left out.
-fn pin_protected(cwd: &Path, protected: &[PathBuf]) -> Result<Vec<PathBuf>, Refusal> {
-    let mut out = Vec::new();
+fn pin_protected(
+    cwd: &Path,
+    protected: &[PathBuf],
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Refusal> {
+    let (mut out, mut made_here) = (Vec::new(), Vec::new());
     for rel in protected {
         let p = cwd.join(rel);
         if p.symlink_metadata().is_err() {
@@ -609,10 +612,137 @@ fn pin_protected(cwd: &Path, protected: &[PathBuf]) -> Result<Vec<PathBuf>, Refu
                 path: Some(p.clone()),
                 message: format!("{}: cannot pin it read-only: {e}", p.display()),
             })?;
+            made_here.push(p.clone());
         }
         out.push(p);
     }
-    Ok(out)
+    Ok((out, made_here))
+}
+
+/// Where the stubs [`pin_protected`] made for session SID are listed (in the hub's scratch, out of the agent's reach).
+fn stubs_file(scratch: &Path) -> PathBuf {
+    scratch.join("stubs")
+}
+
+/// Remove the stubs the hub made in a worktree for a session whose scratch is SCRATCH, when they are still empty and
+/// not in the git index (an agent's real file is never touched; a committed one is the merge gate's).  Called when
+/// the session ends, so an empty `.envrc` or `mise.toml` never lingers in a checkout.
+pub fn remove_stubs(scratch: &Path, worktree: &Path) {
+    let list = stubs_file(scratch);
+    let Ok(text) = std::fs::read_to_string(&list) else {
+        return;
+    };
+    let index = git_dirs(worktree)
+        .and_then(|g| std::fs::read(g.gitdir.join("index")).ok())
+        .unwrap_or_default();
+    for line in text.lines() {
+        let p = Path::new(line);
+        let Ok(rel) = p.strip_prefix(worktree) else {
+            continue;
+        };
+        let tracked = rel.to_str().is_some_and(|r| {
+            let r = r.as_bytes();
+            index.windows(r.len().max(1)).any(|w| w == r)
+        });
+        let Ok(m) = p.symlink_metadata() else {
+            continue;
+        };
+        if tracked {
+            continue;
+        }
+        let _ = if m.is_file() && m.len() == 0 {
+            std::fs::remove_file(p)
+        } else if m.is_dir() {
+            std::fs::remove_dir(p)
+        } else {
+            Ok(())
+        };
+    }
+    let _ = std::fs::remove_file(list);
+}
+
+/// A worktree's git folders: its own (`gitdir`; `.git` itself in a plain checkout) and the common one (`common`),
+/// which holds the hooks, the config, the objects and the refs of every worktree of the repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitDirs {
+    pub gitdir: PathBuf,
+    pub common: PathBuf,
+}
+
+/// The git folders of WORKTREE, as true names: `.git` is a folder (a plain checkout), or a file `gitdir: PATH` (a
+/// linked worktree) whose folder names the common one in `commondir`.  None: not a git worktree.
+pub fn git_dirs(worktree: &Path) -> Option<GitDirs> {
+    let dot = worktree.join(".git");
+    let meta = dot.symlink_metadata().ok()?;
+    if meta.is_dir() {
+        let d = std::fs::canonicalize(&dot).ok()?;
+        return Some(GitDirs {
+            gitdir: d.clone(),
+            common: d,
+        });
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let path = text.lines().next()?.strip_prefix("gitdir:")?.trim();
+    let gitdir = std::fs::canonicalize(worktree.join(path)).ok()?;
+    let common = match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(c) => std::fs::canonicalize(gitdir.join(c.trim())).ok()?,
+        Err(_) => gitdir.clone(),
+    };
+    Some(GitDirs { gitdir, common })
+}
+
+/// What a sandboxed agent in WORKTREE needs of git's folders, and what it must not write there.  A linked worktree
+/// commits into the common folder, so that is writable as a whole (objects, refs, the worktree's own folder); but
+/// git runs code it finds there: `hooks`, `config`, the per-worktree `config.worktree` of every worktree, and the
+/// same of each submodule's folder under `modules/`.  Those are pinned read-only (an agent that could write them
+/// would have the user's next git command run its code).  Returns (writable folders, pinned paths); every pin
+/// exists (a missing `hooks` folder is made).
+pub fn git_access(worktree: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let Some(g) = git_dirs(worktree) else {
+        return (vec![], vec![]);
+    };
+    let mut pins: Vec<PathBuf> = Vec::new();
+    let mut add = |p: PathBuf| {
+        if p.symlink_metadata().is_ok() && !pins.contains(&p) {
+            pins.push(p);
+        }
+    };
+    // a repository always has a hooks folder; make it if it is gone, so a hook cannot be added later
+    let hooks = g.common.join("hooks");
+    if !hooks.exists() {
+        let _ = std::fs::create_dir(&hooks);
+    }
+    for dir in [&g.common, &g.gitdir] {
+        for n in ["hooks", "config", "config.worktree"] {
+            add(dir.join(n));
+        }
+    }
+    // each linked worktree's folder (one level) and each submodule's (nested, to a depth of four)
+    for kind in ["worktrees", "modules"] {
+        let mut todo = vec![(g.common.join(kind), 0usize)];
+        while let Some((dir, depth)) = todo.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let p = e.path();
+                if !p.is_dir() || p.is_symlink() {
+                    continue;
+                }
+                for n in ["hooks", "config", "config.worktree"] {
+                    add(p.join(n));
+                }
+                if kind == "modules" && depth < 4 {
+                    todo.push((p.join("modules"), depth + 1));
+                }
+            }
+        }
+    }
+    let mut write = vec![g.common.clone()];
+    if !g.gitdir.starts_with(&g.common) {
+        write.push(g.gitdir);
+    }
+    (write, pins)
 }
 
 /// Where the hub makes the worktrees of plan runs and manager-started workers (`<state>/hub/runs`).  It lies inside
@@ -670,7 +800,20 @@ pub fn session_spec(
     // The CLI's own login dir, for it alone (its token refreshes in place); never the home.
     write.extend(plan.login_dir.iter().filter(|d| d.exists()).cloned());
     let mut read = shape.read.clone();
-    let pinned = pin_protected(&shape.cwd, &plan.protected_ro)?;
+    let (pinned, made_here) = pin_protected(&shape.cwd, &plan.protected_ro)?;
+    if !made_here.is_empty() {
+        use std::io::Write;
+        let record = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(stubs_file(scratch))
+            .and_then(|mut f| {
+                made_here
+                    .iter()
+                    .try_for_each(|p| writeln!(f, "{}", p.display()))
+            });
+        record.map_err(|e| malformed(format!("{}: {e}", scratch.display())))?;
+    }
     read.extend(pinned.iter().cloned());
     let binds = pinned
         .iter()

@@ -16,6 +16,6 @@
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "waiting"}}}, "within_ms": 20000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/list", "params": {"session": "$sid", "running": true}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"jobs": [{"status": "running"}, {"status": "running"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"jobs": [{"status": "queued"}, {"status": "running"}]}}}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "echo go > $ROOT/gate"], "expect_code": 0}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "[job", "within_ms": 20000}

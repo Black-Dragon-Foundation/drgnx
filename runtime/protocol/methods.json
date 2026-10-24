@@ -902,6 +902,11 @@
                 "type": "string"
               },
               {
+                "const": "queued",
+                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
+                "type": "string"
+              },
+              {
                 "const": "done",
                 "description": "Ended by itself (any exit code).",
                 "type": "string"
@@ -5547,6 +5552,11 @@
                 "type": "string"
               },
               {
+                "const": "queued",
+                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
+                "type": "string"
+              },
+              {
                 "const": "done",
                 "description": "Ended by itself (any exit code).",
                 "type": "string"
@@ -5844,6 +5854,11 @@
                 "enum": [
                   "running"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "queued",
+                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
                 "type": "string"
               },
               {
@@ -6187,6 +6202,11 @@
                 "enum": [
                   "running"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "queued",
+                "description": "Waiting for a machine slot (no process yet); it starts when one frees.",
                 "type": "string"
               },
               {

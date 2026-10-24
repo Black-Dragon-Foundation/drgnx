@@ -27,7 +27,10 @@ fn session(who: &Identity) -> Result<(&str, &std::path::Path), String> {
 async fn row(coord: &Coord, sid: &str, id: &str) -> Result<(Value, bool), String> {
     let row = coord.hub().exec(sid, "exec/get", json!({"id": id})).await?;
     let own = row.get("session").and_then(Value::as_str) == Some(sid);
-    let running = row.get("status").and_then(Value::as_str) == Some("running");
+    let running = matches!(
+        row.get("status").and_then(Value::as_str),
+        Some("running" | "queued")
+    );
     Ok((row, own && running))
 }
 

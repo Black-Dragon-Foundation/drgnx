@@ -438,7 +438,8 @@ impl HubGit {
             .collect();
         if !protected.is_empty() {
             return Ok(Gate::Never(format!(
-                "protected configuration changed: {}",
+                "protected configuration changed: {} (these files never merge: the agent's configuration and the files the \
+                 user's tools run; remove them from the branch)",
                 protected.join(", ")
             )));
         }
