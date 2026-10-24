@@ -991,7 +991,6 @@ async fn launch(
     role: Role,
     sid: &str,
     cwd: &Path,
-    job: Option<&str>,
     existing: Option<&str>,
     (task, job): (Option<&str>, Option<&str>),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {

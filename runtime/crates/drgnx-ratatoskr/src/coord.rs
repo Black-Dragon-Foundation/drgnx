@@ -981,6 +981,7 @@ mod tests {
             signals: signals.clone(),
             editors: Arc::new(Default::default()),
             settings: Arc::new(crate::settings::Settings::new()),
+            front: Default::default(),
         };
         // the tools call `notify` after each write: the records' follower wakes
         hub.notify();
