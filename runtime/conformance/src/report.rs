@@ -5,8 +5,16 @@ use std::path::Path;
 
 pub enum Outcome {
     Pass,
-    Skip { reason: String, excused: bool },
+    Skip {
+        reason: String,
+        excused: bool,
+    },
     Fail(String),
+    /// A `pending` row that failed, as its mark expects: no failure.
+    Pending {
+        reason: String,
+        what: String,
+    },
 }
 
 #[derive(Default)]
@@ -14,6 +22,7 @@ pub struct Report {
     pub passed: usize,
     pub skipped: usize,
     pub unexcused_skips: usize,
+    pub pending: usize,
     pub failed: usize,
     /// `measure` results: (name, milliseconds of each repeat).
     pub perf: Vec<(String, Vec<f64>)>,
@@ -38,12 +47,21 @@ impl Report {
                 self.failed += 1;
                 println!("FAIL {name}: {what}");
             }
+            Outcome::Pending { reason, what } => {
+                self.pending += 1;
+                println!("PENDING {name} ({reason}): {what}");
+            }
         }
     }
 
     pub fn summary(&self) -> String {
+        let pending = if self.pending > 0 {
+            format!(", {} pending", self.pending)
+        } else {
+            String::new()
+        };
         format!(
-            "{} passed, {} skipped, {} failed",
+            "{} passed, {} skipped{pending}, {} failed",
             self.passed, self.skipped, self.failed
         )
     }
@@ -71,9 +89,38 @@ impl Report {
     }
 }
 
+/// A run's outcome under the row's `pending` mark (none: as it ran).  A pending row that fails is expected; one that
+/// passes is a failure, so the mark is removed once its task lands.
+pub fn judge(ran: Result<(), String>, pending: Option<&str>) -> Outcome {
+    match (ran, pending) {
+        (Ok(()), None) => Outcome::Pass,
+        (Err(what), None) => Outcome::Fail(what),
+        (Err(what), Some(reason)) => Outcome::Pending {
+            reason: reason.to_string(),
+            what,
+        },
+        (Ok(()), Some(reason)) => Outcome::Fail(format!(
+            "it passes now: remove its \"pending\" mark ({reason})"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pending_row_fails_as_expected_and_a_pass_fails_the_run() {
+        let mut r = Report::default();
+        r.add("p", &judge(Err("step 3".into()), Some("Task 16a")));
+        assert_eq!((r.pending, r.failed), (1, 0));
+        assert_eq!(r.exit_code(true), 0);
+        assert_eq!(r.summary(), "0 passed, 0 skipped, 1 pending, 0 failed");
+        r.add("q", &judge(Ok(()), Some("Task 16a")));
+        assert_eq!(r.failed, 1, "a pending row that passes fails the run");
+        assert!(matches!(judge(Ok(()), None), Outcome::Pass));
+        assert!(matches!(judge(Err(String::new()), None), Outcome::Fail(_)));
+    }
 
     #[test]
     fn exit_codes() {

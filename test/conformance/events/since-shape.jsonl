@@ -1,4 +1,4 @@
-{"scenario": "events/since-shape", "requires": ["v0"], "doc": "A stopped job is in events/since, its data a JSON object."}
+{"scenario": "events/since-shape", "requires": ["v0"], "pending": "Task 16a: job/propose and job/stop are the hub's own, not yet ported from the frozen Lisp", "doc": "A stopped job is in events/since, its data a JSON object."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "write_file", "path": "$ROOT/plan.md", "text": "# One task\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n"}

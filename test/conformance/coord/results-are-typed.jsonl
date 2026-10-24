@@ -1,4 +1,4 @@
-{"scenario": "coord/results-are-typed", "requires": ["v1", "lisp-backend"], "doc": "What the front writes, the Lisp backend reads (once it made work.db: the first job/status): a job made by coord/job-create, a card by coord/card-create and a message by messages/send; each answer is typed, and job/status over them matches the registry (a result that did not would be internal)."}
+{"scenario": "coord/results-are-typed", "requires": ["v1", "lisp-backend"], "pending": "Task 16a: job/status is the hub's own, not yet ported from the frozen Lisp", "doc": "What the front writes, the Lisp backend reads (once it made work.db: the first job/status): a job made by coord/job-create, a card by coord/card-create and a message by messages/send; each answer is typed, and job/status over them matches the registry (a result that did not would be internal)."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 9, "method": "job/status", "params": {}}}

@@ -1,5 +1,5 @@
-{"scenario": "forward/empty-lists-are-arrays", "requires": ["v1", "lisp-backend"], "doc": "An empty list the Lisp backend sends as null reaches the client as [] (A-17): job/status with no job is {jobs: []}."}
-{"do": "start", "hub": "h"}
+{"scenario": "forward/empty-lists-are-arrays", "requires": ["v1", "fake-backend"], "doc": "An empty list the backend sends as null reaches the client as [] (A-17; the Lisp backend's empty lists are null). The vehicle is env/set, a method the backend still serves: {applied: null} reaches the client as {applied: []}."}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"result\": {\"applied\": null}}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/status"}}
-{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"jobs": []}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}
+{"do": "expect_next", "conn": "c", "json": {"id": 1, "result": {"applied": []}}, "within_ms": 30000}
