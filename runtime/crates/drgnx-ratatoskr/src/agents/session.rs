@@ -458,6 +458,8 @@ pub struct Session {
     wait_refusals: AtomicU32,
     /// Closed while idle on a job: its agent process is gone and the hub resumes it at the wake.
     closed: AtomicBool,
+    /// The decision-log version the freshness gate last told this session of (Task 24).
+    gated: AtomicU64,
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
@@ -1035,9 +1037,11 @@ async fn launch(
                         .is_some_and(|v| !v.is_null() && *v != json!(false))
                 };
                 if can("/sessionCapabilities/resume") {
-                    conn.resume_session(&sid, cwd, mcp.clone()).await?;
+                    conn.resume_session(&sid, cwd, mcp.clone(), meta.clone())
+                        .await?;
                 } else if can("/loadSession") {
-                    conn.load_session(&sid, cwd, mcp.clone()).await?;
+                    conn.load_session(&sid, cwd, mcp.clone(), meta.clone())
+                        .await?;
                 } else {
                     return Err(hermod::Error::Decode(
                         "the agent can neither resume nor load a session".into(),
@@ -1146,6 +1150,7 @@ fn assemble(
         live: front.core.exec.live(),
         wait_refusals: AtomicU32::new(0),
         closed: AtomicBool::new(false),
+        gated: AtomicU64::new(0),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         steps,
@@ -1160,6 +1165,9 @@ fn assemble(
 pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
     for row in read_rows(hub, None).await {
         if hub.find(&row.0).is_ok() {
+            continue;
+        }
+        if row.3 == "manager" && restart_manager_from_graph(front, &row).await {
             continue;
         }
         resume_row(hub, front, row).await;
@@ -1212,6 +1220,24 @@ async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
     }
 }
 
+/// What a session that could be neither resumed nor loaded is told (it is a new session on the same transcript).
+const RESTART_NOTICE: &str = "[the hub restarted and your earlier conversation could not be restored: you are a new session in the same directory; the earlier transcript is kept. Check the task and the repository before you go on.]";
+
+/// The summary handoff of Task 26 (`agents/move`): a fresh session given a summary of the old one.  Not there yet:
+/// none, and the session starts afresh with [`RESTART_NOTICE`].
+async fn summary_handoff(
+    _: &Front,
+    _: &str,
+) -> Option<(Launched, tokio::sync::mpsc::Receiver<Event>)> {
+    None
+}
+
+/// A manager restarted from the graph (Task 25): its role, its plan and what it decided read back from Urdr instead of
+/// its conversation.  Not there yet: false, and the manager resumes like any session.
+async fn restart_manager_from_graph(_: &Front, _: &Row) -> bool {
+    false
+}
+
 /// ROW as a running session again: `session/resume`, else `session/load`; its transcript and held queue read back
 /// and its first prompt delivered.  A session whose profile is gone or whose agent will not resume stays in the table.
 async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
@@ -1246,24 +1272,64 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
             .and_then(Value::as_str)
             .map(PathBuf::from),
     };
-    let (l, rx) = match launch(
-        front,
-        &profile,
-        serde_json::from_value(json!(role)).unwrap_or(Role::Chat),
-        &sid,
-        Path::new(&cwd),
-        Some(&acp),
-        (task.as_deref(), job.as_deref()),
-    )
-    .await
-    {
-        Ok(x) => x,
+    let role_of = serde_json::from_value(json!(role)).unwrap_or(Role::Chat);
+    let again = |existing: Option<String>| {
+        let (front, profile, sid, cwd, task, job) = (
+            front,
+            profile.clone(),
+            sid.clone(),
+            cwd.clone(),
+            task.clone(),
+            job.clone(),
+        );
+        async move {
+            launch(
+                front,
+                &profile,
+                role_of,
+                &sid,
+                Path::new(&cwd),
+                existing.as_deref(),
+                (task.as_deref(), job.as_deref()),
+            )
+            .await
+        }
+    };
+    // `session/resume`, else `session/load` (both inside `launch`), else the summary handoff of Task 26, else a fresh
+    // session that is told what happened (its transcript stays)
+    let (l, rx, fresh) = match again(Some(acp.clone())).await {
+        Ok((l, rx)) => (l, rx, false),
+        Err(e) if e.code == ErrorCode::Internal => {
+            tracing::warn!(
+                sid,
+                "session cannot be resumed ({}); starting it afresh",
+                e.message
+            );
+            match summary_handoff(front, &sid).await {
+                Some(x) => (x.0, x.1, true),
+                None => match again(None).await {
+                    Ok((l, rx)) => (l, rx, true),
+                    Err(e) => {
+                        tracing::warn!(sid, "session not resumed: {}", e.message);
+                        return false;
+                    }
+                },
+            }
+        }
         Err(e) => {
             tracing::warn!(sid, "session not resumed: {}", e.message);
             return false;
         }
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
+    if fresh {
+        lock(&s.state)
+            .queue
+            .push(RESTART_NOTICE.to_string(), Origin::Hub, false);
+        if let Some(db) = hub.db() {
+            insert_row(db, &s).await;
+        }
+    }
     if let Some(store) = &s.store {
         let entries = store.load(&sid);
         let (queue, paused) = store.load_queue(&sid);
@@ -1273,10 +1339,23 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
         st.queue = queue;
         st.paused = paused;
     }
-    lock(&s.state).status = SessionStatus::Idle;
+    // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
+    let waiting = s.has_jobs();
+    {
+        let mut st = lock(&s.state);
+        if waiting {
+            st.status = SessionStatus::Waiting;
+            st.step_begin(StepClass::JobWait, None);
+        } else {
+            st.status = SessionStatus::Idle;
+        }
+    }
     hub.insert(s.clone());
     tokio::spawn(s.clone().run(rx, done));
     s.changed();
+    if waiting {
+        s.close_when_idle();
+    }
     s.next();
     true
 }
@@ -1943,6 +2022,10 @@ impl Session {
                 reply(resp, pick_reject(&options));
                 return;
             }
+            if super::deliver::gate(&s, req.get("toolCall")).await {
+                reply(resp, pick_reject(&options));
+                return;
+            }
             let (action, facts) = classify(req.get("toolCall"));
             let ctx = ActionCtx {
                 session: Some(s.id.clone()),
@@ -2129,6 +2212,58 @@ impl Session {
 
     pub(crate) fn status(&self) -> SessionStatus {
         lock(&self.state).status
+    }
+
+    /// The job this session works for.
+    pub(crate) fn job_id(&self) -> Option<&str> {
+        self.job.as_deref()
+    }
+
+    /// The coordination store this session's decisions and messages live in.
+    pub(crate) fn coord(&self) -> &crate::coord::Writer {
+        &self.writer
+    }
+
+    /// Is WHO this session (its id, or its name)?
+    pub(crate) fn is_for(&self, who: &str) -> bool {
+        who == self.id || who == self.name
+    }
+
+    /// Free for a delivery: idle, not held by a Stop, nothing waiting (`drgnx-agents-free-p`).  A delivery is a new
+    /// turn, never an interruption.
+    pub(crate) fn is_free(&self) -> bool {
+        let st = lock(&self.state);
+        st.status == SessionStatus::Idle
+            && !st.paused
+            && st.queue.is_empty()
+            && !self.closed.load(Ordering::SeqCst)
+    }
+
+    /// Does a prompt starting with PREFIX wait in the queue or stand in the transcript?  (A wake that was delivered
+    /// before a restart is not delivered again.)
+    pub(crate) fn holds_text(&self, prefix: &str) -> bool {
+        let st = lock(&self.state);
+        st.queue.texts().iter().any(|t| t.starts_with(prefix))
+            || st.entries.iter().any(|e| {
+                e.kind == EntryType::User
+                    && e.rest
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|t| t.starts_with(prefix))
+            })
+    }
+
+    /// TEXT goes ahead of the ordinary queued prompts (the freshness gate's notice: the agent reads it at its next
+    /// turn; hermod cannot inject into a running one).
+    pub(crate) fn steer_in(self: &Arc<Self>, text: String) {
+        lock(&self.state).queue.push(text, Origin::Hub, true);
+        self.persist_queue();
+        self.changed();
+    }
+
+    /// First call for decision-log version V: true (the gate tells the agent once per version).
+    pub(crate) fn gate_told(&self, v: u64) -> bool {
+        self.gated.swap(v, Ordering::AcqRel) != v
     }
 
     /// A job this session started runs: when its turn ends the session waits for it (no model request).

@@ -715,6 +715,28 @@ history into the transcript and the session is idle; an editor that reconnects f
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
 
+**Everything kept across a restart (Task 24).** The hub starts in this order: the jobs a hub before this one left running
+are watched again (`exec::ensure_open`; a session's wake would otherwise wait for its first `exec/*` call), the plan
+runner's tick pauses (`Runs::set_recovering`: a task whose worker is not back yet is not a dead one), the sessions
+resume, the tick goes on from the store with the same workers, and the wakes still on file are delivered.
+
+- **A resumed session is launched exactly as a new one**: `session/resume` and `session/load` carry the same
+  `_meta` options (`hermod::Conn::resume_session`/`load_session` take `meta`), so a resumed Claude session has its lock
+  (`managedSettings`) as before. `restart/resumed-session-gets-the-options`.
+- **A session that waited on a job still waits** (status `waiting`, the `job-wait` step, idle close as before) when
+  its job is still running.
+- **If the agent can neither resume nor load**: the summary handoff of Task 26 (`summary_handoff`, none yet), else a
+  fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`). A manager is restarted from the
+  graph by Task 25 (`restart_manager_from_graph`, none yet).
+- **A job's end wakes once.** `runtime.db` table `wake` (migration 7): a row `pending` when the end is announced,
+  `sending` while it is delivered, deleted once the session has the prompt. After the sessions are back
+  (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's queue and transcript
+  do not hold the `[job ID finished` prompt, one of a job that is gone is dropped. The gap left: a hub that dies
+  between the job's result file and the row never wakes that session (it reads the job with `job_result`).
+- **A queued message stays in the store** and is delivered after the sessions are back
+  ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
+  `<sid>.queue.json`.
+
 ## The store
 
 The front serves the store (`work.db`, schema 7) itself: `graph/*` (reads and walks, history, revert, excise, grants,

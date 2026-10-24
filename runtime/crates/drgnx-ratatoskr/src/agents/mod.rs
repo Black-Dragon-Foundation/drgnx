@@ -120,6 +120,15 @@ impl Hub {
         self.find(id)?.prompt(text, origin)
     }
 
+    /// Every session the hub holds that has not exited.
+    pub(crate) fn live_sessions(&self) -> Vec<Arc<Session>> {
+        lock(&self.sessions)
+            .values()
+            .filter(|s| s.status() != SessionStatus::Exited)
+            .cloned()
+            .collect()
+    }
+
     /// A job's result for session ID: resumes the session first when it was closed while it waited, then prompts it
     /// (a plain `session/prompt` from the hub; a turn when it waits or idles, else queued).
     pub async fn wake(&self, front: &Front, id: &str, text: String) -> Result<(), Error> {

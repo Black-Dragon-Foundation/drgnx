@@ -14,6 +14,9 @@
 //! - `op` (6): the touched-folder ledger (`kind = 'touched'`): the run folders a sandboxed agent worked in, so plain
 //!   git never runs there, across restarts ([`crate::runner::git`]).
 //!
+//! - `wake` (7): a job's end that has to reach the session that started it, `pending` until the hub prompts it,
+//!   `sending` while it does; deleted once delivered, so a restart wakes once ([`crate::agents::wake`]).
+//!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
 //! their sockets do not come back after the restart, which is accepted (installs are disposable).
@@ -53,6 +56,10 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
         6,
         "create table op(folder text not null, kind text not null, at real not null, \
          primary key(folder, kind));",
+    ),
+    (
+        7,
+        "create table wake(job text primary key, session text not null, state text not null, at real not null);",
     ),
 ];
 
@@ -126,7 +133,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("6"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("7"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600

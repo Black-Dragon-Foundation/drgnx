@@ -214,7 +214,12 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.core.agents.open_store(runtime.clone());
     tokio::spawn(sessions::watch(front.clone()));
     // a job's end wakes the session that started it
-    tokio::spawn(crate::agents::wake::run(front.clone()));
+    tokio::spawn(crate::agents::wake::run(
+        front.clone(),
+        front.core.exec.subscribe(),
+    ));
+    // a queued message reaches its session once that is free
+    tokio::spawn(crate::agents::deliver::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
@@ -222,9 +227,17 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.refresh_settings().await;
     // the sessions recorded before this start: resumed (their profiles are in the settings now), queues delivered
     // (in the background: a slow agent never delays serving)
+    // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),
+    // and a job end that reached no session is delivered once they are back.
+    crate::exec::ensure_open(&front);
+    front.core.runs.set_recovering(true);
     {
         let f = front.clone();
-        tokio::spawn(async move { f.core.agents.resume_all(&f).await });
+        tokio::spawn(async move {
+            f.core.agents.resume_all(&f).await;
+            f.core.runs.set_recovering(false);
+            crate::agents::wake::recover(&f).await;
+        });
     }
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept
     front.core.budgets.open_store(runtime.clone()).await;

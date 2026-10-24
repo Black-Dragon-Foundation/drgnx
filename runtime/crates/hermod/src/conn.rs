@@ -200,8 +200,10 @@ impl Conn {
         sid: &SessionId,
         cwd: &Path,
         mcp: Vec<McpServer>,
+        meta: Option<Value>,
     ) -> Result<(), Error> {
-        let params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
+        let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
+        set_meta(&mut params, meta);
         self.typed::<Value>("session/load", params).await?;
         self.remember(sid, cwd);
         Ok(())
@@ -213,8 +215,10 @@ impl Conn {
         sid: &SessionId,
         cwd: &Path,
         mcp: Vec<McpServer>,
+        meta: Option<Value>,
     ) -> Result<(), Error> {
-        let params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
+        let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
+        set_meta(&mut params, meta);
         self.typed::<Value>("session/resume", params).await?;
         self.remember(sid, cwd);
         Ok(())

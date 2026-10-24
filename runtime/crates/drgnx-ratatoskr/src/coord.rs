@@ -43,6 +43,8 @@ pub const SESSIONS_DEADLINE: Duration = Duration::from_secs(2);
 pub struct Signals {
     events: Notify,
     notify: Notify,
+    /// A message may be waiting for a hub session (delivery, Task 24).
+    pub deliver: Notify,
     writes: AtomicU64,
     /// A write the record views may follow ([`crate::records::follow`]).
     pub records: Notify,
@@ -63,6 +65,7 @@ impl Signals {
     pub fn wrote(&self) {
         self.writes.fetch_add(1, Ordering::Relaxed);
         self.records.notify_one();
+        self.deliver.notify_one();
         self.events_soon();
     }
 
@@ -73,6 +76,7 @@ impl Signals {
 
     /// The backend should hear `coord/notify` (coalesced).
     pub fn notify_soon(&self) {
+        self.deliver.notify_one();
         self.notify.notify_one();
     }
 

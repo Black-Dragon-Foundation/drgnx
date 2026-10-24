@@ -268,6 +268,19 @@ impl Runner {
         self.inner.get()?.row(id)
     }
 
+    /// How job ID ended, as the event that announced it said; none while it runs (or when it is unknown).
+    pub fn done(&self, id: &str) -> Option<ExecDone> {
+        let i = self.inner.get()?;
+        let (m, end) = (i.meta(id)?, i.end(id)?);
+        Some(ExecDone {
+            id: id.to_string(),
+            session: m.session,
+            status: end.status,
+            exit: end.exit,
+            summary: end.summary,
+        })
+    }
+
     /// The jobs, newest first; SESSION only that session's, RUNNING only those that run.
     pub fn list(&self, session: Option<&str>, running: bool) -> Vec<ExecRow> {
         self.inner
@@ -783,6 +796,14 @@ fn error(code: ErrorCode, message: impl Into<String>) -> Error {
 }
 
 /// Open the runner on first use, from the front's folders, store and subscribers.
+/// Open the runner now (at the hub's start), so the jobs a hub before this one left running are watched again and
+/// their ends reach the sessions that started them.
+pub fn ensure_open(f: &Front) {
+    if let Err(e) = runner(f) {
+        tracing::warn!("jobs not re-attached: {}", e.message);
+    }
+}
+
 fn runner(f: &Front) -> Result<&Runner, Error> {
     let r = &f.core.exec;
     if r.inner.get().is_none() {

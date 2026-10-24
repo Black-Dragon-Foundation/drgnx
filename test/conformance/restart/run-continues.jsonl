@@ -1,0 +1,26 @@
+{"scenario": "restart/run-continues", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 24: a plan run goes on across a hub restart from the store: its worker session is resumed (session/resume, no second session/new), the task stays claimed by the same session, and the runner does not take the worker for a dead one and start another while the sessions are being resumed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))) (drgnx-agents-routes ((implement . \"mock-claude\") (review . \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Worker\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md", "auto": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "running"}}, "within_ms": 10000}
+{"do": "connect", "conn": "w", "hub": "h"}
+{"do": "expect_silent", "conn": "w", "for_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": {"sessions": {"$contains": [{"id": "$string", "role": "worker", "job": "$job"}]}}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"tasks": [{"n": 1, "status": "claimed", "agent": "$capture:sid"}]}}, "within_ms": 60000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/resume\"", "within_ms": 30000}
+{"do": "connect", "conn": "q", "hub": "h2"}
+{"do": "expect_silent", "conn": "q", "for_ms": 8000}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"status": "running", "tasks": [{"n": 1, "status": "claimed", "agent": "$sid"}], "agents": [{"id": "$sid"}]}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}
