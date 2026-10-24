@@ -13,7 +13,6 @@ use super::launch;
 use super::lock as plock;
 use super::queue::{Origin, Queue, Queued};
 use super::transcript;
-use crate::agent_core::not_yet;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
@@ -1245,15 +1244,6 @@ async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
 /// What a session that could be neither resumed nor loaded is told (it is a new session on the same transcript).
 const RESTART_NOTICE: &str = "[the hub restarted and your earlier conversation could not be restored: you are a new session in the same directory; the earlier transcript is kept. Check the task and the repository before you go on.]";
 
-/// The summary handoff of Task 26 (`agents/move`): a fresh session given a summary of the old one.  Not there yet:
-/// none, and the session starts afresh with [`RESTART_NOTICE`].
-async fn summary_handoff(
-    _: &Front,
-    _: &str,
-) -> Option<(Launched, tokio::sync::mpsc::Receiver<Event>)> {
-    None
-}
-
 /// A manager restarted from the graph (Task 25): its role, its plan and what it decided read back from Urdr instead of
 /// its conversation.  Not there yet: false, and the manager resumes like any session.
 async fn restart_manager_from_graph(_: &Front, _: &Row) -> bool {
@@ -1319,6 +1309,7 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
     };
     // `session/resume`, else `session/load` (both inside `launch`), else the summary handoff of Task 26, else a fresh
     // session that is told what happened (its transcript stays)
+    let mut handoff: Option<String> = None;
     let (l, rx, fresh) = match again(Some(acp.clone())).await {
         Ok((l, rx)) => (l, rx, false),
         Err(e) if e.code == ErrorCode::Internal => {
@@ -1327,15 +1318,15 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
                 "session cannot be resumed ({}); starting it afresh",
                 e.message
             );
-            match summary_handoff(front, &sid).await {
-                Some(x) => (x.0, x.1, true),
-                None => match again(None).await {
-                    Ok((l, rx)) => (l, rx, true),
-                    Err(e) => {
-                        tracing::warn!(sid, "session not resumed: {}", e.message);
-                        return false;
-                    }
-                },
+            // the summary handoff (Task 26): a new session on the same hub id, told what the old one left
+            handoff =
+                Some(super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref()).await);
+            match again(None).await {
+                Ok((l, rx)) => (l, rx, true),
+                Err(e) => {
+                    tracing::warn!(sid, "session not resumed: {}", e.message);
+                    return false;
+                }
             }
         }
         Err(e) => {
@@ -1345,9 +1336,11 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
     if fresh {
-        lock(&s.state)
-            .queue
-            .push(RESTART_NOTICE.to_string(), Origin::Hub, false);
+        let text = match handoff {
+            Some(h) => format!("{RESTART_NOTICE}\n\n{h}"),
+            None => RESTART_NOTICE.to_string(),
+        };
+        lock(&s.state).queue.push(text, Origin::Hub, false);
         if let Some(db) = hub.db() {
             insert_row(db, &s).await;
         }
@@ -2812,8 +2805,145 @@ pub async fn do_op(f: &Front, c: &Caller, p: DoParams) -> Result<bool, Error> {
     f.core.agents.do_op(c, p).await
 }
 
-pub async fn move_to(_: &Front, _: &Caller, _: MoveParams) -> Result<Started, Error> {
-    Err(not_yet("agents/move", "26"))
+/// How long a move waits for the tool running now to finish before it cancels the turn.
+const MOVE_WAIT: Duration = Duration::from_secs(60);
+
+pub async fn move_to(f: &Front, c: &Caller, p: MoveParams) -> Result<Started, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user moves a session here"));
+    }
+    move_session(f, c, p.id.as_str(), p.profile.as_str()).await
+}
+
+/// What is keyed by a worker's session id follows it to NEW: the runner's scope (plan, project) for timeline steps, the
+/// budget chain and the gateway's job binding, and the task claim (so the runner sees a live agent on the task and
+/// starts no second worker).  The gateway registration itself is made by the new session's launch (an `:ai` profile).
+/// Called with both sessions running, before the old one stops.
+pub(crate) async fn rekey(front: &Front, old: &Session, new: &str) {
+    let scope = front.core.runs.scope_of(&old.id);
+    if let Some((plan, project)) = &scope {
+        front
+            .core
+            .runs
+            .set_scope(new, plan.clone(), project.clone());
+    }
+    let worker = scope_of(old.role, new);
+    if let Some((plan, _)) = &scope {
+        let plan_scope =
+            runstav::methods::timeline::BudgetScope::Plan(runstav::types::Bounded(plan.clone()));
+        front.core.budgets.link(&worker, &plan_scope);
+    }
+    if let Some(job) = &old.job {
+        front.core.budgets.bind_job(job, &worker);
+    }
+    if let Some(task) = old.task.clone() {
+        let (tid, new) = (task, new.to_owned());
+        let r = front
+            .writer
+            .write(&crate::runner::service(), "agents/move", move |tx| {
+                use norn::write::tasks::{entity_id, force_status};
+                let missing =
+                    |e: urdr::SqliteError| norn::store::CoordError::Refused(e.to_string());
+                let status = urdr::graph::entity::by_id(tx.sql(), &entity_id(&tid))
+                    .map_err(missing)?
+                    .and_then(|e| e.status);
+                match status.as_deref() {
+                    Some(st @ ("claimed" | "running" | "needs-input")) => {
+                        force_status(tx, &tid, st, Some(&new), now()).map(|_| ())
+                    }
+                    _ => Ok(()),
+                }
+            })
+            .await;
+        if let Err(e) = r {
+            tracing::warn!(sid = old.id, "task claim not moved: {e}");
+        }
+    }
+}
+
+/// Session ID continues on PROFILE (Task 26): the old one stops after the tool running now, a new one starts in the
+/// same worktree and is prompted with the summary handoff, the old one's entity `relates` to the new one and the
+/// old one ends.  Who may call it is the caller's to decide (the user's `agents/move`; a manager's `agent_move`
+/// through the matrix).
+pub async fn move_session(
+    front: &Front,
+    caller: &Caller,
+    id: &str,
+    profile: &str,
+) -> Result<Started, Error> {
+    let hub = &front.core.agents;
+    let old = hub.find(id)?;
+    front.refresh_settings().await;
+    if find_profile(front, profile).is_none() {
+        return Err(invalid("profile", format!("no agent profile {profile:?}")));
+    }
+    if old.role == Role::Manager {
+        return Err(refuse("a manager is not moved; it is rotated"));
+    }
+    // stop after the current tool, then wait for the turn to end (a turn that will not is cancelled)
+    hub.cancel_after_tool(id)?;
+    let end = tokio::time::Instant::now() + MOVE_WAIT;
+    while old.status() == SessionStatus::Busy {
+        if tokio::time::Instant::now() >= end {
+            old.stop_turn();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref()).await;
+    let start: StartParams = serde_json::from_value(json!({
+        "profile": profile,
+        "cwd": old.cwd,
+        "task": old.task,
+        "job": old.job,
+        "role": old.role,
+    }))
+    .map_err(|e| invalid("profile", e.to_string()))?;
+    let user = Caller {
+        class: Class::User,
+        ..caller.clone()
+    };
+    let started = open(hub, front, start, &user).await?;
+    hub.prompt(&started.id, text, Origin::Hub)?;
+    rekey(front, &old, &started.id).await;
+    let (from, to) = (format!("session:{id}"), format!("session:{}", started.id));
+    let linked = front
+        .writer
+        .write(caller, "agents/move", move |tx| {
+            use urdr::graph::{entity, link};
+            let refused =
+                |e: urdr::graph::WriteError| norn::store::CoordError::Refused(e.to_string());
+            let missing = |e: urdr::SqliteError| norn::store::CoordError::Refused(e.to_string());
+            let a = entity::by_id(tx.sql(), &from).map_err(missing)?;
+            let b = entity::by_id(tx.sql(), &to).map_err(missing)?;
+            if let (Some(a), Some(b)) = (a, b) {
+                link::add(
+                    tx,
+                    a.n,
+                    "relates",
+                    b.n,
+                    None,
+                    entity::Origin::Recorded,
+                    None,
+                )
+                .map_err(refused)?;
+            }
+            Ok(())
+        })
+        .await;
+    if let Err(e) = linked {
+        tracing::warn!(id, "moved session not linked: {e}");
+    }
+    stop(
+        front,
+        caller,
+        ById {
+            id: runstav::types::Id::new(id).map_err(|_| invalid("id", "bad id"))?,
+        },
+    )
+    .await?;
+    Ok(started)
 }
 
 #[cfg(test)]

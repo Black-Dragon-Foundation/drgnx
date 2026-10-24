@@ -76,7 +76,7 @@ fn version(conn: &Tx, plan: i64) -> Result<u64, CoordError> {
     Ok(v as u64)
 }
 
-fn reports_of(conn: &Tx, task: i64) -> Result<Vec<Ent>, CoordError> {
+pub(crate) fn reports_of(conn: &Tx, task: i64) -> Result<Vec<Ent>, CoordError> {
     let mut out = Vec::new();
     for n in srcs(conn, task, "report_of")? {
         out.extend(live(conn, n)?.filter(|e| e.kind == "report"));
@@ -439,7 +439,7 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
 
 // ---- reports ----------------------------------------------------------------------------------------------------
 
-fn report_of(conn: &Tx, e: &Ent) -> Result<Report, CoordError> {
+pub(crate) fn report_of(conn: &Tx, e: &Ent) -> Result<Report, CoordError> {
     let task = dsts(conn, e.n, "report_of")?
         .into_iter()
         .find_map(|n| live(conn, n).ok().flatten())

@@ -293,6 +293,13 @@ messages that were queued when the hub ended delivered as the next turn; a turn 
 is lost; a job's agents are not resumed (the job starts their tasks again). An update of drgnx waits for a durable
 session's *running turn* to end, never for an idle chat.
 
+**Moving a session to another model** (`agents/move`, or a manager's `agent_move`): the session stops after the tool
+running now, a new session on the other profile starts in the same directory, and its first prompt is a **summary**
+of the old one: the task's brief, the decisions it recorded, the task's newest report, the directory's HEAD and its
+last steps. The old conversation is not copied (its transcript stays on disk) and the old session leaves the list; the
+two stay linked in the graph. Codex profiles stay refused until their lock is proven. The same summary is what a
+session is told when the hub restarts and its agent can neither resume nor load it.
+
 A durable session's messages and Stop work like this:
 
 - A message sent while the agent works is **queued** (or put ahead of the queue by `:mode steer`); it never cancels

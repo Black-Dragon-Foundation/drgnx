@@ -12,6 +12,7 @@
 //! - [`wake`]: a job's end prompts the session that started it; a queue wait is a step (Task 15).
 
 pub mod deliver;
+pub mod handoff;
 pub mod launch;
 pub mod lock;
 pub mod queue;
