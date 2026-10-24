@@ -614,7 +614,14 @@ fn import_entity(tx: &mut Tx<'_>, rec: &EntLine) -> Result<Outcome, WriteError> 
     if cur.ver >= rec.ver || cur.retired_tx.is_some() {
         return Ok(Outcome::Skipped);
     }
-    guard::check(tx.guard(), tx.meta(), &cur.kind)?;
+    guard::check_entity(
+        tx,
+        &cur.kind,
+        guard::Target {
+            id: &cur.id,
+            project: rec.project,
+        },
+    )?;
     let id = tx.id();
     let mut field_tx = cur.field_tx.clone();
     for (name, changed) in [

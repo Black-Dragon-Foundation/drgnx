@@ -252,7 +252,7 @@ pub fn for_caller(
                 }
             }
             What::All => star = true,
-            What::Task(_) => continue,
+            What::Task(_) | What::OptionsGlobal | What::OptionsProject => continue,
         }
         if let Some(t) = g.expires {
             expires = Some(expires.map_or(t, |e: f64| e.min(t)));

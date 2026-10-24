@@ -109,6 +109,12 @@ the refusal text. Urdr knows no kind: norn registers drgnx's rules. `entity::{cr
 writer calls `guard::check_key`. An unregistered kind or key passes; a class other than the registered one gets
 `Refused(<text>)`.
 
+A kind may also carry a rule (`guard::register_rule(&mut guard, kind, rule)`) that decides from the write itself:
+`rule(conn, &meta, at, Target { id, project })`, where `project` is the entity's project after the write (an
+update's new one). Every entity write (`create`, `update`, `retire`, `unretire`, revert and restore, import) calls
+`guard::check_entity(tx, kind, target)`, which runs the kind's class check and then its rule. norn registers one
+rule, for kind `option` (below, "Settings history and grants").
+
 ## History (Task 3)
 
 `urdr::graph::hist` reads and rewrites the past. It is policy-free: the caller checks the class (user only).
@@ -491,6 +497,50 @@ arguments.
   are the user's"). `entity::{create, update, retire}` check it on every path, so a proposed tx, an import (class
   `system`), a parsed entity (class `system`) or any agent tool that names kind `grant` is refused;
   `grants::{create, revoke}` check it first too. Test: `grants::tests::every_agent_reachable_write_is_refused`.
+
+## Settings history and grants (Urdr Task 10b)
+
+Built in the unified-settings plan (its Task 23; design §12, §13), in `norn::options` and `norn::grants`. The file
+stays the truth for a setting; the store records its history as entities of kind `option`.
+
+- **Ids** (`options::parse_id(&str) -> Result<OptionId, BadId>`; `OptionId { scope, dir, mode, var }` prints back
+  as its id):
+  - `option:global:<var>` and `option:global:mode/<mode>:<var>` (`settings.el`);
+  - `option:private/<project>:[dir/<sub>/:][mode/<mode>:]<var>` (your private workspace file) and the same with
+    `shared/` (the repository's `.drgnx/settings.el`).
+  - `<project>` is the Urdr project id without `project:` (`[a-z0-9-]`), or `root-<12 hex of sha256(true root)>` for
+    a folder with no Urdr project. `OptionId::project()` gives `project:<project>`, or `None` for a global id and a
+    `root-` folder.
+  - A dir is relative, ends in `/`, and has no empty, `.` or `..` part; a mode has no `/`; the variable comes last,
+    is not empty and does not start with `dir/` or `mode/` (it may hold `/` and `:`). No part holds whitespace or a
+    control character, and an id is at most 1024 bytes.
+- **The `options` grant** is a grant (above) with `access: "options"`, `what: "options:global" | "options:project"`
+  and optional `names`: 1 to 64 globs, `*` the only wildcard, no `/`. `grants::create_options(tx, who, what, names,
+  expires)` makes one (user class only, as every grant). An `options` grant opens no reads, and a `read` or
+  `edit-user-tasks` grant never names an `options:` scope or carries names; a row that mixes them opens nothing.
+- **The rule** (`options::rule`, registered by `grants::register`), on every write of kind `option`:
+  - every class: the id parses;
+  - the user: passes;
+  - an agent (`Class::Agent`, a proposed tx included): the name is not on the deny-list (`DENIED`); for a private or
+    shared id, the agent's project is the id's project and the entity's `project` column is that project
+    (`NOT_ITS_PROJECT`); a global id has no project; and an active `options` grant whose `who` is the agent's
+    project, profile or session, whose `what` is the id's scope (`options:project` covers the agent's own project's
+    private and shared ids, never a `root-` folder) and whose `names` match (`NO_GRANT` otherwise);
+  - an outside agent, the hub, an import and the scan (`Class::Ext`, `Class::System`): refused ("settings are the
+    user's").
+  - `options::may_write(conn, &caller, target, now)` is the same check without a write (the hub's `settings_change`
+    asks it before it records a proposed tx).
+- **The deny-list's name half** (`options::deny::is_denied(name)`, call 9): the names, prefixes and suffixes of
+  `test/fixtures/settings-deny.json` (drgnx's and Emacs's security settings, `eval` and `mode`, `drgnx-trust-*`,
+  `safe-local-variable-*`, Emacs's risky endings and design §4.4's program endings, case folded). The test
+  `options::tests::deny_table` keeps the Rust lists equal to the file and runs its cases; the editor adds what only
+  Lisp knows (`:agents never`, `:workspace code`).
+- **`graph/put-parsed`** holds no `option` yet (a `file` source holds parsed kinds only), and the rule refuses the
+  scan's class.
+- Tests: `options::tests::{id_grammar, project_is_the_ids_project, deny_table, globs_match_star_only}`,
+  `grants::tests::{every_agent_reachable_write_is_refused, an_options_grant_allows_its_names_only,
+  project_grant_covers_private_and_shared, options_grants_are_well_formed_and_open_no_reads}`,
+  `urdr::graph::guard::tests::a_rule_decides_from_the_target`.
 
 ## Trust (Task 10)
 
