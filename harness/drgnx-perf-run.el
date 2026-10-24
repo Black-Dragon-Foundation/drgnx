@@ -154,7 +154,8 @@ for agents, the Live view open, the blank-frame count, and the session functions
       (require 'drgnx-jobs)
       (defvar drgnx-perf--live-timer nil "Sends the frames.")
       (defvar drgnx-perf--live-message nil
-        "Two frames' messages, as the browser sends them: encoded websocket frames, sent in turn.  Two, because a page's
+        "Two frames' messages, as the browser sends them: encoded websocket frames, one after the other as the view draws
+them.  Two, because a page's
 frames differ: the view's last frame stays in the image cache while the next one decodes (its stand-in); identical
 frames would share one cache entry, and flushing the old frame would flush the new one.")
       (setq drgnx-perf--live-message nil)
@@ -206,8 +207,10 @@ cheaper to draw."
                                         'raw-text))
                              nil))
                           '(60 61))))
-          (let ((msg (car drgnx-perf--live-message)))
-            (setq drgnx-perf--live-message (append (cdr drgnx-perf--live-message) (list msg)))
+          ;; by the count of frames drawn: frames sent between two draws are the same, so the next drawn frame always
+          ;; differs from the last drawn one, however many the view drops
+          (let* ((view (drgnx-perf--live-view))
+                 (msg (nth (% (if view (buffer-local-value 'drgnx-live--drawn view) 0) 2) drgnx-perf--live-message)))
             (dolist (ws (drgnx-mock-cdp-clients)) (process-send-string (websocket-conn ws) msg)))))
       (defun drgnx-perf--live-arm ()
         "The Live view beside the file, frames arriving."
@@ -223,8 +226,7 @@ cheaper to draw."
         (setq drgnx-perf--live-drawn (buffer-local-value 'drgnx-live--drawn (drgnx-perf--live-view)))
         (setq drgnx-perf--live-blank 0
               drgnx-perf--live-seen (plist-get (drgnx-perf--live-images) :deferred))
-        (when (fboundp 'nidhogg-workers--test-image-timing) (nidhogg-workers--test-image-timing t))
-        (add-hook 'pre-redisplay-functions #'drgnx-perf--live-blank-sample)
+        (when (fboundp 'nidhogg-workers--test-image-timing) (nidhogg-workers--test-image-timing t))        (add-hook 'pre-redisplay-functions #'drgnx-perf--live-blank-sample)
         (advice-add 'drgnx-live--draw-frame :before #'drgnx-perf--live-blank-sample))
       ;; "No blank frame" (off-the-main-thread design §17.6): with Nidhogg's image worker a frame's decode may outlast
       ;; the redisplay's wait budget; its entry is then pending and draws the last frame's picture (the stand-in) or
