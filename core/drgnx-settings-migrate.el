@@ -5,9 +5,9 @@
 ;;; Commentary:
 ;; Unified-settings Task 14 (design §14, §5.4; docs/develop/settings.md, "The migration and the shim").
 ;; - `drgnx-settings-migrate-maybe' runs first at every start, also in safe mode, and acts only while settings.el does
-;;   not exist: agents.eld, ai.eld, keys.eld, modules.eld, large-files.eld and session.eld are read through the config
-;;   layer, their keys become entries (`drgnx-settings-migrate-table'; a comment above a key goes above its entry),
-;;   settings.el is written once, read back and compared with the old files' values.  Any difference removes it again
+;;   not exist: agents.eld, ai.eld, keys.eld, modules.eld, large-files.eld, session.eld and speed.eld are read
+;;   through the config layer, their keys become entries (`drgnx-settings-migrate-table'; a comment above a key goes
+;;   above its entry), settings.el is written once, read back and compared with the old files' values.  Any difference removes it again
 ;;   and moves nothing.  Then each old file is copied to <state>/backups/migrated-DATE/ and moved to
 ;;   <config>/migrated-DATE/, and the report goes to <state>/settings-migration.eld.  A file with a mistake (or keys
 ;;   this drgnx does not know, or a newer format) stays where it is.
@@ -33,9 +33,9 @@
 (declare-function drgnx-settings-area-has-entry-p "drgnx-settings-area" (var))
 (declare-function drgnx-settings-area-set "drgnx-settings-area" (changes))
 
-(defconst drgnx-settings-migrate-names '(agents ai keys modules large-files session)
-  "The config files that fold into settings.el (design §5.4), in the order the migration reads them.
-Each is NAME.eld in the config dir.")
+(defconst drgnx-settings-migrate-names '(agents ai keys modules large-files session speed)
+  "The config files that fold into settings.el (design §5.4; speed.eld, the GC census's, by the manager's ruling
+US-SPEED-ELD-FOLD-1), in the order the migration reads them.  Each is NAME.eld in the config dir.")
 
 (defconst drgnx-settings-migrate-table
   '(((agents . :profiles) . drgnx-agents-profiles)
@@ -59,7 +59,8 @@ Each is NAME.eld in the config dir.")
     ((large-files . :ask-above) . drgnx-large-files-ask-above)
     ((large-files . :chunks-above) . drgnx-large-files-chunks-above)
     ((large-files . :chunk-size) . drgnx-large-files-chunk-size)
-    ((session . :keep-running) . drgnx-session-keep-running))
+    ((session . :keep-running) . drgnx-session-keep-running)
+    ((speed . :gc-census) . drgnx-speed-gc-census))
   "Every key of the old files and its setting: ((FILE . KEY) . VAR), FILE a config file's name (FILE.eld).
 The setting is drgnx-AREA-KEY (design §5.4), except modules.eld's `:theme', which is `drgnx-look-theme'.")
 
@@ -68,7 +69,8 @@ The setting is drgnx-AREA-KEY (design §5.4), except modules.eld's `:theme', whi
 \(`drgnx-keys-layers'); an entry would set that stack to nil.  The shim gives nil for them, as the old file did.")
 
 (defconst drgnx-settings-migrate--features
-  '((agents . drgnx-agents) (ai . drgnx-ai) (keys . drgnx-keys) (modules . drgnx-modules) (session . drgnx-session))
+  '((agents . drgnx-agents) (ai . drgnx-ai) (keys . drgnx-keys) (modules . drgnx-modules) (session . drgnx-session)
+    (speed . drgnx-gc-census))
   "The features that define each old config file; large-files.eld is its module's (loaded by its path).")
 
 (defconst drgnx-settings-migrate--strict '(agents)
@@ -494,10 +496,10 @@ custom.el entries Tidy could move (design §14)."
       buf)))
 
 (defun drgnx-settings-migrate-old-files ()
-  "Settings: Migrate Old Files: move agents.eld, ai.eld, keys.eld, modules.eld, large-files.eld and session.eld into
-settings.el now, as the first start does, while settings.el does not exist.  Once it exists, an old file that stayed
-and now reads cleanly gets its values added for the settings settings.el has no entry for, and moves away when
-settings.el holds them all (`drgnx-settings-migrate--fold-stayed'): then (:status folded :added VARS :files MOVED)."
+  "Settings: Migrate Old Files: move agents.eld, ai.eld, keys.eld, modules.eld, large-files.eld, session.eld and
+speed.eld into settings.el now, as the first start does, while settings.el does not exist.  Once it exists, an old
+file that stayed and now reads cleanly gets its values added for the settings settings.el has no entry for, and
+moves away when settings.el holds them all (`drgnx-settings-migrate--fold-stayed'): then (:status folded :added VARS :files MOVED)."
   (interactive)
   (if (drgnx-settings-migrate--settings-there-p)
       (pcase-let ((`(,added . ,moved) (drgnx-settings-migrate--fold-stayed)))

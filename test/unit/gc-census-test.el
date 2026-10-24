@@ -200,10 +200,12 @@
       (make-directory dir t)
       (dolist (f (list old recent today "notes.txt" (concat "heap-" (string-remove-suffix ".jsonl" old) ".json")))
         (write-region "" nil (expand-file-name f dir) nil 'silent))
-      ;; the setting turns the census on at start (drgnx-gc-setup)
+      ;; the setting turns the census on at start (drgnx-gc-setup), read from settings.el before it is applied
       (make-directory (getenv "DRGNX_CONFIG_DIR") t)
-      (write-region "(:gc-census t)\n" nil (expand-file-name "speed.eld" (getenv "DRGNX_CONFIG_DIR")) nil 'silent)
-      (let ((gc-cons-threshold (* 64 1024 1024)) (gc-cons-percentage 0.1))
+      (write-region "(drgnx-settings :version 1 (drgnx-speed-gc-census t))\n" nil
+                    (expand-file-name "settings.el" (getenv "DRGNX_CONFIG_DIR")) nil 'silent)
+      (let ((gc-cons-threshold (* 64 1024 1024)) (gc-cons-percentage 0.1)
+            (drgnx-settings-apply--entries nil) (drgnx-settings-area--cache nil))
         (drgnx-test-with-clock ()
           (unwind-protect
               (progn
@@ -219,6 +221,32 @@
       (should (equal (sort (directory-files dir nil "\\`[^.]") #'string<)
                      (sort (list recent today "notes.txt" (concat "heap-" (string-remove-suffix ".jsonl" old) ".json"))
                            #'string<))))))
+
+(ert-deftest drgnx-gc-census/the-setting-applies-at-once ()
+  ;; speed.eld folded into settings.el (US-SPEED-ELD-FOLD-1): a setting of drgnx's own, never a workspace's; a change
+  ;; turns the census on or off at once, and only when it is not that already.
+  (let ((meta (drgnx-setting-meta 'drgnx-speed-gc-census)))
+    (should (eq (plist-get meta :scope) 'global))
+    (should (eq (plist-get meta :workspace) 'never))
+    (should (eq (plist-get meta :apply) #'drgnx-gc-census--settings-apply)))
+  (should (null (default-value 'drgnx-speed-gc-census)))
+  (drgnx-gc-census-test--in-dirs
+    (let ((calls 0) (orig (symbol-function 'drgnx-gc-census-mode)))
+      (cl-letf (((symbol-function 'drgnx-gc-census-mode) (lambda (&optional arg) (cl-incf calls) (funcall orig arg))))
+        (unwind-protect
+            (progn
+              (let ((drgnx-speed-gc-census t))
+                (drgnx-gc-census--settings-apply)
+                (should drgnx-gc-census-mode)
+                (drgnx-gc-census--settings-apply)               ; on already: nothing
+                (should (= calls 1)))
+              (let ((drgnx-speed-gc-census nil))
+                (drgnx-gc-census--settings-apply)
+                (should-not drgnx-gc-census-mode)
+                (should (= calls 2))))
+          (when drgnx-gc-census-mode (funcall orig -1))
+          (drgnx-gc-mode -1)
+          (drgnx-timer-cancel 'gc-idle))))))
 
 (ert-deftest drgnx-gc-census/gc-census-command-is-registered ()
   (require 'drgnx)

@@ -14,6 +14,7 @@
 (require 'drgnx-keys)
 (require 'drgnx-modules)
 (require 'drgnx-session)
+(require 'drgnx-gc-census)
 (require 'drgnx-doctor)
 (require 'drgnx-settings-migrate)
 
@@ -35,8 +36,9 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
   `(drgnx-test-with-config
      (let ((custom-file (expand-file-name "custom.el" (drgnx-user-dir)))
            (inhibit-interaction t)
-           ;; the shim is tested with all six areas, though Tasks 15 and 16 take theirs out of the real list
-           (drgnx-settings-shim-areas '(agents ai keys modules large-files session))
+           ;; the shim is tested with every area, though Tasks 15 and 16 (and speed.eld's fold) keep none in the real
+           ;; list
+           (drgnx-settings-shim-areas '(agents ai keys modules large-files session speed))
            (drgnx-settings-apply--entries nil)          ; settings.el is not applied in this process
            (drgnx-settings-migrate--shim-cache nil)
            (drgnx-settings-migrate--values-cache nil)
@@ -64,7 +66,7 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
   (let ((coding-system-for-write 'utf-8-unix)) (write-region text nil file nil 'silent)))
 
 (defun drgnx-settings-migrate-test--put-all ()
-  "All six old files."
+  "All the old files."
   (mapc #'drgnx-settings-migrate-test--put drgnx-settings-migrate-names))
 
 (defun drgnx-settings-migrate-test--text (file)
@@ -113,23 +115,24 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
       (should (member '(agents :default "review") before))
       (let ((report (drgnx-settings-migrate-maybe)))
         (should (eq (plist-get report :status) 'migrated))
-        (should (= (length (plist-get report :files)) 6))
+        (should (= (length (plist-get report :files)) 7))
         (should-not (plist-get report :stayed)))
-      (should (= (length (drgnx-settings-doc-entries (drgnx-settings-migrate-test--doc))) 22))
+      (should (= (length (drgnx-settings-doc-entries (drgnx-settings-migrate-test--doc))) 23))
       (should (equal (drgnx-settings-migrate-test--get-all) before))
       (dolist (w whole)
         (should (equal (drgnx-settings-migrate--plist (car w) (drgnx-config-get (car w))) (cdr w)))))))
 
 (ert-deftest drgnx-settings-migrate/comments-move ()
   (drgnx-settings-migrate-test--with
-    (mapc #'drgnx-settings-migrate-test--put '(agents modules session))
+    (mapc #'drgnx-settings-migrate-test--put '(agents modules session speed))
     (should (eq (plist-get (drgnx-settings-migrate-maybe) :status) 'migrated))
     (let ((text (drgnx-settings-migrate-test--text (drgnx-settings-migrate-test--settings))))
       (should (string-prefix-p drgnx-settings-file-global-header text))
       (should (string-search ";; the review profile reads every project\n (drgnx-agents-profiles" text))
       (should (string-search "; New Agent Session offers it\n (drgnx-agents-default \"review\")" text))
       (should (string-search ";; flags for completion\n (drgnx-modules-flags" text))
-      (should (string-search ";; quit when the last window closes\n (drgnx-session-keep-running nil)" text)))
+      (should (string-search ";; quit when the last window closes\n (drgnx-session-keep-running nil)" text))
+      (should (string-search ";; record every collection\n (drgnx-speed-gc-census t)" text)))
     (let ((doc (drgnx-settings-migrate-test--doc)))
       (should-not (drgnx-settings-doc-problems doc))
       ;; sorted by name, as the writer keeps it
@@ -189,7 +192,7 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
         (should (equal (sort (mapcar #'file-name-nondirectory left) #'string<)
                        (sort (mapcar (lambda (n) (format "%s.eld" n)) drgnx-settings-migrate-names) #'string<)))
         (should (eq (car (drgnx-doctor--settings-leftovers-check left)) 'warn)))
-      (should (= (length (drgnx-settings-migrate-move-away)) 6))
+      (should (= (length (drgnx-settings-migrate-move-away)) 7))
       (should-not (drgnx-settings-migrate-leftovers))
       (should-not (drgnx-doctor--settings-leftovers-check nil))
       (should (equal (drgnx-settings-migrate-test--get-all) before)))))
@@ -230,7 +233,7 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
     (let* ((report (drgnx-settings-migrate-read-report))
            (doc (drgnx-settings-migrate-test--doc))
            (entries (plist-get report :entries)))
-      (should (= (length entries) 20))                   ; 22 keys, less ai.eld's 2
+      (should (= (length entries) 21))                   ; 23 keys, less ai.eld's 2
       (pcase-dolist (`(,name ,key ,var ,line) entries)
         (should (eq var (cdr (assoc (cons name key) drgnx-settings-migrate-table))))
         (should (equal line (drgnx-settings-entry-line
@@ -246,7 +249,7 @@ config folder, `inhibit-interaction' t and every `drgnx-notify' recorded in `drg
         (should (string-search "fill-column (custom.el line 2)" text))
         (should (string-search "Two machines: Commit and push" text))))
     (let ((n (car drgnx-settings-migrate-test--notices)))
-      (should (equal (list (nth 0 n) (nth 1 n) (nth 2 n)) '(config info "Your settings moved into settings.el (5 files)")))
+      (should (equal (list (nth 0 n) (nth 1 n) (nth 2 n)) '(config info "Your settings moved into settings.el (6 files)")))
       (should (eq (plist-get (nthcdr 3 n) :command) 'settings-migration-report)))
     ;; the three commands are in the registry
     (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))

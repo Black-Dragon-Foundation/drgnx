@@ -12,7 +12,8 @@
 ;; the ring as collection lines (JSON Lines, the watchdog's format) into
 ;; (drgnx-state-dir)/watchdog/YYYY-MM-DD.jsonl; day files older than 14 days are deleted when the mode starts.
 ;; `drgnx-gc-census-report' reads the day files back; the command `gc-census' (Help) shows it.  Off by default:
-;; speed.eld's :gc-census turns it on at start, `drgnx-gc-census-mode' for this session.  While the watchdog's own
+;; the setting `drgnx-speed-gc-census' (settings.el) turns it on at start and at once, `drgnx-gc-census-mode' for
+;; this session.  While the watchdog's own
 ;; mode (`nidhogg-watchdog-mode') is on, the census stands down: one writer.
 
 ;;; Code:
@@ -21,6 +22,8 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-config)
+(require 'drgnx-setting)
+(require 'drgnx-settings-area)
 (require 'drgnx-timer)
 (require 'drgnx-registry)
 (require 'drgnx-gc)
@@ -49,15 +52,31 @@ entry (malloc's arena, not the Lisp heap) is left out.")
 
 ;;;; The setting
 
+(defvar drgnx-gc-census-mode)
+
+(drgnx-defsetting drgnx-speed-gc-census nil
+  "Non-nil: record every garbage collection's pause, origin and live heap (Help → GC Census shows them).
+Read at every start; a change turns the census on or off at once.  `drgnx-gc-census-mode' does it for this session."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :apply #'drgnx-gc-census--settings-apply)
+
+(defun drgnx-gc-census--settings-apply ()
+  "`drgnx-speed-gc-census' changed: the census on or off now, when it is not that already."
+  (let ((want (eq drgnx-speed-gc-census t)))
+    (unless (eq (and drgnx-gc-census-mode t) want)
+      (drgnx-gc-census-mode (if want 1 -1)))))
+
+;; speed.eld is the old file: it is still defined for one reason, `drgnx-settings-migrate-maybe' reads it once to
+;; move its value into settings.el.
 (drgnx-config-define 'speed
                      :file "speed.eld" :shape 'plist :version 1 :reload 'start :last-good t
                      :schema '(plist (:gc-census boolean "Record every garbage collection (Help → GC Census)"))
                      :default nil
-                     :doc "Speed measurements you turn on (read at every start).")
+                     :doc "Speed measurements you turn on (moved into settings.el).")
 
 (defun drgnx-gc-census-maybe-start ()
-  "Turn the census on when speed.eld's :gc-census is t; `drgnx-gc-setup' calls it at start."
-  (when (eq (drgnx-config-get 'speed :gc-census) t)
+  "Turn the census on when `drgnx-speed-gc-census' is t (settings.el's entry, also before it applied);
+`drgnx-gc-setup' calls it at start."
+  (when (eq (cdar (drgnx-settings-area-values '(drgnx-speed-gc-census))) t)
     (drgnx-gc-census-mode 1)))
 
 ;;;; The ring (the hook's side)
@@ -184,7 +203,7 @@ Nothing while the watchdog's own mode is on."
 
 (define-minor-mode drgnx-gc-census-mode
   "The GC census: every collection's pause, origin and live heap, written at idle to the watchdog's day files.
-Turned on at start by speed.eld's :gc-census; Help → GC Census shows what it recorded."
+Turned on at start by the setting `drgnx-speed-gc-census'; Help → GC Census shows what it recorded."
   :global t :group 'drgnx
   ;; The GC owner's `post-gc-hook' function (drgnx-gc.el) calls `drgnx-gc-census--note' while this mode is on: only
   ;; the owner touches the hook (drgnx-lint/garbage-collect-only-in-the-gc-owner).
@@ -294,7 +313,7 @@ the live heap by type after the last collection; :dropped and :error, this sessi
     (concat
      (format "GC census: every garbage collection's pause (ms), by day\nFolder: %s\n\n" (plist-get report :directory))
      (if (null days)
-         (concat "No collections recorded yet.  Turn the census on: (:gc-census t) in speed.eld (at every start), or\n"
+         (concat "No collections recorded yet.  Turn the census on: (drgnx-speed-gc-census t) in settings.el, or\n"
                  "M-x drgnx-gc-census-mode for this session.\n")
        (concat
         (format "%-12s %6s %7s %7s %7s %7s %8s %5s  %s\n" "Day" "Count" "Max" "p50" "p95" "p99" "Total s" "Felt"
