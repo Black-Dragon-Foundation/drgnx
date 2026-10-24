@@ -523,8 +523,10 @@ differences; same rule: not worse unless the whole 95 % interval is above max (1
 a side does not report is left out. A workload whose `:digest` differs between the sides is `regressed (digest)`.
 `--ab-env` counts all of these in the exit code (3 stays "inconclusive").
 
-**Machine shape.** `DRGNX_PERF_CPUS=2|4` runs `bin/drgnx test --container` with `--cpuset-cpus 0-1` or `0-3`
-(`drgnx-perf-cpuset-args`). The workers' A/B runs both shapes:
+**Machine shape.** `DRGNX_PERF_CPUS=2|4` runs `bin/drgnx test --container` with `--cpuset-cpus` set to one thread of
+each of the first 2 or 4 physical cores, read from `lscpu -p=CPU,CORE` (`drgnx-perf-cpuset-args`): `0,1` / `0,1,2,3`
+on a machine that numbers its cores first, `0,2` / `0,2,4,6` on one that puts a core's two threads side by side, so
+"2 cores" never means one core's two threads. The workers' A/B runs both shapes:
 
 ```sh
 DRGNX_PERF_CPUS=2 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default

@@ -342,10 +342,13 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi
     args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
     # DRGNX_PERF_CPUS=2|4: the machine shape of the workers' A/B (review M14), the cores the run may use (as `drgnx-perf-cpuset-args')
+    # one thread of each of the first N physical cores (a 7900X: 0,1; a 4900HS, whose core's threads sit side by side: 0,2)
     case "${DRGNX_PERF_CPUS:-}" in
       "") ;;
-      2) args+=(--cpuset-cpus 0-1) ;;
-      4) args+=(--cpuset-cpus 0-3) ;;
+      2|4)
+        cpus=$(lscpu -p=CPU,CORE 2>/dev/null | awk -F, -v n="$DRGNX_PERF_CPUS" '/^#/ {next} !seen[$2]++ && k < n {printf "%s%s", (k++ ? "," : ""), $1}')
+        [ "$(printf '%s' "$cpus" | tr ',' '\n' | grep -c .)" = "$DRGNX_PERF_CPUS" ] || cpus=""
+        args+=(--cpuset-cpus "${cpus:-0-$((DRGNX_PERF_CPUS - 1))}") ;;
       *) echo "drgnx: DRGNX_PERF_CPUS must be 2 or 4, not ${DRGNX_PERF_CPUS}" >&2; return 2 ;;
     esac
     mount="$here:/src:ro"

@@ -730,14 +730,30 @@ differ, (:verdict no-regression) when all agree, (:verdict not-comparable) when 
           ((seq-some (lambda (p) (not (equal (car p) (cdr p)))) pairs) (list :verdict 'regressed :why 'digest))
           (t (list :verdict 'no-regression)))))
 
-(defun drgnx-perf-cpuset-args (cpus)
+(defun drgnx-perf-cpuset-args (cpus &optional topology)
   "The container run arguments that give the lab CPUS cores (\"2\" or \"4\", $DRGNX_PERF_CPUS; review M14):
-`--cpuset-cpus 0-1' or `0-3'.  Nil for an empty CPUS; an error for any other."
-  (pcase (format "%s" (or cpus ""))
-    ("" nil)
-    ("2" (list "--cpuset-cpus" "0-1"))
-    ("4" (list "--cpuset-cpus" "0-3"))
-    (v (error "perf: DRGNX_PERF_CPUS must be 2 or 4, not %s" v))))
+`--cpuset-cpus' with the first thread of each of the first CPUS physical cores, so a machine that numbers a core's two
+threads next to each other (a 4900HS: 0,2) gets the same shape as one that does not (a 7900X: 0,1).  TOPOLOGY is
+a list of (CPU . CORE), by default from `lscpu -p=CPU,CORE'; without one, CPUs 0 to CPUS - 1.  Nil for an empty
+CPUS; an error for any other."
+  (let ((n (pcase (format "%s" (or cpus ""))
+             ("" nil)
+             ((and v (or "2" "4")) (string-to-number v))
+             (v (error "perf: DRGNX_PERF_CPUS must be 2 or 4, not %s" v)))))
+    (when n
+      (let ((topology (or topology
+                          (ignore-errors
+                            (mapcar (lambda (l) (let ((f (split-string l ","))) (cons (car f) (cadr f))))
+                                    (seq-remove (lambda (l) (string-prefix-p "#" l))
+                                                (process-lines "lscpu" "-p=CPU,CORE"))))))
+            (seen nil) (picked nil))
+        (dolist (c topology)
+          (when (and (< (length picked) n) (not (member (format "%s" (cdr c)) seen)))
+            (push (format "%s" (cdr c)) seen)
+            (push (format "%s" (car c)) picked)))
+        (list "--cpuset-cpus" (if (= (length picked) n)
+                                  (string-join (nreverse picked) ",")
+                                (format "0-%d" (1- n))))))))
 
 (defun drgnx-perf--path-value (plist path)
   "The value at PATH (a list of keys) in the nested PLIST."

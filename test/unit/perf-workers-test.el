@@ -129,14 +129,21 @@
     (should-not (assoc '(:complete-ms) vs))))
 
 (ert-deftest drgnx-perf-workers/cpus-cpuset ()
-  (should (equal (drgnx-perf-cpuset-args "2") '("--cpuset-cpus" "0-1")))
-  (should (equal (drgnx-perf-cpuset-args "4") '("--cpuset-cpus" "0-3")))
+  ;; a 7900X numbers the cores first (CPU n and n + 12 share a core); a 4900HS puts a core's threads side by side
+  (let ((desktop (mapcar (lambda (c) (cons c (% c 12))) (number-sequence 0 23)))
+        (laptop (mapcar (lambda (c) (cons c (/ c 2))) (number-sequence 0 15))))
+    (should (equal (drgnx-perf-cpuset-args "2" desktop) '("--cpuset-cpus" "0,1")))
+    (should (equal (drgnx-perf-cpuset-args "4" desktop) '("--cpuset-cpus" "0,1,2,3")))
+    (should (equal (drgnx-perf-cpuset-args "2" laptop) '("--cpuset-cpus" "0,2")))
+    (should (equal (drgnx-perf-cpuset-args "4" laptop) '("--cpuset-cpus" "0,2,4,6")))
+    ;; too few cores to pick from: the old range
+    (should (equal (drgnx-perf-cpuset-args "4" '((0 . 0) (1 . 1))) '("--cpuset-cpus" "0-3"))))
   (should-not (drgnx-perf-cpuset-args nil))
   (should-error (drgnx-perf-cpuset-args "3"))
-  ;; the container runner builds the same arguments
+  ;; the container runner picks the cores the same way
   (let ((text (with-temp-buffer (insert-file-contents (expand-file-name "bin/drgnx" drgnx-dir)) (buffer-string))))
-    (should (string-match-p "--cpuset-cpus 0-1" text))
-    (should (string-match-p "--cpuset-cpus 0-3" text))))
+    (should (string-match-p "lscpu -p=CPU,CORE" text))
+    (should (string-match-p "--cpuset-cpus \"\\${cpus:-0-" text))))
 
 ;;;; Task 8: the workloads of §17.6
 
