@@ -286,3 +286,9 @@ Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg
 repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
 a missing `:rev`, no version header, a module's package with drgnx's Git source, an offline first sync naming the Git
 package it could not get and installing the rest.
+
+## Settings of installed packages
+
+`drgnx sync` also writes the settings index (`settings-index.eld` in the cache folder): the options every installed
+package and Emacs declare, found by reading their files as text. The Settings page shows them before a package loads.
+See [Packages' settings](settings.md#packages-settings-task-31).

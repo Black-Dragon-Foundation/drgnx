@@ -64,7 +64,20 @@ an agent with a grant), it changes as little as it can:
 
 ## The Settings page (Task 26)
 
-## Editing a value (Task 27)
+## Editing a value
+
+Each row has an editor that fits its type:
+
+- **On/off** settings toggle in place; **numbers** ask for a value inside the setting's bounds (a value outside them
+  is refused and the message says which bound); **text**, **files** and **folders** ask with a picker; a fixed set of
+  choices is a drop-down; a **symbol** completes; **Shortcuts** record the keys you press.
+- **Lists and other structured values** open a pane with Customize's widgets and an Apply button.
+- **Anything else** (`sexp`, computed types) opens a Lisp editor. What you type is read as plain data, never run,
+  and must fit the setting's type.
+- A value that does not fit is refused with the setting's name and where it fails; nothing is written.
+- A **code** setting (marked "code": a hook, a function) can be saved in User or your Workspace file, never in Shared.
+- A value that looks like a **secret** (a key, a token, `password = ...`) is refused: "use your keyring". A key never
+  goes into a settings file or its history.
 
 ## Who wins
 
@@ -500,6 +513,31 @@ a variable twice, a comment of yours inside the form (move it above the form fir
 information.
 
 ## Packages' settings (Task 31)
+
+The Settings page lists the options of every installed package, **before the package is loaded**. `drgnx sync` reads
+each package's `.el` files as text (nothing is loaded or run) and writes `settings-index.eld` in the cache folder:
+every `defcustom` with its group, file, line, documentation and, when it is written out literally, its type. Group
+**Packages** shows them by package; **Emacs** shows the built-in ones. Editing one stores the value; it takes effect
+when the package loads. An option whose type the file only computes gets the Lisp editor until the package is loaded.
+
+Plain variables (`defvar`) are settings only when they are *described*. drgnx ships descriptions for common packages
+(`settings/described/*.eld`); you add your own in `described.el` in your config folder:
+
+```elisp
+(drgnx-described
+ (my-package-limit :type integer :doc "How many." :group my-package)
+ (eglot-server-programs :workspace code :merge alist))
+```
+
+A description is `(VARIABLE :type TYPE :doc "…" :group GROUP :scope … :workspace … :merge …)`. It is read as data,
+never run; yours wins over a shipped one. It also refines options the package declares: `:workspace code` marks one
+that holds a program (a workspace file cannot set it), `:merge alist` one that modules and you extend.
+A described variable behaves like any other setting; drgnx sets it with `set-default` after recording it, and taking
+the value away puts back what it was.
+
+**Other tools** (Workspace group): the files other tools keep in the folder (`.editorconfig`, `.prettierrc*`,
+`pyproject.toml`, `.clang-format`, `.clangd`, `rust-analyzer.toml`, `tsconfig.json`, `.eslintrc*`, `biome.json`,
+`.golangci.yml`, `.ruff.toml`), each with [Open]. They stay theirs: nothing is imported or written.
 
 ## Moving from the old files
 
