@@ -1162,7 +1162,8 @@ tests you add.
   whose packages are missing does not set up, and the test's message says which were not set up.
   `drgnx-teardown/off-on-off-is-off` turns each one off and on again in between: the second setup must set up the
   same things as the first, compared by what they are (a timer made again is a new object but the same timer) —
-  no stacked timers, no idempotence guard that outlived the teardown.
+  no stacked timers, no idempotence guard that outlived the teardown. The timers the recorder leaves alone are left
+  out here too (Glitnir's refresh, which each change of `child-frame-chrome` schedules once, is Nidhogg's).
   `restart` modules are not set up here: their own tests set them up `:strict`, and the helper unwinds their record
   (`core/basics`, `core/workbench`: `test/unit/mod-core-test.el`).
 - `drgnx-lint/modules-register-nothing-at-load`: a registration (`add-hook`, `advice-add`, `add-to-list`,
