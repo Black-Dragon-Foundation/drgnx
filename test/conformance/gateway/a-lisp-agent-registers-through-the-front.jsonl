@@ -1,7 +1,8 @@
 {"scenario": "gateway/a-lisp-agent-registers-through-the-front", "requires": ["v1", "lisp-backend"], "doc": "Task 23: an agent the Lisp backend starts on a gateway profile (:ai claude-openrouter) is registered by the front's gateway (gateway/register through the backend's front connection, owner the backend): status.gateway.registrations is 1, and the mock ACP agent's environment has ANTHROPIC_BASE_URL = the gateway's URL and a token, never the key (a canary the user connection handed over)."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "text": "(drgnx-settings :version 1 (drgnx-agents-mcp (coordination)) (drgnx-agents-profiles ((\"mock-acp\" :ai claude-openrouter :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\") :env (\"MOCK_ACP_LOG=$ROOT/acp.log\")))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "install_bin", "to": "$DATA/bin/ratatoskr"}
-{"do": "write_file", "path": "$CONFIG/settings.el", "text": "(drgnx-settings :version 1 (drgnx-agents-mcp (coordination)) (drgnx-agents-profiles ((\"mock-acp\" :ai claude-openrouter :command (\"sh\" \"$SCENARIOS/../fixtures/mock-acp-stdin.sh\" \"$EMACS\" \"--batch\" \"-Q\" \"-l\" \"$SCENARIOS/../fixtures/mock-acp.el\") :env (\"MOCK_ACP_LOG=$ROOT/acp.log\")))))\n"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"openrouter":{"kind":"openai","url":"https://openrouter.ai/api/v1","caps":["chat","fim","embed"],"messages":true,"key_env":"KEY"}}}]}}}
 {"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
