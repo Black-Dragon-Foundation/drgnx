@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'drgnx-ui)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-repo-dir) nil t)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-ui-repo-dir) nil t)
 
 (defun drgnx-live-wk--q (sess form)
   (car (read-from-string (plist-get (drgnx-ui-call sess (format "(drgnx-uitest--json (list :v (prin1-to-string %s)))" form) 60) :v))))
@@ -13,7 +14,10 @@
   (drgnx-test-wait (lambda () (drgnx-live-wk--q sess form)) :secs (max 30 secs) :what form))
 
 (ert-deftest drgnx-live/the-work-tab-fills-in-and-opens-what-it-shows ()
-  (let* ((root (file-name-as-directory (make-temp-file "drgnx-work-live" t)))
+  ;; the scan writes through the hub: the session starts the real Ratatoskr itself (state under its temp HOME and
+  ;; runtime dir); without the binary the test skips like the hub tests
+  (let* ((rbin (or (drgnx-test-ratatoskr-bin) (ert-skip "DRGNX_RATATOSKR_BIN is not set")))
+         (root (file-name-as-directory (make-temp-file "drgnx-work-live" t)))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root "ui") process-environment))
          (s nil) (sess nil))
     (make-directory (concat root "docs/specs") t) (make-directory (concat root "docs/plans") t)
@@ -23,6 +27,8 @@
     (unwind-protect
         (progn
           (setq s (drgnx-ui-start "drgnx" "1400x800" 30) sess (drgnx-ui-own-session (plist-get s :name)))
+          (drgnx-live-wk--q sess (format "(progn (setenv \"DRGNX_NO_HUB_START\") (setenv \"DRGNX_RATATOSKR_BIN\" %S)
+                                                 (setenv \"DRGNX_HUB_PARENT_PID\" (number-to-string (emacs-pid))) t)" rbin))
           (drgnx-live-wk--q sess (format "(progn (setenv \"DRGNX_DATA_DIR\" %S) (setq drgnx-work-roots (list %S) drgnx-projects-board-file %S)
                                                  (drgnx-work-ui-view) t)"
                                          (concat root "data") root (concat root "none.org")))

@@ -38,6 +38,19 @@ jobs:
           image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
           if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-gui-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
+      # the live tests that need the hub start their own against this Ratatoskr (DRGNX_RATATOSKR_BIN; built as in
+      # ci.yml's Nidhogg job, test/no-skip.eld)
+      - name: Ratatoskr (cargo build, for the live tests that need the hub)
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr \
+            --features drgnx-ratatoskr/test-hooks --bin ratatoskr
+          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
       - name: GUI tier in test/container/Containerfile.gui (the :timing tests left out by name)
         env:
           DRGNX_CONTAINER: podman

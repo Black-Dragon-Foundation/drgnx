@@ -396,3 +396,16 @@ Budget p95 22 ms, max 50 ms, **provisional**. The ruled target is `typing`'s 16 
 (p95 12.2, 17.2, 21.1 ms; max 19.4, 24.0, 25.2 ms), taken on 2026-10-18 at a load average of 7 to 8, where the p95 rose with
 the load. `typing` alone reads 3.5 ms on a quiet machine, so the loaded index is not shown to cost anything yet.
 A quiet-machine `bin/drgnx test --perf` run pins the number: set the p95 to 16 if it holds, and drop this note.
+
+## Settings (design §16)
+
+The settings gates (start, provenance, watchers, page open, `drgnx sync`'s index) are not perf rows yet: the perf
+deferral stands, so there is no `test/perf/settings-*.el`.
+
+Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
+reads at most 1 ms. It is `#[ignore]`, run once and alone on the perf island, optimized:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=2 … cargo test --release -p huginn --test timing -- --ignored --nocapture`
+(2026-10-24, desktop, 2 pinned CPUs: median 0.60 ms, max 4.2 ms for 65,677 bytes).
+
+In CI the `huginn_read` fuzz target runs in `runtime.yml`'s fuzz job, and `ci.yml`'s Nidhogg job builds huginn's `dump`
+example so the ERT differential (`drgnx-huginn/differential-fresh-seed`) compares it with Emacs's reader.
