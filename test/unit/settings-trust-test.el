@@ -185,6 +185,23 @@
       (should-not drgnx-stt--prompts))
     (should-not (drgnx-settings-trust-waiting drgnx-stt--proj))))
 
+(ert-deftest drgnx-settings-trust/a-symlinked-dir-locals-is-allowed-by-its-written-name ()
+  ;; one path form: the open's split and Trust This Folder's pairs both name the link, never its target
+  (drgnx-stt--with (list (list drgnx-stt--ws))
+    (drgnx-stt--put "conf/dl.el" drgnx-stt--dl)
+    (make-symbolic-link (expand-file-name "conf/dl.el" drgnx-stt--proj) (expand-file-name ".dir-locals.el" drgnx-stt--proj))
+    (setq dir-locals-directory-cache nil)
+    (drgnx-stt--in "a.txt"
+      (should-not (local-variable-p 'drgnx-stt-risky-function))
+      (let ((waiting (drgnx-settings-trust-waiting drgnx-stt--proj)))
+        (should (equal (delete-dups (mapcar (lambda (i) (plist-get i :file)) waiting)) '(".dir-locals.el")))
+        (drgnx-settings-trust-allow drgnx-stt--proj waiting))
+      (should (eq drgnx-stt-risky-function 'ignore)))
+    (should-not (drgnx-settings-trust-waiting drgnx-stt--proj))
+    (with-current-buffer (drgnx-stt--reopen "a.txt")
+      (should (eq drgnx-stt-risky-function 'ignore))
+      (should-not drgnx-stt--prompts))))
+
 (ert-deftest drgnx-settings-trust/a-changed-pair-waits-again ()
   (drgnx-stt--with (list (list drgnx-stt--ws))
     (drgnx-stt--put ".dir-locals.el" drgnx-stt--dl)

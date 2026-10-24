@@ -56,6 +56,13 @@ ancestors are never trusted.  Agents can never change it, and no workspace sets 
   "DIR as roots are compared: an absolute truename ending in a slash (DIR is local)."
   (file-name-as-directory (file-truename (expand-file-name dir))))
 
+(defun drgnx-settings-trust--rel (file root)
+  "FILE relative to ROOT (normalized) in the one form every pair is kept by: its folder's truename and its own name.
+A symlinked .dir-locals.el is named as written, never by its target, wherever the pair is made or matched."
+  (let ((file (expand-file-name file)))
+    (file-relative-name (expand-file-name (file-name-nondirectory file) (file-truename (file-name-directory file)))
+                        root)))
+
 (defun drgnx-settings-trust--parents ()
   "The usable entries of `drgnx-trust-parents' (its default value) as ((DIR . CODE)…), DIR normalized and CODE t
 for :code t.  Remote, broad (`drgnx-trust--broad-p') and malformed entries are left out."
@@ -310,7 +317,7 @@ dropped."
                   ('code
                    (let* ((srcs (or sources (setq sources (drgnx-settings-trust--sources dir))))
                           (file (drgnx-settings-trust--source-of srcs elt))
-                          (rel (file-relative-name (file-truename file) root)))
+                          (rel (drgnx-settings-trust--rel file root)))
                      (pcase (drgnx-settings-trust--decide state root rel (car elt) (cdr elt) data)
                        ('apply (push elt kept))
                        ('wait (drgnx-settings-trust--note
@@ -339,7 +346,7 @@ Untrusted: safe values only.  Trusted by location or Trust This Folder: safe val
 `:workspace code' settings) whose pair is allowed.  `everything': all.  What waits is remembered."
   (let* ((root (or (drgnx-settings-trust-root root) root))
          (state (drgnx-settings-trust-state root))
-         (rel (file-relative-name file root))
+         (rel (drgnx-settings-trust--rel file root))
          (data (drgnx-settings-trust--state-data))
          (kept nil))
     (when (eq state 'location) (drgnx-settings-trust--announce root))
@@ -376,7 +383,7 @@ Untrusted: safe values only.  Trusted by location or Trust This Folder: safe val
     (when (and (fboundp 'drgnx-settings-workspace--usable) (file-exists-p file))
       (mapcar (lambda (e)
                 (let ((var (drgnx-settings-entry-var e)) (value (drgnx-settings-entry-value e)))
-                  (list :file (file-relative-name file root) :var var :value value :line (drgnx-settings-entry-line e)
+                  (list :file (drgnx-settings-trust--rel file root) :var var :value value :line (drgnx-settings-entry-line e)
                         :class (drgnx-settings-trust-class var value 'shared))))
               (car (drgnx-settings-workspace--usable file))))))
 
@@ -388,7 +395,7 @@ ROOT/.drgnx/settings.el.  What Trust This Folder shows and allows."
     (dolist (file (dir-locals--all-files root))
       (dolist (pair (drgnx-settings-trust--dir-locals-leaves (drgnx-settings-trust--read-dir-locals file)))
         (when (eq (drgnx-settings-trust-class (car pair) (cdr pair) 'dir-locals) 'code)
-          (let ((item (list :file (file-relative-name file root) :var (car pair) :value (cdr pair)
+          (let ((item (list :file (drgnx-settings-trust--rel file root) :var (car pair) :value (cdr pair)
                             :line (drgnx-settings-trust--line file (car pair) (cdr pair)) :class 'code)))
             (unless (cl-find-if (lambda (i) (drgnx-settings-trust--same-p i item)) out) (push item out))))))
     (append (nreverse out)

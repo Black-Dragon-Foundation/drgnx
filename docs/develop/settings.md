@@ -784,7 +784,8 @@ enable/disable call `drgnx-settings-trust-enable`/`-disable`; `drgnx-trust-mode`
   applies (`drgnx-settings-trust--decide`); `never` entries are dropped; waiting code is remembered per root for the
   session. A code entry's FILE is found by collecting each `.dir-locals*.el` of DIR alone (the `-2` file first).
 - **W1:** `drgnx-settings-trust-filter` is `drgnx-settings-workspace-filter-function`'s default, the same rule.
-- **Pairs:** `(FILE VAR VALUE)`, FILE relative to the root, kept in trusted-folders.eld version 2 (`drgnx-trust.el`:
+- **Pairs:** `(FILE VAR VALUE)`, FILE relative to the root (`drgnx-settings-trust--rel`: its folder's truename and its
+  own name, so a symlinked `.dir-locals.el` is named as written wherever a pair is made or matched), kept in trusted-folders.eld version 2 (`drgnx-trust.el`:
   `:allowed`/`:denied` `((ROOT (FILE VAR TEXT)…)…)`, `:untrusted` roots) with VALUE as its printed text (an `eval` form
   may hold a backquote, which the data reader refuses). `drgnx-trust-update FN` writes them under the file's lock; a
   version above 2 is a newer drgnx's, never changed. `(drgnx-settings-trust-allow ROOT PAIRS)`,
