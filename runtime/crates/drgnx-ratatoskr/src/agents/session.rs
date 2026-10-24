@@ -2923,6 +2923,10 @@ pub async fn move_to(f: &Front, c: &Caller, p: MoveParams) -> Result<Started, Er
 /// starts no second worker).  The gateway registration itself is made by the new session's launch (an `:ai` profile).
 /// Called with both sessions running, before the old one stops.
 pub(crate) async fn rekey(front: &Front, old: &Session, new: &str) {
+    if old.parent().is_some() {
+        // a manager's worker stays under its delegation, whatever the new profile's defaults are
+        crate::manager::move_delegation(front, &old.id, new).await;
+    }
     let scope = front.core.runs.scope_of(&old.id);
     if let Some((plan, project)) = &scope {
         front
@@ -2962,6 +2966,15 @@ pub(crate) async fn rekey(front: &Front, old: &Session, new: &str) {
             tracing::warn!(sid = old.id, "task claim not moved: {e}");
         }
     }
+}
+
+/// Run REKEY to its end, then FIRST: a moved worker's first prompt waits for its re-keying (grants, claim, scope).
+async fn rekey_then<T>(
+    rekey: impl std::future::Future<Output = ()>,
+    first: impl FnOnce() -> T,
+) -> T {
+    rekey.await;
+    first()
 }
 
 /// Session ID continues on PROFILE (Task 26): the old one stops after the tool running now, a new one starts in the
@@ -3007,9 +3020,13 @@ pub async fn move_session(
         class: Class::User,
         ..caller.clone()
     };
-    let started = open(hub, front, start, &user).await?;
-    hub.prompt(&started.id, text, Origin::Hub)?;
-    rekey(front, &old, &started.id).await;
+    // the new session keeps the old one's manager: its budget chain, and (in `rekey`) its delegated grants
+    let started = open_as(hub, front, start, &user, old.parent().map(str::to_owned)).await?;
+    // nothing prompts the new session before everything keyed by the old sid is on the new one
+    rekey_then(rekey(front, &old, &started.id), || {
+        hub.prompt(&started.id, text, Origin::Hub)
+    })
+    .await?;
     let (from, to) = (format!("session:{id}"), format!("session:{}", started.id));
     let linked = front
         .writer
@@ -3053,6 +3070,20 @@ pub async fn move_session(
 mod tests {
     use super::*;
     use runstav::methods::agents::SessionStatus;
+
+    #[tokio::test]
+    async fn rekey_runs_before_the_first_prompt() {
+        let log = std::sync::Mutex::new(Vec::new());
+        rekey_then(
+            async {
+                tokio::task::yield_now().await;
+                log.lock().unwrap().push("rekey");
+            },
+            || log.lock().unwrap().push("prompt"),
+        )
+        .await;
+        assert_eq!(*log.lock().unwrap(), ["rekey", "prompt"]);
+    }
 
     fn upd(v: Value) -> Value {
         v

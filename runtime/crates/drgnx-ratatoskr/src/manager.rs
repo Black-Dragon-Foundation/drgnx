@@ -566,6 +566,18 @@ async fn save_delegation(f: &Front, sid: &str) {
     }
 }
 
+/// Worker OLD moved to session NEW (Task 26): the delegation follows, in memory and in runtime.db, before NEW is
+/// prompted.  None found: Never everywhere and a card, as a restart without the row.
+pub(crate) async fn move_delegation(f: &Front, old: &str, new: &str) {
+    match f.core.matrix.delegated_to(old) {
+        Some(e) => {
+            f.core.matrix.set_delegated(new, e);
+            save_delegation(f, new).await;
+        }
+        None => lose_delegation(f, new).await,
+    }
+}
+
 /// Worker SID is resumed: what its manager delegated is back before its first tool call.  A worker whose row is
 /// missing (or unreadable) gets nothing (Never everywhere), never its profile's default, and the user a card.
 pub async fn restore_delegation(f: &Front, sid: &str) {
@@ -588,6 +600,11 @@ pub async fn restore_delegation(f: &Front, sid: &str) {
         f.core.matrix.set_delegated(sid, e);
         return;
     }
+    lose_delegation(f, sid).await;
+}
+
+/// SID has no delegation to read: Never everywhere, and the user a card.
+async fn lose_delegation(f: &Front, sid: &str) {
     f.core.matrix.set_delegated(sid, Effective::default());
     let card = norn::write::cards::NewCard {
         job: None,
