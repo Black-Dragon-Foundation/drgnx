@@ -229,6 +229,65 @@ mod tests {
         );
     }
 
+    /// Every entity write runs the kind's rule before it writes: create, update, retire, unretire, history's restore
+    /// and revert (both through `set_version`). Import's two paths are pinned in `export`'s tests.
+    #[test]
+    fn every_entity_write_runs_the_rule() {
+        fn never(_: &Connection, _: &TxMeta, _: f64, _: Target<'_>) -> Result<(), WriteError> {
+            Err(WriteError::Refused("never".into()))
+        }
+        let mut g = Guard::default();
+        register_rule(&mut g, "grant", never);
+        let g = Arc::new(g);
+        let open = Arc::new(Guard::default());
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(GRAPH_DDL).unwrap();
+        let user = TxMeta::new("user", Class::User, "cli:test");
+        let (n, retired) = {
+            let mut tx = Tx::for_test(&mut conn, user.clone(), open.clone());
+            let n = entity::create(&mut tx, new_grant()).unwrap().n;
+            let mut r = new_grant();
+            r.id = "grant:r".into();
+            let r = entity::create(&mut tx, r).unwrap().n;
+            entity::retire(&mut tx, r).unwrap();
+            tx.commit_for_test().unwrap();
+            (n, r)
+        };
+        let retitled = {
+            let mut tx = Tx::for_test(&mut conn, user.clone(), open);
+            let titled = Changes {
+                title: Some(Some("t2".into())),
+                ..Changes::default()
+            };
+            entity::update(&mut tx, n, None, titled).unwrap();
+            let id = tx.id();
+            tx.commit_for_test().unwrap();
+            id
+        };
+        let mut tx = Tx::for_test(&mut conn, user, g);
+        let never = || WriteError::Refused("never".into());
+        let mut other = new_grant();
+        other.id = "grant:new".into();
+        assert_eq!(entity::create(&mut tx, other).unwrap_err(), never());
+        let titled = Changes {
+            title: Some(Some("t3".into())),
+            ..Changes::default()
+        };
+        assert_eq!(entity::update(&mut tx, n, None, titled).unwrap_err(), never());
+        assert_eq!(entity::retire(&mut tx, n).unwrap_err(), never());
+        assert_eq!(entity::unretire(&mut tx, retired).unwrap_err(), never());
+        assert_eq!(
+            crate::graph::hist::restore(&mut tx, n, 1).unwrap_err(),
+            never()
+        );
+        assert_eq!(
+            crate::graph::hist::revert(&mut tx, retitled).unwrap_err(),
+            never()
+        );
+        let e = entity::by_n(tx.sql(), n).unwrap().unwrap();
+        assert_eq!((e.ver, e.title.as_deref()), (2, Some("t2")));
+    }
+
     #[test]
     fn the_guard_runs_on_update_too() {
         let g = guarded();

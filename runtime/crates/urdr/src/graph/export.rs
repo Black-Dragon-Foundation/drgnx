@@ -1339,4 +1339,55 @@ mod tests {
             assert_eq!(lines(&dir, f), lines(&again, f));
         }
     }
+
+    /// An imported record runs the kind's rule on both of its paths: a new id (through `entity::create`) and a newer
+    /// version of a stored one (the update in place), and writes nothing when refused.
+    #[test]
+    fn an_import_runs_the_rule_on_both_paths() {
+        use crate::graph::guard::{Guard, Target, register_rule};
+        fn never(
+            _: &rusqlite::Connection,
+            _: &TxMeta,
+            _: f64,
+            _: Target<'_>,
+        ) -> Result<(), WriteError> {
+            Err(WriteError::Refused("never".into()))
+        }
+        let mut g = Guard::default();
+        register_rule(&mut g, "option", never);
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::graph::schema::GRAPH_DDL).unwrap();
+        let line = |id: &str, ver: i64| EntLine {
+            id: id.into(),
+            kind: "option".into(),
+            project: None,
+            title: Some("t".into()),
+            status: None,
+            body: None,
+            priority: None,
+            assignee: None,
+            data: json!({"value": "1"}),
+            origin: Origin::Imported,
+            source: None,
+            ver,
+        };
+        let import = TxMeta::new("import", Class::System, "import");
+        {
+            let mut tx = Tx::for_test(&mut conn, import.clone(), Arc::new(Guard::default()));
+            assert!(matches!(
+                import_entity(&mut tx, &line("option:global:a", 1)),
+                Ok(Outcome::Written)
+            ));
+            tx.commit_for_test().unwrap();
+        }
+        let mut tx = Tx::for_test(&mut conn, import, Arc::new(g));
+        let never = |got: Result<Outcome, WriteError>| {
+            matches!(got, Err(WriteError::Refused(t)) if t == "never")
+        };
+        assert!(never(import_entity(&mut tx, &line("option:global:b", 1))));
+        assert!(never(import_entity(&mut tx, &line("option:global:a", 2))));
+        let a = entity::by_id(tx.sql(), "option:global:a").unwrap().unwrap();
+        assert_eq!(a.ver, 1);
+        assert!(entity::by_id(tx.sql(), "option:global:b").unwrap().is_none());
+    }
 }
