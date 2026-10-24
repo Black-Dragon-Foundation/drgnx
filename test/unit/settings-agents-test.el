@@ -178,3 +178,11 @@
         (should (equal (plist-get row :source) "your workspace file"))))))
 
 ;;; settings-agents-test.el ends here
+
+(ert-deftest drgnx-settings-agents/hub-disconnect-removes-its-hook ()
+  "`drgnx-hub-disconnect' removes the hook `drgnx-hub-connect' added, and again is harmless."
+  (let ((drgnx-hub-event-functions (list #'drgnx-settings-agents--event)))
+    (drgnx-hub-disconnect)
+    (should-not (memq #'drgnx-settings-agents--event drgnx-hub-event-functions))
+    (drgnx-hub-disconnect)
+    (should-not (memq #'drgnx-settings-agents--event drgnx-hub-event-functions))))

@@ -827,6 +827,7 @@ closes it when this Emacs dies."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
   (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
   (let (ids)
     (maphash (lambda (id _) (push id ids)) drgnx-hub--pending)
@@ -1193,11 +1194,11 @@ Asynchronous; safe to call again, also before the hub has answered (one subscrip
       (setq drgnx-hub--subscribing c)
       (process-put c :since (float-time))
       (drgnx-hub--call-on c "subscribe" nil (lambda (r _err) (drgnx-hub--subscribed c r)))
-      ;; both removed by `drgnx-hub-disconnect'
+      ;; all removed by `drgnx-hub-disconnect'
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
-      (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions 'drgnx-settings-agents--event))
+      (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
       (drgnx-hub-send-settings)
       (when (fboundp 'drgnx-settings-history-connected) (drgnx-settings-history-connected)))))
 
