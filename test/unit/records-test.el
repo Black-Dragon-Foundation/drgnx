@@ -102,7 +102,8 @@
       (write-region "# Build\n\n**Repo:** code\n\n### Task 1: A\n- [ ] one\n\n### Task 2: B\n**Depends:** Task 1\n**Role:** test\n- [ ] two\n"
                     nil plan nil 'silent)
       (let* ((drgnx-job-routes '((implement . "claude") (test "claude")))
-             (data (plist-get (drgnx-job-get (drgnx-job-propose plan :budget 5)) :proposal)))
+             ;; the proposal is made where the hub makes it (the job code writes the job row)
+             (data (plist-get (drgnx-job-get (drgnx-work-fixture-as-hub (drgnx-job-propose plan :budget 5))) :proposal)))
         (should (plist-get data :routes))
         (should (records-test--round 'drgnx-records-job-data data))))))
 

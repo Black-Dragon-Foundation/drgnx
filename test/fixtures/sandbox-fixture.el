@@ -22,6 +22,7 @@
 (require 'drgnx-hub)
 (require 'drgnx-coord)
 (require 'drgnx-sandbox)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)   ; the cards and the inbox, as the hub's stand-in
 
 (defvar drgnx-sandbox-fixture-root nil "The fixture's temporary directory (a true name, a trailing slash).")
 (defvar drgnx-sandbox-fixture-home nil "The fixture user's HOME.")
@@ -164,10 +165,11 @@
             (let ((tcp (drgnx-sandbox-fixture--listen "loopback" :family 'ipv4 :host "127.0.0.1" :service t)))
               (setq drgnx-sandbox-fixture-loopback (format "127.0.0.1:%d" (aref (process-contact tcp :local) 4))))
             (drgnx-hub-serve (drgnx-hub-socket))
-            (drgnx-coord-send :job "fixture" :sender nil :recipient "OTHER" :text "probe-forged-inbox-for-OTHER" :seen 0)
-            (setq drgnx-sandbox-fixture-cards
-                  (cons (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A card the agent must not answer")
-                        (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A second one, for the call without hello")))
+            (drgnx-work-fixture-as-hub
+              (drgnx-coord-send :job "fixture" :sender nil :recipient "OTHER" :text "probe-forged-inbox-for-OTHER" :seen 0)
+              (setq drgnx-sandbox-fixture-cards
+                    (cons (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A card the agent must not answer")
+                          (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A second one, for the call without hello"))))
             (setq drgnx-sandbox-fixture-probe-env
                   (cl-loop
                    for kv in

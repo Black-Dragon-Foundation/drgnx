@@ -6,6 +6,7 @@
 (require 'drgnx-coord)
 (require 'drgnx-records)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)   ; seeding as the hub's stand-in
 
 (defmacro drgnx-hub-agents-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT, the hub served here, profile \"mock\", EVENTS what subscribers heard."
@@ -158,7 +159,7 @@
              (name (plist-get (drgnx-hub-agents-test--snapshot second) :name)))
         (should (string-suffix-p "<2>" name))
         (drgnx-hub-call-sync "agents/kill" (list :id first))
-        (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one")))
+        (drgnx-work-fixture-as-hub (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one"))))
         (let ((job-agent (cl-letf (((symbol-function 'drgnx-agents-job-safe-p) #'always))   ; the mock: never job-safe
                            (drgnx-agents-start "mock" temporary-file-directory nil "j"))))
           (should (drgnx-hub-agents-test--wait (lambda () (eq (drgnx-agent-session-status job-agent) 'idle))))
