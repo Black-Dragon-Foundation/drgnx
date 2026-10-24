@@ -116,6 +116,25 @@
         (should (numberp (plist-get (cdr (car (nth 2 r))) :budget)))))
     (should (eql (car (drgnx-job-cli-test--run summary "approve" "j" "--budget")) 1))))      ; no value
 
+(ert-deftest drgnx-job-cli/status-is-the-fronts-jobs-shape ()
+  ;; `drgnx job status --json' with no id, against a real Ratatoskr (the CLI starts it): the Front's {"jobs": …}
+  (skip-unless (getenv "DRGNX_RATATOSKR_BIN"))
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-cli" t)))
+         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
+                                            (concat "XDG_STATE_HOME=" root "state") (concat "HOME=" root "home")
+                                            "DRGNX_JOBS_LAUNCHER=detached" "DRGNX_NO_HUB_START"
+                                            "RATATOSKR_SUPERVISOR=none" (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
+                                      process-environment)))
+    (unwind-protect
+        (progn
+          (make-directory (concat root "config") t) (make-directory (concat root "home") t)
+          (with-temp-buffer
+            (should (eql 0 (call-process (expand-file-name "bin/drgnx" drgnx-dir) nil t nil "job" "status" "--json")))
+            (let ((r (json-parse-string (buffer-string) :object-type 'plist :array-type 'list)))
+              (should (plist-member r :jobs))
+              (should (listp (plist-get r :jobs))))))
+      (ignore-errors (delete-directory root t)))))
+
 ;; the commands: job-ui-test.el (module tools/jobs)
 
 ;;; job-cli-test.el ends here

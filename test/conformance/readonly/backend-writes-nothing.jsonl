@@ -1,9 +1,15 @@
-{"scenario": "readonly/backend-writes-nothing", "requires": ["v1", "lisp-backend"], "doc": "The Lisp backend writes no table: with the one-writer gate on (DRGNX_WORK_DB_GATE=1 makes it signal on a read-write open of work.db), what it still serves (env/set) answers, the backend stays up, and work.db holds no session, step or job rows the backend could have made."}
+{"scenario": "readonly/backend-writes-nothing", "requires": ["v1", "lisp-backend"], "doc": "The Lisp backend writes no table: with the one-writer gate on (DRGNX_WORK_DB_GATE=1 signals on a read-write open of work.db) the backend runs and answers what it still serves (env/set), and a digest of every table of work.db (rows and sha256) taken once the backend runs is the same after its work. No table is excepted."}
 {"do": "start", "hub": "h", "env": {"DRGNX_WORK_DB_GATE": "1"}}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {}}, "within_ms": 30000}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"backend": {"state": "running"}}}}
-{"do": "sql_expect", "sql": "select count(*) from agent", "rows": [[0]]}
-{"do": "sql_expect", "sql": "select count(*) from step", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "env/set", "params": {"env": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"backend": {"state": "running"}}}}
+{"do": "db_digest", "capture": "before"}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "env/set", "params": {"env": [{"name": "DRGNX_ROW_PROBE", "value": "1"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"backend": {"state": "running"}}}}
+{"do": "db_digest", "same_as": "before"}

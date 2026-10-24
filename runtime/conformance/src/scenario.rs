@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 33] = [
+pub const VERBS: [&str; 34] = [
     "start",
     "root",
     "rename",
@@ -33,6 +33,7 @@ pub const VERBS: [&str; 33] = [
     "spawn_conn",
     "sql_expect",
     "capture_file",
+    "db_digest",
     "http",
     "expect_http",
     "file_grep",
@@ -358,6 +359,7 @@ mod tests {
 {"do": "http", "conn": "h", "to": "tcp:127.0.0.1:1", "method": "POST", "path": "/", "headers": {"a": "b"}, "body": "x", "read": "head", "close_after": true}
 {"do": "expect_http", "conn": "h", "status": 200, "headers": {"content-type": "$any"}, "body_contains": "x", "body_json": {}, "within_ms": 100}
 {"do": "file_grep", "paths": ["$ROOT/**"], "absent": "secret"}
+{"do": "db_digest", "capture": "d"}
 "#;
 
     #[test]
