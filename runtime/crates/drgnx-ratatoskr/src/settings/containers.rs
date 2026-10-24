@@ -11,6 +11,6 @@ pub fn caps(values: &RuntimeValues) -> Caps {
         memory: values.agents_job_memory.clone(),
         cpus: values.agents_job_cpus,
         pids: PIDS,
-        proxy_network: None,
+        proxy: None,
     }
 }

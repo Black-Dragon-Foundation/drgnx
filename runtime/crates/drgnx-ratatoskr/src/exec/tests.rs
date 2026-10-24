@@ -244,7 +244,7 @@ fn container_spec(cwd: &Path) -> ExecSpec {
                 memory: "1G".into(),
                 cpus: 1,
                 pids: container::PIDS,
-                proxy_network: None,
+                proxy: None,
             },
             net: None,
         }),

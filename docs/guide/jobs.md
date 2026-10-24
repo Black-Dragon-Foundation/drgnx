@@ -27,8 +27,14 @@ A job of kind `container` runs a command inside an image you allowed, with `podm
 on `agents-container-images`) and a command; the hub builds the whole `podman run` line from a fixed spec, so the
 agent can add no option. The container has no capabilities and cannot gain privileges, its root is read-only (with a
 tmpfs `/tmp`), and the only folder it sees is the job's worktree, at `/work`. It has a process limit, and
-`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. It has **no network** (a granted network is
-meant to reach the world only through the proxy; that network is not built yet, so a job is never given one).
+`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. It has **no network of its own**
+(`--network=none`, only a loopback). When the matrix's Network cell allows it (a job you start yourself has none unless it asks), the
+job gets the one route there is: the job's own allow-list proxy, a Unix socket the hub mounts read-only into the
+container, and a small forwarder (`drgnx-fwd`, mounted read-only, next to the hub) that listens on `127.0.0.1:3128`
+inside the job and runs the command in its place. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
+package hosts on the allow-list are reached. A job you start yourself asks with `network: true`; without `drgnx-fwd`, or if the socket cannot be made, a job that was allowed a network is refused. An Ask on the Network cell refuses the start with the matrix card. The request has no
+other fields: `exec/start` refuses a field it does not know (a `mounts` or `privileged` is an `invalid-params` error,
+not ignored).
 
 The image is the allow-list's reference pinned by digest; the hub pulls it before the job starts and the job never
 pulls (`--pull=never`). A name that is not on the list is refused. A starting agent needs the matrix's `job.container`

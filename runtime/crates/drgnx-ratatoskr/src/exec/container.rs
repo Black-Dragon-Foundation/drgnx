@@ -26,9 +26,30 @@ pub struct Caps {
     /// `agents-job-cpus`.
     pub cpus: u32,
     pub pids: u32,
-    /// The podman network whose only route is the Gleipnir proxy ([`proxy_network`]); none until one exists.
-    pub proxy_network: Option<String>,
+    /// What a job that was granted network reaches the proxy through ([`Proxy`]); none: a grant is refused.
+    pub proxy: Option<Proxy>,
 }
+
+/// A granted network is not a network: the job keeps `--network=none`, and two files are bind-mounted read-only into
+/// it, the job's Gleipnir proxy socket and the forwarder ([`FORWARDER`]) that gives the job's own loopback a port in
+/// front of that socket.  The only route out is the proxy, by construction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Proxy {
+    /// The job's proxy socket on the host.
+    pub socket: PathBuf,
+    /// The `drgnx-fwd` binary on the host.
+    pub forwarder: PathBuf,
+}
+
+/// Where the proxy socket and the forwarder appear inside the container.
+pub const PROXY_SOCKET: &str = "/run/drgnx/proxy.sock";
+pub const FORWARDER: &str = "/run/drgnx/fwd";
+
+/// The extra flags a granted network adds: the two mounts, the proxy variables and the forwarder as entrypoint.
+#[cfg(test)]
+const NET_FLAGS: usize = 2 + 2 + 8 + 2;
+/// The arguments the entrypoint takes before the job's command: the port, the socket, `--`.
+pub const FORWARDER_ARGS: usize = 3;
 
 /// The process limit of a container job.
 pub const PIDS: u32 = 512;
@@ -117,14 +138,14 @@ pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
             "agents-job-memory, agents-job-cpus: a limit that fits podman",
         ));
     }
-    let network = match req.net {
-        None => "--network=none".to_string(),
-        Some(_) => format!(
-            "--network={}",
-            caps.proxy_network.as_deref().ok_or_else(|| refuse(
-                "this job was granted network access, but no proxy network is set up for containers yet"
-            ))?
-        ),
+    let proxy = match req.net {
+        None => None,
+        Some(_) => {
+            let p = caps.proxy.as_ref().ok_or_else(|| {
+                refuse("this job was granted network access, but it has no proxy to go through")
+            })?;
+            Some((mount_source(&p.socket)?, mount_source(&p.forwarder)?))
+        }
     };
     let mut a: Vec<OsString> = [
         "run",
@@ -148,12 +169,32 @@ pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
     a.push(caps.memory.clone().into());
     a.push("--cpus".into());
     a.push(caps.cpus.to_string().into());
-    a.push(network.into());
+    a.push("--network=none".into());
     a.push("-v".into());
     a.push(format!("{source}:{WORK}:Z").into());
     a.push("-w".into());
     a.push(WORK.into());
+    if let Some((socket, forwarder)) = &proxy {
+        // The socket is this job's alone (`Z`: private label); so is the forwarder, the job's own copy.
+        a.push("-v".into());
+        a.push(format!("{socket}:{PROXY_SOCKET}:ro,Z").into());
+        a.push("-v".into());
+        a.push(format!("{forwarder}:{FORWARDER}:ro,Z").into());
+        let url = format!("http://127.0.0.1:{}", crate::sandbox::PROXY_PORT);
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            a.push("-e".into());
+            a.push(format!("{k}={url}").into());
+        }
+        a.push("--entrypoint".into());
+        a.push(FORWARDER.into());
+    }
     a.push(image.into());
+    if proxy.is_some() {
+        // the entrypoint binds the port, then runs the command in its place
+        a.push(crate::sandbox::PROXY_PORT.to_string().into());
+        a.push(PROXY_SOCKET.into());
+        a.push("--".into());
+    }
     a.extend(req.argv.iter().map(OsString::from));
     Ok(a)
 }
@@ -168,12 +209,89 @@ pub fn podman_missing() -> Refusal {
     }
 }
 
-/// The podman network whose only route is the Gleipnir proxy, created on first use.  Not built yet: a container
-/// that is granted network access is refused until it is (the argv side, [`argv`], already takes its name).
-pub fn proxy_network(_sid: &str) -> Result<String, Refusal> {
-    Err(refuse(
-        "a network for container jobs is not set up yet (its only route would be the Gleipnir proxy)",
-    ))
+/// A job's proxy: the listener on its socket, the socket (removed when the job ends) and the forwarder's copy.
+pub struct JobProxy {
+    _handle: gleipnir::net::proxy::ProxyHandle,
+    pub mounts: Proxy,
+}
+
+impl Drop for JobProxy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.mounts.socket);
+    }
+}
+
+/// Where a job's proxy socket lives: a short path (a Unix socket's path holds 108 bytes) under the user's runtime dir.
+pub fn socket_for(job: &str, run_dir: &Path) -> PathBuf {
+    run_dir.join("drgnx-jobs").join(format!("{job}.sock"))
+}
+
+/// Makes job JOB's proxy: its own copy of FORWARDER in DIR (the job's folder; the copy is what gets relabelled, never
+/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET.  An error means the job
+/// was granted a network it cannot be given.
+pub fn prepare_proxy(
+    job: &str,
+    dir: &Path,
+    run_dir: &Path,
+    forwarder: &Path,
+    net: NetCell,
+) -> Result<JobProxy, Refusal> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let copy = dir.join("fwd");
+    std::fs::copy(forwarder, &copy)
+        .and_then(|_| std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)))
+        .map_err(|e| {
+            refuse(format!(
+                "this job was granted network access, but the forwarder {} cannot be copied: {e}",
+                forwarder.display()
+            ))
+        })?;
+    let socket = socket_for(job, run_dir);
+    if let Some(parent) = socket.parent() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|e| refuse(format!("{}: {e}", parent.display())))?;
+    }
+    let handle = start_proxy(&socket, net)?;
+    Ok(JobProxy {
+        _handle: handle,
+        mounts: Proxy {
+            socket,
+            forwarder: copy,
+        },
+    })
+}
+
+/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET.  Dropping the handle closes the
+/// listener and every connection.
+pub fn start_proxy(
+    socket: &Path,
+    net: NetCell,
+) -> Result<gleipnir::net::proxy::ProxyHandle, Refusal> {
+    use gleipnir::net::{host, proxy};
+    let allow = crate::sandbox::allowed_hosts(net)
+        .iter()
+        .map(|h| host::parse_target(h))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| refuse(format!("the allow-list: {e:?}")))?;
+    let _ = std::fs::remove_file(socket);
+    let listener = tokio::net::UnixListener::bind(socket)
+        .map_err(|e| refuse(format!("the proxy socket {}: {e}", socket.display())))?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    // nobody is asked about a denied host here; the channel only has to stay drained
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let handle = proxy::start(
+        proxy::ProxyConfig {
+            allow,
+            ..Default::default()
+        },
+        std::sync::Arc::new(proxy::SystemResolver),
+        tx,
+    );
+    handle.listen(proxy::Listener::Unix(listener), 1);
+    Ok(handle)
 }
 
 /// Run `podman ARGS`; kill it and say so when it outlives LIMIT.
@@ -289,7 +407,10 @@ mod tests {
             memory: "4G".into(),
             cpus: 2,
             pids: PIDS,
-            proxy_network: Some("drgnx-proxy".into()),
+            proxy: Some(Proxy {
+                socket: "/run/h/job.sock".into(),
+                forwarder: "/opt/drgnx-fwd".into(),
+            }),
         }
     }
 
@@ -417,11 +538,15 @@ mod tests {
         let mut r = req(&["ls"]);
         r.net = Some(NetCell::ProviderAndPackages);
         let a = strs(argv(&r, &caps()).unwrap());
-        assert!(a.contains(&"--network=drgnx-proxy".to_string()));
-        assert!(!a.contains(&"--network=none".to_string()));
-        // a grant with no proxy network is refused, never turned into the host's network
+        // still no podman network: the proxy comes in as files
+        assert!(a.contains(&"--network=none".to_string()));
+        assert!(
+            !a.iter()
+                .any(|s| s.starts_with("--network=") && s != "--network=none")
+        );
+        // a grant with no proxy is refused, never turned into the host's network
         let c = Caps {
-            proxy_network: None,
+            proxy: None,
             ..caps()
         };
         assert!(argv(&r, &c).is_err());
@@ -431,6 +556,139 @@ mod tests {
                 .iter()
                 .any(|s| s.contains("host"))
         );
+    }
+
+    #[test]
+    fn a_grant_adds_exactly_two_ro_mounts_the_proxy_env_and_the_entrypoint() {
+        let plain = strs(argv(&req(&["ls", "-l"]), &caps()).unwrap());
+        let mut r = req(&["ls", "-l"]);
+        r.net = Some(NetCell::ProviderAndPackages);
+        let a = strs(argv(&r, &caps()).unwrap());
+        // the fixed flags before the extras are untouched
+        let at = plain.iter().position(|s| s == REF).unwrap();
+        assert_eq!(a[..at], plain[..at]);
+        let image = a.iter().position(|s| s == REF).unwrap();
+        assert_eq!(image - at, NET_FLAGS);
+        let extra = &a[at..image];
+        assert_eq!(
+            extra[..4],
+            [
+                "-v",
+                "/run/h/job.sock:/run/drgnx/proxy.sock:ro,Z",
+                "-v",
+                "/opt/drgnx-fwd:/run/drgnx/fwd:ro,Z"
+            ]
+        );
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            let want = format!("{k}=http://127.0.0.1:3128");
+            assert!(
+                extra.windows(2).any(|w| w[0] == "-e" && w[1] == want),
+                "{k}"
+            );
+        }
+        assert_eq!(extra[12..], ["--entrypoint", "/run/drgnx/fwd"]);
+        // the command stays last, after the forwarder's own arguments
+        assert_eq!(
+            a[image + 1..],
+            ["3128", "/run/drgnx/proxy.sock", "--", "ls", "-l"]
+        );
+        // a mount source that podman would read as options is refused
+        let c = Caps {
+            proxy: Some(Proxy {
+                socket: "/a:b/s".into(),
+                forwarder: "/f".into(),
+            }),
+            ..caps()
+        };
+        assert!(argv(&r, &c).is_err());
+    }
+
+    #[tokio::test]
+    async fn every_mount_source_lies_in_the_jobs_own_dirs() {
+        let d = tempfile::tempdir().unwrap();
+        let (job_dir, run_dir, installed) = (
+            d.path().join("job"),
+            d.path().join("run"),
+            d.path().join("bin-drgnx-fwd"),
+        );
+        std::fs::create_dir_all(&job_dir).unwrap();
+        std::fs::write(&installed, b"binary").unwrap();
+        let jp = prepare_proxy(
+            "j1",
+            &job_dir,
+            &run_dir,
+            &installed,
+            NetCell::ProviderAndPackages,
+        )
+        .unwrap();
+        // the socket path stays short; the copy is the job's own; the installed file is never a mount source
+        assert!(jp.mounts.socket.starts_with(&run_dir));
+        assert!(jp.mounts.socket.as_os_str().len() < 108);
+        assert_eq!(jp.mounts.forwarder, job_dir.join("fwd"));
+        assert_eq!(std::fs::read(&jp.mounts.forwarder).unwrap(), b"binary");
+        let c = Caps {
+            proxy: Some(jp.mounts.clone()),
+            ..caps()
+        };
+        let mut r = req(&["ls"]);
+        r.worktree = d.path().join("tree");
+        r.net = Some(NetCell::ProviderAndPackages);
+        let a = strs(argv(&r, &c).unwrap());
+        let sources: Vec<&str> = a
+            .windows(2)
+            .filter(|w| w[0] == "-v")
+            .map(|w| w[1].split(':').next().unwrap())
+            .collect();
+        assert_eq!(sources.len(), 3);
+        for s in sources {
+            let p = Path::new(s);
+            assert!(
+                p.starts_with(d.path().join("tree"))
+                    || p.starts_with(&job_dir)
+                    || p.starts_with(&run_dir),
+                "{s}"
+            );
+            assert_ne!(p, installed);
+        }
+        assert!(a.iter().all(|s| !s.ends_with(":ro,z")));
+        let sock = jp.mounts.socket.clone();
+        drop(jp);
+        assert!(!sock.exists());
+        // a forwarder that is not there refuses the job instead of running it without a network
+        assert!(
+            prepare_proxy(
+                "j2",
+                &job_dir,
+                &run_dir,
+                &d.path().join("none"),
+                NetCell::Open
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn no_grant_adds_no_proxy_flag() {
+        let a = strs(argv(&req(&["ls"]), &caps()).unwrap());
+        assert!(!a.iter().any(|s| s.contains("proxy") || s == "--entrypoint"));
+        assert_eq!(a.len(), 22 + 1 + 1);
+    }
+
+    #[tokio::test]
+    async fn the_job_proxy_listens_on_its_socket() {
+        let d = tempfile::tempdir().unwrap();
+        let sock = d.path().join("proxy.sock");
+        let handle = start_proxy(&sock, NetCell::ProviderAndPackages).unwrap();
+        // not on the allow-list: refused by the proxy itself
+        let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        c.write_all(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 12];
+        let n = c.read(&mut buf).await.unwrap_or(0);
+        assert!(!buf[..n].starts_with(b"HTTP/1.1 200"), "{:?}", &buf[..n]);
+        drop(handle);
     }
 
     #[test]

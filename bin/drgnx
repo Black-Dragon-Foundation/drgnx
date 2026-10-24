@@ -138,13 +138,18 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   printf 'drgnx runtime: building Ratatoskr %s with %s (-j%s)\n' "${commit:0:12}" "$RT_CARGO" "$jobs"
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
         --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr) || { rt_err "the build failed"; return 1; }
+  # the forwarder a container job runs: static, so it starts in any image (its own target dir: other flags)
+  printf 'drgnx runtime: building the container forwarder (static)\n'
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "CARGO_TARGET_DIR=$cache/ratatoskr-fwd-target" \
+        "RUSTFLAGS=-C target-feature=+crt-static" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --manifest-path runtime/Cargo.toml -p drgnx-fwd) || { rt_err "the forwarder build failed"; return 1; }
   if ((install)); then
     if [[ -n "$prefix" ]]; then rt_install --prefix "$prefix"; else rt_install; fi
   fi
 }
 
 rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by rename; with a prefix, $PREFIX/bin/{ratatoskr,rtsk} link to it
-  local prefix="" built dir answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
+  local prefix="" built dir fwd answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
   while (($#)); do
     case "$1" in
       --prefix) [[ -n "${2:-}" ]] || { rt_err "--prefix needs a directory"; return 2; }; prefix="$2"; shift ;;
@@ -161,6 +166,14 @@ rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by 
   mkdir -p "$dir"
   cp "$built" "$dir/ratatoskr.new" && chmod 755 "$dir/ratatoskr.new" && mv -f "$dir/ratatoskr.new" "$dir/ratatoskr" ||
     { rt_err "could not install into $dir"; return 1; }   # a rename: a running hub sees a new inode at its resolved path
+  # beside the hub, where it looks for the forwarder of a container job's network
+  fwd="$(drgnx_dir cache)/ratatoskr-fwd-target/release/drgnx-fwd"
+  if [[ -x "$fwd" ]]; then
+    cp "$fwd" "$dir/drgnx-fwd.new" && chmod 755 "$dir/drgnx-fwd.new" && mv -f "$dir/drgnx-fwd.new" "$dir/drgnx-fwd" ||
+      { rt_err "could not install drgnx-fwd into $dir"; return 1; }
+  else
+    rt_err "no forwarder built at $fwd: container jobs get no network until drgnx runtime build runs"
+  fi
   if [[ -n "$prefix" ]]; then
     mkdir -p "$prefix/bin"
     for n in ratatoskr rtsk; do ln -sfn "$dir/ratatoskr" "$prefix/bin/$n"; done
