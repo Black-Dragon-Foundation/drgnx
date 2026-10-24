@@ -337,14 +337,14 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 7, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 7. A newer file (above 7) makes the hub read-only; a
+missing file is made at schema 8, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 8. A newer file (above 8) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
-It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 7,
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 8,
 the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
 
 **Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
@@ -399,8 +399,7 @@ method the front does not serve (`runtime/crates/drgnx-ratatoskr/src/{backend,fo
 **The agent core is the front's** (agent system part 1): `agents/*` and `job/*`, and every method the agent core adds
 (`exec/*`, `matrix/*`, `presence/set`, `messages/retract`, `plans/*`, `brief/*`, `reports/get`, `decisions/effects`,
 `timeline/get`, `budget/*`, `pace/get`, `records/*`), are routed by `src/agent_core.rs` to the module that serves
-each. Until its task lands, such a method answers `internal` "METHOD: not yet (agent system part 1, Task N)"; the
-backend serves none of them.
+each. The backend serves none of them.
 
 **The command.** `DRGNX_RATATOSKR_BACKEND` when set (an absolute executable, no arguments: the tests' fake backend or
 `test/conformance/lisp-hub.sh`), else `EMACS --batch -Q --eval "(setq load-prefer-newer t)" -L DRGNX/core -l
@@ -725,9 +724,9 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   (`managedSettings`) as before. `restart/resumed-session-gets-the-options`.
 - **A session that waited on a job still waits** (status `waiting`, the `job-wait` step, idle close as before) when
   its job is still running.
-- **If the agent can neither resume nor load**: the summary handoff of Task 26 (`summary_handoff`, none yet), else a
-  fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`). A manager is restarted from the
-  graph by Task 25 (`restart_manager_from_graph`, none yet).
+- **If the agent can neither resume nor load**: a fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`, followed by the
+  summary handoff when there is one). A manager is restarted from the graph (`restart_manager_from_graph`): a new
+  session told its digest and open decisions, its conversation not restored.
 - **A job's end wakes once.** `runtime.db` table `wake` (migration 7): a row `pending` when the end is announced,
   `sending` while it is delivered, `done` once the session has the prompt (the mark; pruned with the job). After the
   sessions are back (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's
@@ -741,7 +740,7 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
 
 ## The store
 
-The front serves the store (`work.db`, schema 7) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 8) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`, never forwarded to the backend. A write the backend's connection asks for among
 them (grants, settings, excise, import, revert, proposed txs, scrub, compact, `tasks/write`) is `not-allowed`. `cards/settle` of an `access` card makes a
@@ -1117,8 +1116,8 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   peer's or manager's message is approval. The matrix (Task 12) is asked first; a `Never` rejects at once.
 - **Files.** `fs/read_text_file` and `fs/write_text_file` are served inside the session's directory only (symlinks
   resolved first). A brainstorm session may read the project and write only its design document.
-- **Launch.** Until Task 10, only test builds (and `test-hooks`) start a session, unsandboxed; no shipped path
-  starts one outside Gleipnir.
+- **Launch.** A session starts inside Gleipnir (`agents/launch.rs`); only test builds (`test-hooks`) can start one
+  unsandboxed.
 - **Stop and kill.** `agents/stop` on a running turn cancels it (`session/cancel`), answers the pending permission
   requests cancelled and holds the queue (`paused`); an agent that has not ended the turn after 2 s loses its process
   group. On a session with no turn running it ends the session (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it

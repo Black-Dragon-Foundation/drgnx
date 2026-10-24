@@ -693,8 +693,8 @@ A notification to the hub (`coord/notify`) carries no id and gets no answer: the
 
 ### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
 
-Since Task 16a the hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
-`drgnx-job-summary` shapes, so the cockpit and `bin/drgnx job` read them unchanged; Task 16b added `job/{card,reply,
+The hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
+`drgnx-job-summary` shapes, so the cockpit and `bin/drgnx job` read them unchanged, and `job/{card,reply,
 dismiss,reassign,resume}` and the review hand-off below. The Lisp runner (`core/drgnx-job*.el`) is frozen and is the oracle for each rule.
 
 - **State:** a job is a `job` row, its tasks `jtask` rows, plus the JSON in `job.data`: `plan`, `hash`, `repo`, `tasks`
@@ -705,8 +705,8 @@ dismiss,reassign,resume}` and the review hand-off below. The Lisp runner (`core/
   `drgnx-job-read-plan` (`# title`, `**Repo:**`, `### Task N: title`, `**Role:**`, `**Depends:**`, `**Won't build:**`
   lines become decisions); duplicates, missing dependencies and cycles are refused; the job starts `proposed` with
   one `proposal` card and a message (three writes). `auto` approves at once; `job/start-task` proposes task N and the
-  tasks it needs. The estimate counts tokens only (150k in, 15k out per task); prices arrive with Task 20, so every
-  routed profile is listed as unpriced.
+  tasks it needs. The estimate counts 150k in and 15k out per task, at the price the user configured for the profile's gateway
+  provider; a profile without one (a subscription) is listed as unpriced.
 - **Approve, stop:** approve settles the proposal card and sets `running` (and the budget); stop rejects it, ends the
   job's sessions (worktrees stay) and sets `stopped`.
 - **The step** (every 2 s, and at once after an approval or an unblock; `runner::tick`): a task whose agent is gone is
@@ -715,7 +715,7 @@ dismiss,reassign,resume}` and the review hand-off below. The Lisp runner (`core/
   **No git runs on the step**: a ready task is marked `starting` and a task of its own makes the worktree through
   `RunGit::task_worktree` (async, with a deadline), then starts the session (role `worker`, the task's profile, its
   lock and sandbox as any worker's), claims the task for it, registers the agent and sends the task prompt. A failure
-  raises the task's `agent` card. `BasicGit` makes worktrees until Task 17's `HubGit` is set with `Runs::set_git`.
+  raises the task's `agent` card. The server sets `HubGit` with `Runs::set_git`; `BasicGit` (plain worktrees, no merge gate) is only the default of a bare `Runs`.
 - **Order, block:** `job/order` moves a task among the open tasks; `job/block` keeps a task from getting an agent
   (reason: one line, control and bidi characters replaced, 500 characters); `job/unblock` lets it run again.
 - **Hooks:** `Runs::set_hooks` takes the `Hooks` (`runner::review::PlanHooks`, set by the server), called after each

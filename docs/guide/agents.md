@@ -622,6 +622,16 @@ that match no record (a deleted row, say) become a note. Rejecting keeps a copy 
 `<state>/hub/records-backup/` and rewrites the file. A manager agent may decide a proposal when the matrix allows it,
 except for settings only you may change (a plan's `matrix`).
 
+### Reviewing a hand edit
+
+The hub writes the org folder's plans, ledgers and DEFERRED file as views of its graph. If you edit one by hand, the
+hub does not overwrite it: the edit becomes a proposal and you get a notice ("A hand edit to … is waiting for
+review"). The notice only tells you; nothing asks. **Records: Review Proposal** (from the notice, or the palette) shows
+the proposal as a diff, with a line saying how many operations it would apply. In that buffer `C-c C-a` accepts (the
+hub applies the operations if the records did not change meanwhile, then rewrites the file) and `C-c C-r` rejects (your
+edited file is kept in the hub's records backup, then the file is rewritten). A proposal that went stale stays open:
+review it again. Also available as **Records: Accept Proposal** and **Records: Reject Proposal**.
+
 ## A manager agent
 
 A chat session becomes a **manager** when you say so: `agents/role` with `role: manager` (no editor command yet). Only
@@ -631,7 +641,7 @@ session is restarted afresh (the same way a rotation restarts it), so its tool s
 | Tool | What it does |
 |---|---|
 | `agent_start` | starts a worker on a profile, for a task, with `grants` and a `budget` |
-| `agent_message`, `agent_pause`, `agent_stop`, `agent_move` | steer a worker it started (`agent_move` arrives with moving an agent to another model) |
+| `agent_message`, `agent_pause`, `agent_stop`, `agent_move` | steer a worker it started (`agent_move` moves one to another model, [above](#durable-sessions)) |
 | `report_read` | a task's structured reports |
 | `transcript_slice` | at most 50 steps of a worker's transcript, with their messages; never a whole transcript |
 | `trial_merge`, `merge` | merge workers' branches in a scratch tree, or into the manager's own integration branch `job/<manager>` through the merge gate; never into `main` |
@@ -728,13 +738,3 @@ its `session/new` or `session/load` got, `mode`: the mode `session/set_mode` set
 `MOCK_ACP_SET_MODE_SLOW=SECS` make it refuse or answer late). Tests start it through
 `test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
 a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.
-
-## Reviewing a hand edit to a plan file
-
-The hub writes the org folder's plans, ledgers and DEFERRED file as views of its graph. If you edit one by hand, the
-hub does not overwrite it: the edit becomes a proposal and you get a notice ("A hand edit to … is waiting for
-review"). The notice only tells you; nothing asks. **Records: Review Proposal** (from the notice, or the palette) shows
-the proposal as a diff, with a line saying how many operations it would apply. In that buffer `C-c C-a` accepts (the
-hub applies the operations if the records did not change meanwhile, then rewrites the file) and `C-c C-r` rejects (your
-edited file is kept in the hub's records backup, then the file is rewritten). A proposal that went stale stays open:
-review it again. Also available as **Records: Accept Proposal** and **Records: Reject Proposal**.

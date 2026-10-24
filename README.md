@@ -69,8 +69,9 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 - **Next:** **Nidhogg**, dragonX's own Emacs build (see Requirements); dragonX then runs on it.
 - **Polish:** a compositor for rounded, shadowed, animated popups and panels. Linux Wayland first, then macOS.
 - **Speed:** no freezes while Lisp works; parsing, process output and JSON move off the main thread; smooth scrolling.
-- **Agents:** a panel that shows what agents do in detail (each step, diffs, permissions, context and cost), with
-  collapse per step type that remembers your choice; an agent runtime written in Rust.
+- **Agents:** the agent runtime in Rust is built: the hub runs sessions, plan runs, managers, budgets and the permissions
+  matrix ([docs/guide/agents.md](docs/guide/agents.md)). Next, a panel that shows what agents do in detail (each step,
+  diffs, permissions, context and cost), with collapse per step type that remembers your choice.
 - **Extensions:** WebAssembly extensions, so tools can be written in any language (agent tools first). Community
   Emacs packages keep working.
 - **Also planned:** a settings editor, a Meow modal module, then the public launch. (Language servers, a debugger,
