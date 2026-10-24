@@ -167,6 +167,16 @@ the allocation. So the budget follows the larger of the two CI-image measurement
 laptop's number; the other allocation rows, whose commands do not wait on a stream, agree to a few percent between
 machines and keep their seeds. A row of this kind that moves again is judged by `--ab` first, not by re-seeding.
 
+The keys also used to arrive in bursts. The harness types onto `unread-command-events`, and while the view's slices and
+the search's parse ran as zero-delay timer chains, Emacs's wait for input ran them back to back and never returned to
+read those keys (it leaves its timers for keyboard input only): up to ten keys queued, then ran with no redisplay
+between them, and each key's 0 s probe timer ran inside the previous one's `redisplay`, so its latency counted every
+redisplay after its own. With Glitnir (the compositor) on, 178 of 198 keys came in such bursts (input p50 58 ms, keys
+alone 7.8 ms) against 101 of 198 off (21.6 / 16.2 ms): the A/B judged that "regressed" by +27.8 ms, an artefact of the
+timing. Both chains now yield to pending input (`drgnx-timer-chain-delay`, core.md "A chain yields to input"): 192 of
+198 keys alone on (a traced run), and the A/B judges the median improved, -19.6 ms [-26.8, -11.3] (input p50 7.3
+on against 21.2 ms off, 2880x1800 at scale 2, n=176/172).
+
 ## Waiting for a view inside a workload (`replace-retype`)
 
 A workload step that waits for a view to finish drawing (`drgnx-perf--replace-idle`: the arm, the measure and the

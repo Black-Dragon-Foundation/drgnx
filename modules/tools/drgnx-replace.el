@@ -228,9 +228,10 @@ part of the queue is parsed (`drgnx-replace--parse-some')."
 
 (defun drgnx-replace--parse-some (proc)
   "Parse at most `drgnx-replace-parse-lines' of PROC's queued lines and send their matches as one batch.  Lines
-left: the rest at the next timer pass (`drgnx-timer-soon', owned by the search's stderr buffer).  None left and
-PROC ended: the end of the stream (`drgnx-replace--end').  A line that does not parse is left out; the first such
-error of the search goes to the callback as (:error REASON).  A cancelled search parses and sends nothing."
+left: the rest at the next timer pass (`drgnx-timer-soon' at `drgnx-timer-chain-delay', owned by the search's stderr
+buffer).  None left and PROC ended: the end of the stream (`drgnx-replace--end').  A line that does not parse is left
+out; the first such error of the search goes to the callback as (:error REASON).  A cancelled search parses and
+sends nothing."
   (unless (process-get proc 'drgnx-replace-cancelled)
     (let ((q (process-get proc 'drgnx-replace-queue)) (parse (process-get proc 'drgnx-replace-parse))
           (n drgnx-replace-parse-lines) (parts nil) (bad nil))
@@ -247,7 +248,8 @@ error of the search goes to the callback as (:error REASON).  A cancelled search
           (process-put proc 'drgnx-replace-parse-failed t)
           (funcall callback (list :error (format "Search output not read: %s" bad)))))
       (unless (process-get proc 'drgnx-replace-cancelled)  ; the callback may have started another search
-        (cond (q (drgnx-timer-soon (cons 'replace-parse proc) 0 #'drgnx-replace--parse-some :args (list proc)
+        (cond (q (drgnx-timer-soon (cons 'replace-parse proc) (drgnx-timer-chain-delay) #'drgnx-replace--parse-some
+                                   :args (list proc)
                                    :owner (process-get proc 'drgnx-replace-err)))
               ((process-get proc 'drgnx-replace-ended) (drgnx-replace--end proc)))))))
 

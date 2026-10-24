@@ -436,6 +436,16 @@ less what reading the counters itself costs."
      (should (equal (drgnx-timer-prim-test--log)
                     '((step 200 nil) (step 200 nil) (step 200 nil) (done)))))))
 
+(ert-deftest drgnx-timer-prim/a-chain-yields-to-pending-input ()
+  "A zero-delay chain's next link waits `drgnx-timer-chain-yield' while input is pending, so Emacs's wait returns
+to read input queued on `unread-command-events' before the chain goes on; with no input it is 0."
+  (cl-letf (((symbol-function 'drgnx-timer--input-pending-p) (lambda () drgnx-timer-prim-test--pending)))
+    (setq drgnx-timer-prim-test--pending nil)
+    (should (eql 0 (drgnx-timer-chain-delay)))
+    (setq drgnx-timer-prim-test--pending t)
+    (should (> drgnx-timer-chain-yield 0))
+    (should (eql drgnx-timer-chain-yield (drgnx-timer-chain-delay)))))
+
 (ert-deftest drgnx-timer-prim/budget-bounds-a-firing ()
   (drgnx-timer-prim-test--with
    (cl-letf (((symbol-function 'drgnx-timer--now) (drgnx-timer-prim-test--install-stub-now)))

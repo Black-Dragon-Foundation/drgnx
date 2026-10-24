@@ -26,6 +26,16 @@
 (defun drgnx-timer--input-pending-p () "Non-nil when input is waiting (`input-pending-p')." (input-pending-p))
 (defun drgnx-timer-now () "Now, in seconds: the clock layer timers run on (a test's virtual clock in tests)." (drgnx-timer--now))
 
+(defvar drgnx-timer-chain-yield 0.016
+  "Seconds a zero-delay chain waits before its next link while input is pending (`drgnx-timer-chain-delay').")
+
+(defun drgnx-timer-chain-delay ()
+  "The delay of a zero-delay chain's next link: 0, or `drgnx-timer-chain-yield' while input is pending.
+Emacs's wait for input runs ripe timers back to back and leaves them only for keyboard input, so a chain re-armed
+at 0 starves input queued on `unread-command-events' (a re-read key, a harness's typing) until the chain ends.
+Waiting one link lets that wait return: the command loop reads the input first.  See docs/develop/core.md, \"Timers\"."
+  (if (drgnx-timer--input-pending-p) drgnx-timer-chain-yield 0))
+
 ;;;; Entries, keys and owners
 
 (cl-defstruct (drgnx-timer--entry (:constructor drgnx-timer--make) (:copier nil))
