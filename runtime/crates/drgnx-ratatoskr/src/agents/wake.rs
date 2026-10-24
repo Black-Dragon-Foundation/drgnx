@@ -200,6 +200,7 @@ pub async fn run(front: Arc<Front>, mut events: tokio::sync::broadcast::Receiver
                 }
             }
             Ok(JobEvent::Done(done)) => {
+                front.core.manager.job_ended(&done);
                 if done.session.is_some() {
                     let front = front.clone();
                     tokio::spawn(async move {

@@ -63,6 +63,28 @@ pub const BLOCK_REASON_MAX: usize = 500;
 /// The tokens one task is estimated at: (input, output) (`drgnx-job-task-tokens`).
 pub const TASK_TOKENS: (u64, u64) = (150_000, 15_000);
 
+/// What one task costs at PRICE (US dollars per million tokens in, out): an estimate (`usd-est`).
+pub(crate) fn task_usd(price: (f64, f64)) -> f64 {
+    (TASK_TOKENS.0 as f64 * price.0 + TASK_TOKENS.1 as f64 * price.1) / 1_000_000.0
+}
+
+/// The price the user configured for PROFILE's gateway provider (`drgnx-ai-providers` `:price`); none for a profile
+/// without a gateway or a provider without a price (a subscription profile stays unpriced).
+pub(crate) fn profile_price(front: &Front, profile: &str) -> Option<(f64, f64)> {
+    let p = crate::agents::session::find_profile(front, profile)?;
+    p.ai.as_ref()?;
+    let (provider, _) = crate::agents::session::gateway_chain(front, &p)
+        .into_iter()
+        .next()?;
+    let cur = front.settings.current();
+    cur.loaded
+        .providers
+        .iter()
+        .find(|c| c.id.as_str() == provider)
+        .and_then(|c| c.price)
+        .map(|p| (p.input.get(), p.output.get()))
+}
+
 /// What Task 16b adds to the tick: reviews, the merge gate, fallback, the budget pause.  Set once by the server
 /// ([`Runs::set_hooks`]); the runner calls it and knows nothing of what it does.
 pub trait Hooks: std::marker::Send + Sync {
@@ -1006,15 +1028,25 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
             )
         })
         .collect();
+    // usd-est: tokens at the price the user configured for the profile's gateway provider; no price: unpriced
     let mut unpriced: Vec<String> = Vec::new();
-    for r in routes.values().filter_map(Value::as_str) {
-        if !unpriced.iter().any(|u| u == r) {
-            unpriced.push(r.to_owned());
+    let mut usd = 0.0;
+    for t in &tasks {
+        let profile = routes
+            .get(&t.role)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match profile_price(front, profile) {
+            Some(price) => usd += task_usd(price),
+            None => {
+                if !unpriced.iter().any(|u| u == profile) {
+                    unpriced.push(profile.to_owned());
+                }
+            }
         }
     }
     let per_task = TASK_TOKENS.0 + TASK_TOKENS.1;
-    let estimate =
-        json!({"usd": 0.0, "tokens": per_task * tasks.len() as u64, "unpriced": unpriced});
+    let estimate = json!({"usd": usd, "unit": "usd-est", "tokens": per_task * tasks.len() as u64, "unpriced": unpriced});
     let gate = match gate.unwrap_or(MergeGate::Review) {
         MergeGate::Review => "review",
         MergeGate::ReviewAccept => "review+accept",
@@ -1383,4 +1415,17 @@ pub async fn reassign(
 
 pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<JobSummary, Error> {
     fallback::resume(front, caller, p).await
+}
+
+#[cfg(test)]
+mod price_tests {
+    use super::*;
+
+    #[test]
+    fn a_task_costs_its_tokens_at_the_configured_price() {
+        // 150k in at 3 $/M + 15k out at 15 $/M = 0.45 + 0.225
+        let usd = task_usd((3.0, 15.0));
+        assert!((usd - 0.675).abs() < 1e-9, "{usd}");
+        assert_eq!(task_usd((0.0, 0.0)), 0.0);
+    }
 }

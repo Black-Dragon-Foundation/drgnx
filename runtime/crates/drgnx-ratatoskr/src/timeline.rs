@@ -143,7 +143,7 @@ fn class_of(c: norn::write::steps::StepClass) -> StepClass {
     serde_json::from_value(serde_json::json!(c.as_str())).unwrap_or(StepClass::Think)
 }
 
-fn step_of(s: table::Step) -> Step {
+pub(crate) fn step_of(s: table::Step) -> Step {
     let plain = |v: String, p: &str| v.strip_prefix(p).map(str::to_string).unwrap_or(v);
     Step {
         id: s.id,

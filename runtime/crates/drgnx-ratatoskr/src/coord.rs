@@ -696,6 +696,23 @@ impl Hub for ToolHub {
         })
     }
 
+    fn manager(
+        &self,
+        sid: &str,
+        op: &'static str,
+        args: Value,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let sid = sid.to_string();
+        Box::pin(async move {
+            let front = self
+                .front
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .ok_or("the hub is starting")?;
+            crate::manager::tool(&front, &sid, op, args).await
+        })
+    }
+
     fn wait_refused(&self, sid: &str) {
         if let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade)
             && let Ok(s) = front.core.agents.find(sid)

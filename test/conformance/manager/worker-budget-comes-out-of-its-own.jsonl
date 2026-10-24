@@ -1,0 +1,28 @@
+{"scenario": "manager/worker-budget-comes-out-of-its-own", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 25: a worker's budget comes out of its manager's. A worker budget above what the manager has left is refused; a smaller one is set on the worker; lowering the manager's limit below it lowers what the worker has left (the manager -> worker link)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/role", "params": {"id": "$sid", "role": "manager"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 90, "method": "budget/set", "params": {"scope": {"manager": "$sid"}, "limits": [{"amount": 5, "unit": "usd"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 90, "result": {"limits": [{"amount": 5.0, "unit": "usd"}]}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "agent_start", "arguments": {"profile": "mock-claude", "budget": [{"amount": 7, "unit": "usd"}]}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "budget refused: 7 usd is more than the 5 usd left of yours"}], "isError": true}}, "within_ms": 30000}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "agent_start", "arguments": {"profile": "mock-claude", "budget": [{"amount": 2, "unit": "usd"}]}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 91, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 91, "result": {"sessions": {"$contains": [{"id": "$capture:wsid", "parent": "$sid"}]}}}}
+{"do": "send", "conn": "c", "json": {"id": 92, "method": "budget/get", "params": {"scope": {"worker": "$wsid"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 92, "result": {"limits": [{"amount": 2.0, "unit": "usd"}], "remaining": [{"amount": 2.0, "unit": "usd"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 93, "method": "budget/set", "params": {"scope": {"manager": "$sid"}, "limits": [{"amount": 1, "unit": "usd"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 93, "result": {"limits": [{"amount": 1.0, "unit": "usd"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 94, "method": "budget/get", "params": {"scope": {"worker": "$wsid"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 94, "result": {"remaining": [{"amount": 1.0, "unit": "usd"}]}}}

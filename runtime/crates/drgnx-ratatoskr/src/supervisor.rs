@@ -323,11 +323,28 @@ async fn changed_lines(cwd: &std::path::Path) -> Option<u64> {
     .flatten()
 }
 
-/// Pause the agent (not for `manager-context`: Task 25 rotates it), make the card, announce it.
+/// Pause the agent (not for `manager-context`: that one is rotated first, one path, and the card says it was), make
+/// the card, announce it.
 async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
-    if rule != Rule::ManagerContext {
+    let mut text = text.to_string();
+    let mut deferred = false;
+    if rule == Rule::ManagerContext {
+        use crate::manager::Rotation;
+        let said = match crate::manager::rotate_for_context(f, &o.sid).await {
+            Rotation::Done => {
+                "rotated: a fresh session was started with its digest and open decisions"
+            }
+            Rotation::Deferred => {
+                deferred = true;
+                "its turn is running: it is rotated when the turn ends"
+            }
+            Rotation::Failed => "could not be rotated",
+        };
+        text = format!("{text}; {said}");
+    } else {
         let _ = f.core.agents.cancel_after_tool(&o.sid);
     }
+    let text = text.as_str();
     if rule == Rule::Silent {
         f.core.agents.mark_stalled(&o.sid);
     }
@@ -355,6 +372,9 @@ async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
         .await;
     match made {
         Ok(id) => {
+            if deferred {
+                crate::manager::note_card(f, &o.sid, id).await;
+            }
             f.writer.signals.wrote();
             f.broadcast(
                 "supervisor",

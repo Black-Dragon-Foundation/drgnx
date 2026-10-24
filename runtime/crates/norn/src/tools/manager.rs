@@ -12,15 +12,21 @@ use runstav::types::{Bounded, Id, Text};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::guard::CoordTool;
 use super::guard::guarded;
-use super::{Ctx, stub_tool};
+use super::{Coord, Ctx, Identity};
+use mimir::BoxFuture;
+use runstav::methods::matrix::Role;
 
 /// `agent_start`'s arguments: a worker on a profile, for a task, with grants (cells for the worker's column that
 /// must not be wider than the manager's) and a budget out of the manager's own.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, serde::Serialize, JsonSchema)]
 pub struct AgentStartArgs {
     #[serde(default)]
     pub task: Option<ParsedId>,
+    /// Only `worker`: a manager does not start a manager (one level).
+    #[serde(default)]
+    pub role: Option<Role>,
     pub profile: Bounded<String, 128>,
     #[serde(default)]
     pub grants: Bounded<Vec<CellRow>, 64>,
@@ -29,91 +35,115 @@ pub struct AgentStartArgs {
 }
 
 /// A session the manager started.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, serde::Serialize, JsonSchema)]
 pub struct SessionArg {
     pub id: Id,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, serde::Serialize, JsonSchema)]
 pub struct AgentMessageArgs {
     pub id: Id,
     pub text: Text,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, serde::Serialize, JsonSchema)]
 pub struct TrialMergeArgs {
     /// Branches merged in order into a scratch worktree.
     pub branches: Bounded<Vec<Bounded<String, 256>>, 16>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, serde::Serialize, JsonSchema)]
 pub struct MergeArgs {
     /// A task's branch, merged `--no-ff` into the run's integration branch through the merge gate.
     pub branch: Bounded<String, 256>,
 }
 
-stub_tool!(
+/// The session calling: only a session the hub runs has a manager's tools.
+fn session(who: &Identity) -> Result<&str, String> {
+    match who {
+        Identity::Session { sid, .. } => Ok(sid),
+        _ => Err("only a manager session the hub runs has these tools".into()),
+    }
+}
+
+/// A manager tool: its arguments go to the hub as JSON, which checks the role, the matrix and the grants.
+macro_rules! manager_tool {
+    ($ty:ident, $name:literal, $args:ty, $doc:literal) => {
+        pub struct $ty;
+
+        impl CoordTool for $ty {
+            type Args = $args;
+            const NAME: &'static str = $name;
+            const DESCRIPTION: &'static str = $doc;
+            fn run<'a>(
+                &'a self,
+                coord: &'a Coord,
+                who: &'a Identity,
+                args: Self::Args,
+            ) -> BoxFuture<'a, Result<String, String>> {
+                Box::pin(async move {
+                    let sid = session(who)?;
+                    let v = serde_json::to_value(&args).map_err(|e| e.to_string())?;
+                    coord.hub().manager(sid, $name, v).await
+                })
+            }
+        }
+    };
+}
+
+manager_tool!(
     AgentStart,
     "agent_start",
     AgentStartArgs,
-    "25",
     "Start a worker on a profile for a task, with grants no wider than yours and a budget out of yours."
 );
-stub_tool!(
+manager_tool!(
     AgentMessage,
     "agent_message",
     AgentMessageArgs,
-    "25",
     "A message to a worker you started (text only: it never approves anything)."
 );
-stub_tool!(
+manager_tool!(
     AgentPause,
     "agent_pause",
     SessionArg,
-    "25",
     "Pause a worker after its current tool call."
 );
-stub_tool!(
+manager_tool!(
     AgentStop,
     "agent_stop",
     SessionArg,
-    "25",
     "Stop a worker you started."
 );
-stub_tool!(
+manager_tool!(
     AgentMove,
     "agent_move",
     MoveParams,
-    "25",
     "Move a worker to another profile (same worktree, a summary handoff)."
 );
-stub_tool!(
+manager_tool!(
     ReportRead,
     "report_read",
     ReportsParams,
-    "25",
     "A task's structured reports, or one by id."
 );
-stub_tool!(
+manager_tool!(
     TranscriptSlice,
     "transcript_slice",
     SliceParams,
-    "25",
     "Steps of a worker's transcript with their entries (at most 50)."
 );
-stub_tool!(
+manager_tool!(
     TrialMerge,
     "trial_merge",
     TrialMergeArgs,
-    "25",
     "Merge branches in order in a scratch worktree: clean, or the conflicting paths."
 );
-stub_tool!(
+manager_tool!(
     Merge,
     "merge",
     MergeArgs,
-    "25",
-    "Merge a task's branch into the run's integration branch through the merge gate."
+    "Merge a worker's branch into your integration branch through the merge gate (never main)."
 );
 
 /// This file's tools.

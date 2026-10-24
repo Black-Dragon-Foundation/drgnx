@@ -67,7 +67,7 @@ pub(crate) fn no_session(id: &str) -> Error {
     invalid("id", format!("no session {id}"))
 }
 
-fn invalid(path: &str, message: impl Into<String>) -> Error {
+pub(crate) fn invalid(path: &str, message: impl Into<String>) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
         message: message.into(),
@@ -75,7 +75,7 @@ fn invalid(path: &str, message: impl Into<String>) -> Error {
     }
 }
 
-fn internal(message: impl Into<String>) -> Error {
+pub(crate) fn internal(message: impl Into<String>) -> Error {
     Error {
         code: ErrorCode::Internal,
         message: message.into(),
@@ -783,7 +783,7 @@ async fn prepare(
 
 /// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
 /// `claude-openrouter` without a model follows the `agent` role.
-fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Option<String>)> {
+pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Option<String>)> {
     let kind = p.ai.as_deref().unwrap_or_default();
     let one = |id: &str, m: Option<String>| vec![(id.to_string(), m)];
     match kind {
@@ -873,6 +873,18 @@ pub(crate) async fn open(
     p: StartParams,
     caller: &Caller,
 ) -> Result<Started, Error> {
+    open_as(hub, front, p, caller, None).await
+}
+
+/// [`open`] for a worker a manager started (Task 25): PARENT is the manager's session id, so the worker's budget comes
+/// out of the manager's.
+pub(crate) async fn open_as(
+    hub: &super::Hub,
+    front: &Front,
+    p: StartParams,
+    caller: &Caller,
+    parent: Option<String>,
+) -> Result<Started, Error> {
     if caller.class != Class::User {
         return Err(refuse("only the user starts a session"));
     }
@@ -933,7 +945,7 @@ pub(crate) async fn open(
         cwd,
         task: p.task.as_ref().map(|t| t.as_str().to_string()),
         job: p.job.as_ref().map(|j| j.as_str().to_string()),
-        parent: None,
+        parent,
         about: p.about.as_ref().map(|a| a.to_string()),
         document: p.document.as_ref().map(|d| PathBuf::from(d.as_str())),
     };
@@ -1188,7 +1200,7 @@ pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
         if hub.find(&row.0).is_ok() {
             continue;
         }
-        if row.3 == "manager" && restart_manager_from_graph(front, &row).await {
+        if row.3 == "manager" && restart_manager_from_graph(hub, front, &row).await {
             continue;
         }
         resume_row(hub, front, row).await;
@@ -1244,16 +1256,91 @@ async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
 /// What a session that could be neither resumed nor loaded is told (it is a new session on the same transcript).
 const RESTART_NOTICE: &str = "[the hub restarted and your earlier conversation could not be restored: you are a new session in the same directory; the earlier transcript is kept. Check the task and the repository before you go on.]";
 
-/// A manager restarted from the graph (Task 25): its role, its plan and what it decided read back from Urdr instead of
-/// its conversation.  Not there yet: false, and the manager resumes like any session.
-async fn restart_manager_from_graph(_: &Front, _: &Row) -> bool {
-    false
+/// A manager restarted from the graph (Task 25): a new agent session in the same hub session, told its digest and open
+/// decisions read back from Urdr instead of its conversation.  False (no profile, no launch): it resumes like any
+/// session.
+async fn restart_manager_from_graph(hub: &super::Hub, front: &Front, row: &Row) -> bool {
+    front.mcp.mark_manager(&row.0);
+    let first = crate::manager::restart_prompt(front, &row.0).await;
+    // an open socket from before has the plain tool list
+    let _ = front.mcp.close(&row.0).await;
+    resume_row_with(hub, front, row.clone(), Some(first)).await
+}
+
+/// Manager SID closed and started afresh with FIRST (its digest and open decisions): the rotation past
+/// `agents-manager-context` and the restart of a manager made one.  The hub session, its row, workers and budget stay.
+pub(crate) async fn rotate(hub: &super::Hub, front: &Front, sid: &str, first: String) -> bool {
+    let Ok(old) = hub.find(sid) else {
+        return false;
+    };
+    old.close_now().await;
+    gateway_gone(front, sid).await;
+    let _ = front.mcp.close(sid).await;
+    let Some(row) = read_rows(hub, Some(sid)).await.into_iter().next() else {
+        return false;
+    };
+    resume_row_with(hub, front, row, Some(first)).await
+}
+
+/// Session SID's recorded role is now ROLE (the user made it a manager).
+pub(crate) async fn record_role(hub: &super::Hub, sid: &str, role: &str) {
+    let (s, r) = (sid.to_owned(), role.to_owned());
+    if let Some(db) = hub.db()
+        && let Err(e) = db
+            .write(move |c| Ok(c.execute("update asession set role = ?2 where sid = ?1", (s, r))?))
+            .await
+    {
+        tracing::warn!(sid, "cannot record a session's role: {e}");
+    }
+}
+
+impl Session {
+    pub(crate) fn role(&self) -> Role {
+        self.role
+    }
+    pub(crate) fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+    pub(crate) fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    /// The transcript entries that carry one of MIDS as their `messageId`, at most CAP.
+    pub(crate) fn entries_for(
+        &self,
+        mids: &std::collections::HashSet<String>,
+        cap: usize,
+    ) -> Vec<(u64, runstav::methods::agents::Entry)> {
+        lock(&self.state)
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                e.rest
+                    .get("messageId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|m| mids.contains(m))
+            })
+            .take(cap)
+            .map(|(i, e)| (i as u64, e.clone()))
+            .collect()
+    }
 }
 
 /// ROW as a running session again: `session/resume`, else `session/load`; its transcript and held queue read back
 /// and its first prompt delivered.  A session whose profile is gone or whose agent will not resume stays in the table.
 async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
+    resume_row_with(hub, front, row, None).await
+}
+
+/// [`resume_row`], or with FIRST (a manager's restart or rotation, Task 25): a new agent session in the same hub
+/// session, no `session/resume`, that is told FIRST (its digest and open decisions) instead of [`RESTART_NOTICE`].
+async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Option<String>) -> bool {
     let (sid, name, profile_name, role, cwd, task, job, acp, parent, at) = row;
+    // a worker a manager started gets back what the manager delegated, before its first tool call
+    if parent.is_some() {
+        crate::manager::restore_delegation(front, &sid).await;
+    }
     let Some(profile) = find_profile(front, &profile_name) else {
         tracing::warn!(
             sid,
@@ -1310,9 +1397,20 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
     // `session/resume`, else `session/load` (both inside `launch`), else the summary handoff of Task 26, else a fresh
     // session that is told what happened (its transcript stays)
     let mut handoff: Option<String> = None;
-    let (l, rx, fresh) = match again(Some(acp.clone())).await {
-        Ok((l, rx)) => (l, rx, false),
-        Err(e) if e.code == ErrorCode::Internal => {
+    let tried = match first {
+        Some(_) => None,
+        None => Some(again(Some(acp.clone())).await),
+    };
+    let (l, rx, fresh) = match tried {
+        None => match again(None).await {
+            Ok((l, rx)) => (l, rx, true),
+            Err(e) => {
+                tracing::warn!(sid, "session not started afresh: {}", e.message);
+                return false;
+            }
+        },
+        Some(Ok((l, rx))) => (l, rx, false),
+        Some(Err(e)) if e.code == ErrorCode::Internal => {
             tracing::warn!(
                 sid,
                 "session cannot be resumed ({}); starting it afresh",
@@ -1329,18 +1427,20 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
                 }
             }
         }
-        Err(e) => {
+        Some(Err(e)) => {
             tracing::warn!(sid, "session not resumed: {}", e.message);
             return false;
         }
     };
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
     if fresh {
-        let text = match handoff {
-            Some(h) => format!("{RESTART_NOTICE}\n\n{h}"),
-            None => RESTART_NOTICE.to_string(),
+        // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
+        let told = match (first, handoff) {
+            (Some(f), _) => f,
+            (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
+            (None, None) => RESTART_NOTICE.to_string(),
         };
-        lock(&s.state).queue.push(text, Origin::Hub, false);
+        lock(&s.state).queue.push(told, Origin::Hub, false);
         if let Some(db) = hub.db() {
             insert_row(db, &s).await;
         }
@@ -1623,7 +1723,10 @@ async fn insert_row(db: &urdr::Handle, s: &Session) {
 pub(crate) async fn delete_row(db: &urdr::Handle, sid: &str) {
     let s = sid.to_owned();
     if let Err(e) = db
-        .write(move |c| Ok(c.execute("delete from asession where sid = ?1", [s])?))
+        .write(move |c| {
+            c.execute("delete from delegation where sid = ?1", [&s])?;
+            Ok(c.execute("delete from asession where sid = ?1", [&s])?)
+        })
         .await
     {
         tracing::warn!(sid, "cannot remove a session from runtime.db: {e}");
@@ -2389,7 +2492,7 @@ impl Session {
         });
     }
 
-    async fn close_now(&self) {
+    pub(crate) async fn close_now(&self) {
         self.closed.store(true, Ordering::SeqCst);
         self.flush_transcript();
         self.persist_queue();
@@ -2780,7 +2883,7 @@ pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
 }
 
 /// Session SID is gone: its gateway token no longer forwards and its jobs are no longer booked.
-async fn gateway_gone(f: &Front, sid: &str) {
+pub(crate) async fn gateway_gone(f: &Front, sid: &str) {
     for j in f.core.budgets.job_of(sid) {
         f.core.budgets.unbind_job(&j);
     }

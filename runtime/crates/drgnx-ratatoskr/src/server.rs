@@ -286,6 +286,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         .set_hooks(Arc::new(crate::runner::review::PlanHooks::default()));
     tokio::spawn(crate::runner::tick::run(front.clone()));
     tokio::spawn(crate::supervisor::run(front.clone()));
+    tokio::spawn(crate::manager::run(front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());
     #[cfg(feature = "test-hooks")]
     let tick = args.idle_tick_ms.map_or(idle::TICK, Duration::from_millis);
