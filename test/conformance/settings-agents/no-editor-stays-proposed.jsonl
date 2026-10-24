@@ -1,0 +1,22 @@
+{"scenario": "settings-agents/no-editor-stays-proposed", "requires": ["v1", "fake-backend"], "doc": "Under a grant with no editor connected settings_change answers pending: the agent's tx stays proposed with the value in the store, and nothing is written to a file. A settings/confirm later (here a refusal) settles it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/grants", "params": {"grant": {"who": "session:$sid", "what": "options:global", "access": "options", "names": ["fill-*"]}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"grant": {"active": true}}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "fill-column", "value": "100", "reason": "wider lines"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"pending": "$capture:tx"}, "isError": "$absent"}}, "within_ms": 3000}
+{"do": "sql_expect", "sql": "select state, tool from tx where id = $tx and actor = 'agent:$sid'", "rows": [["proposed", "mcp:settings_change"]]}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.value') from entity where id = 'option:global:fill-column'", "rows": [["100"]]}
+{"do": "file", "path": "$ROOT/work/alpha/.drgnx/settings.el", "exists": false}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "settings/confirm", "params": {"tx": "$tx", "ok": false, "error": "the user said no"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"state": "reverted"}}}
+{"do": "sql_expect", "sql": "select state from tx where id = $tx", "rows": [["reverted"]]}
+{"do": "sql_expect", "sql": "select count(*) from message where recipient = 'agent:$sid' and text like 'your settings change (tx $tx): the editor refused option:global:fill-column (the user said no)%'", "rows": [[1]]}

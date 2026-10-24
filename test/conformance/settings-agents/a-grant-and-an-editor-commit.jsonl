@@ -1,0 +1,26 @@
+{"scenario": "settings-agents/a-grant-and-an-editor-commit", "requires": ["v1", "fake-backend"], "doc": "Under an options grant of fill-column (unified-settings Task 32; design §13) an agent's settings_change is a proposed tx of its own, and the editor (a subscriber) gets settings/proposed {tx, scope, name, value, agent, reason}; the editor's settings/confirm ok accepts the tx, the tool answers changed, and the agent gets a message. The hub writes no file."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "graph/grants", "params": {"grant": {"who": "session:$sid", "what": "options:global", "access": "options", "names": ["fill-column"]}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"grant": {"active": true, "access": "options", "names": ["fill-column"]}}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "fill-column", "value": "100", "reason": "wider lines"}}}}
+{"do": "expect", "conn": "c", "json": {"event": "settings/proposed", "data": {"tx": "$capture:tx", "scope": "global", "name": "fill-column", "value": "100", "agent": "$string", "reason": "wider lines", "root": "$string"}}}
+{"do": "sql_expect", "sql": "select state, tool, note from tx where id = $tx and actor = 'agent:$sid'", "rows": [["proposed", "mcp:settings_change", "wider lines"]]}
+{"do": "sql_expect", "sql": "select kind, json_extract(data, '$.value') from entity where id = 'option:global:fill-column'", "rows": [["option", "100"]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "settings/confirm", "params": {"tx": "$tx", "ok": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"state": "accepted"}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"changed": "$tx"}, "isError": "$absent"}}}
+{"do": "sql_expect", "sql": "select state from tx where id = $tx", "rows": [["accepted"]]}
+{"do": "sql_expect", "sql": "select count(*) from message where recipient = 'agent:$sid' and text = 'your settings change (tx $tx): option:global:fill-column applied'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "settings/confirm", "params": {"tx": "$tx", "ok": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "$any"}}}

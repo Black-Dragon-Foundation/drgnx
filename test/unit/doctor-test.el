@@ -969,6 +969,17 @@ what `ratatoskr doctor --json' said)."
       (should (eq (car r) 'fail))
       (should-not (string-search "job sandbox" (nth 1 r))))))
 
+(ert-deftest drgnx-settings-sandbox/the-doctor-says-the-reduced-tier-cannot-pin ()
+  ;; the section's pins_note (Ratatoskr's text, the reduced tier only) ends the line; null or absent adds nothing
+  (let* ((note "the reduced tier cannot pin .dir-locals.el, .dir-locals-2.el or .drgnx/ read-only")
+         (line (lambda (s) (nth 1 (drgnx-doctor-check 'ratatoskr (drgnx-doctor-test--rtsk :sandbox s))))))
+    (should (string-search (concat "works here (Landlock ABI 9, seccomp); job agents do not use it yet (phase 6); " note)
+                           (funcall line (list :backend "reduced" :ok t :landlock_abi 9 :pins_note note))))
+    (should (string-search (concat "not available here: x; " note)
+                           (funcall line (list :backend "reduced" :ok nil :reason "x" :pins_note note))))
+    (dolist (null '(nil :null))
+      (should-not (string-search "cannot pin" (funcall line (list :backend "bwrap" :ok t :landlock_abi 10 :pins_note null)))))))
+
 (ert-deftest drgnx-doctor/ratatoskr-check-cases ()
   (should (equal (plist-get (alist-get 'ratatoskr drgnx-doctor--checks) :group) "Agents"))
   (let ((check (lambda (&rest over) (drgnx-doctor-check 'ratatoskr (apply #'drgnx-doctor-test--rtsk over)))))

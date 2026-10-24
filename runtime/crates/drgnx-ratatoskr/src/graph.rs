@@ -246,6 +246,11 @@ pub async fn serve(
         Params::GraphSettings(p) => settings(w, caller, p).await,
         Params::GraphPrivacy(p) => privacy(w, tools, dirs, caller, p).await,
         Params::SettingsRecord(p) => settings_record(w, tools, caller, p).await,
+        // here rather than in crate::coord: a settings card's allowed change is proposed through the tools
+        Params::CardsSettle(p) => {
+            let choice = p.choice.as_str().to_owned();
+            settle_with(w, Some(tools), caller, int(p.card), choice, now()).await
+        }
         Params::TasksReady(p) => tasks_ready(w, p).await,
         Params::TasksFind(p) => tasks_find(w, p).await,
         Params::TasksWrite(p) => tasks_write(w, caller, p).await,
@@ -357,6 +362,95 @@ async fn settings_record(
         w.signals.wrote();
     }
     Ok(json!(settings_api::RecordAnswer { tx: written.tx }))
+}
+
+/// `settings/confirm` (unified-settings Task 32; design §13): the editor's answer to `settings/proposed`, settled in
+/// one user tx: `ok` accepts the agent's proposed tx, else it is reverted (`blocked`, and nothing written, when a later
+/// change of the same setting came first). Only a proposed tx of `settings_change`; the agent gets a message either
+/// way. Never the backend's connection's.
+pub async fn settings_confirm(
+    w: &Writer,
+    caller: &Caller,
+    p: settings_api::ConfirmParams,
+) -> Result<Value, Error> {
+    if caller.backend {
+        return Err(not_allowed(
+            "",
+            "only the editor confirms settings: the backend's connection never does",
+        ));
+    }
+    let t = int(p.tx);
+    let (ok, error) = (p.ok, p.error.map(|e| e.into_inner()));
+    let now = now();
+    let state = write_or_undo(w, caller, "settings/confirm", move |tx| {
+        let row = opt(tx.sql().query_row(
+            "select actor, tool, state from tx where id = ?1",
+            [t],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        ))?;
+        let Some((actor, tool, state)) = row else {
+            return Err(refused(format!("no tx {t}")));
+        };
+        if tool.as_deref() != Some(norn::tools::settings::PROPOSED_TOOL) || state != "proposed" {
+            return Err(refused(format!(
+                "tx {t} is not an agent's proposed settings change"
+            )));
+        }
+        let names: Vec<String> = tx
+            .sql()
+            .prepare(
+                "select id from entity where updated_tx = ?1 \
+                 or n in (select n from entity_hist where tx_from = ?1) order by id",
+            )?
+            .query_map([t], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let what = names.join(", ");
+        let (state, said) = match hist::settle_proposed(tx, &[t], ok)? {
+            hist::Revert::Blocked { .. } => (
+                settings_api::ConfirmState::Blocked,
+                format!(
+                    "refused by the editor, but a later change of {what} came first: nothing undone"
+                ),
+            ),
+            hist::Revert::Done { .. } if ok => (
+                settings_api::ConfirmState::Accepted,
+                format!("{what} applied"),
+            ),
+            hist::Revert::Done { .. } => (
+                settings_api::ConfirmState::Reverted,
+                format!(
+                    "the editor refused {what} ({}); it is undone",
+                    error.as_deref().unwrap_or("no reason given")
+                ),
+            ),
+        };
+        let keep = state != settings_api::ConfirmState::Blocked;
+        if keep {
+            messages::send(
+                tx,
+                messages::Send {
+                    job: None,
+                    sender: None,
+                    recipient: actor,
+                    text: format!("your settings change (tx {t}): {said}"),
+                    seen: None,
+                    answers: None,
+                    question: false,
+                },
+                now,
+            )?;
+        }
+        Ok((state, keep))
+    })
+    .await?;
+    w.signals.wrote();
+    Ok(json!(settings_api::ConfirmAnswer { state }))
 }
 
 /// The test seam between a put's or a record's resolve (git, seconds) and its write: a test holds one there.
@@ -909,10 +1003,10 @@ fn who_of(c: &Connection, text: &str) -> Result<Option<Who>, urdr::SqliteError> 
     Ok(Who::parse(text))
 }
 
-/// A grant's `what`: `project:ID|SLUG|N`, `*`, `task:ID` or `task:N`.
+/// A grant's `what`: `project:ID|SLUG|N`, `*`, `task:ID`, `task:N`, `options:global` or `options:project`.
 fn what_of(c: &Connection, text: &str) -> Result<Option<What>, urdr::SqliteError> {
-    if text == "*" {
-        return Ok(Some(What::All));
+    if text == "*" || text.starts_with("options:") {
+        return Ok(What::parse(text));
     }
     if text.starts_with("project:") {
         return Ok(project_n(c, text)?.map(What::Project));
@@ -933,6 +1027,7 @@ fn view(g: &grants::Grant, now: f64) -> api::GrantView {
         what: g.what.to_string(),
         access: g.access.as_str().to_owned(),
         expires: g.expires,
+        names: g.names.clone(),
         status: g.status.clone(),
         active: g.active(now),
     }
@@ -971,6 +1066,9 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
     if let Some(g) = p.grant {
         let (who, what, access, expires) =
             (g.who.into_inner(), g.what.into_inner(), g.access, g.expires);
+        let names: Option<Vec<String>> = g
+            .names
+            .map(|l| l.into_inner().into_iter().map(|s| s.into_inner()).collect());
         let made = w
             .write(caller, "graph/grants", move |tx| {
                 let w = who_of(tx.sql(), &who)?.ok_or_else(|| {
@@ -980,14 +1078,19 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
                 })?;
                 let x = what_of(tx.sql(), &what)?.ok_or_else(|| {
                     refused(format!(
-                        "no such what: {what} (project:ID or a slug, *, or task:ID)"
+                        "no such what: {what} (project:ID or a slug, *, task:ID, options:global or options:project)"
                     ))
                 })?;
-                let a = match access {
-                    api::GrantAccess::Read => Access::Read,
-                    api::GrantAccess::EditUserTasks => Access::EditUserTasks,
-                };
-                Ok(grants::create(tx, w, x, a, expires)?)
+                match access {
+                    api::GrantAccess::Options => {
+                        Ok(grants::create_options(tx, w, x, names, expires)?)
+                    }
+                    _ if names.is_some() => Err(refused("only an options grant names settings")),
+                    api::GrantAccess::Read => Ok(grants::create(tx, w, x, Access::Read, expires)?),
+                    api::GrantAccess::EditUserTasks => {
+                        Ok(grants::create(tx, w, x, Access::EditUserTasks, expires)?)
+                    }
+                }
             })
             .await
             .map_err(coord::fail)?;
@@ -1193,10 +1296,183 @@ pub(crate) fn settle_close(
     Ok(true)
 }
 
-/// `cards/settle`: an access or a close card as above (the choice checked first, the backend's connection held to
-/// refusing and rejecting), any other card settled as it is.
+/// How long a settings card's `once` grant lasts at most: it is revoked as soon as the change is proposed.
+const ONCE_GRANT_SECS: f64 = 60.0;
+
+fn check_setting_access(choice: &str, backend: bool) -> Result<(), Error> {
+    match choice {
+        "once" | "session" if backend => Err(not_allowed(
+            "choice",
+            "only the user allows a settings change: the backend's connection settles a settings card only by refusing",
+        )),
+        "once" | "session" | "refuse" | "resolved" => Ok(()),
+        other => Err(invalid(
+            "choice",
+            format!("a settings card's choices are once, session and refuse, not {other:?}"),
+        )),
+    }
+}
+
+/// What a settings card allowed: the agent's change, proposed once the settle committed, and the grant made for it.
+pub(crate) struct Allowed {
+    caller: StoreCaller,
+    change: norn::tools::settings::Change,
+    grant: String,
+    once: bool,
+    card: i64,
+}
+
+/// Settings access card CARD (its data D) settled with CHOICE (checked; unified-settings Task 32): `once` and
+/// `session` make, in this tx (the user's), an `options` grant of the card's one setting for its session (`once`
+/// lasting [`ONCE_GRANT_SECS`] and revoked once the change is proposed, `session` [`SESSION_GRANT_SECS`]); `refuse`
+/// and `resolved` nothing. The card's request is checked again first. A message tells the session either way. False
+/// when the card was not open.
+fn settle_setting(
+    tx: &mut WTx<'_>,
+    card: i64,
+    choice: &str,
+    now: f64,
+    d: &Value,
+) -> Result<(bool, Option<Allowed>), CoordError> {
+    let allows = matches!(choice, "once" | "session");
+    let request = if allows {
+        match norn::tools::settings::card_request(d) {
+            Some(Ok(r)) => Some(r),
+            Some(Err(e)) => {
+                return Err(refused(format!(
+                    "the card's request does not hold ({e}): refuse it"
+                )));
+            }
+            None => return Err(refused("not a settings card")),
+        }
+    } else {
+        None
+    };
+    if let Some((_, change)) = &request
+        && change.name.contains('*')
+    {
+        return Err(refused(
+            "the setting's name holds a *, which a grant reads as a glob: refuse it, or grant it yourself",
+        ));
+    }
+    if !cards::card_settle(tx, card, choice, now)? {
+        return Ok((false, None));
+    }
+    let session = d["session"].as_str().unwrap_or_default().to_owned();
+    let name = d["setting"]["name"].as_str().unwrap_or("?").to_owned();
+    let allowed = match request {
+        Some((caller, change)) => {
+            let what = match change.scope {
+                settings_api::SettingScope::Global => What::OptionsGlobal,
+                _ => What::OptionsProject,
+            };
+            let once = choice == "once";
+            let expires = now
+                + if once {
+                    ONCE_GRANT_SECS
+                } else {
+                    SESSION_GRANT_SECS
+                };
+            let g = grants::create_options(
+                tx,
+                Who::Session(session.clone()),
+                what,
+                Some(vec![change.name.clone()]),
+                Some(expires),
+            )?;
+            Some(Allowed {
+                caller,
+                change,
+                grant: g.id,
+                once,
+                card,
+            })
+        }
+        None => None,
+    };
+    let said = match (&allowed, choice) {
+        (Some(_), "once") => format!("allowed once: {name} goes to the editor"),
+        (Some(_), _) => format!(
+            "allowed for this session: {name} goes to the editor, and so may your next changes of it"
+        ),
+        (None, _) => format!("refused: {name} stays as it is"),
+    };
+    if !session.is_empty() {
+        messages::send(
+            tx,
+            messages::Send {
+                job: None,
+                sender: None,
+                recipient: requester(&session),
+                text: format!("your settings request (card {card}): {said}"),
+                seen: None,
+                answers: None,
+                question: false,
+            },
+            now,
+        )?;
+    }
+    Ok((true, allowed))
+}
+
+/// After a settings card's `once` or `session` (A): the agent's change proposed to the editor (not waited for: the
+/// editor that settled the card answers it), then a `once` grant revoked. A failure goes to the agent as a message.
+async fn allow(w: &Writer, tools: Option<&Coord>, caller: &Caller, a: Allowed, now: f64) {
+    let proposed = match tools {
+        Some(t) => norn::tools::settings::propose(t, &a.caller, &a.change, Duration::ZERO)
+            .await
+            .map(drop),
+        None => Err("the hub's tools are not open".to_string()),
+    };
+    let (grant, once, card, actor) = (a.grant, a.once, a.card, a.caller.actor.clone());
+    let failed = proposed.err();
+    let r = w
+        .write(caller, "cards/settle", move |tx| {
+            if once {
+                grants::revoke(tx, &grant)?;
+            }
+            if let Some(e) = failed {
+                messages::send(
+                    tx,
+                    messages::Send {
+                        job: None,
+                        sender: None,
+                        recipient: actor,
+                        text: format!(
+                            "your settings request (card {card}): allowed, but it could not be proposed: {e}"
+                        ),
+                        seen: None,
+                        answers: None,
+                        question: false,
+                    },
+                    now,
+                )?;
+            }
+            Ok(())
+        })
+        .await;
+    if let Err(e) = r {
+        tracing::warn!(card, "after a settings card: {e}");
+    }
+}
+
+/// `cards/settle` without the tools (`crate::coord`'s, the tests'): [`settle_with`] with none.
 pub async fn settle(
     w: &Writer,
+    caller: &Caller,
+    card: i64,
+    choice: String,
+    now: f64,
+) -> Result<Value, Error> {
+    settle_with(w, None, caller, card, choice, now).await
+}
+
+/// `cards/settle`: an access or a close card as above (the choice checked first, the backend's connection held to
+/// refusing and rejecting), any other card settled as it is. A settings card's allowed change is proposed through
+/// TOOLS after the settle committed ([`allow`]).
+pub async fn settle_with(
+    w: &Writer,
+    tools: Option<&Coord>,
     caller: &Caller,
     card: i64,
     choice: String,
@@ -1205,16 +1481,25 @@ pub async fn settle(
     let backend = caller.backend;
     let refusal: Arc<Mutex<Option<Error>>> = Arc::default();
     let theirs = refusal.clone();
+    let allowed: Arc<Mutex<Option<Allowed>>> = Arc::default();
+    let mine = allowed.clone();
     let r = w
         .write(caller, "cards/settle", move |tx| {
-            let kind: Option<String> =
-                opt(tx
-                    .sql()
-                    .query_row("select kind from card where id = ?1", [card], |r| {
-                        r.get::<_, Option<String>>(0)
-                    }))?
-                .flatten();
+            let (kind, data) = opt(tx.sql().query_row(
+                "select kind, data from card where id = ?1",
+                [card],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            ))?
+            .unwrap_or((None, None));
+            let d = card_data(data);
+            let setting = kind.as_deref() == Some("access") && d.get("setting").is_some();
             let checked = match kind.as_deref() {
+                Some("access") if setting => check_setting_access(&choice, backend),
                 Some("access") => check_access(&choice, backend),
                 Some("close") => check_close(&choice, backend),
                 _ => Ok(()),
@@ -1224,6 +1509,11 @@ pub async fn settle(
                 return Err(refused(UNDONE));
             }
             match kind.as_deref() {
+                Some("access") if setting => {
+                    let (settled, a) = settle_setting(tx, card, &choice, now, &d)?;
+                    *lock(&mine) = a;
+                    Ok(settled)
+                }
                 Some("access") => settle_access(tx, card, &choice, now),
                 Some("close") => settle_close(tx, card, &choice, now),
                 _ => cards::card_settle(tx, card, &choice, now),
@@ -1231,7 +1521,13 @@ pub async fn settle(
         })
         .await;
     match r {
-        Ok(settled) => Ok(json!(Settled { settled })),
+        Ok(settled) => {
+            let a = lock(&allowed).take();
+            if let Some(a) = a {
+                allow(w, tools, caller, a, now).await;
+            }
+            Ok(json!(Settled { settled }))
+        }
         Err(e) => Err(lock(&refusal).take().unwrap_or_else(|| coord::fail(e))),
     }
 }
@@ -2601,6 +2897,236 @@ mod tests {
             .find(|g| matches!(g.who, Who::Project(_)))
             .unwrap();
         assert_eq!(project.expires, None);
+    }
+
+    /// A settings access card (Task 32) of session s1 asking for NAME in SCOPE.
+    async fn setting_card(w: &Writer, scope: &str, name: &str) -> i64 {
+        let data = json!({"session": "s1", "profile": "p1", "job": null, "project": "r1", "project_n": null,
+                          "setting": {"scope": scope, "name": name, "value": "100", "reason": "r", "root": null},
+                          "choices": ["once", "session", "refuse"]});
+        w.db.write(TxMeta::new("agent:s1", TxClass::Agent, "test"), move |tx| {
+            cards::card_create(
+                tx,
+                NewCard {
+                    job: None,
+                    task: None,
+                    kind: Some("access".into()),
+                    title: Some("s1 asks to set".into()),
+                    data: Some(data),
+                },
+                1.0,
+            )
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn card_state(w: &Writer, card: i64) -> String {
+        w.db.read(move |c| {
+            Ok(c.query_row("select state from card where id = ?1", [card], |r| r.get(0))?)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Task 32: `session` makes an options grant of the card's one setting for its session (a day), `once` one of a
+    /// minute that is revoked after the propose; `refuse` and `resolved` none. The session hears each.
+    #[tokio::test]
+    async fn a_settings_card_settles_into_a_grant_of_one_setting() {
+        let (_dir, w, _, _) = fixture().await;
+        let at = now();
+        let card = setting_card(&w, "global", "fill-column").await;
+        let r = settle(&w, &user(false), card, "session".into(), at).await;
+        assert_eq!(r.unwrap(), json!({"settled": true}));
+        let gs = grants_now(&w).await;
+        assert_eq!(gs.len(), 1);
+        let g = &gs[0];
+        assert_eq!(
+            (&g.who, &g.what, g.access, &g.names),
+            (
+                &Who::Session("s1".into()),
+                &What::OptionsGlobal,
+                Access::Options,
+                &Some(vec!["fill-column".to_string()])
+            )
+        );
+        let near = |e: Option<f64>, want: f64| e.is_some_and(|e| (e - want).abs() < 0.01);
+        assert!(near(g.expires, at + SESSION_GRANT_SECS), "{:?}", g.expires);
+        assert!(g.active(at));
+        let heard = count(
+            &w,
+            "select count(*) from message where recipient = 'agent:s1' \
+             and text like 'your settings request (card %): allowed for this session: fill-column%'",
+        )
+        .await;
+        assert_eq!(heard, 1);
+        // a project scope's grant is options:project; once is revoked at once (no tools: nothing proposed, and the
+        // session hears that too)
+        let card = setting_card(&w, "shared", "tab-width").await;
+        settle(&w, &user(false), card, "once".into(), at)
+            .await
+            .unwrap();
+        let gs = grants_now(&w).await;
+        let once = gs
+            .iter()
+            .find(|g| g.names == Some(vec!["tab-width".to_string()]))
+            .unwrap();
+        assert_eq!(once.what, What::OptionsProject);
+        assert!(
+            near(once.expires, at + ONCE_GRANT_SECS),
+            "{:?}",
+            once.expires
+        );
+        assert_eq!(once.status, "revoked");
+        let heard = count(
+            &w,
+            "select count(*) from message where recipient = 'agent:s1' and text like '%allowed once: tab-width%'",
+        )
+        .await;
+        assert_eq!(heard, 1);
+        let failed = count(
+            &w,
+            "select count(*) from message where text like '%allowed, but it could not be proposed%'",
+        )
+        .await;
+        assert_eq!(failed, 2);
+        for choice in ["refuse", "resolved"] {
+            let card = setting_card(&w, "global", "fill-column").await;
+            let r = settle(&w, &user(false), card, choice.into(), at).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}), "{choice}");
+            assert_ne!(card_state(&w, card).await, "open", "{choice}");
+        }
+        assert_eq!(grants_now(&w).await.len(), 2);
+        let refused = count(
+            &w,
+            "select count(*) from message where text like '%refused: fill-column stays as it is'",
+        )
+        .await;
+        assert_eq!(refused, 2);
+        // settled once
+        let again = settle(&w, &user(false), card, "session".into(), at).await;
+        assert_eq!(again.unwrap(), json!({"settled": false}));
+        assert_eq!(grants_now(&w).await.len(), 2);
+    }
+
+    /// Task 32: only the user allows; a choice of another card kind is invalid; a card whose request no longer holds
+    /// (a deny-listed or a glob name) is refused and stays open.
+    #[tokio::test]
+    async fn a_settings_card_is_the_users_and_is_checked_again() {
+        let (_dir, w, _, _) = fixture().await;
+        let card = setting_card(&w, "global", "fill-column").await;
+        for choice in ["once", "session"] {
+            let e = settle(&w, &user(true), card, choice.into(), now())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed, "{choice}");
+        }
+        for choice in ["project", "profile", "maybe"] {
+            let e = settle(&w, &user(false), card, choice.into(), now())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (e.code, e.path.as_deref()),
+                (ErrorCode::InvalidParams, Some("choice")),
+                "{choice}"
+            );
+        }
+        assert_eq!(card_state(&w, card).await, "open");
+        assert!(grants_now(&w).await.is_empty());
+        for name in ["load-path", "after-save-hook", "fill-*"] {
+            let card = setting_card(&w, "global", name).await;
+            let e = settle(&w, &user(false), card, "session".into(), now())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidParams, "{name}: {}", e.message);
+            assert_eq!(card_state(&w, card).await, "open", "{name}");
+            // refusing it still works
+            let r = settle(&w, &user(false), card, "refuse".into(), now()).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}), "{name}");
+        }
+        // the backend refuses
+        let card = setting_card(&w, "global", "fill-column").await;
+        let r = settle(&w, &user(true), card, "refuse".into(), now()).await;
+        assert_eq!(r.unwrap(), json!({"settled": true}));
+        assert!(grants_now(&w).await.is_empty());
+    }
+
+    /// Task 32: `settings/confirm` settles only an agent's proposed tx of `settings_change`, never the backend's
+    /// connection's; ok accepts it, else it is reverted; the agent hears either.
+    #[tokio::test]
+    async fn settings_confirm_settles_only_a_proposed_settings_change() {
+        let (_dir, w, _, _) = fixture().await;
+        let propose = |tool: &'static str, id: &'static str| {
+            let mut m = TxMeta::new("agent:s1", TxClass::Agent, tool);
+            m.session = Some("s1".into());
+            m.state = urdr::graph::TxState::Proposed;
+            w.db.write(m, move |tx| {
+                entity::create(
+                    tx,
+                    entity::EntityNew {
+                        id: id.into(),
+                        kind: "task".into(),
+                        project: None,
+                        title: Some(id.into()),
+                        status: Some("open".into()),
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({}),
+                        origin: entity::Origin::Recorded,
+                        source: None,
+                    },
+                )?;
+                Ok(tx.id())
+            })
+        };
+        let other = propose("mcp:task_write/create", "task:p1").await.unwrap();
+        let mine = propose(norn::tools::settings::PROPOSED_TOOL, "task:p2")
+            .await
+            .unwrap();
+        let mine2 = propose(norn::tools::settings::PROPOSED_TOOL, "task:p3")
+            .await
+            .unwrap();
+        let wr = &w;
+        let confirm = |caller: Caller, tx: i64, ok: bool| {
+            let p = serde_json::from_value(json!({"tx": tx, "ok": ok, "error": "no"})).unwrap();
+            async move { settings_confirm(wr, &caller, p).await }
+        };
+        let e = confirm(user(false), other, true).await.unwrap_err();
+        assert!(
+            e.message
+                .contains("not an agent's proposed settings change"),
+            "{}",
+            e.message
+        );
+        let e = confirm(user(true), mine, true).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotAllowed);
+        assert_eq!(
+            confirm(user(false), mine, true).await.unwrap(),
+            json!({"state": "accepted"})
+        );
+        assert_eq!(
+            confirm(user(false), mine2, false).await.unwrap(),
+            json!({"state": "reverted"})
+        );
+        let e = confirm(user(false), mine, true).await.unwrap_err();
+        assert!(
+            e.message.contains("not an agent's proposed"),
+            "{}",
+            e.message
+        );
+        let states = text_of(
+            &w,
+            "select group_concat(state, ' ') from (select state from tx where tool like 'mcp:%' order by id)",
+        )
+        .await;
+        assert_eq!(states, "proposed accepted reverted");
+        let heard = count(
+            &w,
+            "select count(*) from message where recipient = 'agent:s1' and text like 'your settings change (tx %'",
+        )
+        .await;
+        assert_eq!(heard, 2);
     }
 
     #[test]

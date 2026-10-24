@@ -163,9 +163,20 @@ spaces (a dock is narrow: a button is never cut in two)."
   "The choices of the store's cards, settled with `cards/settle': an agent's access request (a read grant for its
 session, its project or its profile, or none) and a close proposal of \"only I close my tasks\".")
 
+(defconst drgnx-cockpit-cards--setting-choices
+  '(("once" "Allow once") ("session" "Allow this setting for this session") ("refuse" "Deny"))
+  "The choices of a settings access card (an access card whose data holds `setting': an agent's `settings_change'
+without a grant), settled with `cards/settle': the change once, a grant of that one setting for the session, or none.")
+
+(defun drgnx-cockpit-cards--setting (c)
+  "The agent's settings change card C asks for (a plist: :scope :name :value :reason :root), or nil."
+  (and (equal (plist-get c :kind) "access")
+       (drgnx-cockpit-cards--v (plist-get (drgnx-cockpit-cards--v (plist-get c :data)) :setting))))
+
 (defun drgnx-cockpit-cards--actions (c)
-  "Card C's actions: a store card's choices, else what the hub sent."
-  (or (cdr (assoc (plist-get c :kind) drgnx-cockpit-cards--store-choices))
+  "Card C's actions: a settings access card's or a store card's choices, else what the hub sent."
+  (or (and (drgnx-cockpit-cards--setting c) drgnx-cockpit-cards--setting-choices)
+      (cdr (assoc (plist-get c :kind) drgnx-cockpit-cards--store-choices))
       (drgnx-cockpit-cards--v (plist-get c :actions))))
 
 (defun drgnx-cockpit-cards--insert-card (job c &optional repo)
@@ -185,8 +196,15 @@ session, its project or its profile, or none) and a close proposal of \"only I c
                       ((null rec) "  The reviewer is reading both sides…\n")
                       (t (format "  The reviewer recommends %s: %s\n" (or (drgnx-cockpit-cards--v (plist-get rec :side)) "neither")
                                  (plist-get rec :why)))))))
+    (when-let* ((s (drgnx-cockpit-cards--setting c)))
+      (insert (format "  Change %s to %s in %s\n" (plist-get s :name)
+                      (truncate-string-to-width (replace-regexp-in-string "[\n\r]+" " " (format "%s" (plist-get s :value)))
+                                                80 nil nil "…")
+                      (pcase (plist-get s :scope) ("global" "your settings") ("private" "your workspace file")
+                             (_ "the project's .drgnx/settings.el")))))
     (when-let* (((equal (plist-get c :kind) "access"))
-                (why (drgnx-cockpit-cards--v (plist-get d :reason))))
+                (why (drgnx-cockpit-cards--v (or (plist-get (drgnx-cockpit-cards--setting c) :reason)
+                                                 (plist-get d :reason)))))
       (insert (format "  Why: %s\n" (replace-regexp-in-string "[\n\r]+" " " (format "%s" why)))))
     (insert "  ")
     (dolist (a (drgnx-cockpit-cards--actions c))

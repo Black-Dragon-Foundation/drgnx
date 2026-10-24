@@ -65,6 +65,7 @@ pub mod peer;
 pub mod relay;
 pub mod runtime_db;
 pub mod sandbox;
+pub mod sandbox_settings;
 pub mod server;
 pub mod sessions;
 pub mod settings;

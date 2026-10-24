@@ -401,7 +401,8 @@ and an agent's first `hello` brings a short brief: its project, its tasks, what 
 To turn the five tools off for a profile, set `:tracker-tools off` on it in `drgnx-agents-profiles` (settings.el); for one task, the user sets
 it with `tasks/write` (op `tools`). The task's setting wins over the profile's: a task with the tools on gets them
 even under a profile that turns them off, and the other way round; with neither set they are on. A session keeps the
-list it started with (21 tools with the tracker tools, 16 without). The editor tells the hub at each session start:
+list it started with (23 tools with the tracker tools, 18 without; the two settings tools of
+[Changing settings](#changing-settings) are always there). The editor tells the hub at each session start:
 the profile's name (as an id: `claude (OpenRouter)` is `claude-OpenRouter`) and its `:tracker-tools` value, when it
 has one. "Only I close my tasks" is the user option `drgnx-store-only-i-close-my-tasks` (default off): with it on, an
 agent's `done` on one of your tasks waits for your acceptance; the editor sends it when it connects and when you
@@ -419,6 +420,44 @@ Work cockpit): for every agent in a project, for one profile, or for one session
 Grants open reading only: agents still write only into their own project. Whatever another agent wrote reaches an
 agent marked as that agent's text, as data rather than instructions. More in
 [security.md](security.md#grants).
+
+## Changing settings
+
+Every agent has two settings tools. Your settings stay yours: an agent changes one only under your grant, the editor
+writes the file (the hub never does), and the change goes into the setting's history, so Settings can undo it.
+
+- **`settings_get {scope, names?}`** reads settings and where their values come from. `scope` is `global`
+  (`settings.el`), `private` (your workspace file for the agent's project) or `shared` (the repository's
+  `.drgnx/settings.el`). It needs a grant: an `options` grant of that scope, or a read grant that covers it (`*`, or
+  the agent's own project for `private` and `shared`). With no editor open the answer says `complete: false`: the hub
+  knows `settings.el`, the shipped defaults and what the editor last sent, but not your Lisp or the workspace files.
+- **`settings_change {scope, name, value, reason}`** asks to change one setting. The value is Lisp data (`80`,
+  `"text"`, `(a b)`), read as data and never run; a value or a reason that looks like a secret is refused. The
+  security settings are never an agent's, under any grant: drgnx's agent, sandbox, trust, keys and module settings,
+  `load-path`, `eval`, `custom-file`, and any name that names a program, a hook or a function (the full list is
+  `test/fixtures/settings-deny.json`); the editor adds the settings marked `:agents never`.
+  - **Under a grant** the change is recorded as a *proposed* change of the agent's, and the editor checks it again,
+    writes it to the file the scope names and confirms it; the agent's answer says `changed`, or `refused` with the
+    editor's reason. With no editor open it stays proposed (`pending`) until you settle it.
+  - **The editor's check** is the last gate before a file is written: a setting marked `:agents never`, a security
+    setting (`:workspace never`), code (`:workspace code`: functions, hooks, risky and program-naming settings), an
+    `:eval` section or the `eval` and `mode` pseudo-variables, a value that does not read as data, does not match the
+    setting's type or bounds, or looks like a secret: each is refused and nothing is written.
+  - **Where it lands:** `global` in `settings.el`; `shared` in the `.drgnx/settings.el` of the folder the agent's
+    session works in (a job's task folder, or the checkout it started in), refused when that file's true path leads
+    out of the folder; `private` in that folder's private workspace file (made when there is none).
+  - **You are told** with a notice, "s1 changed fill-column to 100 in drgnx [Undo]". **Undo** writes the earlier value
+    back (or removes the entry the agent added) and records it in the history as an undo of the agent's change; it
+    refuses when the setting changed again since. The change is in the setting's history once, under the agent's name.
+  - **Without a grant** you get a card in What needs you, "Change NAME to VALUE in …" with the agent's reason:
+    **Allow once**, **Allow this setting for this session** (a grant for that one
+    setting, until the session ends or a day passes) or **Deny**. The agent goes on meanwhile; your answer comes to
+    its inbox.
+
+To let agents change settings without asking each time, give them an `options` grant: `graph/grants` with access
+`options`, what `options:global` (your `settings.el`) or `options:project` (the private and shared settings of their
+own project), and optionally `names`, globs such as `python-*` (none: every name the deny-list leaves). A grant opens
+settings in the agent's own project only. Agents outside drgnx never change a setting, grant or not.
 
 ## Agents outside drgnx
 

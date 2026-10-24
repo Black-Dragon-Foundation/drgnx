@@ -1,0 +1,36 @@
+{"scenario": "settings-agents/the-card-allows-for-the-session", "requires": ["v1", "fake-backend"], "doc": "Without a grant settings_change makes an access card (choices once, session, refuse; the same card when asked again) and changes nothing. The user's session answer makes an options grant of that one setting for the session, proposes the change to the editor and tells the agent; the session's next change of the setting needs no card, another setting does."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "fill-column", "value": "100", "reason": "wider lines"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"card": "$capture:card"}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "fill-column", "value": "100", "reason": "wider lines"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"card": "$card"}}}}
+{"do": "sql_expect", "sql": "select kind, state, json_extract(data, '$.session'), json_extract(data, '$.setting.name'), json_extract(data, '$.setting.value'), json_extract(data, '$.choices') from card where id = $card", "rows": [["access", "open", "$sid", "fill-column", "100", "[\"once\",\"session\",\"refuse\"]"]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind in ('option', 'grant')", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "cards/settle", "params": {"card": "$card", "choice": "session"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"settled": true}}}
+{"do": "expect", "conn": "c", "json": {"event": "settings/proposed", "data": {"tx": "$capture:tx1", "name": "fill-column", "value": "100", "agent": "$string"}}}
+{"do": "sql_expect", "sql": "select state, tool from tx where id = $tx1 and actor = 'agent:$sid'", "rows": [["proposed", "mcp:settings_change"]]}
+{"do": "sql_expect", "sql": "select count(*) from message where recipient = 'agent:$sid' and text like 'your settings request (card $card): allowed for this session%'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "graph/grants", "params": {"list": {"active": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"grants": [{"who": "$string", "what": "options:global", "access": "options", "names": ["fill-column"], "active": true}]}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "settings/confirm", "params": {"tx": "$tx1", "ok": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"state": "accepted"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "fill-column", "value": "110", "reason": "a bit wider"}}}}
+{"do": "expect", "conn": "c", "json": {"event": "settings/proposed", "data": {"tx": "$capture:tx2", "name": "fill-column", "value": "110"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "settings/confirm", "params": {"tx": "$tx2", "ok": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"state": "accepted"}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"structuredContent": {"changed": "$tx2"}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "tab-width", "value": "4", "reason": "narrow tabs"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "result": {"structuredContent": {"card": "$number"}}}}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.value') from entity where id = 'option:global:fill-column'", "rows": [["110"]]}

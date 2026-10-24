@@ -839,6 +839,120 @@
       "doc": "the gateway forwarded a request: its tokens and cost",
       "from": "front",
       "name": "request"
+    },
+    {
+      "data": {
+        "$defs": {
+          "SettingScope": {
+            "description": "Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared\n`.drgnx/settings.el` of the session's project.",
+            "enum": [
+              "global",
+              "private",
+              "shared"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `settings/explain` event (to the editor): an agent's `settings_get`; the editor answers `settings/explained`\nwith the same `req`.",
+        "properties": {
+          "names": {
+            "description": "None: every setting.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/$defs/SettingScope"
+          }
+        },
+        "required": [
+          "req",
+          "scope"
+        ],
+        "title": "Explain",
+        "type": "object"
+      },
+      "doc": "an agent's settings_get: the editor answers settings/explained with the same req",
+      "from": "front",
+      "name": "settings/explain"
+    },
+    {
+      "data": {
+        "$defs": {
+          "SettingScope": {
+            "description": "Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared\n`.drgnx/settings.el` of the session's project.",
+            "enum": [
+              "global",
+              "private",
+              "shared"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `settings/proposed` event (to the editor): an agent's change under a grant, recorded as the proposed tx `tx`.\nThe editor checks it again, writes it to the file SCOPE names (under ROOT for a project's), and answers\n`settings/confirm`.",
+        "properties": {
+          "agent": {
+            "description": "Who asks (`agent:SID`).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "root": {
+            "description": "The session's folder: a job's task folder, or the checkout it started in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/$defs/SettingScope"
+          },
+          "tx": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "value": {
+            "description": "The value as printed Lisp: read as data by the hub, never evaluated.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tx",
+          "scope",
+          "name",
+          "value",
+          "agent",
+          "reason"
+        ],
+        "title": "Proposed",
+        "type": "object"
+      },
+      "doc": "an agent's granted settings change, as a proposed tx: the editor checks it, writes the file and answers settings/confirm",
+      "from": "front",
+      "name": "settings/proposed"
     }
   ],
   "methods": [
@@ -4364,17 +4478,26 @@
       "classes": [
         "user"
       ],
-      "doc": "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks), revoke one; the store refuses a grant from any other class",
+      "doc": "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks, or the change of settings: access options, what options:global or options:project, names globs), revoke one; the store refuses a grant from any other class",
       "home": "front",
       "name": "graph/grants",
       "params": {
         "$defs": {
           "GrantAccess": {
-            "enum": [
-              "read",
-              "edit-user-tasks"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "read",
+                  "edit-user-tasks"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "options",
+                "description": "Change settings (`options:global` or `options:project`), never a deny-listed one.",
+                "type": "string"
+              }
+            ]
           },
           "GrantsList": {
             "properties": {
@@ -4404,6 +4527,18 @@
                 "format": "double",
                 "type": [
                   "number",
+                  "null"
+                ]
+              },
+              "names": {
+                "description": "An `options` grant's setting names: globs (`*` only, no `/`); none: every name the deny-list leaves.",
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": [
+                  "array",
                   "null"
                 ]
               },
@@ -4480,6 +4615,16 @@
               },
               "id": {
                 "type": "string"
+              },
+              "names": {
+                "description": "An `options` grant's name globs.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
               },
               "status": {
                 "description": "`active` or `revoked`.",
@@ -8529,6 +8674,122 @@
         "type": "boolean"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to settings/proposed: ok accepts the agent's proposed tx (the editor wrote the file), else it is reverted (blocked when a later change of the setting came first); the agent gets a message either way; only a proposed tx of the tool mcp:settings_change",
+      "home": "front",
+      "name": "settings/confirm",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "error": {
+            "description": "Why the editor refused it.",
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "description": "The editor wrote the change; false: it refused it (the tx is undone).",
+            "type": "boolean"
+          },
+          "tx": {
+            "description": "The proposed tx of `settings/proposed`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tx",
+          "ok"
+        ],
+        "title": "ConfirmParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ConfirmState": {
+            "description": "What `settings/confirm` did with the proposed tx.",
+            "oneOf": [
+              {
+                "enum": [
+                  "accepted",
+                  "reverted"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "blocked",
+                "description": "A refusal met a later change of the same setting: nothing undone.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "$ref": "#/$defs/ConfirmState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ConfirmAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to settings/explain (one object per setting) for the settings_get waiting on req; false when none waits (it timed out)",
+      "home": "front",
+      "name": "settings/explained",
+      "params": {
+        "$defs": {
+          "JsonObject": {
+            "description": "a JSON object: at most 64 KiB (65536 bytes as JSON)",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "req": {
+            "description": "The `req` of `settings/explain`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settings": {
+            "description": "One object per setting (`drgnx-settings-explain`'s answer).",
+            "items": {
+              "$ref": "#/$defs/JsonObject"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          }
+        },
+        "required": [
+          "req",
+          "settings"
+        ],
+        "title": "ExplainedParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [

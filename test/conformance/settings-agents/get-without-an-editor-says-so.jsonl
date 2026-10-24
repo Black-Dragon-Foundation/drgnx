@@ -1,0 +1,19 @@
+{"scenario": "settings-agents/get-without-an-editor-says-so", "requires": ["v1", "fake-backend"], "doc": "settings_get needs an options or a read grant of the scope; with one and no editor it answers what the hub itself read (settings.el, the defaults, the editor's last overrides) with complete false and a note that your Lisp and the workspace layers are not seen."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "t1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "settings_get", "arguments": {"scope": "global"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "reading settings needs an options or a read grant for this scope: the user grants it"}], "isError": true}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "graph/grants", "params": {"grant": {"who": "session:$sid", "what": "options:global", "access": "options", "names": ["fill-column"]}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"grant": {"active": true}}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "settings_get", "arguments": {"scope": "global"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"structuredContent": {"complete": false, "note": "no editor: your Lisp and the workspace layers are not seen", "settings": "$any"}, "isError": "$absent"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "settings_get", "arguments": {"scope": "shared"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "reading settings needs an options or a read grant for this scope: the user grants it"}], "isError": true}}}

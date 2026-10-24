@@ -16,6 +16,7 @@ runstav = { path = "../runstav", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
+huginn = { path = "../huginn", version = "0.1.0" }  # settings_change reads an agent's value as data
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

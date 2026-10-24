@@ -196,6 +196,7 @@ pub async fn serve(
         // an access card settles into a grant, a close card into done (crate::graph); the rest as they are
         Params::CardsSettle(p) => {
             let (card, choice) = (int(p.card), p.choice.as_str().to_owned());
+            // the front's goes through crate::graph::serve, which has the tools a settings card needs
             return Ok(crate::graph::settle(w, caller, card, choice, now).await);
         }
         Params::MessagesSend(p) => {
@@ -593,6 +594,10 @@ pub async fn notify_backend(front: Arc<Front>) {
 pub struct ToolHub {
     pub forward: Arc<dyn Forward>,
     pub signals: Arc<Signals>,
+    /// The editors the settings tools ask (unified-settings Task 32).
+    pub editors: Arc<crate::settings::agents::Editors>,
+    /// What the hub read of `settings.el`, for a `settings_get` with no editor.
+    pub settings: Arc<crate::settings::Settings>,
 }
 
 impl Hub for ToolHub {
@@ -620,6 +625,38 @@ impl Hub for ToolHub {
     fn notify(&self) {
         self.signals.events_soon();
         self.signals.notify_soon();
+    }
+
+    fn propose(
+        &self,
+        event: runstav::methods::settings::Proposed,
+        wait: Duration,
+    ) -> BoxFuture<'_, norn::tools::EditorAnswer> {
+        Box::pin(self.editors.propose(event, wait))
+    }
+
+    fn explain(
+        &self,
+        scope: runstav::methods::settings::SettingScope,
+        names: Option<Vec<String>>,
+        root: Option<String>,
+    ) -> BoxFuture<'_, Option<Vec<Value>>> {
+        Box::pin(
+            self.editors
+                .explain(scope, names, root, norn::tools::settings::EXPLAIN_WAIT),
+        )
+    }
+
+    /// The runtime settings in effect globally (the project overrides are the editor's, keyed by its names).
+    fn known_settings(&self, names: Option<&[String]>) -> Vec<Value> {
+        crate::settings::RUNTIME_NAMES
+            .iter()
+            .filter(|n| names.is_none_or(|l| l.iter().any(|x| x.as_str() == **n)))
+            .filter_map(|n| {
+                let (value, _) = self.settings.effective(n, None)?;
+                Some(json!({"name": n, "value": value, "source": "hub"}))
+            })
+            .collect()
     }
 }
 

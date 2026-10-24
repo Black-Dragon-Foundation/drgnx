@@ -728,6 +728,41 @@ truth: the hub never writes one, and nothing it records applies a value.
   project. A global or private id there, an option of any other file, or `data` beyond `value`, `file` and `line`
   refuses the source. Workspace trust still decides what the file's values do.
 
+### Agents change settings
+
+The tools `settings_get` and `settings_change` (`runtime/crates/norn/src/tools/settings.rs`; design §13) are every
+agent's. The hub never writes a settings file: it asks the editor, through two events to the subscribers (every
+subscriber is a user's connection; none is no editor; `drgnx-ratatoskr/src/settings/agents.rs`), and the editor
+answers with two methods.
+
+- **`settings_change {scope, name, value, reason}`**: `scope` is `global`, `private` or `shared`; the id is
+  `option:global:<name>` or the session's project's `option:private/<project>:<name>` / `option:shared/…`
+  (`norn::options::option_id`: a plain variable, never a dir or mode section). The checks, in order: `value` read by
+  `huginn` as one datum of data (a refusal names `value`), a secret in the value or the reason refused, the tool's own
+  deny-list check (`norn::options::deny`), then the store's rule for kind `option` (`norn::options::may_write`:
+  outside agents never; an active `options` grant of the scope whose `names` match; the deny-list again). Under a
+  grant the change is a **proposed** tx of the agent's (tool `mcp:settings_change`, the reason as its `note`), the
+  store's guard checking it once more, then the event **`settings/proposed {tx, scope, name, value, root, agent,
+  reason}`** (`root`: the session's folder); the tool waits up to 5 s for **`settings/confirm {tx, ok, error?}`** →
+  `{state: accepted | reverted | blocked}` (user class; only a proposed tx of `mcp:settings_change`): `ok` accepts
+  the tx, else it is reverted (`blocked`, nothing written, when a later change of the setting came first). The agent
+  gets a message either way and its answer is `{changed: TX}`, `{refused: TX, error}`, or `{pending: TX}` (no editor,
+  or no answer in time). Without a grant: an `access` card whose `data.setting` holds the request and whose choices
+  are `once`, `session` and `refuse` (an open card of the same session and change is the same card); the tool answers
+  `{card: N}`.
+- **The card** (`cards/settle`, `drgnx-ratatoskr/src/graph.rs`): `once` and `session` (the user's only: the backend's
+  connection only refuses) check the request again and make, in the settle's tx, an `options` grant of the card's one
+  setting for its session (`session`: a day; `once`: 60 s, revoked as soon as the change is proposed); then the change
+  is proposed as above without waiting (the editor that settled the card answers it). A name holding `*` is refused
+  (a grant would read it as a glob).
+- **`settings_get {scope, names?}`**: an `options` grant of the scope or a `read` grant covering it (`*`; its own
+  project for `private` and `shared`; `norn::options::may_read`). The event **`settings/explain {req, scope, names?,
+  root?}`**, and the editor's **`settings/explained {req, settings: [object]}`** → `true` when the tool still waits
+  (2 s). Without an editor the hub's own runtime settings (`settings.el`, the shipped defaults, the global overrides)
+  with `complete: false` and `note`. A string that looks like a secret is `[redacted]` in either answer.
+- `graph/grants` makes options grants: `access: "options"`, `what` `options:global` or `options:project`, `names?`
+  (1 to 64 globs, `*` only); a grant's view carries its `names`.
+
 ## Records 2
 
 What crosses the socket is JSON shaped by the record schemas of `core/drgnx-records.el` (docs/develop/core.md,
@@ -802,7 +837,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no | front |
 | `graph/excise` | user | `{fields?: ["title" \| "status" \| "body" \| "assignee" \| "data"], reason: Text, rotate_backups?: boolean, target: ExciseTarget, transcripts?: boolean}` | `ExciseAnswer` | yes | front |
 | `graph/export` | user | `{history?: boolean, out?: AbsPath, project?: string, since?: natnum, with_activity?: boolean}` | `PortAnswer` | no | front |
-| `graph/grants` | user | `{grant?: {access: "read" \| "edit-user-tasks", expires?: number, what: string, who: string}, list?: {active?: boolean, who?: string}, revoke?: string}` | `{grant?: GrantView, grants?: [GrantView], revoked?: boolean}` | yes | front |
+| `graph/grants` | user | `{grant?: {access: "read" \| "edit-user-tasks" \| "options", expires?: number, names?: [string], what: string, who: string}, list?: {active?: boolean, who?: string}, revoke?: string}` | `{grant?: GrantView, grants?: [GrantView], revoked?: boolean}` | yes | front |
 | `graph/history` | user | `{id: string, since?: natnum}` | `{versions?: [any]}` | no | front |
 | `graph/import` | user | `{dir: AbsPath}` | `PortAnswer` | yes | front |
 | `graph/neighbors` | user | `{as_of?: natnum, depth?: natnum, direction?: "out" \| "in" \| "both", id: string, kinds?: [string]}` | `{hidden: natnum, links?: [any], nodes?: [any], truncated?: string}` | no | front |
@@ -837,6 +872,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |
 | `restart` | user | `{}` | `boolean` | no | front |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes | front |
+| `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes | front |
+| `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no | front |
 | `settings/record` | user | `{changes: [{file: string, id: string, line?: natnum, value?: Text}], req: string, reverts?: natnum, tool: string}` | `{tx: integer}` | yes | front |
 | `shutdown` | user | `{}` | `boolean` | no | front |
 | `spend` | user, agent, service | `{agent?: AgentName, job?: Id, task?: TaskRef}` | `{cost: number, input: natnum, output: natnum, requests: natnum}` | no | front |
@@ -925,6 +962,8 @@ result is (`event(NAME).check`):
 | `gateway/keys-changed` | the gateway | `{providers: [Id]}`: the ids whose key the hub holds, sent when that set changes (`gateway/keys`, a registration's `keys`); never a key ([The editor's token](#the-editors-token)) |
 | `challenge` | the front, on accept | `{nonce}` |
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
+| `settings/proposed` | the front (`settings_change`) | `{tx, scope, name, value, root?, agent, reason}`: the editor checks it, writes the file, answers `settings/confirm` ([Agents change settings](#agents-change-settings)) |
+| `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 
 Each event type says which side sends it (`from`, in `methods.json`): `events`, `challenge` and `notice` the front,
 the rest the backend. The first nine are what the Lisp backend broadcasts on main (its `events` is dropped under

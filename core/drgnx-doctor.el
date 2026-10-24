@@ -812,18 +812,21 @@ severity, the fix the first `:fix'."
 
 (defun drgnx-doctor--ratatoskr-sandbox-line (s)
   "The detail line for the job sandbox section S of `ratatoskr doctor --json' (nil without one).
-It only informs: nothing runs in the sandbox yet (phase 6), so the check's status never depends on it."
+It only informs: nothing runs in the sandbox yet (phase 6), so the check's status never depends on it.  The
+section's `pins_note' (the reduced tier cannot pin your settings files in a job's folders) ends the line."
   (when s
-    (if (plist-get s :ok)
-        (format "job sandbox backend: %s%s works here (%s); job agents do not use it yet (phase 6)"
-                (plist-get s :backend)
-                (if-let* ((v (plist-get s :version))) (concat " " v) "")
-                (if (equal (plist-get s :backend) "seatbelt")
-                    "Seatbelt"
-                  (format "Landlock ABI %s, seccomp" (plist-get s :landlock_abi))))
-      (format "job sandbox backend: not available here: %s%s"
-              (or (plist-get s :reason) "unknown")
-              (if-let* ((fix (plist-get s :fix))) (concat " — " fix) "")))))
+    (concat
+     (if (plist-get s :ok)
+         (format "job sandbox backend: %s%s works here (%s); job agents do not use it yet (phase 6)"
+                 (plist-get s :backend)
+                 (if-let* ((v (plist-get s :version))) (concat " " v) "")
+                 (if (equal (plist-get s :backend) "seatbelt")
+                     "Seatbelt"
+                   (format "Landlock ABI %s, seccomp" (plist-get s :landlock_abi))))
+       (format "job sandbox backend: not available here: %s%s"
+               (or (plist-get s :reason) "unknown")
+               (if-let* ((fix (plist-get s :fix))) (concat " — " fix) "")))
+     (if-let* ((note (plist-get s :pins_note)) ((stringp note))) (concat "; " note) ""))))
 
 (defun drgnx-doctor--ratatoskr-check (f)
   "The `ratatoskr' check of the fact F (`drgnx-doctor--ratatoskr'): failures first, then warnings."

@@ -463,7 +463,8 @@ pub struct ExciseAnswer {
 
 /// `project:N` (or `project:SLUG`), `profile:NAME` or `session:SID`.
 pub type GrantWho = Bounded<String, 256>;
-/// `project:N` (or `project:SLUG`), `*`, or `task:N` / `task:ID` (an `edit-user-tasks` grant).
+/// `project:N` (or `project:SLUG`), `*`, `task:N` / `task:ID` (an `edit-user-tasks` grant), or `options:global` /
+/// `options:project` (an `options` grant: settings agents may change).
 pub type GrantWhat = Bounded<String, 4352>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -471,6 +472,8 @@ pub type GrantWhat = Bounded<String, 4352>;
 pub enum GrantAccess {
     Read,
     EditUserTasks,
+    /// Change settings (`options:global` or `options:project`), never a deny-listed one.
+    Options,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -489,6 +492,9 @@ pub struct NewGrant {
     /// Unix seconds, in the future.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<f64>,
+    /// An `options` grant's setting names: globs (`*` only, no `/`); none: every name the deny-list leaves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names: Option<Bounded<Vec<Bounded<String, 256>>, 64>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -512,6 +518,9 @@ pub struct GrantView {
     pub access: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<f64>,
+    /// An `options` grant's name globs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names: Option<Vec<String>>,
     /// `active` or `revoked`.
     pub status: String,
     /// Active and not expired now.
@@ -862,7 +871,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "graph/grants", GraphGrants(GrantsParams) -> GrantsAnswer,
             classes: [User], writes: true, home: Front,
-            doc: "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks), revoke one; the store refuses a grant from any other class",
+            doc: "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks, or the change of settings: access options, what options:global or options:project, names globs), revoke one; the store refuses a grant from any other class",
             check: check_grants,
         ),
         method!(

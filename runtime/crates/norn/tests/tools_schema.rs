@@ -37,9 +37,11 @@ fn lisp_names() -> Vec<String> {
 fn tool_names_are_the_lisp_names() {
     let mut lisp = lisp_names();
     assert_eq!(lisp.len(), 16, "the Lisp defines 16 tools: {lisp:?}");
+    // the two settings tools are Rust's only (unified-settings Task 32; the Lisp server is frozen)
     let mut rust: Vec<String> = tools_for(ToolSets { tracker: false })
         .iter()
         .map(|t| t.name().to_owned())
+        .filter(|n| n != "settings_get" && n != "settings_change")
         .collect();
     lisp.sort();
     rust.sort();
@@ -67,10 +69,12 @@ fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
     )
 }
 
-/// What `tools/list` may weigh: about 9k tokens at 4 bytes a token for the 21 tools (answer 1, option A), and
-/// p2-p3's 6k for the 16 without the tracker set.
-const BUDGET_BYTES: usize = 36_000;
-const BUDGET_BYTES_16: usize = 24_000;
+/// What `tools/list` may weigh: the 23 tools (the 21 of answer 1, option A, and the two settings tools every agent
+/// has) and the 18 without the tracker set, each the size measured when the settings tools came (unified-settings
+/// Task 32: 15,564 and 8,930 bytes) plus 10 %, at most 40,000 bytes (call 10).
+const BUDGET_BYTES: usize = 17_121;
+const BUDGET_BYTES_16: usize = 9_823;
+const _: () = assert!(BUDGET_BYTES <= 40_000 && BUDGET_BYTES_16 <= 40_000);
 
 #[test]
 fn the_tool_list_fits_the_budget() {
@@ -80,7 +84,7 @@ fn the_tool_list_fits_the_budget() {
         .len();
     // the numbers go in the ledger
     eprintln!(
-        "tools/list for the 21 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 16: {bytes16} (budget {BUDGET_BYTES_16})"
+        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18: {bytes16} (budget {BUDGET_BYTES_16})"
     );
     assert!(
         bytes <= BUDGET_BYTES,

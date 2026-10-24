@@ -1009,15 +1009,19 @@ mod tools {
     }
 
     #[test]
-    fn default_session_lists_21() {
-        assert_eq!(tools_for(ToolSets::default()).len(), 21);
-        assert_eq!(tools().len(), 21);
+    fn default_session_lists_23() {
+        assert_eq!(tools_for(ToolSets::default()).len(), 23);
+        assert_eq!(tools().len(), 23);
     }
 
+    /// The 16 of before and the two settings tools, which every agent has (unified-settings call 10).
     #[test]
-    fn tracker_off_lists_16() {
+    fn tracker_off_lists_18() {
         let off = tools_for(ToolSets { tracker: false });
-        assert_eq!(off.len(), 16);
+        assert_eq!(off.len(), 18);
+        for name in ["settings_get", "settings_change"] {
+            assert!(off.iter().any(|t| t.name() == name), "{name}");
+        }
         for t in &off {
             assert!(
                 ![

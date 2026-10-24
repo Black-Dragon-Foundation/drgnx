@@ -127,6 +127,8 @@ params! {
     GraphSettings(graph::SettingsParams),
     GraphPrivacy(graph::PrivacyParams),
     SettingsRecord(settings::RecordParams),
+    SettingsConfirm(settings::ConfirmParams),
+    SettingsExplained(settings::ExplainedParams),
     TasksReady(tasks::ReadyParams),
     TasksFind(tasks::FindParams),
     TasksWrite(tasks::WriteParams),

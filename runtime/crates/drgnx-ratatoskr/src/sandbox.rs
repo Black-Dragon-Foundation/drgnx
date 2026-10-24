@@ -336,11 +336,27 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn check_command(args: SandboxCheckArgs) -> i32 {
     let check = check_blocking(args.tier, args.bwrap, CHECK_TIMEOUT);
     if args.json {
-        println!("{}", check.to_json());
+        println!("{}", check_json(&check));
     } else {
-        println!("{}", check.text());
+        println!("{}", check_text(&check));
     }
     i32::from(!check.ok)
+}
+
+/// The check's text, and on the reduced tier the line that it cannot pin your settings files
+/// ([`crate::sandbox_settings::pins_note`]).
+pub fn check_text(check: &Check) -> String {
+    match crate::sandbox_settings::pins_note(check.backend) {
+        Some(note) => format!("{}\n{note}", check.text()),
+        None => check.text(),
+    }
+}
+
+/// The check's JSON with `pins_note` (the same line, or null).
+pub fn check_json(check: &Check) -> serde_json::Value {
+    let mut v = check.to_json();
+    v["pins_note"] = crate::sandbox_settings::pins_note(check.backend).into();
+    v
 }
 
 #[cfg(feature = "test-hooks")]
@@ -501,7 +517,7 @@ mod run {
             path: Some(a.spec.clone()),
             message: format!("{}: {e}", a.spec.display()),
         })?;
-        let spec: Spec = serde_json::from_str(&text).map_err(|e| Refusal {
+        let mut spec: Spec = serde_json::from_str(&text).map_err(|e| Refusal {
             rule: Rule::Malformed,
             path: Some(a.spec.clone()),
             message: format!("{}: {e}", a.spec.display()),
@@ -509,7 +525,20 @@ mod run {
         let target = sandbox
             .target()
             .ok_or_else(|| setup("no sandbox backend here".into()))?;
-        let valid = gleipnir::validate(spec, &context(&Env::process()), target)?;
+        let env = Env::process();
+        let mut ctx = context(&env);
+        if a.settings_guards {
+            // As phase 6's job spec builder will: your config files closed, the roots' settings files pinned.
+            let config = paths::config_dir(&env);
+            let files = crate::sandbox_settings::read_user_lisp_files(&config, &ctx.home);
+            ctx.closed
+                .extend(crate::sandbox_settings::closed_config_targets(
+                    &config, &files,
+                ));
+            let pins = crate::sandbox_settings::settings_pins(&spec.write);
+            spec.binds.extend(pins);
+        }
+        let valid = gleipnir::validate(spec, &ctx, target)?;
         let hooks = TestHooks {
             landlock_omit: a.landlock_omit.clone(),
             abi_cap: a.landlock_abi_cap,

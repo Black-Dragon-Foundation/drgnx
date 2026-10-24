@@ -392,7 +392,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 79, "{names:?}");
+        assert_eq!(names.len(), 81, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
-    const FRONT_WRITES: [&str; 28] = [
+    const FRONT_WRITES: [&str; 29] = [
         "cards/settle",
         "messages/send",
         "messages/mark",
@@ -453,6 +453,8 @@ mod tests {
         "tasks/write",
         // the settings' history (unified-settings Task 24)
         "settings/record",
+        // the editor's answer to an agent's settings change (unified-settings Task 32)
+        "settings/confirm",
     ];
 
     /// The store's methods that read only (Urdr Task 15b), the front's too.
@@ -499,6 +501,8 @@ mod tests {
             // the editor's token and the held keys' ids (Task 22b)
             "gateway/editor-token",
             "gateway/keys-held",
+            // the editor's settings_get answer (unified-settings Task 32)
+            "settings/explained",
         ];
         want.extend(FRONT_WRITES);
         want.extend(FRONT_READS);
@@ -665,7 +669,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 51);
+        assert_eq!(with, 53);
     }
 
     #[test]

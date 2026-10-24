@@ -9,7 +9,9 @@
 //! - [`load`]: the file checks, the reading and the fallbacks ([`Settings::load`]).
 //! - [`profiles`]: the agents' settings (`AgentProfile`, routes, OpenRouter restrictions).
 //! - [`providers`]: the AI settings (provider entries, role chains) and the provider table (`ProviderConfig`).
+//! - [`agents`]: the editor as the agents' settings tools reach it (`settings/proposed`, `settings/explain`).
 
+pub mod agents;
 pub mod load;
 pub mod overrides;
 pub mod profiles;

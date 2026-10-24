@@ -61,7 +61,8 @@ pub fn tools() -> Vec<Box<dyn Tool<Ctx>>> {
     vec![rich(TaskRead), rich(TaskWrite), rich(NoteAdd)]
 }
 
-/// The tools a session with SETS is served: 21 with the tracker tools, p2–p3's 16 without.
+/// The tools a session with SETS is served: 23 with the tracker tools, p2–p3's 16 and the two settings tools without
+/// (the settings tools are every agent's: unified-settings call 10).
 pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
     let mut all = super::report::tools_for(sets.tracker);
     all.extend(super::job::tools());
@@ -70,6 +71,7 @@ pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
         all.extend(tools());
         all.extend(super::graph::tools());
     }
+    all.extend(super::settings::tools());
     all
 }
 

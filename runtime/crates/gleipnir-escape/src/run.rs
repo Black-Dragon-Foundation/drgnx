@@ -1024,6 +1024,9 @@ fn run_sandboxed(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
         if let Some(n) = row.landlock_abi_cap {
             cmd.arg("--landlock-abi-cap").arg(n.to_string());
         }
+        if row.settings_guards {
+            cmd.arg("--settings-guards");
+        }
         let probes = row
             .probes
             .iter()
