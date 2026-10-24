@@ -389,7 +389,9 @@ never kept, so its earlier value cannot be restored either.
 for the timeline.
 
 When the hub is not running, records wait in `settings-journal.eld` in drgnx's state folder (at most 1 MiB; the
-oldest go first, with one notice) and are sent when the editor connects.
+oldest go first, with one notice) and are sent when the editor connects. A value that looks like a secret is never
+written there: the journal keeps a placeholder, which the hub records as a redacted change. What your Lisp decided is
+remembered in `settings-lisp-seen.eld` as a hash of each value, never the value.
 
 ## Your Lisp files
 

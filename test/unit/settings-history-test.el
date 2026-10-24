@@ -159,6 +159,34 @@
         (should (= n (length (drgnx-sht--records))))
         (should-not (file-exists-p (drgnx-settings-history--journal-file)))))))
 
+(ert-deftest drgnx-settings-history/no-secret-in-the-journal-or-lisp-seen ()
+  (drgnx-sht--with
+    (let ((secret (concat "AKIA" "ABCDEFGHIJKLMNOP")))
+      (setq drgnx-sht--down t)
+      (drgnx-settings-history--record "ui:settings" (list (list :id "option:global:x" :value (format "%S" secret)
+                                                                :file "/c/settings.el")
+                                                          (list :id "option:global:y" :value "80" :file "/c/settings.el")))
+      (drgnx-settings-history--send "graph/put-parsed"
+                                    (list :root "/r" :sources (list (list :entities (list (list :id "o" :data (list :value (format "%S" secret))))))))
+      (let ((text (with-temp-buffer (insert-file-contents (drgnx-settings-history--journal-file)) (buffer-string))))
+        (should-not (string-search secret text))
+        (should (string-search "\"80\"" text)))
+      ;; sent later, the placeholder is one the hub's secret table redacts
+      (let ((v (plist-get (car (plist-get (cadr (car (drgnx-settings-history--journal-read))) :changes)) :value)))
+        (should (equal v drgnx-settings-history--redacted))
+        (should (drgnx-secrets-looks-like v)))
+      (setq drgnx-sht--down nil)
+      ;; what your Lisp set is remembered by a hash only
+      (cl-letf (((symbol-function 'drgnx-settings-prov--managed) (lambda () '(fill-column)))
+                ((symbol-function 'drgnx-settings-explain)
+                 (lambda (_var &optional _b) (list :kind 'lisp :value secret :file "/x/config.el" :line 4))))
+        (should (= 1 (drgnx-settings-history-record-lisp)))
+        (should-not (string-search secret (with-temp-buffer (insert-file-contents
+                                                             (drgnx-settings-history--lisp-seen-file))
+                                                            (buffer-string))))
+        (setq drgnx-settings-history--lisp-done nil)
+        (should (= 0 (drgnx-settings-history-record-lisp)))))))
+
 (ert-deftest drgnx-settings-history/lisp-effect-once-per-start ()
   (drgnx-sht--with
     (let ((value 80))
