@@ -4,7 +4,7 @@
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "run", "args": ["graph", "backup", "now", "--json"], "expect_code": 0, "expect_stdout": {"ok": true, "path": "$string", "bytes": "$number"}}
-{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(stat -c %a $DATA/backup/work-2*.db)\" = 600"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "m=$(stat -c %a $DATA/backup/work-2*.db 2>/dev/null || stat -f %Lp $DATA/backup/work-2*.db); test \"$m\" = 600"], "expect_code": 0}
 {"do": "file", "path": "$DATA/backup", "mode": "700"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"store": {"backup_ok": true, "last_backup": "$string"}}}}
