@@ -862,7 +862,7 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/providers`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
+| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/settings`, `config/changed`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
 | service | `mcp/attach` (an outside agent's bridge: [Sessions and their sockets](#sessions-and-their-sockets)) |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
@@ -1136,14 +1136,15 @@ port file — and holds no key:
   `drgnx-job--gateway-event`: the job pauses, its busy sessions stop, a "spent N of M USD: paused" card.
 
 **The editor's side** (`core/drgnx-hub-client.el`):
-- **The provider table.** Once a subscription is answered (`drgnx-hub--subscribed`), and from `drgnx-hub-ensure`, an
-  editor sends (until unified settings Task 22 moves it to `config/settings`) `config/providers`, a method the hub no longer has, with the effective table — the presets and your own (settings.el's `drgnx-ai-providers`),
-  as the function `drgnx-ai-providers` resolves them: `{id, kind, base (the :url), auth ("none" without a :key-env,
-  "x-api-key" for :auth x-api-key, else "bearer"), messages, caps, price?}` — then its keys. It never carries a key. A
-  change to the providers in settings.el sends it again (`drgnx-ai--settings-changed` on
-  `drgnx-settings-changed-functions`; an old ai.eld saved in a buffer, `drgnx-ai--config-changed`; then `drgnx-hub-resend-providers`: only from an
-  editor subscribed to a proven hub). Each of the answer's `warnings` (a keyed provider at `http://` off this machine)
-  becomes a `hub` notice once per provider per Emacs session (`drgnx-hub--clear-text-told`).
+- **The runtime settings** (`core/drgnx-settings-runtime.el`). Once a subscription is answered (`drgnx-hub--subscribed`),
+  and from `drgnx-hub-ensure`, an editor sends `config/settings` (`drgnx-settings-runtime-send`) with the runtime
+  settings whose value comes from your Lisp or Customize rather than settings.el (`drgnx-settings-runtime-overrides`,
+  by `drgnx-settings-explain`'s winner); the hub reads settings.el itself, and the presets are its own. A provider goes
+  in `ProviderEntry` form (`{kind, url, key_env, caps, price: [in, out], messages, auth, name}` per id), never a key.
+  The set is sent again on `drgnx-settings-changed-functions`, per project (`:project`, once Urdr names it) for what a
+  workspace file sets, and `config/changed` follows each write of settings.el (`drgnx-settings-file-written-functions`).
+  An empty list clears the set. Only an editor subscribed to a hub that proved itself sends on a change; the next
+  connection sends the set anyway.
 - **`gateway/need-keys`** (`drgnx-hub--need-keys`, on the subscription) is answered only on a proven connection
   (`drgnx-hub--event-conn`'s `:drgnx-proven`). For each provider the key is looked for again as the hand-over does
   (`drgnx-ai-key` without INTERACTIVE: its `:key-env` variable, else auth-source's sources that never ask, read

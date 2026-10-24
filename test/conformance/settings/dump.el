@@ -10,7 +10,7 @@
 ;; - `defaults': each entry of runtime-defaults.el as the editor reads it (`drgnx-settings-defaults-all'), in the
 ;;   canonical dump of test/fixtures/huginn/README.md;
 ;; - `counts': how many presets, built-in profiles and default roles the editor's constants hold;
-;; - `providers': the provider table `drgnx-hub--providers-table' gives for providers-settings.el's
+;; - `providers': the provider table `drgnx-settings-dump--providers-table' gives for providers-settings.el's
 ;;   `drgnx-ai-providers';
 ;; - `runtime': [NAME TYPE ON-ERROR] of every declared setting with a `:runtime' type, sorted by name (ON-ERROR
 ;;   `strict', else `last-good').
@@ -29,6 +29,24 @@
 (defconst drgnx-settings-dump-dir (file-name-directory (or load-file-name buffer-file-name))
   "This folder: test/conformance/settings/.")
 
+(defun drgnx-settings-dump--provider-json (id p)
+  "Provider ID (its entry P) as the hub's provider table has it — (:id :kind :base :auth :messages :caps [:price]) —
+or nil when it cannot be one (no URL, a kind the hub does not know).  The reference the hub's table is compared with;
+the editor no longer sends this form (it sends `ProviderEntry' overrides, `drgnx-settings-runtime-overrides')."
+  (let ((kind (plist-get p :kind)) (url (plist-get p :url)) (price (plist-get p :price)))
+    (when (and (memq kind '(openai ollama llamacpp tei anthropic)) (stringp url))
+      (append (list :id (symbol-name id) :kind (symbol-name kind) :base url
+                    :auth (cond ((not (plist-get p :key-env)) "none") ((eq (plist-get p :auth) 'x-api-key) "x-api-key") (t "bearer"))
+                    :messages (if (plist-get p :messages) t :false)
+                    :caps (vconcat (mapcar #'symbol-name (cl-remove-if-not (lambda (c) (memq c '(chat fim embed)))
+                                                                           (delete-dups (copy-sequence (plist-get p :caps)))))))
+              (and (consp price) (numberp (car price)) (numberp (cdr price))
+                   (list :price (list :input (car price) :output (cdr price))))))))
+
+(defun drgnx-settings-dump--providers-table ()
+  "The effective providers (the presets and `drgnx-ai-providers') as `drgnx-settings-dump--provider-json' has them."
+  (vconcat (delq nil (mapcar (lambda (e) (drgnx-settings-dump--provider-json (car e) (cdr e))) (drgnx-ai-providers)))))
+
 (defun drgnx-settings-dump--providers ()
   "The editor's provider table for providers-settings.el's `drgnx-ai-providers'."
   (let* ((doc (drgnx-settings-file-read (expand-file-name "providers-settings.el" drgnx-settings-dump-dir)
@@ -38,7 +56,7 @@
     (unless entry (error "providers-settings.el has no drgnx-ai-providers"))
     (unwind-protect
         (progn (set-default 'drgnx-ai-providers (drgnx-settings-entry-value entry))
-               (drgnx-hub--providers-table))
+               (drgnx-settings-dump--providers-table))
       (set-default 'drgnx-ai-providers old))))
 
 (defun drgnx-settings-dump--runtime ()

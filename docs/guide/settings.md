@@ -308,7 +308,13 @@ allowed (`-` old, `+` new).
 In a project that is not trusted the buffer lists what waits for trust and offers no Allow. The Workspace group of
 Settings shows the same counts: settings (values that wait for trust) and code (that waits for review).
 
-## Settings the runtime reads (Task 22)
+## Settings the runtime reads
+
+The runtime (the hub, with the agent gateway) reads `settings.el` itself. What it cannot read is a value your Lisp
+or Customize set: drgnx sends the runtime only those (providers, roles, agent profiles, routes and the other settings
+marked as read by the runtime), and only when the value in effect does not come from `settings.el`. A workspace file
+that sets one sends it for that project. drgnx sends again whenever your settings change, tells the runtime after
+each write of `settings.el`, and never sends a key (a provider names the variable that holds it).
 
 ## History and undo (Task 25)
 
