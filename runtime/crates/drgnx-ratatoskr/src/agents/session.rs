@@ -127,6 +127,13 @@ struct State {
     closed: Vec<ClosedStep>,
     /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
     last_mid: Option<String>,
+    /// When the agent last sent an update (or its turn began): what the supervisor's `silent` rule reads.
+    last_update: f64,
+    /// Tool calls started this turn, by title and command, and the most any one was repeated.
+    cmd_counts: HashMap<String, u32>,
+    max_repeat: u32,
+    /// Tokens the finished turns used.
+    tokens: u64,
 }
 
 /// A step that has begun.
@@ -178,6 +185,10 @@ impl State {
             cur: None,
             stash: None,
             last_mid: None,
+            last_update: now(),
+            cmd_counts: HashMap::new(),
+            max_repeat: 0,
+            tokens: 0,
             closed: Vec::new(),
             status: runstav::methods::agents::SessionStatus::Starting,
             seq: 0,
@@ -296,6 +307,7 @@ impl State {
     /// One `session/update` of the agent (its JSON), as entries, commands and usage.
     fn apply(&mut self, u: &Value) {
         self.seq += 1;
+        self.last_update = now();
         let kind = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
         let text_of = |u: &Value| {
             let c = u.get("content");
@@ -366,6 +378,15 @@ impl State {
                             Some(id),
                         )),
                     );
+                    let command = self.entries[idx].rest.get("rawInput").map(Value::to_string);
+                    let key = format!(
+                        "{}\n{}",
+                        title.as_deref().unwrap_or(""),
+                        command.unwrap_or_default()
+                    );
+                    let n = self.cmd_counts.entry(key).or_insert(0);
+                    *n += 1;
+                    self.max_repeat = self.max_repeat.max(*n);
                 }
                 if matches!(status.as_deref(), Some("completed" | "failed")) {
                     if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) == Some(id) {
@@ -2218,6 +2239,43 @@ impl Session {
         Ok(())
     }
 
+    /// What the supervisor reads of this session.
+    pub(crate) fn observe(&self) -> crate::supervisor::Obs {
+        let st = lock(&self.state);
+        crate::supervisor::Obs {
+            sid: self.id.clone(),
+            task: self.task.clone(),
+            role: self.role,
+            cwd: self.cwd.clone(),
+            status: st.status,
+            last_update: st.last_update,
+            busy_elsewhere: !st.permissions.is_empty()
+                || st.cur.as_ref().map(|c| c.class) == Some(StepClass::MachineQueue),
+            max_repeat: st.max_repeat,
+            tokens: st.tokens,
+            refusals: self.wait_refusals.load(Ordering::Relaxed),
+            context: st
+                .usage
+                .as_ref()
+                .and_then(|u| Some(u.used? / u.size.filter(|s| *s > 0.0)?)),
+            jobs: self.live.ids(&self.id),
+        }
+    }
+
+    /// The supervisor found this busy session silent: the time until its turn ends is a `stalled` step.
+    pub(crate) fn mark_stalled(self: &Arc<Self>) {
+        {
+            let mut st = lock(&self.state);
+            if st.status != SessionStatus::Busy
+                || st.cur.as_ref().map(|c| c.class) == Some(StepClass::Stalled)
+            {
+                return;
+            }
+            st.stash_begin(StepClass::Stalled);
+        }
+        self.changed();
+    }
+
     pub(crate) fn status(&self) -> SessionStatus {
         lock(&self.state).status
     }
@@ -2415,6 +2473,9 @@ impl Session {
             self.wait_refusals.store(0, Ordering::Relaxed);
             st.status = SessionStatus::Busy;
             st.turn += 1;
+            st.last_update = now();
+            st.cmd_counts.clear();
+            st.max_repeat = 0;
             st.open = None;
             st.text(EntryType::User, &item.text, None);
             if let Some(e) = st.entries.last_mut() {
@@ -2483,6 +2544,7 @@ impl Session {
                     }
                     used = turn_use(o);
                     let tokens = (used.tokens_in + used.tokens_out) as f64;
+                    st.tokens += tokens as u64;
                     self.spend(vec![(Unit::Tokens, tokens)]);
                 }
                 Err(hermod::Error::Closed) => {}
