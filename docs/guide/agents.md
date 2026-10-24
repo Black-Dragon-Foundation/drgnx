@@ -279,6 +279,13 @@ requests and edits to review — and drives it the same way (send, Stop, answer,
 sessions when it is idle whenever a hub is running (and looks again every 30 s of idleness); it never starts a hub for that.
 Turning `tools/agents` off (Preferences: Modules) stops the mirroring and closes this Emacs's connection to the hub;
 the hub and its sessions go on.
+**New Agent Session…**, **Review Branch** and starting an agent on a task now start the session in the hub too (the
+hub's `agents/start`); the transcript you open is its mirror. A session whose provider's lock the hub could not enforce
+(for instance no sandbox on this machine) is announced once as "not enforced: <why>" and says so in
+`drgnx-agents-mirror-lock-label`. A permission-matrix question (`matrix` card) or a rule that paused an agent
+(`supervisor`) shows as a notice; nothing asks you in the middle of your typing. `drgnx job` talks to the hub's `job/*`
+methods, which the hub itself serves.
+
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its agent processes end too.
 The next hub (the next durable session, an agent that needs the gateway, or `drgnx hub start`) brings each session
 back when its agent can resume or load sessions: idle, with its history read from the transcript, and with the

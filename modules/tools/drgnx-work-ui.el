@@ -288,7 +288,7 @@ and its commits are recorded for the task."
                  (_ (user-error "Not a task, TODO or plan"))))
          (plan (drgnx-work-ui--plan-of task))
          (cwd (or (plist-get plan :worktree) (plist-get plan :repo) (file-name-directory (plist-get plan :path))))
-         (s (drgnx-agents-start profile cwd (plist-get task :id))))
+         (s (progn (require 'drgnx-agents-mirror) (drgnx-agents-mirror-start profile cwd (plist-get task :id)))))
     (when (fboundp 'drgnx-agents-ui-transcript) (drgnx-agents-ui-transcript s))
     s))
 

@@ -261,8 +261,8 @@ master); its findings land in the Review tab."
          (count (drgnx-review--git root "rev-list" "--count" (format "%s..HEAD" base))))
     (when (member count '(nil "0")) (user-error "Nothing to review against %s" base))
     (require 'drgnx-job)
-    (require 'drgnx-agents)
-    (let* ((s (drgnx-agents-start (car (drgnx-job-route 'review)) (file-name-as-directory root)))
+    (require 'drgnx-agents-mirror)
+    (let* ((s (drgnx-agents-mirror-start (car (drgnx-job-route 'review)) (file-name-as-directory root)))
            (sid (drgnx-agent-session-id s)))
       (puthash sid (list :root (file-name-as-directory root) :base base
                          :branch (or (drgnx-review--git root "rev-parse" "--abbrev-ref" "HEAD") "HEAD")

@@ -25,7 +25,7 @@
      (let* ((default-directory repo) (delivered nil) (drgnx-review--runs (make-hash-table :test #'equal))
             (drgnx-review--current nil)
             (s (drgnx-agents--make :id "rev-1" :name "reviewer" :status 'idle :conn 'fake :cwd repo)))
-       (cl-letf (((symbol-function 'drgnx-agents-start) (lambda (_profile _cwd &rest _) s))
+       (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (_profile _cwd &rest _) s))
                  ((symbol-function 'drgnx-agents-deliver) (lambda (_s text) (push text delivered) t))
                  ((symbol-function 'drgnx-agents-kill) #'ignore))
          (unwind-protect (progn ,@body)

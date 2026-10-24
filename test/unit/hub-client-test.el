@@ -1149,4 +1149,21 @@ without the binary."
           (should-not ensures)
           (should-not runs))))))
 
+(ert-deftest drgnx-hub-client/matrix-card-shown ()
+  ;; a matrix card and a supervisor pause become notices of the hub; nothing asks, nothing waits; agent-step is ignored
+  (drgnx-notice-test-with-model
+    (let ((conn (make-pipe-process :name "matrix-card-test" :noquery t)))
+      (unwind-protect
+          (progn
+            (process-put conn :drgnx-proven t)
+            (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (error "prompted")))
+                      ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "prompted"))))
+              (let ((inhibit-interaction t) (drgnx-hub--event-conn conn))
+                (drgnx-hub--note-card "agent-step" '(:session "s1"))
+                (should-not (drgnx-notices :source 'hub))
+                (drgnx-hub--note-card "card" '(:id 7 :kind "matrix" :title "Run make?"))
+                (drgnx-hub--note-card "supervisor" '(:rule "loop" :session "s1" :card 8 :text "same call 5 times"))))
+            (should (= (length (drgnx-notices :source 'hub)) 2)))
+        (delete-process conn)))))
+
 ;;; hub-client-test.el ends here

@@ -21,6 +21,9 @@
   "Hub id → events that came while its transcript was being fetched (newest first).")
 (defvar drgnx-agents-mirror--seq (make-hash-table :test #'equal) "Hub id → the last change number applied.")
 
+(defvar drgnx-agents-mirror--lock (make-hash-table :test #'equal)
+  "Hub id → why the hub could not hold the provider to its lock (its snapshot's `enforced_why'), or nil.")
+
 (defun drgnx-agents-mirror--find (id) (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) id)) drgnx-agents--sessions))
 
 (defconst drgnx-agents-mirror--slots
@@ -61,7 +64,33 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
       (push m drgnx-agents--sessions))
     (dolist (slot drgnx-agents-mirror--slots)
       (setf (cl-struct-slot-value 'drgnx-agent-session slot m) (plist-get snap (intern (concat ":" (symbol-name slot))))))
+    ;; a false flag is not in a decoded record (nil-valued keys are left out): the hub's reason says the lock is not held
+    (progn
+      (puthash id (plist-get snap :enforced_why) drgnx-agents-mirror--lock)
+      (when (and new (plist-get snap :enforced_why))
+        (drgnx-notify 'agents 'warn (format "%s: %s" (plist-get snap :name) (format "not enforced: %s" (plist-get snap :enforced_why)))
+                      :id (intern (concat "lock-" id)) :life 'event)))
     (cons m new)))
+
+(defun drgnx-agents-mirror-lock-label (m)
+  "\"not enforced\" (with the hub's reason) when the hub could not hold mirror M's provider to its lock, else nil."
+  (when-let* ((why (gethash (drgnx-agent-session-remote m) drgnx-agents-mirror--lock)))
+    (format "not enforced: %s" why)))
+
+(defun drgnx-agents-mirror-start (profile cwd &optional task job)
+  "Start a session of PROFILE in CWD in the hub and return its mirror here (for a command the user ran: it waits for
+the hub).  The agent runs in the hub, so it keeps working when this Emacs closes."
+  (unless (memq #'drgnx-agents-mirror--event drgnx-hub-event-functions) (drgnx-hub-ensure) (drgnx-agents-mirror-sync))
+  (let* ((r (drgnx-hub-call-sync "agents/start" (append (list :profile profile :cwd (expand-file-name cwd))
+                                                        (and task (list :task task)) (and job (list :job job)))
+                                 30))
+         (id (plist-get r :id)))
+    (or (drgnx-agents-mirror--find id)
+        (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session
+                                                       (plist-get (drgnx-hub-call-sync "agents/get" (list :id id) 10) :session))))
+          (let ((m (car (drgnx-agents-mirror--apply-snapshot (car snap)))))
+            (drgnx-agents-mirror--fetch m)
+            m)))))
 
 (defun drgnx-agents-mirror--apply-entries (m entries)
   "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript."
@@ -141,6 +170,7 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
   (remove-hook 'drgnx-hub-skew-functions #'drgnx-agents-mirror--skew)
   (setq drgnx-agents-mirror--paused nil)
   (clrhash drgnx-agents-mirror--fetching)
+  (clrhash drgnx-agents-mirror--lock)
   (clrhash drgnx-agents-mirror--seq))
 
 (provide 'drgnx-agents-mirror)

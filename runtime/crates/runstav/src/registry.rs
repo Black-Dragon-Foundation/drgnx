@@ -593,6 +593,28 @@ mod tests {
         assert_eq!(env_set["home"], json!("backend"), "{env_set}");
     }
 
+    /// The editor's switch (agent system part 1, Task 27): the hub serves every `agents/*` and `job/*` method; the
+    /// Lisp backend serves none, in the registry and in the committed `methods.json` the editor reads.
+    #[test]
+    fn no_agent_or_job_method_is_backend() {
+        assert!(
+            registry()
+                .iter()
+                .filter(|m| m.name.starts_with("agents/") || m.name.starts_with("job/"))
+                .all(|m| m.home == Home::Front)
+        );
+        let methods = methods_json();
+        let backend: Vec<&str> = methods["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["home"] == json!("backend"))
+            .filter_map(|m| m["name"].as_str())
+            .filter(|n| n.starts_with("agents/") || n.starts_with("job/"))
+            .collect();
+        assert!(backend.is_empty(), "served by the backend: {backend:?}");
+    }
+
     #[test]
     fn the_docs_table_has_the_home_column() {
         let t = markdown_table();

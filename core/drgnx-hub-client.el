@@ -881,6 +881,7 @@ closes it when this Emacs dies."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event)
   (setq drgnx-hub--editor nil drgnx-hub--keys-held :unknown)
@@ -1254,6 +1255,7 @@ Asynchronous; safe to call again, also before the hub has answered (one subscrip
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
       (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
+      (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
       (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
       (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
       (drgnx-hub-send-settings)
@@ -1323,6 +1325,22 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
         (drgnx-notify 'hub (intern severity) text :id (intern id)
                       :life (if (equal (plist-get data :life) "condition") 'condition 'event)
                       :command (and (stringp command) (intern command)))))))
+
+(defun drgnx-hub--note-card (event data)
+  "In an editor: a `matrix' card (the permission matrix asks) or a `supervisor' pause from a hub that proved itself is
+a notice.  Nothing asks and nothing waits: the cockpit's cards answer.  `agent-step' is not handled here: it matters
+only to a subscriber that asked for it."
+  (when (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven))
+    (cond
+     ((and (equal event "card") (equal (plist-get data :kind) "matrix") (numberp (plist-get data :id)))
+      (drgnx-notify 'hub 'info
+                    (format "The permission matrix asks: %s" (or (plist-get data :title) "a question is waiting"))
+                    :id (intern (format "matrix-card-%d" (plist-get data :id))) :life 'condition
+                    :scope (plist-get data :job)))
+     ((and (equal event "supervisor") (stringp (plist-get data :text)))
+      (drgnx-notify 'hub 'warn (format "An agent was paused: %s" (plist-get data :text))
+                    :id (intern (format "supervisor-%s" (or (plist-get data :card) (plist-get data :session) "rule")))
+                    :life 'condition)))))
 
 (provide 'drgnx-hub-client)
 ;;; drgnx-hub-client.el ends here

@@ -583,7 +583,8 @@ exists is connected to (asynchronously)."
 (defun drgnx-agents-ui-new (profile)
   "Start an agent session of PROFILE in this project."
   (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile))))
-  (drgnx-agents-ui-transcript (drgnx-agents-start profile (drgnx-agents-ui--cwd))))
+  (require 'drgnx-agents-mirror)
+  (drgnx-agents-ui-transcript (drgnx-agents-mirror-start profile (drgnx-agents-ui--cwd))))
 
 (defun drgnx-agents-ui-send (text)
   "Send TEXT to the agent — queued while it works; it never cancels the running turn."

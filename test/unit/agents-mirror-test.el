@@ -195,4 +195,15 @@
 
 (defun drgnx-agents-mirror-test--no-read (&rest _) (error "The mirror read hub data as Lisp"))
 
+(ert-deftest drgnx-agents-mirror/not-enforced-label ()
+  (let ((drgnx-agents--sessions nil) (drgnx-agents-mirror--lock (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'drgnx-notify) #'ignore))
+      (let* ((snap (drgnx-records-from-json 'drgnx-records-session
+                                            '(:id "h1" :name "a" :status "idle" :enforced_why "no sandbox here")))
+             (m (car (drgnx-agents-mirror--apply-snapshot snap)))
+             (ok (car (drgnx-agents-mirror--apply-snapshot
+                       (drgnx-records-from-json 'drgnx-records-session '(:id "h2" :name "b" :status "idle" :enforced t))))))
+        (should (equal (drgnx-agents-mirror-lock-label m) "not enforced: no sandbox here"))
+        (should-not (drgnx-agents-mirror-lock-label ok))))))
+
 ;;; agents-mirror-test.el ends here
