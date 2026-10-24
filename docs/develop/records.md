@@ -41,3 +41,29 @@ never regenerated, which is what keeps it byte-exact.
   and any `#+TODO:` words of the preamble.
 
 All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well under 50 ms.
+
+## Importer and views
+
+`ratatoskr graph import-records --root DIR [--only plans|ledgers|deferred|build-board|board] [--dry-run]` (method
+`records/import`; `records/status` lists the views). The importer finds `docs/plans/**/*.md` (ledgers end in
+`.ledger.md`), `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`.
+
+- **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
+  second import on the same day gets `<date>-2`, never overwriting). A dry run reads and counts and writes nothing.
+- **Pieces.** `saga::import::ops(doc, source)` turns a file into ordered pieces; each piece is one entity
+  (`Origin::Imported`, `source = records:<hash of the path>`) whose `body` is the piece's raw text: a plan is its head
+  (`plan`), one `task` per task (heading, body and the sections after it) and its tail; a ledger a head and one
+  `note` per section; DEFERRED a head, one `todo` per row and a tail; the board a `note` per text or table block;
+  `board.org` a head and one `task` per headline. Ids are `<kind>:rec-<hash>-<seq>`, so importing twice changes
+  nothing (the second report says 0 operations and adds no `tx` row); pieces that disappeared from the file are
+  retired.
+- **Views.** `saga::view::render` concatenates the pieces in `seq` order: an unchanged graph renders the imported
+  file byte for byte. The hub writes the file back at its path (tmp file + rename) with a one-line header comment,
+  which the importer strips. Task state in a piece is the raw text, so a status changed only in the graph shows in
+  the view once the piece's body is regenerated (Task 14b and the later wiring of graph changes to
+  `Views::on_change`, debounced 2 s).
+- **Never overwritten.** `Views::changed(path)` compares the file with the hash of what the hub last wrote; a changed
+  file is held (`Flush::Held`), not rewritten. Task 14b turns it into a proposal. After an import the file was just
+  read and backed up, so the import writes the view over it.
+- **Never committed.** The hub runs no git on view files. The files stay modified in the work tree; committing them
+  is the user's.

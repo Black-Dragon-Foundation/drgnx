@@ -24,6 +24,7 @@ test-hooks = ["gleipnir/test-hooks", "norn/test-hooks"]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
+saga = { path = "../saga", version = "0.1.0" }
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
 eitri = { path = "../eitri", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }

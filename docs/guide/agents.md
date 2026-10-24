@@ -527,6 +527,14 @@ TODO is under, wherever it was refiled). Projects: Sync Plans and Board TODOs ma
 checkbox (`- [x]`) in the plan; a ticked checkbox marks its TODO DONE. It writes only what changed, only when you
 run it, with the plan's own encoding and line endings — and leaves alone a plan open in Emacs with unsaved edits.
 
+## Plans and records
+
+Plans, ledgers, `DEFERRED.md`, `BUILD-BOARD.md` (and `board.org`, only when you name it) can move into the graph:
+`ratatoskr graph import-records --root DIR` (add `--dry-run` to see what it would do). Every file is copied to
+`<state>/hub/records-backup/<date>/` first; importing again changes nothing. Afterwards each file is a view of the
+graph: drgnx rewrites it when the records change, starts it with a one-line comment saying so, and never overwrites
+a file you edited by hand. drgnx never commits these files; that stays yours.
+
 ## Tests
 
 - `test/unit/coord-test.el`, `coord-mcp-test.el`, `hub-agents-test.el`, `agents-mirror-test.el`, `coord-delivery-test.el`
