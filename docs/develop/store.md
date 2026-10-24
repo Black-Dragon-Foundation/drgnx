@@ -543,9 +543,12 @@ stays the truth for a setting; the store records its history as entities of kind
     id of an agent's plain setting (never a dir or mode section; `NO_PROJECT` for a project scope with none).
 - **The deny-list's name half** (`options::deny::is_denied(name)`, call 9): the names, prefixes and suffixes of
   `test/fixtures/settings-deny.json` (drgnx's and Emacs's security settings, `eval` and `mode`, `drgnx-trust-*`,
-  `safe-local-variable-*`, Emacs's risky endings and design §4.4's program endings, case folded). The test
-  `options::tests::deny_table` keeps the Rust lists equal to the file and runs its cases; the editor adds what only
-  Lisp knows (`:agents never`, `:workspace code`).
+  `safe-local-variable-*`, Emacs's risky endings and design §4.4's program endings, case folded), and every name
+  no variable has (`options::deny::is_not_a_name`: a keyword such as `:eval`, `nil`, `t`, whitespace, a control
+  character or one of the file's `characters`, which the editor refuses too; `settings_change` and `settings_get`
+  refuse such a name before any grant or card). The test `options::tests::deny_table` keeps the Rust lists equal
+  to the file and runs its cases, and the editor's `drgnx-settings-agents/the-shared-deny-table` runs them against
+  its check, which adds what only Lisp knows (`:agents never`, `:workspace code`).
 - **`graph/put-parsed`** (Task 24) takes `option` entities from a `file` source whose path ends in
   `/.drgnx/settings.el` only: each id a well-formed shared id, `data` only `value` (a text), `file` (the source's
   path) and `line` (a number). Anything else refuses the source, which stores nothing (`norn::parsed`). The entity's

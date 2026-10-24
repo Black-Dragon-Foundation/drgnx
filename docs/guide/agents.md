@@ -435,7 +435,8 @@ writes the file (the hub never does), and the change goes into the setting's his
   `"text"`, `(a b)`), read as data and never run; a value or a reason that looks like a secret is refused. The
   security settings are never an agent's, under any grant: drgnx's agent, sandbox, trust, keys and module settings,
   `load-path`, `eval`, `custom-file`, and any name that names a program, a hook or a function (the full list is
-  `test/fixtures/settings-deny.json`); the editor adds the settings marked `:agents never`.
+  `test/fixtures/settings-deny.json`); the editor adds the settings marked `:agents never`. A name no variable has
+  (a keyword such as `:eval`, `nil`, `t`, or one with a space or any of `` ()";'`,#[]\ ``) is refused before any grant.
   - **Under a grant** the change is recorded as a *proposed* change of the agent's, and the editor checks it again,
     writes it to the file the scope names and confirms it; the agent's answer says `changed`, or `refused` with the
     editor's reason. With no editor open it stays proposed (`pending`) until you settle it.

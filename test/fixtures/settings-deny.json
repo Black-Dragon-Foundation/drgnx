@@ -3,12 +3,15 @@
   "about": [
     "The settings deny-list's name half (unified-settings design 13, plan call 9): no agent may change these, under",
     "any grant. norn::options::deny (Rust) holds the same lists and its test `deny_table` checks them against this",
-    "file; the editor's check reads it too and adds what only Lisp knows (`:agents never`, `:workspace code`).",
-    "A name is denied when it is one of `names`, starts with one of `prefixes`, ends with one of `suffixes`, or ends",
-    "with one of `numbered_suffixes` followed by one or more digits. Suffixes are compared case-insensitively",
-    "(Emacs's risky-local-variable-p matches with case-fold-search on). `names` and `prefixes` are exact.",
+    "file; the editor's test (settings-agents-test) runs its cases and characters against the editor's check, which",
+    "adds what only Lisp knows (`:agents never`, `:workspace code`).",
+    "A name is denied when it is one of `names`, starts with one of `prefixes`, ends with one of `suffixes`, ends",
+    "with one of `numbered_suffixes` followed by one or more digits, or holds whitespace, a control character or one of",
+    "`characters` (no variable's name: the editor refuses them). Suffixes are compared case-insensitively",
+    "(Emacs's risky-local-variable-p matches with case-fold-search on). `names` and `prefixes` are exact; `:` is a",
+    "keyword (`:eval`), `nil` and `t` are constants.",
     "`suffixes`: Emacs's risky-local-variable-p (files.el) and the program-naming endings of design 4.4.",
-    "`cases`: [name, denied] rows both readers run."
+    "`cases`: [name, denied] rows both readers run (the editor refuses the empty name too)."
   ],
   "names": [
     "custom-file",
@@ -49,13 +52,16 @@
     "invocation-name",
     "load-path",
     "mode",
+    "nil",
     "package-archives",
     "process-environment",
     "shell-command-switch",
     "shell-file-name",
+    "t",
     "trusted-content"
   ],
   "prefixes": [
+    ":",
     "drgnx-trust-",
     "safe-local-variable-"
   ],
@@ -87,6 +93,7 @@
   "numbered_suffixes": [
     "font-lock-keywords-"
   ],
+  "characters": "()\";'`,#[]\\",
   "cases": [
     ["fill-column", false],
     ["python-indent-offset", false],
@@ -140,6 +147,16 @@
     ["invocation-name", true],
     ["drgnx-tty-mac-app-dirs", true],
     ["shell-file-name-chars", false],
+    [":eval", true],
+    [":mode", true],
+    [":dir", true],
+    ["nil", true],
+    ["t", true],
+    ["nil-or-t", false],
+    ["fill(column", true],
+    ["a;b", true],
+    ["a b", true],
+    ["a]b", true],
     ["hook", false],
     ["map", false],
     ["programs", false],

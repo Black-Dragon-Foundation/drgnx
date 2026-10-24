@@ -191,3 +191,24 @@
     (should-not (memq #'drgnx-settings-agents--event drgnx-hub-event-functions))
     (drgnx-hub-disconnect)
     (should-not (memq #'drgnx-settings-agents--event drgnx-hub-event-functions))))
+
+(ert-deftest drgnx-settings-agents/the-shared-deny-table ()
+  "The editor's check refuses what test/fixtures/settings-deny.json denies, and takes the rest (the hub runs the same
+rows, norn's `deny_table')."
+  (require 'drgnx-agents)
+  (require 'drgnx-ai)
+  (require 'drgnx-user-lisp)
+  (let ((table (with-temp-buffer
+                 (insert-file-contents (expand-file-name "test/fixtures/settings-deny.json" drgnx-dir))
+                 (json-parse-buffer :false-object nil)))
+        (refused (lambda (name)
+                   (let ((var (drgnx-settings-agents--var name)))
+                     (or (null var) (and (drgnx-settings-agents--denied var) t))))))
+    (seq-doseq (row (gethash "cases" table))
+      (let ((name (aref row 0)))
+        (unless (equal name "")         ; no name: the editor refuses it, the hub's name check too
+          (should (equal (list name (funcall refused name)) (list name (aref row 1)))))))
+    (seq-doseq (c (gethash "characters" table))
+      (should (funcall refused (string ?f c ?x))))
+    (dolist (name '("nil" "t" ":eval" ":x" "a b" "a\tb"))
+      (should (funcall refused name)))))

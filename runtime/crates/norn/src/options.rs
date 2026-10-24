@@ -237,15 +237,31 @@ pub mod deny {
         "invocation-name",
         "load-path",
         "mode",
+        "nil",
         "package-archives",
         "process-environment",
         "shell-command-switch",
         "shell-file-name",
+        "t",
         "trusted-content",
     ];
 
-    /// Name prefixes of the same set.
-    pub const PREFIXES: &[&str] = &["drgnx-trust-", "safe-local-variable-"];
+    /// Name prefixes of the same set; `:` is a keyword (`:eval`, `:mode`, `:dir`), never a variable.
+    pub const PREFIXES: &[&str] = &[":", "drgnx-trust-", "safe-local-variable-"];
+
+    /// The characters no variable's name holds, as the editor refuses them (with whitespace and control characters).
+    pub const CHARACTERS: &str = "()\";'`,#[]\\";
+
+    /// Whether NAME is shaped as no variable an agent may name: a keyword, `nil` or `t` (in [`NAMES`]), or a name
+    /// with whitespace, a control character or one of [`CHARACTERS`].
+    pub fn is_not_a_name(name: &str) -> bool {
+        name.starts_with(':')
+            || name == "nil"
+            || name == "t"
+            || name
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || CHARACTERS.contains(c))
+    }
 
     /// Emacs's risky endings (`risky-local-variable-p`) and design §4.4's program endings, compared case folded.
     pub const SUFFIXES: &[&str] = &[
@@ -279,7 +295,10 @@ pub mod deny {
 
     /// Whether no agent may change the setting NAME, under any grant.
     pub fn is_denied(name: &str) -> bool {
-        if NAMES.contains(&name) || PREFIXES.iter().any(|p| name.starts_with(p)) {
+        if NAMES.contains(&name)
+            || PREFIXES.iter().any(|p| name.starts_with(p))
+            || is_not_a_name(name)
+        {
             return true;
         }
         let folded = name.to_ascii_lowercase();
@@ -601,6 +620,10 @@ mod tests {
         assert_eq!(strings(&t["prefixes"]), deny::PREFIXES);
         assert_eq!(strings(&t["suffixes"]), deny::SUFFIXES);
         assert_eq!(strings(&t["numbered_suffixes"]), deny::NUMBERED_SUFFIXES);
+        assert_eq!(t["characters"].as_str().unwrap(), deny::CHARACTERS);
+        for c in deny::CHARACTERS.chars().chain([' ', '\t', '\n', '\u{7f}']) {
+            assert!(deny::is_denied(&format!("fill{c}column")), "{c:?}");
+        }
         let cases = t["cases"].as_array().unwrap();
         assert!(cases.len() >= 40);
         for case in cases {

@@ -42,9 +42,11 @@
 ;;;; The checks
 
 (defun drgnx-settings-agents--var (name)
-  "NAME (a string) as the variable an agent may change, or nil: no keyword, no `eval' or `mode' pseudo-variable."
+  "NAME (a string) as the variable an agent may change, or nil: no keyword, no `eval' or `mode' pseudo-variable.
+The refused characters are `characters' of test/fixtures/settings-deny.json (the hub refuses the same)."
   (when (and (stringp name) (< 0 (length name) 201)
-             (not (string-match-p "[[:space:][:cntrl:]()\"';`,#\\[\\]]" name))
+             ;; `]' first and `[' last are literal in a bracket expression, and so is `\'
+             (not (string-match-p "[][:space:][:cntrl:]()\"';`,#\\[]" name))
              (not (string-prefix-p ":" name))
              (not (member name '("eval" "mode" "nil" "t"))))
     (intern name)))

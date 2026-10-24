@@ -87,14 +87,13 @@ fn scope_of(text: &str) -> Result<SettingScope, String> {
         .ok_or_else(|| format!("scope: global, private or shared, not {text:?}"))
 }
 
-/// NAME as a setting's name: 1 to 256 characters, no whitespace or control character.
+/// NAME as a setting's name: 1 to 256 characters, shaped as a variable's ([`deny::is_not_a_name`]: no keyword, `nil`
+/// or `t`, no whitespace, control character or one of [`deny::CHARACTERS`]), as the editor checks it.
 fn check_name(path: &str, name: &str) -> Result<(), String> {
-    if name.is_empty()
-        || name.len() > MAX_NAME
-        || name.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
+    if name.is_empty() || name.len() > MAX_NAME || deny::is_not_a_name(name) {
         return Err(format!(
-            "{path}: a variable's name, 1 to {MAX_NAME} characters, no spaces"
+            "{path}: a variable's name, 1 to {MAX_NAME} characters: not a keyword, nil or t, no spaces or any of {}",
+            deny::CHARACTERS
         ));
     }
     Ok(())
@@ -862,6 +861,34 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(e, options::DENIED);
+        // a name no variable has (a keyword, nil, the editor's refused characters): the store's rule refuses it as
+        // deny-listed too (the tool refuses it as no name: `value_is_parsed_as_data`), so no grant or card carries it
+        for name in [
+            ":eval",
+            ":mode",
+            ":dir",
+            "nil",
+            "t",
+            "fill(column",
+            "a;b",
+            "a#b",
+            "a[b",
+        ] {
+            assert!(
+                check_change(name, "nil", "r")
+                    .unwrap_err()
+                    .starts_with("name: a variable's name"),
+                "{name}"
+            );
+            let change = Change {
+                name: name.into(),
+                ..change.clone()
+            };
+            let e = propose(&w.coord, &caller, &change, Duration::ZERO)
+                .await
+                .unwrap_err();
+            assert_eq!(e, options::DENIED, "{name}");
+        }
         untouched(&w);
     }
 
@@ -1327,11 +1354,37 @@ mod tests {
             assert_eq!(w.hub.proposed.lock().unwrap().last().unwrap().value, value);
         }
         // a name that would read as a section, or is no name
-        for name in ["mode/c-mode:fill-column", "dir/src/:x", "fill column", ""] {
+        for name in [
+            "mode/c-mode:fill-column",
+            "dir/src/:x",
+            "fill column",
+            "",
+            ":eval",
+            "nil",
+            "t",
+            "a\"b",
+            "a'b",
+            "a`b",
+            "a,b",
+            "a)b",
+            "a]b",
+            "a\\b",
+        ] {
             let out = w
                 .call(&me, "settings_change", change("global", name, "1"))
                 .await;
             assert!(out.err, "{name:?}");
+        }
+        // the shape refusals are the tool's own, before any grant or card
+        for name in [":eval", "nil", "t", "a\"b", "a)b", "a]b", "a\\b"] {
+            let out = w
+                .call(&me, "settings_change", change("global", name, "1"))
+                .await;
+            assert!(
+                out.text.starts_with("name: a variable's name"),
+                "{name:?}: {}",
+                out.text
+            );
         }
         let out = w
             .call(&me, "settings_change", change("everywhere", "x", "1"))
