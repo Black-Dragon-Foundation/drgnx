@@ -160,7 +160,9 @@ project's (nothing until Urdr names ROOT's project).  The call's id, or nil."
 
 (defun drgnx-settings-runtime--live-p ()
   "Non-nil in an editor subscribed to a hub that proved itself: the only place settings go on a change."
-  (and (not drgnx-hub--behind-front) (process-live-p drgnx-hub--events) (process-get drgnx-hub--events :drgnx-proven)))
+  ;; the hub client may not be loaded: its variables are unbound then
+  (let ((events (bound-and-true-p drgnx-hub--events)))
+    (and (not (bound-and-true-p drgnx-hub--behind-front)) (process-live-p events) (process-get events :drgnx-proven))))
 
 (defun drgnx-settings-runtime-changed ()
   "settings.el may have changed: the hub looks at its stamp (`config/changed')."
