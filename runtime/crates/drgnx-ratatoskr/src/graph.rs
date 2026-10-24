@@ -2747,6 +2747,138 @@ mod tests {
         assert_eq!(title, "first");
     }
 
+    /// An excise of a task whose title a kept backup and a session transcript both hold; `flags` are the
+    /// `rotate_backups` / `transcripts` params. Returns the answer and the two files.
+    async fn excise_with_copies(flags: Value) -> (Value, PathBuf, PathBuf, tempfile::TempDir) {
+        const TEXT: &str = "secret title of the task";
+        let (dir, w, _, _) = fixture().await;
+        let made = task_write(&w, json!({"op": "create", "title": TEXT, "project": MINE})).await;
+        let id = made["id"].as_str().unwrap().to_owned();
+        let backup = dir.path().join("backup/old.db");
+        let sessions = dir.path().join("hub/sessions");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&sessions).unwrap();
+        let transcript = sessions.join("s1.jsonl");
+        std::fs::write(&backup, format!("row {TEXT} end")).unwrap();
+        std::fs::write(&transcript, format!("{{\"text\": \"{TEXT}\"}}\n")).unwrap();
+        let mut p = json!({"target": id, "reason": "r"});
+        p.as_object_mut()
+            .unwrap()
+            .extend(flags.as_object().unwrap().clone());
+        let dirs = StoreDirs {
+            home: dir.path().join("home"),
+            config: dir.path().join("config"),
+            hub: dir.path().join("hub"),
+        };
+        let a = excise_of(
+            &w,
+            Some(&dirs),
+            &user(false),
+            serde_json::from_value(p).unwrap(),
+        )
+        .await
+        .unwrap();
+        (a, backup, transcript, dir)
+    }
+
+    /// With the flags the kept backup is removed and the transcript redacted, and the answer lists them.
+    #[tokio::test]
+    async fn the_excise_removes_and_redacts_the_copies_when_asked() {
+        let (a, backup, transcript, _dir) =
+            excise_with_copies(json!({"rotate_backups": true, "transcripts": true})).await;
+        assert_eq!(
+            a["backups_removed"],
+            json!([backup.to_string_lossy()]),
+            "{a}"
+        );
+        assert_eq!(a["backups_holding"], json!([]), "{a}");
+        assert_eq!(
+            a["transcripts_redacted"],
+            json!([transcript.to_string_lossy()]),
+            "{a}"
+        );
+        assert_eq!(a["transcripts_holding"], json!([]), "{a}");
+        assert!(!backup.exists());
+        let t = std::fs::read_to_string(&transcript).unwrap();
+        assert!(!t.contains("secret title"), "{t}");
+    }
+
+    /// Without the flags both copies stay as they were and the answer lists them as still holding the text.
+    #[tokio::test]
+    async fn the_excise_leaves_the_copies_alone_unless_asked() {
+        let (a, backup, transcript, _dir) = excise_with_copies(json!({})).await;
+        assert_eq!(
+            a["backups_holding"],
+            json!([backup.to_string_lossy()]),
+            "{a}"
+        );
+        assert_eq!(a["backups_removed"], json!([]), "{a}");
+        assert_eq!(
+            a["transcripts_holding"],
+            json!([transcript.to_string_lossy()]),
+            "{a}"
+        );
+        assert_eq!(a["transcripts_redacted"], json!([]), "{a}");
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "row secret title of the task end"
+        );
+        assert!(
+            std::fs::read_to_string(&transcript)
+                .unwrap()
+                .contains("secret title of the task")
+        );
+    }
+
+    /// URDR-EXCISE-OF-MUTANTS-1: the answer of `graph/excise` reports each count of what the excise did (pinned
+    /// field by field, so a dropped field fails here).
+    #[tokio::test]
+    async fn the_excise_answer_reports_each_count() {
+        let (_dir, w, _, _) = fixture().await;
+        let made = task_write(
+            &w,
+            json!({"op": "create", "title": "first title of the task", "project": MINE}),
+        )
+        .await;
+        let id = made["id"].as_str().unwrap().to_owned();
+        task_write(
+            &w,
+            json!({"op": "update", "id": id, "ver": made["ver"], "title": "second title of the task", "project": MINE}),
+        )
+        .await;
+        // a third tx whose note quotes the title: it is blanked too
+        let n = count(&w, "select n from entity where kind = 'task'").await;
+        let mut noted = TxMeta::new("agent:s1", TxClass::Agent, "test");
+        noted.note = Some("because first title of the task".into());
+        w.db.graph_writer()
+            .unwrap()
+            .write(noted, move |tx| {
+                urdr::graph::entity::update(
+                    tx,
+                    n,
+                    None,
+                    urdr::graph::entity::Changes {
+                        body: Some(Some("a body".into())),
+                        ..Default::default()
+                    },
+                )
+                .map(|_| ())
+            })
+            .await
+            .unwrap();
+        let before = count(&w, "select max(id) from tx").await;
+        let p: api::ExciseParams =
+            serde_json::from_value(json!({"target": id, "reason": "r"})).unwrap();
+        let a = excise_of(&w, None, &user(false), p).await.unwrap();
+        let after = count(&w, "select max(id) from tx").await;
+        assert_eq!(after, before + 1, "the excise is one tx");
+        assert_eq!(a["tx"], json!(after), "{a}");
+        assert_eq!(a["entities"], json!(1), "{a}");
+        assert_eq!(a["versions"], json!(3), "{a}");
+        assert_eq!(a["txs_blanked"], json!(1), "{a}");
+        assert_eq!(a["blanked"], json!(2), "{a}");
+    }
+
     /// The user's `graph/revert`: `cascade` only says what a tx's revert or a version put back would do (nothing is
     /// written); without it the entity is put back to the version.
     #[tokio::test]

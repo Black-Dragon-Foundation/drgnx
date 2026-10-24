@@ -272,7 +272,7 @@ put into `minor-mode-map-alist' (the alist keeps the old map).  Runs when eat lo
   "Problems that make eat ask or fail (eat is not loaded for this: its terminfo is found beside its library)."
   (let ((terminfo (if (boundp 'eat-term-terminfo-directory) eat-term-terminfo-directory
                     (when-let* ((lib (locate-library "eat"))) (expand-file-name "terminfo" (file-name-directory lib))))))
-    (append (when (eq eat-eshell-fallback-if-stty-not-available 'ask)
+    (append (when (eq (bound-and-true-p eat-eshell-fallback-if-stty-not-available) 'ask)
               (list "eat would ask when stty is missing (eat-eshell-fallback-if-stty-not-available is ask)"))
             (unless (and terminfo (file-directory-p terminfo))
               (list "eat's terminfo is missing: drgnx sync")))))

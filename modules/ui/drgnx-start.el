@@ -4,9 +4,9 @@
 
 ;;; Commentary:
 ;; Part A of M12f.  Someone who opens drgnx and sees an empty editor does not know what to do.  `*drgnx start*' says
-;; what drgnx is in two lines, shows the three keys that open everything (the files, the commands, all keys: from
-;; the active profile, as the top line shows them) and has buttons: Open a Folder…, Open the Work Graph, All Keys,
-;; Don't show this again.
+;; what drgnx is in two lines (under the logo, on a frame that shows images), shows the three keys that open
+;; everything (the files, the commands, all keys: from the active profile, as the top line shows them) and has
+;; buttons: Open a Folder…, Open the Work Graph, All Keys, Don't show this again.
 ;;
 ;; It shows itself, only where nothing is lost: in the editor window used last, when that window shows `*scratch*'
 ;; (never a file), by changing that window's buffer — it never splits a window, never selects another one and never
@@ -24,6 +24,8 @@
 (require 'drgnx-face-state)
 (require 'drgnx-timer)
 (require 'drgnx-frame-kind)
+(require 'drgnx-memo)
+(require 'drgnx-paths)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
 (defvar drgnx-surfaces-starter-commands)
@@ -81,11 +83,48 @@ boolean, not the buffer).")
   "A line's prefix: spaces up to the column that centres the block, whatever the window's width (a window narrower
 than the block starts it at the left edge).")
 
-(defun drgnx-start--top-padding ()
-  "Blank lines above the name: the page sits in the upper third of the editor window that shows it."
+;;;; The logo
+
+(defconst drgnx-start--logo-file "etc/images/drgnx-logo.jpg"
+  "The logo above the name, relative to `drgnx-dir': the dragon, wide (`drgnx-start--logo-ratio'), on its own dark
+background.")
+
+(defconst drgnx-start--logo-ratio (/ 660.0 361)
+  "The logo file's width over its height.")
+
+(defconst drgnx-start--logo-lines 9
+  "The logo's height, in lines of the frame's default font.")
+
+(drgnx-cache-define 'drgnx-start--logos :key 'string :cap 8
+                    :doc "(HEIGHT . FILE) → the logo's image HEIGHT pixels tall, or `none' when FILE is missing or
+unreadable: one `create-image' per size, no file read when the page is drawn again.  At most 8 sizes, the least
+recently used evicted; emptied when ui/face is turned off.")
+
+(defun drgnx-start--logo (window)
+  "The logo's image for WINDOW's frame, or nil: a frame that shows no JPEG (a terminal), or no logo file.
+It is `drgnx-start--logo-lines' of the frame's default font tall (its line height grows with the font and the
+display's scaling), lower when that would make it wider than WINDOW's text area.  Never signals, never asks."
+  (let ((frame (window-frame window)))
+    (when (and (display-images-p frame) (image-type-available-p 'jpeg))
+      (let* ((height (min (* drgnx-start--logo-lines (frame-char-height frame))
+                          (floor (window-body-width window t) drgnx-start--logo-ratio)))
+             (file (expand-file-name drgnx-start--logo-file drgnx-dir))
+             (key (cons height file))
+             (image (or (drgnx-cache-get 'drgnx-start--logos key)
+                        (drgnx-cache-put 'drgnx-start--logos key
+                                         (or (and (> height 0) (file-readable-p file)
+                                                  (ignore-errors
+                                                    (create-image file 'jpeg nil :height height :scale 1
+                                                                  :ascent 'center)))
+                                             'none)))))
+        (unless (eq image 'none) image)))))
+
+(defun drgnx-start--top-padding (&optional logo)
+  "Blank lines above the name: the page sits in the upper third of the editor window that shows it.
+LOGO non-nil: the logo above the name takes `drgnx-start--logo-lines' and a blank line more."
   (let* ((w (drgnx-start--window (selected-frame)))
          (rows (if (window-live-p w) (window-body-height w) 24)))
-    (max 1 (/ (- rows 17) 3))))
+    (max 1 (/ (- rows 17 (if logo (1+ drgnx-start--logo-lines) 0)) 3))))
 
 (defun drgnx-start--press (button)
   "Run what BUTTON stands for: a registry command (as if from the palette), or dismiss the page."
@@ -105,9 +144,13 @@ than the block starts it at the left edge).")
 (defun drgnx-start--render ()
   "Fill the current buffer: the name, two lines on what drgnx is, the three keys, the buttons.
 The keys are read from the registry now, so a changed profile shows when the page shows again."
-  (let ((inhibit-read-only t) (search (drgnx-start--glyph)))
+  (let* ((inhibit-read-only t) (search (drgnx-start--glyph))
+         (window (drgnx-start--window (selected-frame)))
+         (logo (drgnx-start--logo (if (window-live-p window) window (selected-window)))))
     (erase-buffer)
-    (insert (make-string (drgnx-start--top-padding) ?\n) (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
+    (insert (make-string (drgnx-start--top-padding logo) ?\n))
+    (when logo (insert (propertize " " 'display logo 'drgnx-start-logo t) "\n\n"))
+    (insert (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
     (insert (propertize "A workbench for Emacs: your files, your agents and your work, side by side." 'face 'drgnx-start-quiet) "\n")
     (insert (propertize "Everything it does is a command, and the keys below find all of them." 'face 'drgnx-start-quiet) "\n\n")
     (pcase-dolist (`(,id ,what) drgnx-surfaces-starter-commands)
@@ -256,6 +299,7 @@ Going to `*scratch*' from anything else is the user's own doing and stays."
   "Define Show Start Page and hang the page on the starts it belongs to (ui/face's setup); idempotent."
   (drgnx-command-define 'start-page :category "Help" :title "Show Start Page" :command #'drgnx-start-show
                         :doc "What drgnx is and the keys that open everything; it shows itself in an empty editor")
+  (drgnx-memo-activate 'drgnx-start--logos)                              ; the logo's images go when ui/face is off
   (add-hook 'drgnx-persist-after-restore-functions #'drgnx-start-maybe-show)
   (add-hook 'server-after-make-frame-hook #'drgnx-start-maybe-show 90)   ; after the restore decided
   (add-hook 'drgnx-first-gui-frame-hook #'drgnx-start--on-first-frame)

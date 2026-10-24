@@ -91,14 +91,18 @@ BATCH).  One that is gone fails the lint too, so the entry goes with it.")
 (defun drgnx-teardown--again (name)
   "Turn module NAME off and on again through the product path; fail when the second setup adds something
 other than the first did (something stacked, or a guard that outlived the teardown).  Compared by description
-\(kind, key, function, repeat), not identity: a timer, buffer or closure made again is the same thing."
-  (let* ((on (drgnx-modules-fingerprint))
+\(kind, key, function, repeat), not identity: a timer, buffer or closure made again is the same thing.  Emacs's own
+timers are left out, as `:strict' does (`drgnx-test-modules--without-emacs-timers'): Glitnir's refresh, which a
+change of `child-frame-chrome' schedules once, is Nidhogg's, not the module's."
+  (let* ((on (drgnx-test-modules--without-emacs-timers (drgnx-modules-fingerprint)))
          (_ (drgnx-module-teardown name))
-         (off (drgnx-modules-fingerprint))
+         (off (drgnx-test-modules--without-emacs-timers (drgnx-modules-fingerprint)))
          (spec (cdr (assq name drgnx-modules--table))))
     (drgnx-modules--run-one name spec (plist-get spec :stage))
     (let ((first (sort (drgnx-test-modules--diff-lines off on) #'string<))
-          (again (sort (drgnx-test-modules--diff-lines off (drgnx-modules-fingerprint)) #'string<)))
+          (again (sort (drgnx-test-modules--diff-lines
+                        off (drgnx-test-modules--without-emacs-timers (drgnx-modules-fingerprint)))
+                       #'string<)))
       (unless (equal first again)
         (ert-fail (list "on again, the module did not set up what it did the first time:"
                         :first first :again again))))))
