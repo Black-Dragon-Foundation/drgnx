@@ -262,7 +262,7 @@ jobs:
       - name: build the agent core's tests (test hooks)
         id: core-build
         if: ${{ !cancelled() }}
-        run: cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --no-run
+        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --no-run
       - name: cargo cache save (agent core)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' && steps.core-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -271,11 +271,12 @@ jobs:
             ~/.cargo/registry
             runtime/target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-core-${{ hashFiles('runtime/Cargo.lock') }}
-      # Landlock ABI 9 is the reduced tier's floor; a runner kernel below it skips those rows with a listed reason (the
-      # escape suite above says which), the full tier here needs bubblewrap 0.12 only.
+      # Landlock ABI 9 is the reduced tier's floor; on a runner kernel below it the launch rows of the reduced tier run
+      # on the full tier (tests/launch_sandboxed.rs), which needs bubblewrap 0.12 only. --no-fail-fast: every test
+      # binary's failures in one run.
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
-        run: cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1
+        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1
 
   # The agent core's container rows (agent system part 1, Tasks 11b/11c): a container job runs only an allowed image,
   # with only its worktree mounted, inside its caps, and every escape row is refused. GitHub's Ubuntu runners ship
