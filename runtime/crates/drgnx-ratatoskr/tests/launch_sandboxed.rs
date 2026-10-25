@@ -206,8 +206,11 @@ fn plain_chat_cannot_read_home() {
         read: vec![],
         net: NetCell::ProviderOnly,
     };
+    // Home lists nothing but the login dir: on the full tier home is the empty folder bwrap makes for that bind, on the
+    // reduced tier it cannot be listed at all.
     let script = format!(
-        "echo n > note || exit 11; cat {h}/secret.txt 2>/dev/null && exit 12; ls {h} >/dev/null 2>&1 && exit 13; exit 0",
+        "echo n > note || exit 11; cat {h}/secret.txt 2>/dev/null && exit 12; \
+         ls -A {h} 2>/dev/null | grep -qvx .claude && exit 13; exit 0",
         h = fx.p("home").display()
     );
     let code = fx.run(reduced(), &fx.plan(&script), &shape);
