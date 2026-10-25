@@ -87,7 +87,9 @@ pub const PULL_TIMEOUT: Duration = Duration::from_secs(600);
 /// The environment of every podman the hub runs (the image check and pull, the job's `podman run`, the leftovers'
 /// cleanup): one list, so all of them use one image store.  Rootless podman keeps its store under `XDG_DATA_HOME` (else
 /// `~/.local/share`) and reads its configuration from `XDG_CONFIG_HOME` and the `CONTAINERS_*` files; a job that saw
-/// fewer of these than the pull did looked in another store and found no image.
+/// fewer of these than the pull did looked in another store and found no image.  `DBUS_SESSION_BUS_ADDRESS` is how
+/// podman reaches the user's systemd, which applies the job's limits ([`check_limits`]) when `XDG_RUNTIME_DIR` is not
+/// the session's own.
 pub fn podman_env() -> Vec<(OsString, OsString)> {
     draugr::env::build(
         &[
@@ -97,6 +99,7 @@ pub fn podman_env() -> Vec<(OsString, OsString)> {
             "LOGNAME",
             "LANG",
             "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
             "XDG_DATA_HOME",
             "XDG_CONFIG_HOME",
             "CONTAINERS_CONF",
@@ -392,6 +395,67 @@ pub fn ensure_image(podman: &Path, reference: &str, limit: Duration) -> Result<(
             String::from_utf8_lossy(&pull.stderr).trim()
         ),
     })
+}
+
+/// The cgroup controllers a job's caps use: `--memory`, `--pids-limit`, `--cpus`.
+pub const CONTROLLERS: [&str; 3] = ["memory", "pids", "cpu"];
+
+/// Whether the podman that `podman info --format json` described (INFO) enforces a job's caps; the reason when it
+/// does not.  Rootless podman applies limits only on cgroup v2 through the systemd cgroup manager, with the
+/// controllers delegated to the user.  Without a systemd user session it falls back to `cgroupfs`, where a rootless
+/// container may get no cgroup of its own and its limits are dropped with no more than a warning.  Rootful podman
+/// (the hub never runs it: `--userns=keep-id` is rootless-only) is held to the same rule.
+pub fn limits_enforced(info: &serde_json::Value) -> Result<(), String> {
+    let host = &info["host"];
+    let version = host["cgroupVersion"].as_str().unwrap_or("unknown");
+    let manager = host["cgroupManager"].as_str().unwrap_or("unknown");
+    if version != "v2" {
+        return Err(format!(
+            "podman runs on cgroup {version}, and the caps need cgroup v2"
+        ));
+    }
+    if manager != "systemd" {
+        return Err(format!(
+            "podman's cgroup manager is {manager}, which cannot enforce a rootless container's caps: \
+             it needs a systemd user session (log in, or `loginctl enable-linger`) and the hub its \
+             XDG_RUNTIME_DIR or DBUS_SESSION_BUS_ADDRESS"
+        ));
+    }
+    let have: Vec<&str> = host["cgroupControllers"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|c| c.as_str()).collect())
+        .unwrap_or_default();
+    let missing: Vec<&str> = CONTROLLERS
+        .iter()
+        .copied()
+        .filter(|c| !have.contains(c))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "the cgroup controllers {} are not delegated to this user, so podman cannot enforce the caps",
+            missing.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse the job unless PODMAN enforces its caps ([`limits_enforced`]), asked within LIMIT.
+pub fn check_limits(podman: &Path, limit: Duration) -> Result<(), Refusal> {
+    let setup = |m: String| Refusal {
+        rule: Rule::Setup,
+        path: None,
+        message: format!("container jobs are refused here: {m}"),
+    };
+    let out = run_limited(podman, &["info", "--format", "json"], limit)?;
+    if !out.status.success() {
+        return Err(setup(format!(
+            "podman info failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| setup(format!("podman info is not JSON: {e}")))?;
+    limits_enforced(&info).map_err(setup)
 }
 
 /// At hub start: remove the `drgnx-job-*` containers whose job is not in RUNNING (a podman client killed with the
@@ -804,6 +868,31 @@ mod name_and_pull_tests {
         std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
+    }
+
+    /// The caps hold only where podman reports cgroup v2, the systemd manager and the memory, pids and cpu
+    /// controllers; anything else (the cgroupfs fallback with no user session above all) is refused with the reason.
+    #[test]
+    fn caps_hold_only_on_v2_with_systemd_and_the_controllers() {
+        let info = |v: &str, m: &str, c: &[&str]| serde_json::json!({"host": {"cgroupVersion": v, "cgroupManager": m, "cgroupControllers": c}});
+        let all = ["cpuset", "cpu", "io", "memory", "pids"];
+        assert_eq!(limits_enforced(&info("v2", "systemd", &all)), Ok(()));
+        let e = limits_enforced(&info("v2", "cgroupfs", &all)).unwrap_err();
+        assert!(e.contains("cgroupfs") && e.contains("enable-linger"), "{e}");
+        let e = limits_enforced(&info("v1", "systemd", &all)).unwrap_err();
+        assert!(e.contains("cgroup v1"), "{e}");
+        let e = limits_enforced(&info("v2", "systemd", &["cpu", "memory"])).unwrap_err();
+        assert!(e.contains("pids"), "{e}");
+        assert!(limits_enforced(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn podman_info_that_fails_refuses_the_job() {
+        let d = tempfile::tempdir().unwrap();
+        let p = script(d.path(), "echo 'no session' >&2; exit 125");
+        let e = check_limits(&p, Duration::from_secs(10)).unwrap_err();
+        assert_eq!(e.rule, Rule::Setup);
+        assert!(e.message.contains("no session"), "{}", e.message);
     }
 
     #[test]

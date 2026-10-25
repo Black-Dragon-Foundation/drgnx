@@ -650,7 +650,9 @@ impl Inner {
             podman.clone(),
             container::resolve(&caps, &job.image)?.to_string(),
         );
+        // caps podman cannot enforce refuse the job: a container without its limits is never run
         tokio::task::spawn_blocking(move || {
+            container::check_limits(&p, Duration::from_secs(30))?;
             container::ensure_image(&p, &reference, container::PULL_TIMEOUT)
         })
         .await

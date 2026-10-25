@@ -1224,8 +1224,16 @@ ignored.
   longer is killed and the job is refused with that reason.
 - **One image store.** Every podman the hub runs (the image check and pull, the job's `podman run`, the leftovers'
   cleanup) gets the same environment (`container::podman_env`: `PATH`, `HOME`, the user and locale, `XDG_RUNTIME_DIR`,
-  `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and the `CONTAINERS_*` files), so the job finds the image the hub pulled: rootless
-  podman's store follows `XDG_DATA_HOME`.
+  `DBUS_SESSION_BUS_ADDRESS`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and the `CONTAINERS_*` files), so the job finds the
+  image the hub pulled: rootless podman's store follows `XDG_DATA_HOME`.
+- **Caps enforced, or no job.** Before each container job the hub asks `podman info --format json`
+  (`container::check_limits`) and refuses the job (`Setup`, with the reason) unless podman reports cgroup v2, the
+  `systemd` cgroup manager and the `memory`, `pids` and `cpu` controllers delegated. Rootless podman with no systemd
+  user session falls back to `cgroupfs` with only a warning, and there a container may get no cgroup of its own: the
+  memory and process caps were silently not applied (found by the container rows on CI, 2026-10-25). Podman reaches
+  the user's systemd through `DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`, so a hub whose
+  `XDG_RUNTIME_DIR` is not the session's (the conformance runner's) needs the former. Fix for a refused host: log
+  in to a user session, or `loginctl enable-linger`.
 - **No network yet.** A granted network needs a podman network whose only route is the Gleipnir proxy. Gleipnir's proxy
   can listen on TCP (`net::proxy::Listener::Tcp`), but nothing routes a podman network to a host listener: a rootless
   internal network lives in podman's own network namespace, where the hub's loopback and the per-session proxy sockets

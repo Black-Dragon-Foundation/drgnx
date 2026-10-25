@@ -290,15 +290,51 @@ async fn container_jobs_without_podman_are_refused_with_a_doctor_hint() {
     assert!(r.list(None, false).is_empty());
 }
 
+/// A fake podman's answer to `podman info`: cgroup v2, the systemd manager, the caps' controllers.
+const INFO_ENFORCES: &str = "if [ \"$1\" = info ]; then echo '{\"host\":{\"cgroupVersion\":\"v2\",\
+\"cgroupManager\":\"systemd\",\"cgroupControllers\":[\"cpu\",\"memory\",\"pids\"]}}'; exit 0; fi\n";
+
+/// A podman that cannot enforce the caps (rootless, no systemd user session: cgroupfs) refuses the job, and nothing
+/// is pulled or run.
+#[tokio::test]
+async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let fake = d.path().join("podman");
+    let ran = d.path().join("ran");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = info ]; then echo '{{\"host\":{{\"cgroupVersion\":\"v2\",\
+             \"cgroupManager\":\"cgroupfs\",\"cgroupControllers\":[\"cpu\",\"memory\",\"pids\"]}}}}'; exit 0; fi\n\
+             echo \"$1\" >> {}\n",
+            ran.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        Hooks {
+            podman: Some(fake),
+            ..hooks()
+        },
+    );
+    let e = r.start(container_spec(d.path())).await.unwrap_err();
+    assert!(e.message.contains("cgroupfs"), "{}", e.message);
+    assert!(!ran.exists(), "podman was asked to pull or run");
+}
+
 #[tokio::test]
 async fn a_container_job_runs_the_fixed_podman_line() {
     use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
-    // a stand-in for podman: the image is "present", and `run` prints the line it was given
+    // a stand-in for podman: it enforces limits, the image is "present", and `run` prints the line it was given
     let fake = d.path().join("podman");
     std::fs::write(
         &fake,
-        "#!/bin/sh\nif [ \"$1\" = image ]; then exit 0; fi\nprintf '%s\\n' \"$@\"\n",
+        format!("#!/bin/sh\n{INFO_ENFORCES}if [ \"$1\" = image ]; then exit 0; fi\nprintf '%s\\n' \"$@\"\n"),
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();

@@ -45,7 +45,11 @@ tmpfs `/tmp`), and the only folder it sees is the starting session's worktree, a
 from the session, never from the request; the command runs in the job's `cwd` inside it, which must be the worktree or
 a folder in it). The worktree is mounted writable as a whole: the protected files above are pinned for jobs that run
 in the sandbox, not for a container job. It has a process limit, and
-`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. It has **no network of its own**
+`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. Those limits are enforced or the job does not
+run: before each container job the hub asks `podman info`, and unless podman uses cgroup v2 with the systemd cgroup
+manager and the memory, pids and cpu controllers, the job is refused with the reason. Rootless podman needs a systemd
+user session for that (a login, or `loginctl enable-linger`); without one it would run the container with no limits.
+It has **no network of its own**
 (`--network=none`, only a loopback). When the matrix's Network cell allows it (a job you start yourself has none unless it asks), the
 job gets the one route there is: the job's own allow-list proxy, a Unix socket the hub mounts read-only into the
 container, and a small forwarder (`drgnx-fwd`, mounted read-only, next to the hub) that listens on `127.0.0.1:3128`
