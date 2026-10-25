@@ -1470,7 +1470,10 @@ read with `gleipnir::read_status`; the user's runs with the user's rights. The c
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
 command stays the hub's child. `Runner::open` re-attaches every folder without a result. The graph record is
 `norn::write::exec`. The `exec/runs-in-the-starters-sandbox` row (`exec::tests::exec_runs_in_the_starters_sandbox`) is
-`#[ignore]`d where bwrap is missing (build containers): run it on the desktop or in CI with `-- --ignored`.
+`#[ignore]`d where bwrap is missing (build containers): run it on the desktop or in CI with `-- --ignored`. So are
+the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch spec run in a real sandbox): a
+container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
+tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
 
 ## The timeline
 

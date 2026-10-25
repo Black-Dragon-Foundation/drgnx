@@ -1,7 +1,8 @@
 //! Task 10's rows `launch-sandboxed/*`, run for real: the spec `launch::launch_on` builds is prepared by Gleipnir and
 //! spawned through draugr, and a shell inside tries what a session must not do.  The sandbox is a hard requirement
-//! (a skip would be a pass nobody checked): a host with no usable tier fails these tests with the reason.  Fixtures
-//! live under /tmp/glp-XXXXXX; HOME points there.
+//! (a skip would be a pass nobody checked): a host with no usable tier fails these tests with the reason.  So they are
+//! the sandbox lane's (`#[ignore]`, run with `-- --ignored` on a host with bwrap and user namespaces: CI's runner
+//! job, the desktop), never a container's, which has neither.  Fixtures live under /tmp/glp-XXXXXX; HOME points there.
 #![cfg(target_os = "linux")]
 
 use drgnx_ratatoskr::agents::launch::{NetCell, launch_on, scratch_dir};
@@ -103,10 +104,21 @@ impl Fx {
     }
 }
 
-/// The reduced tier: Landlock ABI >= 9 or the test fails.
-const T: Tier = Tier::Reduced;
-
+/// The reduced tier where the kernel has Landlock ABI 9, else the full tier: the row's check runs under a real
+/// sandbox either way (no CI runner's kernel has ABI 9 yet; the escape suite's reduced rows list that).
+fn reduced() -> Tier {
+    let abi = gleipnir::landlock::kernel_abi();
+    if abi >= 9 {
+        Tier::Reduced
+    } else {
+        eprintln!(
+            "the kernel's Landlock ABI is {abi}, below the reduced tier's 9: this row runs on the full tier"
+        );
+        Tier::Full
+    }
+}
 #[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn worker_writes_only_its_worktree() {
     let fx = Fx::new();
     let script = format!(
@@ -114,7 +126,11 @@ fn worker_writes_only_its_worktree() {
         w = fx.p("wt").display(),
         o = fx.p("outside").display()
     );
-    let code = fx.run(T, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
+    let code = fx.run(
+        reduced(),
+        &fx.plan(&script),
+        &fx.shape(NetCell::ProviderOnly),
+    );
     assert_eq!(code, 0);
     assert!(fx.p("wt/a").exists());
     assert!(!fx.p("outside/b").exists());
@@ -123,6 +139,7 @@ fn worker_writes_only_its_worktree() {
 /// Bwrap's read-only bind is what pins a path inside a writable root; the reduced tier cannot
 /// (`sandbox_settings::REDUCED_CANNOT_PIN`), so this row needs the full tier.
 #[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn codex_config_is_read_only() {
     let fx = Fx::new();
     let script = format!(
@@ -142,6 +159,7 @@ fn codex_config_is_read_only() {
 }
 
 #[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn network_is_provider_only_under_balanced() {
     let fx = Fx::new();
     let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -149,11 +167,16 @@ fn network_is_provider_only_under_balanced() {
         "(exec 4<>/dev/tcp/127.0.0.1/{}) 2>/dev/null && exit 12; exit 0",
         other.local_addr().unwrap().port()
     );
-    let code = fx.run(T, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
+    let code = fx.run(
+        reduced(),
+        &fx.plan(&script),
+        &fx.shape(NetCell::ProviderOnly),
+    );
     assert_eq!(code, 0, "a live listener outside was reachable");
 }
 
 #[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn the_login_token_dir_is_bound_for_its_own_cli_only() {
     let fx = Fx::new();
     let script = format!(
@@ -161,12 +184,17 @@ fn the_login_token_dir_is_bound_for_its_own_cli_only() {
         c = fx.p("home/.claude").display(),
         x = fx.p("home/.codex").display()
     );
-    let code = fx.run(T, &fx.plan(&script), &fx.shape(NetCell::ProviderOnly));
+    let code = fx.run(
+        reduced(),
+        &fx.plan(&script),
+        &fx.shape(NetCell::ProviderOnly),
+    );
     assert_eq!(code, 0);
     assert!(fx.p("home/.claude/token").exists());
 }
 
 #[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn plain_chat_cannot_read_home() {
     let fx = Fx::new();
     let env = fx.env();
@@ -182,7 +210,7 @@ fn plain_chat_cannot_read_home() {
         "echo n > note || exit 11; cat {h}/secret.txt 2>/dev/null && exit 12; ls {h} >/dev/null 2>&1 && exit 13; exit 0",
         h = fx.p("home").display()
     );
-    let code = fx.run(T, &fx.plan(&script), &shape);
+    let code = fx.run(reduced(), &fx.plan(&script), &shape);
     assert_eq!(code, 0);
     assert!(scratch.join("note").exists());
 }
@@ -191,6 +219,7 @@ fn plain_chat_cannot_read_home() {
 /// the lock's real, relative `PROTECTED_RO` list is pinned inside it, `.envrc` and `mise.toml` included, though none
 /// exists yet.  Pinning needs bwrap's read-only bind, so the full tier.
 #[test]
+#[ignore = "needs the real sandbox (bwrap with user namespaces): the sandbox lane"]
 fn a_worker_under_the_hub_run_root_cannot_write_the_protected_files() {
     use drgnx_ratatoskr::agents::lock::PROTECTED_RO;
     let fx = Fx::new();
