@@ -84,12 +84,14 @@ impl Root {
         self.dir.path()
     }
 
-    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH` and `DRGNX_EMACS`): every
-    /// directory points into this root, so nothing reaches `~`.  `extra` wins.
+    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` and
+    /// `DBUS_SESSION_BUS_ADDRESS`): every directory points into this root, so nothing reaches `~`.  The session bus is
+    /// how a container job's podman reaches the user's systemd, which enforces the job's caps (the hub refuses the job
+    /// without it; `XDG_RUNTIME_DIR` here is the root's, so podman cannot find the bus there).  `extra` wins.
     pub fn base_env(&self, extra: Vec<(String, String)>) -> BTreeMap<String, String> {
         let dir = |s: &str| self.path().join(s).to_string_lossy().into_owned();
         let mut vars: BTreeMap<String, String> = BTreeMap::new();
-        for k in ["PATH", "DRGNX_EMACS"] {
+        for k in ["PATH", "DRGNX_EMACS", "DBUS_SESSION_BUS_ADDRESS"] {
             if let Ok(v) = std::env::var(k) {
                 vars.insert(k.into(), v);
             }

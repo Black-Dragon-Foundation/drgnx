@@ -315,6 +315,18 @@ jobs:
             ~/.cargo/registry
             runtime/target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ hashFiles('runtime/Cargo.lock') }}
+      # The runner's user has no systemd user session, so rootless podman would fall back to cgroupfs and drop the
+      # caps (the hub refuses container jobs then: exec/container.rs, check_limits). Lingering starts the user's
+      # systemd; the hub's podman reaches it over the session bus (domr passes DBUS_SESSION_BUS_ADDRESS through).
+      - name: a systemd user session for podman
+        run: |
+          uid=$(id -u)
+          sudo loginctl enable-linger "$(id -un)"
+          timeout 60 sh -c "until [ -S /run/user/$uid/bus ]; do sleep 0.5; done"
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus \
+            podman info --format '{{.Host.CgroupsVersion}} {{.Host.CgroupManager}} {{.Host.CgroupControllers}}'
       # --require-all: a skipped container row fails here (podman is on the runner)
       - name: container and container-escape rows
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
