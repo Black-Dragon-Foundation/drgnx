@@ -6,6 +6,9 @@
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
 (add-to-list 'load-path (expand-file-name "core" drgnx-git-ui-test--repo))
 (require 'drgnx-agents)
+;; loaded before the test stubs `drgnx-agents-mirror-start': `drgnx-review-branch' requires it, and a first load
+;; inside the stub's `cl-letf' would put the real function (a hub call) back
+(require 'drgnx-agents-mirror)
 (require 'drgnx-job)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-git-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-git-ui-test--repo) nil t)
