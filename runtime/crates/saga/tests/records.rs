@@ -28,6 +28,21 @@ fn render_of_parse_is_identity() {
     }
 }
 
+/// A multi-byte whitespace before the tags (U+00A0, U+3000: two and three bytes) is stepped over whole, never
+/// sliced inside (the fuzz target `saga_org` panicked on an NBSP).
+#[test]
+fn tags_after_a_multibyte_space_split_cleanly() {
+    for ws in ['\u{a0}', '\u{3000}'] {
+        let text = format!("* TODO Fix it{ws}:work:urgent:\n* DONE Plain{ws}{ws}\n*{ws}\n");
+        let d = org::parse(&text);
+        assert_eq!(d.items[0].title, "Fix it");
+        assert_eq!(d.items[0].tags, ["work", "urgent"]);
+        assert_eq!(d.items[1].title, "Plain");
+        assert!(d.items[1].tags.is_empty());
+        assert_eq!(org::render(&d), text);
+    }
+}
+
 #[test]
 fn deferred_rows_parse() {
     let d = deferred::parse(DEFERRED);

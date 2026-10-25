@@ -71,8 +71,9 @@ fn file_keywords(preamble: &str) -> Vec<String> {
 
 fn split_tags(title: &str) -> (&str, Vec<String>) {
     let t = title.trim_end();
-    if let Some(i) = t.rfind(char::is_whitespace) {
-        let last = &t[i + 1..];
+    // the last whitespace by its char, so a multi-byte one (U+00A0, U+3000) is stepped over whole
+    if let Some((i, ws)) = t.char_indices().rev().find(|(_, c)| c.is_whitespace()) {
+        let last = &t[i + ws.len_utf8()..];
         if last.len() > 2
             && last.starts_with(':')
             && last.ends_with(':')
