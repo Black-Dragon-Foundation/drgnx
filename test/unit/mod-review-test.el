@@ -2,6 +2,9 @@
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-agents)
+;; loaded before the tests stub `drgnx-agents-mirror-start': `drgnx-review-branch' requires it, and a first load
+;; inside the stub's `cl-letf' would put the real function (a hub call) back
+(require 'drgnx-agents-mirror)
 (require 'drgnx-job)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
