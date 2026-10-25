@@ -698,6 +698,7 @@ impl Runner<'_> {
                 Ok(())
             }
             "expect" | "expect_next" => self.expect(step),
+            "poll" => self.poll(step),
             "expect_closed" => {
                 let silent = step
                     .obj
@@ -1290,6 +1291,58 @@ impl Runner<'_> {
             conn.expect_next(&pattern, within, &mut self.caps)
         }
         .map(|_| ())
+    }
+
+    /// `poll`: send the request `json` on `conn` and take its reply (by id) until one matches `expect`, every
+    /// `every_ms` within `within_ms`: state the hub reaches in the background (sessions resumed after a restart),
+    /// read back rather than waited for as an event that may have gone before the row subscribed.
+    fn poll(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let request = self.subst(
+            idx,
+            step.obj.get("json").ok_or("poll needs \"json\"")?,
+            true,
+        );
+        let id = request
+            .get("id")
+            .cloned()
+            .ok_or("poll's request needs an \"id\"")?;
+        let pattern = self.subst(
+            idx,
+            step.obj.get("expect").ok_or("poll needs \"expect\"")?,
+            false,
+        );
+        let (within, every) = (
+            ms(&step.obj, "within_ms", 5000),
+            ms(&step.obj, "every_ms", 200),
+        );
+        let line = format!("{request}\n");
+        let name = str_of(&step.obj, "conn").unwrap_or("c").to_string();
+        let conn = self
+            .conns
+            .get_mut(&name)
+            .ok_or_else(|| format!("no connection named {name:?}"))?;
+        let deadline = Instant::now() + within;
+        loop {
+            conn.send_bytes(line.as_bytes())?;
+            let left = deadline.saturating_duration_since(Instant::now());
+            // the reply is taken off the connection whether it matches or not, so none piles up for later steps
+            let reply = conn.expect(&json!({ "id": id }), left, &mut Captures::default())?;
+            let mut trial = self.caps.clone();
+            match matcher::matches(&pattern, &reply, &mut trial) {
+                Ok(()) => {
+                    self.caps = trial;
+                    return Ok(());
+                }
+                Err(e) if Instant::now() + every >= deadline => {
+                    return Err(format!(
+                        "no reply matched {pattern} within {} ms ({e}); the last: {reply}",
+                        within.as_millis()
+                    ));
+                }
+                Err(_) => std::thread::sleep(every),
+            }
+        }
     }
 
     /// Every method of `registry` (`methods.json`; a relative path is from the current directory) with required

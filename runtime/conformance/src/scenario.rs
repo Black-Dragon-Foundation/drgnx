@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 34] = [
+pub const VERBS: [&str; 35] = [
     "start",
     "root",
     "rename",
@@ -17,6 +17,7 @@ pub const VERBS: [&str; 34] = [
     "pause",
     "expect",
     "expect_next",
+    "poll",
     "expect_closed",
     "expect_silent",
     "kill",
@@ -340,6 +341,7 @@ mod tests {
 {"do": "pause", "conn": "c"}
 {"do": "expect", "conn": "c", "json": {"id": 1}, "within_ms": 100}
 {"do": "expect_next", "conn": "c", "json": {"id": 2}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "ping"}, "expect": {"id": 3, "result": "$any"}, "within_ms": 100, "every_ms": 10}
 {"do": "expect_closed", "conn": "c"}
 {"do": "expect_silent", "conn": "c", "for_ms": 50}
 {"do": "kill", "hub": "h", "signal": "TERM"}

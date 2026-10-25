@@ -542,6 +542,7 @@ methods and the task that ports it; a row is never deleted for it.
 | `pause` | `conn` | stop reading the connection (what arrives stays in the socket): a client that stopped reading. The next step that reads it reads again |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
 | `expect_next` | as `expect` | the very next line must match |
+| `poll` | `conn`, `json` (a request with an `id`), `expect` (pattern), `within_ms` (5000), `every_ms` (200) | send the request and take its reply (by id) again until one matches: for state the hub reaches in the background (sessions resumed after a restart), read back instead of an event that may have gone before the row subscribed |
 | `expect_closed` | `conn`, `within_ms`, `silent` | the hub closed the connection; with `"silent": true`, without sending a line first (a refusal answers nothing) |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
