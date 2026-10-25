@@ -1,4 +1,4 @@
-//! A schema-7 store with its tools, for the `task_write_args` and `graph_read_args` targets: a file made by the graph
+//! A schema-7 store with its tools, for the `task_write_args`, `graph_read_args` and `report_submit` targets: a file made by the graph
 //! writer, the tools over it, a caller whose folder is a project, and one task made at the start (the text `@T` in an
 //! input stands for its id).  Each input gets a fresh store, so a crash reproduces from its input alone.
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ use mimir::{BoxFuture, Tool};
 use norn::deny::DenyList;
 use norn::project::ProjectRef;
 use norn::store::CoordDb;
-use norn::tools::{Coord, Ctx, GraphStore, Hub, Identity, SessionRow, tools};
+use norn::tools::{Coord, Ctx, GraphStore, Hub, Identity, SessionRow, core_tools, tools};
 use serde_json::{Value, json};
 use urdr::graph::{Class, ReadPool, TxMeta};
 
@@ -77,7 +77,8 @@ fn make(dir: &Path) -> World {
     let mut w = World {
         rt,
         ctx: (coord, who),
-        tools: tools(),
+        // the coordination tools and the agent core's (`report_submit` is a core tool, not a coordination one)
+        tools: tools().into_iter().chain(core_tools()).collect(),
         task: String::new(),
     };
     let made = w.call("task_write", json!({"op": "create", "title": "seed"}));
