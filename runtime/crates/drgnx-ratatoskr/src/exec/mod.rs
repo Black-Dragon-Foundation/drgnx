@@ -659,11 +659,7 @@ impl Inner {
             draugr::Spec {
                 program: podman,
                 args,
-                env: draugr::env::build(
-                    &["PATH", "HOME", "USER", "LOGNAME", "LANG", "XDG_RUNTIME_DIR"],
-                    &[],
-                    &[],
-                ),
+                env: container::podman_env(),
                 cwd: Some(spec.cwd.clone()),
                 stdin_null: true,
                 pass_fds: vec![],

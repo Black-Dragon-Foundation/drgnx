@@ -1222,6 +1222,10 @@ ignored.
   `drgnx-job-*` container whose job is not running (through the same podman path; other names are never touched).
 - **Pull timeout.** The hub pulls the image before the job (`container::PULL_TIMEOUT`, 10 minutes); a pull that takes
   longer is killed and the job is refused with that reason.
+- **One image store.** Every podman the hub runs (the image check and pull, the job's `podman run`, the leftovers'
+  cleanup) gets the same environment (`container::podman_env`: `PATH`, `HOME`, the user and locale, `XDG_RUNTIME_DIR`,
+  `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and the `CONTAINERS_*` files), so the job finds the image the hub pulled: rootless
+  podman's store follows `XDG_DATA_HOME`.
 - **No network yet.** A granted network needs a podman network whose only route is the Gleipnir proxy. Gleipnir's proxy
   can listen on TCP (`net::proxy::Listener::Tcp`), but nothing routes a podman network to a host listener: a rootless
   internal network lives in podman's own network namespace, where the hub's loopback and the per-session proxy sockets

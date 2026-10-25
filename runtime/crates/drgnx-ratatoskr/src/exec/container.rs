@@ -84,6 +84,30 @@ pub const NAME_PREFIX: &str = "drgnx-job-";
 /// How long the hub waits for an image pull before refusing the job.
 pub const PULL_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// The environment of every podman the hub runs (the image check and pull, the job's `podman run`, the leftovers'
+/// cleanup): one list, so all of them use one image store.  Rootless podman keeps its store under `XDG_DATA_HOME` (else
+/// `~/.local/share`) and reads its configuration from `XDG_CONFIG_HOME` and the `CONTAINERS_*` files; a job that saw
+/// fewer of these than the pull did looked in another store and found no image.
+pub fn podman_env() -> Vec<(OsString, OsString)> {
+    draugr::env::build(
+        &[
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "LANG",
+            "XDG_RUNTIME_DIR",
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "CONTAINERS_CONF",
+            "CONTAINERS_STORAGE_CONF",
+            "CONTAINERS_REGISTRIES_CONF",
+        ],
+        &[],
+        &[],
+    )
+}
+
 /// The container name of job ID (an id of `[a-z0-9]`, as the runner makes them).
 pub fn name_of(id: &str) -> Result<String, Refusal> {
     if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
@@ -317,6 +341,8 @@ fn run_limited(
     };
     let mut child = std::process::Command::new(podman)
         .args(args)
+        .env_clear()
+        .envs(podman_env())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
