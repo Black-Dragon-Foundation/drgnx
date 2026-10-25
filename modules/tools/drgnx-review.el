@@ -21,6 +21,7 @@
 (declare-function drgnx-diff-default-base "drgnx-diff")
 (declare-function drgnx-diff-show "drgnx-diff")
 (declare-function drgnx-job-route "drgnx-job")
+(declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-job-policy "drgnx-job")
 (declare-function drgnx-agents-start "drgnx-agents")
 (declare-function drgnx-agents-free-p "drgnx-agents")

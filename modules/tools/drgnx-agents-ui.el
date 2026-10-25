@@ -559,6 +559,7 @@ from its own timer, at most every 0.1 s, only while shown).  Called from the age
   (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory))
 
 (declare-function drgnx-agents-mirror-sync "drgnx-agents-mirror")
+(declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-hub-socket "drgnx-hub-client")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")

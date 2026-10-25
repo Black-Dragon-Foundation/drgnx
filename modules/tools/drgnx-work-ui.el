@@ -27,6 +27,7 @@
 (require 'image)                        ; (setf image-property): not preloaded in every build (31.1 -nw)
 
 (declare-function drgnx-wb-area-show "drgnx-area")
+(declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-wb-place "drgnx-rules")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
