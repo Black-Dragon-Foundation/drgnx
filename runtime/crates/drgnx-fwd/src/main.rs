@@ -59,6 +59,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // The forwarder is the container's entrypoint, so usually PID 1: the child knows its parent by this pid, never by
+    // "not 1" (which made the child of PID 1 take its parent for gone and leave the port unserved).
+    // SAFETY: plain syscall.
+    let parent = unsafe { libc::getpid() };
     // SAFETY: nothing has started a thread yet, so the child is a single-threaded copy; it only serves and never
     // returns.  It dies with its parent, which becomes COMMAND.
     match unsafe { libc::fork() } {
@@ -72,7 +76,7 @@ fn main() {
             unsafe {
                 #[cfg(target_os = "linux")]
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                if libc::getppid() == 1 {
+                if libc::getppid() != parent {
                     libc::_exit(0);
                 }
             }
