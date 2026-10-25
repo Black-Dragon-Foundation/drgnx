@@ -48,6 +48,18 @@ pub fn resolve_exe() -> std::io::Result<&'static Path> {
     Ok(START_EXE.get_or_init(|| path).as_path())
 }
 
+/// Tests: take PATH as the executable resolved at start.  A unit test's own binary is libtest's harness, which is no
+/// sandbox helper (it refuses `sandbox-inner --spec-fd`); a test that runs the real sandbox pins the built hub instead.
+/// Panics when another path was resolved first.
+#[cfg(test)]
+pub(crate) fn pin_exe_for_test(path: PathBuf) {
+    let got = START_EXE.get_or_init(|| path.clone());
+    assert_eq!(
+        got, &path,
+        "the executable was resolved before the test pinned it"
+    );
+}
+
 /// What identifies a file's content for the watch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stamp {

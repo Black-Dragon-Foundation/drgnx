@@ -206,6 +206,16 @@ fn exec_remote_machine_refused() {
 #[tokio::test]
 #[ignore = "needs bwrap (the real sandbox): desktop or GitHub CI lane"]
 async fn exec_runs_in_the_starters_sandbox() {
+    // The sandbox's helper is the process's own binary, here the test harness: the hub binary the same build made
+    // (`<target>/<profile>/ratatoskr`, beside `deps/`) takes its place.
+    let exe = std::env::current_exe().unwrap();
+    let hub = exe.parent().unwrap().parent().unwrap().join("ratatoskr");
+    assert!(
+        hub.is_file(),
+        "{} is not built (cargo test builds it with the package's tests)",
+        hub.display()
+    );
+    crate::idle::pin_exe_for_test(std::fs::canonicalize(&hub).unwrap());
     let d = tempfile::tempdir_in("/tmp").unwrap();
     let wt = d.path().join("wt");
     std::fs::create_dir_all(&wt).unwrap();
