@@ -300,8 +300,13 @@ jobs:
             ~/.cargo/registry
             runtime/target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ hashFiles('runtime/Cargo.lock') }}
+      # + the forwarder a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir) and
+      # beside the hub, where the hub looks for it
       - id: build
-        run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target-dir runtime/target/fwd
+          cp runtime/target/fwd/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
       - name: cargo cache save (containers)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.ctr-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
