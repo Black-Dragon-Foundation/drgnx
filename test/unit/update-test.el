@@ -469,6 +469,9 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
                        "mkdir -p \"$CARGO_TARGET_DIR/release\" && cp \"$STUB_RATATOSKR\" \"$CARGO_TARGET_DIR/release/ratatoskr\"\n")
                cargo-log))
       (set-file-modes (expand-file-name "cargo" tc) #o755)
+      ;; the forwarder's musl target is added through the toolchain's rustup (a stub: never the host's)
+      (drgnx-update-test--write (expand-file-name "rustup" tc) (format "#!/bin/sh\necho \"rustup $*\" >> '%s'\n" cargo-log))
+      (set-file-modes (expand-file-name "rustup" tc) #o755)
       ;; a cargo on PATH that must not be used, and a systemd-run that logs the cap and runs the command
       (drgnx-update-test--write (expand-file-name "cargo" stubs) (format "#!/bin/sh\necho WRONG >> '%s'\n" cargo-log))
       (set-file-modes (expand-file-name "cargo" stubs) #o755)
@@ -485,6 +488,9 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-search (format "RUSTUP_HOME=%s/rh CARGO_HOME=%s/ch" dir dir) log))
         (should (string-search (format "TARGET=%s/cache/drgnx/ratatoskr-target COMMIT=%s CHECKOUT=%s/install" dir head dir) log))
         (should-not (string-search "WRONG" log))
+        (should (string-search (format "rustup target add %s-unknown-linux-musl"
+                                       (string-trim (shell-command-to-string "uname -m")))
+                               log))
         (should (string-search "--user --scope -q -p MemoryMax=7168M -p MemorySwapMax=0"
                                (drgnx-update-test--slurp (expand-file-name "sd.log" dir))))
         ;; installed: the built file under the data dir, by rename, no .new left, no links without --prefix

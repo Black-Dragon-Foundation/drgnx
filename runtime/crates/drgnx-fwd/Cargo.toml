@@ -11,7 +11,7 @@ publish = false
 name = "drgnx-fwd"
 path = "src/main.rs"
 
-# std and libc only, so it builds into one small static binary (RUSTFLAGS="-C target-feature=+crt-static") that the hub
+# std and libc only, so it builds into one small static binary (the musl target on Linux) that the hub
 # bind-mounts read-only into a container job.
 [dependencies]
 libc.workspace = true

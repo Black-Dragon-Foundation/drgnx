@@ -321,9 +321,13 @@ installs anything and never asks.
 Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.88
 or newer and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
 parallel job. The same build (`drgnx runtime build`, which install.sh and `drgnx update` run) also makes `drgnx-fwd`,
-the small forwarder that gives a container job its network (Container jobs in the jobs guide). It is built with
-`RUSTFLAGS="-C target-feature=+crt-static"` into its own target folder, so it starts in any image, and
-`drgnx runtime install` puts it beside `ratatoskr`; without it, a container job that is allowed a network is refused.
+the small forwarder that gives a container job its network (Container jobs in the jobs guide). On Linux it is built for
+`<arch>-unknown-linux-musl` (Rust's self-contained musl, so no static glibc package is needed; Fedora has none) into
+its own target folder, so it is a static binary that starts in any image; `drgnx runtime build` runs
+`rustup target add` for it first (a Rust without rustup needs that target installed, or the forwarder is skipped).
+`drgnx runtime install` puts it beside `ratatoskr`. A forwarder that cannot be built only warns and the update goes
+on; without it, a container job that is allowed a network is refused. (macOS builds it with
+`-C target-feature=+crt-static` and no target.)
 install.sh takes the first of these that applies (`--dry-run` says which):
 
 1. `cargo` and `rustc` 1.88 or newer already on `PATH`.

@@ -305,8 +305,9 @@ jobs:
       - id: build
         run: |
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
-          RUSTFLAGS="-C target-feature=+crt-static" cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target-dir runtime/target/fwd
-          cp runtime/target/fwd/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
+          cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
       - name: cargo cache save (containers)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.ctr-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
