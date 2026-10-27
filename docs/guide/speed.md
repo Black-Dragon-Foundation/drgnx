@@ -93,6 +93,11 @@ how serious it is.
   collection; `warn` for a collection of 250 ms or more or a heap over its budget, with the fix **Help → Heap Audit**
   and the largest owner of the last audit.
 
+`drgnx doctor` runs in an Emacs of its own, so it judges what your running drgnx wrote: the day files, and the live
+heap recorded with the newest collection. The watchdog counts as running when the setting is on and a day file was
+written in the last 15 minutes; with the setting on and nothing recent, `freezes` is `info` and says there is no recent
+watchdog record (is drgnx running?).
+
 The watchdog also posts a notice (source *Freezes*, a warning, not echoed) for a stall you felt of a second or more
 or a killed hang, at most once per kind of stall per day, and one for the GC at most once a day. Each opens Show
 Freezes (or the Heap Audit).

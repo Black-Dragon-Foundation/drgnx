@@ -130,3 +130,29 @@
       (setcar drgnx-watchdog-doctor--noticed "2000-01-01")
       (drgnx-watchdog-doctor-note felt)
       (should (equal (cdr drgnx-watchdog-doctor--noticed) '("sig-a"))))))
+
+(ert-deftest drgnx-watchdog/doctor-in-a-batch-process-reads-the-day-files ()
+  ;; `drgnx doctor' runs in its own batch Emacs: the watchdog mode is nil there and the heap is the doctor's own.  So
+  ;; nothing here binds the mode or stubs the doctor's view; the verdict comes from the setting and the day files.
+  (let* ((root (make-temp-file "drgnx-wd-batch" t))
+         (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
+         (features (cons 'nidhogg-watchdog features))
+         (nidhogg-watchdog-mode nil))
+    (unwind-protect
+        (let* ((dir (drgnx-watchdog-log-directory))
+               (file (expand-file-name (format-time-string "%F.jsonl") dir)))
+          (make-directory dir t)
+          (with-temp-file file
+            (insert (json-serialize '((type . "stall") (nongc_ms . 120) (felt . :false) (culprit . ((pkg . "p"))))) "\n"
+                    (json-serialize '((type . "gc") (pause_ms . 20) (heap . ((live_mb . 512.5))))) "\n"))
+          (let* ((w (drgnx-watchdog-doctor-facts)) (r (drgnx-doctor-check 'freezes (list :watchdog w))))
+            (should (plist-get w :running))
+            (should (= 512.5 (plist-get (plist-get w :heap) :live-mb)))
+            (should-not (string-match-p "needs Nidhogg\\|is off" (nth 1 r)))
+            (should (string-match-p "1 stalls over 100 ms" (nth 1 r))))
+          ;; the files are old: it is not running now
+          (set-file-times file (time-subtract (current-time) 3600))
+          (let* ((w (drgnx-watchdog-doctor-facts)) (r (drgnx-doctor-check 'freezes (list :watchdog w))))
+            (should-not (plist-get w :running))
+            (should (string-match-p "no recent watchdog record" (nth 1 r)))))
+      (delete-directory root t))))

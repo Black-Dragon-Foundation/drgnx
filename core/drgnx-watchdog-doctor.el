@@ -21,11 +21,12 @@
 (require 'drgnx-notice)
 (require 'drgnx-timer)
 (require 'drgnx-owner)
+(require 'drgnx-watchdog)
 
 (defvar nidhogg-watchdog-record-functions)
+(defvar nidhogg-watchdog-log-directory)
+(defvar nidhogg-watchdog-mode)
 (defvar drgnx-heap-budgets)
-(declare-function drgnx-watchdog-available-p "drgnx-watchdog")
-(declare-function drgnx-watchdog-log-directory "drgnx-watchdog")
 (declare-function nidhogg-watchdog-gc-row "nidhogg-watchdog-gc")
 (declare-function drgnx-heap-check "drgnx-heap")
 (declare-function drgnx-heap-dir "drgnx-heap")
@@ -102,25 +103,52 @@
                            (alist-get 'module top))))
         (error nil)))))
 
-(defun drgnx-watchdog-doctor--heap ()
-  "The live heap against its budget: (:live-mb MB :budget-mb MB-or-nil :over BOOL), or nil."
-  (when (and (fboundp 'garbage-collect-heapsize) (require 'drgnx-heap nil t))
-    (let* ((rows (drgnx-heap-check (garbage-collect-heapsize)))
+(defun drgnx-watchdog-doctor--live-mb (lines)
+  "The live heap (MB) of the newest `gc' line in LINES (the day's alists) that has one, or nil.  The watchdog's own
+session wrote it; this process's heap says nothing about that session (`drgnx doctor' is a batch Emacs)."
+  (cl-some (lambda (l)
+             (let ((mb (and (equal (alist-get 'type l) "gc") (alist-get 'live_mb (alist-get 'heap l)))))
+               (and (numberp mb) mb)))
+           (reverse lines)))
+
+(defun drgnx-watchdog-doctor--heap (live-mb)
+  "LIVE-MB (the watchdog session's live heap) against its budget: (:live-mb MB :budget-mb MB-or-nil :over BOOL), or nil."
+  (when (and (numberp live-mb) (require 'drgnx-heap nil t))
+    (let* ((rows (drgnx-heap-check (list :heap (list :live-mb live-mb))))
            (row (seq-find (lambda (r) (eq (plist-get r :measure) 'live)) rows)))
       (and row (list :live-mb (plist-get row :value-mb) :budget-mb (plist-get row :cap)
                      :over (eq (plist-get row :state) 'over))))))
 
+(defconst drgnx-watchdog-doctor-recent-s 900
+  "A day file written within this many seconds shows the watchdog running (it writes a summary every ten minutes).")
+
+(defun drgnx-watchdog-doctor--recent-p (file)
+  "Non-nil when FILE was written within `drgnx-watchdog-doctor-recent-s'."
+  (when-let* ((a (file-attributes file)))
+    (< (float-time (time-since (file-attribute-modification-time a))) drgnx-watchdog-doctor-recent-s)))
+
 (defun drgnx-watchdog-doctor-facts ()
-  "The `:watchdog' fact: nil without the watchdog in this Emacs, else (:running BOOL :today SUMMARY :gc ROW :heap
-HEAP :largest OWNER), read from the day files.  Never signals."
-  (when (and (fboundp 'drgnx-watchdog-available-p) (drgnx-watchdog-available-p))
+  "The `:watchdog' fact: nil without the watchdog in this Emacs, else (:running BOOL :wanted BOOL :today SUMMARY :gc ROW
+:heap HEAP :largest OWNER), read from the day files.  `drgnx doctor' is a batch Emacs, so :running is the setting
+being on and a day file written in the last quarter hour (or the mode, in a live session), and :heap the live heap the
+watchdog's session recorded.  Never signals."
+  (when (drgnx-watchdog-available-p)
     (condition-case err
-        (let* ((file (expand-file-name (format-time-string "%F.jsonl") (drgnx-watchdog-log-directory)))
+        (let* ((dir (drgnx-watchdog-log-directory))
+               (file (expand-file-name (format-time-string "%F.jsonl") dir))
+               (lines (drgnx-watchdog-doctor--read-day file))
+               (nidhogg-watchdog-log-directory dir)
                (gc (and (require 'nidhogg-watchdog-gc nil t) (fboundp 'nidhogg-watchdog-gc-row)
-                        (nidhogg-watchdog-gc-row))))
-          (list :running (bound-and-true-p nidhogg-watchdog-mode)
-                :today (drgnx-watchdog-doctor--summarize (drgnx-watchdog-doctor--read-day file))
-                :gc gc :heap (drgnx-watchdog-doctor--heap) :largest (drgnx-watchdog-doctor--largest-owner)))
+                        (nidhogg-watchdog-gc-row)))
+               (wanted (and (drgnx-watchdog--wanted-p) t)))
+          (list :running (or (bound-and-true-p nidhogg-watchdog-mode)
+                             (and wanted (drgnx-watchdog-doctor--recent-p file) t))
+                :wanted wanted
+                :today (drgnx-watchdog-doctor--summarize lines)
+                :gc gc
+                :heap (drgnx-watchdog-doctor--heap (or (drgnx-watchdog-doctor--live-mb lines)
+                                                       (plist-get (plist-get (plist-get gc :week) :heap) :live_mb)))
+                :largest (drgnx-watchdog-doctor--largest-owner)))
       (error (list :error (error-message-string err))))))
 
 ;;;; The checks
@@ -133,6 +161,9 @@ HEAP :largest OWNER), read from the day files.  Never signals."
     (cond
      ((null w) (list 'info "the watchdog needs Nidhogg 31.1-nidhogg.N or newer" drgnx-watchdog-doctor-update-fix))
      ((plist-get w :error) (list 'info (format "the watchdog's day could not be read: %s" (plist-get w :error)) nil))
+     ((and (not (plist-get w :running)) (plist-get w :wanted))
+      (list 'info "no recent watchdog record (is drgnx running?)"
+            "start drgnx: the watchdog writes a summary every ten minutes (docs/guide/speed.md)"))
      ((not (plist-get w :running))
       (list 'info "the watchdog is off" "turn it on: set drgnx-speed-watchdog to t (docs/guide/speed.md)"))
      (t
