@@ -510,7 +510,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                                        "   (kill-buffer b)) "
                                        kill-fixture ")"))
       ;; the same shape as agent-stream with no agent: a transcript fed from a recording (test/fixtures/day/transcript.eld) by
-      ;; a timer, at the recorded pace, through `drgnx-agents--append-text' and `drgnx-agents--changed' (PD-14); it runs in
+      ;; a timer, at the recorded pace, through `drgnx-agents--append-text' and `drgnx-agents--changed'; it runs in
       ;; the container, where a mock agent's turn ends before the typing does
       (transcript-replay :setup ,(format "(progn (defvar drgnx-perf--replay-mark 0 \"Chunks fed when the keys began.\")
                                                 (drgnx-perf-replay-start \"replay\" '%S) t)" (drgnx-perf-day--read "transcript.eld"))
@@ -1032,7 +1032,7 @@ version and the commit, as JSON in FILE."
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package")
-    (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream, PD-14)")
+    (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream)")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")
@@ -1378,7 +1378,7 @@ that came with AFTER, and the monitor's CPU as a percent of the wall time.  Nil 
             (if sigs (format ", top %s" (mapconcat (lambda (c) (format "%s x%d" (car c) (cdr c))) (seq-take sigs 3) ", ")) ""))))
 
 (defun drgnx-perf-day (&optional minutes)
-  "`drgnx test --day [MINUTES]': a long, mixed, deterministic session (PD-14).  The build-up phase opens the day's
+  "`drgnx test --day [MINUTES]': a long, mixed, deterministic session.  The build-up phase opens the day's
 files and Org trees, starts eglot on the project against `test/fixtures/lsp-replay.el', reads the repository with
 `vc-git' and starts two transcript replays; the steady phase then runs rounds of `drgnx-perf-day-workloads' (the order
 shuffled from `drgnx-perf-day-seed') until MINUTES (30) have passed, sampling RSS and the live Lisp heap after each.

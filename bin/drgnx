@@ -1672,7 +1672,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                (--audit: what each hook function costs, not judged; --ab-env: the paired A/B on
                                one tree, the first value the judged side, e.g. DRGNX_PERF_GLITNIR=on,off)
        drgnx test --soak [MIN] the workloads in a loop for MIN minutes (30); memory must hold
-       drgnx test --day [MIN]  the synthetic day (PD-14): a build-up (files, Org, eglot on a replay server, vc-git,
+       drgnx test --day [MIN]  the synthetic day: a build-up (files, Org, eglot on a replay server, vc-git,
                                transcript replays) then rounds of workloads for MIN minutes (30); RSS growth
                                across the rounds <= 20%, no workload may fail (perf.md, The synthetic day)
        drgnx test --scenario [--config drgnx|gryphn|DIR]

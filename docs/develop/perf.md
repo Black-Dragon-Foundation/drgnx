@@ -532,7 +532,7 @@ collected nothing, and the GC p95 is judged only over at least 20 collections; b
 long pause is not always the collector's own marking.
 
 **A/B.** Gated: `bin/drgnx test --perf --ab-env DRGNX_PERF_WATCHDOG=default,off` (the shipped watchdog against none).
-Reported stress: `--ab-env DRGNX_PERF_WATCHDOG=on,off` (1 ms; not a gate, PD-13).
+Reported stress: `--ab-env DRGNX_PERF_WATCHDOG=on,off` (1 ms; not a gate).
 
 Tests: `test/unit/perf-watchdog-test.el`.
 

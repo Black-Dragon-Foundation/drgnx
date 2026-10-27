@@ -93,9 +93,9 @@
  (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 30) (remote-typing (:cpu_ms :p90) 349.0) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
- ;; Watchdog rows (stall-watchdog Task 19), REPORTED until seeded (`drgnx-perf-watchdog-gated'): no stall in any input
+ ;; Watchdog rows, REPORTED until seeded (`drgnx-perf-watchdog-gated'): no stall in any input
  ;; workload; a collection at most 250 ms; the GC p95 at most 50 ms, judged only over >= 20 collections.
- ;; (:typing :ge16) and (:heap :live_mb) are reported without a budget (Task 25 gates the heap row).
+ ;; (:typing :ge16) and (:heap :live_mb) are reported without a budget (the heap row is gated separately).
  (typing (:stalls) 0) (typing (:gc :max) 250) (typing (:gc :p95) 50)
  (scrolling (:stalls) 0) (scrolling (:gc :max) 250) (scrolling (:gc :p95) 50)
  (tabs (:stalls) 0) (tabs (:gc :max) 250) (tabs (:gc :p95) 50)
