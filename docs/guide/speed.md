@@ -115,5 +115,6 @@ Each package row has buttons: **Source** (the package's library, or its folder),
 names one) and **Module** (the drgnx module that enables it; the modules list lets you turn it off). The header has
 **Copy report**, which puts the names, durations, call stacks and the Nidhogg version on the clipboard, with no file
 path, ready to paste into a bug report, and **Sample the next freeze in depth**, which makes the watchdog keep a
-longer stack for the next stall; a notice tells you when that record is in. The GC row has **Run a heap audit** (it
+longer stack for the next stall; a notice tells you when the record that was sampled in
+depth is in (it needs the watchdog on; with it off the command says so). The GC row has **Run a heap audit** (it
 asks first, see [Heap Audit](#heap-audit)) and **Show collections** (the GC census report). `g` draws the page again.

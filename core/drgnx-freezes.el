@@ -239,9 +239,10 @@
 
 (defvar drgnx-freezes--deep-armed nil "Non-nil: the next stall record is the deep one the user asked for.")
 
-(defun drgnx-freezes--deep-arrived (_record)
-  "A stall record arrived after `drgnx-freezes-sample-deep': say so once.  A record hook: no prompt, no I/O."
-  (when drgnx-freezes--deep-armed
+(defun drgnx-freezes--deep-arrived (record)
+  "A stall RECORD sampled in depth arrived after `drgnx-freezes-sample-deep': say so once.  A record hook: no prompt,
+no I/O."
+  (when (and drgnx-freezes--deep-armed (plist-get record :deep))
     (setq drgnx-freezes--deep-armed nil)
     (remove-hook 'nidhogg-watchdog-record-functions #'drgnx-freezes--deep-arrived)
     (drgnx-notify 'watchdog 'info "The deep sample of the freeze is in" :id 'deep :command 'freezes)))
@@ -251,7 +252,8 @@
   (interactive)
   (unless (fboundp 'nidhogg-watchdog--deep)
     (user-error "This Emacs has no stall watchdog (docs/guide/speed.md)"))
-  (when (require 'drgnx-watchdog-doctor nil t) (drgnx-watchdog-doctor-start))
+  (unless (bound-and-true-p nidhogg-watchdog-mode)
+    (user-error "The watchdog is off: set drgnx-speed-watchdog to t first (docs/guide/speed.md)"))
   (nidhogg-watchdog--deep 1)
   (setq drgnx-freezes--deep-armed t)
   (add-hook 'nidhogg-watchdog-record-functions #'drgnx-freezes--deep-arrived)

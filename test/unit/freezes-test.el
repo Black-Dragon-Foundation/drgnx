@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defvar nidhogg-watchdog-record-functions nil)
+(defvar nidhogg-watchdog-mode nil)
 (defvar nidhogg-version)
 
 (defconst drgnx-freezes-test--ranking
@@ -42,14 +43,24 @@
 (ert-deftest drgnx-freezes/deep-sample-action ()
   (drgnx-notice-test-with-model
     (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
-    (let ((asked nil) (nidhogg-watchdog-record-functions nil) (drgnx-freezes--deep-armed nil))
+    (let ((asked nil) (started 0) (nidhogg-watchdog-record-functions nil) (drgnx-freezes--deep-armed nil)
+          (nidhogg-watchdog-mode nil))
       (cl-letf (((symbol-function 'nidhogg-watchdog--deep) (lambda (n) (push n asked)))
-                ((symbol-function 'drgnx-watchdog-doctor-start) #'ignore))
+                ((symbol-function 'drgnx-watchdog-doctor-start) (lambda () (cl-incf started))))
+        ;; with the watchdog off there is nothing to sample with, and the doctor is not started
+        (should-error (drgnx-freezes-sample-deep) :type 'user-error)
+        (should (null asked))
+        (setq nidhogg-watchdog-mode t)
         (drgnx-freezes-sample-deep))
+      (should (= started 0))
       (should (equal asked '(1)))
       (should (memq #'drgnx-freezes--deep-arrived nidhogg-watchdog-record-functions))
       (should (null (drgnx-notices)))
+      ;; a stall that was not sampled in depth does not use the notice up
       (run-hook-with-args 'nidhogg-watchdog-record-functions '(:nongc-ms 300))
+      (should (null (drgnx-notices)))
+      (should drgnx-freezes--deep-armed)
+      (run-hook-with-args 'nidhogg-watchdog-record-functions '(:nongc-ms 300 :deep t))
       (should (= 1 (length (drgnx-notices))))
       (should-not (memq (function drgnx-freezes--deep-arrived) nidhogg-watchdog-record-functions))
       (drgnx-watchdog-doctor-stop)
