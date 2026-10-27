@@ -127,6 +127,9 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
 ;;;; The stall watchdog (docs/develop/perf.md, "The stalls probe")
 
 (defvar nidhogg-watchdog-mode)
+(defvar drgnx-watchdog-mode)
+(defvar nidhogg-watchdog--bucket-edges)
+(declare-function drgnx-watchdog-mode "drgnx-watchdog")
 (defvar nidhogg-watchdog-threshold)
 (defvar nidhogg-watchdog-record-functions)
 (declare-function nidhogg-watchdog-mode "nidhogg-watchdog")
@@ -143,24 +146,81 @@ configuration), `on' at 1 ms (the stress case), `off' leaves it off.  Without th
     (setq drgnx-perf--watchdog-applied t)
     (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
            (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100))))
-      (when (and (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode) (nidhogg-watchdog-mode -1))
+      (drgnx-perf--watchdog-set nil)
       (when ms
         (setq nidhogg-watchdog-threshold ms)
-        (nidhogg-watchdog-mode 1)))))
+        (drgnx-perf--watchdog-set t)))))
+
+(defun drgnx-perf--watchdog-set (on)
+  "Turn the whole watchdog stack on or off.  A drgnx session has already started it at init, through
+`drgnx-watchdog-mode', which also carries the doctor's record hook and idle timer; so that is the switch, and Nidhogg's
+mode is only touched directly where drgnx is not loaded."
+  (if (fboundp 'drgnx-watchdog-mode)
+      (drgnx-watchdog-mode (if on 1 -1))
+    (nidhogg-watchdog-mode (if on 1 -1)))
+  (when (and (not on) (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode)
+    (nidhogg-watchdog-mode -1)))
 
 (defun drgnx-perf--watchdog-on-p ()
   (and (featurep 'nidhogg-watchdog) (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode))
 
+(defun drgnx-perf-watchdog-snapshot ()
+  "The watchdog's cumulative counters now, without resetting them (nil when it is off): :spans :samples :missed :stale
+:stalls :monitor-cpu-ms and :drain, the drain histogram as a vector.  `:samples' is Nidhogg's own count when it has
+one, else its spans."
+  (when-let* (((drgnx-perf--watchdog-on-p)) (s (nidhogg-watchdog-stats)))
+    (list :spans (or (plist-get s :spans) 0)
+          :samples (or (plist-get s :samples) (plist-get s :spans) 0)
+          :missed (or (plist-get s :missed) 0) :stale (or (plist-get s :stale) 0)
+          :stalls (or (plist-get s :stalls) 0)
+          :monitor-cpu-ms (or (plist-get s :monitor-cpu-ms) 0.0)
+          :drain (vconcat (plist-get s :drain)))))
+
+(defun drgnx-perf--hist-edge (hist edges q)
+  "The upper edge (ms) of the bucket of HIST (counts by bucket; the last bucket is open) that holds the share Q (0..1)
+of its counts, 0 when HIST is empty.  EDGES are the buckets' upper edges."
+  (let ((total (apply #'+ (append hist nil))) (acc 0) (i 0))
+    (if (zerop total)
+        0
+      (while (and (< i (1- (length edges))) (< (* 100 (setq acc (+ acc (aref hist i)))) (* 100 q total)))
+        (setq i (1+ i)))
+      (aref edges (min i (1- (length edges)))))))
+
+(defun drgnx-perf-watchdog-delta (before after &optional edges)
+  "The counters AFTER minus those of BEFORE (both snapshots; nil BEFORE is zero).  The drain's p95 and largest bucket
+come from the difference of the histograms, by EDGES (default Nidhogg's `nidhogg-watchdog--bucket-edges').  Counters
+never go below zero, in case the watchdog was restarted between."
+  (let* ((edges (let ((e (vconcat edges)))
+                  (cond ((> (length e) 0) e)
+                        ((boundp 'nidhogg-watchdog--bucket-edges) nidhogg-watchdog--bucket-edges)
+                        (t [4 8 16 33 50 100 250 1000]))))
+         (num (lambda (k) (max 0 (- (or (plist-get after k) 0) (or (plist-get before k) 0)))))
+         (a (vconcat (plist-get after :drain))) (b (vconcat (plist-get before :drain)))
+         (hist (vconcat (cl-loop for i from 0 below (length a)
+                                 collect (max 0 (- (aref a i) (if (< i (length b)) (aref b i) 0))))))
+         (top (cl-position-if (lambda (n) (> n 0)) hist :from-end t)))
+    (list :spans (funcall num :spans) :samples (funcall num :samples) :missed (funcall num :missed)
+          :stale (funcall num :stale) :stalls (funcall num :stalls)
+          :monitor-cpu-ms (drgnx-perf--round (float (funcall num :monitor-cpu-ms)))
+          :drain hist
+          :drain-p95-ms (drgnx-perf--round (float (drgnx-perf--hist-edge hist edges 0.95)))
+          :drain-max-ms (drgnx-perf--round (float (if top (aref edges (min top (1- (length edges)))) 0))))))
+
 (defun drgnx-perf--stall-record (record)
-  "A `nidhogg-watchdog-record-functions' entry: keep RECORD's wall time and whether the user felt it."
-  (push (cons (plist-get record :wall-ms) (plist-get record :felt)) drgnx-perf--stalls))
+  "A `nidhogg-watchdog-record-functions' entry: keep what RECORD says of the stall (wall time, felt, signature, culprit)."
+  (push (list :wall-ms (plist-get record :wall-ms) :felt (plist-get record :felt)
+              :signature (plist-get record :signature) :culprit (plist-get record :culprit))
+        drgnx-perf--stalls))
+
+(defvar drgnx-perf--stalls-snapshot nil "The watchdog's counters when the stalls probe began.")
 
 (defun drgnx-perf--stalls-begin ()
-  "Drain what came before, and start keeping the records."
-  (setq drgnx-perf--stalls nil)
+  "Drain what came before, snapshot the counters (they are not reset: the watchdog's summaries and the day's totals
+read them) and start keeping the records."
+  (setq drgnx-perf--stalls nil drgnx-perf--stalls-snapshot nil)
   (when (drgnx-perf--watchdog-on-p)
     (nidhogg-watchdog-drain-now)
-    (nidhogg-watchdog-stats t)
+    (setq drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot))
     (add-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)))
 
 (defun drgnx-perf--stalls-end ()
@@ -170,13 +230,42 @@ without the watchdog."
       (list :watchdog nil)
     (nidhogg-watchdog-drain-now)
     (remove-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)
-    (let ((s (nidhogg-watchdog-stats)) (walls (delq nil (mapcar #'car drgnx-perf--stalls))))
+    (let ((d (drgnx-perf-watchdog-delta drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot)))
+          (walls (delq nil (mapcar (lambda (s) (plist-get s :wall-ms)) drgnx-perf--stalls))))
       (list :stalls (length drgnx-perf--stalls)
-            :stalls-felt (length (seq-filter #'cdr drgnx-perf--stalls))
+            :stalls-felt (length (seq-filter (lambda (s) (plist-get s :felt)) drgnx-perf--stalls))
             :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
-            :watchdog (list :missed (or (plist-get s :missed) 0)
-                            :monitor-cpu-ms (drgnx-perf--round (or (plist-get s :monitor-cpu-ms) 0.0))
-                            :drain-p95-ms (drgnx-perf--round (or (plist-get s :drain-p95-ms) 0.0)))))))
+            :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans)
+                            :monitor-cpu-ms (plist-get d :monitor-cpu-ms)
+                            :drain-p95-ms (plist-get d :drain-p95-ms)
+                            :drain-max-ms (plist-get d :drain-max-ms))))))
+
+(defvar drgnx-perf--day-stalls nil "The stalls the day's session has seen since the last `drgnx-perf-watchdog-day-read'.")
+
+(defun drgnx-perf--day-stall-record (record)
+  "A record function of the day: keep the stall's wall time, felt, signature and culprit, for the phase report."
+  (let ((c (plist-get record :culprit)))
+    (push (list :wall-ms (or (plist-get record :wall-ms) 0.0) :felt (if (plist-get record :felt) t :false)
+                :signature (or (plist-get record :signature) "")
+                :culprit (cond ((stringp c) c) (c (format "%S" c)) (t "")))
+          drgnx-perf--day-stalls)))
+
+(defun drgnx-perf-watchdog-day-read ()
+  "For the synthetic day, in the session: what the watchdog shows now, as a plist for the harness.  No reset.  :on,
+:native (the preloaded Lisp is compiled), :version-dir, :drgnx-mode, :stats (`drgnx-perf-watchdog-snapshot') and :stalls
+(the vector of stalls since the last call).  Collecting begins on the first call."
+  (if (not (drgnx-perf--watchdog-on-p))
+      (list :on :false :drgnx-mode (if (and (boundp 'drgnx-watchdog-mode) drgnx-watchdog-mode) t :false))
+    (nidhogg-watchdog-drain-now)
+    (add-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--day-stall-record)
+    (prog1 (list :on t
+                 :native (if (and (fboundp 'native-comp-function-p) (native-comp-function-p (symbol-function 'nidhogg-watchdog-mode))) t :false)
+                 :version-dir (if (boundp 'comp-native-version-dir) (format "%s" comp-native-version-dir) "")
+                 :drgnx-mode (if (and (boundp 'drgnx-watchdog-mode) drgnx-watchdog-mode) t :false)
+                 :stats (drgnx-perf-watchdog-snapshot)
+                 :edges (if (boundp 'nidhogg-watchdog--bucket-edges) (vconcat nidhogg-watchdog--bucket-edges) [])
+                 :stalls (vconcat (reverse drgnx-perf--day-stalls)))
+      (setq drgnx-perf--day-stalls nil))))
 
 (defun drgnx-perf--gc-row (pauses)
   "(:count N :max MS :p95 MS) of PAUSES (ms); :max and :p95 are nil with no collection."

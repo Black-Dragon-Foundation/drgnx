@@ -1341,6 +1341,42 @@ pass BEFORE (the counts a round earlier), or the project's language server gone 
              do (cl-rotatef (aref v i) (aref v (random (1+ i)))))
     (append v nil)))
 
+(defun drgnx-perf-day--workload-watchdog (name result)
+  "What the day keeps of workload NAME's RESULT: its stalls and the watchdog's numbers (nil for a result without)."
+  (list :name (symbol-name name)
+        :stalls (or (plist-get result :stalls) 0) :stalls-felt (or (plist-get result :stalls-felt) 0)
+        :stall-max-ms (or (plist-get result :stall-max-ms) 0.0)
+        :watchdog (or (plist-get result :watchdog) :null)))
+
+(defun drgnx-perf-day--watchdog-read (sess)
+  "The session's watchdog now (`drgnx-perf-watchdog-day-read'), with its histogram as a vector."
+  (let ((r (drgnx-perf-run--call sess "(drgnx-perf-watchdog-day-read)")))
+    (when-let* ((s (plist-get r :stats)) ((consp s)))
+      (setq r (plist-put r :stats (plist-put (copy-sequence s) :drain (vconcat (plist-get s :drain))))))
+    r))
+
+(defun drgnx-perf-day--watchdog-interval (before after wall-s)
+  "The watchdog's part of the interval from read BEFORE to read AFTER (WALL-S seconds): its counter delta, the stalls
+that came with AFTER, and the monitor's CPU as a percent of the wall time.  Nil when the watchdog is off."
+  (when (eq (plist-get after :on) t)
+    (let ((d (drgnx-perf-watchdog-delta (plist-get before :stats) (plist-get after :stats) (plist-get after :edges)))
+          (stalls (append (plist-get after :stalls) nil)))
+      (append d (list :monitor-pct (drgnx-perf--round2 (if (> wall-s 0) (/ (* 100.0 (plist-get d :monitor-cpu-ms)) (* 1000.0 wall-s)) 0.0))
+                      :wall-s (drgnx-perf--round wall-s) :stall-list (vconcat stalls) :felt (seq-count (lambda (s) (eq (plist-get s :felt) t)) stalls))))))
+
+(defun drgnx-perf-day--watchdog-line (delta wall-s stalls)
+  "One line on the watchdog over WALL-S seconds: DELTA (`drgnx-perf-watchdog-delta') and the STALLS it saw."
+  (let* ((felt (seq-count (lambda (s) (eq (plist-get s :felt) t)) stalls))
+         (sigs (let (alist)
+                 (dolist (s stalls) (let ((k (if (string-empty-p (or (plist-get s :signature) "")) "unsampled" (plist-get s :signature))))
+                                      (setf (alist-get k alist 0 nil #'equal) (1+ (alist-get k alist 0 nil #'equal)))))
+                 (sort alist (lambda (a b) (> (cdr a) (cdr b)))))))
+    (format "monitor %.2f%% of wall, drain p95 %.1f ms, max %.1f ms, missed %d of %d samples, stalls %d (%d felt)%s"
+            (if (> wall-s 0) (/ (* 100.0 (plist-get delta :monitor-cpu-ms)) (* 1000.0 wall-s)) 0.0)
+            (plist-get delta :drain-p95-ms) (plist-get delta :drain-max-ms) (plist-get delta :missed) (plist-get delta :samples)
+            (length stalls) felt
+            (if sigs (format ", top %s" (mapconcat (lambda (c) (format "%s x%d" (car c) (cdr c))) (seq-take sigs 3) ", ")) ""))))
+
 (defun drgnx-perf-day (&optional minutes)
   "`drgnx test --day [MINUTES]': a long, mixed, deterministic session (PD-14).  The build-up phase opens the day's
 files and Org trees, starts eglot on the project against `test/fixtures/lsp-replay.el', reads the repository with
@@ -1359,21 +1395,35 @@ Results go to $DRGNX_PERF_RESULTS."
          (s (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)) (sess (drgnx-ui-own-session (plist-get s :name)))
          (all (drgnx-perf-run--workloads))
          (stamp (lambda () (format-time-string "%FT%T%z")))
-         rounds steps errors phases (before '(0 0)))
+         rounds steps errors phases (before '(0 0)) steady-t0 steady-from steady-iv wd-prev wd-t wd-info
+         ;; the watchdog since the last call: its interval (nil when it is off), and what the read says of the build
+         (wd-step (lambda ()
+                    (let* ((now (float-time)) (cur (drgnx-perf-day--watchdog-read sess))
+                           (iv (and wd-prev (drgnx-perf-day--watchdog-interval wd-prev cur (- now wd-t)))))
+                      (setq wd-prev cur wd-t now)
+                      (unless wd-info (setq wd-info cur))
+                      iv))))
     (random (plist-get comp :seed))
     (unwind-protect
         (progn
           (drgnx-perf-run--check-gc sess)
+          ;; the watchdog's arm applies as the session starts, so build-up is watched (or, for off, nothing is)
+          (drgnx-perf-run--call sess "(progn (drgnx-perf--watchdog-env) t)")
+          (setq wd-prev (drgnx-perf-day--watchdog-read sess) wd-t (float-time) wd-info wd-prev)
           (drgnx-perf-day--fixture-repo dir)
           (push (list :phase "build-up" :start (funcall stamp)) phases)
           (setq steps (append (drgnx-perf-run--call sess (drgnx-perf-day--buildup-form dir) 300) nil))
           (setf (car phases) (plist-put (car phases) :end (funcall stamp)))
+          (when-let* ((iv (funcall wd-step)))
+            (setf (car phases) (plist-put (car phases) :watchdog (drgnx-perf-run--json-ready iv)))
+            (send-string-to-terminal (format "day: build-up watchdog: %s %s\n" (drgnx-perf-day--watchdog-line iv (plist-get iv :wall-s) (append (plist-get iv :stall-list) nil)) label)))
           (dolist (st steps)
             (send-string-to-terminal (format "day: build-up %-9s %6d ms, RSS %d MB, heap %.0f MB %s\n" (plist-get st :step) (plist-get st :ms)
                                              (/ (plist-get st :rss_kb) 1024) (plist-get st :heap_mb) label)))
           (push (list :phase "steady" :start (funcall stamp)) phases)
+          (setq steady-t0 (float-time) steady-from wd-prev)
           (while (< (float-time) deadline)
-            (let ((t0 (float-time)) (ran 0))
+            (let ((t0 (float-time)) (ran 0) wl)
               (dolist (name (drgnx-perf-day--shuffle drgnx-perf-day-workloads))
                 (message "day: %s…" name)
                 (let ((r (condition-case err (drgnx-perf-run-workload sess (cdr (assq name all)))
@@ -1381,6 +1431,7 @@ Results go to $DRGNX_PERF_RESULTS."
                   (if (plist-get r :error)
                       (progn (message "day: %s FAILED: %s" name (plist-get r :error))
                              (push (format "%s: %s" name (plist-get r :error)) errors))
+                    (push (drgnx-perf-day--workload-watchdog name r) wl)
                     (cl-incf ran))))
               (let* ((m (drgnx-perf-run--call
                          sess (format "(list :rss_kb (progn (garbage-collect) (drgnx-perf-rss-kb)) :heap_mb (drgnx-perf-heap-mb) :gcs gcs-done
@@ -1390,12 +1441,22 @@ Results go to $DRGNX_PERF_RESULTS."
                      (live (drgnx-perf-day-liveness-fails (1+ (length rounds)) before m)))
                 (dolist (f live) (message "day: FAILED: %s" f))
                 (setq errors (append (reverse live) errors) before (append (plist-get m :replays) nil))
-                (push (append m (list :workloads ran :seconds (round (- (float-time) t0)))) rounds)
+                (let ((iv (funcall wd-step)))
+                  (push (append m (list :workloads ran :seconds (round (- (float-time) t0))
+                                        :workload_watchdog (vconcat (nreverse wl))
+                                        :watchdog (drgnx-perf-run--json-ready iv)))
+                        rounds)
+                  (when iv
+                    (send-string-to-terminal (format "day: round %d watchdog: %s %s\n" (length rounds)
+                                                     (drgnx-perf-day--watchdog-line iv (plist-get iv :wall-s) (append (plist-get iv :stall-list) nil)) label))))
                 (send-string-to-terminal (format "day: round %d: RSS %d MB, heap %.0f MB, %d collections, %d of %d workloads, replays %s chunks, language server %s, %d s %s\n"
                                                  (length rounds) (/ (plist-get m :rss_kb) 1024) (plist-get m :heap_mb) (plist-get m :gcs) ran
                                                  (length drgnx-perf-day-workloads) (append (plist-get m :replays) nil)
                                                  (if (eq (plist-get m :eglot) t) "up" "GONE") (round (- (float-time) t0)) label)))))
-          (setf (car phases) (plist-put (car phases) :end (funcall stamp))))
+          (setf (car phases) (plist-put (car phases) :end (funcall stamp)))
+          (when (and steady-from wd-prev)
+            (setq steady-iv (drgnx-perf-day--watchdog-interval steady-from wd-prev (- wd-t steady-t0)))
+            (setf (car phases) (plist-put (car phases) :watchdog (drgnx-perf-run--json-ready steady-iv)))))
       (ignore-errors (drgnx-perf-run--call sess drgnx-perf-day-teardown-form))
       (drgnx-ui-stop (plist-get s :name))
       (delete-file drgnx-perf-run--fixture)
@@ -1408,6 +1469,10 @@ Results go to $DRGNX_PERF_RESULTS."
                                (list :synthetic t :composition (plist-get comp :sha) :label label :minutes minutes
                                      :phases (vconcat (mapcar (lambda (p) (drgnx-perf-run--json-ready p)) phases))
                                      :build_up (vconcat (mapcar #'drgnx-perf-run--json-ready steps))
+                                     :watchdog (list :on (if (eq (plist-get wd-info :on) t) t :false)
+                                                     :native (or (plist-get wd-info :native) :false)
+                                                     :version_dir (or (plist-get wd-info :version-dir) "")
+                                                     :drgnx_mode (or (plist-get wd-info :drgnx-mode) :false))
                                      :rounds (vconcat (mapcar #'drgnx-perf-run--json-ready rounds))
                                      :errors (vconcat errors)))
                               "\n")
@@ -1418,6 +1483,14 @@ Results go to $DRGNX_PERF_RESULTS."
                      (length rounds) minutes (/ (plist-get (car rounds) :rss_kb) 1024) (/ (plist-get (car (last rounds)) :rss_kb) 1024)
                      (plist-get (car rounds) :heap_mb) (plist-get (car (last rounds)) :heap_mb) label))
       (unless (cdr rounds) (princ "day: one steady round, RSS growth not judged\n"))
+      (princ (format "day: watchdog: %s%s\n"
+                     (if (eq (plist-get wd-info :on) t)
+                         (format "on, drgnx-watchdog-mode %s, preloaded Lisp %s (%s); steady phase: %s"
+                                 (if (eq (plist-get wd-info :drgnx-mode) t) "on" "off")
+                                 (if (eq (plist-get wd-info :native) t) "native yes" "native no") (plist-get wd-info :version-dir)
+                                 (if steady-iv (drgnx-perf-day--watchdog-line steady-iv (plist-get steady-iv :wall-s) (append (plist-get steady-iv :stall-list) nil)) "nothing read"))
+                       (format "off, drgnx-watchdog-mode %s" (if (eq (plist-get wd-info :drgnx-mode) t) "on" "off")))
+                     label))
       (dolist (f fails) (princ (format "FAIL %s\n" f)))
       (if fails 1 (princ "day: the leak rule holds, no workload failed\n") 0))))
 

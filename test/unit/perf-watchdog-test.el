@@ -10,15 +10,24 @@
 (defvar nidhogg-watchdog-mode)
 (defvar nidhogg-watchdog-threshold)
 (defvar nidhogg-watchdog-record-functions)
+(defvar drgnx-watchdog-mode)
+(defvar nidhogg-watchdog--bucket-edges)
 
 (defmacro perf-watchdog-test--with-feature (&rest body)
-  "Run BODY as if `nidhogg-watchdog' were loaded, with its mode and functions stubbed."
+  "Run BODY as if `nidhogg-watchdog' were loaded, with its mode and functions stubbed.  `drgnx-watchdog-mode' is
+stubbed the way the real one acts: it carries Nidhogg's mode with it."
   `(let ((features (cons 'nidhogg-watchdog features))
          (drgnx-perf--watchdog-applied nil)
          (nidhogg-watchdog-mode nil)
-         (nidhogg-watchdog-threshold 100))
+         (drgnx-watchdog-mode nil)
+         (nidhogg-watchdog-threshold 100)
+         (nidhogg-watchdog--bucket-edges [4 8 16 33 50 100 250 1000]))
      (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
-                (lambda (&optional arg) (setq nidhogg-watchdog-mode (and (not (eq arg -1)) t)))))
+                (lambda (&optional arg) (setq nidhogg-watchdog-mode (and (not (eq arg -1)) t))))
+               ((symbol-function 'drgnx-watchdog-mode)
+                (lambda (&optional arg)
+                  (setq drgnx-watchdog-mode (and (not (eq arg -1)) t))
+                  (funcall 'nidhogg-watchdog-mode arg))))
        ,@body)))
 
 (defun perf-watchdog-test--env (value)
@@ -35,24 +44,57 @@
   (should (equal (perf-watchdog-test--env "default") '(t . 100)))
   (should (null (car (perf-watchdog-test--env "off")))))
 
+(ert-deftest drgnx-perf/watchdog-env-off-is-fully-off ()
+  ;; init has already started drgnx's mode (and with it the doctor's hook and idle timer); the `off' arm must stop
+  ;; all of it, and the other arms must start it through drgnx's mode, not around it
+  (let ((process-environment (cons "DRGNX_PERF_WATCHDOG=off" process-environment)))
+    (perf-watchdog-test--with-feature
+     (setq drgnx-watchdog-mode t nidhogg-watchdog-mode t)
+     (drgnx-perf--watchdog-env)
+     (should-not drgnx-watchdog-mode)
+     (should-not nidhogg-watchdog-mode)))
+  (let ((process-environment (cons "DRGNX_PERF_WATCHDOG=on" process-environment)))
+    (perf-watchdog-test--with-feature
+     (setq drgnx-watchdog-mode t nidhogg-watchdog-mode t)
+     (drgnx-perf--watchdog-env)
+     (should drgnx-watchdog-mode)
+     (should nidhogg-watchdog-mode)
+     (should (= nidhogg-watchdog-threshold 1)))))
+
+(defun perf-watchdog-test--stats (spans missed cpu drain)
+  (list :spans spans :missed missed :stale 0 :stalls 0 :monitor-cpu-ms cpu :drain drain))
+
 (ert-deftest drgnx-perf/stalls-probe-shape ()
+  ;; the probe subtracts a snapshot; it never resets the counters (the watchdog's own summary lines and the day-wide
+  ;; totals read them), and the record it keeps carries the signature
   (perf-watchdog-test--with-feature
-   (let ((drains 0) (drgnx-perf--stalls nil) (nidhogg-watchdog-record-functions nil))
+   (let ((drains 0) (resets nil) (calls 0) (drgnx-perf--stalls nil) (nidhogg-watchdog-record-functions nil))
      (setq nidhogg-watchdog-mode t)
      (cl-letf (((symbol-function 'nidhogg-watchdog-drain-now) (lambda () (cl-incf drains)))
                ((symbol-function 'nidhogg-watchdog-stats)
-                (lambda (&optional _reset) '(:missed 2 :monitor-cpu-ms 3.5 :drain-p95-ms 1.3))))
+                (lambda (&optional reset)
+                  (when reset (push t resets))
+                  (if (= (cl-incf calls) 1)
+                      (perf-watchdog-test--stats 100 1 10.0 [1 0 0 0 0 0 0 0 0])
+                    (perf-watchdog-test--stats 300 3 13.5 [5 0 0 0 0 0 0 1 0])))))
        (drgnx-perf--stalls-begin)
        (should (memq #'drgnx-perf--stall-record nidhogg-watchdog-record-functions))
-       (funcall #'drgnx-perf--stall-record '(:wall-ms 120.0 :felt t))
+       (funcall #'drgnx-perf--stall-record '(:wall-ms 120.0 :felt t :signature "a.el:f" :culprit "f"))
        (funcall #'drgnx-perf--stall-record '(:wall-ms 40.0 :felt nil))
+       (should (equal (plist-get (car (last drgnx-perf--stalls)) :signature) "a.el:f"))
        (let ((r (drgnx-perf--stalls-end)))
          (should (= drains 2))                  ; at the start and the end
+         (should-not resets)
          (should-not (memq #'drgnx-perf--stall-record nidhogg-watchdog-record-functions))
          (should (= (plist-get r :stalls) 2))
          (should (= (plist-get r :stalls-felt) 1))
          (should (= (plist-get r :stall-max-ms) 120.0))
-         (should (equal (plist-get r :watchdog) '(:missed 2 :monitor-cpu-ms 3.5 :drain-p95-ms 1.3))))))
+         (let ((w (plist-get r :watchdog)))
+           (should (= (plist-get w :missed) 2))
+           (should (= (plist-get w :monitor-cpu-ms) 3.5))
+           (should (= (plist-get w :spans) 200))
+           (should (= (plist-get w :drain-p95-ms) 1000.0)) ; the histogram delta [4 0 0 0 0 0 0 1 0]
+           (should (= (plist-get w :drain-max-ms) 1000.0))))))
    (should (equal (drgnx-perf--gc-row '(10.0 30.0 20.0)) '(:count 3 :max 30.0 :p95 30.0)))
    (should (equal (plist-get (drgnx-perf--typing-row '(5 10 20 30)) :ge16) 50.0))))
 

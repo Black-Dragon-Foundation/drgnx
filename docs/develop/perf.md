@@ -342,7 +342,12 @@ every line, with the machine: `(:synthetic t :composition SHA :machine HOST)`).
 - **Steady**, until MIN minutes (default 30) have passed: rounds of `drgnx-perf-day-workloads` (`typing`, `scrolling`,
   `tabs`, `explorer`, `code-scrolling`, `diff-scrolling`, `replace-typing`, `replace-retype`, `window-switch`,
   `transcript-replay`), their order shuffled per round from the fixed seed. After each round: RSS and the live heap
-  (`drgnx-perf-heap-mb`, after a collection), and the number of collections.
+  (`drgnx-perf-heap-mb`, after a collection), and the number of collections. With the watchdog on, the day also reads its cumulative counters
+  (never reset) at the start, after build-up and after each round, and prints per phase and per round: the monitor's CPU
+  as a percent of the wall, the drain's p95 and largest bucket, missed against samples, and the stalls with felt and
+  the most frequent signatures. The closing line says whether `drgnx-watchdog-mode` is on and whether the preloaded
+  Lisp is natively compiled. Each workload's own stalls and `:watchdog` numbers are kept per round in the results
+  JSON (`:workload_watchdog`), with the interval's numbers under `:watchdog`.
 - **`transcript-replay`** is `agent-stream` with no agent: a session with no process whose transcript is fed from
   `transcript.eld` by a timer, one `drgnx-agents--append-text` and `drgnx-agents--changed` per recorded chunk at the
   recorded delay, while keys are typed in the editor window beside it. It runs in the container, which `agent-stream`
@@ -510,12 +515,16 @@ compositor, the first frame, fonts); drgnx's own init is ~220 ms in batch and ~2
 On a Nidhogg with `nidhogg-watchdog` the perf lab reads the watchdog per workload. `drgnx-perf-begin` drains it
 (`nidhogg-watchdog-drain-now`) and collects its records through `nidhogg-watchdog-record-functions`; `drgnx-perf-end`
 drains again and reports `(:stalls N :stalls-felt N :stall-max-ms F :gc (:count N :max F :p95 F) :typing (:ge16 F :p95 F)
-:watchdog (:missed N :monitor-cpu-ms F :drain-p95-ms F))`. `:typing :ge16` is the percent of commands at 16 ms or more.
+:watchdog (:missed N :spans N :monitor-cpu-ms F :drain-p95-ms F :drain-max-ms F))`. The watchdog's counters are never reset:
+the probe snapshots them at the start and reports the difference (a reset would zero the totals the day reads and the
+deltas of the watchdog's own summary lines). Each stall it keeps carries its wall time, felt, signature and culprit. `:typing :ge16` is the percent of commands at 16 ms or more.
 Without the feature the probe reports `:watchdog nil` and no stalls row is judged. The soak also prints `(:heap :live_mb
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 
 **The switch.** `DRGNX_PERF_WATCHDOG` is read once when a session records: unset or `default` runs
-`nidhogg-watchdog-mode` at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off.
+the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off. The switch is
+`drgnx-watchdog-mode`, so `off` also stops the doctor's record hook and idle timer; the synthetic day applies it as the
+session starts, before build-up.
 
 **Budgets.** `(W (:stalls) 0)`, `(W (:gc :max) 250)` and `(W (:gc :p95) 50)` for every input workload. They are
 reported until seeded (`drgnx-perf-watchdog-gated`), as every new row is. The GC max is skipped when the workload
