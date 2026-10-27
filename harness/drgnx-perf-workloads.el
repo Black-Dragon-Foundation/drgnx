@@ -68,6 +68,7 @@ whatever they found)."
         :setup ,(drgnx-perf-workers--form
                  (format "(drgnx-perf-w-lsp-setup '(\"LSP_REPLAY_COMPLETION_SIZES=%s\"))" drgnx-perf-workers-lsp-sizes))
         :each ,(concat "(progn " visit " (drgnx-perf-w-lsp-burst-each) t)")
+        :timers t
         :actions ,code
         :complete-when "(drgnx-perf-w-lsp-burst-done)"
         :digest "(drgnx-perf-w-lsp-burst-digest)"
@@ -78,6 +79,7 @@ whatever they found)."
        (lsp-typing
         :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-lsp-setup '(\"LSP_REPLAY_FLOOD=100\"))")
         :each ,(concat "(progn " visit " (drgnx-perf-w-lsp-typing-each) t)")
+        :timers t
         :actions ,code
         :complete-when "(drgnx-perf-w-lsp-typing-done)"
         :digest "(drgnx-perf-w-lsp-typing-digest)"
@@ -124,6 +126,7 @@ whatever they found)."
        (compile-flood
         :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-compile-setup)")
         :each ,(concat "(progn " visit " (drgnx-perf-w-compile-each))")
+        :timers t
         :actions ,code
         :complete-when "(drgnx-perf-w-compile-done)"
         :digest "(drgnx-perf-w-compile-digest)"
@@ -176,6 +179,34 @@ whatever they found)."
         :digest "(drgnx-perf-w-autosave-digest)"
         :check "(drgnx-perf-w-autosave-done)"
         :teardown "(drgnx-perf-w-autosave-teardown)")))))
+
+;;;; The calibration rows (report-only, never failing)
+
+(defconst drgnx-perf-cal-rows
+  '((cal-costs :workloads (ts-open ts-typing ts-paste image-open) :keys (:costs :decisions :policy))
+    (cal-pressure :workloads (ts-typing live-view) :keys (:pressure))
+    (cal-pty :workloads (terminal-output) :keys (:ahead)))
+  "The calibration rows: (ROW :workloads W… :keys K…).  A row reads the `:cal' record of each of its workloads in a
+run (`drgnx-perf-cal-lines'): `cal-costs' the costs and the decisions against `nidhogg-workers--policy' (ts open,
+typing and paste, image open), `cal-pressure' the pressure on the tree-sitter and live-view workloads (starts/s, mean
+and max frames), `cal-pty' the pty read-ahead (`:ahead' p50 and max) under terminal-output's `seq'.  They report the
+numbers the thresholds are calibrated from; nothing here fails a run.")
+
+(defun drgnx-perf-cal-lines (results)
+  "Report lines for `drgnx-perf-cal-rows' over RESULTS ((WORKLOAD . PLIST)…): one per row and workload that ran, each
+key as the probe's value, or `n/a (Task 55/57)' for a key the Nidhogg build does not have."
+  (let (out)
+    (pcase-dolist (`(,row . ,spec) drgnx-perf-cal-rows)
+      (dolist (w (plist-get spec :workloads))
+        (when-let* ((r (assq w results)) ((not (plist-get (cdr r) :error))))
+          (let ((cal (plist-get (cdr r) :cal)))
+            (push (format "%s %s: %s" row w
+                          (mapconcat (lambda (k)
+                                       (format "%s %s" (substring (symbol-name k) 1)
+                                               (if (plist-member cal k) (format "%S" (plist-get cal k)) "n/a (Task 55/57)")))
+                                     (plist-get spec :keys) ", "))
+                  out)))))
+    (nreverse out)))
 
 (provide 'drgnx-perf-workloads)
 ;;; drgnx-perf-workloads.el ends here

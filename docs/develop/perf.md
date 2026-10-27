@@ -218,7 +218,8 @@ T = max(1 ms, 10 % of REF's median value); `not comparable` when a side lacks th
 
 `--ab REF` still judges the median only and also prints the p95 verdict (T = 1 ms). `--ab-env` prints, per workload,
 the median verdict, the p95 verdict at T = 1 ms and, when the runs carry it, the probe verdict on
-`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3. It also judges the judged
+`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3, and an A/A that fails
+(see "An A/A before every A/B") is exit 4. It also judges the judged
 side's `:compose` budget rows (the median of the value over its rounds) at n >= 100, n being `(:compose :count)` summed
 over its rounds.
 
@@ -503,7 +504,7 @@ On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without
 
 **The probe.** `drgnx-perf-begin` resets `nidhogg-workers-stats`, `drgnx-perf-end` reports
 `:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase (`worker-wait` as its total
-and as `worker-wait-REASON` per reason, so the A/B judges it like the other phases), the main thread's waits for a
+and as `worker-wait-REASON` per reason; the A/B explains with them, see below), the main thread's waits for a
 worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
 `:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
 `DRGNX_PERF_WATCHDOG=16`, the threshold the gates' A/Bs run with, or `on`).
@@ -520,11 +521,36 @@ as `:digest`.
 row is judged like any other, wall-clock paths included.
 
 **The A/B verdict.** Besides the wall samples, p95 and the compose probe, each judged workload prints a verdict for
-per-command input p95, p99 and max, `:cpu_ms` p50 and p90, stalls of 16 and of 100 ms or more, `:complete-ms` and each
-worker phase's ms (a phase value is the run's total, so the statistic over the rounds is the median of the per-round
-differences; same rule: not worse unless the whole 95 % interval is above max (1 ms, 10 % of the REF median)). A path
-a side does not report is left out. A workload whose `:digest` differs between the sides is `regressed (digest)`.
-`--ab-env` counts all of these in the exit code (3 stays "inconclusive").
+per-command input p50, p95, p99 and max, `:cpu_ms` p50 and p90, `:busy-ms` p50 and p95 (the main thread's busy time
+per command: its latency plus the timers that ran after the screen showed it, up to the next command), `:timer-ms` p95
+(the ms the timers took under each command; only the `:timers t` rows: `terminal-output`, `compile-flood`, `lsp-burst`,
+`lsp-typing`), stalls of 16 and of 100 ms or more, and `:complete-ms` (the statistic over the rounds is the median of
+the per-round differences; same rule: not worse unless the whole 95 % interval is above max (1 ms, 10 % of the REF
+median)). A path a side does not report is left out. A workload whose `:digest` differs between the sides is
+`regressed (digest)`. `--ab-env` counts all of these in the exit code (3 stays "inconclusive").
+
+**Worker phases explain, they do not decide.** A phase's ms (`:workers :phase-ms`) gets no verdict: moving work to a
+worker is meant to move time between phases, and the verdict is what the user feels (input, busy, timers, stalls). The
+A/B prints an explain block under each workload with every phase's REF and tree value. What the lab does check is that
+the phases add up (`drgnx-perf-ab-phase-sum`, printed on every A/B as `phase-sum ok` or `MISMATCH`): per arm the sum
+of the phases (`worker-wait-REASON` entries repeat `worker-wait` and are left out) must not exceed `(:busy-ms :sum)` by
+more than 1 ms, and across the arms the busy time's difference must equal the phases' sum's difference within
+max (1 ms, 10 %). The check works on the run's totals (the sum of the per-command values).
+
+**An A/A before every A/B.** With `--ab-env` each selected workload first runs against itself (`--aa`, the default;
+`--no-aa` skips it, for debugging): the same session on the REF side, the same rounds, the same verdicts, read both
+ways (REF minus REF, and the sides swapped). A workload whose deciding verdicts (median, p95, compose probe, every
+metric above) are not "not worse" both ways, whose digests differ, or whose phase-sum check fails, is refused: no A/B
+round for it, `A/A failed` with the reasons, and the exit code is 4 (it comes before 1 and 3). A noisy machine or a
+probe that counts a phase twice shows up here, as a refused run, instead of as a verdict about the change. An A/A that
+is not judged for its own reasons (a loaded calibration, a workload without per-command samples) is left to the A/B,
+which reports the same. The A/A doubles a workload's lab time.
+
+**The calibration rows** (report-only, never failing; printed as `report cal-ROW WORKLOAD: KEY value, …` by plain
+`--perf`; a key the Nidhogg build does not report prints `n/a (Task 55/57)`): `cal-costs` (`:costs` and `:decisions`
+against `(nidhogg-workers--policy)` for `ts-open`, `ts-typing`, `ts-paste` and `image-open`), `cal-pressure` (`:pressure`:
+starts per second, mean and max frames, from `ts-typing` and `live-view`) and `cal-pty` (`terminal-output`'s `:ahead`
+p50 and max, sampled per command from `nidhogg-workers--test-io-info`). They come from the probe's `:cal` record.
 
 **Machine shape.** `DRGNX_PERF_CPUS=2|4` runs `bin/drgnx test --container` with `--cpuset-cpus` set to one thread of
 each of the first 2 or 4 physical cores, read from `lscpu -p=CPU,CORE` (`drgnx-perf-cpuset-args`): `0,1` / `0,1,2,3`

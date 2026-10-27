@@ -45,10 +45,13 @@
                              'worker-wait (drgnx-perf--round 203.25) 'worker-wait-display (drgnx-perf--round 200.25)
                              'worker-wait-image-pixels (drgnx-perf--round 3.0) 'worker-wait-drain (drgnx-perf--round 0.0))))
         (should (equal (plist-get w :wait-ms) (drgnx-perf--round 205.25))))))
+  ;; a phase explains, it does not decide: no verdict for it, a line in the explain block
   (let* ((run (lambda (wait) (list :workers (list :phase-ms (list 'image 1.0 'worker-wait wait)) :input (list :p95 4.0))))
          (rounds (cl-loop for i below 8 collect (list :a (funcall run 0.0) :b (funcall run (+ 200.0 i)))))
          (vs (drgnx-perf-ab-metric-verdicts rounds)))
-    (should (eq (plist-get (cdr (assoc '(:workers :phase-ms worker-wait) vs)) :verdict) 'regressed))))
+    (should-not (assoc '(:workers :phase-ms worker-wait) vs))
+    (should (equal (assq 'worker-wait (drgnx-perf-ab-phase-explain (funcall run 0.0) (funcall run 200.0)))
+                   '(worker-wait 0.0 200.0)))))
 
 (ert-deftest drgnx-perf-workers/report-only-row ()
   (let ((results '((typing :alloc (:p50 20))))
@@ -118,15 +121,24 @@
                (list :digest-verdict (drgnx-perf-ab-digest-verdict (perf-workers-test--rounds '(:digest "x") '(:digest "y")))))))
     (should (string-match-p "regressed (digest)" line))))
 
-(ert-deftest drgnx-perf-workers/phase-ms-in-verdict ()
-  (let* ((run (lambda (wait) (list :workers (list :phase-ms (list :treesit-wait wait :json 5.0)) :input (list :p95 4.0))))
-         (rounds (cl-loop for i below 10 collect (list :a (funcall run (+ 2.0 (* 0.1 (% i 3)))) :b (funcall run (+ 5.0 (* 0.1 (% i 3)))))))
-         (vs (drgnx-perf-ab-metric-verdicts rounds)))
-    (should (eq (plist-get (cdr (assoc '(:workers :phase-ms :treesit-wait) vs)) :verdict) 'regressed))
-    (should (eq (plist-get (cdr (assoc '(:workers :phase-ms :json) vs)) :verdict) 'no-regression))
-    (should (eq (plist-get (cdr (assoc '(:input :p95) vs)) :verdict) 'no-regression))
-    ;; a path neither side reports is left out
-    (should-not (assoc '(:complete-ms) vs))))
+(ert-deftest drgnx-perf-workers/cal-rows-registered ()
+  (should (equal (mapcar #'car drgnx-perf-cal-rows) '(cal-costs cal-pressure cal-pty)))
+  ;; every row reads workloads the lab has
+  (let ((ws (drgnx-perf-run--workloads)))
+    (dolist (row drgnx-perf-cal-rows)
+      (dolist (w (plist-get (cdr row) :workloads)) (should (assq w ws)))))
+  ;; the rows with a timers flag record the timers' ms per command
+  (let ((ws (drgnx-perf-run--workloads)))
+    (dolist (w '(terminal-output compile-flood lsp-burst lsp-typing)) (should (plist-get (cdr (assq w ws)) :timers))))
+  (should (string-match-p "(drgnx-perf-begin t)" (drgnx-perf-run--begin-form '(:timers t))))
+  (should-not (string-match-p "(drgnx-perf-begin t)" (drgnx-perf-run--begin-form '(:actions nil))))
+  ;; a key the Nidhogg build lacks prints n/a; one it has prints its value; a workload that did not run has no line
+  (let ((lines (drgnx-perf-cal-lines '((ts-open :cal (:costs (:parse 3)))
+                                       (terminal-output :cal (:ahead (:p50 4096 :max 16384)))
+                                       (live-view :error "x")))))
+    (should (member "cal-costs ts-open: costs (:parse 3), decisions n/a (Task 55/57), policy n/a (Task 55/57)" lines))
+    (should (member "cal-pty terminal-output: ahead (:p50 4096 :max 16384)" lines))
+    (should (= (length lines) 2))))
 
 (ert-deftest drgnx-perf-workers/cpus-cpuset ()
   ;; a 7900X numbers the cores first (CPU n and n + 12 share a core); a 4900HS puts a core's threads side by side
