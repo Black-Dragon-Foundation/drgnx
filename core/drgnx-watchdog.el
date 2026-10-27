@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; Where the running Emacs is a Nidhogg built with the stall watchdog (`(featurep 'nidhogg-watchdog)'), drgnx turns
 ;; it on at start: the day files go to (drgnx-state-dir)/watchdog/, the typing commands are the ones whose latency
-;; counts as typing, and the package of a file is named by drgnx's owner map.  Only in an interactive Emacs, and
+;; counts as typing, and the package of a file is named by drgnx's owner map.  Only in an interactive Emacs (not in `drgnx safe'), and
 ;; only while the setting `drgnx-speed-watchdog' is on (the default).  `drgnx-watchdog-mode' is drgnx's side of
 ;; the switch: turning it off turns Nidhogg's mode off.  Without the feature nothing happens; the doctor's
 ;; `freezes' check says why (core/drgnx-watchdog-doctor.el).  The GC census stands down while the watchdog runs.
@@ -98,14 +98,14 @@ here would escape drgnx's init, so it is contained."
 
 (defun drgnx-watchdog--settings-apply ()
   "`drgnx-speed-watchdog' changed: the watchdog on or off now, when it is not that already."
-  (when (and (drgnx-watchdog-available-p) (not noninteractive))
+  (when (and (drgnx-watchdog-available-p) (not noninteractive) (not (getenv "DRGNX_SAFE")))
     (let ((want (and drgnx-speed-watchdog t)))
       (unless (eq (and drgnx-watchdog-mode t) want)
         (drgnx-watchdog-mode (if want 1 -1))))))
 
 (defun drgnx-watchdog-maybe-start ()
-  "Turn the watchdog on when this Emacs has it, is interactive and the setting is on; `drgnx-gc-setup' calls it."
-  (when (and (drgnx-watchdog-available-p) (not noninteractive) (drgnx-watchdog--wanted-p))
+  "Turn the watchdog on when this Emacs has it, is interactive, is not in safe mode and the setting is on; `drgnx-gc-setup' calls it."
+  (when (and (drgnx-watchdog-available-p) (not noninteractive) (not (getenv "DRGNX_SAFE")) (drgnx-watchdog--wanted-p))
     (drgnx-watchdog-mode 1)))
 
 (provide 'drgnx-watchdog)

@@ -76,7 +76,7 @@ If the watchdog cannot start (another library owns its signal, say), drgnx start
 `drgnx doctor` says "off: could not start" with the reason. A hang that ended with the session being killed is turned
 into a record at the next start, and noticed then; the doctor counts those from the last two days.
 
-It runs only in an interactive Emacs, never in a batch command. To turn it off, set `drgnx-speed-watchdog` to `nil`
+It runs only in an interactive Emacs, never in a batch command, and not in safe mode (`drgnx safe`), so safe mode rules it out. To turn it off, set `drgnx-speed-watchdog` to `nil`
 ([Settings](settings.md)); the change applies at once. In an Emacs without the watchdog the setting does nothing, and
 `drgnx doctor` says so.
 

@@ -118,3 +118,12 @@
                    (lambda (&optional _) (setq hooked (memq #'drgnx-watchdog-doctor-note nidhogg-watchdog-record-functions)))))
           (drgnx-watchdog-mode 1))
         (should hooked)))))
+
+(ert-deftest drgnx-watchdog/safe-mode-does-not-start-it ()
+  ;; `drgnx safe' is how a user rules the new C code out: neither the start at init nor the setting's apply runs it
+  (drgnx-watchdog-test--stubbed
+    (let ((process-environment (cons "DRGNX_SAFE=1" process-environment)))
+      (drgnx-watchdog-maybe-start)
+      (drgnx-watchdog--settings-apply))
+    (should-not drgnx-watchdog-mode)
+    (should-not calls)))
