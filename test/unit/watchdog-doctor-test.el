@@ -181,3 +181,29 @@
           (should (= reads 0))
           (should (= snapshots 1))
           (should (= 1 (length (drgnx-notices)))))))))
+
+(ert-deftest drgnx-watchdog/a-killed-hang-is-noticed-with-its-wall-time-and-its-own-key ()
+  ;; a record built from a hang file has :wall-ms and no :nongc-ms, and often no signature
+  (drgnx-notice-test-with-model
+    (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
+    (let ((drgnx-watchdog-doctor--noticed nil))
+      (drgnx-watchdog-doctor-note (list :killed t :wall-ms 5400.0 :culprit '(:pkg "pkg-a")))
+      (drgnx-watchdog-doctor-note (list :killed t :wall-ms 7000.0 :culprit '(:pkg "pkg-b")))
+      (drgnx-watchdog-doctor-note (list :killed t :wall-ms 7100.0 :culprit '(:pkg "pkg-b")))
+      (should (= 2 (length (drgnx-notices))))              ; one per kind of hang, not one for every killed hang
+      (should (cl-some (lambda (n) (string-match-p "hung for 5\\.4 s in pkg-a" (plist-get n :text))) (drgnx-notices))))))
+
+(ert-deftest drgnx-watchdog/freezes-counts-the-killed-hangs-of-yesterday ()
+  ;; a hang file collected at the next start is written under the day the hang began, which may be yesterday
+  (let* ((root (make-temp-file "drgnx-wd-killed" t))
+         (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
+         (features (cons 'nidhogg-watchdog features)) (nidhogg-watchdog-mode t))
+    (unwind-protect
+        (let ((dir (drgnx-watchdog-log-directory)))
+          (make-directory dir t)
+          (with-temp-file (expand-file-name (format-time-string "%F.jsonl" (time-subtract (current-time) 86400)) dir)
+            (insert (json-serialize '((type . "stall") (nongc_ms . 90) (killed . t))) "\n"))
+          (let ((w (drgnx-watchdog-doctor-facts)))
+            (should (= 1 (plist-get (plist-get w :today) :killed)))
+            (should (eq 'warn (car (drgnx-doctor-check 'freezes (list :watchdog w)))))))
+      (delete-directory root t))))

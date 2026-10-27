@@ -3,6 +3,10 @@
 (require 'drgnx-paths)
 (require 'drgnx-watchdog)
 (require 'drgnx-gc-census)
+(require 'drgnx-watchdog-doctor)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(defvar nidhogg-watchdog-record-functions)
 
 (defvar nidhogg-watchdog-mode)
 (defvar nidhogg-watchdog-log-directory)
@@ -14,7 +18,7 @@
 `calls' collects the arguments the stand-in mode was called with."
   (declare (indent 0) (debug t))
   `(let ((nidhogg-watchdog-mode nil) (nidhogg-watchdog-log-directory nil) (nidhogg-watchdog-typing-commands nil)
-         (nidhogg-watchdog-package-functions nil) (drgnx-watchdog-mode nil) (drgnx-speed-watchdog t)
+         (nidhogg-watchdog-package-functions nil) (nidhogg-watchdog-record-functions nil) (drgnx-watchdog-mode nil) (drgnx-speed-watchdog t)
          (noninteractive nil) (calls nil))
      (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
                 (lambda (&optional arg) (push arg calls) (setq nidhogg-watchdog-mode (and arg (> arg 0)))))
@@ -88,3 +92,29 @@
     (setq nidhogg-watchdog-mode nil)
     (drgnx-gc-census--note)
     (should (= 1 drgnx-gc-census--count))))
+
+(ert-deftest drgnx-watchdog/a-failed-start-is-contained ()
+  ;; any error out of the start (another library claimed SIGURG, the thread would not start, …) must not escape init:
+  ;; the mode is off, one notice says why, and the doctor can say it
+  (drgnx-notice-test-with-model
+    (drgnx-watchdog-test--stubbed
+      (cl-letf (((symbol-function 'nidhogg-watchdog-mode) (lambda (&optional _) (error "Another library owns SIGURG"))))
+        (drgnx-watchdog-mode 1))
+      (should-not drgnx-watchdog-mode)
+      (should (string-match-p "SIGURG" drgnx-watchdog-start-error))
+      (should (= 1 (length (drgnx-notices))))
+      (should (eq (plist-get (car (drgnx-notices)) :source) 'watchdog))
+      (should-not (memq #'drgnx-watchdog-doctor-note nidhogg-watchdog-record-functions))
+      (should (string-match-p "could not start: Another library owns SIGURG"
+                              (nth 1 (drgnx-doctor-check 'freezes (list :watchdog (list :running nil :start-error drgnx-watchdog-start-error)))))))))
+
+(ert-deftest drgnx-watchdog/the-record-hook-is-in-place-before-the-mode-starts ()
+  ;; the mode turns hang files from an earlier session into records while it starts; the notice for a killed hang
+  ;; reaches `drgnx-watchdog-doctor-note' only when that hook is already on
+  (drgnx-notice-test-with-model
+    (drgnx-watchdog-test--stubbed
+      (let ((hooked nil))
+        (cl-letf (((symbol-function 'nidhogg-watchdog-mode)
+                   (lambda (&optional _) (setq hooked (memq #'drgnx-watchdog-doctor-note nidhogg-watchdog-record-functions)))))
+          (drgnx-watchdog-mode 1))
+        (should hooked)))))

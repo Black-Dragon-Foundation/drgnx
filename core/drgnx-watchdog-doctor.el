@@ -26,6 +26,7 @@
 (defvar nidhogg-watchdog-record-functions)
 (defvar nidhogg-watchdog-log-directory)
 (defvar nidhogg-watchdog-mode)
+(defvar drgnx-watchdog-start-error)
 (defvar drgnx-heap-budgets)
 (declare-function nidhogg-watchdog-gc-row "nidhogg-watchdog-gc")
 (declare-function drgnx-heap-check "drgnx-heap")
@@ -127,6 +128,13 @@ session wrote it; this process's heap says nothing about that session (`drgnx do
   (when-let* ((a (file-attributes file)))
     (< (float-time (time-since (file-attribute-modification-time a))) drgnx-watchdog-doctor-recent-s)))
 
+(defun drgnx-watchdog-doctor--killed-yesterday (dir)
+  "The killed hangs in yesterday's day file in DIR.  A hang file collected at the next start is written under the day
+the hang began."
+  (let ((file (expand-file-name (format-time-string "%F.jsonl" (time-subtract (current-time) 86400)) dir)))
+    (seq-count (lambda (l) (and (equal (alist-get 'type l) "stall") (alist-get 'killed l)))
+               (drgnx-watchdog-doctor--read-day file))))
+
 (defun drgnx-watchdog-doctor-facts ()
   "The `:watchdog' fact: nil without the watchdog in this Emacs, else (:running BOOL :wanted BOOL :today SUMMARY :gc ROW
 :heap HEAP :largest OWNER), read from the day files.  `drgnx doctor' is a batch Emacs, so :running is the setting
@@ -144,7 +152,9 @@ watchdog's session recorded.  Never signals."
           (list :running (or (bound-and-true-p nidhogg-watchdog-mode)
                              (and wanted (drgnx-watchdog-doctor--recent-p file) t))
                 :wanted wanted
-                :today (drgnx-watchdog-doctor--summarize lines)
+                :start-error (bound-and-true-p drgnx-watchdog-start-error)
+                :today (let ((s (drgnx-watchdog-doctor--summarize lines)))
+                         (plist-put s :killed (+ (plist-get s :killed) (drgnx-watchdog-doctor--killed-yesterday dir))))
                 :gc gc
                 :heap (drgnx-watchdog-doctor--heap (or (drgnx-watchdog-doctor--live-mb lines)
                                                        (plist-get (plist-get (plist-get gc :week) :heap) :live_mb)))
@@ -161,6 +171,9 @@ watchdog's session recorded.  Never signals."
     (cond
      ((null w) (list 'info "the watchdog needs Nidhogg 31.1-nidhogg.N or newer" drgnx-watchdog-doctor-update-fix))
      ((plist-get w :error) (list 'info (format "the watchdog's day could not be read: %s" (plist-get w :error)) nil))
+     ((and (not (plist-get w :running)) (plist-get w :start-error))
+      (list 'info (format "off: could not start: %s" (plist-get w :start-error))
+            "set drgnx-speed-watchdog to nil to stop this notice, or update Nidhogg (docs/guide/speed.md)"))
      ((and (not (plist-get w :running)) (plist-get w :wanted))
       (list 'info "no recent watchdog record (is drgnx running?)"
             "start drgnx: the watchdog writes a summary every ten minutes (docs/guide/speed.md)"))
@@ -249,13 +262,15 @@ watchdog's session recorded.  Never signals."
 (defun drgnx-watchdog-doctor-note (record)
   "Notice the stall RECORD (a plist, from `nidhogg-watchdog-record-functions') once per signature per day: only a
 felt stall of 1 s or more, or a killed hang.  Numbers and one `drgnx-notify'; never prompts."
-  (let ((ms (or (plist-get record :nongc-ms) 0)))
+  (let ((ms (or (and (plist-get record :killed) (plist-get record :wall-ms)) (plist-get record :nongc-ms) 0)))
     (when (or (plist-get record :killed)
               (and (plist-get record :felt) (>= ms drgnx-watchdog-doctor-felt-warn-ms)))
       (let* ((day (format-time-string "%F"))
              (culprit (plist-get record :culprit))
-             (sig (or (plist-get record :signature) (plist-get culprit :pkg) "unsampled"))
-             (pkg (or (and (consp culprit) (or (plist-get culprit :pkg) (alist-get 'pkg culprit))) "unsampled")))
+             (pkg (or (and (consp culprit) (or (plist-get culprit :pkg) (alist-get 'pkg culprit))) "unsampled"))
+             ;; a killed hang from a hang file may carry no signature: it is keyed by where it hung, apart from live stalls
+             (sig (or (plist-get record :signature)
+                      (if (plist-get record :killed) (concat "killed:" pkg) (or (plist-get culprit :pkg) "unsampled")))))
         (unless (equal (car drgnx-watchdog-doctor--noticed) day)
           (setq drgnx-watchdog-doctor--noticed (list day)))
         (unless (member sig (cdr drgnx-watchdog-doctor--noticed))

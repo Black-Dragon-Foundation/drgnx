@@ -24,6 +24,7 @@
 (declare-function nidhogg-watchdog-mode "nidhogg-watchdog")
 (declare-function drgnx-watchdog-doctor-start "drgnx-watchdog-doctor")
 (declare-function drgnx-watchdog-doctor-stop "drgnx-watchdog-doctor")
+(declare-function drgnx-notify "drgnx-notice")
 
 (defconst drgnx-watchdog-typing-commands
   '(self-insert-command delete-backward-char delete-char backward-delete-char-untabify newline)
@@ -33,6 +34,8 @@
   "Evil's insert-state equivalents of the typing commands; added when evil is loaded.")
 
 (defvar drgnx-watchdog-mode)
+(defvar drgnx-watchdog-start-error nil
+  "The message of the error that stopped the last start of the watchdog, or nil (the doctor's `freezes' says it).")
 
 (drgnx-defsetting drgnx-speed-watchdog t
   "Non-nil: run Nidhogg's stall watchdog (Help → Show Freezes) when this Emacs has it.
@@ -69,11 +72,29 @@ Does nothing in an Emacs without the watchdog.  Turning it off turns Nidhogg's m
          (setq nidhogg-watchdog-log-directory (drgnx-watchdog-log-directory)
                nidhogg-watchdog-typing-commands (drgnx-watchdog-typing-commands))
          (add-hook 'nidhogg-watchdog-package-functions #'drgnx-watchdog-package-of)
-         (nidhogg-watchdog-mode 1)
-         (when (require 'drgnx-watchdog-doctor nil t) (drgnx-watchdog-doctor-start)))
+         (condition-case err
+             (progn
+               ;; the record hook first: Nidhogg's mode turns the hang files of an earlier session into records as it
+               ;; starts, and the notice for a killed hang needs the hook to be there
+               (when (require 'drgnx-watchdog-doctor nil t) (drgnx-watchdog-doctor-start))
+               (nidhogg-watchdog-mode 1)
+               (setq drgnx-watchdog-start-error nil))
+           (error (drgnx-watchdog--start-failed err))))
         (t (remove-hook 'nidhogg-watchdog-package-functions #'drgnx-watchdog-package-of)
            (when (featurep 'drgnx-watchdog-doctor) (drgnx-watchdog-doctor-stop))
            (nidhogg-watchdog-mode -1))))
+
+(defun drgnx-watchdog--start-failed (err)
+  "The start failed with ERR: leave the mode off and the doctor's hook and timer undone, and say why once.  An error
+here would escape drgnx's init, so it is contained."
+  (setq drgnx-watchdog-mode nil
+        drgnx-watchdog-start-error (error-message-string err))
+  (remove-hook 'nidhogg-watchdog-package-functions #'drgnx-watchdog-package-of)
+  (when (featurep 'drgnx-watchdog-doctor) (ignore-errors (drgnx-watchdog-doctor-stop)))
+  (ignore-errors (nidhogg-watchdog-mode -1))
+  (ignore-errors
+    (drgnx-notify 'watchdog 'warn (format "The stall watchdog could not start: %s" drgnx-watchdog-start-error)
+                  :id 'start :command 'freezes :fix "Set drgnx-speed-watchdog to nil to turn it off; docs/guide/speed.md")))
 
 (defun drgnx-watchdog--settings-apply ()
   "`drgnx-speed-watchdog' changed: the watchdog on or off now, when it is not that already."
