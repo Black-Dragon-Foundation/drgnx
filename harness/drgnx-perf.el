@@ -304,13 +304,19 @@ own calls after the keys do not end one, so work that finished later in the paus
 
 (defvar drgnx-perf--timer-key nil "Non-nil while recording a `:timers t' row: `drgnx-perf-end' reports `:timer-ms'.")
 
+(defun drgnx-perf--decisions-json (decisions)
+  "Nidhogg's :decisions (((AREA OUTCOME REASON) . N) ...) as a vector of strings \"AREA OUTCOME REASON N\": the session
+sends its result as JSON, which takes neither dotted pairs, lists nor symbols."
+  (vconcat (mapcar (lambda (d) (format "%s %s" (mapconcat #'symbol-name (car d) " ") (cdr d))) decisions)))
+
 (defun drgnx-perf--cal-end ()
   "(:cal PLIST) for the calibration rows, or nil without a key to report: `:costs', `:decisions' and `:pressure' as
 `nidhogg-workers-stats' gives them, `:policy' from `nidhogg-workers--policy', `:ahead' (:p50 :max) from the samples of
 the terminal's pty read-ahead.  A key the Nidhogg build lacks is left out (the report prints `n/a')."
   (let (out (s (and (featurep 'nidhogg-workers) (fboundp 'nidhogg-workers-stats) (nidhogg-workers-stats))))
     (dolist (k '(:costs :decisions :pressure))
-      (when (plist-member s k) (setq out (append out (list k (plist-get s k))))))
+      (when (plist-member s k)
+        (setq out (append out (list k (if (eq k :decisions) (drgnx-perf--decisions-json (plist-get s k)) (plist-get s k)))))))
     (when (fboundp 'nidhogg-workers--policy)
       (setq out (append out (list :policy (nidhogg-workers--policy)))))
     (when drgnx-perf--ahead

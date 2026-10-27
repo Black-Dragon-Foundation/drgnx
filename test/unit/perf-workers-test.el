@@ -401,6 +401,12 @@ period, so work finishing later in the pause after the keys was never seen."
             (should (equal (plist-get (plist-get (plist-get doc :results) :ts-typing) :order) ["a" "b" "b" "a"]))))
       (delete-file file))))
 
+(ert-deftest drgnx-perf-workers/decisions-serialize-in-the-session ()
+  ;; The session's reply is `json-serialize'd: the decision alist failed it ("symbolp, (ts inline estimate)").
+  (let ((d (drgnx-perf--decisions-json '(((ts inline estimate) . 3) ((image offload cost) . 1)))))
+    (should (equal d ["ts inline estimate 3" "image offload cost 1"]))
+    (should (json-serialize (list :cal (list :decisions d))))))
+
 (ert-deftest drgnx-perf-workers/results-json-takes-decision-counts ()
   ;; The calibration record's :decisions is an alist (((AREA OUTCOME REASON) . N) ...): dotted pairs and symbols.
   (let ((file (make-temp-file "perf-workers-json" nil ".json")))
