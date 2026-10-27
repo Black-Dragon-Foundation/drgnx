@@ -96,3 +96,18 @@ how serious it is.
 The watchdog also posts a notice (source *Freezes*, a warning, not echoed) for a stall you felt of a second or more
 or a killed hang, at most once per kind of stall per day, and one for the GC at most once a day. Each opens Show
 Freezes (or the Heap Audit).
+
+## Show Freezes
+
+**Help → Show Freezes** (or the palette) lists what the watchdog found, worst first, over the days it keeps. At the top
+is the **GC row**: how many collections, how many you felt, the longest and the total, whether the week meets its
+target, and, once you have run a Heap Audit, its largest owner. Below it, one row per package: how many stalls, how many
+you **felt** (the felt column: they came while you typed or waited on Emacs), the time in all and the longest, each kind of
+stall (its signature) and the call tree, the busiest branches first.
+
+Each package row has buttons: **Source** (the package's library, or its folder), **Homepage** (when the package
+names one) and **Module** (the drgnx module that enables it; the modules list lets you turn it off). The header has
+**Copy report**, which puts the names, durations, call stacks and the Nidhogg version on the clipboard, with no file
+path, ready to paste into a bug report, and **Sample the next freeze in depth**, which makes the watchdog keep a
+longer stack for the next stall; a notice tells you when that record is in. The GC row has **Run a heap audit** (it
+asks first, see [Heap Audit](#heap-audit)) and **Show collections** (the GC census report). `g` draws the page again.
