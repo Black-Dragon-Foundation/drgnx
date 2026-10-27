@@ -65,11 +65,12 @@ contains, and only you can read it (mode 0600). Audits on different days can be 
 
 When drgnx runs on a Nidhogg built with the stall watchdog, it turns the watchdog on at every start; there is
 nothing to install and nothing to switch on. The watchdog times every busy span of Emacs and, when one lasts 100 ms or
-more, notes what it was doing: the command, the Lisp function and file at the bottom of the stack and the package
-that owns them. It writes one line per stall into the same `watchdog/` folder of drgnx's state folder as the census
+more, notes what it was doing: the command, the sampled stack, and the culprit: the innermost frame that is not Emacs's own
+code and was present in at least half of the samples taken outside garbage collection, with the package that owns it. It writes one line per stall into the same `watchdog/` folder of drgnx's state folder as the census
 (`YYYY-MM-DD.jsonl`, files older than 14 days are deleted), while the census stops writing. The typing commands
-(`self-insert-command`, the delete commands, `newline`, and Evil's insert-state ones when Evil is loaded) are marked, so a
-stall during typing is told apart from one while you were idle. A file's package is named by drgnx's own owner map
+(`self-insert-command`, the delete commands, `newline`, and Evil's insert-state ones when Evil is loaded) feed a per-command typing-latency
+histogram (the share of typing commands that took 16 ms or more). Whether you felt a stall comes from the input and
+commands the watchdog recorded around it. A file's package is named by drgnx's own owner map
 (your packages, drgnx's modules, Emacs itself).
 
 If the watchdog cannot start (another library owns its signal, say), drgnx starts anyway, posts one notice, and
@@ -88,7 +89,7 @@ how serious it is.
 - **freezes** judges today's stalls by the time Emacs was busy not counting garbage collection, against 100 ms. It is
   `ok` when there was none (and says how many of your typing commands took 16 ms or more). It is `info` when there were
   some but all under 250 ms and none you felt, with the counts and the three packages with most stalls. It is `warn`
-  for a stall you felt of a second or more, a package with ten or more stalls, or a hang the watchdog had to kill, and
+  for a stall you felt of a second or more, a package with ten or more stalls, or a hang that ended with the session being killed (the watchdog never kills anything), and
   the fix line names the package, the drgnx module that enables it, how often it stalled, how long in all and how many
   you felt: open **Help → Show Freezes**. In an Emacs without the watchdog it is `info` and says to update Nidhogg
   (`drgnx update`).
