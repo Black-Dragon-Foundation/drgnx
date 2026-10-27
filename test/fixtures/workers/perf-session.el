@@ -134,20 +134,28 @@
         (drgnx-perf-w--stat :draw_ms (max (or (plist-get drgnx-perf-w--stats :draw_ms) 0) (drgnx-perf-w--ms visited)))
         (drgnx-perf-w--ts-await key visited t0)))))
 
-(defun drgnx-perf-w--ts-await (key visited t0)
-  "Poll until the other window shows colour (at most 5 s), then record and go on to the next file."
-  (if (or (drgnx-perf-w--colored-p drgnx-perf-w--other-window) (> (- (float-time) visited) 5))
-      (progn
-        (drgnx-perf-w--stat :colored_ms (max (or (plist-get drgnx-perf-w--stats :colored_ms) 0) (drgnx-perf-w--ms visited)))
-        (drgnx-perf-w--stat :visit_ms (max (or (plist-get drgnx-perf-w--stats :visit_ms) 0)
-                                           (drgnx-perf-w--ms t0)))
-        (push (cons key (drgnx-perf-w--visible-digest drgnx-perf-w--other-window)) drgnx-perf-w--ts-digests)
-        (let ((buf (window-buffer drgnx-perf-w--other-window)))
-          (set-window-buffer drgnx-perf-w--other-window (get-buffer-create "*scratch*"))
-          (with-current-buffer buf (set-buffer-modified-p nil))
-          (kill-buffer buf))
-        (run-with-timer 0 nil #'drgnx-perf-w--ts-open-next))
-    (run-with-timer 0.01 nil #'drgnx-perf-w--ts-await key visited t0)))
+(defun drgnx-perf-w--ts-await (key visited t0 &optional colored)
+  "Poll until the other window shows colour (at most 5 s), then record and go on to the next file.
+The latency stats are taken at the first colour (COLORED is when that was seen), but the digest waits for the colour to
+settle (`drgnx-perf-w--ts-settled-p', at most 5 s more): with the workers' deferral a deferred chunk counts as
+fontified while still plain, so a digest at first colour can catch a half-coloured window."
+  (let ((now (float-time)))
+    (when (and (not colored)
+               (or (drgnx-perf-w--colored-p drgnx-perf-w--other-window) (> (- now visited) 5)))
+      (setq colored now)
+      (drgnx-perf-w--stat :colored_ms (max (or (plist-get drgnx-perf-w--stats :colored_ms) 0) (drgnx-perf-w--ms visited)))
+      (drgnx-perf-w--stat :visit_ms (max (or (plist-get drgnx-perf-w--stats :visit_ms) 0)
+                                         (drgnx-perf-w--ms t0))))
+    (if (and colored
+             (or (drgnx-perf-w--ts-settled-p drgnx-perf-w--other-window) (> (- now colored) 5)))
+        (progn
+          (push (cons key (drgnx-perf-w--visible-digest drgnx-perf-w--other-window)) drgnx-perf-w--ts-digests)
+          (let ((buf (window-buffer drgnx-perf-w--other-window)))
+            (set-window-buffer drgnx-perf-w--other-window (get-buffer-create "*scratch*"))
+            (with-current-buffer buf (set-buffer-modified-p nil))
+            (kill-buffer buf))
+          (run-with-timer 0 nil #'drgnx-perf-w--ts-open-next))
+      (run-with-timer 0.01 nil #'drgnx-perf-w--ts-await key visited t0 colored))))
 
 (defun drgnx-perf-w-ts-open-done () drgnx-perf-w--ts-finished)
 (defun drgnx-perf-w-ts-open-digest () (format "%S" (reverse drgnx-perf-w--ts-digests)))

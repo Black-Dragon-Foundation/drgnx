@@ -299,6 +299,33 @@ parse job and no deferred region for the buffer, and jit-lock's contextual refon
               (should (drgnx-perf-w-ts-edit-done 3)))))
       (kill-buffer buf))))
 
+(ert-deftest drgnx-perf-workers/ts-open-digest-waits-for-deferred-chunk ()
+  "ts-open takes its digest only once the window's colour has settled: while a deferred chunk still waits for its
+parse the window shows colour (first-colour latency is recorded) but no digest is taken; after the landing it is."
+  (perf-workers-test--session)
+  (let ((buf (generate-new-buffer " perf-ts-open")) (timers 0)
+        (drgnx-perf-w--ts-digests nil) (drgnx-perf-w--stats nil) (drgnx-perf-w--ts-queue nil))
+    (unwind-protect
+        (save-window-excursion
+          (setq drgnx-perf-w--other-window (selected-window))
+          (set-window-buffer (selected-window) buf)
+          (with-current-buffer buf
+            (insert "int x;\n")
+            (setq-local jit-lock-context-unfontify-pos (point-max))
+            ;; a chunk deferred and still plain: it counts as fontified
+            (setq-local nidhogg-workers-treesit--pending (list (cons 1 2))))
+          (cl-letf (((symbol-function 'drgnx-perf-w--colored-p) (lambda (&optional _window) t))
+                    ((symbol-function 'drgnx-perf-w--visible-digest) (lambda (&optional _window) "md5"))
+                    ((symbol-function 'run-with-timer) (lambda (&rest _) (cl-incf timers) nil)))
+            (drgnx-perf-w--ts-await "k" (float-time) (float-time))
+            (should (plist-get drgnx-perf-w--stats :colored_ms))
+            (should-not drgnx-perf-w--ts-digests)
+            (with-current-buffer buf (setq-local nidhogg-workers-treesit--pending nil))
+            (drgnx-perf-w--ts-await "k" (float-time) (float-time) (float-time))
+            (should (equal drgnx-perf-w--ts-digests '(("k" . "md5"))))))
+      (setq drgnx-perf-w--other-window nil)
+      (kill-buffer buf))))
+
 (ert-deftest drgnx-perf-workers/completion-polls-while-idle ()
   "The completion poll is a repeating wall timer that polls only while Emacs is idle: an idle timer runs once per idle
 period, so work finishing later in the pause after the keys was never seen."
