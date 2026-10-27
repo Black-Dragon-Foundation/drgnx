@@ -644,4 +644,26 @@
       (ert-info (f)
         (should (eq (plist-get (drgnx-file-read f) :status) 'ok))))))
 
+(ert-deftest drgnx-file/append-line-never-asks-about-a-visited-file ()
+  ;; A person reads today's log in a buffer and the file changes on disk behind it: the next append (from a timer)
+  ;; must not ask about the supersession.
+  (drgnx-file-test--with-dir dir
+    (let ((file (concat dir "day.jsonl")))
+      (drgnx-file-append-line file "{\"a\":1}")
+      (let ((buf (find-file-noselect file)))
+        (unwind-protect
+            (progn
+              (write-region "{\"a\":2}\n" nil file t 'silent)
+              (set-file-times file (time-subtract nil 60))
+              (should-not (verify-visited-file-modtime buf))
+              (cl-letf (((symbol-function 'ask-user-about-supersession-threat)
+                         (lambda (&rest _) (error "Asked about supersession")))
+                        ((symbol-function 'userlock--ask-user-about-supersession-threat)
+                         (lambda (&rest _) (error "Asked about supersession"))))
+                (drgnx-file-append-line file "{\"a\":3}"))
+              (should (equal (split-string (drgnx-file-test--bytes file) "\n" t)
+                             '("{\"a\":1}" "{\"a\":2}" "{\"a\":3}")))
+              (should-not (directory-files dir nil "nolock\\|\\`\\.#")))
+          (kill-buffer buf))))))
+
 ;;; file-test.el ends here
