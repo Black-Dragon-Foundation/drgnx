@@ -75,3 +75,24 @@ stall during typing is told apart from one while you were idle. A file's package
 It runs only in an interactive Emacs, never in a batch command. To turn it off, set `drgnx-speed-watchdog` to `nil`
 ([Settings](settings.md)); the change applies at once. In an Emacs without the watchdog the setting does nothing, and
 `drgnx doctor` says so.
+
+## The doctor's speed checks
+
+`drgnx doctor` has two checks in the group Speed. Each says whether the day **meets** or **missed** its goal, beside
+how serious it is.
+
+- **freezes** judges today's stalls by the time Emacs was busy not counting garbage collection, against 100 ms. It is
+  `ok` when there was none (and says how many of your typing commands took 16 ms or more). It is `info` when there were
+  some but all under 250 ms and none you felt, with the counts and the three packages with most stalls. It is `warn`
+  for a stall you felt of a second or more, a package with ten or more stalls, or a hang the watchdog had to kill, and
+  the fix line names the package, the drgnx module that enables it, how often it stalled, how long in all and how many
+  you felt: open **Help → Show Freezes**. In an Emacs without the watchdog it is `info` and says to update Nidhogg
+  (`drgnx update`).
+- **gc** judges the garbage collection row (a pause p95 of 50 ms or less over the last week and no collection of 250 ms
+  or more) and the live heap against its budget. `ok` when met; `info` with the numbers when missed without a long
+  collection; `warn` for a collection of 250 ms or more or a heap over its budget, with the fix **Help → Heap Audit**
+  and the largest owner of the last audit.
+
+The watchdog also posts a notice (source *Freezes*, a warning, not echoed) for a stall you felt of a second or more
+or a killed hang, at most once per kind of stall per day, and one for the GC at most once a day. Each opens Show
+Freezes (or the Heap Audit).

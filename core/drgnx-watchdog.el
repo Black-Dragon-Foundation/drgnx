@@ -22,6 +22,8 @@
 (defvar nidhogg-watchdog-typing-commands)
 (defvar nidhogg-watchdog-package-functions)
 (declare-function nidhogg-watchdog-mode "nidhogg-watchdog")
+(declare-function drgnx-watchdog-doctor-start "drgnx-watchdog-doctor")
+(declare-function drgnx-watchdog-doctor-stop "drgnx-watchdog-doctor")
 
 (defconst drgnx-watchdog-typing-commands
   '(self-insert-command delete-backward-char delete-char backward-delete-char-untabify newline)
@@ -67,8 +69,10 @@ Does nothing in an Emacs without the watchdog.  Turning it off turns Nidhogg's m
          (setq nidhogg-watchdog-log-directory (drgnx-watchdog-log-directory)
                nidhogg-watchdog-typing-commands (drgnx-watchdog-typing-commands))
          (add-hook 'nidhogg-watchdog-package-functions #'drgnx-watchdog-package-of)
-         (nidhogg-watchdog-mode 1))
+         (nidhogg-watchdog-mode 1)
+         (when (require 'drgnx-watchdog-doctor nil t) (drgnx-watchdog-doctor-start)))
         (t (remove-hook 'nidhogg-watchdog-package-functions #'drgnx-watchdog-package-of)
+           (when (featurep 'drgnx-watchdog-doctor) (drgnx-watchdog-doctor-stop))
            (nidhogg-watchdog-mode -1))))
 
 (defun drgnx-watchdog--settings-apply ()
