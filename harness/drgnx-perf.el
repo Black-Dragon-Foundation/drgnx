@@ -129,6 +129,8 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
 (defvar nidhogg-watchdog-mode)
 (defvar drgnx-watchdog-mode)
 (defvar nidhogg-watchdog--bucket-edges)
+(defvar nidhogg-watchdog--drain-edges)
+(declare-function nidhogg-watchdog--stats-delta "nidhogg-watchdog")
 (declare-function drgnx-watchdog-mode "drgnx-watchdog")
 (defvar nidhogg-watchdog-threshold)
 (defvar nidhogg-watchdog-record-functions)
@@ -164,17 +166,26 @@ mode is only touched directly where drgnx is not loaded."
 (defun drgnx-perf--watchdog-on-p ()
   (and (featurep 'nidhogg-watchdog) (boundp 'nidhogg-watchdog-mode) nidhogg-watchdog-mode))
 
+(defun drgnx-perf--drain-edges ()
+  "The upper edges (ms) of the drain histogram's buckets: Nidhogg's `nidhogg-watchdog--drain-edges', for a build
+without them its C bucket edges, else the C defaults."
+  (cond ((boundp 'nidhogg-watchdog--drain-edges) nidhogg-watchdog--drain-edges)
+        ((boundp 'nidhogg-watchdog--bucket-edges) nidhogg-watchdog--bucket-edges)
+        (t [4 8 16 33 50 100 250 1000])))
+
 (defun drgnx-perf-watchdog-snapshot ()
   "The watchdog's cumulative counters now, without resetting them (nil when it is off): :spans :samples :missed :stale
-:stalls :monitor-cpu-ms and :drain, the drain histogram as a vector.  `:samples' is Nidhogg's own count when it has
-one, else its spans."
+:stalls :monitor-cpu-ms and :drain, the drain histogram as a vector; with Nidhogg's newer stats also :drain-take (a
+vector) and :drain-over-budget.  `:samples' is Nidhogg's own count when it has one, else its spans."
   (when-let* (((drgnx-perf--watchdog-on-p)) (s (nidhogg-watchdog-stats)))
-    (list :spans (or (plist-get s :spans) 0)
-          :samples (or (plist-get s :samples) (plist-get s :spans) 0)
-          :missed (or (plist-get s :missed) 0) :stale (or (plist-get s :stale) 0)
-          :stalls (or (plist-get s :stalls) 0)
-          :monitor-cpu-ms (or (plist-get s :monitor-cpu-ms) 0.0)
-          :drain (vconcat (plist-get s :drain)))))
+    (append (list :spans (or (plist-get s :spans) 0)
+                  :samples (or (plist-get s :samples) (plist-get s :spans) 0)
+                  :missed (or (plist-get s :missed) 0) :stale (or (plist-get s :stale) 0)
+                  :stalls (or (plist-get s :stalls) 0)
+                  :monitor-cpu-ms (or (plist-get s :monitor-cpu-ms) 0.0)
+                  :drain (vconcat (plist-get s :drain)))
+            (when (plist-member s :drain-take) (list :drain-take (vconcat (plist-get s :drain-take))))
+            (when (plist-member s :drain-over-budget) (list :drain-over-budget (plist-get s :drain-over-budget))))))
 
 (defun drgnx-perf--hist-edge (hist edges q)
   "The upper edge (ms) of the bucket of HIST (counts by bucket; the last bucket is open) that holds the share Q (0..1)
@@ -187,23 +198,29 @@ of its counts, 0 when HIST is empty.  EDGES are the buckets' upper edges."
       (aref edges (min i (1- (length edges)))))))
 
 (defun drgnx-perf-watchdog-delta (before after &optional edges)
-  "The counters AFTER minus those of BEFORE (both snapshots; nil BEFORE is zero).  The drain's p95 and largest bucket
-come from the difference of the histograms, by EDGES (default Nidhogg's `nidhogg-watchdog--bucket-edges').  Counters
-never go below zero, in case the watchdog was restarted between."
-  (let* ((edges (let ((e (vconcat edges)))
-                  (cond ((> (length e) 0) e)
-                        ((boundp 'nidhogg-watchdog--bucket-edges) nidhogg-watchdog--bucket-edges)
-                        (t [4 8 16 33 50 100 250 1000]))))
-         (num (lambda (k) (max 0 (- (or (plist-get after k) 0) (or (plist-get before k) 0)))))
-         (a (vconcat (plist-get after :drain))) (b (vconcat (plist-get before :drain)))
-         (hist (vconcat (cl-loop for i from 0 below (length a)
-                                 collect (max 0 (- (aref a i) (if (< i (length b)) (aref b i) 0))))))
+  "The counters AFTER minus those of BEFORE (both snapshots; nil BEFORE is zero).  With Nidhogg's
+`nidhogg-watchdog--stats-delta' it does the subtraction (it copes with a counter reset in between) and its ready
+`:drain-p95-ms' is used; without, counters never go below zero and the p95 comes from the difference of the
+histograms.  The largest bucket is read by EDGES (default `drgnx-perf--drain-edges')."
+  (let* ((edges (let ((e (vconcat edges))) (if (> (length e) 0) e (drgnx-perf--drain-edges))))
+         (d (if (fboundp 'nidhogg-watchdog--stats-delta)
+                (funcall 'nidhogg-watchdog--stats-delta after before)
+              (let* ((num (lambda (k) (max 0 (- (or (plist-get after k) 0) (or (plist-get before k) 0)))))
+                     (a (vconcat (plist-get after :drain))) (b (vconcat (plist-get before :drain))))
+                (list :spans (funcall num :spans) :samples (funcall num :samples) :missed (funcall num :missed)
+                      :stale (funcall num :stale) :stalls (funcall num :stalls)
+                      :monitor-cpu-ms (funcall num :monitor-cpu-ms)
+                      :drain-over-budget (funcall num :drain-over-budget)
+                      :drain (vconcat (cl-loop for i from 0 below (length a)
+                                               collect (max 0 (- (aref a i) (if (< i (length b)) (aref b i) 0)))))))))
+         (hist (vconcat (plist-get d :drain)))
          (top (cl-position-if (lambda (n) (> n 0)) hist :from-end t)))
-    (list :spans (funcall num :spans) :samples (funcall num :samples) :missed (funcall num :missed)
-          :stale (funcall num :stale) :stalls (funcall num :stalls)
-          :monitor-cpu-ms (drgnx-perf--round (float (funcall num :monitor-cpu-ms)))
+    (list :spans (or (plist-get d :spans) 0) :samples (or (plist-get d :samples) 0) :missed (or (plist-get d :missed) 0)
+          :stale (or (plist-get d :stale) 0) :stalls (or (plist-get d :stalls) 0)
+          :monitor-cpu-ms (drgnx-perf--round (float (or (plist-get d :monitor-cpu-ms) 0)))
+          :drain-over-budget (or (plist-get d :drain-over-budget) 0)
           :drain hist
-          :drain-p95-ms (drgnx-perf--round (float (drgnx-perf--hist-edge hist edges 0.95)))
+          :drain-p95-ms (drgnx-perf--round (float (or (plist-get d :drain-p95-ms) (drgnx-perf--hist-edge hist edges 0.95))))
           :drain-max-ms (drgnx-perf--round (float (if top (aref edges (min top (1- (length edges)))) 0))))))
 
 (defun drgnx-perf--stall-record (record)
@@ -235,7 +252,7 @@ without the watchdog."
       (list :stalls (length drgnx-perf--stalls)
             :stalls-felt (length (seq-filter (lambda (s) (plist-get s :felt)) drgnx-perf--stalls))
             :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
-            :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans)
+            :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans) :samples (plist-get d :samples)
                             :monitor-cpu-ms (plist-get d :monitor-cpu-ms)
                             :drain-p95-ms (plist-get d :drain-p95-ms)
                             :drain-max-ms (plist-get d :drain-max-ms))))))
@@ -263,7 +280,7 @@ without the watchdog."
                  :version-dir (if (boundp 'comp-native-version-dir) (format "%s" comp-native-version-dir) "")
                  :drgnx-mode (if (and (boundp 'drgnx-watchdog-mode) drgnx-watchdog-mode) t :false)
                  :stats (drgnx-perf-watchdog-snapshot)
-                 :edges (if (boundp 'nidhogg-watchdog--bucket-edges) (vconcat nidhogg-watchdog--bucket-edges) [])
+                 :edges (vconcat (drgnx-perf--drain-edges))
                  :stalls (vconcat (reverse drgnx-perf--day-stalls)))
       (setq drgnx-perf--day-stalls nil))))
 

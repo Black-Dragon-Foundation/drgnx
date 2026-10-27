@@ -515,9 +515,11 @@ compositor, the first frame, fonts); drgnx's own init is ~220 ms in batch and ~2
 On a Nidhogg with `nidhogg-watchdog` the perf lab reads the watchdog per workload. `drgnx-perf-begin` drains it
 (`nidhogg-watchdog-drain-now`) and collects its records through `nidhogg-watchdog-record-functions`; `drgnx-perf-end`
 drains again and reports `(:stalls N :stalls-felt N :stall-max-ms F :gc (:count N :max F :p95 F) :typing (:ge16 F :p95 F)
-:watchdog (:missed N :spans N :monitor-cpu-ms F :drain-p95-ms F :drain-max-ms F))`. The watchdog's counters are never reset:
-the probe snapshots them at the start and reports the difference (a reset would zero the totals the day reads and the
-deltas of the watchdog's own summary lines). Each stall it keeps carries its wall time, felt, signature and culprit. `:typing :ge16` is the percent of commands at 16 ms or more.
+:watchdog (:missed N :spans N :samples N :monitor-cpu-ms F :drain-p95-ms F :drain-max-ms F))`. The watchdog's counters are
+never reset: the probe snapshots them at the start and reports the difference (a reset would zero the totals the day reads
+and the deltas of the watchdog's own summary lines). The difference comes from Nidhogg's `nidhogg-watchdog--stats-delta`
+(which copes with a reset in between) and the drain p95 and largest bucket are read on Nidhogg's own drain edges
+(1 2 4 8 16 33 50 100 ms; a forced `drain-now` is not in them); a build without these falls back to the C bucket edges. Each stall it keeps carries its wall time, felt, signature and culprit. `:typing :ge16` is the percent of commands at 16 ms or more.
 Without the feature the probe reports `:watchdog nil` and no stalls row is judged. The soak also prints `(:heap :live_mb
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 

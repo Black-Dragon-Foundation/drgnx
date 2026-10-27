@@ -98,6 +98,48 @@ stubbed the way the real one acts: it carries Nidhogg's mode with it."
    (should (equal (drgnx-perf--gc-row '(10.0 30.0 20.0)) '(:count 3 :max 30.0 :p95 30.0)))
    (should (equal (plist-get (drgnx-perf--typing-row '(5 10 20 30)) :ge16) 50.0))))
 
+(defvar nidhogg-watchdog--drain-edges)
+
+(defun perf-watchdog-test--probe (stats-fn)
+  "Run the stalls probe over two `nidhogg-watchdog-stats' values (STATS-FN gets the call number); the :watchdog plist."
+  (let ((calls 0) (drgnx-perf--stalls nil) (nidhogg-watchdog-record-functions nil))
+    (setq nidhogg-watchdog-mode t)
+    (cl-letf (((symbol-function 'nidhogg-watchdog-drain-now) #'ignore)
+              ((symbol-function 'nidhogg-watchdog-stats) (lambda (&optional _) (funcall stats-fn (cl-incf calls)))))
+      (drgnx-perf--stalls-begin)
+      (plist-get (drgnx-perf--stalls-end) :watchdog))))
+
+(ert-deftest drgnx-perf/probe-reads-the-drain-on-its-own-edges ()
+  ;; Nidhogg's drain histogram has finer edges than the C ones: the 2 ms budget has to be readable from it
+  (perf-watchdog-test--with-feature
+   (let ((nidhogg-watchdog--drain-edges [1 2 4 8 16 33 50 100]))
+     (let ((w (perf-watchdog-test--probe
+               (lambda (n)
+                 (append (perf-watchdog-test--stats (* n 100) 0 1.0 (if (= n 1) [1 0 0 0 0 0 0 0 0] [1 6 0 0 0 0 0 0 0]))
+                         (list :samples (* n 120) :drain-over-budget (* n 0)))))))
+       (should (= (plist-get w :drain-p95-ms) 2.0))
+       (should (= (plist-get w :drain-max-ms) 2.0))
+       (should (= (plist-get w :samples) 120))))))
+
+(ert-deftest drgnx-perf/probe-subtracts-through-nidhoggs-delta ()
+  ;; when Nidhogg has `--stats-delta' the probe uses it (it copes with a reset in between) and takes its ready p95
+  (perf-watchdog-test--with-feature
+   (let ((nidhogg-watchdog--drain-edges [1 2 4 8 16 33 50 100]) (args nil))
+     (cl-letf (((symbol-function 'nidhogg-watchdog--stats-delta)
+                (lambda (now base)
+                  (push (cons now base) args)
+                  (list :spans 40 :samples 55 :missed 1 :stale 0 :stalls 0 :monitor-cpu-ms 2.0
+                        :drain [0 0 3 0 0 0 0 0 0] :drain-p95-ms 4.0 :drain-over-budget 3))))
+       (let ((w (perf-watchdog-test--probe
+                 (lambda (n) (perf-watchdog-test--stats (* n 1000) 0 (* n 10.0) [9 9 9 9 9 9 9 9 9])))))
+         (should (= (length args) 1))
+         (should (= (plist-get (cdar args) :spans) 1000))
+         (should (= (plist-get (caar args) :spans) 2000))
+         (should (= (plist-get w :spans) 40))
+         (should (= (plist-get w :samples) 55))
+         (should (= (plist-get w :missed) 1))
+         (should (= (plist-get w :drain-p95-ms) 4.0)))))))
+
 (ert-deftest drgnx-perf/stalls-probe-without-the-flag ()
   (let ((features (remq 'nidhogg-watchdog features)))
     (should (equal (drgnx-perf--stalls-end) '(:watchdog nil)))
