@@ -401,4 +401,15 @@ period, so work finishing later in the pause after the keys was never seen."
             (should (equal (plist-get (plist-get (plist-get doc :results) :ts-typing) :order) ["a" "b" "b" "a"]))))
       (delete-file file))))
 
+(ert-deftest drgnx-perf-workers/results-json-takes-decision-counts ()
+  ;; The calibration record's :decisions is an alist (((AREA OUTCOME REASON) . N) ...): dotted pairs and symbols.
+  (let ((file (make-temp-file "perf-workers-json" nil ".json")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-run--write-results file '((ts-typing :cal (:decisions (((ts inline estimate) . 3))))))
+          (let ((doc (with-temp-buffer (insert-file-contents file) (json-parse-buffer :object-type 'plist))))
+            (should (equal (plist-get (plist-get (plist-get (plist-get doc :results) :ts-typing) :cal) :decisions)
+                           [[["ts" "inline" "estimate"] 3]]))))
+      (delete-file file))))
+
 ;;; perf-workers-test.el ends here
