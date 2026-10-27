@@ -538,17 +538,25 @@ median)). A path a side does not report is left out. A workload whose `:digest` 
 **Worker phases explain, they do not decide.** A phase's ms (`:workers :phase-ms`) gets no verdict: moving work to a
 worker is meant to move time between phases, and the verdict is what the user feels (input, busy, timers, stalls). The
 A/B prints an explain block under each workload with every phase's REF and tree value. What the lab does check is that
-the phases add up (`drgnx-perf-ab-phase-sum`, printed on every A/B as `phase-sum ok` or `MISMATCH`): per arm the sum
-of the phases (`worker-wait-REASON` entries repeat `worker-wait` and are left out) must not exceed `(:busy-ms :sum)` by
-more than 1 ms, and across the arms the busy time's difference must equal the phases' sum's difference within
-max (1 ms, 10 %). The check works on the run's totals (the sum of the per-command values).
+the phases add up in each arm (`drgnx-perf-ab-phase-sum`, printed on every A/B as `phase-sum ok` or `MISMATCH`): the
+sum of the phases (`worker-wait-REASON` entries repeat `worker-wait` and are left out) must not exceed `(:busy-ms :sum)`
+by more than 1 ms, else a phase counted time the main thread was not busy. The check works on the run's totals (the sum
+of the per-command values). The change across the arms is only explained, never judged: every A/B prints
+`explain busy changed by X ms, the phases' sum by Y ms` (`drgnx-perf-ab-phase-delta-line`). `:busy-ms` is a stand-in
+(latency plus the timers after the screen showed the command), because Nidhogg reports no per-command main-thread busy
+time, so run sums of it and of the phases are not comparable and a cross-arm rule failed by construction, even in an
+A/A. No run carries a watchdog busy measure today; when one does, the explain line should prefer it, and a cross-arm
+check can be judged again once Nidhogg reports a real per-command busy time.
 
 **An A/A before every A/B.** With `--ab-env` each selected workload first runs against itself (`--aa`, the default;
 `--no-aa` skips it, for debugging): the same session on the REF side, the same rounds, the same verdicts, read both
-ways (REF minus REF, and the sides swapped). A workload whose deciding verdicts (median, p95, compose probe, every
-metric above) are not "not worse" both ways, whose digests differ, or whose phase-sum check fails, is refused: no A/B
-round for it, `A/A failed` with the reasons, and the exit code is 4 (it comes before 1 and 3). A noisy machine or a
-probe that counts a phase twice shows up here, as a refused run, instead of as a verdict about the change. An A/A that
+ways (REF minus REF, and the sides swapped). A workload with a deciding verdict (median, p95, compose probe, every
+metric above) of `regressed` in either direction (the build reads worse than itself, so the lab is broken), whose
+digests differ, or whose per-arm phase-sum check fails, is refused: no A/B round for it, `A/A failed` with the reasons,
+and the exit code is 4 (it comes before 1 and 3). An `inconclusive` verdict does not refuse: with about 13 deciding
+metrics read two ways at n around 100, a tail metric is nearly always inconclusive against itself, so it prints a line
+(`A/A: p95 inconclusive (forward)`) and the A/B goes on; the A/B's own verdicts, budgets and exit codes are unchanged.
+A probe that counts a phase twice shows up here, as a refused run, instead of as a verdict about the change. An A/A that
 is not judged for its own reasons (a loaded calibration, a workload without per-command samples) is left to the A/B,
 which reports the same. The A/A doubles a workload's lab time.
 

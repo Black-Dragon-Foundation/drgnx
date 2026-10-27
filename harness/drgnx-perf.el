@@ -830,18 +830,23 @@ so they are left out) and its `(:busy-ms :sum)'; nil when it has no phases, BUSY
   "The phase-sum check of the runs RUN-A and RUN-B (a run is the median over a side's rounds): nil when it holds or
 there is nothing to check, else (:phase-sum-mismatch :why TEXT).  Per arm, the sum of the worker phases' ms must not
 exceed the main thread's busy ms (`(:busy-ms :sum)') by more than 1 ms (a phase is time the main thread spent, so
-more means a phase counted time it was not busy); across arms, the busy ms's difference must equal the phases' sum's
-difference within max (1 ms, 10 %)."
+more means a phase counted time it was not busy).  The change across arms is not judged:
+`drgnx-perf-ab-phase-delta-line' explains it."
   (let ((a (drgnx-perf-ab--phase-total run-a)) (b (drgnx-perf-ab--phase-total run-b)) why)
     (cl-loop for (arm . tot) in (list (cons "A" a) (cons "B" b))
              when (and tot (cdr tot) (> (car tot) (+ (cdr tot) 1.0)))
              do (push (format "arm %s: phases %.1f ms > busy %.1f ms + 1" arm (car tot) (cdr tot)) why))
-    (when (and a b (cdr a) (cdr b))
-      (let* ((db (- (cdr b) (cdr a))) (dp (- (car b) (car a)))
-             (tol (max 1.0 (* 0.1 (max (abs db) (abs dp))))))
-        (when (> (abs (- db dp)) tol)
-          (push (format "busy changed by %.1f ms, the phases' sum by %.1f ms (within %.1f)" db dp tol) why))))
     (and why (list :phase-sum-mismatch :why (string-join (nreverse why) "; ")))))
+
+(defun drgnx-perf-ab-phase-delta-line (run-a run-b)
+  "An explain line (a string, never a verdict) with the change of `(:busy-ms :sum)' and of the phases' sum from RUN-A
+to RUN-B; nil when either run lacks phases or busy time.  `:busy-ms' is a stand-in (latency plus the timers after the
+screen showed the command; Nidhogg reports no per-command main-thread busy time), so run sums of it and of the phases
+do not have to agree, and no run carries a watchdog busy measure to prefer."
+  (let ((a (drgnx-perf-ab--phase-total run-a)) (b (drgnx-perf-ab--phase-total run-b)))
+    (when (and a b (cdr a) (cdr b))
+      (format "busy changed by %.1f ms, the phases' sum by %.1f ms (busy is latency plus timers, a stand-in; not judged)"
+              (- (cdr b) (cdr a)) (- (car b) (car a))))))
 
 (defun drgnx-perf-ab-digest-verdict (rounds)
   "The correctness verdict on ROUNDS' `:digest' strings: (:verdict regressed :why digest) when any round's two sides

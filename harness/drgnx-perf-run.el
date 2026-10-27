@@ -1678,8 +1678,9 @@ judged, not-comparable, error, not-judged."
     (pcase st
       ('not-comparable (format "%-13s not comparable: %s" (plist-get e :name) (plist-get e :why)))
       ('error (format "%-13s ERROR: %s" (plist-get e :name) (plist-get e :why)))
-      ('aa-failed (format "%-13s A/A failed: %s (the A/B was not run: the lab, not the change, differs between the sides)"
-                          (plist-get e :name) (plist-get e :why)))
+      ('aa-failed (format "%-13s A/A failed: %s (the A/B was not run: the lab, not the change, differs between the sides)%s"
+                          (plist-get e :name) (plist-get e :why)
+                          (mapconcat (lambda (n) (format "\n%-13s %s" "" n)) (plist-get e :notes) "")))
       (_ (format "%-13s %s\n%-13s REF  %s\n%-13s tree %s\n%-13s diff %s ms [%s, %s] threshold %s; warm-up p50 REF %s tree %s; alloc p50 %s/%s, cpu p90 %s/%s, rows %s/%s"
                  (plist-get e :name)
                  (if (eq st 'not-judged) "not judged: loaded calibration (wall clock is the machine's)" (symbol-name (plist-get v :verdict)))
@@ -1706,6 +1707,9 @@ judged, not-comparable, error, not-judged."
             (and digest (not (eq (plist-get digest :verdict) 'not-comparable))
                  (format "\n%-13s digest %s" "" (if (plist-get digest :why) "regressed (digest)" "same")))
             (and (plist-member e :aa) (format "\n%-13s A/A %s" "" (plist-get e :aa)))
+            (mapconcat (lambda (n) (format "\n%-13s %s" "" n)) (plist-get e :aa-notes) "")
+            (let ((d (drgnx-perf-ab-phase-delta-line (plist-get e :a-run) (plist-get e :b-run))))
+              (and d (format "\n%-13s explain %s" "" d)))
             (and (plist-member e :phase-sum)
                  (format "\n%-13s phase-sum %s" "" (if-let* ((m (plist-get e :phase-sum)))
                                                        (format "MISMATCH: %s" (plist-get (cdr m) :why))
@@ -1731,22 +1735,33 @@ the runs RUN-ROUNDS: median, p95, the compose probe and the probe metrics."
   "ROUNDS with the sides exchanged."
   (mapcar (lambda (r) (list :a (plist-get r :b) :b (plist-get r :a))) rounds))
 
-(defun drgnx-perf-ab-aa-problems (e)
-  "Why the A/A entry E (a workload run against itself) refuses the A/B, a list of strings, nil when it passes: a
-deciding verdict that is not `no-regression' (or `improved', or `not-comparable') in either direction, a digest that
-differs, or a phase-sum mismatch."
+(defun drgnx-perf-ab--aa-labelled (e)
+  "((LABEL VERDICT DIRECTION)…): the deciding verdicts of the A/A entry E, read forward and reverse."
   (let* ((rounds (plist-get e :wall-rounds)) (runs (plist-get e :run-rounds))
          (a (apply #'append (mapcar (lambda (r) (plist-get r :a)) rounds)))
          (b (apply #'append (mapcar (lambda (r) (plist-get r :b)) rounds))) out)
     (cl-loop for (dir . vs) in (list (cons "forward" (drgnx-perf-ab--deciding a b rounds runs))
                                      (cons "reverse" (drgnx-perf-ab--deciding b a (drgnx-perf-ab--swap rounds)
                                                                               (drgnx-perf-ab--swap runs))))
-             do (dolist (v vs)
-                  (unless (memq (cdr v) '(no-regression improved not-comparable))
-                    (push (format "%s %s (%s)" (car v) (cdr v) dir) out))))
+             do (dolist (v vs) (push (list (car v) (cdr v) dir) out)))
+    (nreverse out)))
+
+(defun drgnx-perf-ab-aa-problems (e &optional labelled)
+  "Why the A/A entry E (a workload run against itself) refuses the A/B, a list of strings, nil when it passes: a
+deciding verdict of `regressed' in either direction (the build reads worse than itself: the lab is broken), a digest
+that differs, or a per-arm phase-sum mismatch.  `inconclusive' does not refuse (`drgnx-perf-ab-aa-notes').  LABELLED
+is `drgnx-perf-ab--aa-labelled' of E when the caller has it."
+  (let ((runs (plist-get e :run-rounds)) out)
+    (dolist (v (or labelled (drgnx-perf-ab--aa-labelled e)))
+      (when (eq (nth 1 v) 'regressed) (push (format "%s regressed (%s)" (nth 0 v) (nth 2 v)) out)))
     (when (eq (plist-get (drgnx-perf-ab-digest-verdict runs) :verdict) 'regressed) (push "digest differs" out))
     (when-let* ((m (plist-get e :phase-sum))) (push (format "phase-sum: %s" (plist-get (cdr m) :why)) out))
     (nreverse out)))
+
+(defun drgnx-perf-ab-aa-notes (e &optional labelled)
+  "The A/A entry E's `inconclusive' deciding verdicts as lines to print, e.g. \"A/A: p95 inconclusive (forward)\"."
+  (cl-loop for v in (or labelled (drgnx-perf-ab--aa-labelled e))
+           when (eq (nth 1 v) 'inconclusive) collect (format "A/A: %s inconclusive (%s)" (nth 0 v) (nth 2 v))))
 
 (defun drgnx-perf-ab--aa (name spec s n)
   "The A/A before an A/B: workload NAME run against itself on the session S (the same build, the same setting; the
@@ -1755,9 +1770,11 @@ the A/B reports those itself); else an entry with `:status' `aa-passed' or, when
 any, `aa-failed' and `:why' naming them."
   (let ((e (drgnx-perf-ab--workload name spec s s n)))
     (when (eq (plist-get e :status) 'judged)
-      (let ((problems (drgnx-perf-ab-aa-problems e)))
+      (let* ((labelled (drgnx-perf-ab--aa-labelled e))
+             (problems (drgnx-perf-ab-aa-problems e labelled)))
         (list :name name :status (if problems 'aa-failed 'aa-passed)
-              :why (and problems (string-join problems "; ")))))))
+              :why (and problems (string-join problems "; "))
+              :notes (drgnx-perf-ab-aa-notes e labelled))))))
 
 (cl-defun drgnx-perf-ab (ref &key (n 100) env (aa t))
   "`drgnx test --perf --ab REF': wall clock judged by interleaving two trees.  REF is exported with `git archive'
@@ -1772,8 +1789,9 @@ Each judged workload also prints the p95 verdict (T = 1 ms) and, when the runs c
 ENV, (VAR JUDGED REF) from `drgnx-perf-ab-env-parse', makes it an A/B on one tree (REF is nil, nothing is exported):
 the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=REF.
 With ENV and AA (the default; `--no-aa' clears it) every selected workload first runs against itself on the REF
-side's session (`drgnx-perf-ab--aa'); one whose deciding verdicts are not `no-regression' both ways, or whose phase-sum
-check fails, gets no A/B round, and the exit code is 4 (\"A/A failed\")."
+side's session (`drgnx-perf-ab--aa'); one with a `regressed' deciding verdict either way, a differing digest or a
+failing per-arm phase-sum check gets no A/B round, and the exit code is 4 (\"A/A failed\"); `inconclusive' verdicts are
+printed as lines and do not block."
   (if (getenv "DRGNX_LEASE_BUSY")
       (let ((code (drgnx-perf-run)))
         (princ "wall clock not judged: host busy\n")
@@ -1803,7 +1821,8 @@ check fails, gets no A/B round, and the exit code is 4 (\"A/A failed\")."
                   (if (eq (plist-get aa-entry :status) 'aa-failed)
                       (push aa-entry entries)   ; refused: no A/B round for this workload
                     (let ((entry (drgnx-perf-ab--workload (car w) (cdr w) sa sb n)))
-                      (push (if aa-entry (append entry (list :aa "passed")) entry) entries)))))))
+                      (push (if aa-entry (append entry (list :aa "passed" :aa-notes (plist-get aa-entry :notes))) entry)
+                            entries)))))))
         (when sa-name (ignore-errors (drgnx-ui-stop sa-name)))
         (when sb-name (ignore-errors (drgnx-ui-stop sb-name)))
         ;; the runner deletes its DRGNX_RUN_TMP; a directory made here is removed here

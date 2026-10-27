@@ -348,7 +348,57 @@ B's is round 1 (+/-4 ms)."
       (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50 :aa nil))))
       (should (memq 'sess-b calls))
       (should-not (eql code 4))
-      (should (string-match-p "phase-sum MISMATCH" out)))))
+      (should (string-match-p "phase-sum MISMATCH" out))))
+  ;; a regressed verdict and a digest that differs block as well
+  (should (string-match-p "regressed" (car (drgnx-perf-ab-test--aa-problems '(("p95" . regressed)) nil))))
+  (should (equal (drgnx-perf-ab-test--aa-problems nil nil 'regressed) '("digest differs"))))
+
+(defun drgnx-perf-ab-test--aa-problems (forward reverse &optional digest)
+  "`drgnx-perf-ab-aa-problems' with the deciding verdicts FORWARD and REVERSE (alists LABEL -> verdict) and the
+digest verdict DIGEST (default no-regression); the entry carries a clean phase-sum."
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'drgnx-perf-ab--deciding)
+               (lambda (&rest _) (prog1 (if (= calls 0) forward reverse) (cl-incf calls))))
+              ((symbol-function 'drgnx-perf-ab-digest-verdict)
+               (lambda (_) (list :verdict (or digest 'no-regression)))))
+      (drgnx-perf-ab-aa-problems (list :wall-rounds nil :run-rounds nil :phase-sum nil)))))
+
+(ert-deftest drgnx-perf-ab/aa-inconclusive-does-not-block ()
+  (should-not (drgnx-perf-ab-test--aa-problems '(("median" . no-regression) ("p95" . inconclusive))
+                                               '(("median" . no-regression) ("max" . inconclusive))))
+  ;; it is printed, as a line of its own
+  (cl-letf (((symbol-function 'drgnx-perf-ab--deciding)
+             (lambda (&rest _) '(("median" . no-regression) ("p95" . inconclusive))))
+            ((symbol-function 'drgnx-perf-ab-digest-verdict) (lambda (_) (list :verdict 'no-regression))))
+    (should (equal (drgnx-perf-ab-aa-notes (list :wall-rounds nil :run-rounds nil))
+                   '("A/A: p95 inconclusive (forward)" "A/A: p95 inconclusive (reverse)")))))
+
+(ert-deftest drgnx-perf-ab/aa-regressed-blocks ()
+  (let ((p (drgnx-perf-ab-test--aa-problems '(("median" . no-regression) ("p95" . regressed))
+                                            '(("median" . no-regression)))))
+    (should (= (length p) 1))
+    (should (string-match-p "p95 regressed (forward)" (car p))))
+  (should (string-match-p "median regressed (reverse)"
+                          (car (drgnx-perf-ab-test--aa-problems '(("median" . improved))
+                                                                '(("median" . regressed)))))))
+
+(ert-deftest drgnx-perf-ab/cross-arm-phase-sum-explains-only ()
+  ;; busy fell 121.5 ms, the phases' sum rose 141.4 ms: not comparable run sums, so no mismatch ...
+  (let ((a (drgnx-perf-ab-test--run (list 'json 60.0) 200.0)) (b (drgnx-perf-ab-test--run (list 'json 201.4) 78.5)))
+    (should-not (drgnx-perf-ab-phase-sum (drgnx-perf-ab-test--run (list 'json 40.0) 200.0)
+                                         (drgnx-perf-ab-test--run (list 'json 100.0) 300.0)))
+    (should (drgnx-perf-ab-phase-sum a b))      ; per arm: B has 201.4 phases in 78.5 busy
+    (let ((ok-b (drgnx-perf-ab-test--run (list 'json 100.0) 300.0))
+          (ok-a (drgnx-perf-ab-test--run (list 'json 60.0) 200.0)))
+      (should-not (drgnx-perf-ab-phase-sum ok-a ok-b))
+      (should (string-match-p "busy changed by 100.0 ms, the phases' sum by 40.0 ms"
+                              (drgnx-perf-ab-phase-delta-line ok-a ok-b))))
+    (should-not (drgnx-perf-ab-phase-delta-line '(:workers nil) '(:workers nil))))
+  ;; ... and an A/A with such a pair passes (the phase-sum entry is nil)
+  (drgnx-perf-ab-test--ab-env (drgnx-perf-ab-test--run (list 'json 40.0) 100.0)
+    (let (out)
+      (setq out (with-output-to-string (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50)))
+      (should (string-match-p "busy changed by" out)))))
 
 (ert-deftest drgnx-perf-ab/aa-passes-then-ab ()
   (drgnx-perf-ab-test--ab-env (drgnx-perf-ab-test--run (list 'json 40.0 'worker-wait 3.0 'worker-wait-drain 3.0) 100.0)
@@ -371,12 +421,11 @@ B's is round 1 (+/-4 ms)."
     (should (drgnx-perf-ab-phase-sum (funcall run (list 'json 101.5) 100.0) nil))
     ;; the by-reason entries repeat worker-wait: not summed twice
     (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'worker-wait 30.0 'worker-wait-display 30.0) 40.0) nil))
-    ;; across arms: the busy time fell by 50 ms, the phases' sum by 10
-    (let ((m (drgnx-perf-ab-phase-sum (funcall run (list 'json 60.0) 200.0) (funcall run (list 'json 50.0) 150.0))))
+    ;; across arms nothing is judged here (see `cross-arm-phase-sum-explains-only')
+    (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'json 60.0) 200.0) (funcall run (list 'json 50.0) 150.0)))
+    (let ((m (drgnx-perf-ab-phase-sum (funcall run (list 'json 60.0) 200.0) (funcall run (list 'json 160.0) 150.0))))
       (should (eq (car m) :phase-sum-mismatch))
-      (should (string-match-p "busy changed by -50.0" (plist-get (cdr m) :why))))
-    ;; the same fall in both: the work moved off the main thread, as designed
-    (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'json 60.0) 200.0) (funcall run (list 'json 10.0) 150.0)))
+      (should (string-match-p "arm B: phases 160.0" (plist-get (cdr m) :why))))
     ;; no phases (stock Emacs) or no busy time: nothing to check
     (should-not (drgnx-perf-ab-phase-sum '(:workers nil) '(:workers nil)))))
 
