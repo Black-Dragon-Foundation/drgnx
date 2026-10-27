@@ -97,6 +97,7 @@ Acts only on a real change: loading gcmh.el sets the variable to nil, which must
   "early-init.el's startup threshold is above this (its emacs-startup-hook tests the same).")
 
 (declare-function drgnx-gc-census-maybe-start "drgnx-gc-census")
+(declare-function drgnx-watchdog-maybe-start "drgnx-watchdog")
 
 (defun drgnx-gc-setup ()
   "The owner on, the steady threshold and the idle collection (once) — unless gcmh-mode does both, and the
@@ -107,7 +108,9 @@ threshold only while it is early-init's startup value (a user's own is kept).  T
       (setq gc-cons-threshold drgnx-gc-cons-threshold gc-cons-percentage 0.1))
     (drgnx-gc--start-idle))
   (when (require 'drgnx-gc-census nil t)               ; absent where only this file is on the load path (a harness)
-    (drgnx-gc-census-maybe-start)))
+    (drgnx-gc-census-maybe-start))
+  (when (require 'drgnx-watchdog nil t)
+    (drgnx-watchdog-maybe-start)))
 
 (defun drgnx-gc-batch-setup ()
   "The settings of a long-lived batch Emacs (hub, workers): a modest threshold, a low percentage."

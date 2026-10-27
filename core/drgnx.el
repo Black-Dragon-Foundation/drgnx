@@ -34,6 +34,7 @@
 (autoload 'drgnx-store-undeny-personal-path "drgnx-store-privacy" nil t)
 (require 'drgnx-gc)
 (require 'drgnx-gc-census)
+(require 'drgnx-watchdog)
 (require 'drgnx-session)
 (require 'drgnx-config)
 (require 'drgnx-shell-env)

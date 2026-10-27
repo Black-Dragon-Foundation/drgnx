@@ -60,3 +60,18 @@ can size is counted as 0, and the view says how many there were.
 Each audit also writes a snapshot, `heap-YYYY-MM-DD.json`, next to the census files (one per day, the last audit of
 the day). It holds sizes and names only — variable, buffer and process names — never what a variable or a buffer
 contains, and only you can read it (mode 0600). Audits on different days can be compared from these files.
+
+## The watchdog
+
+When drgnx runs on a Nidhogg built with the stall watchdog, it turns the watchdog on at every start; there is
+nothing to install and nothing to switch on. The watchdog times every busy span of Emacs and, when one lasts 100 ms or
+more, notes what it was doing: the command, the Lisp function and file at the bottom of the stack and the package
+that owns them. It writes one line per stall into the same `watchdog/` folder of drgnx's state folder as the census
+(`YYYY-MM-DD.jsonl`, files older than 14 days are deleted), while the census stops writing. The typing commands
+(`self-insert-command`, the delete commands, `newline`, and Evil's insert-state ones when Evil is loaded) are marked, so a
+stall during typing is told apart from one while you were idle. A file's package is named by drgnx's own owner map
+(your packages, drgnx's modules, Emacs itself).
+
+It runs only in an interactive Emacs, never in a batch command. To turn it off, set `drgnx-speed-watchdog` to `nil`
+([Settings](settings.md)); the change applies at once. In an Emacs without the watchdog the setting does nothing, and
+`drgnx doctor` says so.
