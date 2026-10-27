@@ -405,13 +405,60 @@ digest verdict DIGEST (default no-regression); the entry carries a clean phase-s
     (let (code out)
       (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
       (should (eql code 0))
-      (should (string-match-p "A/A passed" out))
+      (should (string-match-p "A/A (typing): passed" out))
       (should (string-match-p "phase-sum ok" out))
       ;; the A/A ran first, on the REF side's session alone, then the A/B on both
       (let ((order (reverse calls)))
         (should (eq (car order) 'sess-a))
         ;; a warm-up and the minimum of rounds on sess-a alone, before the first call on sess-b
         (should (>= (cl-position 'sess-b order) (+ 1 (* 2 drgnx-perf-ab-min-rounds))))))))
+
+(defmacro drgnx-perf-ab-test--three-workloads (&rest body)
+  "BODY with three workloads selected and `drgnx-perf-ab--workload' counting its calls in `wcalls' ((NAME SA SB)…,
+newest first), returning a judged entry that carries the A/A fields."
+  (declare (indent 0))
+  `(let (wcalls)
+     (drgnx-perf-ab-test--with-fake 0
+       (cl-letf (((symbol-function 'drgnx-perf-run--workloads)
+                  (lambda () '((w1 :measure "m") (w2 :measure "m") (w3 :measure "m"))))
+                 ((symbol-function 'drgnx-perf-ab--start)
+                  (lambda (_tree &optional env) (list :name (if (member "DRGNX_PERF_GLITNIR=on" env) 'sess-b 'sess-a))))
+                 ((symbol-function 'drgnx-perf-ab--workload)
+                  (lambda (name _spec sa sb _n)
+                    (push (list name sa sb) wcalls)
+                    (list :name name :status 'judged :wall-rounds nil :run-rounds nil
+                          :verdict (list :verdict 'no-regression :diff 0.0 :lo 0.0 :hi 0.0 :threshold 1.0)
+                          :a (list :n 1) :b (list :n 1))))
+                 ((symbol-function 'drgnx-perf-ab--deciding) (lambda (&rest _) nil))
+                 ((symbol-function 'drgnx-perf-ab-digest-verdict) (lambda (_) (list :verdict 'no-regression))))
+         ,@body))))
+
+(ert-deftest drgnx-perf-ab/aa-runs-once-per-invocation ()
+  (drgnx-perf-ab-test--three-workloads
+    (let (code out)
+      (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+      (should (eql code 0))
+      ;; one call with session S on both sides (the A/A), then one A/B per workload
+      (let ((aa (seq-filter (lambda (c) (eq (nth 1 c) (nth 2 c))) wcalls)))
+        (should (= (length aa) 1))
+        (should (eq (car (car aa)) 'w1)))
+      (should (= (length wcalls) 4))
+      (should (string-match-p "A/A (w1): passed" out))
+      (should (= 1 (with-temp-buffer (insert out) (how-many "A/A (" (point-min) (point-max)))))))
+  ;; --no-aa: no such call
+  (drgnx-perf-ab-test--three-workloads
+    (with-output-to-string (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50 :aa nil))
+    (should (= (length wcalls) 3))
+    (should-not (seq-some (lambda (c) (eq (nth 1 c) (nth 2 c))) wcalls))))
+
+(ert-deftest drgnx-perf-ab/aa-failure-refuses-every-workload ()
+  (drgnx-perf-ab-test--three-workloads
+    (cl-letf (((symbol-function 'drgnx-perf-ab-aa-problems) (lambda (&rest _) '("p95 regressed (forward)"))))
+      (let (code out)
+        (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+        (should (eql code 4))
+        (should (= (length wcalls) 1))            ; the A/A only: no A/B for any workload
+        (should (string-match-p "^w1 +A/A failed: p95 regressed (forward)" out))))))
 
 (ert-deftest drgnx-perf-ab/phase-sum-checks-arms-and-the-difference ()
   (let ((run (lambda (ph busy) (drgnx-perf-ab-test--run ph busy))))

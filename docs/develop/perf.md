@@ -219,7 +219,7 @@ T = max(1 ms, 10 % of REF's median value); `not comparable` when a side lacks th
 `--ab REF` still judges the median only and also prints the p95 verdict (T = 1 ms). `--ab-env` prints, per workload,
 the median verdict, the p95 verdict at T = 1 ms and, when the runs carry it, the probe verdict on
 `(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3, and an A/A that fails
-(see "An A/A before every A/B") is exit 4. It also judges the judged
+(see "One A/A per A/B invocation") is exit 4. It also judges the judged
 side's `:compose` budget rows (the median of the value over its rounds) at n >= 100, n being `(:compose :count)` summed
 over its rounds.
 
@@ -548,17 +548,20 @@ time, so run sums of it and of the phases are not comparable and a cross-arm rul
 A/A. No run carries a watchdog busy measure today; when one does, the explain line should prefer it, and a cross-arm
 check can be judged again once Nidhogg reports a real per-command busy time.
 
-**An A/A before every A/B.** With `--ab-env` each selected workload first runs against itself (`--aa`, the default;
-`--no-aa` skips it, for debugging): the same session on the REF side, the same rounds, the same verdicts, read both
-ways (REF minus REF, and the sides swapped). A workload with a deciding verdict (median, p95, compose probe, every
-metric above) of `regressed` in either direction (the build reads worse than itself, so the lab is broken), whose
-digests differ, or whose per-arm phase-sum check fails, is refused: no A/B round for it, `A/A failed` with the reasons,
-and the exit code is 4 (it comes before 1 and 3). An `inconclusive` verdict does not refuse: with about 13 deciding
+**One A/A per A/B invocation.** With `--ab-env` the first selected workload runs against itself once, before any A/B
+round (`--aa`, the default; `--no-aa` skips it, for debugging): the same session on the REF side, the same rounds, the
+same verdicts, read both ways (REF minus REF, and the sides swapped). It runs once because it proves the lab is quiet at
+that moment, which does not depend on the workload; one A/A per workload doubled the lab time of a gate arm. A deciding
+verdict (median, p95, compose probe, every metric above) of `regressed` in either direction (the build reads worse than
+itself, so the lab is broken), digests that differ, or a failing per-arm phase-sum check refuses the invocation: no
+workload gets an A/B round, `A/A failed` is printed under the A/A's workload with the reasons, and the exit code is 4
+(it comes before 1 and 3). Else every workload gets its A/B, and the results file records the A/A once (`aa`, with the
+workload it ran on). An `inconclusive` verdict does not refuse: with about 13 deciding
 metrics read two ways at n around 100, a tail metric is nearly always inconclusive against itself, so it prints a line
-(`A/A: p95 inconclusive (forward)`) and the A/B goes on; the A/B's own verdicts, budgets and exit codes are unchanged.
+(`A/A (typing): p95 inconclusive (forward)`) and the A/B goes on; the A/B's own verdicts, budgets and exit codes are unchanged.
 A probe that counts a phase twice shows up here, as a refused run, instead of as a verdict about the change. An A/A that
 is not judged for its own reasons (a loaded calibration, a workload without per-command samples) is left to the A/B,
-which reports the same. The A/A doubles a workload's lab time.
+which reports the same. The A/A costs one workload's lab time per invocation.
 
 **The calibration rows** (report-only, never failing; printed as `report cal-ROW WORKLOAD: KEY value, …` by plain
 `--perf`; a key the Nidhogg build does not report prints `n/a (Task 55/57)`): `cal-costs` (`:costs` and `:decisions`

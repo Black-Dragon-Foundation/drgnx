@@ -1791,10 +1791,12 @@ Each judged workload also prints the p95 verdict (T = 1 ms) and, when the runs c
 `(:compose :draw-ms :p95)'; with ENV they count in the exit code as well, and `:compose' budget rows are judged.
 ENV, (VAR JUDGED REF) from `drgnx-perf-ab-env-parse', makes it an A/B on one tree (REF is nil, nothing is exported):
 the work-tree side (the judged one) runs with VAR=JUDGED, the REF side with VAR=REF.
-With ENV and AA (the default; `--no-aa' clears it) every selected workload first runs against itself on the REF
-side's session (`drgnx-perf-ab--aa'); one with a `regressed' deciding verdict either way, a differing digest or a
-failing per-arm phase-sum check gets no A/B round, and the exit code is 4 (\"A/A failed\"); `inconclusive' verdicts are
-printed as lines and do not block."
+With ENV and AA (the default; `--no-aa' clears it) the first selected workload runs against itself once, on the REF
+side's session (`drgnx-perf-ab--aa'), before any A/B round: the A/A proves the lab is quiet now, whatever the
+workload.  With a `regressed' deciding verdict either way, a differing digest or a failing per-arm phase-sum check no
+workload gets an A/B round, and the exit code is 4 (\"A/A failed\", printed under that workload's name); else every
+workload gets its A/B.  `inconclusive' verdicts are printed once as \"A/A (WORKLOAD): …\" lines and do not block.
+The results file records the A/A once, as `aa', with the workload it ran on."
   (if (getenv "DRGNX_LEASE_BUSY")
       (let ((code (drgnx-perf-run)))
         (princ "wall clock not judged: host busy\n")
@@ -1803,7 +1805,7 @@ printed as lines and do not block."
            (tmp (or (getenv "DRGNX_RUN_TMP") own-tmp)) (ref-tree (expand-file-name "ab-ref" tmp))
            (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
            (workloads (drgnx-perf-run--select (drgnx-perf-run--only (drgnx-perf-run--workloads))))
-           sa-name sb-name entries)
+           sa-name sb-name entries aa-entry)
       (unwind-protect
           (progn
             (unless env
@@ -1817,40 +1819,50 @@ printed as lines and do not block."
             (let ((sa (drgnx-ui-own-session sa-name)) (sb (drgnx-ui-own-session sb-name)))
               (drgnx-perf-run--call sa drgnx-perf-ab--settle-form 200)
               (drgnx-perf-run--call sb drgnx-perf-ab--settle-form 200)
-              (dolist (w workloads)
-                (message "perf ab: %s…" (car w))
-                (let ((aa-entry (and env aa (progn (message "perf ab: %s: A/A first…" (car w))
-                                                   (drgnx-perf-ab--aa (car w) (cdr w) sa n)))))
-                  (if (eq (plist-get aa-entry :status) 'aa-failed)
-                      (push aa-entry entries)   ; refused: no A/B round for this workload
-                    (let ((entry (drgnx-perf-ab--workload (car w) (cdr w) sa sb n)))
-                      (push (if aa-entry (append entry (list :aa "passed" :aa-notes (plist-get aa-entry :notes))) entry)
-                            entries)))))))
+              ;; one A/A per invocation, on the first selected workload: it proves the lab is quiet now
+              (when (and env aa workloads)
+                (message "perf ab: %s: A/A first…" (car (car workloads)))
+                (setq aa-entry (drgnx-perf-ab--aa (car (car workloads)) (cdr (car workloads)) sa n)))
+              (if (eq (plist-get aa-entry :status) 'aa-failed)
+                  (push aa-entry entries)       ; refused: no A/B round for any workload
+                (dolist (w workloads)
+                  (message "perf ab: %s…" (car w))
+                  (push (drgnx-perf-ab--workload (car w) (cdr w) sa sb n) entries)))))
         (when sa-name (ignore-errors (drgnx-ui-stop sa-name)))
         (when sb-name (ignore-errors (drgnx-ui-stop sb-name)))
         ;; the runner deletes its DRGNX_RUN_TMP; a directory made here is removed here
         (when own-tmp (ignore-errors (delete-directory own-tmp t)))
         (delete-file drgnx-perf-run--fixture))
       (setq entries (nreverse entries))
+      (when (eq (plist-get aa-entry :status) 'aa-passed) ; a failed one is an entry, printed under its workload
+        (princ (format "A/A (%s): passed\n" (plist-get aa-entry :name)))
+        (dolist (note (plist-get aa-entry :notes))
+          (princ (concat (string-replace "A/A: " (format "A/A (%s): " (plist-get aa-entry :name)) note) "\n"))))
       (dolist (e entries) (princ (concat (drgnx-perf-ab--line e) (drgnx-perf-ab--extra-lines e) "\n")))
       (when-let* ((file (getenv "DRGNX_PERF_RESULTS")))
         (unless (string-empty-p file)
           (drgnx-perf-run--write-results
-           file (mapcar (lambda (e)
-                          (let ((v (plist-get e :verdict)))
-                            (cons (plist-get e :name)
-                                  (list :status (symbol-name (plist-get e :status))
-                                        :verdict (and v (symbol-name (plist-get v :verdict)))
-                                        :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
-                                        :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
-                                        :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
-                                        :digest_verdict (and (plist-get e :digest-verdict) (symbol-name (plist-get (plist-get e :digest-verdict) :verdict)))
-                                        :metric_verdicts (mapcan (lambda (m) (list (intern (concat ":" (drgnx-perf--path-name (car m))))
-                                                                                   (symbol-name (plist-get (cdr m) :verdict))))
-                                                                 (plist-get e :metric-verdicts))
-                                        :a (plist-get e :a) :b (plist-get e :b)
-                                        :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why)))))
-                        entries))))
+           file (append
+                 (mapcar (lambda (e)
+                           (let ((v (plist-get e :verdict)))
+                             (cons (plist-get e :name)
+                                   (list :status (symbol-name (plist-get e :status))
+                                         :verdict (and v (symbol-name (plist-get v :verdict)))
+                                         :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
+                                         :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
+                                         :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
+                                         :digest_verdict (and (plist-get e :digest-verdict) (symbol-name (plist-get (plist-get e :digest-verdict) :verdict)))
+                                         :metric_verdicts (mapcan (lambda (m) (list (intern (concat ":" (drgnx-perf--path-name (car m))))
+                                                                                    (symbol-name (plist-get (cdr m) :verdict))))
+                                                                  (plist-get e :metric-verdicts))
+                                         :a (plist-get e :a) :b (plist-get e :b)
+                                         :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why)))))
+                         entries)
+                 ;; the A/A once, with the workload it ran on
+                 (and aa-entry (list (cons 'aa (list :status (symbol-name (plist-get aa-entry :status))
+                                                     :workload (symbol-name (plist-get aa-entry :name))
+                                                     :why (plist-get aa-entry :why)
+                                                     :notes (plist-get aa-entry :notes)))))))))
       (let* ((verdicts (append (mapcar (lambda (e) (plist-get (plist-get e :verdict) :verdict)) entries)
                                ;; --ab-env also judges the p95 and the probe verdicts; --ab only prints the p95 one
                                (and env (mapcar (lambda (e) (plist-get (plist-get e :p95-verdict) :verdict)) entries))
