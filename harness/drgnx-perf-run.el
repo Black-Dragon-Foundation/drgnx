@@ -1674,6 +1674,34 @@ judged, not-comparable, error, not-judged."
 
 (define-error 'drgnx-perf-ab-ref-error "The workload failed on REF")
 
+(defun drgnx-perf-ab--per-round (e key path)
+  "One value per round for each arm of entry E: the value at PATH in every round's run, null where a run has none.
+The :a-run and :b-run medians keep one run's digest and a median blank count; this keeps them all."
+  (cl-flet ((arm (side) (vconcat (mapcar (lambda (r) (let ((v (plist-get r side)))
+                                                       (dolist (k path) (setq v (plist-get v k)))
+                                                       v))
+                                         (plist-get e :run-rounds)))))
+    (and (plist-get e :run-rounds) (list key (list :a (arm :a) :b (arm :b))))))
+
+(defun drgnx-perf-ab--result-entry (e)
+  "The results-file record of entry E: (NAME . PLIST)."
+  (let ((v (plist-get e :verdict)))
+    (cons (plist-get e :name)
+          (append
+           (list :status (symbol-name (plist-get e :status))
+                 :verdict (and v (symbol-name (plist-get v :verdict)))
+                 :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
+                 :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
+                 :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
+                 :digest_verdict (and (plist-get e :digest-verdict) (symbol-name (plist-get (plist-get e :digest-verdict) :verdict)))
+                 :metric_verdicts (mapcan (lambda (m) (list (intern (concat ":" (drgnx-perf--path-name (car m))))
+                                                            (symbol-name (plist-get (cdr m) :verdict))))
+                                          (plist-get e :metric-verdicts))
+                 :a (plist-get e :a) :b (plist-get e :b)
+                 :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why))
+           (drgnx-perf-ab--per-round e :digests '(:digest))
+           (drgnx-perf-ab--per-round e :blanks '(:live :blank))))))
+
 (defun drgnx-perf-ab--line (e)
   (let* ((st (plist-get e :status)) (v (plist-get e :verdict)) (a (plist-get e :a)) (b (plist-get e :b))
          (side (lambda (x) (format "n=%s p50 %s p90 %s p95 %s" (plist-get x :n) (drgnx-perf--round (plist-get x :p50)) (drgnx-perf--round (plist-get x :p90))
@@ -1843,21 +1871,7 @@ The results file records the A/A once, as `aa', with the workload it ran on."
         (unless (string-empty-p file)
           (drgnx-perf-run--write-results
            file (append
-                 (mapcar (lambda (e)
-                           (let ((v (plist-get e :verdict)))
-                             (cons (plist-get e :name)
-                                   (list :status (symbol-name (plist-get e :status))
-                                         :verdict (and v (symbol-name (plist-get v :verdict)))
-                                         :diff (and v (list :diff (plist-get v :diff) :lo (plist-get v :lo) :hi (plist-get v :hi)))
-                                         :p95_verdict (and (plist-get e :p95-verdict) (symbol-name (plist-get (plist-get e :p95-verdict) :verdict)))
-                                         :probe_verdict (and (plist-get e :probe-verdict) (symbol-name (plist-get (plist-get e :probe-verdict) :verdict)))
-                                         :digest_verdict (and (plist-get e :digest-verdict) (symbol-name (plist-get (plist-get e :digest-verdict) :verdict)))
-                                         :metric_verdicts (mapcan (lambda (m) (list (intern (concat ":" (drgnx-perf--path-name (car m))))
-                                                                                    (symbol-name (plist-get (cdr m) :verdict))))
-                                                                  (plist-get e :metric-verdicts))
-                                         :a (plist-get e :a) :b (plist-get e :b)
-                                         :a_run (plist-get e :a-run) :b_run (plist-get e :b-run) :order (mapcar (function symbol-name) (plist-get e :order)) :why (plist-get e :why)))))
-                         entries)
+                 (mapcar #'drgnx-perf-ab--result-entry entries)
                  ;; the A/A once, with the workload it ran on
                  (and aa-entry (list (cons 'aa (list :status (symbol-name (plist-get aa-entry :status))
                                                      :workload (symbol-name (plist-get aa-entry :name))

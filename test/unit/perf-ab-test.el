@@ -516,3 +516,35 @@ newest first), returning a judged entry that carries the A/A fields."
     (setq drgnx-perf--timer-cur nil)
     (drgnx-perf--timer-note 9.0)
     (should-not drgnx-perf--timer-cur)))
+
+(ert-deftest drgnx-perf-ab/results-keep-a-digest-and-blank-count-per-round ()
+  ;; the medians keep one run's digest; a differing round must stay visible in the results file
+  (let* ((rounds (list (list :a (list :digest "d1" :live (list :blank 0)) :b (list :digest "d1" :live (list :blank 0)))
+                       (list :a (list :digest "d1" :live (list :blank 0)) :b (list :digest "d2" :live (list :blank 3)))
+                       (list :a (list :digest "d1") :b (list :digest "d1" :live (list :blank 0)))))
+         (e (list :name 'live-view :status 'judged :run-rounds rounds))
+         (file (make-temp-file "drgnx-perf-ab" nil ".json")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-run--write-results file (list (drgnx-perf-ab--result-entry e)))
+          (let* ((j (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string))
+                                       :object-type 'plist :null-object nil))
+                 (r (plist-get (plist-get j :results) :live-view)))
+            (should (equal (plist-get (plist-get r :digests) :a) ["d1" "d1" "d1"]))
+            (should (equal (plist-get (plist-get r :digests) :b) ["d1" "d2" "d1"]))
+            (should (equal (plist-get (plist-get r :blanks) :a) [0 0 nil]))
+            (should (equal (plist-get (plist-get r :blanks) :b) [0 3 0]))))
+      (delete-file file))))
+
+(ert-deftest drgnx-perf-ab/a-workload-without-a-digest-still-has-one-entry-per-round ()
+  (let* ((rounds (list (list :a (list :rows 1) :b (list :rows 1)) (list :a (list :rows 1) :b (list :rows 1))))
+         (file (make-temp-file "drgnx-perf-ab" nil ".json")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-run--write-results file (list (drgnx-perf-ab--result-entry (list :name 'w :status 'judged :run-rounds rounds))))
+          (let ((r (plist-get (plist-get (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string))
+                                                            :object-type 'plist :null-object nil)
+                                         :results)
+                              :w)))
+            (should (equal (plist-get (plist-get r :digests) :a) [nil nil]))))
+      (delete-file file))))
