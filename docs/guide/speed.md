@@ -123,3 +123,18 @@ path, ready to paste into a bug report, and **Sample the next freeze in depth**,
 longer stack for the next stall; a notice tells you when the record that was sampled in
 depth is in (it needs the watchdog on; with it off the command says so). The GC row has **Run a heap audit** (it
 asks first, see [Heap Audit](#heap-audit)) and **Show collections** (the GC census report). `g` draws the page again.
+
+## Workers
+
+On a Nidhogg built with work off the main thread (`drgnx update` builds it), the doctor's **workers** check, in the
+group Speed, says whether that work is on and whether it keeps falling back to the main thread.
+
+- In an Emacs without the feature it is `info` and says to update Nidhogg (`drgnx update`).
+- In the editor itself it reads the live switches and `nidhogg-workers-stats`. It is `ok` when every switch is on and
+  no job fell back: "workers on: …; running: N". It is `info` when some switch is off or a job fell back, listing the
+  switches that are off and every fallback reason with its count since the editor started (`dumping`, `dead`,
+  `thread-create`, `fd-budget`, `boost-denied`). It is `warn` when a worker's fallbacks are more than 10 % of its jobs;
+  the fix line names the switch that turns that worker's work off (`nidhogg-workers-process-reader`,
+  `-treesit`, `-images`, `-dns`, `-autosave`).
+- `drgnx doctor` on the command line runs in an Emacs of its own and cannot see your editor's counters. There the
+  check is `info` and says only that the build has the feature, which switches are on by default and which are off.
