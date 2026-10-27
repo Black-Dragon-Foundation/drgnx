@@ -99,7 +99,8 @@ written in the last 15 minutes; with the setting on and nothing recent, `freezes
 watchdog record (is drgnx running?).
 
 The watchdog also posts a notice (source *Freezes*, a warning, not echoed) for a stall you felt of a second or more
-or a killed hang, at most once per kind of stall per day, and one for the GC at most once a day. Each opens Show
+or a killed hang, at most once per kind of stall per day, and one for the GC at most once a day. The GC look runs at idle every half hour and reads only the GC row (the heap
+audit's snapshot only to word a warning), so the watchdog does not cause the stalls it reports. Each opens Show
 Freezes (or the Heap Audit).
 
 ## Show Freezes

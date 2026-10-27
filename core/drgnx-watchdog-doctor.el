@@ -266,6 +266,17 @@ felt stall of 1 s or more, or a killed hang.  Numbers and one `drgnx-notify'; ne
                         :id (format "stall-%s" sig) :echo nil :command 'freezes
                         :fix "Show Freezes (Help → Show Freezes) says where the time went"))))))
 
+(defun drgnx-watchdog-doctor--gc-facts ()
+  "The `:watchdog' fact for the `gc' check alone: the GC row and, from it, the live heap.  It reads neither the day's
+file nor the heap audit snapshot (an idle timer calls it).  Never signals."
+  (when (drgnx-watchdog-available-p)
+    (condition-case err
+        (let* ((nidhogg-watchdog-log-directory (drgnx-watchdog-log-directory))
+               (gc (and (require 'nidhogg-watchdog-gc nil t) (fboundp 'nidhogg-watchdog-gc-row)
+                        (nidhogg-watchdog-gc-row))))
+          (list :gc gc :heap (drgnx-watchdog-doctor--heap (plist-get (plist-get (plist-get gc :week) :heap) :live_mb))))
+      (error (list :error (error-message-string err))))))
+
 (defun drgnx-watchdog-doctor--gc-check ()
   "Once a day, notice a collection at the limit or a heap over its budget; read the day files at most every 30
 minutes.  An idle timer's function."
@@ -273,8 +284,12 @@ minutes.  An idle timer's function."
     (when (and (not (equal drgnx-watchdog-doctor--gc-noticed day))
                (> (- now drgnx-watchdog-doctor--gc-checked) 1800))
       (setq drgnx-watchdog-doctor--gc-checked now)
-      (let ((r (drgnx-watchdog-doctor--gc (list :watchdog (drgnx-watchdog-doctor-facts)))))
+      (let* ((facts (drgnx-watchdog-doctor--gc-facts))
+             (r (drgnx-watchdog-doctor--gc (list :watchdog facts))))
         (when (eq (car r) 'warn)
+          ;; the snapshot is read only to word the warning
+          (setq r (drgnx-watchdog-doctor--gc
+                   (list :watchdog (append facts (list :largest (drgnx-watchdog-doctor--largest-owner))))))
           (setq drgnx-watchdog-doctor--gc-noticed day)
           (drgnx-notify 'watchdog 'warn (format "Garbage collection: %s" (nth 1 r)) :id 'gc :echo nil
                         :command 'heap-audit :fix (nth 2 r)))))))

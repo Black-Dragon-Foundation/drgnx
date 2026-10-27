@@ -156,3 +156,28 @@
             (should-not (plist-get w :running))
             (should (string-match-p "no recent watchdog record" (nth 1 r)))))
       (delete-directory root t))))
+
+(ert-deftest drgnx-watchdog/gc-check-reads-neither-the-day-nor-the-snapshot-unless-it-warns ()
+  ;; the idle timer's look is the instrument's own cost: it takes the GC row (Nidhogg's, cached) and nothing else; the
+  ;; heap audit snapshot is read only to word a warning
+  (drgnx-notice-test-with-model
+    (drgnx-notice-define-source 'watchdog :title "Freezes" :command 'freezes)
+    (let ((features (cons 'nidhogg-watchdog features)) (drgnx-watchdog-doctor--gc-noticed nil)
+          (reads 0) (snapshots 0) (max-ms 100.0))
+      (cl-letf (((symbol-function 'nidhogg-watchdog-gc-row)
+                 (lambda (&rest _)
+                   (list :days (list (list :date "2026-10-27" :max max-ms :meets t)) :week (list :p95 40 :heap '(:live_mb 300.0))
+                         :meets t :target 50 :gc-max 250)))
+                ((symbol-function 'drgnx-watchdog-doctor--read-day) (lambda (_) (cl-incf reads) nil))
+                ((symbol-function 'drgnx-watchdog-doctor--largest-owner) (lambda () (cl-incf snapshots) '("pkg-a" 1.5 nil))))
+        (let ((drgnx-watchdog-doctor--gc-checked 0))
+          (drgnx-watchdog-doctor--gc-check)
+          (should (= reads 0))
+          (should (= snapshots 0))
+          (should (null (drgnx-notices))))
+        (setq max-ms 300.0)
+        (let ((drgnx-watchdog-doctor--gc-checked 0))
+          (drgnx-watchdog-doctor--gc-check)
+          (should (= reads 0))
+          (should (= snapshots 1))
+          (should (= 1 (length (drgnx-notices)))))))))
