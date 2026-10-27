@@ -63,7 +63,6 @@
       (run-hook-with-args 'nidhogg-watchdog-record-functions '(:nongc-ms 300 :deep t))
       (should (= 1 (length (drgnx-notices))))
       (should-not (memq (function drgnx-freezes--deep-arrived) nidhogg-watchdog-record-functions))
-      (drgnx-watchdog-doctor-stop)
       (should-not drgnx-freezes--deep-armed))))
 
 (ert-deftest drgnx-freezes/gc-row-actions ()

@@ -4,10 +4,12 @@
 (require 'drgnx-paths)
 (require 'drgnx-watchdog)
 (require 'drgnx-watchdog-doctor)
+(require 'drgnx-heap)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defvar nidhogg-watchdog-mode)
+(defvar features)                       ; special here, so a `let' of it is dynamic (`features' is not special in Emacs)
 
 (defun drgnx-watchdog-doctor-test--stall(ms &rest kv)
   "A stall line of MS non-GC milliseconds; KV: :pkg, :felt, :killed."
@@ -137,7 +139,8 @@
   (let* ((root (make-temp-file "drgnx-wd-batch" t))
          (process-environment (append (list (concat "XDG_STATE_HOME=" root) (concat "XDG_CONFIG_HOME=" root)) process-environment))
          (features (cons 'nidhogg-watchdog features))
-         (nidhogg-watchdog-mode nil))
+         (nidhogg-watchdog-mode nil)
+         (drgnx-heap-budgets '((:owner "total" :measure live :cap 600))))
     (unwind-protect
         (let* ((dir (drgnx-watchdog-log-directory))
                (file (expand-file-name (format-time-string "%F.jsonl") dir)))
