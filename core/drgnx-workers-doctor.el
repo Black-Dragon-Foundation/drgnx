@@ -30,6 +30,10 @@
 (defconst drgnx-workers-doctor-fallback-share 0.1
   "A worker whose fallbacks are more than this share of its jobs is a warning.")
 
+(defconst drgnx-workers-doctor--not-fallbacks '(boost-denied)
+  "Reasons in `:fallbacks' that are no job taking today's path: `boost-denied' counts a wait that could not raise an
+idle-priority thread (always, without privileges), while the job still ran on its worker.")
+
 (defun drgnx-workers-doctor-facts ()
   "The `:workers' fact: nil without the feature, else (:live BOOL :switches ((SWITCH . VALUE)...) :stats STATS).
 In a batch Emacs (`drgnx doctor') :live is nil, the switches are the build's defaults and there are no stats: they
@@ -64,7 +68,8 @@ would be this process's, not the editor's.  Never signals."
     (dolist (w drgnx-workers-doctor--workers)
       (let* ((s (plist-get stats (car w)))
              (jobs (or (plist-get s :jobs) 0))
-             (fb (apply #'+ (mapcar #'cdr (plist-get s :fallbacks)))))
+             (fb (cl-loop for f in (plist-get s :fallbacks)
+                          unless (memq (car f) drgnx-workers-doctor--not-fallbacks) sum (cdr f))))
         (when (and (> jobs 0) (> (/ (float fb) jobs) drgnx-workers-doctor-fallback-share)
                    (> (/ (float fb) jobs) worst-share))
           (setq worst (list (car w) jobs fb) worst-share (/ (float fb) jobs)))))
@@ -99,8 +104,12 @@ the editor's counters are not visible from `drgnx doctor'"
                   (format "%s; %s took today's path for %d of %d jobs since start (%s)" on
                           (substring (symbol-name key) 1) (nth 2 worst) (nth 1 worst)
                           (mapconcat (lambda (f) (format "%s %d" (car f) (cdr f))) fb ", "))
-                  (format "set %s to nil to take that work back to the main thread; the reasons are in `nidhogg-workers-stats'"
-                          (cdr (assq key drgnx-workers-doctor--workers))))))
+                  (if (eq key :nh-blk)
+                      ;; nh-blk also runs directory reads and file blocks, which their callers ask for: no switch
+                      "set nidhogg-workers-dns to nil to take host-name lookups back to the main thread (nh-blk's \
+directory reads and file blocks have no switch: their callers ask for them); the reasons are in `nidhogg-workers-stats'"
+                    (format "set %s to nil to take that work back to the main thread; the reasons are in `nidhogg-workers-stats'"
+                            (cdr (assq key drgnx-workers-doctor--workers)))))))
          ((or fb (not (equal off "none")))
           (list 'info
                 (concat on "; off: " off

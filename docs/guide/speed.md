@@ -134,7 +134,10 @@ group Speed, says whether that work is on and whether it keeps falling back to t
   no job fell back: "workers on: …; running: N". It is `info` when some switch is off or a job fell back, listing the
   switches that are off and every fallback reason with its count since the editor started (`dumping`, `dead`,
   `thread-create`, `fd-budget`, `boost-denied`). It is `warn` when a worker's fallbacks are more than 10 % of its jobs;
-  the fix line names the switch that turns that worker's work off (`nidhogg-workers-process-reader`,
-  `-treesit`, `-images`, `-dns`, `-autosave`).
+  `boost-denied` does not count there (it is a wait that could not raise an idle-priority thread, which an
+  unprivileged Emacs never can, while the job still ran on its worker). The fix line names the switch that turns that
+  worker's work off (`nidhogg-workers-process-reader`, `-treesit`, `-images`, `-dns`, `-autosave`); for `nh-blk` it
+  names `-dns` for host-name lookups and says that its directory reads and file blocks have no switch (their callers
+  ask for them).
 - `drgnx doctor` on the command line runs in an Emacs of its own and cannot see your editor's counters. There the
   check is `info` and says only that the build has the feature, which switches are on by default and which are off.

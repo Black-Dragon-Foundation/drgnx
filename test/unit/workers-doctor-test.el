@@ -66,6 +66,26 @@
                        :nh-img (drgnx-workers-doctor-test--worker 20 0 '((fd-budget . 2))))))))
     (should (eq (car r) 'info))))
 
+(ert-deftest drgnx-workers-doctor/boost-denied-is-no-fallback ()
+  ;; without privileges every wait on a running idle job counts boost-denied, but the job still ran on its worker:
+  ;; info with the count, never a warning that the work took today's path
+  (let ((r (drgnx-doctor-check
+            'workers (drgnx-workers-doctor-test--facts
+                      (drgnx-workers-doctor-test--stats
+                       :nh-img (drgnx-workers-doctor-test--worker 20 0 '((boost-denied . 15))))))))
+    (should (eq (car r) 'info))
+    (should (string-match-p "boost-denied 15" (nth 1 r)))))
+
+(ert-deftest drgnx-workers-doctor/blk-fix-names-lookups-only ()
+  ;; nh-blk also runs directory reads and file blocks, which have no switch: the fix says so
+  (let ((r (drgnx-doctor-check
+            'workers (drgnx-workers-doctor-test--facts
+                      (drgnx-workers-doctor-test--stats
+                       :nh-blk (drgnx-workers-doctor-test--worker 20 0 '((fd-budget . 5))))))))
+    (should (eq (car r) 'warn))
+    (should (string-match-p "nidhogg-workers-dns" (nth 2 r)))
+    (should (string-match-p "directory reads and file blocks have no switch" (nth 2 r)))))
+
 (ert-deftest drgnx-workers-doctor/no-flag-info ()
   (let ((r (drgnx-doctor-check 'workers (list :workers nil))))
     (should (eq (car r) 'info))
