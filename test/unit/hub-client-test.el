@@ -672,13 +672,36 @@ without the binary."
               (should (equal (funcall ensures) '("ensure --timeout 5")))))
         (drgnx-notice-clear 'hub 'restart-when-idle)))))
 
+(defun drgnx-hub-client-test--commands ()
+  "A registry table of its own holding what drgnx registers at start: Hub: Restart Now."
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)))
+    (drgnx-command-define 'hub-restart-now :category "Agents" :title "Hub: Restart Now" :command #'drgnx-hub-restart-now :doc "Restart the hub")
+    drgnx-commands--table))
+
+(ert-deftest drgnx-hub-client/a-hub-notice-keeps-only-a-registered-command ()
+  ;; the click runs the command through the registry: a hub (any process on its socket) must not name `delete-file'
+  (let ((drgnx-commands--table (drgnx-hub-client-test--commands)))
+    (unwind-protect
+        (progn
+          (drgnx-hub--note-notice "notice" '(:id "restart-when-idle" :text "updated" :severity "warn" :life "condition"
+                                                 :command "hub-restart-now"))
+          (should (eq (plist-get (gethash '(hub . restart-when-idle) drgnx-notice--table) :command) 'hub-restart-now))
+          (drgnx-notice-clear 'hub 'restart-when-idle)
+          (drgnx-hub--note-notice "notice" '(:id "restart-when-idle" :text "updated" :severity "warn" :life "condition"
+                                                 :command "delete-file"))
+          (let ((n (gethash '(hub . restart-when-idle) drgnx-notice--table)))
+            (should n)
+            (should-not (plist-get n :command))))
+      (drgnx-notice-clear 'hub 'restart-when-idle))))
+
 (ert-deftest drgnx-hub-client/the-update-notice-offers-restart-now ()
   ;; binary: the file the hub runs from is replaced by another commit's (an update): the hub's `notice' event becomes
   ;; a notice whose command is Hub: Restart Now (needs the binary's test hooks: the 200 ms tick)
   (skip-unless (and (drgnx-hub-client-test--bin)
                     (string-search "\"test_hooks\":true"
                                    (shell-command-to-string (concat (shell-quote-argument (drgnx-hub-client-test--bin)) " version --json")))))
-  (let ((drgnx-hub-client-test--serve-fn
+  (let ((drgnx-commands--table (drgnx-hub-client-test--commands))
+        (drgnx-hub-client-test--serve-fn
          (lambda (root)
            (let ((live (concat root "ratatoskr-live")))
              (copy-file (drgnx-hub-client-test--bin) live)

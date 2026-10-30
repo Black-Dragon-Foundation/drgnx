@@ -278,7 +278,8 @@ Installed with `evil-ex-define-cmd' when the engine starts and taken out when it
     (evil-window-vsplit . drgnx-evil-ex-split-right)
     (evil-window-delete . drgnx-evil-ex-close-group)
     (evil-window-new . drgnx-evil-ex-new)
-    (evil-delete-buffer . drgnx-evil-ex-delete-buffer))
+    (evil-delete-buffer . drgnx-evil-ex-delete-buffer)
+    (delete-other-windows . drgnx-evil-ex-only))
   "evil's window and quit commands and drgnx's replacement for each: `:around' advice while the engine runs.  Evil's
 own would act on its windows and could quit Emacs; the workbench keeps its groups, tabs and layout.  Each replacement
 calls evil's own command when the workbench is not on (`drgnx-evil-ex--workbench-p').")
@@ -298,6 +299,7 @@ drgnx put there.")
 (declare-function evil-write "evil-commands")
 (declare-function evil-write-all "evil-commands")
 (declare-function drgnx-chrome-tabs "drgnx-chrome")
+(declare-function drgnx-chrome-close-tab "drgnx-chrome")
 (declare-function drgnx-groups-list "drgnx-groups")
 
 (defun drgnx-evil-ex--workbench-p ()
@@ -453,32 +455,16 @@ group that shows it closes that tab and goes on with its next one; no group or w
       (with-current-buffer buf (set-buffer-modified-p nil))
       (kill-buffer buf))))
 
-(defun drgnx-evil-ex-only ()
-  "`C-w o' (Vim's only): keep this editor group and close the other groups; the sidebar, the panel and the right
-dock stay.  In a dock it goes back to the editor you used last first."
-  (interactive)
-  (if (not (drgnx-evil-ex--workbench-p))
-      (delete-other-windows)
+(defun drgnx-evil-ex-only (orig &rest args)
+  "Advice around `delete-other-windows' when it is the command run (`C-w o', Vim's only): keep this editor group and
+close the other groups; the sidebar, the panel and the right dock stay.  In a dock it goes back to the editor you used
+last first.  Lisp callers of `delete-other-windows' get it unchanged."
+  (if (or (not (eq this-command 'delete-other-windows)) (not (drgnx-evil-ex--workbench-p)))
+      (apply orig args)
     (when (drgnx-evil-ex--in-dock-p) (drgnx-evil-ex--run 'focus-editor))
     (let ((keep (selected-window)))
       (dolist (g (drgnx-groups-list))
         (unless (eq g keep) (delete-window g))))))
-
-(defvar evil-window-map)
-(defvar drgnx-evil--window-saved nil
-  "Alist of `evil-window-map' keys drgnx rebound, KEY → what evil had there.")
-
-(defun drgnx-evil--window-keys (on)
-  "ON: `C-w o' and `C-w C-o' are `drgnx-evil-ex-only'.  Nil: what evil had there, unless something else holds them."
-  (if on
-      (dolist (k '("o" "C-o"))
-        (unless (assoc k drgnx-evil--window-saved)
-          (push (cons k (keymap-lookup evil-window-map k)) drgnx-evil--window-saved)
-          (keymap-set evil-window-map k #'drgnx-evil-ex-only)))
-    (pcase-dolist (`(,k . ,old) drgnx-evil--window-saved)
-      (when (eq (keymap-lookup evil-window-map k) #'drgnx-evil-ex-only)
-        (keymap-set evil-window-map k old)))
-    (setq drgnx-evil--window-saved nil)))
 
 (defun drgnx-evil--ex-names (spec)
   "The names `evil-ex-define-cmd' defines for SPEC: \"w[rite]\" is w, wr, wri, writ, write."
@@ -511,8 +497,7 @@ something else by now (the user's own `evil-ex-define-cmd')."
 (defun drgnx-evil--advice (on)
   "ON: evil's window and quit commands are `drgnx-evil--advice-pairs'.  Nil: evil's own again."
   (pcase-dolist (`(,evil . ,ours) drgnx-evil--advice-pairs)
-    (if on (advice-add evil :around ours) (advice-remove evil ours)))
-  (drgnx-evil--window-keys on))
+    (if on (advice-add evil :around ours) (advice-remove evil ours))))
 
 ;;;; AI ghost text and the selection
 

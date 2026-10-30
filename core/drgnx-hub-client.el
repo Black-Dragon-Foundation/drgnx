@@ -28,6 +28,7 @@
 (declare-function drgnx-settings-runtime-send "drgnx-settings-runtime")
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
+(declare-function drgnx-commands-get "drgnx-registry" (id))
 (defvar drgnx-hub--server)              ; drgnx-hub.el: this Emacs's hub socket, when it is the hub
 (defvar drgnx-hub--editor)              ; the editor token and the held keys: defined below, used by `drgnx-hub-disconnect'
 (defvar drgnx-hub--keys-held)
@@ -1225,7 +1226,7 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
                       :life (if (equal (plist-get data :life) "condition") 'condition 'event)
                       ;; only a registry id: the click runs it through `drgnx-ui--run'
                       :command (let ((sym (and (stringp command) (intern-soft command))))
-                                 (and sym (drgnx-commands-get sym) sym)))))))
+                                 (and sym (fboundp 'drgnx-commands-get) (drgnx-commands-get sym) sym)))))))
 
 (provide 'drgnx-hub-client)
 ;;; drgnx-hub-client.el ends here

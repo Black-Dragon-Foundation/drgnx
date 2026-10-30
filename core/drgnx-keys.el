@@ -698,6 +698,7 @@ after `drgnx-keys--restore', so drgnx's own bindings are gone."
       (let ((now (drgnx-keys--lookup (symbol-value sym) key)))
         (and now (not (equal now (drgnx-keys--lookup snap key))) now)))))
 
+(declare-function evil-get-auxiliary-keymap "evil-common" (map state &optional create))
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 
