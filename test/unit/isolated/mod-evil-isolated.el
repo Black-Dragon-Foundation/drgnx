@@ -84,6 +84,8 @@ stopped.  Evil's packages are not on `load-path' here."
                 ,@body)
        (when (fboundp 'drgnx-evil-stop) (drgnx-evil-stop))
        (when (fboundp 'evil-mode) (evil-mode -1))
+       ;; the module's claims on evil's options go with the test (the settings layer keeps them process-wide)
+       (when (alist-get 'editor/evil drgnx-modules--table) (ignore-errors (drgnx-module-teardown 'editor/evil)))
        (setq-default mode-line-format mode-line-saved)
        (delete-directory root t))))
 
@@ -335,6 +337,7 @@ stopped.  Evil's packages are not on `load-path' here."
 (ert-deftest drgnx-evil/cursor-shapes-per-state ()
   (drgnx-evil-test--running
     (drgnx-evil-test--buffer b #'text-mode
+      (evil-normal-state)                ; a state entry refreshes the cursor; a new buffer has had none yet
       (should (eq cursor-type 'box))
       (evil-insert-state)
       (should (eq drgnx-modal-state 'insert))
@@ -454,8 +457,8 @@ stopped.  Evil's packages are not on `load-path' here."
   (drgnx-modal-test-with-evil
     (drgnx-evil-test--config '((vim app editing window)) t
       (require 'evil)
-      (setq evil-want-keybinding t evil-undo-system 'undo-tree evil-want-C-u-scroll nil
-            evil-search-module 'isearch evil-want-minibuffer t evil-mode-line-format 'before)
+      ;; options nobody set: the setup's values apply (an option the user set keeps their value, next test)
+      (setq evil-want-keybinding t)
       (should (eq (drgnx-evil-test--run) 'ok))
       (should-not evil-want-keybinding)
       (should (eq evil-undo-system 'undo-redo))
@@ -464,12 +467,25 @@ stopped.  Evil's packages are not on `load-path' here."
       (should-not evil-want-minibuffer)
       (should-not evil-mode-line-format))))
 
+(ert-deftest drgnx-evil/a-users-setopt-wins-over-the-setup ()
+  ;; the settings layer: an option the user set (Customize, setopt) keeps their value
+  (drgnx-modal-test-with-evil
+    (drgnx-evil-test--config '((vim app editing window)) t
+      (require 'evil)
+      (unwind-protect
+          (progn (setopt evil-mode-line-format 'after)
+                 (should (eq (drgnx-evil-test--run) 'ok))
+                 (should (eq evil-mode-line-format 'after)))
+        (put 'evil-mode-line-format 'theme-value nil)        ; not the next test's user value
+        (custom-reevaluate-setting 'evil-mode-line-format)))))
+
 (ert-deftest drgnx-evil/settings-go-through-setopt ()
   ;; evil's :set functions run: C-u scrolls only when the option's setter has bound it
   (drgnx-modal-test-with-evil
     (drgnx-evil-test--config '((vim app editing window)) t
       (require 'evil)
-      (setopt evil-want-C-u-scroll nil)
+      (set-default 'evil-want-C-u-scroll nil)                       ; no setter has run for the value the setup sets
+      (keymap-unset evil-motion-state-map "C-u" t)
       (should-not (eq (keymap-lookup evil-motion-state-map "C-u") #'evil-scroll-up))
       (should (eq (drgnx-evil-test--run) 'ok))
       (should (eq (keymap-lookup evil-motion-state-map "C-u") #'evil-scroll-up)))))
@@ -480,7 +496,7 @@ stopped.  Evil's packages are not on `load-path' here."
   (drgnx-modal-test-with-evil
     (drgnx-evil-test--config '((vim app editing window)) t
       (require 'evil)
-      (setq evil-search-module 'isearch)
+      (should (eq evil-search-module 'isearch))                    ; evil's own default
       (should (eq (drgnx-evil-test--run) 'ok))
       (should (eq drgnx-modal-running 'evil))
       (should (eq evil-search-module 'evil-search))
