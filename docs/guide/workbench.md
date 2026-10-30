@@ -116,10 +116,10 @@ there).
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
 theme's version-control faces; a folder with changes inside shows `●` (also one whose only change is a new file;
 a new folder itself shows `U`), and so does a root; ignored files are dimmed. One background `git status` per
-repository (never holding your git lock), repositories nested inside the tree included; a repository made after
-the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
-The status of at most 16 repositories is kept; one that was pushed out is read again by the next refresh of its
-folder. `drgnx-explorer-git` turns it off. What git complains
+repository on screen (never holding your git lock), repositories nested inside the tree included; a repository made
+after the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
+The status of at most 16 repositories is kept, so the Explorer reads at most the top 16 it shows; a repository
+scrolled into view, or one that was pushed out, is read when its rows are drawn. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel

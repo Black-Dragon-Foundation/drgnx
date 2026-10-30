@@ -271,7 +271,7 @@ for that file to exist (up to 20 s) instead of sleeping."
           (should (equal (list (plist-get json :passed) (plist-get json :failed)) '(2 0)))
           (should (= 2 (length (plist-get json :files)))))
         (should-not (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get unit :env)))
-        (should (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get timing :env)))))))
+        (should-not (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get timing :env)))))))   ; a file per Emacs, as CI
 
 (ert-deftest drgnx-check/the-durations-file-is-written-atomically ()
   ;; a rename that fails keeps the old file as it was and leaves no temp file; the new one is data read back

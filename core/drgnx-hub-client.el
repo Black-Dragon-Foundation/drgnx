@@ -669,11 +669,12 @@ so nothing else should come; any other event is dropped."
 (defun drgnx-hub--front-take (conn pred deadline)
   "The first line in CONN's inbox that PRED accepts, taken out of it, waiting until DEADLINE (`drgnx-hub--front-now')
 for it: nil when none came by then or CONN closed.  It waits with JUST-THIS-ONE an integer: no other process's output
-is read and no timer runs meanwhile (src/process.c), so nothing re-enters the backend while it waits."
-  (let (found)
+is read and no timer runs meanwhile (src/process.c), so nothing re-enters the backend while it waits.  Each wait
+is 50 ms at most and never past DEADLINE."
+  (let (found left)
     (while (and (not (setq found (cl-find-if pred (process-get conn :front-inbox))))
-                (process-live-p conn) (< (drgnx-hub--front-now) deadline))
-      (accept-process-output conn 0.05 nil 1))
+                (process-live-p conn) (> (setq left (- deadline (drgnx-hub--front-now))) 0))
+      (accept-process-output conn (min 0.05 left) nil 1))
     (when found (process-put conn :front-inbox (delq found (process-get conn :front-inbox))))
     found))
 

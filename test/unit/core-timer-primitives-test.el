@@ -438,13 +438,48 @@ less what reading the counters itself costs."
 
 (ert-deftest drgnx-timer-prim/a-chain-yields-to-pending-input ()
   "A zero-delay chain's next link waits `drgnx-timer-chain-yield' while input is pending, so Emacs's wait returns
-to read input queued on `unread-command-events' before the chain goes on; with no input it is 0."
+to read input queued on `unread-command-events' before the chain goes on; with no input it is 0.0."
   (cl-letf (((symbol-function 'drgnx-timer--input-pending-p) (lambda () drgnx-timer-prim-test--pending)))
     (setq drgnx-timer-prim-test--pending nil)
-    (should (eql 0 (drgnx-timer-chain-delay)))
+    (should (eql 0.0 (drgnx-timer-chain-delay)))
     (setq drgnx-timer-prim-test--pending t)
     (should (> drgnx-timer-chain-yield 0))
     (should (eql drgnx-timer-chain-yield (drgnx-timer-chain-delay)))))
+
+(ert-deftest drgnx-timer-prim/chains-running-back-to-back-yield-to-process-input ()
+  "Zero-delay links running back to back for `drgnx-timer-chain-span' make the next one wait
+`drgnx-timer-chain-yield', so Emacs's wait finds no ripe timer and reads sockets and process output (an emacsclient
+waited for a whole Search view's draw).  Every chain's link waits until that yield ends.  A timer armed otherwise
+\(the yield's link, a throttle, even one at the integer 0) begins a new run: the pauses between runs never count."
+  ;; times in 1/64 s steps from 1024: exact floats, so the span's edge is where the test says
+  (let ((now 1024.0) (drgnx-timer--chain-start nil) (drgnx-timer--chain-resume 0) (drgnx-timer-chain-span 0.125)
+        (drgnx-timer-chain-yield 0.016)
+        (first (drgnx-timer--make :key 'x :kind 'start :secs 0.1))
+        (throttle (drgnx-timer--make :key 'x :kind 'start :secs 0))
+        (link (drgnx-timer--make :key 'x :kind 'start :secs 0.0)))
+    (cl-letf (((symbol-function 'drgnx-timer--input-pending-p) #'ignore)
+              ((symbol-function 'drgnx-timer--now) (lambda () now)))
+      (let ((delays nil))
+        (dotimes (i 9)                                                   ; a first link, then links of 1/64 s
+          (let ((drgnx-timer--firing (if (= i 0) first link))) (push (drgnx-timer-chain-delay) delays))
+          (setq now (+ now (/ 1.0 64))))
+        (setq delays (nreverse delays))
+        (should (equal (take 8 delays) (make-list 8 0.0)))               ; under the span: back to back
+        (should (eql (nth 8 delays) 0.016)))                             ; at the span: this link waits
+      (setq now (- now (/ 1.0 64) (- (/ 1.0 256))))                      ; 1/256 s into the yield
+      (let* ((drgnx-timer--firing link) (other (drgnx-timer-chain-delay)))   ; another chain's link, during it
+        (should (> other 0))
+        (should (<= other 0.016)))
+      (setq now (+ now 0.02))
+      (let ((drgnx-timer--firing (drgnx-timer--make :key 'x :kind 'start :secs 0.016)))
+        (should (eql 0.0 (drgnx-timer-chain-delay))))                    ; the link that waited: a new run
+      (let ((drgnx-timer--firing link))
+        (setq now (+ now 0.1))
+        (should (eql 0.0 (drgnx-timer-chain-delay))))
+      ;; a later chain whose first draw is a throttle at 0: a new run, the pause before it never counts
+      (setq now (+ now 5.0))
+      (let ((drgnx-timer--firing throttle)) (should (eql 0.0 (drgnx-timer-chain-delay))))
+      (let ((drgnx-timer--firing link)) (should (eql 0.0 (drgnx-timer-chain-delay)))))))
 
 (ert-deftest drgnx-timer-prim/budget-bounds-a-firing ()
   (drgnx-timer-prim-test--with

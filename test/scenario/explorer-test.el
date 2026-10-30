@@ -308,29 +308,40 @@ opens that row, and the view does not scroll under the pointer."
     (let* ((w (drgnx-driver-explorer-window))
            (_ (with-current-buffer (window-buffer w) (set-window-start w (point-min))))
            (_ (drgnx-uitest-run nil))
-           (start (window-start w))
+           (frame (window-frame w))
+           (height (frame-text-height frame))
            (row (or (drgnx-scn--partial-bottom-row w)
-                    ;; The window's height is a whole number of rows: scroll the text up by half a row.
-                    (progn (set-window-vscroll w (/ (default-line-height) 2) t)
-                           (redisplay t)
-                           (drgnx-scn--partial-bottom-row w)))))
-      (drgnx-scenario-require row "a partly visible bottom row in the Explorer")
-      (let* ((v (cdr row))
-             (origin (drgnx-uitest--text-origin w))
-             (top (posn-x-y (posn-at-point (car row) w)))      ; text-area pixels of the row's top left
-             (x (+ (car origin) (car top) 6))
-             (y (+ (cdr origin) (cdr top) (/ (nth 4 v) 2)))    ; ROWH: the part of the row that shows
-             (name (with-current-buffer (window-buffer w)
-                     (string-trim (buffer-substring-no-properties (car row) (save-excursion (goto-char (car row)) (pos-eol))))))
-             (posn (drgnx-uitest-posn x y))
-             (_ (drgnx-scenario-require
-                 (and (eq (posn-window posn) w) (eql (posn-point posn) (car row)))
-                 (format "the pixel %d,%d (row %S: %S) to land on the bottom row, it landed on %S at %S"
-                         x y name v (posn-window posn) (posn-point posn))))
-             (r (drgnx-uitest-run (drgnx-uitest-click-events posn)))
-             (file (drgnx-scn--editor-file)))
-        (drgnx-scenario-check
-         (and file (string-suffix-p name file) (= (window-start w) start))
-         (format "a click on the partly visible bottom row %S must open it without scrolling: the editor shows %S, view %s"
-                 name (and file (file-name-nondirectory file)) (if (= (window-start w) start) "kept" "scrolled"))
-         r)))))
+                    ;; The window's height is a whole number of rows: the frame half a row shorter, as a user's
+                    ;; window is (a vscroll would not do: redisplay drops it once point enters the half row)
+                    (let ((frame-resize-pixelwise t))
+                      (set-frame-height frame (- height (/ (default-line-height) 2)) nil t)
+                      (drgnx-uitest-run nil)
+                      (with-current-buffer (window-buffer w) (set-window-start w (point-min)))
+                      (drgnx-uitest-run nil)
+                      (drgnx-scn--partial-bottom-row w))))
+           (start (window-start w)))
+      (unwind-protect
+          (progn
+            (drgnx-scenario-require row "a partly visible bottom row in the Explorer")
+            (let* ((v (cdr row))
+                   (origin (drgnx-uitest--text-origin w))
+                   (top (posn-x-y (posn-at-point (car row) w)))      ; text-area pixels of the row's top left
+                   (x (+ (car origin) (car top) 6))
+                   (y (+ (cdr origin) (cdr top) (/ (nth 4 v) 2)))    ; ROWH: the part of the row that shows
+                   (name (with-current-buffer (window-buffer w)
+                           (string-trim (buffer-substring-no-properties (car row) (save-excursion (goto-char (car row)) (pos-eol))))))
+                   (posn (drgnx-uitest-posn x y))
+                   (_ (drgnx-scenario-require
+                       (and (eq (posn-window posn) w) (eql (posn-point posn) (car row)))
+                       (format "the pixel %d,%d (row %S: %S) to land on the bottom row, it landed on %S at %S"
+                               x y name v (posn-window posn) (posn-point posn))))
+                   (r (drgnx-uitest-run (drgnx-uitest-click-events posn)))
+                   (file (drgnx-scn--editor-file)))
+              (drgnx-scenario-check
+               (and file (string-suffix-p name file) (= (window-start w) start))
+               (format "a click on the partly visible bottom row %S must open it without scrolling: the editor shows %S, view %s"
+                       name (and file (file-name-nondirectory file)) (if (= (window-start w) start) "kept" "scrolled"))
+               r)))
+        (unless (= (frame-text-height frame) height)        ; the next scenario's frame as it was
+          (let ((frame-resize-pixelwise t)) (set-frame-height frame height nil t))
+          (drgnx-uitest-run nil))))))

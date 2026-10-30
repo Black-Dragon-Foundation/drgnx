@@ -1347,13 +1347,20 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
   abort). A step that signals ends its firing with no chain; the failure limit stops the key with no ON-DONE
   (`drgnx-timer-errors` and the doctor's `timers` check show it). Drawing never uses idle steps.
 - **A chain yields to input.** A timer that re-arms itself at 0 to carry on its work (a live view's slices, the
-  Search's parse of a search's output) takes its delay from `(drgnx-timer-chain-delay)`: 0, or
+  Search's parse of a search's output) takes its delay from `(drgnx-timer-chain-delay)`: 0.0, or
   `drgnx-timer-chain-yield` (16 ms) while input is pending. Emacs's wait for input runs ripe timers back to back and
   leaves them only for keyboard input (`wait_reading_process_output` checks the keyboard buffer, not
   `unread-command-events`), so a chain at 0 starved input queued there (a key read again, the harness's typing)
   until the chain ended: the keys then ran in one burst with no redisplay between them. One link's wait lets the
   wait find no ripe timer and return, and the command loop reads the input first
   (`drgnx-timer-prim/a-chain-yields-to-pending-input`; the `replace-typing` workload measured it, perf.md).
+  The same wait reads sockets and process output only once no timer is ripe, so a chain at 0 also held back an
+  emacsclient, a search's output and agent streams until it ended. Links that run back to back for
+  `drgnx-timer-chain-span` (100 ms) make the next one wait `drgnx-timer-chain-yield` too, and every chain's link
+  waits until that yield ends (one chain cannot keep the wait busy while another yields). The run is the links
+  fired one after another at the 0.0 the function returns (the float marks a chain's link: the entry firing now,
+  `drgnx-timer--firing`, was armed with it); any other timer (a throttle, even one at the integer 0, or the yield's
+  link) or a call from outside a timer begins a new one, so the pauses between runs never count (`drgnx-timer-prim/chains-running-back-to-back-yield-to-process-input`).
 
 All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
 `test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
@@ -1671,8 +1678,8 @@ a `:full-draws`.
 **The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
 (list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
 DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. A slice that leaves work re-arms a second key,
-`(drgnx-timer-start (cons 'drgnx-view-more BUFFER) (drgnx-timer-chain-delay) …)` (0, or 16 ms while input is
-pending: "A chain yields to input" under Timers), so the throttle never delays the next slice. A mark made
+`(drgnx-timer-start (cons 'drgnx-view-more BUFFER) (drgnx-timer-chain-delay) …)` (0.0, or 16 ms while input is
+pending or the links have run back to back for 100 ms: "A chain yields to input" under Timers), so the throttle never delays the next slice. A mark made
 during a chain arms nothing (`--arm` returns while the continuation is pending): the next slice takes it, so one
 view never draws two slices in one gap; re-arming the continuation also cancels a throttle armed during that draw.
 A chain broken by hiding leaves no timer, and showing the view arms it again. Both keys are owned by the buffer
@@ -1683,10 +1690,13 @@ slice's deadline is `drgnx-view--deadline` when it is still ahead of `(drgnx-tim
 timer pass and left time), else now + SLICE. Every 8 rows (`drgnx-view--check-every`; a clock read boxes a float)
 the slice stops when the deadline has passed or `input-pending-p`. The first check comes after 8 rows, so a slice
 draws at least `min(8, work)` rows, and its rows are a multiple of 8 except the last. Views ripe in one timer pass
-share the deadline while it is unspent: a view that finishes early leaves the next the rest of the slice. A view
-that finds the deadline already spent starts a fresh one, so N sliced views that each use a whole slice cost
-N × SLICE in one gap; the spec's "at most 4 ms per gap for all views" needs a timer-pass identity, which nothing
-gives yet. Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
+share the deadline: a view that finishes early leaves the next the rest of the slice, and a view that finds it
+spent in the same pass keeps it (it draws its first 8 rows and stops), so all views together spend one SLICE per
+gap. The pass's identity is the key `drgnx-view-pass`: the draw that spends the deadline arms it, due a second ago
+(`drgnx-view--spend`). Emacs runs only the timers ripe when a pass began, so it fires in the next pass, first of
+all (a continuation armed after it may carry the same time), and clears the deadline (`drgnx-view/views-in-one-timer-pass-share-one-slice`). A view that finishes its work
+past the deadline between two checks marks nothing (that would cost a clock read per draw): the next view starts
+a fresh slice. Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
 entries from the one at `window-start`, `window-body-height` of them), then the rest, each sweep in buffer order.
 `:slices` counts the slices of SLICE types and `:max-slice-rows` the most rows one drew. When a draw leaves no view
 with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded).

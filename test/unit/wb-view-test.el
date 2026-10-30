@@ -273,6 +273,28 @@ tail, and the next draw finishes both."
     (should (= 50 (drgnx-view-test--stat v :removed)))
     (drgnx-view-test--ok v)))
 
+(defvar drgnx-view-test--clock 0.0
+  "The clock `drgnx-timer-now' reads in the pass tests: each rendered row costs 2^-14 s (exact: sums never round).")
+(defun drgnx-view-test--slow-render (key) (cl-incf drgnx-view-test--clock (/ 1.0 16384)) (drgnx-view-test--render key))
+
+(ert-deftest drgnx-view/views-in-one-timer-pass-share-one-slice ()
+  "The first view spends the pass's 4 ms slice (72 rows of 2^-14 s: the check after 64 is still in time); a second
+view drawn in the same pass gets no slice of its own: it draws its first 8 rows and stops.  The next pass starts a
+fresh slice."
+  (drgnx-view-test--with (v :render #'drgnx-view-test--slow-render :slice 0.004 :key-test 'eq)
+    (drgnx-view-append v (number-sequence 1 100))
+    (with-temp-buffer
+      (let ((w (drgnx-view-attach 'drgnx-view-test-t)) (drgnx-view-test--clock 0.0) (drgnx-view--deadline nil))
+        (drgnx-view-append w (number-sequence 1 100))
+        (unwind-protect
+            (cl-letf (((symbol-function 'drgnx-timer-now) (lambda () drgnx-view-test--clock)))
+              (should (= 72 (with-current-buffer (drgnx-view--buffer v) (drgnx-view--draw v 0.004))))
+              (should (drgnx-timer-active-p 'drgnx-view-pass))
+              (should (= 8 (drgnx-view--draw w 0.004)))                    ; same pass: the slice is spent
+              (drgnx-view--pass-end)                                       ; what the key runs in the next pass
+              (should (= 72 (drgnx-view--draw w 0.004))))
+          (drgnx-timer-cancel 'drgnx-view-pass))))))
+
 ;;;; Sync
 
 (ert-deftest drgnx-view/sync-rows-marks-appends-removals-and-dirty ()

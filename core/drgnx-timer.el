@@ -29,12 +29,33 @@
 (defvar drgnx-timer-chain-yield 0.016
   "Seconds a zero-delay chain waits before its next link while input is pending (`drgnx-timer-chain-delay').")
 
+(defvar drgnx-timer-chain-span 0.1
+  "Seconds zero-delay chain links may run back to back before the chains wait `drgnx-timer-chain-yield' once.")
+
+(defvar drgnx-timer--firing nil "The entry whose timer runs now (`drgnx-timer--fire'), or nil.")
+(defvar drgnx-timer--chain-start nil "When the zero-delay links running back to back now began, or nil.")
+(defvar drgnx-timer--chain-resume 0 "Until when every chain's next link waits: the end of the last yield.")
+
 (defun drgnx-timer-chain-delay ()
-  "The delay of a zero-delay chain's next link: 0, or `drgnx-timer-chain-yield' while input is pending.
-Emacs's wait for input runs ripe timers back to back and leaves them only for keyboard input, so a chain re-armed
-at 0 starves input queued on `unread-command-events' (a re-read key, a harness's typing) until the chain ends.
-Waiting one link lets that wait return: the command loop reads the input first.  See docs/develop/core.md, \"Timers\"."
-  (if (drgnx-timer--input-pending-p) drgnx-timer-chain-yield 0))
+  "The delay of a zero-delay chain's next link: 0.0, or `drgnx-timer-chain-yield' while input is pending or once
+links have run back to back for `drgnx-timer-chain-span'.  The float 0.0 marks the link as a chain's: a timer armed
+at the integer 0 (a view type's throttle with no delay) begins a run, it does not carry one on.
+Emacs's wait for input runs ripe timers and redisplays back to back and leaves them only for keyboard input, so a
+chain re-armed at 0 starves input queued on `unread-command-events' (a re-read key, a harness's typing) and every
+socket and process output (an emacsclient, a search, an agent stream) until the chain ends.  Waiting one link lets
+that wait find no ripe timer: the command loop reads the input, and the wait reads the processes.  The run is the
+links fired at 0 one after another (`drgnx-timer--zero-link-p'); a link with a delay, or a call from outside a
+timer, begins one.  A yield holds every chain's next link (all of them wait to its end), so one chain cannot keep
+the wait busy while another yields.  See docs/develop/core.md, \"Timers\"."
+  (if (drgnx-timer--input-pending-p)
+      drgnx-timer-chain-yield
+    (let ((now (drgnx-timer--now)))
+      (cond ((< now drgnx-timer--chain-resume)             ; a clock stepped back never stretches the wait
+             (min drgnx-timer-chain-yield (- drgnx-timer--chain-resume now)))
+            ((not (and drgnx-timer--chain-start (drgnx-timer--zero-link-p))) (setq drgnx-timer--chain-start now) 0.0)
+            ((< (- now drgnx-timer--chain-start) drgnx-timer-chain-span) 0.0)
+            (t (setq drgnx-timer--chain-start nil drgnx-timer--chain-resume (+ now drgnx-timer-chain-yield))
+               drgnx-timer-chain-yield)))))
 
 ;;;; Entries, keys and owners
 
@@ -44,9 +65,15 @@ Waiting one link lets that wait return: the command loop reads the input first. 
   timer chain       ; the Emacs timer; idle steps' re-armed one-shot
   fn args owner token (failures 0)
   secs last         ; debounce: its SECS and the last call's time (nil: an idle debounce); poll: its INTERVAL and start time
+                                        ; start, soon: the delay it was armed with (0.0: a chain's link, `drgnx-timer--zero-link-p')
   min-interval      ; soon: its :min-interval, or nil
   deadline on-timeout budget interruptible on-done
   repeat)           ; start: its REPEAT (nil: a one-shot)
+
+(defun drgnx-timer--zero-link-p ()
+  "Non-nil when the timer running now is a chain's link armed with no delay (`drgnx-timer-chain-delay''s 0.0):
+it ran right after the link before it."
+  (and drgnx-timer--firing (eql (drgnx-timer--entry-secs drgnx-timer--firing) 0.0)))
 
 (defvar drgnx-timer--table (make-hash-table :test #'equal)
   "KEY → entry.  KEY: a symbol, or (SYMBOL . OBJECT) for one timer per buffer, process, frame, window, session or root.")
@@ -207,13 +234,14 @@ number (Emacs refuses it).  See docs/develop/core.md, \"Timers\"."
     (nreverse out)))
 
 (defun drgnx-timer-reset ()
-  "Cancel every layer timer and empty the table (tests and the census).
+  "Cancel every layer timer, empty the table and forget the chains' run (tests and the census).
 An entry that cannot be cancelled (its timer is a test's stub, not a timer) never stops the rest."
   (let ((all nil))
     (maphash (lambda (_key entry) (push entry all)) drgnx-timer--table)
     (dolist (entry all) (ignore-errors (drgnx-timer--drop entry)))
     (clrhash drgnx-timer--table)
-    (clrhash drgnx-timer--last-run)))
+    (clrhash drgnx-timer--last-run)
+    (setq drgnx-timer--chain-start nil drgnx-timer--chain-resume 0)))
 
 ;;;; The fire wrapper
 
@@ -221,8 +249,8 @@ An entry that cannot be cancelled (its timer is a test's stub, not a timer) neve
   "Run ENTRY: the function of every layer timer (so `list-timers' shows one function, and the key names it).
 In order: a timer whose key holds another entry now (replaced, or cancelled while it was ripe) does nothing; an
 owner that is gone drops the entry without calling FN; a one-shot leaves the table before FN runs, so FN may start
-its key again; then FN runs (`drgnx-timer--call')."
-  (let ((key (drgnx-timer--entry-key entry)))
+its key again; then FN runs (`drgnx-timer--call'), with ENTRY in `drgnx-timer--firing'."
+  (let ((key (drgnx-timer--entry-key entry)) (drgnx-timer--firing entry))
     (when (eq (gethash key drgnx-timer--table) entry)
       (if (not (drgnx-timer--live-p entry))
           (drgnx-timer--drop entry)
@@ -395,7 +423,7 @@ idleness.  A call on a key that holds another kind of timer replaces it.  OWNER,
           (when entry (drgnx-timer--drop entry))
           (let* ((delay (if min-interval (drgnx-timer--soon-delay key secs min-interval (car cell)) secs))
                  (new (drgnx-timer--make :key key :kind 'soon :fn fn :args args :owner (car cell)
-                                         :token (cdr cell) :min-interval min-interval)))
+                                         :token (cdr cell) :min-interval min-interval :secs delay)))
             (setf (drgnx-timer--entry-timer new)
                   (if idle
                       (run-with-idle-timer delay nil #'drgnx-timer--fire new)

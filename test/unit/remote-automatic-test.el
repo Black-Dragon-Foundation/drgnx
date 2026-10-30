@@ -180,12 +180,12 @@
       ;; 4. a local save and its hooks (blame, VC, the bus)
       (with-current-buffer lbuf (save-buffer) (run-hooks 'after-save-hook))
       (drgnx-remote-auto--none 'local-save)
-      ;; 5. the Explorer redrawn from a timer, a file event of a shown local folder, a git status of every root
+      ;; 5. the Explorer redrawn from a timer, a file event of a shown local folder, a git status of what it shows
       (drgnx-explorer--render)
       (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "new.py" ldir)) (directory-file-name ldir))
       (drgnx-explorer--apply-file-events)
       (drgnx-explorer--git-refresh)
-      (drgnx-git-refresh-tree (list root ldir))
+      (drgnx-explorer--git-run)
       (drgnx-remote-auto--none 'explorer-redraw)
       ;; 6. the mode line of the remote buffer and the global one (the status segment), redrawn
       (with-current-buffer rbuf

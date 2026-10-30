@@ -380,7 +380,7 @@
   (drgnx-test-with-clock (:allow-pending t)
     (drgnx-explorer-test--with root
       (let ((drgnx-explorer-git t) (calls nil))
-        (cl-letf (((symbol-function 'drgnx-git-refresh-tree) (lambda (dirs &rest _) (push dirs calls))))
+        (cl-letf (((symbol-function 'drgnx-explorer--git-run) (lambda (&rest args) (push args calls))))
           (drgnx-test-idle 0.1)                         ; what the setup's render armed
           (setq calls nil)
           (drgnx-explorer--git-refresh)
@@ -390,7 +390,7 @@
           (drgnx-test-advance 1)
           (should-not calls)                            ; idle time, not wall time
           (drgnx-test-idle 0.1)
-          (should (equal calls (list drgnx-explorer--roots)))
+          (should (equal calls '(nil)))                ; every repository on screen, not only the unread ones
           (drgnx-explorer--git-refresh)
           (kill-buffer drgnx-explorer-buffer-name)
           (should-not (drgnx-timer-active-p 'explorer-git))

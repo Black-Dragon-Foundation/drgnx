@@ -102,6 +102,19 @@ its front connection fresh."
                     :type 'drgnx-hub-front-error)
       (should (< (- (float-time) t0) 0.6)))))
 
+(ert-deftest drgnx-hub-client/a-front-wait-never-runs-past-its-deadline ()
+  ;; each wait takes 1/32 s of a 1/8 s deadline (binary fractions: exact): the last one is cut to what is left
+  (let* ((now 0.0) (waits nil)
+         (conn (make-pipe-process :name "drgnx-hub-front-wait-test" :noquery t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub--front-now) (lambda () now))
+                  ((symbol-function 'accept-process-output)
+                   (lambda (_p secs &rest _) (push secs waits) (setq now (+ now (min secs 0.03125))) nil)))
+          (should-not (drgnx-hub--front-take conn #'identity 0.125))
+          (should (equal (mapcar (lambda (s) (round (* 1000 s))) (nreverse waits)) '(50 50 50 31)))
+          (should (= now 0.125)))
+      (delete-process conn))))
+
 (ert-deftest drgnx-hub-client/front-call-decodes-an-error-with-its-path ()
   (drgnx-hub-client-front-test--with
       '("DRGNX_FAKE_HUB_ERRORS={\"messages/send\": {\"code\": \"not-allowed\", \"message\": \"only the backend names a message's sender\", \"path\": \"sender\"}}")

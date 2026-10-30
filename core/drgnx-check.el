@@ -140,12 +140,13 @@ LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-che
                                :env (append (list "DRGNX_TEST_SELECTOR=(not (tag :timing))") (funcall results name)
                                             census (drgnx-test-env-outer)))
                       jobs))
-    ;; the unit tests that measure time, alone once the parallel phase is over, in one Emacs (16 tests: an Emacs
-    ;; for each of ~140 files would cost more than they take; each shard above runs a file per Emacs)
+    ;; the unit tests that measure time, alone once the parallel phase is over, a file per Emacs as CI runs them (a
+    ;; test that scans what is loaded measures its own file's load, not every test file's): the runner's prefilter
+    ;; starts an Emacs only for the files that hold a :timing test
     (push (funcall job "unit-timing" 3 'unit
                    (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                            paths (list "-l" run-ert "-f" "drgnx-run-ert-batch" (expand-file-name "test/unit" root)))
-                   :env (append (list "DRGNX_TEST_SELECTOR=(tag :timing)" "DRGNX_TEST_ONE_PROCESS=1") (funcall results "unit-timing")
+                   :env (append (list "DRGNX_TEST_SELECTOR=(tag :timing)") (funcall results "unit-timing")
                                 census (drgnx-test-env-outer)))
           jobs)
     (when gui
