@@ -25,6 +25,7 @@
                                       (dolist (b (buffer-list))
                                         (when (or (string-prefix-p "*markdown preview" (buffer-name b))
                                                   (equal (buffer-name b) " *string-pixel-width*")   ; shr's work buffer
+                                                  (string-prefix-p " *work*" (buffer-name b))      ; Emacs 31's pooled work buffer (`with-work-buffer')
                                                   (and (buffer-file-name b) (string-prefix-p tmp (buffer-file-name b))))
                                           (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))))
          (delete-directory tmp t)))))

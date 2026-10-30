@@ -1160,3 +1160,27 @@ this test are not passed on."
   (should (<= (drgnx-run-ert--awake 1.0 10.0 3610.0) 6.0))
   ;; a clock that stepped back adds nothing
   (should (= 2.0 (drgnx-run-ert--awake 2.0 10.0 5.0))))
+
+(defvar drgnx-uitest--queue)
+
+(ert-deftest drgnx-run-ert/a-prompt-with-no-input-pending-fails-at-once ()
+  (let ((unread-command-events nil) (executing-kbd-macro nil))
+    (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) nil)))
+      (should-error (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? ")))
+    ;; queued input, a keyboard macro or a real pending event: the prompt is asked
+    (let ((unread-command-events '(?y)))
+      (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))
+    (let ((executing-kbd-macro [?y]))
+      (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))
+    (let ((drgnx-uitest--queue '(?y)))
+      (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))
+    (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) t)))
+      (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))))
+
+(ert-deftest drgnx-run-ert/the-session-guard-advises-the-prompt-functions-it-names ()
+  (unwind-protect
+      (progn (drgnx-run-ert-refuse-idle-prompts)
+             (dolist (f drgnx-run-ert--prompt-functions)
+               (should (advice-member-p #'drgnx-run-ert--idle-prompt-guard f))))
+    (dolist (f drgnx-run-ert--prompt-functions)
+      (advice-remove f #'drgnx-run-ert--idle-prompt-guard))))

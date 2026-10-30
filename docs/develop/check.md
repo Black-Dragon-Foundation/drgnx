@@ -22,7 +22,8 @@ It runs in phases:
      own), when tmux is installed; not with `--no-gui`;
    - the live tests in shards, each in the unit suite's sandbox (`drgnx-run-ert-batch`: a temp HOME and drgnx dirs,
      a dead session bus, no display, the provider keys unset), its files in one Emacs. The sessions they start run
-     detached (no systemd user manager answers there), and `test/live/jobs-systemd-test.el` skips. A live test that
+     detached (no systemd user manager answers there), and `test/live/jobs-systemd-test.el` skips. With a user manager, check
+     starts each shard in a `systemd-run --user --scope` (`MemoryMax=4G`, no swap), so those sessions share its cgroup cap. A live test that
      needs the user's ELPA reads it from `DRGNX_USER_ELPA` (named before HOME is swapped), never from `~`. Every shard's
      C environment (the dead bus, no display) comes from `drgnx-test-env-outer` (`docs/develop/harness.md`, "One test
      environment"); `bin/drgnx test --ui` runs its live half the same way, in a child Emacs, never in its own process.

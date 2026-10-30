@@ -105,6 +105,9 @@ leaves out the tests tagged `:timing` (wall-clock assertions) and lists them as 
 once, each in an Emacs of its own as always; a file's output is printed whole when it ends, after a `drgnx: FILE`
 line, and the summary at the end lists every unexpected result.
 
+The Nidhogg 31.1 (Fedora 45) job also sets `DRGNX_TEST_LOCALE=C.UTF-8`, which `bin/drgnx test --container` turns into
+`LC_ALL` in the container; the other jobs run with no locale, so both are covered.
+
 No CI job runs a `:timing` test: a shared runner's clock judges nothing, so a budget in wall time lives where the
 machine is quiet (`bin/drgnx check`'s `unit-timing` job, [check.md](check.md)) and, for the frame and the work in a
 command, in the perf job (allocation, CPU time and counts; [perf.md](perf.md)). `bin/drgnx check` stays as the local

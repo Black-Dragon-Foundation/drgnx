@@ -43,7 +43,7 @@ request returns before drgnx may quit."
           (let ((process-environment (append (list (concat "DRGNX_SERVER_NAME=" (plist-get sess :socket))
                                                    (concat "DRGNX_EMACS=" (drgnx-ui-emacs-bin))
                                                    (concat "WAYLAND_DISPLAY=" name)
-                                                   (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))
+                                                   (concat "XDG_RUNTIME_DIR=" (drgnx-ui-session-runtime-dir name))
                                                    "DISPLAY")
                                              process-environment)))
             (with-temp-buffer

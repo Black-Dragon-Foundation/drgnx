@@ -545,7 +545,7 @@ starting `refused`) with:
 | `<id> is not a drgnx harness session (drgnx-ui-N-HEX)` | not a session id at all (`server`, a path, …) |
 | `<id> ended at TIME (stopped\|reaped); ids are never reused: start a new session` | the id's tombstone exists: that session is gone for good |
 | `no harness session <id> (see ui_list)` | no run directory: a typo, a pruned tombstone, or another state root |
-| `<id>: its session.json names another session` / `says mutter, but it has a private runtime directory` | session.json (the session's Emacs can write it) does not match the id, run directory or compositor the harness computed |
+| `<id>: its session.json names another session` | session.json (the session's Emacs can write it) does not match the id or run directory the harness computed |
 | `<id> belongs to another client (KIND, WORKTREE, pid PID); pass adopt: true to drive it` | an MCP tool addressed a session another MCP client started (`ui_list` shows `yours`). Pass `adopt: true` to drive it anyway; the adoption (`:client`, `:at`) is appended to `:adopted` in session.json. The CLI has no client token and is not checked |
 | `<id> has no live socket (stopped or crashed? see ui_list)` | the session is not running; `stop` it |
 | `this session is S, not ID` | the session's own check: every form `drgnx-ui-call` sends is `(drgnx-uitest-api-as "ID" FORM)`, and a session answers only when its id (`DRGNX_UI_NAME`, `drgnx-uitest-session-id`) is ID, so no socket path reaches another session |
@@ -618,7 +618,7 @@ process group) with the same caps (`MemoryMax=3G`, `RuntimeMaxSec`) and the same
 
 | Compositor | What runs | Emacs | What it isolates |
 |---|---|---|---|
-| `mutter` | `dbus-run-session -- mutter --headless --wayland --no-x11 --virtual-monitor WxH…` | pgtk, full screen | its Wayland display (named after the session) in `$XDG_RUNTIME_DIR` |
+| `mutter` | `dbus-run-session -- mutter --headless --wayland --no-x11 --virtual-monitor WxH…` | pgtk, full screen | its Wayland display (named after the session) in the session's own runtime directory |
 | `sway` | `dbus-run-session -- sway -c RUN/sway.conf` with `WLR_BACKENDS=headless`, `WLR_HEADLESS_OUTPUTS=N`, `WLR_RENDERER=pixman`, `WLR_LIBINPUT_NO_DEVICES=1` (no GPU, seat or input devices) | pgtk, tiled (no `--fullscreen`), on `HEADLESS-1` | a runtime directory of its own (`$XDG_RUNTIME_DIR/drgnx-ui/<hash>/<name>-xdg`, mode 0700) for sway's IPC socket (pinned there with `SWAYSOCK=…/sway-ipc.sock`) and its Wayland display; XWayland is off, so no X display in the shared `/tmp` |
 | `x11` | `dbus-run-session -- sh -c SCRIPT`: `Xvfb :N -noreset -auth RUN/Xauthority -displayfd 3 -screen 0 (N·W)xHx24`, one `xrandr --setmonitor XVFB-k` per monitor | the X11 build (`$DRGNX_UI_X11_EMACS`, else `emacs-lucid`) with `--no-x-resources`: it reads no `~/.Xdefaults`, `$XENVIRONMENT` or app-defaults | its own bus and runtime directory (as sway); a display `:N` reserved for it; only clients with its cookie (`RUN/Xauthority`, `XAUTHORITY`) can connect; no `WAYLAND_DISPLAY` |
 | `i3` | the same, then `i3 -c RUN/i3.conf` (no bar, no borders), focused on `XVFB-1` | the X11 build, with `I3SOCK` set as i3 sets it for its children | as x11, and i3's IPC socket in the session's socket directory (`ipc-socket` in the config) |

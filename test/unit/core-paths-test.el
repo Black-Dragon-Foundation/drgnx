@@ -358,3 +358,17 @@ and data dirs, whose init.el is INIT (text); what it prints, read."
   (should (equal (drgnx-run-ert--ignoring-sigpipe '("a" "b")) (drgnx-command-ignoring-sigpipe '("a" "b"))))
   (let ((system-type 'windows-nt))
     (should (equal (drgnx-run-ert--ignoring-sigpipe '("a")) (drgnx-command-ignoring-sigpipe '("a"))))))
+
+(ert-deftest drgnx-paths/the-doctor-warns-when-the-state-dir-is-inside-the-temp-dir ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-st" t)))
+         (temporary-file-directory tmp))
+    (unwind-protect
+        (progn
+          (let ((process-environment (cons (concat "XDG_STATE_HOME=" tmp "state") process-environment)))
+            (should (eq 'warn (car (drgnx-doctor-check 'state-dir (list :state-in-temp (drgnx-doctor--state-in-temp)))))))
+          (let ((process-environment (cons (concat "XDG_STATE_HOME=" (file-name-as-directory (file-truename "/var/tmp-not-here")) "s")
+                                           process-environment))
+                (temporary-file-directory tmp))
+            (should-not (drgnx-doctor--state-in-temp))
+            (should (eq 'ok (car (drgnx-doctor-check 'state-dir (list :state-in-temp nil)))))))
+      (delete-directory tmp t))))

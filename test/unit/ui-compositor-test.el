@@ -68,10 +68,14 @@ paths no WM serves."
                                (and monitors '("--virtual-monitor" "1024x768"))
                                (list "--" (drgnx-ui-emacs-bin) "--init-directory"
                                      (expand-file-name "init" (plist-get s :run)) "--fullscreen"))))
-        (should (member (concat "XDG_RUNTIME_DIR=" runtime) env))
-        (should-not (seq-find (lambda (kv) (string-match-p "\\`\\(WLR_\\|DISPLAY=\\)" kv)) env))
-        (should (equal (drgnx-ui--display-env s)
-                       (list (concat "WAYLAND_DISPLAY=" name) (concat "XDG_RUNTIME_DIR=" runtime))))))))
+        ;; mutter's own runtime directory too, so its Wayland display is not in the caller's
+        (let ((xdg (drgnx-ui-session-runtime-dir name root)))
+          (should (member (concat "XDG_RUNTIME_DIR=" xdg) env))
+          (should-not (member (concat "XDG_RUNTIME_DIR=" runtime) env))
+          (should (file-directory-p xdg))
+          (should-not (seq-find (lambda (kv) (string-match-p "\\`\\(WLR_\\|DISPLAY=\\)" kv)) env))
+          (should (equal (drgnx-ui--display-env s)
+                         (list (concat "WAYLAND_DISPLAY=" name) (concat "XDG_RUNTIME_DIR=" xdg)))))))))
 
 (ert-deftest drgnx-ui-compositor/sway-config-places-outputs-side-by-side ()
   (drgnx-ui-compositor-test--with
@@ -401,9 +405,7 @@ paths no WM serves."
             (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-1-00000a") :name) "drgnx-ui-1-00000a"))
             (dolist (forged (list (list :name "drgnx-ui-7-00000a")
                                   (list :name "../00000000/drgnx-ui-1-00000a")
-                                  (list :run (expand-file-name "drgnx-ui-7-00000a" root))
-                                  ;; M12c-2-2: a sway session saying mutter would get the caller's runtime dir
-                                  (list :compositor "mutter")))
+                                  (list :run (expand-file-name "drgnx-ui-7-00000a" root))))
               (drgnx-ui--write json (drgnx-ui--json (apply #'plist-put (copy-sequence s) forged)))
               (should-error (drgnx-ui-own-session "drgnx-ui-1-00000a") :type 'drgnx-ui-refused)))
         (delete-process server)))))
@@ -700,3 +702,24 @@ paths no WM serves."
       (delete-directory dir t))))
 
 ;;; ui-compositor-test.el ends here
+
+(ert-deftest drgnx-ui-compositor/a-lock-another-taker-replaced-is-not-held-and-not-removed ()
+  ;; two takers both found the old lock stale: the second deleted the first's fresh lock and made its own.  The first
+  ;; reads its token back, finds another's, and does not go on; and a holder never removes a lock that is not its own.
+  (drgnx-ui-compositor-test--with
+    (let* ((lock (expand-file-name ".lock" (drgnx-ui--display-reservations)))
+           (drgnx-ui--reservation-lock-wait 0.3) (ran nil))
+      (make-directory (drgnx-ui--display-reservations) t)
+      (cl-letf* ((orig (symbol-function 'drgnx-ui--write))
+                 ((symbol-function 'drgnx-ui--write)
+                  (lambda (file text)   ; the other taker's token lands over this one's
+                    (funcall orig file (if (string-suffix-p ".lock/owner" file) "someone-else" text)))))
+        (should-not (drgnx-ui--call-with-reservation-lock (lambda () (setq ran t)))))
+      (should-not ran)
+      (should (equal (drgnx-ui--lock-token lock) "someone-else"))   ; theirs, left alone
+      (delete-directory lock t)
+      ;; a holder that finds its token replaced while it works leaves the new lock
+      (should (drgnx-ui--call-with-reservation-lock
+               (lambda () (write-region "other" nil (expand-file-name "owner" lock) nil 'silent) t)))
+      (should (equal (drgnx-ui--lock-token lock) "other"))
+      (delete-directory lock t))))

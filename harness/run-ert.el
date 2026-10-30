@@ -1099,6 +1099,28 @@ exit 0 or 1."
     (when own (drgnx-run-ert--delete-run-dir own))
     (kill-emacs (if ok 0 1))))
 
+;;;; Prompts in GUI sessions
+
+;; A question asked while no input is queued and no keyboard macro runs waits for a key nobody sends: in a GUI session
+;; it hangs the whole run (a failing test's file opening, a command that asks).  A test that means to answer one has
+;; the answer queued (`unread-command-events', a macro) or replaces the prompt function.
+
+(defconst drgnx-run-ert--prompt-functions
+  '(read-from-minibuffer y-or-n-p yes-or-no-p read-key read-char-choice read-multiple-choice)
+  "The functions every other prompt (`read-string', `completing-read', …) ends in.")
+
+(defun drgnx-run-ert--idle-prompt-guard (orig &rest args)
+  "Around advice of a prompt function ORIG: it fails at once when no input is pending and no keyboard macro runs."
+  (if (or unread-command-events executing-kbd-macro (input-pending-p)
+          (bound-and-true-p drgnx-uitest--queue))    ; events `drgnx-uitest-run' delivers, one per tick
+      (apply orig args)
+    (error "A question nobody answers (no input pending, no keyboard macro): %S" (car args))))
+
+(defun drgnx-run-ert-refuse-idle-prompts ()
+  "Fail, at once, the prompts of this GUI session's tests that no input is queued for (see above)."
+  (dolist (f drgnx-run-ert--prompt-functions)
+    (when (fboundp f) (advice-add f :around #'drgnx-run-ert--idle-prompt-guard))))
+
 ;;;; Stress: the same tests, again and again
 
 ;; `bin/drgnx test --stress N [--load K]' (DRGNX_TEST_STRESS=N, DRGNX_TEST_LOAD=K): the selected tests run N times, each

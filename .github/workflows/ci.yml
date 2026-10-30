@@ -84,6 +84,7 @@ jobs:
           DRGNX_CONTAINER: podman
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_TEST_LOCALE: C.UTF-8      # the one job under a UTF-8 locale; the others run with none
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 
   # The one-writer gate (Urdr schema 7, storage §9 step 4): the whole unit suite once with DRGNX_WORK_DB_GATE=1, where

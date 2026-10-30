@@ -6,6 +6,7 @@
 (require 'drgnx-platform)
 (require 'drgnx-notice)
 (require 'drgnx-timer)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 ;;;; Helpers
@@ -68,10 +69,15 @@ OPTS: (:delay SECONDS :exit CODE :out TEXT :stderr TEXT :map \"ARGS-REGEXP FILE\
     (with-temp-buffer (insert-file-contents drgnx-platform-test--log) (split-string (buffer-string) "\n" t))))
 
 (defun drgnx-platform-test--await (pred &optional seconds)
-  "Wait (running timers and processes) until PRED is non-nil or SECONDS (default 3) pass; return PRED's value."
-  (let ((deadline (+ (float-time) (or seconds 3))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02))
-    (funcall pred)))
+  "Wait (processes and timers running, a due chain of them back to back) until PRED is non-nil; return its value.  The
+limit, SECONDS (default 3) scaled like every wait, only bounds a failure: it signals with what was running."
+  (drgnx-test-wait pred :secs (or seconds 3) :what "the platform test's condition"))
+
+(defun drgnx-platform-test--await-maybe (pred &optional seconds)
+  "Like `drgnx-platform-test--await', but PRED's value (nil) after SECONDS instead of a failure: for a thing the test
+does not require to happen."
+  (condition-case nil (drgnx-platform-test--await pred seconds)
+    (ert-test-failed nil)))
 
 (defun drgnx-platform-test--env (alist) (lambda (var) (cdr (assoc var alist))))
 

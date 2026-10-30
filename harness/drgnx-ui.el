@@ -204,7 +204,7 @@ monitor under Xvfb; the Lucid build reads the RandR 1.5 monitors `xrandr --setmo
                       (file-name-nondirectory p) compositor))))
 
 (defun drgnx-ui-session-runtime-dir (name &optional root)
-  "Session NAME's own XDG_RUNTIME_DIR under sway, x11 and i3 (state ROOT): sway's IPC socket and Wayland
+  "Session NAME's own XDG_RUNTIME_DIR (state ROOT): sway's IPC socket and Wayland
 display, and whatever the session's programs put in a runtime directory, live there, never in the caller's.
 Next to the session's socket directory, so just as short.  Always computed from NAME and ROOT, never read back
 from session.json."
@@ -271,23 +271,42 @@ run directory is gone (a crashed session) is taken over."
 (defvar drgnx-ui--reservation-lock-wait 2.0
   "Seconds a start waits for the reservations' lock before it skips the number it wanted.")
 
+(defun drgnx-ui--lock-token (lock)
+  "The owner token written in the lock directory LOCK, or nil."
+  (ignore-errors
+    (with-temp-buffer (insert-file-contents (expand-file-name "owner" lock)) (buffer-string))))
+
+(defun drgnx-ui--lock-stale-p (lock)
+  "Whether the lock directory LOCK is older than 10 s."
+  (let ((mt (file-attribute-modification-time (file-attributes lock))))
+    (and mt (< (float-time mt) (- (float-time) 10)))))
+
 (defun drgnx-ui--call-with-reservation-lock (fn)
   "Call FN holding the reservations' lock (`x11/.lock', made with `make-directory'); its value, or nil when
 the lock stays taken for `drgnx-ui--reservation-lock-wait' seconds.  A lock older than 10 s is a crashed
-holder's and is taken over."
-  (let ((lock (expand-file-name ".lock" (drgnx-ui--display-reservations)))
-        (deadline (+ (float-time) drgnx-ui--reservation-lock-wait))
-        held)
+holder's and is taken over.  The holder writes a token into the lock and reads it back before it goes on: of two
+takers that both found the old lock stale, the one whose token was overwritten (the other deleted its fresh lock)
+does not hold it and tries again.  It removes the lock afterwards only while the token is still its own."
+  (let* ((lock (expand-file-name ".lock" (drgnx-ui--display-reservations)))
+         (token (format "%d-%d-%d" (emacs-pid) (random 1000000000) (truncate (* 1000 (float-time)))))
+         (deadline (+ (float-time) drgnx-ui--reservation-lock-wait))
+         held)
     (while (and (not held) (< (float-time) deadline))
       (if (condition-case nil (progn (make-directory lock) t) (file-already-exists nil))
-          (setq held t)
-        (let ((mt (file-attribute-modification-time (file-attributes lock))))
-          (when (and mt (< (float-time mt) (- (float-time) 10)))
-            (ignore-errors (delete-directory lock)))
-          ;; still there (held, or an old one that cannot be removed): wait, never spin
-          (when (file-exists-p lock) (sleep-for 0.02)))))
+          (progn
+            (ignore-errors (drgnx-ui--write (expand-file-name "owner" lock) token))
+            (if (equal (drgnx-ui--lock-token lock) token)
+                (setq held t)
+              (sleep-for 0.02)))
+        ;; the age is read again right before the removal, so a lock another taker just made is left alone
+        (when (and (drgnx-ui--lock-stale-p lock) (drgnx-ui--lock-stale-p lock))
+          (ignore-errors (delete-directory lock t)))
+        ;; still there (held, or an old one that cannot be removed): wait, never spin
+        (when (file-exists-p lock) (sleep-for 0.02))))
     (when held
-      (unwind-protect (funcall fn) (ignore-errors (delete-directory lock))))))
+      (unwind-protect (funcall fn)
+        (when (equal (drgnx-ui--lock-token lock) token)
+          (ignore-errors (delete-directory lock t)))))))
 
 (defun drgnx-ui--take-over-reservation (n run)
   "Give the stale reservation of display N to RUN; non-nil if this call won it.  Under the reservations' lock
@@ -583,7 +602,7 @@ SIZE: WxH in device pixels (nil: $DRGNX_UI_SIZE, else 1600x900).
 MONITORS: how many virtual monitors of SIZE (default 1).  SCALES: a scale for all monitors or a list, one per
 monitor (nil: $DRGNX_UI_SCALES \"1 2\", else $DRGNX_UI_SCALE, else 1); mutter, sway and kwin only.
 COMPOSITOR: one of `drgnx-ui-compositors' (nil: the
-default, `drgnx-ui-default-compositor'); every one but mutter gets a private runtime directory; sway gets
+default, `drgnx-ui-default-compositor'); every one gets a private runtime directory; sway gets
 RUN/sway.conf, x11 and i3 a free X display, i3 also RUN/i3.conf, niri (one monitor only) RUN/sway.conf,
 RUN/niri.kdl and RUN/niri-session.sh."
   (let* ((size (or size (let ((e (getenv "DRGNX_UI_SIZE"))) (and (not (member e '(nil ""))) e)) "1600x900"))
@@ -626,12 +645,12 @@ RUN/niri.kdl and RUN/niri-session.sh."
         (when daemon (setq sess (plist-put sess :daemon t)))
         (when (and (integerp monitors) (> monitors 1)) (setq sess (plist-put sess :monitors monitors)))
         (when scales (setq sess (plist-put sess :scales (vconcat scales))))
-        (unless (equal compositor "mutter")
-          ;; the session's own runtime directory: nothing it starts reaches the caller's (its bus, its sockets)
-          (let ((xdg (drgnx-ui-session-runtime-dir name root)))
-            (when (file-directory-p xdg) (delete-directory xdg t))   ; stale, from a crashed session
-            (drgnx-ui--make-private-dir xdg)
-            (setq sess (plist-put sess :xdg_runtime_dir xdg))))
+        ;; the session's own runtime directory, whatever the compositor: nothing it starts reaches the caller's
+        ;; (its bus, its sockets, mutter's Wayland display)
+        (let ((xdg (drgnx-ui-session-runtime-dir name root)))
+          (when (file-directory-p xdg) (delete-directory xdg t))   ; stale, from a crashed session
+          (drgnx-ui--make-private-dir xdg)
+          (setq sess (plist-put sess :xdg_runtime_dir xdg)))
         (pcase compositor
           ("sway" (drgnx-ui--write (expand-file-name "sway.conf" run) (drgnx-ui-sway-config sess)))
           ("kwin" (drgnx-ui-kwin-session-command sess)       ; its paths are checked before anything starts
@@ -1343,11 +1362,6 @@ says it ended; session.json is its own (:id, :name, :run, compositor); it was no
                    (equal (plist-get sess :run) run))
         (drgnx-ui--refuse "%s: its session.json names another session (%S, %S)"
                           name (plist-get sess :name) (plist-get sess :run)))
-      ;; …or another compositor: every one but mutter has a private runtime directory, so a session.json that says
-      ;; mutter there would point frames at the caller's runtime directory (M12c-2-2)
-      (when (and (member (plist-get sess :compositor) '(nil "mutter"))
-                 (file-directory-p (drgnx-ui-session-runtime-dir name)))
-        (drgnx-ui--refuse "%s: its session.json says mutter, but it has a private runtime directory" name))
       (setq sess (drgnx-ui--check-client sess client adopt))
       (unless (and (equal (plist-get sess :socket) sock)
                    (string-prefix-p "s" (or (file-attribute-modes (file-attributes sock)) "")))
@@ -1603,7 +1617,7 @@ The runtime directory and the X display are the ones the harness made and reserv
        (list (concat "DISPLAY=" (plist-get sess :display))
              (concat "XAUTHORITY=" (expand-file-name "Xauthority" run)) "WAYLAND_DISPLAY")))
     (_ (list (concat "WAYLAND_DISPLAY=" (plist-get sess :name))
-             (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))))))
+             (concat "XDG_RUNTIME_DIR=" (drgnx-ui-session-runtime-dir (plist-get sess :name)))))))
 
 (defun drgnx-ui--client-env (sess)
   "The whole environment of the emacsclient that opens a frame in SESS: the allowlist (`drgnx-ui-keep-env') and
