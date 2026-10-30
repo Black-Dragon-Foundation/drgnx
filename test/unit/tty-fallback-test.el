@@ -32,6 +32,13 @@
                                 :bindings))
                  tty-fallback-test--resolved))))
 
+;; Resolved here, once, before any test stubs terminals, messages or timers: a first call made inside a test's stubs
+;; fills the global key-table caches under them, and one unstubbed call then poisons every later test.
+(tty-fallback-test--bindings "VS Code")
+
+(ert-deftest drgnx-tty-fallback/the-key-bindings-were-resolved-before-any-stub ()
+  (should (gethash (cons "VS Code" nil) tty-fallback-test--resolved)))
+
 (defun tty-fallback-test--keys (preset &optional platform)
   (seq-uniq (mapcar (lambda (b) (plist-get b :key)) (tty-fallback-test--bindings preset platform))))
 
