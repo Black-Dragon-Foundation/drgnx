@@ -267,6 +267,9 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 | `:sp [FILE]`, `C-w s` | Split Editor Down (`FILE` opens in the new group) |
 | `:vs [FILE]`, `C-w v` | Split Editor Right (`FILE` opens in the new group) |
 | `C-w c`, `:clo` | Close Editor Group |
+| `C-w o` | Close the other editor groups (the sidebar, the panel and the right dock stay) |
+| `:new [FILE]`, `C-w n` | A new editor group below with an empty buffer (`FILE` opens there) |
+| `:bd[!]` | Kill the buffer; each group showing it closes that tab and goes on with its next one, no group is closed |
 | `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Editor Group when there is another group, else Close Window |
 | `:wq`, `:x`, `ZZ` | Save when the buffer changed, then what `:q` does |
 | `:wq`, `:x`, `ZZ` in a Magit commit or rebase message | Finish the edit: git goes on (`with-editor-finish`) |
@@ -287,7 +290,7 @@ quitting; `:cq` and `:wqa` never end Emacs either. In the sidebar or the panel (
 data `drgnx-evil-ex-routes`; evil's `:q`, `:wq`, `:x`, `:qa`, `:wqa`, `:cq`, `:sp`, `:vs` and `C-w s/v/c` are advised while the
 engine runs (`drgnx-evil--advice-pairs`), and evil's own again when Vim editing stops (a command you defined meanwhile
 is kept). With the `core/workbench` module off, all of them are evil's own. Vim's other ex commands are untouched, and so
-are evil's other window keys and commands (`C-w o` `x` `r` `H` `J` `K` `L`, `:new`, `:bd`): they act on raw Emacs
+are evil's other window keys (`C-w x` `r` `H` `J` `K` `L`): they act on raw Emacs
 windows, not on editor groups, and can leave the workbench's arrangement (`C-w h` `j` `k` `l` `s` `v` `c` are drgnx's, above). In a
 VS Code or Emacs stack Focus Left/Right/Above/Below and the problem commands have no keys (VS Code's `F8` /
 `Shift+F8` go to the next / previous problem); they are in the palette.

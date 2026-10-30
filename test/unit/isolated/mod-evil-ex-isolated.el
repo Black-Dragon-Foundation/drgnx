@@ -192,7 +192,7 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
       (drgnx-evil-stop)
       (dolist (cell drgnx-evil--advice-pairs)
         (should-not (advice-member-p (cdr cell) (car cell))))
-      (should (= (length drgnx-evil--advice-pairs) 9))
+      (should (= (length drgnx-evil--advice-pairs) 11))
       (dolist (cell '(evil-save-and-quit evil-quit-all-with-error-code))
         (should (assq cell drgnx-evil--advice-pairs)))
       (should-not (advice-member-p #'drgnx-evil-ex-quit 'evil-quit))
