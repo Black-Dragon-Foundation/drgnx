@@ -34,6 +34,17 @@ jobs:
           image="ghcr.io/black-dragon-foundation/drgnx-test-tty:$(sha256sum test/container/Containerfile.tty | cut -c1-16)"
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
           if podman pull -q "$image"; then echo "DRGNX_TEST_TTY_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
+      - name: The pinned kkp, for the kitty and keys tests (they skip without it)
+        run: |
+          block=$(grep -A3 '^[[:space:]]*(kkp :version' etc/drgnx.lock.eld)
+          version=$(printf '%s' "$block" | grep -o ':version "[^"]*"' | head -1 | cut -d'"' -f2)
+          sha=$(printf '%s' "$block" | grep -o '"[0-9a-f]\{64\}"' | head -1 | tr -d '"')
+          [ -n "$version" ] && [ -n "$sha" ] || { echo "kkp is not pinned in etc/drgnx.lock.eld"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/user-elpa"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/kkp.tar" "https://melpa.org/packages/kkp-$version.tar"
+          echo "$sha  $RUNNER_TEMP/kkp.tar" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/kkp.tar" -C "$RUNNER_TEMP/user-elpa"
+          echo "DRGNX_USER_ELPA=$RUNNER_TEMP/user-elpa" >> "$GITHUB_ENV"
       - name: Terminal tier in test/container/Containerfile.tty
         env:
           DRGNX_CONTAINER: podman

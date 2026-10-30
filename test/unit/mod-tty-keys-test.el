@@ -29,11 +29,23 @@
 into a directory and set DRGNX_USER_ELPA to it, or point DRGNX_USER_ELPA at an elpa drgnx sync filled"
                         (car pin) (car pin) (cdr pin))))))
 
+(defun drgnx-tty-keys-test--call-process-advised-p ()
+  "Whether kkp's `kkp-restore-legacy-keys' advises `call-process' (`advice-member-p' does not see it on this Emacs)."
+  (let (found)
+    (advice-mapc (lambda (f _props) (when (eq f 'kkp-restore-legacy-keys) (setq found t))) 'call-process)
+    found))
+
 (defun drgnx-tty-keys-test--unload-kkp ()
   "Turn kkp's mode off and unload it (the fake or the real one), so the next test loads its own."
   (when (featurep 'kkp)
     (when (fboundp 'global-kkp-mode) (funcall 'global-kkp-mode -1))
     (unload-feature 'kkp t))
+  ;; the real kkp's options leave their custom state behind: the next kkp (the fake or the real) starts clean
+  (dolist (var '(kkp-restore-legacy-keys-around-subprocesses kkp-terminal-query-timeout))
+    (makunbound var)
+    (dolist (prop '(standard-value saved-value theme-value customized-value custom-type risky-local-variable))
+      (put var prop nil)))
+  (advice-remove 'call-process #'kkp-restore-legacy-keys)
   (advice-remove 'kkp-enable-in-terminal #'drgnx-tty-keys--enable-guard)
   (advice-remove 'kkp--terminal-setup #'drgnx-tty-keys--kkp-setup-guard))
 
@@ -204,6 +216,28 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
       (drgnx-tty-keys-test--unload-kkp)
       (delete-directory dir t))))
 
+(ert-deftest drgnx-tty-keys/turning-it-off-undoes-everything-in-the-real-kkp ()
+  ;; the same teardown as with the fake, against the pinned kkp: its mode, advice, hook and options all come back
+  (drgnx-tty-keys-test--need-kkp)
+  (drgnx-tty-keys-test--unload-kkp)
+  (let ((load-path (cons (drgnx-tty-keys-test--kkp-dir) load-path)))
+    (unwind-protect
+        (drgnx-tty-keys-test--terminal '((drgnx-tty-kkp-declined . t)) '("TERM=xterm-kitty") ""
+          (cl-letf (((symbol-function 'terminal-list) (lambda () '(kx-a))))
+            (drgnx-test-with-modules '(ui/terminal-keys) :strict t
+                                     (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'ok))
+                                     (should (symbol-value 'global-kkp-mode))
+                                     (should (drgnx-tty-keys-test--call-process-advised-p))
+                                     (set-terminal-parameter nil 'drgnx-tty-kkp t))
+            (should-not (symbol-value 'global-kkp-mode))
+            (should-not (drgnx-tty-keys-test--call-process-advised-p))
+            (should-not (advice-member-p #'drgnx-tty-keys--enable-guard 'kkp-enable-in-terminal))
+            (should-not (advice-member-p #'drgnx-tty-keys--kkp-setup-guard 'kkp--terminal-setup))
+            (should-not (memq #'drgnx-tty-keys--kkp-on (symbol-value 'kkp-terminal-setup-complete-hook)))
+            (should-not (terminal-parameter nil 'drgnx-tty-kkp))
+            (should-not (terminal-parameter nil 'drgnx-tty-kkp-declined))))
+      (drgnx-tty-keys-test--unload-kkp))))
+
 (ert-deftest drgnx-tty-keys/the-pinned-kkp-has-the-subprocess-option ()
   ;; the real kkp: its option advises `call-process' (`process-file' runs it for local files), and the advice
   ;; switches a terminal to legacy keys only where kkp is active
@@ -216,7 +250,7 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
          (drgnx-modules-run 'startup)
          (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'ok))
          (should (symbol-value 'global-kkp-mode))
-         (should (advice-member-p 'kkp-restore-legacy-keys 'call-process))
+         (should (drgnx-tty-keys-test--call-process-advised-p))
          (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &rest _) (push s sent))))
            (should (eq (call-process "true") 0))
            (should-not sent)))

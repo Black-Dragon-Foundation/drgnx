@@ -1290,7 +1290,7 @@ Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its 
    or a daemon with no client. Nothing on these paths prompts.
 
 `(drgnx-timer-describe TIMER)` → `(:key K :owner O :kind KIND :fn FN)` for a layer timer (O without the run token),
-else nil; `(drgnx-timer-pending)` → `(KEY OWNER KIND)` for every live key; `(drgnx-timer-reset)` cancels them all
+else nil (`(drgnx-timer-fn TIMER)` is just the :fn, without building the list: the guards call it on every firing); `(drgnx-timer-pending)` → `(KEY OWNER KIND)` for every live key; `(drgnx-timer-reset)` cancels them all
 (tests and the census). The layer never cancels a timer it did not make.
 
 ### The primitives: debounce, soon, poll, idle steps

@@ -192,6 +192,12 @@ number (Emacs refuses it).  See docs/develop/core.md, \"Timers\"."
         (list :key (drgnx-timer--entry-key entry) :owner (drgnx-timer--entry-owner entry)
               :kind (drgnx-timer--entry-kind entry) :fn (drgnx-timer--entry-fn entry))))))
 
+(defun drgnx-timer-fn (timer)
+  "The function a layer TIMER runs (what `drgnx-timer-describe' gives as :fn), else nil.  Cheap: no plist."
+  (when (and (timerp timer) (eq (timer--function timer) #'drgnx-timer--fire))
+    (let ((entry (car (timer--args timer))))
+      (when (drgnx-timer--entry-p entry) (drgnx-timer--entry-fn entry)))))
+
 (defun drgnx-timer-pending ()
   "The live keys, as (KEY OWNER KIND)."
   (let ((out nil))

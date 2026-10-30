@@ -14,7 +14,7 @@
 no registered modal engine; every binding is undone after."
   (declare (indent 0))
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+         (drgnx-modules--table nil) (drgnx-modules--report nil)
          (find-file-hook find-file-hook) (drgnx-modal-engines nil) (drgnx-modal-running nil)
          (drgnx-keys-modal-snapshots drgnx-keys-modal-snapshots))
      (drgnx--core-commands)

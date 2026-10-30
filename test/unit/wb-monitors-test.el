@@ -115,7 +115,6 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
   "BODY with a registry holding the core and module commands, nothing else.  The startup modules are set up for
 BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers would run in the later tests."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil)
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
      (drgnx--core-commands)

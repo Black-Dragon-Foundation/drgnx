@@ -43,7 +43,7 @@
                                                (concat "HOME=" dir "home"))
                                          process-environment))
             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-            (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+            (drgnx-modules--table nil) (drgnx-modules--report nil)
             (drgnx-modules--state nil) (drgnx-modal-engines nil) (drgnx-modal-running nil)
             (drgnx-keys--applied nil) (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
             (drgnx-keys--session-layers nil)

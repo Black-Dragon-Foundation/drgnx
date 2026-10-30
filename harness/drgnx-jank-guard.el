@@ -69,13 +69,12 @@
 (defun drgnx-jank-guard--describe (fn)
   (truncate-string-to-width (if (symbolp fn) (symbol-name fn) (format "%S" fn)) 80))
 
-(declare-function drgnx-timer-describe "drgnx-timer")
+(declare-function drgnx-timer-fn "drgnx-timer")
 
 (defun drgnx-jank-guard--timer (orig timer)
   (let ((drgnx-jank-guard--timer-fn
          (or (and (timerp timer)       ; a layer timer's function is named by its entry, not `drgnx-timer--fire'
-                  (let ((layer (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe timer))))
-                    (if layer (plist-get layer :fn) (timer--function timer))))
+                  (or (and (fboundp 'drgnx-timer-fn) (drgnx-timer-fn timer)) (timer--function timer)))
              'unknown-timer)))
     (funcall orig timer)))
 

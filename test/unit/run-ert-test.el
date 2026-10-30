@@ -675,6 +675,20 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (equal (plist-get (drgnx-run-ert-test--json results) :total) 1)))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/the-defining-file-sees-a-deftest-macro ()
+  ;; find-polluter looks a test up by name: a file's own `…--deftest' macro defines tests too
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t))) (suite (expand-file-name "suite" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("macro-test.el" . "(defmacro iso-d--deftest (name &rest body) `(ert-deftest ,name () ,@body))
+(iso-d--deftest iso-d/a (should t))")
+                   ("other-test.el" . "(ert-deftest iso-d/b () (should t))")))
+          (should (equal (file-name-nondirectory (drgnx-run-ert--defining-file suite "iso-d/a")) "macro-test.el"))
+          (should (equal (file-name-nondirectory (drgnx-run-ert--defining-file suite "iso-d/b")) "other-test.el"))
+          (should-not (drgnx-run-ert--defining-file suite "iso-d/c")))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/a-computed-name-selects-its-file ()
   ;; a name the prefilter cannot read keeps its file (fail open); a file with plain names that do not match is skipped
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))

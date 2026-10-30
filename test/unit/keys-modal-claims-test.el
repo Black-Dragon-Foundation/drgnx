@@ -34,7 +34,7 @@ registered as test commands of scope `window'.")
   "BODY with VAR the resolution of LAYERS, in a registry holding the core commands and the startup modules."
   (declare (indent 2))
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+         (drgnx-modules--table nil) (drgnx-modules--report nil)
          (find-file-hook find-file-hook))
      (drgnx--core-commands)
      (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))

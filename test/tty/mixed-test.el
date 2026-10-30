@@ -52,7 +52,7 @@ frame and an `emacsclient -t' client of one daemon.  Both are stopped afterwards
                     :size "100x30"
                     :command (format "%s -a false -t -s %s; echo \"[emacsclient exited $?]\"; sh"
                                      (drgnx-ui--emacsclient) (shell-quote-argument (plist-get ,(nth 0 spec) :socket)))))
-             (drgnx-tty-session-wait-screen ,(nth 1 spec) "\\*scratch\\*" 30)
+             (drgnx-tty-session-wait-screen ,(nth 1 spec) "\\*\\(?:scratch\\|drgnx start\\)\\*" 30)
              (drgnx-tty-session-wait ,(nth 0 spec) '(seq-some (lambda (f) (and (frame-parameter f 'client) (not (display-graphic-p f)))) (frame-list)) 30)
              ,@body)
          (when ,(nth 1 spec) (drgnx-tty-session-stop ,(nth 1 spec)))
