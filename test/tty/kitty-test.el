@@ -5,6 +5,7 @@
 ;; from `wl-paste' on the session's display.  kitty is installed only in test/container/Containerfile.tty: anywhere
 ;; else every test skips (bin/drgnx test --container --tty).  kkp comes from DRGNX_USER_ELPA, as in keys-test.el.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 (unless (featurep 'tty-keys-helpers)
   (load (expand-file-name "tty-keys-helpers" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -152,9 +153,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
                   emulation-mode-map-alists)
             t))
       (drgnx-tty-session-kitty-key s "f12")
-      (let ((deadline (+ (float-time) 10)))
-        (while (and (not (file-exists-p started)) (< (float-time) deadline)) (sleep-for 0.05)))
-      (should (file-exists-p started))
+      (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
       ;; kkp gives kitty its plain keys back as the program starts
       (sleep-for 0.5)
       (let ((sent (float-time)))
@@ -218,9 +217,7 @@ screen.  Returns its directory."
     (drgnx-tty-session-wait s '(with-current-buffer "*copy*" (and (use-region-p) (= (- (region-end) (region-beginning)) 5))))
     (drgnx-tty-session-kitty-key s "ctrl+c")
     (drgnx-tty-session-wait s '(equal (car kill-ring) "hello"))
-    (let ((deadline (+ (float-time) 5)))
-      (while (and (not (equal (drgnx-tty-session-kitty-clipboard s) "hello")) (< (float-time) deadline))
-        (sleep-for 0.1)))
+    (drgnx-test-wait (lambda () (equal (drgnx-tty-session-kitty-clipboard s) "hello")) :secs 5 :what "the kitty clipboard")
     (should (equal (drgnx-tty-session-kitty-clipboard s) "hello"))))
 
 (ert-deftest drgnx-kitty/true-colour ()

@@ -5,6 +5,7 @@
 ;; tmux would give as tmux); kitty proves it for real (the exit test).  kkp comes from DRGNX_USER_ELPA (read-only,
 ;; the version etc/drgnx.lock.eld pins); without it the kkp tests skip and say how to supply it.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 (unless (featurep 'tty-keys-helpers)
   (load (expand-file-name "tty-keys-helpers" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -93,9 +94,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
       ;; busy Lisp, and C-g as this terminal sends it: the raw byte
       (let ((started (expand-file-name "busy-started" (plist-get s :run))))
         (drgnx-tty-session-key c "<f12>" 'mok)
-        (let ((deadline (+ (float-time) 10)))
-          (while (and (not (file-exists-p started)) (< (float-time) deadline)) (sleep-for 0.05)))
-        (should (file-exists-p started))
+        (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
         (should (equal (drgnx-tty-session-encode "C-g" 'mok) "\a"))
         (let ((sent (float-time)))
           (drgnx-tty-session-key c "C-g" 'mok)
@@ -170,9 +169,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
       (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
         (drgnx-tty-keys-test--answer-kkp s c)
         (drgnx-tty-session-key c "<f12>" 'kkp)
-        (let ((deadline (+ (float-time) 10)))
-          (while (and (not (file-exists-p started)) (< (float-time) deadline)) (sleep-for 0.05)))
-        (should (file-exists-p started))
+        (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
         ;; a kkp terminal sends C-g as a raw byte only once the program set its flags to 0 (CSI = 0 ; 1 u);
         ;; with kkp's flags still on, it is an escape sequence that a blocked Emacs never reads
         (let* ((out (with-temp-buffer (insert-file-contents log) (buffer-string)))

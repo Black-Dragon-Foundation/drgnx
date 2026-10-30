@@ -2,6 +2,7 @@
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  Positions
 ;; come from the screen (`drgnx-tty-session-find'), never computed from Emacs's idea of the layout.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 (defun drgnx-tty-mouse-test--project (sess)
@@ -214,10 +215,8 @@ tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrom
 
 (defun drgnx-tty-mouse-test--flag (sess want)
   "The pane's SGR mouse flag once it is WANT (waits up to 5 s), else the flag it has."
-  (let ((deadline (+ (float-time) 5)))
-    (while (and (/= want (plist-get (drgnx-tty-session-pane-flags sess) :mouse-sgr)) (< (float-time) deadline))
-      (sleep-for 0.05))
-    (plist-get (drgnx-tty-session-pane-flags sess) :mouse-sgr)))
+  (condition-case nil (drgnx-test-wait (lambda () (= want (plist-get (drgnx-tty-session-pane-flags sess) :mouse-sgr))) :secs 5 :what "the mouse flag") (ert-test-failed nil))
+  (plist-get (drgnx-tty-session-pane-flags sess) :mouse-sgr))
 
 (ert-deftest drgnx-tty-mouse/off-by-setting ()
   (drgnx-tty-session-with (s :size "120x40")

@@ -2,6 +2,7 @@
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The tmux of
 ;; the harness has `set-clipboard on': an OSC 52 copy becomes its paste buffer (`drgnx-tty-session-clipboard').
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 (defconst drgnx-tty-clip-test--log
@@ -34,8 +35,7 @@
     (should-not (drgnx-tty-session-clipboard s))
     (drgnx-tty-clip-test--copy s "hello drgnx")
     (drgnx-tty-session-wait s '(and (member "hello drgnx" (list (car kill-ring))) t))
-    (let ((deadline (+ (float-time) 5)))
-      (while (and (not (drgnx-tty-session-clipboard s)) (< (float-time) deadline)) (sleep-for 0.05)))
+    (drgnx-test-wait (lambda () (drgnx-tty-session-clipboard s)) :secs 5 :what "the clipboard")
     (should (equal (drgnx-tty-session-clipboard s) "hello drgnx"))))
 
 (ert-deftest drgnx-tty-clip/paste-key-yanks-the-last-copy-without-asking ()
@@ -65,8 +65,7 @@
     (drgnx-tty-session-wait s '(with-current-buffer "*copy*" (and (use-region-p) (= (- (region-end) (region-beginning)) 5))))
     (drgnx-tty-session-send s "\C-c")
     (drgnx-tty-session-wait s '(equal (car kill-ring) "hello"))
-    (let ((deadline (+ (float-time) 5)))
-      (while (and (not (drgnx-tty-session-clipboard s)) (< (float-time) deadline)) (sleep-for 0.05)))
+    (drgnx-test-wait (lambda () (drgnx-tty-session-clipboard s)) :secs 5 :what "the clipboard")
     (should (equal (drgnx-tty-session-clipboard s) "hello"))
     (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*copy*" (buffer-string))) "hello drgnx"))
     (should-not (drgnx-tty-session-eval s '(with-current-buffer "*copy*" (use-region-p))))))
