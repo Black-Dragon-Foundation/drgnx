@@ -84,8 +84,9 @@ cat /tmp/run1.out
 
 # ---- 2: the outcome ------------------------------------------------------------------------------------------------
 step "2. the outcome"
+# settings.el is what the first start makes of the fixture's older settings files (the migration; the second run leaves it as it is)
 # the repository's own lock is the shipped one, which the first sync completes (drops :from-shipped): the one file that may differ
-[[ -z "$(git -C "$CONFIG" status --porcelain | grep -v ' drgnx.lock.eld$' || true)" ]] || { git -C "$CONFIG" status --short; fail "the config dir differs from the repository"; }
+[[ -z "$(git -C "$CONFIG" status --porcelain | grep -v -e ' drgnx.lock.eld$' -e ' settings.el$' || true)" ]] || { git -C "$CONFIG" status --short; fail "the config dir differs from the repository"; }
 for f in /src/test/fixtures/bootstrap/config/*; do
   cmp -s "$f" "$CONFIG/${f##*/}" || fail "${f##*/} is not the fixture's"
 done
