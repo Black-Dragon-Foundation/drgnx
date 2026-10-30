@@ -191,6 +191,10 @@ fn query(
     let mut out = Vec::new();
     let mut truncated = false;
     while let Some(row) = rows.next().map_err(fail)? {
+        // the progress handler counts steps, and a few steps can build a large row
+        if start.elapsed() >= deadline {
+            return Err(SqlRefusal::Deadline);
+        }
         if out.len() == row_cap {
             truncated = true;
             break;
@@ -474,6 +478,22 @@ mod tests {
         .await;
         assert_eq!(r, Err(SqlRefusal::Deadline));
         assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn heavy_rows_meet_the_deadline() {
+        // 30 rows are too few steps for the progress handler to look at the clock, and 27 MB of random bytes take
+        // longer than a millisecond on any machine
+        let (_dir, pool) = fixture();
+        let r = run(
+            &pool,
+            "select randomblob(900000) from n a, n b".into(),
+            Vec::new(),
+            Duration::from_millis(1),
+            30,
+        )
+        .await;
+        assert_eq!(r, Err(SqlRefusal::Deadline));
     }
 
     #[tokio::test]
