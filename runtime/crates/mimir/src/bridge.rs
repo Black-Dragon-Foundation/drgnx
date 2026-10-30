@@ -905,6 +905,50 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
     }
 }
 
+/// The bridge's line handling for the fuzz crate (`fuzz/fuzz_targets/bridge_line.rs`): the private functions that read
+/// hostile bytes, behind plain signatures.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing {
+    use super::*;
+
+    /// The id `classify` finds in a request or an answer; `None` for anything else.
+    pub fn classify_id(line: &str) -> Option<Id> {
+        match classify(line) {
+            Msg::Request { id, .. } | Msg::Answer { id, .. } => Some(id),
+            Msg::Notification { .. } | Msg::Other => None,
+        }
+    }
+
+    /// `id_in_prefix` on BYTES.
+    pub fn prefix_id(bytes: &[u8]) -> Option<Id> {
+        id_in_prefix(bytes)
+    }
+
+    /// `read_bounded` over DATA (every read ready at once) until the end: each line's kept bytes and whether it was
+    /// over MAX.
+    pub fn read_lines(data: &[u8], max: usize) -> Vec<(Vec<u8>, bool)> {
+        let mut r = data;
+        let mut out = Vec::new();
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        loop {
+            let mut buf = Vec::new();
+            let got = {
+                let mut fut = std::pin::pin!(read_bounded(&mut r, &mut buf, max));
+                match fut.as_mut().poll(&mut cx) {
+                    std::task::Poll::Ready(Ok(g)) => g,
+                    _ => return out,
+                }
+            };
+            match got {
+                Got::Eof => return out,
+                Got::Line => out.push((buf, false)),
+                Got::TooLong => out.push((buf, true)),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
