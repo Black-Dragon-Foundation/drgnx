@@ -438,7 +438,9 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 ;; macOS's bash reads "$name…" as a variable named "name" plus the first byte of "…" (its libc calls bytes above 127
 ;; letters in a UTF-8 locale), so under `set -u' the script stops: "name\342: unbound variable".  ${name}… is safe.
 (ert-deftest drgnx-bin/no-shell-variable-runs-into-a-non-ascii-character ()
-  (dolist (file '("bin/drgnx" "install.sh"))
+  (dolist (file (append '("bin/drgnx" "install.sh")
+                        (mapcar (lambda (f) (file-relative-name f drgnx-bin-test--root))
+                                (directory-files-recursively (expand-file-name "test" drgnx-bin-test--root) "\\.sh\\'"))))
     (with-temp-buffer
       (insert-file-contents (expand-file-name file drgnx-bin-test--root))
       (let (hits)
