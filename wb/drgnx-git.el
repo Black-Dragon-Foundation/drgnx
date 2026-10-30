@@ -12,7 +12,6 @@
 
 ;;; Code:
 (require 'cl-lib)
-(require 'seq)
 (require 'subr-x)
 (require 'drgnx-memo)
 
@@ -28,10 +27,13 @@
     (ignored nil drgnx-git-ignored 0))
   "Status → (LETTER FACE RANK); folders take the highest-ranked status inside them.")
 
+(defconst drgnx-git-roots-max 16
+  "How many repositories' status is kept.  A panel reads at most this many at a time (more would push out its own).")
+
 ;; Repository root → plist (:files HASH :folders HASH :branch PLIST :proc PROCESS :again BOOL), at most 16 roots (the
 ;; least recently read goes first; PERF-M5).  A root evicted while its status process runs is put back when the
 ;; process finishes; the process is not killed.  `drgnx-core/workbench' activates it (empties it on teardown).
-(drgnx-cache-define 'git-status :key 'string :cap 16
+(drgnx-cache-define 'git-status :key 'string :cap drgnx-git-roots-max
                     :doc "Repository root → its status plist; capped at 16 roots, the least recently read evicted.")
 (defvar drgnx-git--roots (make-hash-table :test #'equal) "Folder → its repository root, or `none'.")
 (defvar drgnx-git-changed-functions nil "Called with a repository root after its status was read.")
@@ -43,8 +45,10 @@
   "The repository root (with a trailing /) holding PATH, or nil (also for remote paths)."
   (unless (file-remote-p path)
     (let* ((dir (cond ((directory-name-p path) (expand-file-name path))   ; a folder (trailing /): itself
-                      ;; a repository's own folder, named without a trailing / (the Explorer's root rows)
-                      ((let ((d (file-name-as-directory (expand-file-name path)))) (and (drgnx-cache-get 'git-status d) d)))
+                      ;; a repository's own folder, named without a trailing / (the Explorer's root rows): once it
+                      ;; is known as its own root, whether or not its status is in the cache now
+                      ((let ((d (file-name-as-directory (expand-file-name path))))
+                         (and (equal (gethash d drgnx-git--roots) d) d)))
                       (t (file-name-directory (directory-file-name (expand-file-name path))))))
            (hit (gethash dir drgnx-git--roots)))
       (unless hit
@@ -147,6 +151,11 @@ ignored or untracked folder around it."
               (setq dir (file-name-directory (directory-file-name dir))))
             found)))))
 
+(defun drgnx-git-unread-p (path)
+  "Non-nil when PATH is in a repository whose status is not in the cache: never read, or pushed out.
+A peek: it keeps nothing from eviction."
+  (when-let* ((root (drgnx-git-root path))) (not (drgnx-cache-peek 'git-status root))))
+
 (defun drgnx-git-look (status)
   "(LETTER FACE) for STATUS."
   (let ((l (alist-get status drgnx-git--looks))) (list (car l) (cadr l))))
@@ -161,15 +170,26 @@ ignored or untracked folder around it."
     (when (> (buffer-size) drgnx-git-errors-max)
       (delete-region (point-min) (- (point-max) drgnx-git-errors-max)))))
 
+(defun drgnx-git--run-of (root)
+  "ROOT's status run that is still going, or nil: found among the processes, for a ROOT the cache pushed out while
+its run went on (the entry, and with it :proc, is gone)."
+  (let ((procs (process-list)) found)
+    (while (and procs (not found))
+      (let ((p (car procs)))
+        (when (and (equal (process-get p 'drgnx-git-root) root) (process-live-p p)) (setq found p)))
+      (setq procs (cdr procs)))
+    found))
+
 (defun drgnx-git-refresh (path &optional wait)
   "Read the status of PATH's repository in the background (WAIT: until done, for tests).
-A refresh asked for while one runs is done once afterwards."
+A refresh asked for while one runs is done once afterwards, also when the cache pushed the repository out meanwhile."
   ;; Folders found outside any repository are looked at again: one may have been made since (git init).
   (maphash (lambda (dir root) (when (eq root 'none) (remhash dir drgnx-git--roots))) drgnx-git--roots)
   (when-let* ((root (drgnx-git-root path)) ((executable-find "git")))
-    (let ((repo (drgnx-cache-get 'git-status root)))
-      (if (process-live-p (plist-get repo :proc))
-          (drgnx-cache-put 'git-status root (plist-put repo :again t))
+    (let* ((repo (drgnx-cache-get 'git-status root))
+           (running (if repo (plist-get repo :proc) (drgnx-git--run-of root))))
+      (if (process-live-p running)
+          (drgnx-cache-put 'git-status root (plist-put (plist-put repo :proc running) :again t))
         (let* ((default-directory root)
                (process-environment (cons "GIT_OPTIONAL_LOCKS=0" process-environment))
                (buf (generate-new-buffer " *drgnx git*" t))
@@ -182,6 +202,7 @@ A refresh asked for while one runs is done once afterwards."
                       :command '("git" "--no-optional-locks" "status" "--porcelain=v2" "--branch" "-z"
                                  "--ignored=matching" "--untracked-files=normal")
                       :sentinel (lambda (p _event) (drgnx-git--done p root)))))
+          (process-put proc 'drgnx-git-root root)
           (drgnx-cache-put 'git-status root (plist-put (copy-sequence repo) :proc proc))))
       (when wait
         ;; Until no run is left unread: the one running, and the one queued behind it.  A run is read
@@ -194,17 +215,6 @@ A refresh asked for while one runs is done once afterwards."
               ;; Read what it left in the pipe (this runs its sentinel), then finish it if that did not.
               (while (accept-process-output p 0))
               (drgnx-git--done p root))))))))
-
-(defun drgnx-git-refresh-tree (dirs &optional wait)
-  "Refresh the repositories of DIRS and every repository already seen inside them (nested ones).
-WAIT: until done, for tests."
-  (let ((roots (mapcar (lambda (d) (file-name-as-directory (expand-file-name d))) dirs)) (nested nil))
-    (maphash (lambda (_dir root)
-               (when (and (stringp root) (not (member root nested))
-                          (seq-some (lambda (d) (string-prefix-p d root)) roots))
-                 (push root nested)))
-             drgnx-git--roots)
-    (dolist (r (delete-dups (append roots nested))) (drgnx-git-refresh r wait))))
 
 (defun drgnx-git--done (proc root)
   "PROC (git status for ROOT) ended: keep its result, tell the panels, run a waiting refresh.

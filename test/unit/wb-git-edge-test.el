@@ -60,8 +60,9 @@
     (drgnx-git-refresh dir t)
     (should (eq (drgnx-git-status (expand-file-name "a.txt" dir)) 'untracked))))
 
-(ert-deftest drgnx-git/nested-repositories-are-refreshed ()
-  ;; A repository inside the tree's root (seen when its rows were painted) is read with the root's.
+(ert-deftest drgnx-git/a-nested-repository-is-its-own ()
+  ;; A repository inside another (seen when its rows were painted) is read on its own, and its folder's row, named
+  ;; without a trailing slash, is its own once it is known, not the outer repository's.
   (skip-unless (executable-find "git"))
   (drgnx-git-edge--with dir
     (drgnx-git-edge--commit dir "a.txt")
@@ -70,8 +71,11 @@
       (drgnx-git-edge--commit inner "b.txt")
       (write-region "changed\n" nil (expand-file-name "b.txt" inner) nil 'silent)
       (should-not (drgnx-git-status (expand-file-name "b.txt" inner)))   ; painted before any status
-      (drgnx-git-refresh-tree (list dir) t)
-      (should (eq (drgnx-git-status (expand-file-name "b.txt" inner)) 'modified)))))
+      (should (drgnx-git-unread-p (expand-file-name "b.txt" inner)))
+      (drgnx-git-refresh (expand-file-name "b.txt" inner) t)
+      (should-not (drgnx-git-unread-p (expand-file-name "b.txt" inner)))
+      (should (eq (drgnx-git-status (expand-file-name "b.txt" inner)) 'modified))
+      (should (equal (drgnx-git-root (directory-file-name inner)) inner)))))
 
 (ert-deftest drgnx-git/a-root-row-is-tinted ()
   ;; The Explorer names a root without a trailing slash; it gets the strongest status in the repository.

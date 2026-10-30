@@ -172,7 +172,9 @@ buffer, and they keep both in step.")
   :type 'boolean)
 
 (defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
-  "Colour the name and put the status letter (● for a folder with changes) at the right edge."
+  "Colour the name and put the status letter (● for a folder with changes) at the right edge.
+A row of a repository whose status is not read yet asks for it (`drgnx-explorer--git-unread')."
+  (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
   (when-let* ((status (and drgnx-explorer-git (drgnx-git-status path))))
     (pcase-let ((`(,letter ,face) (drgnx-git-look status)))
       (add-face-text-property name-start eol face)
@@ -300,9 +302,38 @@ faces come later, from jit-lock, for the rows on screen."
   (when-let* ((drgnx-explorer-git) (buf (get-buffer drgnx-explorer-buffer-name)))
     (drgnx-timer-soon 'explorer-git 0.05 #'drgnx-explorer--git-run :idle t :owner buf)))
 
-(defun drgnx-explorer--git-run ()
-  "Read the git status of every root (the key `explorer-git')."
-  (drgnx-git-refresh-tree drgnx-explorer--roots))
+(defun drgnx-explorer--git-unread ()
+  "Read the repositories on screen whose status is not read yet (a row scrolled into view, a repository pushed
+out of the cache): the key `explorer-git-unread', 0.05 s into a pause, owned by the Explorer buffer."
+  (when-let* ((drgnx-explorer-git) (buf (get-buffer drgnx-explorer-buffer-name)))
+    (drgnx-timer-soon 'explorer-git-unread 0.05 #'drgnx-explorer--git-run :args '(t) :idle t :owner buf)))
+
+(defun drgnx-explorer--git-shown ()
+  "The repositories of the rows the Explorer's windows show, each once, the top ones first, at most
+`drgnx-git-roots-max' (the cache keeps that many: reading more would push out the ones on screen).  A
+folder's row counts as the folder (a repository's own row: that repository).  The Explorer in no window: the
+repositories of its roots."
+  (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
+    (with-current-buffer buf
+      (let ((rows drgnx-explorer--rows) (windows (get-buffer-window-list buf nil t)) (found nil) (n 0))
+        (cl-flet ((add (path) (let ((root (and (< n drgnx-git-roots-max) (drgnx-git-root path))))
+                                (when (and root (not (member root found))) (push root found) (setq n (1+ n))))))
+          (if (null windows)
+              (dolist (root drgnx-explorer--roots) (add (file-name-as-directory (expand-file-name root))))
+            (dolist (w windows)
+              (let* ((i (drgnx-explorer--index (window-start w)))
+                     (end (min (length rows) (+ i (window-body-height w)))))
+                (while (< i end)
+                  (let ((v (aref rows i)))
+                    (add (if (aref v 2) (file-name-as-directory (drgnx-explorer--path v)) (drgnx-explorer--path v))))
+                  (setq i (1+ i)))))))
+        (nreverse found)))))
+
+(defun drgnx-explorer--git-run (&optional unread wait)
+  "Read the git status of the repositories on screen (`drgnx-explorer--git-shown'; the key `explorer-git').
+UNREAD: only those whose status is not read yet (the key `explorer-git-unread').  WAIT: until done, for tests."
+  (dolist (root (drgnx-explorer--git-shown))
+    (when (or (not unread) (drgnx-git-unread-p root)) (drgnx-git-refresh root wait))))
 
 (defun drgnx-explorer--git-changed (_root)
   "A git status arrived: repaint the visible rows."

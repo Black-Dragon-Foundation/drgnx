@@ -27,8 +27,8 @@
 (declare-function drgnx-gc-gap "drgnx-gc" ())
 
 (defcustom drgnx-view-slice 0.004
-  "The longest slice, in seconds, a view type may ask for.  Views ripe in one timer pass share an unspent deadline;
-one that finds it spent starts its own slice."
+  "The longest slice, in seconds, a view type may ask for.  Views ripe in one timer pass share one deadline: one that
+finds it spent in the same pass draws its first rows only; the next pass starts a fresh slice."
   :type 'number :group 'drgnx)
 
 (defcustom drgnx-view-delay 0.1
@@ -69,13 +69,27 @@ right after it would inherit `read-only' and is refused (see `drgnx-view--protec
 (defvar drgnx-view--changed nil "Keys the draw now running drew or grew, newest first (for PATCHED).")
 (defvar drgnx-view--syncing nil "The view whose SYNC runs now: its marks need no timer, the draw takes them.")
 
+(defun drgnx-view--pass-end ()
+  "The key `drgnx-view-pass' fired: a new timer pass began, its first sliced view starts a fresh deadline."
+  (setq drgnx-view--deadline nil))
+
+(defun drgnx-view--spend ()
+  "The deadline is spent in this timer pass: until the pass ends, a view drawn after this one keeps it (and stops
+after its first rows) instead of starting a fresh one.  The pass's end is the key `drgnx-view-pass': Emacs runs the
+timers ripe when a pass began and never one armed during it, so it fires in the next pass.  It is due a second ago,
+so it sorts before every timer of that pass (a view's continuation armed after it may carry the same time).
+Returns t."
+  (unless (drgnx-timer-active-p 'drgnx-view-pass)
+    (drgnx-timer-start 'drgnx-view-pass -1 #'drgnx-view--pass-end :owner :core))
+  t)
+
 (defun drgnx-view--go-p ()
   "Non-nil if the draw now running may work on one more row (and count it).  Every `drgnx-view--check-every' rows a
-sliced draw reads the clock and `input-pending-p': past the deadline or with input waiting it stops.  A slice always
-draws its first row."
+sliced draw reads the clock and `input-pending-p': past the deadline (spent for the pass: `drgnx-view--spend') or
+with input waiting it stops.  A slice always draws its first row."
   (cond (drgnx-view--stopped nil)
         ((and drgnx-view--slicing (> drgnx-view--rows 0) (zerop (% drgnx-view--rows drgnx-view--check-every))
-              (or (>= (drgnx-timer-now) drgnx-view--deadline) (input-pending-p)))
+              (or (and (>= (drgnx-timer-now) drgnx-view--deadline) (drgnx-view--spend)) (input-pending-p)))
          (setq drgnx-view--stopped t)
          nil)
         (t (setq drgnx-view--rows (1+ drgnx-view--rows)) t)))
@@ -768,8 +782,9 @@ rows drawn, grown or removed; the view's `cut' says whether work is left."
             (drgnx-view--slicing (and slice t)) (drgnx-view--rows 0) (drgnx-view--stopped nil)
             (drgnx-view--changed nil) (type (drgnx-view--type view)))
         (when slice
-          (let ((now (drgnx-timer-now)))
-            (unless (and drgnx-view--deadline (> drgnx-view--deadline now))
+          (let ((now (drgnx-timer-now)))   ; this pass's deadline while unspent, or spent by a view before this one
+            (unless (and drgnx-view--deadline
+                         (or (> drgnx-view--deadline now) (drgnx-timer-active-p 'drgnx-view-pass)))
               (setq drgnx-view--deadline (+ now slice)))))
         (when (drgnx-view--touched view)
           (setf (drgnx-view--touched view) nil)
@@ -808,8 +823,8 @@ was removed.  A RENDER, GROW, SYNC or PATCHED that signals is recorded (`drgnx-v
 (defun drgnx-view--draw-buffer (buffer)
   "The timer function of BUFFER's view (keys `(drgnx-view . BUFFER)' and `(drgnx-view-more . BUFFER)').
 Hidden: mark it stale, count a `:stale-skips', draw and allocate nothing.  Shown: draw one slice (a type with SLICE)
-or everything; work left re-arms `(drgnx-view-more . BUFFER)' at `drgnx-timer-chain-delay' (0, or later while
-input is pending); when no view has work left, `drgnx-gc-gap'."
+or everything; work left re-arms `(drgnx-view-more . BUFFER)' at `drgnx-timer-chain-delay' (0.0, or later while
+input is pending or the chain has run long); when no view has work left, `drgnx-gc-gap'."
   (let ((view (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view buffer))))
     (when (drgnx-view-p view)
       (cond ((not (drgnx-view-shown-p view))

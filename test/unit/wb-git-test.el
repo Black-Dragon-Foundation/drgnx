@@ -253,3 +253,85 @@ build/ ignored (with build/out.o)."
       (should (= (process-exit-status proc) 0))
       (should (eq (drgnx-git-status (expand-file-name "u.txt" root)) 'untracked))
       (should (= (drgnx-cache-size 'git-status) 16)))))
+
+(ert-deftest drgnx-git/a-refresh-of-a-root-pushed-out-mid-run-starts-no-second-git ()
+  ;; The root's entry, and with it its run, is gone from the cache; the run still goes, so a refresh now is done once
+  ;; after it, not by a second git beside it.
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--many-repos roots 1
+    (let ((root (car roots)) proc)
+      (drgnx-git-refresh root)
+      (setq proc (plist-get (drgnx-cache-get 'git-status root) :proc))
+      (dotimes (i 16) (drgnx-cache-put 'git-status (format "/tmp/drgnx-fill-%d/" i) (list :branch nil)))
+      (should-not (drgnx-cache-get 'git-status root))
+      (should (process-live-p proc))
+      (drgnx-git-refresh root)
+      (should (eq (plist-get (drgnx-cache-peek 'git-status root) :proc) proc))     ; the same run
+      (should (plist-get (drgnx-cache-peek 'git-status root) :again))              ; asked again after it
+      (drgnx-git-refresh root t)
+      (should (eq (drgnx-git-status (expand-file-name "u.txt" root)) 'untracked)))))
+
+(ert-deftest drgnx-git/a-pushed-out-repository-s-own-row-stays-its-own ()
+  ;; The Explorer names a repository's folder without a trailing slash: pushed out of the cache, it must not fall to
+  ;; the folder around it.
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--many-repos roots 17
+    (dolist (r roots) (drgnx-git-refresh r t))
+    (should-not (drgnx-cache-peek 'git-status (car roots)))
+    (should (equal (drgnx-git-root (directory-file-name (car roots))) (car roots)))))
+
+(defun drgnx-git-test--explorer-lines (w)
+  "The row indexes window W of the Explorer shows: (FIRST . END)."
+  (with-current-buffer drgnx-explorer-buffer-name
+    (let ((first (drgnx-explorer--index (window-start w))))
+      (cons first (min (length drgnx-explorer--rows) (+ first (window-body-height w)))))))
+
+(defun drgnx-git-test--shown (roots w)
+  "Those of ROOTS whose folder row or u.txt row window W of the Explorer shows."
+  (let ((lines (drgnx-git-test--explorer-lines w)))
+    (with-current-buffer drgnx-explorer-buffer-name
+      (cl-flet ((in (path) (let ((i (drgnx-explorer--index (drgnx-explorer--row-pos path))))
+                             (and (<= (car lines) i) (< i (cdr lines))))))
+        (seq-filter (lambda (r) (or (in (directory-file-name r)) (in (expand-file-name "u.txt" r)))) roots)))))
+
+(ert-deftest drgnx-git/the-explorer-reads-only-the-repositories-on-screen ()
+  ;; Twenty repositories open in one tree, more than the cache keeps: reading every one of them pushed out those on
+  ;; screen, which lost their letters until the next read.  Only the repositories on screen are read, each once; a
+  ;; scroll reads the ones that came into view.
+  (skip-unless (executable-find "git"))
+  (drgnx-git-test--many-repos roots 20
+    (drgnx-test-with-state
+      (let ((drgnx-wb--sections nil) (drgnx-explorer-compact-folders nil) (drgnx-explorer-git t)
+            (drgnx-explorer--expanded (make-hash-table :test #'equal)) (read nil))
+        (unwind-protect
+            (progn
+              (delete-other-windows)
+              (drgnx-explorer-setup)
+              (dolist (r roots) (puthash (directory-file-name r) t drgnx-explorer--expanded))
+              (drgnx-explorer-set-roots (list parent))
+              (drgnx-wb-show-sidebar)
+              (let* ((w (get-buffer-window drgnx-explorer-buffer-name t)) (shown (drgnx-git-test--shown roots w))
+                     (orig (symbol-function 'drgnx-git-refresh)))
+                (should w)
+                (should (< 0 (length shown) 17))
+                (cl-letf (((symbol-function 'drgnx-git-refresh)
+                           (lambda (path &optional wait) (push (drgnx-git-root path) read) (funcall orig path wait))))
+                  (drgnx-explorer--git-run nil t)
+                  (should (equal (sort (copy-sequence read) #'string<) shown))      ; each on screen once, no other
+                  (dolist (r shown) (should (eq (drgnx-git-status (expand-file-name "u.txt" r)) 'untracked)))
+                  ;; scrolled to the last repository read: the rows that came into view ask for their repositories,
+                  ;; and only those are read
+                  (setq read nil)
+                  (with-current-buffer drgnx-explorer-buffer-name
+                    (set-window-start w (drgnx-explorer--row-pos (directory-file-name (car (last shown)))) t)
+                    (let ((now (drgnx-git-test--shown roots w)))
+                      (should now)
+                      (drgnx-explorer--fontify (window-start w) (point-max))
+                      (should (drgnx-timer-active-p 'explorer-git-unread))
+                      (drgnx-explorer--git-run t t)
+                      (should (equal (sort (copy-sequence read) #'string<) (seq-difference now shown)))
+                      (dolist (r now) (should (eq (drgnx-git-status (expand-file-name "u.txt" r)) 'untracked))))))))
+          (drgnx-timer-cancel 'explorer-git-unread)
+          (drgnx-wb-hide-sidebar)
+          (drgnx-explorer-set-roots nil)
+          (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))))))
