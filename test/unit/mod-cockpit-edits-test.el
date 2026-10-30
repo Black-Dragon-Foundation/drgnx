@@ -1,5 +1,6 @@
 ;;; mod-cockpit-edits-test.el --- batch tests: each agent's edits as a live diff (accept, revert by request, comment on a line) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'filenotify)
 (require 'drgnx)
@@ -271,10 +272,10 @@ subscriptions (`drgnx-cockpit-edits--subscribe'): a test that shows or hides E c
 (ert-deftest drgnx-cockpit-edits/the-pane-is-never-cloned ()
   ;; a clone would share the pane's timers and watches: killing it would stop the original's updates
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
-    (let ((n (length (buffer-list))))
+    (let ((n (length (drgnx-test-buffer-list))))
       (should-error (clone-buffer))
       (should-error (clone-indirect-buffer nil nil))
-      (should (= n (length (buffer-list))))
+      (should (= n (length (drgnx-test-buffer-list))))
       (should (drgnx-timer-active-p (cons 'cockpit-edits-check (current-buffer)))))))
 
 (defun drgnx-cockpit-edits-test--hide (e)

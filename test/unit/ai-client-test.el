@@ -1,5 +1,6 @@
 ;;; ai-client-test.el --- batch tests: requests to providers, fallback, cancel, probes, the doctor's ai check -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)
 (require 'drgnx-doctor)
@@ -49,14 +50,14 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
 (ert-deftest drgnx-ai-client/what-cannot-be-sent-falls-back-and-leaves-nothing-behind ()
   ;; a raw byte in the buffer (json-serialize refuses it), no curl: a reason, never an error in a timer
   (drgnx-ai-client-test--with '((:path "/api/generate" :body "{\"response\":\"ok\"}"))
-    (let ((buffers (length (buffer-list))))
+    (let ((buffers (length (drgnx-test-buffer-list))))
       (let ((r (drgnx-ai-client-test--call '((o . "m")) 'fim (list :prefix (string (unibyte-char-to-multibyte #xff)) :suffix ""))))
         (should-not (car r))
         (should (string-search "cannot send" (plist-get (cdr r) :error))))
       (let* ((exec-path nil) (r (drgnx-ai-client-test--call '((o . "m")) 'fim '(:prefix "a" :suffix ""))))
         (should-not (car r))
         (should (string-search "cannot send" (plist-get (cdr r) :error))))
-      (should (= (length (buffer-list)) buffers)))))
+      (should (= (length (drgnx-test-buffer-list)) buffers)))))
 
 (defun drgnx-ai-client-test--log (log) (if (file-exists-p log) (with-temp-buffer (insert-file-contents log) (buffer-string)) ""))
 

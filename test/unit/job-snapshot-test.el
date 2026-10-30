@@ -4,6 +4,7 @@
 ;; is bound to a plain `cp -a' (the copy is then a full one; what it holds is the same).
 ;; The git these tests run in a task folder is the agent's or the sandbox's part, played by the test.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-job-snapshot)
@@ -455,10 +456,10 @@ its alternates', `cat-file --batch-all-objects --batch')."
     (should (eql (car got) 3))
     (should (= (length (cddr got)) big)))
   ;; a program that cannot start: an error, and no process or buffer left behind
-  (let ((procs (length (process-list))) (bufs (length (buffer-list))))
+  (let ((procs (length (process-list))) (bufs (length (drgnx-test-buffer-list))))
     (should-error (drgnx-job-snapshot--run temporary-file-directory (list "drgnx-no-such-program-x") nil #'ignore))
     (should (= (length (process-list)) procs))
-    (should (= (length (buffer-list)) bufs))))
+    (should (= (length (drgnx-test-buffer-list)) bufs))))
 
 ;;;; Bounded: disk use and removal
 
