@@ -52,7 +52,7 @@ frame and an `emacsclient -t' client of one daemon.  Both are stopped afterwards
                     :size "100x30"
                     :command (format "%s -a false -t -s %s; echo \"[emacsclient exited $?]\"; sh"
                                      (drgnx-ui--emacsclient) (shell-quote-argument (plist-get ,(nth 0 spec) :socket)))))
-             (drgnx-tty-session-wait-screen ,(nth 1 spec) "\\*scratch\\*" 30)
+             (drgnx-tty-session-wait-screen ,(nth 1 spec) "\\*drgnx start\\*" 30)   ; a new frame's start page
              (drgnx-tty-session-wait ,(nth 0 spec) '(seq-some (lambda (f) (and (frame-parameter f 'client) (not (display-graphic-p f)))) (frame-list)) 30)
              ,@body)
          (when ,(nth 1 spec) (drgnx-tty-session-stop ,(nth 1 spec)))
@@ -106,6 +106,30 @@ window is driven by calls, the terminal window by real keys."
       (drgnx-tty-session-key tty "C-g" 'legacy)
       (drgnx-tty-mixed-test--wait gui '(null (get-buffer-window " *transient*" t)))
       (should (equal (drgnx-tty-mixed-test--state gui) before)))))
+
+(defconst drgnx-tty-mixed-test--view-buffer "*drgnx-tty-mixed-view*" "The buffer of the view test's view.")
+
+(ert-deftest drgnx-tty-mixed/a-view-shown-only-in-the-terminal-window-draws ()
+  ;; The graphical frame selected, a view's buffer shown only in the terminal window: the view counts as shown and
+  ;; draws what is appended (visibility once saw only the selected terminal's frames; batch Emacs has one terminal).
+  (drgnx-tty-mixed-test--with (gui _tty)
+    (let ((name drgnx-tty-mixed-test--view-buffer))
+      (should (drgnx-tty-session-eval
+               gui `(progn (require 'drgnx-view)
+                           (defun drgnx-tty-mixed-test--render (key) (format "row %s\n" key))
+                           (drgnx-view-define 'drgnx-tty-mixed-test :render #'drgnx-tty-mixed-test--render)
+                           (let ((b (get-buffer-create ,name)))
+                             (with-current-buffer b (drgnx-view-attach 'drgnx-tty-mixed-test))
+                             (with-selected-frame ,drgnx-tty-mixed-test--tty-frame (drgnx-wb-show-in-editor b t))
+                             (select-frame ,drgnx-tty-mixed-test--gui-frame)
+                             (and (get-buffer-window b ,drgnx-tty-mixed-test--tty-frame)
+                                  (not (get-buffer-window b ,drgnx-tty-mixed-test--gui-frame)))))))
+      (drgnx-tty-mixed-test--wait gui `(with-current-buffer ,name (drgnx-view-shown-p drgnx-view)))
+      (should (drgnx-tty-session-eval
+               gui `(with-selected-frame ,drgnx-tty-mixed-test--gui-frame
+                      (with-current-buffer ,name (drgnx-view-append drgnx-view '(a b c)) t))))
+      (drgnx-tty-mixed-test--wait gui `(with-current-buffer ,name (and (string-search "row c" (buffer-string)) t)))
+      (should (drgnx-tty-session-eval gui `(display-graphic-p (selected-frame)))))))
 
 (defun drgnx-tty-mixed-test--corfu-dirs ()
   "The corfu and compat directories, or the test is skipped saying how to supply them."

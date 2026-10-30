@@ -1,5 +1,6 @@
 ;;; wb-buffers-test.el --- batch tests: the Buffers panel -*- lexical-binding: t -*-
 (require 'ert)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-buffers)
@@ -133,21 +134,40 @@
       (with-current-buffer drgnx-buffers-buffer-name (setq header-line-format nil))
       (should (stringp (window-parameter w 'header-line-format))))))
 
+(defun drgnx-buffers-test--compile ()
+  "Byte-compile drgnx's functions in place, as an install runs them: the tests load source, and an interpreted call
+conses (a refresh of 500 rows made 20,000 conses interpreted, 4,000 compiled)."
+  (mapatoms (lambda (s)
+              (when (and (fboundp s) (string-prefix-p "drgnx-" (symbol-name s))
+                         (not (string-prefix-p "drgnx-buffers-test" (symbol-name s)))
+                         (functionp (symbol-function s)) (not (compiled-function-p (symbol-function s))))
+                (let ((byte-compile-warnings nil)) (byte-compile s))))))
+
+(defun drgnx-buffers-test--bytes (fn)
+  "The bytes calling FN allocates (conses, vector cells, string characters, intervals): the least of three warm runs."
+  (funcall fn)
+  (let (best)
+    (dotimes (_ 3)
+      (let* ((m0 (memory-use-counts)) (_ (funcall fn)) (m1 (memory-use-counts))
+             (bytes (+ (* 16 (- (nth 0 m1) (nth 0 m0))) (* 8 (- (nth 2 m1) (nth 2 m0))) (- (nth 4 m1) (nth 4 m0))
+                       (* 56 (- (nth 5 m1) (nth 5 m0))))))
+        (setq best (if best (min best bytes) bytes))))
+    best))
+
 (ert-deftest drgnx-buffers/rendering-allocates-little ()
-  :tags '(:timing)    ; allocation budget of the hand-drawn list (437 KB since the UI kit's counted buttons): the render port of Buffers replaces it
-  ;; 500 rows under 400 KB (a GUI session's full GC takes ~15 ms; a refresh must not cause one).
+  ;; 500 rows under 400 KB (a GUI session's full GC takes ~15 ms; a refresh must not cause one), compiled as an
+  ;; install runs it: the 437 KB once measured here were the interpreter's conses.
   (drgnx-buffers-test--with dir
     (dotimes (i 500)
       (let ((f (expand-file-name (format "d%d/f%03d.txt" (/ i 100) i) dir)))
         (make-directory (file-name-directory f) t) (write-region "" nil f nil 'silent) (find-file-noselect f)))
     (drgnx-buffers--refresh)
-    (let ((m0 (memory-use-counts)))
-      (setq drgnx-buffers--signature nil)
-      (drgnx-buffers--refresh)
-      (let* ((m1 (memory-use-counts))
-             (bytes (+ (* 16 (- (nth 0 m1) (nth 0 m0))) (* 8 (- (nth 2 m1) (nth 2 m0))) (- (nth 4 m1) (nth 4 m0))
-                       (* 56 (- (nth 5 m1) (nth 5 m0))))))
-        (should (< bytes (* 400 1024)))))))
+    (should (<= 500 (with-current-buffer drgnx-buffers-buffer-name (length drgnx-buffers--rows))))
+    (drgnx-buffers-test--compile)
+    (let ((byte-compile-warnings nil))
+      (should (< (drgnx-buffers-test--bytes
+                  (byte-compile (lambda () (setq drgnx-buffers--signature nil) (drgnx-buffers--refresh))))
+                 (* 400 1024))))))
 
 (ert-deftest drgnx-buffers/a-newline-in-a-name-keeps-rows-in-step ()
   (drgnx-buffers-test--with dir
