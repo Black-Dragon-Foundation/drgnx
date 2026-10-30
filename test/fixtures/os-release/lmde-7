@@ -1,0 +1,6 @@
+NAME="LMDE"
+VERSION_ID="7"
+ID=linuxmint
+ID_LIKE=debian
+PRETTY_NAME="LMDE 7"
+DEBIAN_CODENAME=trixie

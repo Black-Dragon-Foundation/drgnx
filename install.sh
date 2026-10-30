@@ -83,11 +83,13 @@ usage: install.sh [options]
   --dir DIR          where drgnx is checked out (default ~/.local/share/drgnx/drgnx)
   --source-dir DIR   use this existing drgnx checkout instead of cloning
   --method M         auto (default) | nidhogg (drgnx's own Emacs, built from source: Fedora 44/45,
-                     Ubuntu 26.04, macOS) | keep (do not install Emacs; drgnx doctor fails on
+                     Ubuntu 26.04, Debian 13, Arch Linux, macOS) | keep (do not install Emacs; drgnx doctor fails on
                      anything but Nidhogg)
   --jobs N           parallel make jobs for the build (default: by CPUs and memory; or DRGNX_INSTALL_JOBS)
   --memory GIB       memory cap of the Nidhogg container build, whole GiB, at least 3 (default: by available
                      memory; or DRGNX_INSTALL_MEMORY)
+  --nidhogg-only     only build the pinned Nidhogg and link it (what an interactive "drgnx update" runs when
+                     the pin is newer than the running Nidhogg); the old build is kept until the new one starts
   --branch B         drgnx branch to check out (default main)
   --config URL       then set this machine up from your configuration repository: runs
                      "drgnx bootstrap --config URL" (an https URL or a local path; asks before keys,
@@ -100,7 +102,7 @@ EOF
 }
 
 parse_args() {
-  DRY_RUN=0 YES=0 PREFIX="$HOME/.local" DIR="$HOME/.local/share/drgnx/drgnx" SOURCE_DIR="" METHOD=auto BRANCH=main
+  DRY_RUN=0 YES=0 PREFIX="$HOME/.local" DIR="$HOME/.local/share/drgnx/drgnx" SOURCE_DIR="" METHOD=auto BRANCH=main NIDHOGG_ONLY=0
   CONFIG="" CHEZMOI="" IDENTITY="" CONFIG_LOCAL=0
   OPT_JOBS="${DRGNX_INSTALL_JOBS:-}" OPT_MEMORY="${DRGNX_INSTALL_MEMORY:-}"
   while (($#)); do
@@ -113,6 +115,7 @@ parse_args() {
       --method) need_value "$1" "${2-}" "a value"; METHOD="$2"; shift ;;
       --jobs) need_value "$1" "${2-}" "a number"; OPT_JOBS="$2"; shift ;;
       --memory) need_value "$1" "${2-}" "a number of GiB"; OPT_MEMORY="$2"; shift ;;
+      --nidhogg-only) NIDHOGG_ONLY=1 ;;
       --branch) need_value "$1" "${2-}" "a value"; BRANCH="$2"; shift ;;
       --config) need_value "$1" "${2-}" "a URL or a path"; config_ref CONFIG "$1" "$2"; shift ;;
       --chezmoi) need_value "$1" "${2-}" "a URL or a path"; config_ref CHEZMOI "$1" "$2"; shift ;;
@@ -129,6 +132,9 @@ parse_args() {
   esac
   if [[ -n "$OPT_JOBS" && ! "$OPT_JOBS" =~ ^[1-9][0-9]*$ ]]; then die 2 "--jobs (DRGNX_INSTALL_JOBS) must be a whole number, 1 or more"; fi
   if [[ -n "$OPT_MEMORY" && ! "$OPT_MEMORY" =~ ^[1-9][0-9]*$ ]]; then die 2 "--memory (DRGNX_INSTALL_MEMORY) must be whole GiB, 3 or more"; fi
+  if ((NIDHOGG_ONLY)); then
+    if [[ "$METHOD" != auto || -n "$CONFIG$CHEZMOI$IDENTITY" ]]; then die 2 "--nidhogg-only takes no --method, --config, --chezmoi or --identity"; fi
+  fi
   if [[ -n "$CONFIG" && -n "$CHEZMOI" ]]; then die 2 "--config and --chezmoi cannot be used together"; fi
   if [[ -n "$IDENTITY" && -z "$CONFIG$CHEZMOI" ]]; then die 2 "--identity needs --config or --chezmoi"; fi
   HANDOVER=0 BOOTSTRAP_ARGS=()   # the hand-over to `drgnx bootstrap' (Task 12): always an array, never a string to eval
@@ -197,6 +203,7 @@ detect() {
       debian|ubuntu) FAMILY=debian; break ;;
     esac
   done
+  UBUNTU_CODENAME="$(os_field "$f" UBUNTU_CODENAME)" DEBIAN_CODENAME="$(os_field "$f" DEBIAN_CODENAME)"   # Linux Mint names its base
   FEDORA_VERSION=""
   if [[ "$FAMILY" == fedora ]]; then   # RHEL clones and Amazon Linux list fedora in ID_LIKE but are not Fedora
     local platform; platform="$(os_field "$f" PLATFORM_ID)"
@@ -259,7 +266,10 @@ nidhogg_distro() { # NIDHOGG_DISTRO: the build recipe this system has (nidhogg/d
   case "$FAMILY" in
     macos) NIDHOGG_DISTRO=macos ;;
     fedora) if ((!OSTREE)) && [[ "$FEDORA_VERSION" == 44 || "$FEDORA_VERSION" == 45 ]]; then NIDHOGG_DISTRO="fedora-$FEDORA_VERSION"; fi ;;
-    debian) if [[ "$ID" == ubuntu && "$VERSION_ID" == 26.04 ]]; then NIDHOGG_DISTRO=ubuntu-26.04; fi ;;
+    debian)   # Ubuntu 26.04 (codename resolute) and Debian 13 (trixie); Linux Mint and LMDE count by the base they name
+      if [[ "$ID" == ubuntu && "$VERSION_ID" == 26.04 ]] || [[ "$ID" == linuxmint && "$UBUNTU_CODENAME" == resolute ]]; then NIDHOGG_DISTRO=ubuntu-26.04
+      elif [[ "$ID" == debian && "$VERSION_ID" == 13 ]] || [[ "$ID" == linuxmint && "$DEBIAN_CODENAME" == trixie ]]; then NIDHOGG_DISTRO=debian-13; fi ;;
+    arch) if [[ "$ID" == arch ]]; then NIDHOGG_DISTRO=arch; fi ;;
   esac
 }
 
@@ -311,6 +321,8 @@ choose_nidhogg_mode() { # NIDHOGG_MODE container | host, NIDHOGG_WHY, NIDHOGG_ME
     case "$NIDHOGG_DISTRO" in
       fedora-*) IMAGE="registry.fedoraproject.org/fedora:${NIDHOGG_DISTRO#fedora-}" ;;
       ubuntu-26.04) IMAGE=docker.io/library/ubuntu:26.04 ;;
+      debian-13) IMAGE=docker.io/library/debian:13 ;;
+      arch) IMAGE=docker.io/library/archlinux:latest ;;
     esac
     build_memory
     JOBS=$((NIDHOGG_MEM * 1024 / 1536))     # one job per 1.5 GiB of the cap
@@ -330,7 +342,7 @@ choose_method() {
     if ((OSTREE)) && [[ "$FAMILY" == fedora ]]; then   # Fedora 44/45 have a recipe, but dnf cannot install on the image
       die 2 "${PRETTY:-this system} is image-based (rpm-ostree): dnf cannot install here. Run this installer inside a toolbox (toolbox create, toolbox enter, then bash install.sh) — see $DOCS_URL"
     fi
-    die 1 "no Nidhogg recipe for ${PRETTY:-this system} yet (NIDHOGG-DISTROS-1): Nidhogg builds on Fedora 44/45, Ubuntu 26.04 and macOS — see $DOCS_URL"
+    die 1 "no Nidhogg recipe for ${PRETTY:-this system} yet (NIDHOGG-DISTROS-1): Nidhogg builds on Fedora 44/45, Ubuntu 26.04, Debian 13, Arch Linux and macOS — see $DOCS_URL"
   fi
   BUILD_DIR="$(drgnx_dir cache)/build"
   JOBS="$(build_jobs)"
@@ -412,6 +424,10 @@ print_plan() {
       fi
       note "link $PREFIX/bin/nidhogg and $PREFIX/bin/nidhoggclient to it" ;;
   esac
+  if ((NIDHOGG_ONLY)); then   # nothing but Nidhogg: the old build stays where it is until this one starts
+    note "remember the new Nidhogg as drgnx's Emacs; a running drgnx keeps the old one until it restarts"
+    return 0
+  fi
   say "2. drgnx:"
   if [[ -n "$SOURCE_DIR" ]]; then note "use the checkout in $DIR"
   elif [[ -d "$DIR/.git" ]]; then note "update $DIR (git pull --ff-only)"
@@ -539,6 +555,7 @@ nidhogg_deps_present() { # PACKAGE… → true if all are installed
     case "$FAMILY" in
       fedora) rpm -q "$p" >/dev/null 2>&1 || return 1 ;;
       debian) dpkg -s "$p" >/dev/null 2>&1 || return 1 ;;
+      arch) pacman -Q "$p" >/dev/null 2>&1 || return 1 ;;
       macos) [[ -n "$("$BREW" list --versions "$p" 2>/dev/null)" ]] || return 1 ;;
       *) return 1 ;;
     esac
@@ -561,6 +578,7 @@ nidhogg_deps() { # the packages Nidhogg's own lists name: runtime libraries for 
     debian)
       as_root apt-get update -qq
       as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" ;;
+    arch) as_root pacman -S --needed --noconfirm "${pkgs[@]}" ;;
     macos) "$BREW" install "${pkgs[@]}" ;;
   esac
 }
@@ -897,15 +915,31 @@ path_hint() {
   offer_rc_line "$rc" "$line"
 }
 
+nidhogg_only() { # --nidhogg-only: the Nidhogg step of main, nothing else (drgnx update runs it from a terminal)
+  if [[ "$CHOSEN" == keep ]]; then say "Nidhogg $NIDHOGG_VERSION is already installed."; return 0; fi
+  if ((!YES)) && ! have_tty; then die 3 "no terminal to ask questions on — run: bash install.sh --nidhogg-only"; fi
+  say ""
+  confirm "Go ahead?" || die 1 "nothing was changed"
+  EMACS_BIN="${EMACS_FOUND:-emacs}"
+  fetch_nidhogg
+  if [[ "$FAMILY" == macos ]]; then install_homebrew; fi
+  nidhogg_deps
+  install_nidhogg
+  link_nidhogg
+  remember_emacs
+  say "Nidhogg $NIDHOGG_VERSION is installed. Restart drgnx to use it."
+}
+
 main() {
   parse_args "$@"
   detect
   probe_emacs
   choose_method
   find_brew
-  rust_toolchain
+  if ((!NIDHOGG_ONLY)); then rust_toolchain; fi
   print_plan
   if ((DRY_RUN)); then exit 0; fi
+  if ((NIDHOGG_ONLY)); then nidhogg_only; exit 0; fi
   check_handover
   if ((!YES)) && ! have_tty; then
     die 3 "no terminal to ask questions on — re-run with --yes, or download install.sh and run it (see $DOCS_URL)"

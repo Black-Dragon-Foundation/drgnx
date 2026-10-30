@@ -73,7 +73,7 @@ machine has."
 
 (ert-deftest drgnx-install/no-recipe-says-so ()
   ;; A system without a Nidhogg recipe: exit 1 and the reason, never a stock Emacs; --method nidhogg says the same.
-  (dolist (args '(("debian-13") ("arch") ("linuxmint") ("unknown") ("rocky-9") ("nobara-42") ("debian-13" "--method" "nidhogg")))
+  (dolist (args '(("linuxmint") ("endeavouros") ("unknown") ("rocky-9") ("nobara-42") ("linuxmint" "--method" "nidhogg")))
     (let ((r (apply #'drgnx-install-test--plan args)))
       (should (= (car r) 1))
       (should (string-search "no Nidhogg recipe for " (cdr r)))
@@ -698,8 +698,8 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
         (should (string-search "keep the installed Emacs 31.1" out))
         (should-not (string-search "build Nidhogg" out)))
       ;; no recipe: a stock Emacs is not a reason to go on, only --method keep does
-      (should (= 1 (car (drgnx-install-test--plan "debian-13" emacs))))
-      (drgnx-install-test--expect (drgnx-install-test--plan "debian-13" emacs "--method" "keep") "keep the installed Emacs 31.1"))))
+      (should (= 1 (car (drgnx-install-test--plan "rocky-9" emacs))))
+      (drgnx-install-test--expect (drgnx-install-test--plan "rocky-9" emacs "--method" "keep") "keep the installed Emacs 31.1"))))
 
 (ert-deftest drgnx-install/low-memory-shrinks-or-refuses ()
   (drgnx-install-test--with-tmp tmp
@@ -1085,3 +1085,25 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       (should-not (string-search "runtime install" log))
       (should (string-search "drgnx doctor" log))                                       ; drgnx still runs
       (should (file-exists-p (expand-file-name "home/.local/share/drgnx/cargo" tmp))))))
+
+(ert-deftest drgnx-install/nidhogg-only-plans-just-the-nidhogg-step ()
+  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" "--nidhogg-only")
+                              "build Nidhogg" "remember the new Nidhogg")
+  (let ((r (drgnx-install-test--plan "fedora-45" "--nidhogg-only")))
+    (should-not (string-search "2. drgnx:" (cdr r)))
+    (should-not (string-search "Ratatoskr" (cdr r))))
+  (should (= 2 (car (drgnx-install-test--plan "fedora-45" "--nidhogg-only" "--method" "keep")))))
+
+(ert-deftest drgnx-install/debian-arch-and-mint-have-recipes ()
+  ;; Debian 13, Arch and Mint on an Ubuntu 26.04 or Debian 13 base build from their own dependency lists, in a container
+  ;; of the matching image, or on the host without podman.
+  (dolist (c '(("debian-13" "debian-13" "docker.io/library/debian:13")
+               ("arch" "arch" "docker.io/library/archlinux:latest")
+               ("linuxmint-26" "ubuntu-26.04" "docker.io/library/ubuntu:26.04")
+               ("lmde-7" "debian-13" "docker.io/library/debian:13")))
+    (drgnx-install-test--with-tmp tmp
+      (drgnx-install-test--expect
+       (apply #'drgnx-install-test--plan (car c) (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))
+              drgnx-install-test--roomy)
+       (format "podman container (%s)" (nth 2 c)) (format "nidhogg/deps/%s.runtime" (nth 1 c))))
+    (drgnx-install-test--expect (drgnx-install-test--plan (car c)) (format "nidhogg/deps/%s.build" (nth 1 c)))))

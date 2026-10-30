@@ -76,8 +76,9 @@ runs nothing.
 | `--prefix DIR` | where Nidhogg (under `opt/nidhogg/`), its links and the `drgnx` command go (default `~/.local`) |
 | `--dir DIR` | where drgnx is checked out (default `~/.local/share/drgnx/drgnx`; it does not follow `DRGNX_DATA_DIR` or `XDG_DATA_HOME`) |
 | `--source-dir DIR` | use an existing drgnx checkout instead of cloning |
+| `--nidhogg-only` | build and link only the pinned Nidhogg, nothing else (what an interactive `drgnx update` runs when the pin moved; the old build stays until the new one starts); no `--method`, `--config`, `--chezmoi` or `--identity` |
 | `--jobs N`, `--memory GIB` | the build's parallel `make` jobs, and the memory cap (whole GiB, at least 3) of a Nidhogg container build; the same as the environment variables `DRGNX_INSTALL_JOBS` and `DRGNX_INSTALL_MEMORY`, and the flag wins. Without them the installer sizes the build itself (below). They go on to Nidhogg's `build.sh` as `--jobs` and `--memory` |
-| `--method M` | `auto` (default: keep a current Nidhogg, else build one), `nidhogg` (build [Nidhogg](#nidhogg); only where there is a recipe — Fedora 44/45, Ubuntu 26.04, macOS — else exit 1) or `keep` (do not touch Emacs; the doctor fails on anything but Nidhogg). The methods that installed a stock GNU Emacs, `package`, `source`, `cask` and `formula`, were removed: they exit 2 with "method M was removed: drgnx runs on Nidhogg" |
+| `--method M` | `auto` (default: keep a current Nidhogg, else build one), `nidhogg` (build [Nidhogg](#nidhogg); only where there is a recipe — Fedora 44/45, Ubuntu 26.04, Debian 13, Arch Linux, macOS, and Linux Mint on an Ubuntu 26.04 or Debian 13 base — else exit 1) or `keep` (do not touch Emacs; the doctor fails on anything but Nidhogg). The methods that installed a stock GNU Emacs, `package`, `source`, `cask` and `formula`, were removed: they exit 2 with "method M was removed: drgnx runs on Nidhogg" |
 | `--branch B` | drgnx branch to clone (default `main`) |
 | `--config URL` | after installing, set this machine up from your configuration repository: hands over to `drgnx bootstrap --config URL` ([below](#on-a-second-machine)); an `https://` URL or a local path |
 | `--chezmoi URL` | the same with a chezmoi source repository (`drgnx bootstrap --chezmoi URL`); not together with `--config` |
@@ -124,10 +125,10 @@ it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself 
 
 | Platform | Emacs comes from | Notes |
 |---|---|---|
-| Fedora 44/45, Ubuntu 26.04 | **Nidhogg**, built from source ([below](#nidhogg)) | in a podman container where podman runs, else on the machine |
+| Fedora 44/45, Ubuntu 26.04, Debian 13, Arch Linux, Linux Mint / LMDE on those bases | **Nidhogg**, built from source ([below](#nidhogg)) | in a podman container where podman runs, else on the machine |
 | macOS | **Nidhogg**, built from source: `Nidhogg.app` | [Homebrew](https://brew.sh) supplies the build dependencies and is installed first if missing, after asking (below) |
 | Image-based Fedora (Silverblue, Kinoite, Bazzite, …; `/run/ostree-booted`) | — (exit 2) | dnf cannot install on them: run the installer inside a toolbox (`toolbox create`, `toolbox enter`) |
-| anything else: Debian, Arch, Linux Mint, other Fedora releases and remixes, RHEL, Rocky, Alma, Amazon Linux, … | — (exit 1: `no Nidhogg recipe for … yet`, NIDHOGG-DISTROS-1) | no stock GNU Emacs is installed instead; `bash install.sh --method keep` installs drgnx on an Emacs you have, and the doctor fails on it |
+| anything else: other Debian and Ubuntu releases, Mint on an older base, Arch derivatives, other Fedora releases and remixes, RHEL, Rocky, Alma, Amazon Linux, … | — (exit 1: `no Nidhogg recipe for … yet`, NIDHOGG-DISTROS-1) | no stock GNU Emacs is installed instead; `bash install.sh --method keep` installs drgnx on an Emacs you have, and the doctor fails on it |
 
 Not used, on purpose: Flathub's Emacs, the Snap and every other stock GNU Emacs package: drgnx runs on Nidhogg only.
 
@@ -196,7 +197,7 @@ checks that it is the exact commit the installer pins, before building anything.
 `--method keep` chose that: no fetch, no rebuild, no root step — but `nidhogg` and `nidhoggclient` are linked again, so
 `~/.local/bin` has them; an older one is rebuilt beside it.
 
-Where `podman` can run containers, the build happens in a podman container (Fedora 44/45, Ubuntu 26.04 image) capped at
+Where `podman` can run containers, the build happens in a podman container (Fedora 44/45, Ubuntu 26.04, Debian 13 or Arch Linux image) capped at
 min(6 GiB, available memory − 1 GiB) of memory, with `make -jN`, N = one job per 1.5 GiB of the cap (at most one per CPU);
 the host gets only the runtime libraries (as root, asked, unless all are there). Without podman, or when `podman info`
 fails, or inside a container, the plan says why and builds on the machine instead (the build dependencies as root,
@@ -224,7 +225,11 @@ A Nidhogg build with Glitnir (the compositor that draws rounded, shadowed popups
 Rust toolchain (`cargo`, `rustc`) to build from source; the container build brings its own, a host build needs them
 installed (for example through `mise`). Without Glitnir nothing changes.
 
-Debian, Arch and other systems have no Nidhogg recipe yet (NIDHOGG-DISTROS-1): the installer stops with exit 1 and
+Debian 13 ships tree-sitter 0.22 (the other recipes use 0.25 or newer), and Arch has no SELinux library, so its build
+leaves SELinux out. Linux Mint counts by the base it names in `os-release` (`UBUNTU_CODENAME=resolute`, or LMDE's
+`DEBIAN_CODENAME=trixie`).
+
+Other systems have no Nidhogg recipe yet (NIDHOGG-DISTROS-1): the installer stops with exit 1 and
 `no Nidhogg recipe for … yet`; it installs no stock GNU Emacs instead.
 
 ## Other Emacs
@@ -326,7 +331,7 @@ parallel job. install.sh takes the first of these that applies (`--dry-run` says
 
 1. `cargo` and `rustc` 1.88 or newer already on `PATH`.
 2. The distro's default Rust package, only if its version is 1.88 or newer (asked first): Fedora `cargo rust gcc`,
-   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 44/45, Ubuntu 26.04 and
+   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 44/45, Ubuntu 26.04, Debian 13, Arch and
    Homebrew qualify.
 3. A versioned Debian-family package when the default is too old (Ubuntu 24.04: `rustc-1.91 cargo-1.91`, binaries in
    `/usr/lib/rust-1.91/bin`).
@@ -379,6 +384,13 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
 6. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
    never restarts or talks to a running drgnx unless you pass `--restart` (below). Restart it soon: a running drgnx still has the old code in memory, and
    files it loads later come from the new version.
+7. **Builds a newer Nidhogg, only when you run it yourself in a terminal.** If the `install.sh` of the new checkout pins a
+   newer Nidhogg than the one running, `drgnx update` runs `install.sh --nidhogg-only` (the same build-from-source path as
+   the installer: the commit check, the dependencies (root steps asked), the container or host build, 30-60 minutes). The
+   old Nidhogg stays installed until the new one starts, and a failed build leaves it in place with the updated drgnx;
+   run `drgnx update` again to retry. The daily timer (`--quiet`) never builds Nidhogg: the doctor's `emacs-version`
+   check warns while the pin is ahead. This runs even when drgnx was already current, so a timer-updated checkout gets
+   its Nidhogg at your next `drgnx update`.
 
 `drgnx update --back` returns to the commit before the last update (and re-syncs and rebuilds); it refuses when you
  changed the checkout's history since, so that commit is no longer part of it. It is named `--back`

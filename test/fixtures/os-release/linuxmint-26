@@ -1,0 +1,6 @@
+NAME="Linux Mint"
+VERSION_ID="26"
+ID=linuxmint
+ID_LIKE="ubuntu debian"
+PRETTY_NAME="Linux Mint 26"
+UBUNTU_CODENAME=resolute
