@@ -99,8 +99,6 @@ frame count is what it was."
   ;; C-h f at the M-x prompt: *Help* shows in the panel and the minibuffer keeps the focus; C-g ends the prompt and
   ;; Toggle Panel hides the panel again
   (drgnx-tty-popups-test--with (s :size "80x24")
-    ;; the default (VS Code) profile gives C-h to Replace in File and so takes it from the help prefix: the prompt gets it back
-    (drgnx-tty-session-eval s '(progn (keymap-set minibuffer-local-map "C-h" 'help-command) t))
     (drgnx-tty-popups-test--round
      s (lambda ()
          (drgnx-tty-popups-test--key s "M-x")

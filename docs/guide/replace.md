@@ -78,7 +78,8 @@ view, scope This file.
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor. In the VS Code
-profile `C-h` replaces Emacs' help prefix (the conflict is listed in Keyboard Shortcuts). Every command is in the
+profile `C-h` is Replace in File in buffers (the conflict with Emacs' help prefix is listed in Keyboard Shortcuts);
+the minibuffer keeps `C-h` as help. Every command is in the
 palette, category Search.
 
 ## Tests

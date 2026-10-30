@@ -715,6 +715,14 @@ Keys problems are `warn', so they never echo.  Never signals."
                                        (abbreviate-file-name (drgnx-config-file 'settings)))))))
     (error (message "drgnx: key problems not recorded as notices: %s" (error-message-string err)))))
 
+(defun drgnx-keys--help-in-minibuffer ()
+  "When a profile took the help key (`help-char', C-h) from the global map, give it back in the minibuffer:
+the profile's command for it (Replace in File) means nothing while the minibuffer reads, and C-h f there is
+the way to look something up.  Undone with the profile's other keys by `drgnx-keys--restore'."
+  (let ((key (key-description (vector help-char))))
+    (unless (memq (lookup-key global-map (key-parse key)) '(help-command nil))
+      (drgnx-keys--bind 'minibuffer-local-map key 'help-command))))
+
 (defun drgnx-keys-apply ()
   "Bind the keys of the active stack and keys.eld, replacing what drgnx bound before.
 Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolution."
@@ -751,6 +759,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                   (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) map))))
                   (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation)))))
           (drgnx-keys--set-everywhere (plist-get r :bindings))
+          (drgnx-keys--help-in-minibuffer)
           (setq drgnx-keys-last (append (list :layers layers
                                               :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
                                         r))))
