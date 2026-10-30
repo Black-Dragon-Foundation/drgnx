@@ -185,7 +185,9 @@ the check for a terminal (so the tests need no `setsid`). `DRGNX_INSTALL_RUNTIME
 Nidhogg is drgnx's own Emacs build: GNU Emacs 31.1 plus a small patch series, with the command `nidhogg` and the
 variable `nidhogg-version` (for example `31.1-nidhogg.1`; `emacs-version` stays GNU's own, `"31.1"`). `drgnx doctor`'s
 `emacs-version` check says `OK` on Nidhogg and `FAIL` on a stock GNU Emacs of any version ("GNU Emacs 31.1 is not Nidhogg,
-drgnx's own Emacs build"), and on anything older than 31.1. Fix: run the installer again, which builds Nidhogg.
+drgnx's own Emacs build"), and on anything older than 31.1. Fix: run the installer again, which builds Nidhogg. It says
+`WARN` when the running Nidhogg is older than the release this drgnx checkout's `install.sh` pins (after a `drgnx update`
+brought a newer pin): "this drgnx pins Nidhogg …"; the same fix builds the pinned release.
 
 The installer builds Nidhogg from a pinned release: it fetches the tag (`v31.1-nidhogg.1`) of the Nidhogg repository and
 checks that it is the exact commit the installer pins, before building anything. Where it goes: `~/.local/opt/nidhogg/<version>`

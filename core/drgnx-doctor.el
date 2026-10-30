@@ -453,6 +453,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
     (append
      (list :version emacs-version
            :nidhogg (bound-and-true-p nidhogg-version)
+           :nidhogg-pin (drgnx-doctor--nidhogg-pin)
            :running-emacs (expand-file-name invocation-name invocation-directory)
            :service-unit (drgnx-doctor--service-unit)
            :native-available native
@@ -611,11 +612,31 @@ severity, the fix the first `:fix'."
 
 (defun drgnx-doctor--version< (a b) (version< a b))
 
-(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "Nidhogg, drgnx's own Emacs build (stock GNU Emacs fails)"
+(defun drgnx-doctor--nidhogg-pin (&optional file)
+  "The Nidhogg version install.sh FILE (default: this checkout's) builds, or nil."
+  (let ((file (or file (expand-file-name "install.sh" drgnx-dir))))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (insert-file-contents file nil 0 4096)
+        (when (re-search-forward "^NIDHOGG_VERSION=\\([0-9.]+-nidhogg\\.[0-9]+\\)$" nil t)
+          (match-string 1))))))
+
+(defun drgnx-doctor--nidhogg< (a b)
+  "Non-nil if Nidhogg version A (\"31.1-nidhogg.1\") is older than B.
+`version<' rejects the suffix, so the GNU part and the release number compare apart."
+  (pcase-let ((`(,ga ,na) (split-string a "-nidhogg\\."))
+              (`(,gb ,nb) (split-string b "-nidhogg\\.")))
+    (or (version< ga gb)
+        (and (version= ga gb) (< (string-to-number (or na "0")) (string-to-number (or nb "0")))))))
+
+(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "Nidhogg, drgnx's own Emacs build (stock GNU Emacs fails), at the release this drgnx pins"
                      :check (lambda (f)
-                              (let ((v (plist-get f :version)) (n (plist-get f :nidhogg)))
+                              (let ((v (plist-get f :version)) (n (plist-get f :nidhogg)) (pin (plist-get f :nidhogg-pin)))
                                 (cond ((drgnx-doctor--version< v "31.1")
                                        (list 'fail (format "Emacs %s is too old (31.1 or newer needed)" v) drgnx-doctor-install-hint))
+                                      ((and n pin (drgnx-doctor--nidhogg< n pin))
+                                       (list 'warn (format "Nidhogg %s (GNU Emacs %s); this drgnx pins Nidhogg %s" n v pin)
+                                             drgnx-doctor-nidhogg-hint))
                                       (n (list 'ok (format "Nidhogg %s (GNU Emacs %s)" n v) nil))
                                       (t (list 'fail (format "GNU Emacs %s is not Nidhogg, drgnx's own Emacs build" v)
                                                drgnx-doctor-nidhogg-hint))))))

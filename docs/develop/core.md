@@ -2323,7 +2323,7 @@ The only file written is `agent-checks.eld`; the child Emacs writes nothing.
 machine is ready, and gives a fix for anything that is not:
 
 ```
-OK    emacs-version        Nidhogg 31.1-nidhogg.1 (GNU Emacs 31.1)   (stock GNU Emacs, or older than 31.1: FAIL)
+OK    emacs-version        Nidhogg 31.1-nidhogg.1 (GNU Emacs 31.1)   (stock GNU Emacs, or older than 31.1: FAIL; older than install.sh's NIDHOGG_VERSION: WARN)
 OK    native-compilation   native compilation works   (built without it, or libgccjit broken: FAIL)
 OK    tree-sitter          tree-sitter available
 OK    gui                  graphical build (pgtk)     (terminal-only: OK, with a note)
