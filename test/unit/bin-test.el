@@ -1044,6 +1044,24 @@ macOS (no /proc there)."
             (should-not (seq-find (lambda (a) (string-suffix-p "/.git:ro" a)) args))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/a-batch-container-run-is-memory-capped-without-swap ()
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                         (format "for a in \"$@\"; do echo \"$a\" >> %s; done" log)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                     (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image")
+                               "test" "--container"))))
+          (let ((args (split-string (drgnx-bin-test--slurp log) "\n" t)))
+            (should (equal (cadr (member "--memory" args)) "4g"))
+            (should (equal (cadr (member "--memory-swap" args)) "4g"))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()
   ;; DRGNX_MODAL_ELPA (evil for the modal tests) is mounted read-only into the container and named there, so the
   ;; 31.1 container runs the evil tests instead of skipping them.
