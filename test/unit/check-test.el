@@ -369,3 +369,15 @@ for that file to exist (up to 20 s) instead of sleeping."
         (should (string-match-p "advice ignore \\+b-fn" text)))
       (should (equal (drgnx-check-leaks-report nil) "")))
     (should (equal (drgnx-check--parse-args '("--leaks" "--no-perf")) '(:jobs 8 :shards 4 :perf nil :gui t :leaks t)))))
+
+(ert-deftest drgnx-check/a-live-shard-runs-in-a-capped-scope-taken-outside-its-sandbox ()
+  ;; the shard's Emacs cannot reach the user's systemd (dead bus), so the detached sessions it starts would run with
+  ;; no memory cap: the whole shard goes into a scope, started by check
+  (cl-letf (((symbol-function 'drgnx-check--live-cap) (lambda () '("systemd-run" "--user" "--scope" "--"))))
+    (let ((live (seq-find (lambda (j) (equal (plist-get j :name) "live-1"))
+                          (drgnx-check-plan :root drgnx-dir :live-shards 1))))
+      (should (equal (seq-take (plist-get live :command) 4) '("systemd-run" "--user" "--scope" "--")))))
+  (cl-letf (((symbol-function 'drgnx-check--live-cap) (lambda () nil)))
+    (let ((live (seq-find (lambda (j) (equal (plist-get j :name) "live-1"))
+                          (drgnx-check-plan :root drgnx-dir :live-shards 1))))
+      (should-not (equal (car (plist-get live :command)) "systemd-run")))))

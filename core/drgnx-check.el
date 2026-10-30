@@ -106,6 +106,17 @@ A summary that is missing, unreadable or has no :leaks (the census was off) adds
 
 (defun drgnx-check--emacs () (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory)))
 
+(defun drgnx-check--live-cap ()
+  "The words that run a live shard in a transient user scope with a memory cap, or nil without a systemd user manager.
+Taken here, in the check's own process: the shard's Emacs runs with a dead bus and its own runtime directory, so
+the detached sessions it starts cannot reach the manager themselves and would run with no cgroup cap; they stay in
+the shard's scope instead."
+  (when (and (executable-find "systemd-run") (executable-find "systemctl")
+             (with-temp-buffer
+               (and (eql 0 (call-process "timeout" nil t nil "5" "systemctl" "--user" "is-system-running"))
+                    (string-match-p "\\`\\(running\\|degraded\\|starting\\)" (buffer-string)))))
+    (list "systemd-run" "--user" "--scope" "-q" "-p" "MemoryMax=4G" "-p" "MemorySwapMax=0" "--")))
+
 (cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) (tty (and (executable-find "tmux") t)) dir leaks)
   "The jobs of a check of the checkout ROOT: (:name :phase :command :gui :env :timeout)…  DIR: where shard
 results go (default: none).  TTY (default: tmux is installed): with GUI, the terminal tier, `bin/drgnx test --tty'.
@@ -143,13 +154,15 @@ LEAKS: the unit jobs (not the live ones) run with the leak census on (`drgnx-che
       ;; the terminal tier: Emacs sessions in private tmux servers, a file at a time in an Emacs of its own (the runner
       ;; does that, as for a unit shard).  A GUI job for the memory accounting: one session is an Emacs of its own.
       (when tty (push (funcall job "tty" 2 'tty (list bin "test" "--tty") :gui t :env (drgnx-test-env-outer)) jobs))
-      (cl-loop for files in (drgnx-check-shard (directory-files-recursively (expand-file-name "test/live" root) "-test\\.el\\'")
+      (cl-loop with cap = (drgnx-check--live-cap)
+               for files in (drgnx-check-shard (directory-files-recursively (expand-file-name "test/live" root) "-test\\.el\\'")
                                                live-shards durations)
                for i from 1
                for name = (format "live-%d" i)
                ;; in the unit tier's sandbox (temp HOME, dead bus, no provider keys), its files in one Emacs
                do (push (funcall job name 2 'live
-                                 (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
+                                 (append cap
+                                         (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                                          paths (list "-l" "drgnx-ui" "-l" run-ert "-f" "drgnx-run-ert-batch") files)
                                  :gui t :env (append (list "DRGNX_TEST_ONE_PROCESS=1") (funcall results name) (drgnx-test-env-outer)))
                         jobs))
