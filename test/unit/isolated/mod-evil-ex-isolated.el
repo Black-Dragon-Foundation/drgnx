@@ -18,6 +18,7 @@
 (declare-function drgnx-chrome-tabs "drgnx-chrome")
 (declare-function drgnx-groups-list "drgnx-groups")
 
+(defvar evil-window-map)
 (defvar drgnx-evil-ex-test--calls nil "What the recorded commands ran, newest first.")
 
 (defvar drgnx-evil-ex-test--modules "(:version 1 :enabled (editor/evil))\n"
@@ -261,6 +262,52 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
         (should (equal (drgnx-evil-ex-test--calls) '((focus-editor))))
         (execute-kbd-macro (kbd "Z Q"))
         (should (equal (drgnx-evil-ex-test--calls) '((focus-editor))))))))
+
+(ert-deftest drgnx-evil-ex/new-makes-a-group-with-an-empty-buffer ()
+  (drgnx-evil-ex-test--with
+    (drgnx-evil-ex-test--buffer b #'text-mode
+      (drgnx-evil-ex-test--layout (list b) (list (selected-window))
+        (evil-ex-execute "new")
+        (should (equal (drgnx-evil-ex-test--calls) '((split-down))))
+        (should (string-prefix-p "*new*" (buffer-name)))
+        (kill-buffer (current-buffer))
+        (evil-ex-execute "new /tmp/three.txt")
+        (should (equal (drgnx-evil-ex-test--calls) '((split-down) (find-file "/tmp/three.txt"))))))))
+
+(ert-deftest drgnx-evil-ex/bd-kills-the-buffer-and-closes-its-tab-not-a-group ()
+  (drgnx-evil-ex-test--with
+    (drgnx-evil-ex-test--buffer b #'text-mode
+      (drgnx-evil-ex-test--layout (list b) (list (selected-window))
+        (evil-ex-execute "bd")
+        (should (equal (drgnx-evil-ex-test--calls) '((close-tab))))
+        (should-not (buffer-live-p b))))))
+
+(ert-deftest drgnx-evil-ex/bd-keeps-a-modified-file-buffer-without-bang ()
+  (drgnx-evil-ex-test--with
+    (drgnx-evil-ex-test--buffer b #'text-mode
+      (drgnx-evil-ex-test--layout (list b) (list (selected-window))
+        (setq buffer-file-name "/tmp/drgnx-evil-ex-bd.txt")
+        (set-buffer-modified-p t)
+        (should-error (evil-ex-execute "bd") :type 'user-error)
+        (should (buffer-live-p b))
+        (should-not (drgnx-evil-ex-test--calls))
+        (evil-ex-execute "bd!")
+        (should-not (buffer-live-p b))))))
+
+(ert-deftest drgnx-evil-ex/c-w-o-closes-the-other-groups-only ()
+  (drgnx-evil-ex-test--with
+    (drgnx-evil-ex-test--buffer b #'text-mode
+      (let ((deleted nil) (keep (selected-window)))
+        (drgnx-evil-ex-test--layout (list b) (list 'g1 keep 'g3)
+          (cl-letf (((symbol-function 'delete-window) (lambda (w) (push w deleted)))
+                    ((symbol-function 'delete-other-windows) (lambda (&rest _) (ert-fail "raw windows"))))
+            (execute-kbd-macro (kbd "C-w o"))
+            (should (equal (sort (mapcar #'symbol-name deleted) #'string<) '("g1" "g3")))
+            (setq deleted nil)
+            (execute-kbd-macro (kbd "C-w C-o"))
+            (should (= (length deleted) 2))))
+        (drgnx-evil-stop)
+        (should (eq (keymap-lookup evil-window-map "o") #'delete-other-windows))))))
 
 (ert-deftest drgnx-evil-ex/without-the-workbench-evils-own-commands-run ()
   (let ((drgnx-evil-ex-test--modules "(:version 1 :enabled (editor/evil) :disabled (core/workbench))\n"))
