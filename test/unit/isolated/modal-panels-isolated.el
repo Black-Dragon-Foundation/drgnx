@@ -153,7 +153,10 @@
        (drgnx-wb-show-sidebar)
        (unwind-protect
            (progn
-             (drgnx-outline-refresh)
+             ;; `drgnx-outline-refresh' fills the Outline only while it is shown, and the test sidebar has no
+             ;; Outline section: index the editor's file directly, while the editor is still on screen, and draw
+             (drgnx-outline--refresh-1)
+             (with-current-buffer drgnx-outline-buffer-name (drgnx-view-draw-now drgnx-view))
              (drgnx-modal-panels-test--show (get-buffer drgnx-outline-buffer-name) ,@body))
          (drgnx-wb-hide-sidebar)
          (delete-other-windows)

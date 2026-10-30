@@ -730,9 +730,13 @@ later application of the keys (`drgnx-modal-suspended'); another stack ends it."
 
 (defun drgnx-evil-setup ()
   "Set evil's defaults, load it, register the engine, and start it when the key layers need it."
-  (setq evil-want-keybinding nil
-        evil-want-C-u-scroll t)    ; also before: evil binds C-u as it loads, so the snapshot of its maps has it
-  (require 'evil)
+  (setq evil-want-keybinding nil)
+  ;; evil binds C-u as it loads, so the snapshot of its maps has it: the flag is bound only for the load.  A `setq'
+  ;; would put the value in effect without evil's setter and without the claim: the settings layer would take it for
+  ;; the user's own (a `changed' stash, which then wins over the module), and C-u stayed unbound when evil was
+  ;; loaded already.  `drgnx-module-set' below sets it for good, through the setter.
+  (let ((evil-want-C-u-scroll t))
+    (require 'evil))
   (drgnx-evil--note-cursor-defaults)
   (drgnx-evil--settings)
   (drgnx-modal-define-engine 'evil :module 'editor/evil :start #'drgnx-evil-start :stop #'drgnx-evil-stop)
@@ -747,9 +751,9 @@ later application of the keys (`drgnx-modal-suspended'); another stack ends it."
   "The module's teardown: Vim editing stops now, as the core stops an engine (`drgnx-evil-stop', then every
 buffer's state cleared), and the engine is no longer registered.  The engine may have started after the setup (a
 key stack chosen later), so what its start did is no setup's record: the stop undoes it.  Evil itself stays
-loaded (it cannot be unloaded); its options go back with the module's record, except the two flags the setup sets
-before `require' (`evil-want-keybinding' nil, `evil-want-C-u-scroll' t): evil reads them as it loads, and they
-stay as evil does (with `evil-mode' off they change nothing)."
+loaded (it cannot be unloaded); its options go back with the module's record, except `evil-want-keybinding' (nil),
+which the setup sets before `require': evil reads it as it loads, and it stays (with `evil-mode' off it changes
+nothing)."
   (drgnx-modal-undefine-engine 'evil))
 
 (drgnx-module-define 'editor/evil
