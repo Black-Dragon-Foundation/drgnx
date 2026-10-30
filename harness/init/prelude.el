@@ -168,6 +168,7 @@ DRGNX_UI_SESSION_SIZE.  GTK 3 gets a scale from the compositor after the frame e
   (load (expand-file-name "run-ert.el" drgnx-ui-harness) nil t)
   ;; Started from a timer, but the tests are not timer code: neither the jank guard nor
   ;; drgnx's no-prompt guard may count them as such.
+  (drgnx-run-ert-refuse-idle-prompts)   ; a question nobody answers fails its test, not the session
   (let ((drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil))
     (kill-emacs (if (drgnx-run-ert (getenv "DRGNX_UI_TEST") (getenv "DRGNX_UI_RESULTS")) 0 1))))
 
