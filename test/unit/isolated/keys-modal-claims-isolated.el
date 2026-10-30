@@ -233,7 +233,7 @@ started by an apply (the after-apply functions are off)."
         (unwind-protect
             (progn
               (should-not (commandp evil-key))
-              (keymap-set evil-normal-state-map "C-s" #'ignore)
+              (keymap-set evil-normal-state-map "C-s" #'delete-char)
               (drgnx-keys-use drgnx-keys-claims-evil-test--mixed)
               (should (seq-find (lambda (c) (and (equal (plist-get c :key) "C-s") (memq 'normal (plist-get c :states))))
                                 (plist-get drgnx-keys-last :conflicts))))
