@@ -460,6 +460,6 @@ pending at the end is cancelled."
             (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (list job))))
               (drgnx-search--teardown))
             (should-not (file-exists-p lock))                   ; at once: no stale lock
-            (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 5 :what "the signal to end the process")                 ; the signal does the rest, nothing here waited
+            (drgnx-test-wait-ended proc :secs 5 :what "the signal to end the process")                 ; the signal does the rest, nothing here waited
             (should-not (process-live-p proc)))
         (when (process-live-p proc) (kill-process proc))))))

@@ -459,7 +459,7 @@ file is readable; /run/user and the runtime dir are absent; /run/drgnx is read-o
                (proc (make-process :name "drgnx-sb-client" :buffer buf :command argv :connection-type 'pipe)))
           (unwind-protect
               (progn
-                (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 30 :what "the sandboxed client to end")
+                (drgnx-test-wait-ended proc :secs 30 :what "the sandboxed client to end")
                 (ert-info ((with-current-buffer buf (buffer-string)))
                   (should (eq (process-exit-status proc) 0))
                   (should (string-match-p "pong" (with-current-buffer buf (buffer-string))))))

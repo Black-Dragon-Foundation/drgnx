@@ -320,7 +320,7 @@
                                                       (princ \"DONE\\n\"))"
                                               at f tag))))))
            (procs (list (funcall start "a") (funcall start "b"))))
-      (drgnx-test-wait (lambda () (not (cl-some #'process-live-p procs))) :secs 30 :what "the writer processes to end")
+      (drgnx-test-wait-ended procs :secs 30 :what "the writer processes to end")
       (unwind-protect
           (progn
             (should (cl-every (lambda (p) (and (not (process-live-p p)) (= (process-exit-status p) 0))) procs))

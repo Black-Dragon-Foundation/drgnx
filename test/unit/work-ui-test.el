@@ -303,7 +303,7 @@ without SVG (librsvg), e.g. a terminal-only build."
               (should-not (string-search "Plan Gamma" (buffer-string)))
               (let ((p (drgnx-work-ui-refresh)))
                 (should (processp p))                           ; not the scan itself: Emacs stays free
-                (drgnx-test-wait (lambda () (not (process-live-p p))) :secs 60 :what "the scan process to end")
+                (drgnx-test-wait-ended p :secs 60 :what "the scan process to end")
                 (accept-process-output nil 0.2)
                 (let ((out (with-current-buffer (process-buffer p) (buffer-string))))   ; its output, when it failed
                   (should (equal (cons (process-exit-status p) out) (cons 0 out)))))
@@ -332,7 +332,7 @@ without SVG (librsvg), e.g. a terminal-only build."
             (let* ((default-directory (file-name-as-directory gone))
                    (p (drgnx-work-ui-refresh)))
               (should (processp p))
-              (drgnx-test-wait (lambda () (not (process-live-p p))) :secs 30 :what "the scan process to end")
+              (drgnx-test-wait-ended p :secs 30 :what "the scan process to end")
               (accept-process-output nil 0.1)
               (should (equal said '("Work: the scan failed: this-scan-failed")))
               (kill-buffer (process-buffer p))

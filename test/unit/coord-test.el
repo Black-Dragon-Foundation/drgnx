@@ -48,7 +48,7 @@
                                                                          (princ (format \"RESULT:%%S\\n\" (drgnx-coord-claim (format \"race#%%d\" (1+ i)) %S (drgnx-coord-version))))))"
                                                                     at agent))))))
            (procs (list (funcall start "a") (funcall start "b"))))
-      (drgnx-test-wait (lambda () (not (seq-some #'process-live-p procs))) :secs 30 :what "the claim processes to end")
+      (drgnx-test-wait-ended procs :secs 30 :what "the claim processes to end")
       (let ((answers (apply #'append
                             (mapcar (lambda (b) (with-current-buffer b
                                                   (goto-char (point-min))
