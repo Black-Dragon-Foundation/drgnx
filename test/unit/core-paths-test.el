@@ -351,3 +351,10 @@ and data dirs, whose init.el is INIT (text); what it prints, read."
                                                (string-search "kx-config" (nth 4 r))
                                                (eq (nth 5 r) 'preferences-user-config))) rows))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-paths/the-runners-copy-of-the-sigpipe-wrapper-is-the-same ()
+  ;; the runner cannot load drgnx-paths (only harness/ is on its load path) and keeps its own copy
+  (skip-unless (fboundp 'drgnx-run-ert--ignoring-sigpipe))
+  (should (equal (drgnx-run-ert--ignoring-sigpipe '("a" "b")) (drgnx-command-ignoring-sigpipe '("a" "b"))))
+  (let ((system-type 'windows-nt))
+    (should (equal (drgnx-run-ert--ignoring-sigpipe '("a")) (drgnx-command-ignoring-sigpipe '("a"))))))
