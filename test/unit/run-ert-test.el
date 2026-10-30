@@ -1156,6 +1156,8 @@ this test are not passed on."
       (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))
     (let ((executing-kbd-macro [?y]))
       (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))
+    (let ((drgnx-uitest--queue '(?y)))
+      (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))
     (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) t)))
       (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))))
 

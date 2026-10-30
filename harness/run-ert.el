@@ -1111,7 +1111,8 @@ exit 0 or 1."
 
 (defun drgnx-run-ert--idle-prompt-guard (orig &rest args)
   "Around advice of a prompt function ORIG: it fails at once when no input is pending and no keyboard macro runs."
-  (if (or unread-command-events executing-kbd-macro (input-pending-p))
+  (if (or unread-command-events executing-kbd-macro (input-pending-p)
+          (bound-and-true-p drgnx-uitest--queue))    ; events `drgnx-uitest-run' delivers, one per tick
       (apply orig args)
     (error "A question nobody answers (no input pending, no keyboard macro): %S" (car args))))
 
