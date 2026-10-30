@@ -37,7 +37,9 @@ http-body-util = "0.1"
 hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "tls12", "logging"] }
 rustls = { version = ">=0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-platform-verifier = "0.7"
-agent-client-protocol-schema = "=1.12.0"
+# hermod's ACP types; the two unstable features carry a turn's token usage and session/fork (both in 1.12.0)
+agent-client-protocol-schema = { version = "=1.12.0", features = ["unstable_end_turn_token_usage", "unstable_session_fork"] }
+pulldown-cmark = { version = "0.13", default-features = false }  # saga's Markdown, with offsets (agent system part 1, Calls made 12)
 secrecy = "0.10"
 zeroize = "1.9"
 tracing = "0.1"

@@ -559,6 +559,7 @@ from its own timer, at most every 0.1 s, only while shown).  Called from the age
   (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory))
 
 (declare-function drgnx-agents-mirror-sync "drgnx-agents-mirror")
+(declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-hub-socket "drgnx-hub-client")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
@@ -583,7 +584,8 @@ exists is connected to (asynchronously)."
 (defun drgnx-agents-ui-new (profile)
   "Start an agent session of PROFILE in this project."
   (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile))))
-  (drgnx-agents-ui-transcript (drgnx-agents-start profile (drgnx-agents-ui--cwd))))
+  (require 'drgnx-agents-mirror)
+  (drgnx-agents-ui-transcript (drgnx-agents-mirror-start profile (drgnx-agents-ui--cwd))))
 
 (defun drgnx-agents-ui-send (text)
   "Send TEXT to the agent — queued while it works; it never cancels the running turn."

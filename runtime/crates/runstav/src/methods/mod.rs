@@ -1,20 +1,28 @@
 //! Every method of the hub protocol, one definition each, grouped as the hub's parts are: the hub itself
 //! ([`hub`]), the gateway, its provider table and spend ([`gateway`]), agent sessions ([`agents`]), jobs ([`jobs`]), coordination
 //! ([`coord`]), the graph store ([`graph`]), the settings' history ([`settings`]), the tracker for the editor
-//! ([`tasks`]) and the coordination tools' sockets ([`mcp`]).  [`crate::registry`] puts them in one sorted table.
+//! ([`tasks`]) and the coordination tools' sockets ([`mcp`]); the agent core's (agent system part 1): jobs
+//! ([`exec`]), the permissions matrix ([`matrix`]), plans, briefs and reports ([`plans`]), records ([`records`]) and
+//! time, budgets and the supervisor ([`timeline`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod config;
 pub mod coord;
+pub mod exec;
 pub mod gateway;
 pub mod graph;
 pub mod hub;
 pub mod jobs;
+pub mod matrix;
 pub mod mcp;
+pub mod plans;
+pub mod records;
 pub mod settings;
 pub mod tasks;
+pub mod timeline;
 
 use crate::registry::Method;
+use crate::wire::{Error, ErrorCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,6 +30,15 @@ use serde_json::Value;
 /// Params of a method that takes none: any keys are dropped (and listed in `ignored`).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Empty {}
+
+/// A params check's refusal at PATH.
+pub(crate) fn invalid(path: &str, message: &str) -> Error {
+    Error {
+        code: ErrorCode::InvalidParams,
+        message: message.into(),
+        path: Some(path.into()),
+    }
+}
 
 /// One method's definition (`registry::Method`): the params and result types give its schemas, its typed decode
 /// (wrapped in `Params::$variant`) and its result check.  `home: Front` marks a method the front serves itself (the
@@ -165,6 +182,32 @@ params! {
     JobReply(jobs::ReplyParams),
     JobDismiss(jobs::ByMessage),
     JobStatus(jobs::StatusParams),
+    AgentsMove(agents::MoveParams),
+    AgentsRole(agents::RoleParams),
+    AgentsSlice(agents::SliceParams),
+    ExecStart(exec::StartParams),
+    ExecGet(exec::ById),
+    ExecList(exec::ListParams),
+    ExecStop(exec::ById),
+    ExecLog(exec::LogParams),
+    MatrixGet(matrix::GetParams),
+    MatrixCheck(matrix::CheckParams),
+    PresenceSet(matrix::PresenceParams),
+    MessagesRetract(coord::RetractParams),
+    PlansGet(plans::ByPlan),
+    PlansWrite(plans::WriteParams),
+    BriefBuild(plans::ByTask),
+    BriefSet(plans::BriefSetParams),
+    ReportsGet(plans::ReportsParams),
+    DecisionsEffects(plans::EffectsParams),
+    TimelineGet(timeline::TimelineParams),
+    BudgetGet(timeline::BudgetGetParams),
+    BudgetSet(timeline::BudgetSetParams),
+    PaceGet(timeline::PaceParams),
+    RecordsImport(records::ImportParams),
+    RecordsStatus(records::ByPath),
+    RecordsProposals(records::ByPath),
+    RecordsDecide(records::DecideParams),
 }
 
 /// Every method, in no order.
@@ -179,6 +222,11 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(gateway::methods());
     v.extend(agents::methods());
     v.extend(jobs::methods());
+    v.extend(exec::methods());
+    v.extend(matrix::methods());
+    v.extend(plans::methods());
+    v.extend(timeline::methods());
+    v.extend(records::methods());
     v
 }
 

@@ -2,4 +2,4 @@
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)", "socket": "$SOCKET", "started": "$string", "proto": 1, "proto_min": 1, "records": 2, "drgnx_version": "$string", "schema": 7, "read_only": "$absent", "runtime": {"version": "$string", "commit": "$string"}, "refusals": {"count": 0, "last": []}, "job_agents": "unsandboxed (as on main; the sandbox comes with phase 6)"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)", "socket": "$SOCKET", "started": "$string", "proto": 1, "proto_min": 1, "records": 2, "drgnx_version": "$string", "schema": 8, "read_only": "$absent", "runtime": {"version": "$string", "commit": "$string"}, "refusals": {"count": 0, "last": []}, "job_agents": "unsandboxed (as on main; the sandbox comes with phase 6)"}}}

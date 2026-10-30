@@ -1,0 +1,21 @@
+{"scenario": "agents/permission-rechecked-after-the-answer", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "S2 (gate-F): the user's answer to a permission request is the answer to its matrix card: the card is settled with it, and the hub checks the matrix again before the agent goes on. The cell became Never while the request waited, so the agent is refused although the user said yes."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-matrix", "source": "row", "value": {"cells": [{"action": "code.edit", "column": {"role": "worker"}, "verdict": "never"}]}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [[ "$any", {"type": "agent", "text": "permission: reject_once"}]]}}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select state, choice from card where kind = 'matrix' and id = $req", "rows": [["settled", "allow"]]}

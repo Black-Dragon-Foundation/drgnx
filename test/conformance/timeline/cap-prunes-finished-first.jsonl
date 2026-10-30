@@ -1,0 +1,25 @@
+{"scenario": "timeline/cap-prunes-finished-first", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19, on a plan run (Task 16b): task 1 is worked, reviewed and merged, so its worker's session is finished and its snapshot refs are the first to go; with the cap lowered to 1 byte, task 2's first edit takes a snapshot, finds the repository over the cap and removes the finished session's refs (the running one's stay)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w1.txt\" \"--log\" \"$ROOT/w1.log\")) (\"mock-polish\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w2.txt\" \"--log\" \"$ROOT/w2.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (polish \"mock-polish\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n\n### Task 2: Polish the note\n\n**Role:** polish\n**Depends:** Task 1\n\nAdd note2.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w1.txt", "text": "tool:edit note.txt\\ncommit work\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/w2.txt", "text": "tool:edit note2.txt\\ncommit work\\ncall:complete_task {\"task\": \"$job#2\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say VERDICT: pass\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "file", "path": "$STATE/hub/runs/$job/_job/note.txt", "contains": "edited by ratatoskr-mock", "within_ms": 120000}
+{"do": "sql_expect", "sql": "select id from agent where branch = 'job/$job-1'", "rows": [["$capture:sid1"]]}
+{"do": "run", "hub": "h", "bin": "/bin/sh", "args": ["-c", "[ $(git --git-dir=$(ls -d $STATE/hub/checkpoints/*.git) for-each-ref --format='%(refname)' refs/drgnx/s/$sid1/ | wc -l) -ge 1 ]"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-checkpoint-cap", "source": "row", "value": 1}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"applied": 1}}}
+{"do": "file", "path": "$STATE/hub/runs/$job/_job/note2.txt", "contains": "edited by ratatoskr-mock", "within_ms": 120000}
+{"do": "run", "hub": "h", "bin": "/bin/sh", "args": ["-c", "git --git-dir=$(ls -d $STATE/hub/checkpoints/*.git) for-each-ref --format='%(refname)' refs/drgnx/s/$sid1/ | wc -l"], "expect_code": 0, "expect_stdout": "0"}

@@ -343,7 +343,7 @@ without SVG (librsvg), e.g. a terminal-only build."
 (ert-deftest drgnx-work-ui/an-agent-started-on-a-task-works-on-it ()
   (drgnx-work-ui-test--with root
     (let ((started nil))
-      (cl-letf (((symbol-function 'drgnx-agents-start) (lambda (profile cwd task) (setq started (list profile cwd task)) 'session))
+      (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (profile cwd &optional task) (setq started (list profile cwd task)) 'session))
                 ((symbol-function 'drgnx-agents-ui-transcript) #'ignore))
         (with-current-buffer (drgnx-work-ui-buffer)
           (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)

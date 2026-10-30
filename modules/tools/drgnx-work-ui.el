@@ -27,6 +27,7 @@
 (require 'image)                        ; (setf image-property): not preloaded in every build (31.1 -nw)
 
 (declare-function drgnx-wb-area-show "drgnx-area")
+(declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-wb-place "drgnx-rules")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
@@ -288,7 +289,7 @@ and its commits are recorded for the task."
                  (_ (user-error "Not a task, TODO or plan"))))
          (plan (drgnx-work-ui--plan-of task))
          (cwd (or (plist-get plan :worktree) (plist-get plan :repo) (file-name-directory (plist-get plan :path))))
-         (s (drgnx-agents-start profile cwd (plist-get task :id))))
+         (s (progn (require 'drgnx-agents-mirror) (drgnx-agents-mirror-start profile cwd (plist-get task :id)))))
     (when (fboundp 'drgnx-agents-ui-transcript) (drgnx-agents-ui-transcript s))
     s))
 

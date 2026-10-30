@@ -76,6 +76,20 @@ this returns.
     DRGNX_HUB_SERVE_SECRET`.
 - `helper()` is this binary (its path resolved at start) with `sandbox-inner` and `relay`.
 - `to_draugr(invocation)` is the `draugr::Spec` (stdin `/dev/null`, the fds as `PassFd`s, `new_session`).
+- Agent sessions (`agents/launch.rs`, `sandbox::session_spec`; Task 10): `launch::spawn(plan, req)` for a worker or
+  manager and `launch::spawn_plain(plan, sid)` for a chat with no project return a `Launch { spec, status, layers }`:
+  the `draugr::Spec` of the lock's argv inside Gleipnir, and the status pipe the caller reads with
+  `gleipnir::read_status` after spawning (an unread status means the start is unknown: kill the session). No path
+  starts a session unsandboxed. The spec:
+  - writable: the worktree (a chat: its scratch dir `<tmp>/drgnx-scratch-UID/SID`, not in the session dir, which is
+    read-only and takes nothing else) and the CLI's own login dir (`LaunchPlan.login_dir`, for that CLI alone); no
+    home, no other login dir; `HOME` is told but unreadable beyond it;
+  - the lock's `protected_ro` paths are read-only binds (a pin inside the writable root: the full tier only, as for
+    [your settings files](#ratatoskrs-side));
+  - network from the matrix's Network cell: `ProviderOnly` and `ProviderAndPackages` are isolated with the relay to
+    `<session dir>/proxy.sock` and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set (the proxy's allowlist is what differs);
+    `Open` shares the host network. A chat is always provider-only;
+  - the full tier when bwrap is usable, else the reduced tier; neither: refused.
 - `ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET…` runs [the relay](#the-relay-task-11).
 - `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`
   spawns its probe, and `sandbox::check_blocking` gives it a runtime of its own. On the reduced tier both add
@@ -1194,3 +1208,38 @@ and each has a DEFERRED row:
   as it can the cap file (the same trust boundary as the user). The git runner's `check_trusted_repo` checks paths:
   phase 6 must keep `.git` pinned while agents run. The proxy says one `Denied` per new target, with no cap (phase 6's
   cards).
+
+## Container jobs (Tasks 11b, 11c)
+
+A container job is not run by Gleipnir: the container is its sandbox (`exec/container.rs`, `docs/guide/jobs.md`). The
+hub builds the one `podman run` line from a fixed spec: `--rm`, `--name drgnx-job-<job id>`, `--pull=never`,
+`--userns=keep-id`, `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the process,
+memory and CPU limits, `--network=none`, the worktree as the only `-v`, `-w /work`, the digest-pinned image, then the
+agent's command, which podman never reads as options. The request has no field that adds anything; extra fields are
+ignored.
+
+- **Name and leftovers.** The name lets the hub find what a killed podman client left: at hub start it removes every
+  `drgnx-job-*` container whose job is not running (through the same podman path; other names are never touched).
+- **Pull timeout.** The hub pulls the image before the job (`container::PULL_TIMEOUT`, 10 minutes); a pull that takes
+  longer is killed and the job is refused with that reason.
+- **One image store.** Every podman the hub runs (the image check and pull, the job's `podman run`, the leftovers'
+  cleanup) gets the same environment (`container::podman_env`: `PATH`, `HOME`, the user and locale, `XDG_RUNTIME_DIR`,
+  `DBUS_SESSION_BUS_ADDRESS`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and the `CONTAINERS_*` files), so the job finds the
+  image the hub pulled: rootless podman's store follows `XDG_DATA_HOME`.
+- **Caps enforced, or no job.** Before each container job the hub asks `podman info --format json`
+  (`container::check_limits`) and refuses the job (`Setup`, with the reason) unless podman reports cgroup v2, the
+  `systemd` cgroup manager and the `memory`, `pids` and `cpu` controllers delegated. Rootless podman with no systemd
+  user session falls back to `cgroupfs` with only a warning, and there a container may get no cgroup of its own: the
+  memory and process caps were silently not applied (found by the container rows on CI, 2026-10-25). Podman reaches
+  the user's systemd through `DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`, so a hub whose
+  `XDG_RUNTIME_DIR` is not the session's (the conformance runner's) needs the former. Fix for a refused host: log
+  in to a user session, or `loginctl enable-linger`.
+- **No network yet.** A granted network needs a podman network whose only route is the Gleipnir proxy. Gleipnir's proxy
+  can listen on TCP (`net::proxy::Listener::Tcp`), but nothing routes a podman network to a host listener: a rootless
+  internal network lives in podman's own network namespace, where the hub's loopback and the per-session proxy sockets
+  are not reachable. Until that is designed (a proxy listener on an address the network can reach, owned by the hub),
+  a job is never given a network and a grant is refused.
+- **Escape rows.** `test/conformance/container-escape/*.jsonl` (15 rows, `requires: podman`) each run a probe inside the
+  container: extra mounts, `-v` in argv, a privileged or cap-add field, devices, host network, no network (only `lo`),
+  no podman socket, no home, a symlink out of the worktree, the memory cap, the process cap, the git common dir. The
+  fuzz target `container_req` feeds arbitrary requests to the builder and checks the fixed flags.

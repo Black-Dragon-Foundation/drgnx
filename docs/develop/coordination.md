@@ -626,6 +626,23 @@ that can be steered is held this way (its snapshot says `:enforced t`); one that
 hold and turn-end delivery only (`:enforced nil`, which the job window shows). Reviewers are never gated (they read).
 A task's prompt asks for `read_decisions` first.
 
+### Delivery in Ratatoskr (`drgnx-ratatoskr/src/agents/deliver.rs`, Task 24)
+
+The same rules, run by the hub for the sessions it holds: `deliver::run` makes a pass whenever a write may have added a
+message (`Signals::deliver`) and every second. A queued message goes to its recipient session (its id or its name)
+when `Session::is_free` (idle, not held by a Stop, nothing queued): the prompt is `message_prompt`'s, it is queued in the
+session first and the message is marked `delivered` and `read` after, so a restart in between delivers it twice
+rather than never. A peer's prompt keeps its header (`Origin::Peer`'s own framing is skipped for text that starts `[message from `).
+An agent of a job whose `seen` is behind the log gets the `[decision log vN — job J]` notice once per version
+when free. **The gate** (`deliver::gate`, called at the permission seam before the matrix): an `edit`, `delete`, `move`
+or `execute` request of a job agent behind the log is refused (its `reject_once`), and once per version the notice
+plus "Your last tool call was refused because you had not read these." goes to the front of its queue (hermod cannot
+inject into a running turn, so it is read at the next turn). Reading is never held; sessions without a job never are.
+
+**Take-back:** `messages/retract {id}` (user only) sets a `queued` message to `retracted`, and answers
+`{retracted: true, status: "retracted"}`; once it is `delivered`, `read` or `acted` (or `held`) it answers
+`{retracted: false, status}`; an unknown id is `invalid-params`. A retracted message is never delivered.
+
 ## Jobs
 
 `core/drgnx-job.el` runs in the hub (user docs: [jobs.md](../guide/jobs.md)). `drgnx-job-propose` reads the plan
@@ -674,6 +691,135 @@ budget lists in its data (`:unpriced-budget`) the profiles of its routes whose g
 `:price`, and warns (the proposal card, `:warnings` in the summary): the gateway cannot count what they spend.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
 
+### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
+
+The hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
+`drgnx-job-summary` shapes, so the cockpit and `bin/drgnx job` read them unchanged, and `job/{card,reply,
+dismiss,reassign,resume}` and the review hand-off below. The Lisp runner (`core/drgnx-job*.el`) is frozen and is the oracle for each rule.
+
+- **State:** a job is a `job` row, its tasks `jtask` rows, plus the JSON in `job.data`: `plan`, `hash`, `repo`, `tasks`
+  (the plan's text per task), `routes`, `estimate`, `budget`, `gate`, and by task id `blocked`, `profiles`, `bases`,
+  `exits`, `notes`, and the run `order`. Nothing else lives in memory except "a worktree is being made" (`starting`,
+  shown as the task's status). A hub restart loses nothing.
+- **Propose:** a plan file (an absolute path, or a `plan` entity id: the graph's plan becomes the job, see "Plans, reports and decisions") is read like
+  `drgnx-job-read-plan` (`# title`, `**Repo:**`, `### Task N: title`, `**Role:**`, `**Depends:**`, `**Won't build:**`
+  lines become decisions); duplicates, missing dependencies and cycles are refused; the job starts `proposed` with
+  one `proposal` card and a message (three writes). `auto` approves at once; `job/start-task` proposes task N and the
+  tasks it needs. The estimate counts 150k in and 15k out per task, at the price the user configured for the profile's gateway
+  provider; a profile without one (a subscription) is listed as unpriced.
+- **Approve, stop:** approve settles the proposal card and sets `running` (and the budget); stop rejects it, ends the
+  job's sessions (worktrees stay) and sets `stopped`.
+- **The step** (every 2 s, and at once after an approval or an unblock; `runner::tick`): a task whose agent is gone is
+  `ready` again (the third time it raises an `agent` card); ready tasks that are not blocked get workers in the run
+  order, up to 3 at a time; cards of finished tasks resolve; the job is `done` when every task is done or dropped.
+  **No git runs on the step**: a ready task is marked `starting` and a task of its own makes the worktree through
+  `RunGit::task_worktree` (async, with a deadline), then starts the session (role `worker`, the task's profile, its
+  lock and sandbox as any worker's), claims the task for it, registers the agent and sends the task prompt. A failure
+  raises the task's `agent` card. The server sets `HubGit` with `Runs::set_git`; `BasicGit` (plain worktrees, no merge gate) is only the default of a bare `Runs`.
+- **Order, block:** `job/order` moves a task among the open tasks; `job/block` keeps a task from getting an agent
+  (reason: one line, control and bidi characters replaced, 500 characters); `job/unblock` lets it run again.
+- **Hooks:** `Runs::set_hooks` takes the `Hooks` (`runner::review::PlanHooks`, set by the server), called after each
+  running job's step (and clash scan), when clashes were carded and when a job stops. They keep only what is cheap to
+  lose in memory (the reviewer of a task, the gate card a merge waits on, which turns were read); the rest is in the
+  job's data (`fails`, `nudged`, `passed`, `waiting`, `review-restarts`, `merge-tries`) and the cards.
+
+#### Review, merge, fallback, budget (Task 16b)
+
+- **Review hand-off.** A task that calls `complete_task` is `in-review`. Once its worker's turn is over (the worker
+  ends; a turn that goes on 10 minutes after it is a `stalled` card) a task of its own looks at the task's changes in
+  the trusted repository (`RunGit::prepare` writes a snapshot task's `<task folder>.bundle`, then `diffs`): none is a
+  `review` card ("finished with no commits"); `clash::before_review` may hold the review (a new against-decision clash
+  is carded and its reviewer started, `clash::start_reviewers`; an open clash card about the task holds it too).
+  Then a session of the first profile of the `review` route (any provider; role worker, the task's tree, no claim)
+  gets "[drgnx review ID] title ... VERDICT: pass, or VERDICT: fail: what to change". The verdict is the last
+  non-empty line of the agent's last message without Markdown marks (`review::verdict`). **Pass:** the task is marked
+  `passed` and merges. **Fail:** the reasons are the task's `notes`, the task is `ready` for a new worker (whose prompt
+  carries them); the third failure is a `review` card. **No verdict:** a `review` card. A reviewer that is lost (the job
+  stopped, the hub restarted) is started again, three times.
+- **Merge.** One merge at a time per job, in a task of its own (the task shows `merging`). The job's branch is checked
+  out in `<runs root>/<job>/_job`. The reviewer's pass is written as `accepted` review marks for every changed file at
+  its current diff hash (unless the job's gate is `review+accept`: then only the user's marks count and the task waits).
+  `RunGit::merge_gate` answers: `Allow` merges exactly the checked tip (`merge_into`: `merge --no-ff`); `Never` is a
+  `review` card; `Ask(card)` (CI or build files changed) waits for the matrix card: answered yes, the next tick
+  re-checks it (`MatrixGate::recheck`), clears the branch (`clear_gate`) and merges. A conflict is aborted and is a
+  `merge-conflict` card; a failure without one is retried once, then a `merge-failed` card. Merged: the task is `done`
+  (its dependents start), its worker session counts as finished for the checkpoint cap.
+- **Stalled nudge, needs-input.** A worker whose turn ended with the task open (and is not paused by a budget) gets
+  one reminder, then a `stalled` card. A task `needs-input` without a card of ours remembers who waits (`waiting`);
+  when that agent is gone the task goes back to `running`.
+- **Fallback.** A worker whose turn failed with a provider limit (a 429, rate limit, overloaded, quota, too many
+  requests) goes to the next profile of its role's route in the same tree, with a handover (its last commit and last
+  words); a `fallback` event says so; with none left, a `fallback` card. A reviewer at its limit starts again on the
+  next profile of the `review` route, else a `review` card.
+- **Budget pause.** The job's USD budget (`job/approve`) is a `usd` limit on its plan scope (`budget/set` can limit
+  any scope below it). A limit reached below a plan run pauses the sessions below it (Task 20), sets the job `paused`
+  and makes the job's `budget` card (the job's card replaces the unscoped one). `job/resume` (a new USD budget
+  optional) sets it `running`, settles the card and lets the held sessions go on.
+- **Cards.** `job/card {card, action, arg}` runs one of the card kind's actions once (`approve`, `reject`, `retry`,
+  `merge`/`accept` = merge as it is, `review`, `drop`, `resume`, `stop`, a clash's `accept`, `pick-a`, `pick-b`;
+  `open`, `edits` and `discuss` leave the card open). A clash pick records the user's decision (`contradiction`,
+  `proposed`, `against-decision`); reviewers of clash cards answer `RECOMMEND: A|B|neither: why`, kept on the card.
+  `job/reply`, `job/dismiss` answer or acknowledge a job's message; `job/reassign` sets a task's profile and gives it
+  a new agent. Not here: answering an agent's permission request from its card (the agent's request is answered in
+  its transcript).
+- **Clash lines.** `RunGit::diffs` gives each changed path its diff hash and its changed line ranges (`git diff -U0`);
+  two tasks in review that change one file make an `overlap` clash.
+
+### Jobs as tools, waking instead of polling (Ratatoskr)
+
+`norn/src/tools/jobs.rs` has the four job tools. They reach `exec/*` through `norn::tools::Hub::exec` as the calling
+session (`ToolHub::exec` in `coord.rs` calls `agent_core::serve` with an agent caller carrying the session id; the hub's
+own `Front` is bound once it is in its `Arc`). `job_result` and `job_log` of a running job of the caller are refused and
+counted (`Hub::wait_refused` → `Session::refuse_wait`); the permission gate refuses `execute` tool calls that wait
+(`session::is_wait_loop`) while the session has a job running, and at `agents-wait-refusals` the turn is cancelled
+(`stop_turn`).
+
+The runner keeps the running jobs by starter (`exec::Live`) and sends `JobEvent`s (`Queued`, `Admitted`, `Done`) on a
+broadcast channel. A session whose turn ends while `Live` has a job of its own goes to `waiting` and a `job-wait` step
+instead of `idle`; a prompt or a hub wake takes it out of `waiting` like out of `idle`. `agents::wake::run` (spawned by
+the server) turns `Done` into `Hub::wake`, which resumes a session closed on a job first (`session::resume_closed`: the
+recorded row, `session/resume` or `session/load`, transcript and queue read back) and prompts it with `Origin::Hub`; a
+queued hub prompt un-pauses the queue after a cancel. `Queued` and `Admitted` open and close the starter's
+`machine-queue` step (`Hooks.slots`, 4; `DRGNX_TEST_JOB_SLOTS` in test-hooks builds). `agents-close-idle-after` closes
+an idle session with a timer in the session itself.
+
+A session the hub starts gets `mcpServers: [{name: "drgnx", command: ratatoskr, args: [mcp-bridge, --socket, PATH]}]` in
+`session/new` (and `resume`/`load`): `agents::session::bridge` mints the socket with `Sessions::open` (owner: the hub),
+reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run a session's jobs unsandboxed when
+`DRGNX_TEST_PLAIN_JOBS` is set (the conformance container has no sandbox helper).
+
+### Plans, reports and decisions (`runner/effects.rs`, `norn/src/tools/{plan,reports}.rs`)
+
+- **A plan in the graph** is a `plan` entity; its tasks are `task` entities under it (`parent_of`) with
+  `data.{number, model, interfaces, steps, role}`; a task waits on the tasks that `block` it. `plans/get` (and the
+  `plan_read` tool) returns the tasks with status, deps, steps, their reports and the latest report's interfaces;
+  `plans/write` (`plan_write`) creates or changes a plan, its tasks (by number), steps and `blocks` in one
+  transaction and is refused when `base_version` is behind. An agent's write needs the matrix's `graph.change`
+  (the worker column; an Ask makes a card and the write is refused until it is settled); a task written `done` also
+  needs `task.done` (never for a worker). An agent reaches its own project's plans, reports and tasks only (its
+  session's project: the plan run's, else the one its folder is in): `plans/get`, `plans/write`, `reports/get` and the
+  manager's `report_read` refuse another project's records, and a new plan lands in the agent's project (naming
+  another is refused); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
+  entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job.
+- **Imported plans** get the same shape: `graph import-records` puts each `### Task N:` piece under the plan's head
+  (`parent_of`), with `data.{number, role, model, interfaces, steps}`, `**Depends:** Task M` as `blocks` links and the
+  `**Repo:**` line as the head's `data.repo`; so `plan_read` and `job/propose` on the head's entity id work.
+- **`report_submit`** (and the fallback block) files, in one transaction: a `report` entity linked `report_of` to the
+  task, whose `data` holds `tip, commits, checks, decisions, differences, interfaces, followups, unrecorded` (so
+  `report.data.interfaces` is what briefs and `plan_read` read); a ledger `note` about the task; each follow-up as
+  a `task` linked `discovered_from` (area `deferred`: a `todo` linked `relates`); decisions listed but never
+  recorded in `unrecorded`; and the task `in-review`. Prose fields are at most 2000 characters; unknown keys are
+  refused. An agent without drgnx's tools ends its last message with a fenced `drgnx-report` block of the same
+  schema; the hub validates it when the turn ends and files it as that session (once: not for a task already in
+  review or done). `reports/get` reads them back.
+- **Decisions and commits.** `record_decision` takes `step` and `origin` (`from-brief`, `own`, `needs-user`) and
+  keeps them, with the session, in the decision. After each shell step of a plan-run session the hub lists the new
+  non-merge commits of its tree beyond `job/<job>` (git in a blocking task) and links each new commit
+  (`commit:<sha>`) `implements` to every decision that session recorded and no commit implements yet.
+  `decisions/effects` returns a decision's commits and the later commits whose changed lines (`git diff-tree -U0`,
+  old side) overlap the lines the decision's commits wrote; line numbers are not followed through the commits in
+  between, and the result says `computed`. It needs the tree (or the repository) to still exist.
+
 ## Clashes (`core/drgnx-job-clash.el`)
 
 Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment only inside the reviewer:
@@ -703,6 +849,95 @@ the user's — a `replaces` of the other side for a contradiction; the proposal 
 decision; for work against a decision, the task back to an agent told which files to revert (A), or the decision
 replaced and the review going on (B) — and the log's delivery tells every agent of the job.
 `drgnx-job-clash-auto-accept` (nil): a short clash's recommendation accepted without the user.
+
+In the hub the rules are `runner::clash` (`runtime/crates/drgnx-ratatoskr/src/runner/clash.rs`), pure functions over
+the run's state: `scan(&RunState, &[Decision], &DiffIndex) -> Vec<Clash>` returns the clashes whose key is not in
+`RunState::carded` (the runner remembers each key it cards); `user_wins(&[Decision])` lists the agent decisions a
+user's decision replaces at once (no card). `DiffIndex` is task id → path → `FileDiff { hash, ranges }`, built from
+`HubGit::diff_hashes`; the against-decision and overlap rules look at tasks `in-review`, overlap at any open task.
+The runner's hooks: `before_review(run, decisions, diffs, task) -> ReviewGate { clashes, wait }` (the review waits
+for a new against-decision clash or an open clash card about the task) and `ReviewerHook::start(clash, long)` via
+`start_reviewers` (not for `stale` and `overlap`). A stale card's key includes the held count, so the runner
+clears the count after carding, as the Lisp does.
+
+## The permissions matrix
+
+`norn::matrix` (`runtime/crates/norn/src/matrix/`) is the policy on the wire's vocabulary
+(`runstav::methods::matrix`). Rows are the 22 `Action`s (ids such as `agents.start`, `push.main`); columns are
+roles (manager, worker, chat), named agents and providers; a cell is `Allow`, `Ask` or `Never` with an optional
+limit (`amount` in a `Unit`).
+
+- **Presets:** `preset(Cautious | Balanced | Autonomous)` builds a layer with every action in the three role columns.
+  Balanced is the design mockup's table. `JobContainer` is Allow for managers and workers under Balanced and
+  Autonomous, Ask under Cautious, Never for chat. A cell has one limit, so Balanced `spend` carries the dollar cap
+  (manager $40, worker $10, chat $2); the weekly-limit share is the gateway's budget check, not the cell.
+- **Combination:** `effective(layers, who)` applies the layers in order (preset, user overrides, project, plan; a
+  later layer replaces a cell), then takes the most restrictive of the columns that match the session: `Never >
+  Ask > Allow`. A provider or agent column can tighten a role, never widen it. At the same verdict a limit beats
+  none and the smaller limit wins; limits in different units do not compare, so the cell becomes Ask with no limit.
+  `unsandboxed` and `user.private` are Never whatever a layer says; an action without a cell is Never.
+- **Deciding:** `decide(effective, action, amount)` is the cell's verdict; over the cell's limit it is Ask if
+  `spend.over` is not Never, else Never.
+- **Narrowing:** `narrow(parent, asked)` returns `asked` only if no cell is wider than the parent's: a verdict at
+  least as restrictive and, where the parent has a limit, a limit in the same unit that is no greater (a child with
+  no limit, or in another unit, is wider). Otherwise `Widening { action }` names the first offender.
+- **Time presets:** `active(base, time_presets, away, minute)` picks the first `Away` preset while the user is away,
+  else the first `Between(from, to)` holding at that minute of day (wrapping past midnight), else the base.
+
+Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, combination, overrides, narrowing as a
+property test, units, time presets).
+
+### The matrix in the hub (`drgnx-ratatoskr/src/matrix_gate.rs`)
+
+`MatrixGate::check(tx, who, action, ctx, now)` is the one door: it builds the layers (the active preset, the
+`agents-matrix` setting decoded by `settings/matrix.rs`, the project's layer, the plan's) and answers `Allow`,
+`Ask(card)` or `Never(why)`. The preset in force is read at every call, so a switch (or `presence/set`) applies from
+the next action. An Ask writes one `matrix` card (`norn::write::cards::matrix_card`); the same open question is the
+same card, and `decide` announces it with the `card` event every card sends (`id`, `kind` `matrix`, `title`). The
+card's title and data come from the hub's `Facts` (command, paths, diff hash) and ids, never from
+agent text. `recheck(card)` runs at execution: a matrix that now says Never refuses whatever the user answered; a
+declined card refuses; an open one is still a question. A project's and a plan's override is the `matrix` field of
+its entity's data and counts only when the user's tx wrote that field: urdr keeps each top-level data key's writer in
+`field_tx` as `data.<key>`, and the gate reads `data.matrix` (an agent's write of the field, or of another data key,
+never decides it). `ActionCtx::of_session` fills a session's project and plan from the runner's scope table (a plan
+run's, or the one `open_as` derives from the task a session starts on).
+
+`effective_for(conn, who, ctx, now)` is what a session may do now; the permission seam, the brief and the launch
+plan all call it. A worker a manager started gets `meet` (the cellwise tighter) of its own cells from every layer, its
+`Delegation` and the manager's own cells read again at that moment. `delegate` records the delegation (no wider than
+the manager's own, `narrow`) before the worker starts; a move copies it to the new session id before the new session
+starts; `restore_delegation` reads it back (`runtime.db`, with the manager's columns, project and plan); the session's
+end drops it. The grant lives in the hub, not as a `grant` entity (the guard makes grants the user's). A session's
+Ask holds the agent's request under the card's id: `agents/permission` settles the card, `cards/settle` (from the
+cockpit) releases the request, and either way `recheck` decides. A manager's Ask carries the call's facts (the tool
+and its arguments, with their hash), and the manager's pending answer is keyed on them. The weekly-share check on a
+subscription is the budget gate's (Task 20), not the matrix's.
+Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
+
+### Plan runs: git, the merge gate, trial merges (`drgnx-ratatoskr/src/runner/git.rs`)
+
+`HubGit` is the hub's `RunGit`. Every git call is async with a deadline and none runs on the runner's tick.
+
+- **Trees.** Worktree mode: `git worktree add -b job/<run>-<task>` under `<root>/<run>/<task>`. Snapshot mode: one
+  bare store per run (`<root>/<run>.git`), copied (reflink where the filesystem can) into the task's `.git`, the task's
+  work comes back as a bundle (`<task>.bundle`). The store is cloned, or fetched from the repository, before every
+  tree is made from it, one store operation at a time (a run's tasks start together). A manager worker's tree that is made again
+  after a restart reads its base in the store, fetched first (its own `.git` holds the integration branch as it was
+  when the tree was made), with the tree's objects lent to it; no git runs in the tree.
+- **The gate reads the trusted repository only** (never a task folder; this removes the VC-guard refusals of the Lisp
+  gate in snapshot mode). A snapshot bundle is first imported: `git bundle verify`, `fetch` with
+  `fetch.fsckObjects`/`transfer.fsckObjects`, a branch that descends from the task's base, and the ref written
+  compare-and-swap. The changed set is `git diff --raw -z` of base..tip; each path's diff hash covers its mode, blob ids
+  and status, so a mark made before the tip moved does not count.
+- **Verdicts.** Paths under the lock's protected list (`.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks`,
+  `mise.toml`) are refused (`Never`). Files not all accepted against the current diff hash wait (`Never` with the
+  count). `.github/`, `Makefile*`, `build.rs` and `*.sh` ask as `code.ci-config` (a card under Balanced). Otherwise
+  `Allow`. The tip checked is remembered; `HubGit::merge` merges exactly that tip with `merge --no-ff` and refuses a
+  branch that moved since the check; a conflict is aborted and listed.
+- **Trial merges** (`trial_merge`) merge the branches in order into a scratch worktree (hooks off) and list the
+  conflicting paths; the scratch worktree is removed.
+- **Touched-folder ledger.** `op` rows (`kind = 'touched'`) in `runtime.db` record the folders a sandboxed agent worked
+  in. Plain git is refused there (`folder_git`, `write_bundle`) and runs only inside the sandbox; the rows survive a restart.
 
 ## Tests
 

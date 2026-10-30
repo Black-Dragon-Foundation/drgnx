@@ -290,7 +290,8 @@ paths no WM serves."
       (should (string-search (concat (drgnx-ui-x11-emacs-bin) " --no-x-resources --init-directory "
                                      (expand-file-name "init" run))
                              script))
-      (should-not (string-search "i3" script))
+      ;; no window manager: neither i3 nor i3-msg as a command (a temp dir's random name may hold "i3")
+      (should-not (string-match-p " i3\\(-msg\\)? " script))
       ;; the cookie: only the session's programs reach the display
       (let ((xa (expand-file-name "Xauthority" run)))
         (should (= (file-modes xa) #o600))

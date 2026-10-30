@@ -39,6 +39,7 @@ use urdr::graph::{Class, OpenOutcome, OpenRule, Tx, TxMeta, WriteError};
 
 use crate::deny::{DenyList, Source, Verdict};
 use crate::kinds;
+use crate::migrate8;
 use crate::project::{self, ProjectCache};
 
 #[cfg(test)]
@@ -153,6 +154,28 @@ pub fn open_rule(opts: MigrateOpts) -> OpenRule {
 }
 
 fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
+    match open7(conn, path, opts) {
+        // the file is at schema 7 now (made, migrated or already): the step table moves it to 8 (`migrate8`)
+        OpenOutcome::Ready { schema: SCHEMA } => match migrate8::upgrade(conn) {
+            Ok(_) => OpenOutcome::Ready {
+                schema: migrate8::SCHEMA,
+            },
+            Err(e) => {
+                let reason = format!("the move of work.db to schema 8 failed: {e}");
+                if urdr::is_busy(&urdr::Error::Sqlite(e)) {
+                    OpenOutcome::NotReady(BUSY_TEXT.into())
+                } else {
+                    tracing::error!("{reason}");
+                    OpenOutcome::Failed(reason)
+                }
+            }
+        },
+        other => other,
+    }
+}
+
+/// Schema 7 as it was: an empty file made, a schema-6 one migrated, a schema-7 or newer one recognised.
+fn open7(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
     let tables: i64 = match conn.query_row("select count(*) from sqlite_master", [], |r| r.get(0)) {
         Ok(n) => n,
         Err(e) => return OpenOutcome::NotReady(format!("work.db cannot be read: {e}")),
@@ -169,7 +192,10 @@ fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
     match schema_of(conn) {
         Err(e) => OpenOutcome::NotReady(format!("work.db cannot be read: {e}")),
         Ok(SCHEMA) => OpenOutcome::Ready { schema: SCHEMA },
-        Ok(s) if s > SCHEMA => OpenOutcome::ReadOnly { schema: s },
+        Ok(migrate8::SCHEMA) => OpenOutcome::Ready {
+            schema: migrate8::SCHEMA,
+        },
+        Ok(s) if s > migrate8::SCHEMA => OpenOutcome::ReadOnly { schema: s },
         Ok(6) => match migrate(conn, path, opts) {
             Ok(report) => {
                 tracing::info!(report = %report.to_json(), "work.db moved to schema 7");

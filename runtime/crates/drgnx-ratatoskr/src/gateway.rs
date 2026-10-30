@@ -113,7 +113,7 @@ impl Registry for Regs {
 }
 
 /// `work.db`'s `spend` table as the engine's ledger.
-pub struct WorkLedger(pub CoordDb);
+pub struct WorkLedger(pub CoordDb, pub Option<crate::budget::Budgets>);
 
 impl Ledger for WorkLedger {
     fn spent(&self, job: &str) -> BoxFuture<'_, Result<f64, String>> {
@@ -135,6 +135,11 @@ impl Ledger for WorkLedger {
     fn record(&self, row: SpendRow) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let provider = row.provider.clone();
+            let booked = row
+                .job
+                .clone()
+                .zip(self.1.clone())
+                .map(|(j, b)| (j, b, row.cost));
             let r = norn::write::spend::SpendRow {
                 job: row.job,
                 task: row.task,
@@ -156,6 +161,10 @@ impl Ledger for WorkLedger {
                 .await
             {
                 tracing::warn!(provider, "a spend row was not recorded: {e}");
+            } else if let Some((job, budgets, cost)) = booked {
+                // the nested budgets count it; a limit it reaches is told to the budget consumer
+                let hits = budgets.usd_spent(&job, cost);
+                budgets.notify(hits);
             }
         })
     }
@@ -173,6 +182,8 @@ pub struct Gate {
     /// Fails closed (design §6.2): `None` only once the server's hardening succeeded.
     keys_refused: Mutex<Option<String>>,
     db: OnceLock<urdr::Handle>,
+    /// The nested budgets the gateway admits `usd` by ([`crate::budget`]).
+    budgets: OnceLock<crate::budget::Budgets>,
     /// The editor token the hub's own embedder uses (memory only, made when first asked for).
     embed_token: OnceLock<String>,
     /// The engine and the loopback port, once it listens.
@@ -200,6 +211,7 @@ impl Gate {
             held: Mutex::new(BTreeSet::new()),
             keys_refused: Mutex::new(Some("the hub was not hardened".into())),
             db: OnceLock::new(),
+            budgets: OnceLock::new(),
             embed_token: OnceLock::new(),
             engine: OnceLock::new(),
             warnings: Mutex::new(Vec::new()),
@@ -217,6 +229,11 @@ impl Gate {
         if self.db.set(db).is_err() {
             tracing::warn!("the gateway's store was given twice: the first is kept");
         }
+    }
+
+    /// The budgets (once, before [`Gate::listen`]).
+    pub fn attach_budgets(&self, b: crate::budget::Budgets) {
+        let _ = self.budgets.set(b);
     }
 
     fn db(&self) -> Result<&urdr::Handle, Error> {
@@ -269,7 +286,7 @@ impl Gate {
             self.regs.clone(),
             self.providers.clone(),
             self.keys.clone(),
-            Arc::new(WorkLedger(self.coord.clone())),
+            Arc::new(WorkLedger(self.coord.clone(), self.budgets.get().cloned())),
             tx,
             upstream,
         );
@@ -634,10 +651,58 @@ impl Gate {
         }
     }
 
+    /// A registration for the hub's own session SID (booked under JOB), on the loopback listener: the URL and the
+    /// token its agent gets.  Owned by this hub process, so a restart prunes it and the resumed session registers
+    /// again.  The session's nested `usd` limit becomes the registration's budget ([`Gate::follow_budget`]).
+    pub async fn register_session(
+        &self,
+        chain: Vec<(String, Option<String>)>,
+        job: &str,
+        agent: &str,
+        scope: &runstav::methods::timeline::BudgetScope,
+        sessions: &Sessions,
+    ) -> Result<Registered, Error> {
+        let chain: Vec<Value> = chain.into_iter().map(|(p, m)| json!([p, m])).collect();
+        let p: RegisterParams = serde_json::from_value(json!({
+            "chain": chain, "job": job, "agent": agent, "owner": std::process::id(),
+        }))
+        .map_err(|e| invalid("chain", e.to_string()))?;
+        let r = self.register(p, None, sessions).await?;
+        if let Some(b) = self.budgets.get() {
+            b.bind_job(job, scope);
+            self.follow_budget(b, job).await;
+        }
+        Ok(r)
+    }
+
+    /// Job JOB's registrations carry what its session may still spend: the job's spend so far plus the nested
+    /// `usd` remaining (the engine refuses at spend >= budget).  A job with no `usd` limit above it keeps its budget.
+    pub async fn follow_budget(&self, budgets: &crate::budget::Budgets, job: &str) {
+        let Some(left) = budgets.usd_left(job) else {
+            return;
+        };
+        let spent = self.job_spent(job).await;
+        if let Err(e) = self.set_budget_raw(job, spent + left).await {
+            tracing::warn!(job, "the nested budget was not applied: {}", e.message);
+        }
+    }
+
+    async fn job_spent(&self, job: &str) -> f64 {
+        let j = job.to_owned();
+        self.coord
+            .read(move |c| norn::read::spend::spend_sum(c, Some(&j), None, None))
+            .await
+            .map_or(0.0, |s| s.cost)
+    }
+
     /// `gateway/set-budget`: every registration of the job gets the budget, in memory and in `runtime.db`.
     pub async fn set_budget(&self, p: SetBudgetParams) -> Result<bool, Error> {
+        self.set_budget_raw(p.job.as_str(), p.budget.get()).await
+    }
+
+    async fn set_budget_raw(&self, job: &str, budget: f64) -> Result<bool, Error> {
         let db = self.db()?;
-        let (job, budget) = (p.job.as_str().to_owned(), p.budget.get());
+        let job = job.to_owned();
         let _one = self.serial.lock().await;
         for k in write(&self.regs.0).values_mut() {
             if k.reg.job.as_deref() == Some(job.as_str()) {
@@ -1767,7 +1832,7 @@ mod tests {
         let h = hub().await;
         let g = &h.front.gate;
         // the rows the engine records, through the ledger
-        let ledger = WorkLedger(h.coord.clone());
+        let ledger = WorkLedger(h.coord.clone(), None);
         for (job, agent, input, output, cost) in
             [("j1", "agent-1", 10, 2, 0.5), ("j2", "agent-2", 7, 1, 0.25)]
         {

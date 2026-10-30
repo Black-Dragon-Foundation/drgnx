@@ -48,14 +48,15 @@
                 (should (member (plist-get s :status) '("running" "done")))
                 (should (= (length (plist-get s :tasks)) 2))
                 (should-not (equal (mapcar (lambda (task) (plist-get task :status)) (plist-get s :tasks)) before))))
-            ;; the mock is no Claude Code, so not job-safe: task 1 gets a card, and no agent starts (job-safe-test.el)
+            ;; the mock has no lock drgnx enforces, and the hub checks the lock before it starts a job's agent (Task 9): task 1
+            ;; gets a card with that reason, and no agent starts (the Lisp job runner's own card text: job-safe-test.el)
             (let ((deadline (+ (float-time) 15)) s card)
               (while (and (not (setq s (funcall status)
                                      card (seq-find (lambda (c) (equal (plist-get c :kind) "agent")) (plist-get s :cards))))
                           (< (float-time) deadline))
                 (sleep-for 0.2))
               (should card)
-              (should (string-search "mock cannot run a job's agent" (plist-get card :title)))
+              (should (string-search "mock's lock is not enforced" (plist-get card :title)))
               (should (equal (plist-get (seq-find (lambda (task) (= (plist-get task :n) 1)) (plist-get s :tasks)) :status)
                              "needs-input"))
               (should (seq-empty-p (plist-get s :agents))))
@@ -115,6 +116,25 @@
         (should (eql (car r) 0))
         (should (numberp (plist-get (cdr (car (nth 2 r))) :budget)))))
     (should (eql (car (drgnx-job-cli-test--run summary "approve" "j" "--budget")) 1))))      ; no value
+
+(ert-deftest drgnx-job-cli/status-is-the-fronts-jobs-shape ()
+  ;; `drgnx job status --json' with no id, against a real Ratatoskr (the CLI starts it): the Front's {"jobs": …}
+  (skip-unless (getenv "DRGNX_RATATOSKR_BIN"))
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-cli" t)))
+         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
+                                            (concat "XDG_STATE_HOME=" root "state") (concat "HOME=" root "home")
+                                            "DRGNX_JOBS_LAUNCHER=detached" "DRGNX_NO_HUB_START"
+                                            "RATATOSKR_SUPERVISOR=none" (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
+                                      process-environment)))
+    (unwind-protect
+        (progn
+          (make-directory (concat root "config") t) (make-directory (concat root "home") t)
+          (with-temp-buffer
+            (should (eql 0 (call-process (expand-file-name "bin/drgnx" drgnx-dir) nil t nil "job" "status" "--json")))
+            (let ((r (json-parse-string (buffer-string) :object-type 'plist :array-type 'list)))
+              (should (plist-member r :jobs))
+              (should (listp (plist-get r :jobs))))))
+      (ignore-errors (delete-directory root t)))))
 
 ;; the commands: job-ui-test.el (module tools/jobs)
 

@@ -116,6 +116,17 @@ rt_cap() { # RT_CAP: the systemd-run words that cap the build's memory (Linux wi
   fi
 }
 
+rt_fwd_triple() { # the static (musl) target of the forwarder on Linux, nothing elsewhere (macOS: AS1-FWD-MACOS-1)
+  [[ "$(update_platform)" == Linux ]] || return 0
+  printf '%s-unknown-linux-musl' "$(uname -m)"
+}
+
+rt_fwd_path() { # where rt_build leaves the forwarder
+  local triple
+  triple="$(rt_fwd_triple)"
+  printf '%s/ratatoskr-fwd-target/%srelease/drgnx-fwd' "$(drgnx_dir cache)" "${triple:+$triple/}"
+}
+
 rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of drgnx-ratatoskr; then rt_install when asked
   local install=0 prefix="" jobs commit cache l
   while (($#)); do
@@ -138,13 +149,26 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   printf 'drgnx runtime: building Ratatoskr %s with %s (-j%s)\n' "${commit:0:12}" "$RT_CARGO" "$jobs"
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
         --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr) || { rt_err "the build failed"; return 1; }
+  # the forwarder a container job runs: static, so it starts in any image. On Linux that is the musl target (Rust's
+  # self-contained musl: no static glibc needed, build scripts stay host builds); a failure here only warns (the hub
+  # then gives container jobs no network)
+  local triple fwdenv
+  triple="$(rt_fwd_triple)"
+  printf 'drgnx runtime: building the container forwarder (static)\n'
+  # with rustup, add the target (quietly; a no-op once installed); a distro Rust may carry it already
+  if [[ -n "$triple" ]]; then env "${envs[@]}" rustup target add "$triple" >/dev/null 2>&1 || true; fi
+  fwdenv=("CARGO_TARGET_DIR=$cache/ratatoskr-fwd-target")
+  if [[ -n "$triple" ]]; then fwdenv+=("CARGO_BUILD_TARGET=$triple"); else fwdenv+=("RUSTFLAGS=-C target-feature=+crt-static"); fi
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "${fwdenv[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --manifest-path runtime/Cargo.toml -p drgnx-fwd) ||
+    rt_err "warning: no forwarder built${triple:+ (needs the Rust target $triple: rustup target add $triple)}: container jobs get no network"
   if ((install)); then
     if [[ -n "$prefix" ]]; then rt_install --prefix "$prefix"; else rt_install; fi
   fi
 }
 
 rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by rename; with a prefix, $PREFIX/bin/{ratatoskr,rtsk} link to it
-  local prefix="" built dir answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
+  local prefix="" built dir fwd answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
   while (($#)); do
     case "$1" in
       --prefix) [[ -n "${2:-}" ]] || { rt_err "--prefix needs a directory"; return 2; }; prefix="$2"; shift ;;
@@ -161,6 +185,14 @@ rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by 
   mkdir -p "$dir"
   cp "$built" "$dir/ratatoskr.new" && chmod 755 "$dir/ratatoskr.new" && mv -f "$dir/ratatoskr.new" "$dir/ratatoskr" ||
     { rt_err "could not install into $dir"; return 1; }   # a rename: a running hub sees a new inode at its resolved path
+  # beside the hub, where it looks for the forwarder of a container job's network
+  fwd="$(rt_fwd_path)"
+  if [[ -x "$fwd" ]]; then
+    cp "$fwd" "$dir/drgnx-fwd.new" && chmod 755 "$dir/drgnx-fwd.new" && mv -f "$dir/drgnx-fwd.new" "$dir/drgnx-fwd" ||
+      { rt_err "could not install drgnx-fwd into $dir"; return 1; }
+  else
+    rt_err "no forwarder built at $fwd: container jobs get no network until drgnx runtime build runs"
+  fi
   if [[ -n "$prefix" ]]; then
     mkdir -p "$prefix/bin"
     for n in ratatoskr rtsk; do ln -sfn "$dir/ratatoskr" "$prefix/bin/$n"; done

@@ -2,10 +2,10 @@
 {"do": "start", "hub": "h"}
 {"do": "file", "path": "$DATA/work.db", "mode": "600"}
 {"do": "file", "path": "$DATA/backup", "exists": false}
-{"do": "sql_expect", "sql": "select key, value from kv where key in ('schema', 'compat-read') order by key", "rows": [["compat-read", "6"], ["schema", "7"]]}
+{"do": "sql_expect", "sql": "select key, value from kv where key in ('schema', 'compat-read') order by key", "rows": [["compat-read", "6"], ["schema", "8"]]}
 {"do": "sql_expect", "sql": "select count(*) from entity", "rows": [[0]]}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "events/add", "params": {"kind": "comment", "summary": "first"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": 1}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready", "migrated_at": "$absent", "failed": "$absent"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 8, "store": {"schema": 8, "writer": "ready", "migrated_at": "$absent", "failed": "$absent"}}}}

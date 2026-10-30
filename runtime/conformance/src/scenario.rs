@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 33] = [
+pub const VERBS: [&str; 35] = [
     "start",
     "root",
     "rename",
@@ -17,6 +17,7 @@ pub const VERBS: [&str; 33] = [
     "pause",
     "expect",
     "expect_next",
+    "poll",
     "expect_closed",
     "expect_silent",
     "kill",
@@ -33,6 +34,7 @@ pub const VERBS: [&str; 33] = [
     "spawn_conn",
     "sql_expect",
     "capture_file",
+    "db_digest",
     "http",
     "expect_http",
     "file_grep",
@@ -52,6 +54,9 @@ pub struct Scenario {
     /// What the row pins, for whoever reads the file (the runner does not use it).
     #[allow(dead_code)]
     pub doc: String,
+    /// `"pending": REASON`: a known red on Ratatoskr until REASON's task lands (a failure counts as expected, a pass
+    /// fails the run so the mark goes); ignored with `--target lisp`.
+    pub pending: Option<String>,
     pub steps: Vec<Step>,
 }
 
@@ -61,7 +66,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 9] = [
+pub const TAGS: [&str; 11] = [
     "v0",
     "v1",
     "fake-backend",
@@ -71,6 +76,8 @@ pub const TAGS: [&str; 9] = [
     "linux",
     "macos",
     "perf",
+    "agent-locks",
+    "podman",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {
@@ -121,6 +128,16 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let pending = match h.get("pending") {
+        None => None,
+        Some(Value::String(r)) if !r.trim().is_empty() => Some(r.clone()),
+        Some(_) => {
+            return Err(err(
+                hl,
+                "\"pending\" is a reason: the task that turns the row green",
+            ));
+        }
+    };
     let mut steps = Vec::new();
     for (line, text) in lines {
         let v: Value =
@@ -142,6 +159,7 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
         name: name.to_string(),
         requires,
         doc,
+        pending,
         steps,
     })
 }
@@ -195,6 +213,8 @@ pub struct Host {
     pub fake_backend: bool,
     pub lisp_backend: bool,
     pub perf: bool,
+    /// `podman` is on the PATH.
+    pub podman: bool,
     /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
     pub ptrace_stays: bool,
 }
@@ -237,6 +257,9 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     }
     if has("test-hooks") && !h.test_hooks {
         return skip("the hub binary is built without test-hooks", false);
+    }
+    if has("podman") && !h.podman {
+        return skip("needs podman on the PATH", true);
     }
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
@@ -286,6 +309,12 @@ pub fn probe_sudo(cmd: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Is `podman` on the PATH?
+pub fn podman_available() -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("podman").is_file()))
+}
+
 /// May another uid be used?  Root can; otherwise passwordless sudo (the command is $SUDO, default `sudo`).
 pub fn sudo_available() -> bool {
     (unsafe { libc::geteuid() } == 0)
@@ -312,6 +341,7 @@ mod tests {
 {"do": "pause", "conn": "c"}
 {"do": "expect", "conn": "c", "json": {"id": 1}, "within_ms": 100}
 {"do": "expect_next", "conn": "c", "json": {"id": 2}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "ping"}, "expect": {"id": 3, "result": "$any"}, "within_ms": 100, "every_ms": 10}
 {"do": "expect_closed", "conn": "c"}
 {"do": "expect_silent", "conn": "c", "for_ms": 50}
 {"do": "kill", "hub": "h", "signal": "TERM"}
@@ -331,6 +361,7 @@ mod tests {
 {"do": "http", "conn": "h", "to": "tcp:127.0.0.1:1", "method": "POST", "path": "/", "headers": {"a": "b"}, "body": "x", "read": "head", "close_after": true}
 {"do": "expect_http", "conn": "h", "status": 200, "headers": {"content-type": "$any"}, "body_contains": "x", "body_json": {}, "within_ms": 100}
 {"do": "file_grep", "paths": ["$ROOT/**"], "absent": "secret"}
+{"do": "db_digest", "capture": "d"}
 "#;
 
     #[test]
@@ -389,6 +420,19 @@ mod tests {
             parse("{\"scenario\": \"t/x\", \"requires\": [\"nonsense\"]}").is_err(),
             "an unknown tag is an error"
         );
+    }
+
+    #[test]
+    fn pending_is_a_reason() {
+        let s = parse("{\"scenario\": \"t/p\", \"pending\": \"Task 16a\"}\n").unwrap();
+        assert_eq!(s.pending.as_deref(), Some("Task 16a"));
+        assert_eq!(parse("{\"scenario\": \"t/p\"}\n").unwrap().pending, None);
+        for bad in ["true", "\"\"", "[\"x\"]"] {
+            assert!(
+                parse(&format!("{{\"scenario\": \"t/p\", \"pending\": {bad}}}\n")).is_err(),
+                "pending {bad} is an error"
+            );
+        }
     }
 
     fn row(requires: &str) -> Scenario {

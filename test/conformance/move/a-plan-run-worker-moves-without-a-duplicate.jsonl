@@ -1,0 +1,25 @@
+{"scenario": "move/a-plan-run-worker-moves-without-a-duplicate", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 26: a plan run's worker is moved to another profile (agents/move). What is keyed by its session follows it: the task is claimed by the new session, the job shows the new session as the task's agent, and the runner starts no second worker (the Claude mock opened one session, the Gemini mock one)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")) (\"mock-gemini\" :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--log\" \"$ROOT/gem.log\")))) (drgnx-agents-routes ((implement . \"mock-claude\") (review . \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Worker\n\n**Repo:** $ROOT/repo\n\n### Task 1: Do the thing\n\n**Role:** implement\n\nNothing to do.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md", "auto": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "running"}}, "within_ms": 10000}
+{"do": "connect", "conn": "w", "hub": "h"}
+{"do": "expect_silent", "conn": "w", "for_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": {"$contains": [{"id": "$capture:old", "role": "worker", "job": "$job"}]}}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/move", "params": {"id": "$old", "profile": "mock-gemini"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:new", "name": "$string"}}, "within_ms": 60000}
+{"do": "file", "path": "$ROOT/gem.log", "contains": "Handoff", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"tasks": [{"n": 1, "agent": "$new"}], "agents": [{"id": "$new"}]}}, "within_ms": 10000}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "expect_silent", "conn": "q", "for_ms": 8000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"tasks": [{"n": 1, "agent": "$new"}], "agents": [{"id": "$new"}]}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/gem.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}

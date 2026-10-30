@@ -864,7 +864,9 @@ fn rerun_is_a_no_op() {
     assert!(backups[0].starts_with("work-pre7-"));
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
-        OpenOutcome::Ready { schema: SCHEMA }
+        OpenOutcome::Ready {
+            schema: migrate8::SCHEMA
+        }
     );
     assert_eq!(census(&c), before);
     assert_eq!(fx.backups(), backups);
@@ -934,7 +936,9 @@ fn a_fresh_file_is_schema_7() {
     let mut c = writer_conn(&fx.db);
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
-        OpenOutcome::Ready { schema: SCHEMA }
+        OpenOutcome::Ready {
+            schema: migrate8::SCHEMA
+        }
     );
     assert!(fx.backups().is_empty(), "nothing to copy");
     let kv = rows(&c, "select key, value from meta order by key");
@@ -942,13 +946,13 @@ fn a_fresh_file_is_schema_7() {
         kv,
         vec![
             vec![json!("compat-read"), json!("6")],
-            vec![json!("schema"), json!("7")]
+            vec![json!("schema"), json!("8")]
         ]
     );
     let schema = |c: &Connection| {
         rows(
             c,
-            "select type, name, tbl_name, sql from sqlite_master where name not like 'sqlite_%' order by name",
+            "select type, name, tbl_name, sql from sqlite_master where name not like 'sqlite_%' and name not like 'step%' order by name",
         )
     };
     let (_m, migrated_conn, _) = migrated();
@@ -1176,7 +1180,9 @@ async fn a_migrated_lease_stays_in_history() {
     handle.tick().await;
     assert_eq!(
         handle.status().last_open,
-        Some(OpenOutcome::Ready { schema: SCHEMA })
+        Some(OpenOutcome::Ready {
+            schema: migrate8::SCHEMA
+        })
     );
     let read = || Connection::open(&fx.db).unwrap();
     let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
@@ -1242,7 +1248,9 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     handle.tick().await;
     assert_eq!(
         handle.status().last_open,
-        Some(OpenOutcome::Ready { schema: SCHEMA })
+        Some(OpenOutcome::Ready {
+            schema: migrate8::SCHEMA
+        })
     );
     let read = || Connection::open(&fx.db).unwrap();
     let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");

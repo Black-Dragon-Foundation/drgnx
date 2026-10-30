@@ -1,0 +1,14 @@
+{"scenario": "delivery/gate-holds-a-stale-agent", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: an agent of a job that has not read the job's decision log is told what changed (a decision-log notice, once per version) and its next edit, delete, move or run request is refused without the user being asked, with a note that it had not read the changes."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into meta values ('log-version', '1')", "insert into decision (n, kind, subject, author, status, at, ver, job) values (1, 'build', 'use the shared parser', 'a', 'current', 1.0, 1, 'j1')"]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-agent\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-agent", "cwd": "$ROOT/work", "role": "worker", "job": "j1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[decision log v1 — job j1]", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "Your last tool call was refused because you had not read these.", "within_ms": 30000}

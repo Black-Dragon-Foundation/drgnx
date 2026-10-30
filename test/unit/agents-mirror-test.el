@@ -195,4 +195,35 @@
 
 (defun drgnx-agents-mirror-test--no-read (&rest _) (error "The mirror read hub data as Lisp"))
 
+(ert-deftest drgnx-agents-mirror/not-enforced-label ()
+  (let ((drgnx-agents--sessions nil) (drgnx-agents-mirror--lock (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'drgnx-notify) #'ignore))
+      (let* ((snap (drgnx-records-from-json 'drgnx-records-session
+                                            '(:id "h1" :name "a" :status "idle" :enforced_why "no sandbox here")))
+             (m (car (drgnx-agents-mirror--apply-snapshot snap)))
+             (ok (car (drgnx-agents-mirror--apply-snapshot
+                       (drgnx-records-from-json 'drgnx-records-session '(:id "h2" :name "b" :status "idle" :enforced t))))))
+        (should (equal (drgnx-agents-mirror-lock-label m) "not enforced: no sandbox here"))
+        (should-not (drgnx-agents-mirror-lock-label ok))))))
+
+(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+
+(ert-deftest drgnx-agents-mirror/start-goes-through-the-hub ()
+  ;; a real Ratatoskr (mock profile): the editor's start is the hub's agents/start, and the mirror follows the session
+  (drgnx-hub-client-test--with-ratatoskr
+    (drgnx-hub-client-test--mock-profile root)
+    (drgnx-hub-client-test--backend-up)
+    (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil) (drgnx-hub-event-functions nil))
+      (unwind-protect
+          (let* ((m (drgnx-agents-mirror-start "mock" root)) (id (drgnx-agent-session-remote m)))
+            (should (stringp id))
+            (should (seq-find (lambda (s) (equal (plist-get s :id) id))
+                              (plist-get (drgnx-hub-call-sync "agents/list" nil 10) :sessions)))
+            (should-not (drgnx-agent-session-conn m))                ; the agent runs in the hub
+            (drgnx-hub-client-test--wait (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")
+            (drgnx-agents-send m "hello hub")
+            (drgnx-hub-client-test--wait
+             (lambda () (string-search "hello hub" (drgnx-agents-mirror-test--text m))) "the mirror follows the session"))
+        (drgnx-agents-mirror-stop)))))
+
 ;;; agents-mirror-test.el ends here

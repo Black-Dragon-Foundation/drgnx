@@ -1,0 +1,44 @@
+{"scenario": "system/a-manager-runs-the-plan", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Exit criterion 1, the manager half, on mocks. A manager agent (a mock whose prompts are its program, so it acts only through its MCP tools) runs the three-provider plan of system/three-providers-one-plan-under-balanced under Balanced: it starts one worker per task with agent_start on a subscription Claude, a Gemini and an API-key profile; its Codex start is refused (CODEX_LOCK_PROVEN). The user's cells: code.edit asks for the mock-gemini profile, and network is never for the manager's own profile. Each worker is the manager's child on its own task; the Claude and API-key workers' edits are answered at once by the matrix with no card; the Gemini worker's edit reaches the event stream and waits behind exactly one matrix card until the user answers. Then the manager asks the Claude worker (agent_message) to fetch a URL: the worker's network ask is refused by the hub (reject_once, no card), because the worker's column is clamped to the manager's, while a worker the user starts on that profile may fetch (matrix/check). It fails if the manager cannot start a worker through its tools, if a worker is not the manager's child or not on its task, if an in-matrix action makes a card or waits, if the Gemini ask runs without a card or the user's answer, if the worker's fetch is allowed or asks, or if Codex starts."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/c.txt", "text": "ask:permission edit\nask:permission fetch\n"}
+{"do": "write_file", "path": "$ROOT/g.txt", "text": "ask:permission edit\n"}
+{"do": "write_file", "path": "$ROOT/a.txt", "text": "ask:permission edit\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-mgr\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/m.log\")) (\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/c.txt\" \"--log\" \"$ROOT/c.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/g.txt\" \"--log\" \"$ROOT/g.log\")) (\"mock-gw\" :ai claude-openrouter :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/a.txt\" \"--log\" \"$ROOT/a.log\")) (\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\")))) (drgnx-agents-matrix (:preset balanced :cells ((:action code.edit :column (:agent \"mock-gemini\") :verdict ask) (:action network :column (:agent \"mock-mgr\") :verdict never)))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Three providers\n\n**Repo:** $ROOT/repo\n\n### Task 1: Claude's part\n\n**Role:** implement\n\nAsk to edit.\n\n### Task 2: Gemini's part\n\n**Role:** docs\n\nAsk to edit.\n\n### Task 3: The API-key part\n\n**Role:** api\n\nAsk to edit.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"openrouter": {"kind": "openai", "url": "https://openrouter.ai/api/v1", "caps": ["chat"], "messages": true, "key_env": "KEY"}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "k"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "mock-mgr", "cwd": "$ROOT/repo"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:mgr", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/role", "params": {"id": "$mgr", "role": "manager"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/send", "params": {"id": "$mgr", "text": "call:agent_start {\"profile\": \"mock-claude\", \"task\": \"$job#1\"}\ncall:agent_start {\"profile\": \"mock-gemini\", \"task\": \"$job#2\"}\ncall:agent_start {\"profile\": \"mock-gw\", \"task\": \"$job#3\"}\ncall:agent_start {\"profile\": \"mock-codex\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$capture:wc", "session": {"profile": "mock-claude", "role": "worker", "parent": "$mgr"}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$capture:wg", "session": {"profile": "mock-gemini", "role": "worker", "parent": "$mgr", "permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$capture:wa", "session": {"profile": "mock-gw", "role": "worker", "parent": "$mgr"}}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/c.log", "contains": "\"answer\":\"allow_once\"", "within_ms": 60000}
+{"do": "file", "path": "$ROOT/a.log", "contains": "\"answer\":\"allow_once\"", "within_ms": 60000}
+{"do": "file", "path": "$ROOT/g.log", "lacks": "\"answer\""}
+{"do": "sql_expect", "sql": "select kind, state from card where kind <> 'proposal'", "rows": [["matrix", "open"]]}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/permission", "params": {"id": "$wg", "request": "$req", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "file", "path": "$ROOT/g.log", "contains": "\"answer\":\"allow_once\"", "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "agents/send", "params": {"id": "$mgr", "text": "call:agent_message {\"id\": \"$wc\", \"text\": \"Fetch https://example.invalid/spec and use it.\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": true}}
+{"do": "file", "path": "$ROOT/c.log", "contains": "\"answer\":\"reject_once\"", "within_ms": 30000}
+{"do": "sql_expect", "sql": "select count(*) from card where kind not in ('proposal', 'matrix')", "rows": [[0]]}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'matrix'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "matrix/check", "params": {"action": "network", "who": {"role": "worker", "agent": "mock-claude"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"verdict": "allow"}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select (select count(*) from asession where parent = '$mgr'), (select count(*) from asession where profile = 'mock-codex'), (select count(*) from asession where parent = '$mgr' and role = 'worker' and ((profile = 'mock-claude' and task = '$job#1') or (profile = 'mock-gemini' and task = '$job#2') or (profile = 'mock-gw' and task = '$job#3')))", "rows": [[3, 0, 3]]}

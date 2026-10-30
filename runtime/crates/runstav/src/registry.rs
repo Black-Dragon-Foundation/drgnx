@@ -20,7 +20,7 @@ pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
 /// The work.db schema this code knows (7: the hub makes it, or migrates a schema-6 file to it at start).
-pub const SCHEMA: u32 = 7;
+pub const SCHEMA: u32 = 8;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -203,7 +203,8 @@ fn sorted(v: Value) -> Value {
 }
 
 /// The Markdown table of the registry that `docs/develop/hub.md` holds between `<!-- hub-methods:begin -->` and
-/// `<!-- hub-methods:end -->`.
+/// `<!-- hub-methods:end -->`.  The schemas' keys are sorted first (as `methods.json`'s are): a build where serde_json
+/// keeps insertion order (the ACP schema crate turns its `preserve_order` on in the hub's build) prints the same table.
 pub fn markdown_table() -> String {
     let mut s = String::from(
         "| Method | Class | Params | Result | Writes | Home |\n|---|---|---|---|---|---|\n",
@@ -214,8 +215,8 @@ pub fn markdown_table() -> String {
             "| `{}` | {} | `{}` | `{}` | {} | {} |\n",
             m.name,
             classes.join(", "),
-            cell(&schema_words((m.params)().as_value(), true)),
-            cell(&schema_words((m.result)().as_value(), false)),
+            cell(&schema_words(&sorted((m.params)().to_value()), true)),
+            cell(&schema_words(&sorted((m.result)().to_value()), false)),
             if m.writes { "yes" } else { "no" },
             m.home.name()
         ));
@@ -392,7 +393,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 81, "{names:?}");
+        assert_eq!(names.len(), 107, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -410,6 +411,7 @@ mod tests {
             "agents/stop",
         ];
         want.extend(FRONT_WRITES);
+        want.extend(CORE_WRITES);
         want.extend(
             registry()
                 .iter()
@@ -455,6 +457,39 @@ mod tests {
         "settings/record",
         // the editor's answer to an agent's settings change (unified-settings Task 32)
         "settings/confirm",
+    ];
+
+    /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
+    const CORE_WRITES: [&str; 10] = [
+        "agents/move",
+        "agents/role",
+        "exec/start",
+        "exec/stop",
+        "messages/retract",
+        "plans/write",
+        "brief/set",
+        "budget/set",
+        "records/import",
+        "records/decide",
+    ];
+
+    /// The agent core's methods that read only.
+    const CORE_READS: [&str; 15] = [
+        "agents/slice",
+        "exec/get",
+        "exec/list",
+        "exec/log",
+        "matrix/get",
+        "matrix/check",
+        "presence/set",
+        "plans/get",
+        "brief/build",
+        "reports/get",
+        "decisions/effects",
+        "timeline/get",
+        "budget/get",
+        "pace/get",
+        "records/status",
     ];
 
     /// The store's methods that read only (Urdr Task 15b), the front's too.
@@ -506,6 +541,17 @@ mod tests {
         ];
         want.extend(FRONT_WRITES);
         want.extend(FRONT_READS);
+        // the agent core (agent system part 1): the hub serves every session and plan run itself
+        want.extend(CORE_WRITES);
+        want.extend(CORE_READS);
+        want.push("records/proposals");
+        want.extend(
+            registry()
+                .iter()
+                .map(|m| m.name)
+                .filter(|n| n.starts_with("agents/") || n.starts_with("job/"))
+                .filter(|n| !CORE_WRITES.contains(n) && !CORE_READS.contains(n)),
+        );
         want.sort();
         assert_eq!(front, want, "the methods the front serves itself");
         // every method of the store is the user's alone
@@ -534,15 +580,39 @@ mod tests {
         let from = |name| events().iter().find(|e| e.name == name).map(|e| e.from);
         assert_eq!(from("events"), Some(Home::Front));
         assert_eq!(from("challenge"), Some(Home::Front));
-        assert_eq!(from("job"), Some(Home::Backend));
+        assert_eq!(from("job"), Some(Home::Front));
+        assert_eq!(from("card"), Some(Home::Backend));
         assert_eq!(from("budget"), Some(Home::Front));
         let methods = methods_json();
-        assert_eq!(
-            methods["methods"][0]["home"],
-            json!("backend"),
-            "{}",
-            methods["methods"][0]
+        let env_set = methods["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "env/set")
+            .unwrap();
+        assert_eq!(env_set["home"], json!("backend"), "{env_set}");
+    }
+
+    /// The editor's switch (agent system part 1, Task 27): the hub serves every `agents/*` and `job/*` method; the
+    /// Lisp backend serves none, in the registry and in the committed `methods.json` the editor reads.
+    #[test]
+    fn no_agent_or_job_method_is_backend() {
+        assert!(
+            registry()
+                .iter()
+                .filter(|m| m.name.starts_with("agents/") || m.name.starts_with("job/"))
+                .all(|m| m.home == Home::Front)
         );
+        let methods = methods_json();
+        let backend: Vec<&str> = methods["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["home"] == json!("backend"))
+            .filter_map(|m| m["name"].as_str())
+            .filter(|n| n.starts_with("agents/") || n.starts_with("job/"))
+            .collect();
+        assert!(backend.is_empty(), "served by the backend: {backend:?}");
     }
 
     #[test]
@@ -647,6 +717,8 @@ mod tests {
                 "graph/grants",
                 "graph/proposed",
                 "graph/settings",
+                "plans/write",
+                "reports/get",
             ]
             .contains(&m.name)
             {
@@ -669,7 +741,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 53);
+        assert_eq!(with, 72);
     }
 
     #[test]
@@ -820,7 +892,7 @@ mod tests {
             "{t}"
         );
         assert!(
-            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |"),
+            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | front |"),
             "{t}"
         );
         assert!(

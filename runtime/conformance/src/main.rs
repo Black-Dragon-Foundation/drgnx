@@ -4,6 +4,7 @@
 //!  [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]`, and the helper
 //! `domr connect-as --socket PATH` (the connection of another uid, relayed over stdio).
 
+mod container_escape;
 mod exec;
 mod http;
 mod hub;
@@ -165,6 +166,7 @@ fn main() -> ExitCode {
         fake_backend: args.fake_backend.is_some(),
         lisp_backend: args.lisp_hub.is_some(),
         perf: args.perf.is_some(),
+        podman: scenario::podman_available(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
     };
     let cfg = exec::Config {
@@ -191,10 +193,10 @@ fn main() -> ExitCode {
         let outcome = match scenario::gate(s, &host) {
             Gate::Exclude => continue,
             Gate::Skip { reason, excused } => Outcome::Skip { reason, excused },
-            Gate::Run => match exec::run_scenario(&cfg, s, &mut report.perf) {
-                Ok(()) => Outcome::Pass,
-                Err(what) => Outcome::Fail(what),
-            },
+            Gate::Run => {
+                let ran = exec::run_scenario(&cfg, s, &mut report.perf);
+                report::judge(ran, s.pending.as_deref().filter(|_| !args.lisp_target))
+            }
         };
         report.add(&s.name, &outcome);
         let _ = std::io::stdout().flush();

@@ -329,7 +329,7 @@ write takes.
 
 ## Agents and your settings files
 
-A job agent's sandbox (once jobs run in it, phase 6) keeps your settings files out of the agent's reach, so an agent
+A job agent's sandbox keeps your settings files out of the agent's reach, so an agent
 that is allowed to write in a folder still cannot change what your Emacs loads as you:
 
 - **Your config files are closed by their true paths.** `settings.el`, `config.el`, `custom.el`, `described.el`,
@@ -376,8 +376,66 @@ A checker that stays silent, or a shorthand that does not apply: look for **Rest
 the folder if you trust its files. A remote name refused by TRAMP because of an unusual user name: open it with a
 plain `user@host` (an ssh config `Host` alias works for anything ssh accepts).
 
+## The permissions matrix
+
+Every action an agent takes is checked against a matrix: rows are things an agent may do (start agents, spend,
+edit code, commit, push, change settings), columns are its role (manager, worker, chat), its agent and its
+provider. Each cell is Allow, Ask or Never, sometimes with a limit. Three presets ship: Cautious, Balanced and
+Autonomous. Your own cells, a project's and a plan's refine the preset; where several columns apply the most
+restrictive wins, and a more specific column never widens. `unsandboxed` and `user.private` are never allowed.
+A session's project and plan are those of the task it works on (a plan run's, or the task it was started with).
+
+- **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
+  hash), never the agent's own description. The same question open twice is one card. An agent's permission request
+  waits under that card's id: answering the request settles the card, and settling the card in the Work cockpit
+  answers the request. Before the agent goes on the hub checks again: if the matrix has since become Never for it,
+  it is refused whatever you answered.
+- **Away:** when you are away the matrix can switch to a stricter (or looser) preset on its own; it applies from the
+  next action.
+- **Managers** may hand a worker less than they have, never more. A worker a manager started may do only what all
+  three allow: its own cells (every layer above, for its role, agent and provider: your Never for its provider binds
+  it too), what the manager handed it, and the manager's own cells as they are at that moment, so tightening the
+  manager reaches the workers it already started. The grants are recorded before the worker starts, and are kept
+  across a hub restart and when the worker is moved to another model (narrowed again for the new model's columns); a
+  worker whose grants are gone gets nothing. A manager's own Ask card shows the call it is about (the tool and its
+  arguments), and your answer counts for that call only.
+- A project's or a plan's override (its `matrix` field) counts only when you wrote that field; an agent's write of
+  it is ignored, and so is an agent's write of another field of the same plan for the matter of who wrote the
+  override.
+- **How a tool call is read.** The hub maps an agent's tool call to a row by its kind and a plain reading of its
+  command: a `read` or `search` is `code.read`, a `fetch` is `network`, a command containing `git push` (to `main`
+  or `master`: `push.main`) or `git commit` is that row, anything else is `code.edit`. A push written another way
+  (`git -C . push`, an alias, a script) counts as `code.edit`. That coarse map is acceptable because the rows that
+  matter outside the worktree are enforced elsewhere: the sandbox (Gleipnir) decides what network an agent has, and
+  a push needs credentials the sandbox does not give the agent.
+- **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
+  builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
+  mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is the setting `agents-net-hosts`, by default the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
+  command and nothing else (`exec/start` refuses any other field); the command is never read as a podman option. The hub pulls the image itself (600 s at most) and names the container `drgnx-job-<id>`, removing leftovers at start.
+
 ## Checking it
 
 `drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)
 and says OK while all of the guards above are on, or WARN naming the ones that are off. If it warns, restart drgnx:
 its startup turns the guards on.
+
+## What each provider obeys
+
+drgnx starts every agent's CLI with a lock: options that make it ask drgnx for each permission instead of deciding
+alone. At the start of a session drgnx checks that the lock holds; if it does not, the session is ended, never run as
+if it were locked.
+
+| Provider | The lock | Where it comes from |
+|---|---|---|
+| Claude Code | policy-tier settings (no bypass or auto mode, only drgnx's hooks and permission rules, plus the deny and ask rules of your Claude settings), strict MCP config, Claude's own sandbox off (drgnx's is the boundary), mode `default` | `_meta.claudeCode.options` of the adapter |
+| Codex | `-c approval_policy={ granular = {…} }` with every category (`sandbox_approval`, `rules`, `mcp_elicitations`, `request_permissions`, `skill_approval`) asked of drgnx, `approvals_reviewer = "user"`, `sandbox_mode = "danger-full-access"` (Gleipnir is the one sandbox) | [Codex configuration reference](https://developers.openai.com/codex/config-reference); codex-acp takes `-c` overrides ([source](https://github.com/zed-industries/codex-acp/blob/main/src/lib.rs)) |
+| Gemini CLI | `--approval-mode default`; any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options) |
+
+Gateway profiles of Claude (a profile with `:ai`) in the worker and manager roles also get
+`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes.
+
+In every worktree `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks` and `mise.toml` are read-only for the agent.
+
+An agent drgnx has no lock for (set `:provider claude|codex|gemini` in its profile, or name the CLI in its command)
+is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex counts as
+enforced only once its lock has passed the sandboxed-launch and laundering checks; until then it is "not enforced".

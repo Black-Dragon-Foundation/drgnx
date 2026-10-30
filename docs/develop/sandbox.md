@@ -807,7 +807,9 @@ Measured on drgnx's own repository on btrfs (base `main`, 7572 objects reachable
 
 ## Git: worktree mode
 
-Snapshot mode is the default. Worktree mode is opt-in: a profile's `:git worktree`, `drgnx job propose --git
+Snapshot mode is the default. (The Rust runner, `HubGit`, keeps plan-run and manager-worker trees in snapshot mode
+always: `TreeMode::Worktree` is for a git without a sandbox, and a sandboxed agent is never given the user's repository
+to write. `RunGit::import` brings a snapshot branch into the trusted repository for `trial_merge`.) Worktree mode is opt-in: a profile's `:git worktree`, `drgnx job propose --git
 worktree`, or the plan's `**Git:** worktree` line. One job uses one mode for all its tasks. `core/drgnx-job-worktree.el`
 builds it: it makes the worktree, returns the binds as data, checks the branch and scrubs the worktree's git state.
 The sandbox applies the binds.

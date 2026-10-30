@@ -20,6 +20,7 @@
   '(
     ;; one entry per line, appended below by each port
     (require drgnx-agents)                ; Task 15: drgnx-agents-*
+    (require drgnx-agents-matrix)         ; agent system Task 13: the matrix and the agent limits
     (require drgnx-ai)                    ; Task 15: drgnx-ai-providers, drgnx-ai-roles
     (require drgnx-keys)
     (require drgnx-modules)

@@ -21,8 +21,8 @@ use urdr::graph::{OpenOutcome, Writer, WriterHandle, WriterOpts};
 use urdr::graph::{TxMeta, WriteError};
 use urdr::{Handle, Mode, Store, StoreSpec};
 
-/// The schema the store writes (schema 7).
-pub const SCHEMA: u32 = crate::migrate7::SCHEMA;
+/// The schema the store writes (schema 8).
+pub const SCHEMA: u32 = crate::migrate8::SCHEMA;
 
 /// What a read closure sees: the connection (read-only).
 pub type Tx = urdr::Connection;
@@ -342,8 +342,16 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    /// A fresh in-memory schema-7 database for a writer's unit tests (`tx_of` makes the transaction).
+    /// A fresh in-memory database as the opening rule leaves it (schema 8) for a writer's unit tests (`tx_of`
+    /// makes the transaction).  The name is from schema 7.
     pub(crate) fn db7() -> urdr::Connection {
+        let mut c = db7_only();
+        assert!(crate::migrate8::upgrade(&mut c).unwrap());
+        c
+    }
+
+    /// A fresh in-memory database at schema 7, before the step table.
+    pub(crate) fn db7_only() -> urdr::Connection {
         let mut c = urdr::Connection::open_in_memory().unwrap();
         crate::migrate7::make_fresh(&mut c).unwrap();
         c
@@ -443,13 +451,13 @@ pub(crate) mod tests {
             "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
         );
         // A newer schema: readable, never written.
-        make(&next, 8);
+        make(&next, 9);
         replace(&next);
         handle.tick().await;
         db.tick();
         assert_eq!(
             db.write(hub_meta(), |_| Ok(())).await.unwrap_err(),
-            CoordError::ReadOnly { schema: 8 }
+            CoordError::ReadOnly { schema: 9 }
         );
         db.read(|c| Ok(c.query_row("select count(*) from meta", [], |r| r.get::<_, i64>(0))?))
             .await
@@ -482,7 +490,7 @@ pub(crate) mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(kv, "7");
+        assert_eq!(kv, "8");
         let other = dir.path().join("other").join("work.db");
         std::fs::create_dir_all(other.parent().unwrap()).unwrap();
         make(&other, 6);

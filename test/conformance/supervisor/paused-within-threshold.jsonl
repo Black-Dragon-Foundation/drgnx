@@ -1,0 +1,17 @@
+{"scenario": "supervisor/paused-within-threshold", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 23: a task session silent past agents-silent-after (1 s here) is paused with a supervisor event and card within a tick or two."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-silent-after ((task . 1) (brainstorm . 600))) (drgnx-agents-no-progress-tokens 1) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "silent 20"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "supervisor", "data": {"rule": "silent", "session": "$sid"}}, "within_ms": 6000}
+{"do": "sql_expect", "sql": "select kind, state from card", "rows": [["supervisor", "open"]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/stop", "params": {"id": "$sid"}}}

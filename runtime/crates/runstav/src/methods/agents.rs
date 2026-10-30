@@ -1,7 +1,9 @@
 //! Agent sessions the hub holds, and their records 2 shapes (`core/drgnx-records.el`: `drgnx-records-session`,
 //! `drgnx-records-entry`).
 
-use super::{Empty, method};
+use super::graph::ParsedId;
+use super::matrix::Role;
+use super::{Empty, invalid, method};
 use crate::registry::Method;
 use crate::types::{AbsPath, Bounded, Id, Prompt, RequestId, TaskRef, null_as_empty};
 use schemars::JsonSchema;
@@ -14,6 +16,8 @@ pub enum SessionStatus {
     Starting,
     Idle,
     Busy,
+    /// Waiting on a job it started (no model request until the wake).
+    Waiting,
     Exited,
 }
 
@@ -129,6 +133,26 @@ pub struct Snapshot {
     pub entries_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforced: Option<bool>,
+    /// Why the provider's lock is not enforced (shown "not enforced").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforced_why: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// The manager session that started it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// A brainstorm's topic note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    /// The job it waits on.
+    #[serde(
+        rename = "waiting-on",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub waiting_on: Option<String>,
 }
 
 /// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).
@@ -171,6 +195,15 @@ pub struct StartParams {
     pub task: Option<TaskRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<Id>,
+    /// Its matrix column (default: `worker` with a task or job, else `chat`); `manager` only through `agents/role`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    /// A brainstorm session: its topic note (the project read-only, only `document` writable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<ParsedId>,
+    /// A brainstorm's design document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<AbsPath>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -235,47 +268,107 @@ pub struct DoParams {
     pub reject: Option<bool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct MoveParams {
+    pub id: Id,
+    /// The profile it moves to (same worktree, from its last step snapshot, with a summary handoff).
+    pub profile: Bounded<String, 128>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct RoleParams {
+    pub id: Id,
+    pub role: Role,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct SliceParams {
+    pub id: Id,
+    /// The first step (its `seq`).
+    pub from_step: u64,
+    /// At most 50 steps (default 20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<u64>,
+}
+
+/// A slice of a session's transcript by steps (never a whole transcript): the steps and their entries.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Slice {
+    pub id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub steps: Vec<super::timeline::Step>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub entries: Vec<(u64, Entry)>,
+    /// The step after the slice, when there is more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<u64>,
+}
+
+fn check_slice(p: &SliceParams) -> Result<(), crate::wire::Error> {
+    match p.n {
+        Some(n) if !(1..=50).contains(&n) => Err(invalid("n", "1 to 50 steps")),
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "agents/list", AgentsList(Empty) -> Sessions,
-            classes: [User, Agent, Service], writes: false,
+            classes: [User, Agent, Service], writes: false, home: Front,
             doc: "the sessions: snapshots for the user, {id, name, job, task} for the others (an agent: its own job's)",
         ),
         method!(
             "agents/start", AgentsStart(StartParams) -> Started,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a session the hub holds",
         ),
         method!(
             "agents/get", AgentsGet(ById) -> Transcript,
-            classes: [User], writes: false,
+            classes: [User], writes: false, home: Front,
             doc: "a session's snapshot, whole transcript and change number",
         ),
         method!(
             "agents/send", AgentsSend(SendParams) -> bool,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "a prompt to the session (queued or steering as its mode says)",
         ),
         method!(
             "agents/stop", AgentsStop(ById) -> bool,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "the session's turn stops",
         ),
         method!(
             "agents/kill", AgentsKill(ById) -> bool,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "the session ends",
         ),
         method!(
             "agents/permission", AgentsPermission(PermissionParams) -> bool,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "the user's answer to a permission request: the only way one is answered",
         ),
         method!(
             "agents/do", AgentsDo(DoParams) -> bool,
-            classes: [User], writes: true,
+            classes: [User], writes: true, home: Front,
             doc: "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
+        ),
+        method!(
+            "agents/move", AgentsMove(MoveParams) -> Started,
+            classes: [User], writes: true, home: Front,
+            doc: "a session moved to another profile: stopped after its tool call, the new one started in the same worktree with a summary handoff",
+        ),
+        method!(
+            "agents/role", AgentsRole(RoleParams) -> bool,
+            classes: [User], writes: true, home: Front,
+            doc: "a session's role (its matrix column): the user's only, the one way to make a manager",
+        ),
+        method!(
+            "agents/slice", AgentsSlice(SliceParams) -> Slice,
+            classes: [User], writes: false, home: Front,
+            doc: "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
+            check: check_slice,
         ),
     ]
 }

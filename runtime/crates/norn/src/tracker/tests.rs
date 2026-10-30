@@ -1797,3 +1797,29 @@ proptest! {
         );
     }
 }
+
+#[test]
+fn board_columns_map_every_status() {
+    use super::Column::*;
+    let want = [
+        ("open", Queued),
+        ("blocked", Queued),
+        ("ready", Queued),
+        ("claimed", Running),
+        ("running", Running),
+        ("waiting", Waiting),
+        ("needs-input", NeedsYou),
+        ("in-review", Review),
+        ("done", Done),
+        ("dropped", Done),
+    ];
+    for (status, column) in want {
+        assert_eq!(board_column(status), column, "{status}");
+    }
+    // every status an update may set has a column on purpose, and `waiting` may be set
+    assert!(STATUSES.contains(&"waiting"));
+    for s in STATUSES {
+        assert!(want.iter().any(|(w, _)| w == s), "{s} is not in the table");
+    }
+    assert_eq!(board_column("nonsense"), Queued);
+}

@@ -1,0 +1,20 @@
+{"scenario": "reports/submit-updates-the-view", "requires": ["v1", "fake-backend"], "doc": "Task 21: report_submit over a session socket makes a report entity linked to the session's task, files its follow-up as a task, and moves the task to in-review; reports/get then shows it with the interfaces later tasks read, and the ledger note is about the task."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "the work", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:work"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "w1", "cwd": "$ROOT/work/alpha", "owner": "$HARNESS_PID", "task": "$work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "report_submit", "arguments": {"tip": "abc123", "commits": ["abc123"], "interfaces": "fn one() -> u8", "followups": [{"title": "tidy up", "area": "docs"}]}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"isError": "$absent"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "reports/get", "params": {"task": "$work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"reports": [{"id": "$string", "task": "$work", "tip": "abc123", "commits": ["abc123"], "interfaces": "fn one() -> u8", "followups": ["$string"], "unrecorded": []}]}}}
+{"do": "sql_expect", "sql": "select kind, status from entity where title = 'the work'", "rows": [["task", "in-review"]]}
+{"do": "sql_expect", "sql": "select kind from entity where kind = 'report'", "rows": [["report"]]}
+{"do": "sql_expect", "sql": "select count(*) from link l join entity f on f.n = l.src where l.kind = 'discovered_from' and f.title = 'tidy up'", "rows": [[1]]}

@@ -1,0 +1,55 @@
+{"scenario": "perf/agents-idle-20", "requires": ["v1", "fake-backend", "test-hooks", "perf"], "doc": "Exit criterion perf, hub half: 20 mock agents sit idle for 10 s with an editor subscribed. Budget, checked in the row: the hub's CPU over the window (utime + stime from /proc) stays under 3 percent of one core (the supervisor's one-second tick and the sessions' timers are all that may run). Linux only (/proc)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 101, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 102, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 103, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 104, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 105, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 106, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 107, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 108, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 109, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 110, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 111, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 112, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 113, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 114, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 115, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 116, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 117, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 118, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 119, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "send", "conn": "c", "json": {"id": 120, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 101, "result": {"id": "$capture:s1", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 102, "result": {"id": "$capture:s2", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 103, "result": {"id": "$capture:s3", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 104, "result": {"id": "$capture:s4", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 105, "result": {"id": "$capture:s5", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 106, "result": {"id": "$capture:s6", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 107, "result": {"id": "$capture:s7", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 108, "result": {"id": "$capture:s8", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 109, "result": {"id": "$capture:s9", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 110, "result": {"id": "$capture:s10", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 111, "result": {"id": "$capture:s11", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 112, "result": {"id": "$capture:s12", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 113, "result": {"id": "$capture:s13", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 114, "result": {"id": "$capture:s14", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 115, "result": {"id": "$capture:s15", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 116, "result": {"id": "$capture:s16", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 117, "result": {"id": "$capture:s17", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 118, "result": {"id": "$capture:s18", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 119, "result": {"id": "$capture:s19", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 120, "result": {"id": "$capture:s20", "name": "$string"}}, "within_ms": 30000}
+{"do": "expect_silent", "conn": "q", "for_ms": 2000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -- $(cat /proc/$PID(h)/stat); echo $((${14} + ${15})) > $ROOT/cpu0; date +%s%N > $ROOT/t0"], "expect_code": 0}
+{"do": "expect_silent", "conn": "q", "for_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -- $(cat /proc/$PID(h)/stat); end=$((${14} + ${15})); start=$(cat $ROOT/cpu0); ms=$(( ($(date +%s%N) - $(cat $ROOT/t0)) / 1000000 )); used=$((end - start)); echo \"hub cpu: $used ticks in $ms ms\"; [ $((used * 1000)) -le $((ms * 3)) ]"], "expect_code": 0}

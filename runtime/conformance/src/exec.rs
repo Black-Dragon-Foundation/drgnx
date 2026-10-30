@@ -698,6 +698,7 @@ impl Runner<'_> {
                 Ok(())
             }
             "expect" | "expect_next" => self.expect(step),
+            "poll" => self.poll(step),
             "expect_closed" => {
                 let silent = step
                     .obj
@@ -722,6 +723,7 @@ impl Runner<'_> {
             "spawn_conn" => self.spawn_conn(step),
             "sql_expect" => self.sql_expect(step),
             "capture_file" => self.capture_file(step),
+            "db_digest" => self.db_digest(step),
             "http" => self.http(step),
             "expect_http" => self.expect_http(step),
             "file_grep" => self.file_grep(step),
@@ -1289,6 +1291,58 @@ impl Runner<'_> {
             conn.expect_next(&pattern, within, &mut self.caps)
         }
         .map(|_| ())
+    }
+
+    /// `poll`: send the request `json` on `conn` and take its reply (by id) until one matches `expect`, every
+    /// `every_ms` within `within_ms`: state the hub reaches in the background (sessions resumed after a restart),
+    /// read back rather than waited for as an event that may have gone before the row subscribed.
+    fn poll(&mut self, step: &Step) -> R {
+        let idx = self.hub_index(None).ok();
+        let request = self.subst(
+            idx,
+            step.obj.get("json").ok_or("poll needs \"json\"")?,
+            true,
+        );
+        let id = request
+            .get("id")
+            .cloned()
+            .ok_or("poll's request needs an \"id\"")?;
+        let pattern = self.subst(
+            idx,
+            step.obj.get("expect").ok_or("poll needs \"expect\"")?,
+            false,
+        );
+        let (within, every) = (
+            ms(&step.obj, "within_ms", 5000),
+            ms(&step.obj, "every_ms", 200),
+        );
+        let line = format!("{request}\n");
+        let name = str_of(&step.obj, "conn").unwrap_or("c").to_string();
+        let conn = self
+            .conns
+            .get_mut(&name)
+            .ok_or_else(|| format!("no connection named {name:?}"))?;
+        let deadline = Instant::now() + within;
+        loop {
+            conn.send_bytes(line.as_bytes())?;
+            let left = deadline.saturating_duration_since(Instant::now());
+            // the reply is taken off the connection whether it matches or not, so none piles up for later steps
+            let reply = conn.expect(&json!({ "id": id }), left, &mut Captures::default())?;
+            let mut trial = self.caps.clone();
+            match matcher::matches(&pattern, &reply, &mut trial) {
+                Ok(()) => {
+                    self.caps = trial;
+                    return Ok(());
+                }
+                Err(e) if Instant::now() + every >= deadline => {
+                    return Err(format!(
+                        "no reply matched {pattern} within {} ms ({e}); the last: {reply}",
+                        within.as_millis()
+                    ));
+                }
+                Err(_) => std::thread::sleep(every),
+            }
+        }
     }
 
     /// Every method of `registry` (`methods.json`; a relative path is from the current directory) with required
@@ -1927,6 +1981,79 @@ impl Runner<'_> {
             false,
         );
         matcher::matches(&pattern, &rows, &mut self.caps).map_err(|e| format!("{sql}: {e}"))
+    }
+
+    /// `db_digest`: every table of a database (`path`, `$DATA/work.db`; read-only) as `{table: [rows, sha256 of its
+    /// rows]}`, tables of `sqlite_master` without `sqlite_*` and without those in `except`.  With `capture` the
+    /// digest is kept under that name; with `same_as` it must equal the digest kept under that name (a table that
+    /// appeared, went, or changed fails, named).
+    fn db_digest(&mut self, step: &Step) -> R {
+        use sha2::{Digest, Sha256};
+        let idx = self.hub_index(None).ok();
+        let path = PathBuf::from(match step.obj.get("path") {
+            Some(_) => self.text(idx, step, "path")?,
+            None => Self::capture_text(&self.subst(idx, &json!("$DATA/work.db"), true)),
+        });
+        let db = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let except: Vec<String> = step
+            .obj
+            .get("except")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let names = query_rows(
+            &db,
+            "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name",
+        )
+        .map_err(|e| format!("tables: {e}"))?;
+        let mut digest = Map::new();
+        for name in names.as_array().into_iter().flatten() {
+            let name = name[0].as_str().unwrap_or_default();
+            if except.iter().any(|e| e == name) {
+                continue;
+            }
+            let rows = query_rows(&db, &format!("select * from \"{name}\" order by rowid"))
+                .or_else(|_| query_rows(&db, &format!("select * from \"{name}\"")))
+                .map_err(|e| format!("{name}: {e}"))?;
+            let n = rows.as_array().map_or(0, Vec::len);
+            let sum: String = Sha256::digest(rows.to_string().as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            digest.insert(name.to_string(), json!([n, sum]));
+        }
+        let digest = Value::Object(digest);
+        if let Some(name) = str_of(&step.obj, "same_as") {
+            let before = self
+                .caps
+                .0
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("db_digest: nothing captured as {name}"))?;
+            let (b, a) = (before.as_object().unwrap(), digest.as_object().unwrap());
+            let changed: Vec<&String> = b
+                .keys()
+                .chain(a.keys())
+                .filter(|k| b.get(*k) != a.get(*k))
+                .collect();
+            if !changed.is_empty() {
+                return Err(format!(
+                    "db_digest: tables changed (name: [rows, sha256]): {changed:?}"
+                ));
+            }
+        }
+        if let Some(name) = str_of(&step.obj, "capture") {
+            self.caps.0.insert(name.to_string(), digest);
+        }
+        Ok(())
     }
 
     /// `capture_file`: read a JSON file (waiting up to `within_ms`, 5000, for it to exist and parse) and capture the

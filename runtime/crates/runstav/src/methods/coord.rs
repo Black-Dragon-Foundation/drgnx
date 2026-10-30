@@ -506,8 +506,27 @@ pub struct Pruned {
     pub pruned: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct RetractParams {
+    /// The message's id.
+    pub id: u64,
+}
+
+/// `messages/retract`'s answer: taken back only while it was still queued; else the status it had.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Retracted {
+    pub retracted: bool,
+    pub status: String,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
+        method!(
+            "messages/retract", MessagesRetract(RetractParams) -> Retracted,
+            classes: [User], writes: true, home: Front,
+            doc: "the user's message taken back while it is still queued (never once delivered)",
+        ),
         method!(
             "coord/notify", CoordNotify(Empty) -> bool,
             classes: [User, Agent, Service], writes: false, home: Front,

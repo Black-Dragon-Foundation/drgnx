@@ -43,13 +43,29 @@ pub const SESSIONS_DEADLINE: Duration = Duration::from_secs(2);
 pub struct Signals {
     events: Notify,
     notify: Notify,
+    /// A message may be waiting for a hub session (delivery, Task 24).
+    pub deliver: Notify,
     writes: AtomicU64,
+    /// A write the record views may follow ([`crate::records::follow`]).
+    pub records: Notify,
+    /// What the proposal tools ask of the records (set once the hub's front is built).
+    pub records_tool: std::sync::OnceLock<RecordsTool>,
 }
+
+/// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
+/// and the session asking (always an agent: the user decides through `records/decide`); the answer is the tool's text.
+pub type RecordsTool = Arc<
+    dyn Fn(String, Option<bool>, Option<String>) -> BoxFuture<'static, Result<String, String>>
+        + Send
+        + Sync,
+>;
 
 impl Signals {
     /// A transaction of the front's methods committed: counted, and its events go out.
     pub fn wrote(&self) {
         self.writes.fetch_add(1, Ordering::Relaxed);
+        self.records.notify_one();
+        self.deliver.notify_one();
         self.events_soon();
     }
 
@@ -60,6 +76,7 @@ impl Signals {
 
     /// The backend should hear `coord/notify` (coalesced).
     pub fn notify_soon(&self) {
+        self.deliver.notify_one();
         self.notify.notify_one();
     }
 
@@ -598,6 +615,15 @@ pub struct ToolHub {
     pub editors: Arc<crate::settings::agents::Editors>,
     /// What the hub read of `settings.el`, for a `settings_get` with no editor.
     pub settings: Arc<crate::settings::Settings>,
+    /// The front the job tools call (set once the front is in its `Arc`: [`ToolHub::bind`]).
+    pub front: std::sync::OnceLock<std::sync::Weak<Front>>,
+}
+
+impl ToolHub {
+    /// The front the job tools reach `exec/*` through.
+    pub fn bind(&self, front: &Arc<Front>) {
+        let _ = self.front.set(Arc::downgrade(front));
+    }
 }
 
 impl Hub for ToolHub {
@@ -622,9 +648,77 @@ impl Hub for ToolHub {
         })
     }
 
+    fn proposal(
+        &self,
+        id: String,
+        accept: Option<bool>,
+        session: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        match self.signals.records_tool.get() {
+            Some(f) => f(id, accept, session),
+            None => Box::pin(async { Err("the records are not open".to_string()) }),
+        }
+    }
+
     fn notify(&self) {
+        // every tool write says so: the record views follow it too
+        self.signals.records.notify_one();
         self.signals.events_soon();
         self.signals.notify_soon();
+    }
+
+    fn exec(
+        &self,
+        sid: &str,
+        method: &'static str,
+        params: Value,
+    ) -> BoxFuture<'_, Result<Value, String>> {
+        let sid = sid.to_string();
+        Box::pin(async move {
+            let front = self
+                .front
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .ok_or("jobs are not ready: the hub is starting")?;
+            let m = registry::find(method).ok_or_else(|| format!("no method {method}"))?;
+            let (params, _) = (m.decode)(&params).map_err(|e| e.message)?;
+            let caller = Caller {
+                class: Class::Agent,
+                sid: Some(sid),
+                job: None,
+                conn_id: 0,
+                backend: false,
+            };
+            match crate::agent_core::serve(&front, &caller, params).await {
+                Ok(answer) => answer.map_err(|e| e.message),
+                Err(_) => Err(format!("{method} is not a job method")),
+            }
+        })
+    }
+
+    fn manager(
+        &self,
+        sid: &str,
+        op: &'static str,
+        args: Value,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let sid = sid.to_string();
+        Box::pin(async move {
+            let front = self
+                .front
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .ok_or("the hub is starting")?;
+            crate::manager::tool(&front, &sid, op, args).await
+        })
+    }
+
+    fn wait_refused(&self, sid: &str) {
+        if let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade)
+            && let Ok(s) = front.core.agents.find(sid)
+        {
+            s.refuse_wait();
+        }
     }
 
     fn propose(
@@ -898,5 +992,22 @@ mod tests {
             .query_row("select count(*) from message", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn a_tool_write_reaches_the_view() {
+        let signals = Arc::new(Signals::default());
+        let hub = ToolHub {
+            forward: Arc::new(crate::dispatch::NoBackend),
+            signals: signals.clone(),
+            editors: Arc::new(Default::default()),
+            settings: Arc::new(crate::settings::Settings::new()),
+            front: Default::default(),
+        };
+        // the tools call `notify` after each write: the records' follower wakes
+        hub.notify();
+        tokio::time::timeout(Duration::from_millis(500), signals.records.notified())
+            .await
+            .expect("the follower was not woken");
     }
 }

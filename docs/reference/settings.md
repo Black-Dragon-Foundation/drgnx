@@ -19,6 +19,76 @@ Non-nil: agents may run without the sandbox.  Off unless you turn it on; no work
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-agents-away-after
+
+Seconds without input after which the editor tells the hub you are away (the time presets of the matrix follow).
+
+| Key | Value |
+| --- | --- |
+| Default | `600` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-checkpoint-cap
+
+Bytes of checkpoints kept per project (the shadow repos of all its sessions together); the oldest of finished
+tasks go first.
+
+| Key | Value |
+| --- | --- |
+| Default | `2147483648` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-close-idle-after
+
+Seconds a session may sit idle on a running job before it is closed and resumed at the job's wake.
+
+| Key | Value |
+| --- | --- |
+| Default | `1800` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-container-images
+
+The images container jobs may run: an alist NAME → image reference pinned by digest ("registry/name@sha256:…").
+The hub pulls them; a job names one of them and nothing else.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `sexp` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<ContainerImage>"` |
+| `:agents` | `never` |
+| `:schema` | `(alist string (string :match "@sha256:[0-9a-f]\\{64\\}\\'"))` |
+
 ## drgnx-agents-default
 
 The profile New Agent Session offers on Return: a profile's name, or nil for claude.
@@ -36,6 +106,77 @@ The profile New Agent Session offers on Return: a profile's name, or nil for cla
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
 
+## drgnx-agents-job-cpus
+
+How many CPUs one job may use.
+
+| Key | Value |
+| --- | --- |
+| Default | `2` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u32"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-agents-job-memory
+
+The memory cap of one job (systemd's MemoryMax, podman's --memory), like "4G" or "512M".
+
+| Key | Value |
+| --- | --- |
+| Default | `"4G"` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`[1-9][0-9]*[KMGT]?\\'")` |
+
+## drgnx-agents-manager-context
+
+The share of its context window (0 to 1) at which a manager is rotated.
+
+| Key | Value |
+| --- | --- |
+| Default | `0.7` |
+| Type | `number` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"f64"` |
+| `:agents` | `never` |
+| `:schema` | `number` |
+
+## drgnx-agents-matrix
+
+What agents may do without asking: a plist (:preset cautious|balanced|autonomous :time TIME-PRESETS :cells CELLS).
+Balanced is the shipped preset.  A time preset replaces the base one while you are away (`drgnx-agents-away-after')
+or between two minutes of the day.  A cell sets one action for a role, an agent or a provider; the most restrictive
+column that matches wins.  Set it in Settings → User; no workspace and no agent can.
+
+| Key | Value |
+| --- | --- |
+| Default | `(:preset balanced)` |
+| Type | `sexp` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"AgentsMatrix"` |
+| `:agents` | `never` |
+| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container network unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
+
 ## drgnx-agents-mcp
 
 The MCP servers agents get: `coordination' and `search'.
@@ -52,6 +193,42 @@ The MCP servers agents get: `coordination' and `search'.
 | `:runtime` | `"Vec<String>"` |
 | `:agents` | `never` |
 | `:schema` | `(list-of (enum coordination search))` |
+
+## drgnx-agents-net-hosts
+
+The hosts a job that was granted network may reach, per tier: an alist TIER → list of "host:port" strings.
+`packages' (the tier of a granted network) is the package registries of crates.io, npm and PyPI; `provider-only'
+reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `((packages "crates.io:443" "index.crates.io:443" "static.crates.io:443" "registry.npmjs.org:443" "pypi.org:443" "files.pythonhosted.org:443"))` |
+| Type | `sexp` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"NetHosts"` |
+| `:agents` | `never` |
+| `:schema` | `(alist symbol (list-of (string :match ":[0-9]+\\'")))` |
+
+## drgnx-agents-no-progress-tokens
+
+Tokens per changed line of task work over which the supervisor pauses the session.
+
+| Key | Value |
+| --- | --- |
+| Default | `20000` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u64"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
 
 ## drgnx-agents-openrouter
 
@@ -111,6 +288,23 @@ secrets (keys come from the environment).
 | `:agents` | `never` |
 | `:schema` | `(alist string (plist (:command (list-of string) "The program and its arguments" :required t) (:env (list-of string) "NAME=value pairs added to its environment") (:mode (enum queue steer interrupt) "What a message to a busy agent does") (:ai symbol "The provider environment it gets") (:model string "The model it asks for") (:tracker-tools (enum on off) "The five tracker tools; on by default") (:doc string "One line")))` |
 
+## drgnx-agents-repeat-limit
+
+How many times the same command may run in one turn before the supervisor pauses the session.
+
+| Key | Value |
+| --- | --- |
+| Default | `3` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u32"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
 ## drgnx-agents-routes
 
 Which profiles do each job role: an alist ROLE → a profile's name, or a list of names.
@@ -149,6 +343,40 @@ another one on, remove it from this list (or set it in the profile's `:env').
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
+
+## drgnx-agents-silent-after
+
+Seconds without an update after which the supervisor pauses a session, per kind of work.
+
+| Key | Value |
+| --- | --- |
+| Default | `((task . 600) (brainstorm . 1800))` |
+| Type | `sexp` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"SilentAfter"` |
+| `:agents` | `never` |
+| `:schema` | `(alist symbol natnum)` |
+
+## drgnx-agents-wait-refusals
+
+How many times an agent may try to wait on a job (sleep, tail -f, polling) before its turn is cancelled.
+
+| Key | Value |
+| --- | --- |
+| Default | `3` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u32"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
 
 ## drgnx-ai-providers
 

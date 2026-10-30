@@ -1,0 +1,20 @@
+{"scenario": "timeline/permission-wait-is-user-wait", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19: a permission request the hub answers is a user-wait step of its own, apart from the tool step it interrupted."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1", "class": "think"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"steps": {"$contains": [{"class": "user-wait", "end": "$number"}]}}}}

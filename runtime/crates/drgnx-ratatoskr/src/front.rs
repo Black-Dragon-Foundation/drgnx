@@ -2,7 +2,8 @@
 //! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`] and
 //! the store's methods of [`crate::graph`] (`graph/*`, `tasks/*`), the
 //! MCP hosting of [`crate::sessions`] (`mcp/*`) and the gateway of [`crate::gateway`] (`gateway/*`,
-//! `spend`) and the settings' (`config/settings`, `config/changed`).  Every other method goes to [`Forward`].
+//! `spend`) and the settings' (`config/settings`, `config/changed`), and the agent core's of [`crate::agent_core`]
+//! (`agents/*`, `job/*`, `exec/*`, `matrix/*`, …).  Every other method goes to [`Forward`].
 //!
 //! [`Front::line`] is one line of one connection: [`dispatch::prelude_as`] (the connection is the backend's when its
 //! peer pid is the backend's), the refusal noted, the handler, the answer queued.  [`Front::start_line`] is the same
@@ -68,6 +69,8 @@ pub struct Front {
     pub writer: Writer,
     /// The coordination tools' shared state, on the same writer (for the MCP hosting).
     pub tools: Arc<norn::tools::Coord>,
+    /// The tools' view of the hub; [`ToolHub::bind`] gives it the front once that is in its `Arc`.
+    pub tool_hub: Arc<ToolHub>,
     /// The coordination tools (`norn::tools::tools`).
     pub tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]>,
     /// The tools on the sessions' sockets and for outside bridges ([`crate::sessions`]).
@@ -82,6 +85,8 @@ pub struct Front {
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
     pub dirs: OnceLock<crate::graph::StoreDirs>,
+    /// The agent core's state ([`crate::agent_core`]): sessions, jobs, plan runs, the matrix, …
+    pub core: crate::agent_core::Core,
     forward: Arc<dyn Forward>,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
@@ -128,7 +133,9 @@ impl Front {
             signals: signals.clone(),
             editors: editors.clone(),
             settings: settings.clone(),
+            front: std::sync::OnceLock::new(),
         });
+        let tool_hub = hub.clone();
         let uid = rustix::process::geteuid().as_raw();
         let coord = norn::tools::Coord::new(coord_db.clone(), hub);
         let tools = Arc::new(match graph {
@@ -136,7 +143,11 @@ impl Front {
             None => coord,
         });
         let gate = Gate::new(coord_db.clone());
+        let budgets = crate::budget::Budgets::default();
+        gate.attach_budgets(budgets.clone());
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
+        let matrix = crate::matrix_gate::MatrixGate::default();
+        matrix.announce_to(editors.clone());
         Front {
             cap,
             pid: std::process::id(),
@@ -154,7 +165,13 @@ impl Front {
             editors,
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
+            core: crate::agent_core::Core {
+                budgets,
+                matrix,
+                ..Default::default()
+            },
             tools,
+            tool_hub,
             tool_list,
             forward,
             refusals: Mutex::new(Refusals::default()),
@@ -487,6 +504,11 @@ impl Front {
         // a new subscriber hears which keys kept registrations need, and the settings' problems, after its answer
         let mut need_keys = None;
         let mut settings_notices = Vec::new();
+        // a settled card may be the one a session's permission request waits on (a matrix Ask)
+        let settled = match &params {
+            Params::CardsSettle(p) => i64::try_from(p.card).ok(),
+            _ => None,
+        };
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
@@ -587,31 +609,38 @@ impl Front {
                     .collect();
                 Ok(json!(self.editors.explained(p.req, rows)))
             }
-            // the graph store's (`graph/*`, `tasks/*`), then the coordination writes
-            other => match crate::graph::serve(
-                &self.writer,
-                &self.tools,
-                self.dirs.get(),
-                &caller,
-                other,
-            )
-            .await
-            {
+            // the agent core's (`agents/*`, `job/*`, `exec/*`, …), the graph store's (`graph/*`, `tasks/*`), then the
+            // coordination writes
+            other => match crate::agent_core::serve(self, &caller, other).await {
                 Ok(result) => result,
-                Err(params) => match coord::serve(&self.writer, &caller, *params).await {
+                Err(params) => match crate::graph::serve(
+                    &self.writer,
+                    &self.tools,
+                    self.dirs.get(),
+                    &caller,
+                    *params,
+                )
+                .await
+                {
                     Ok(result) => result,
-                    Err(params) => {
-                        return Some(Forwarded {
-                            id,
-                            method,
-                            params: *params,
-                            ignored,
-                            caller,
-                        });
-                    }
+                    Err(params) => match coord::serve(&self.writer, &caller, *params).await {
+                        Ok(result) => result,
+                        Err(params) => {
+                            return Some(Forwarded {
+                                id,
+                                method,
+                                params: *params,
+                                ignored,
+                                caller,
+                            });
+                        }
+                    },
                 },
             },
         };
+        if let (Some(card), Ok(_)) = (settled, &result) {
+            self.core.agents.card_settled(card).await;
+        }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
         {
@@ -821,15 +850,23 @@ mod tests {
             r#"{"id":2,"method":"events/since","params":{"since":3}}"#,
         )
         .await;
-        f.line(&mut s, &out, r#"{"id":3,"method":"job/status"}"#)
-            .await;
+        f.line(
+            &mut s,
+            &out,
+            r#"{"id":3,"method":"env/set","params":{"env":[]}}"#,
+        )
+        .await;
         f.line(&mut s, &out, r#"{"method":"ping"}"#).await;
+        // the agent core's methods are the front's: job/status is answered here, not forwarded (Task 16a)
+        f.line(&mut s, &out, r#"{"id":5,"method":"job/status"}"#)
+            .await;
         assert_eq!(
             answers(&out),
             vec![
                 json!({"id": 1, "result": {"pid": std::process::id()}}),
                 json!({"id": 2, "result": {"since": 3, "last": 3, "events": []}}),
                 json!({"id": 3, "error": {"code": "internal", "message": "backend not running"}}),
+                json!({"id": 5, "result": {"jobs": []}}),
             ]
         );
         // shutdown: answered, then the hub is asked to stop
@@ -919,7 +956,7 @@ mod tests {
         s.class = Class::User;
         let out = Arc::new(Outbox::new(s.conn));
         let slots = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
-        let call = |i: usize| format!(r#"{{"id":{i},"method":"job/status"}}"#);
+        let call = |i: usize| format!(r#"{{"id":{i},"method":"env/set","params":{{"env":[]}}}}"#);
         for i in 0..MAX_IN_FLIGHT {
             tokio::time::timeout(
                 Duration::from_secs(5),
@@ -1013,8 +1050,12 @@ mod tests {
         s.class = Class::User;
         s.peer_pid = Some(4242);
         let out = Arc::new(Outbox::new(s.conn));
-        f.line(&mut s, &out, r#"{"id":1,"method":"job/status"}"#)
-            .await;
+        f.line(
+            &mut s,
+            &out,
+            r#"{"id":1,"method":"env/set","params":{"env":[]}}"#,
+        )
+        .await;
         f.line(&mut s, &out, r#"{"id":2,"method":"subscribe"}"#)
             .await;
         f.line(&mut s, &out, r#"{"id":3,"method":"status"}"#).await;
@@ -1034,8 +1075,12 @@ mod tests {
         let mut t = Session::new(f.next_conn(), Socket::Main);
         t.class = Class::User;
         t.peer_pid = Some(4243);
-        f.line(&mut t, &out, r#"{"id":4,"method":"job/status"}"#)
-            .await;
+        f.line(
+            &mut t,
+            &out,
+            r#"{"id":4,"method":"env/set","params":{"env":[]}}"#,
+        )
+        .await;
         assert_eq!(answers(&out), vec![json!({"id": 4, "result": true})]);
         assert_eq!(behind.0.load(Ordering::SeqCst), 1);
     }

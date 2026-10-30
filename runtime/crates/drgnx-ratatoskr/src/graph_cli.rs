@@ -31,7 +31,8 @@ pub const USAGE: &str = "usage: ratatoskr graph export [--project P --out DIR] [
     \x20      ratatoskr graph grants [list [--who W] | grant WHO WHAT [--access read|edit-user-tasks] [--expires T] | revoke ID] [--json]\n\
     \x20      ratatoskr graph sql 'SELECT …' [--json]\n\
     \x20      ratatoskr graph compact [--dry-run] [--json]\n\
-    \x20      ratatoskr graph proposed accept|reject TX... [--json]";
+    \x20      ratatoskr graph proposed accept|reject TX... [--json]\n\
+    \x20      ratatoskr graph import-records --root DIR [--only plans|ledgers|deferred|build-board|board] [--dry-run] [--json]";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct GraphCommand {
@@ -76,6 +77,11 @@ pub enum Sub {
         accept: Vec<u64>,
         reject: Vec<u64>,
     },
+    ImportRecords {
+        root: PathBuf,
+        only: Option<String>,
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -115,7 +121,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
     // options that take a value
     let valued = [
         "project", "out", "since", "tx", "entity", "to-ver", "field", "reason", "who", "access",
-        "expires", "with",
+        "expires", "with", "root", "only",
     ];
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -183,6 +189,25 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                     .first()
                     .map(PathBuf::from)
                     .ok_or("graph import needs DIR")?,
+            }
+        }
+        "import-records" => {
+            known(&["root", "only", "dry-run"])?;
+            no_words(0)?;
+            let only = get("only");
+            if let Some(o) = &only
+                && !["plans", "ledgers", "deferred", "build-board", "board"].contains(&o.as_str())
+            {
+                return Err(format!(
+                    "--only takes plans, ledgers, deferred, build-board or board, not {o:?}"
+                ));
+            }
+            Sub::ImportRecords {
+                root: get("root")
+                    .map(PathBuf::from)
+                    .ok_or("graph import-records needs --root DIR")?,
+                only,
+                dry_run: flag("dry-run"),
             }
         }
         "backup" => {
@@ -365,6 +390,20 @@ impl GraphCommand {
                 ("graph/export", p)
             }
             Sub::Import { dir } => ("graph/import", json!({"dir": absolute(dir, cwd)})),
+            Sub::ImportRecords {
+                root,
+                only,
+                dry_run,
+            } => {
+                let mut p = json!({"root": absolute(root, cwd)});
+                if let Some(o) = only {
+                    p["only"] = json!(o);
+                }
+                if *dry_run {
+                    p["dry_run"] = json!(true);
+                }
+                ("records/import", p)
+            }
             Sub::Backup => ("graph/backup", json!({})),
             Sub::Revert {
                 tx,
@@ -522,6 +561,21 @@ pub fn render(sub: &Sub, a: &Value) -> (String, bool) {
             }
             for r in a["refused"].as_array().into_iter().flatten() {
                 out.push_str(&format!("refused: {r}\n"));
+            }
+        }
+        Sub::ImportRecords { .. } => {
+            let dry = a["dry_run"] == true;
+            for f in a["files"].as_array().into_iter().flatten() {
+                out.push_str(&format!(
+                    "{} {}: {} entities, {} operations\n",
+                    if dry { "would import" } else { "imported" },
+                    f["path"].as_str().unwrap_or("?"),
+                    n(&f["entities"]),
+                    n(&f["ops"])
+                ));
+            }
+            if let Some(b) = a["backup"].as_str() {
+                out.push_str(&format!("backup {b}\n"));
             }
         }
         Sub::Backup => {

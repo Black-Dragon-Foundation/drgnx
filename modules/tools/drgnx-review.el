@@ -21,6 +21,7 @@
 (declare-function drgnx-diff-default-base "drgnx-diff")
 (declare-function drgnx-diff-show "drgnx-diff")
 (declare-function drgnx-job-route "drgnx-job")
+(declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-job-policy "drgnx-job")
 (declare-function drgnx-agents-start "drgnx-agents")
 (declare-function drgnx-agents-free-p "drgnx-agents")
@@ -261,8 +262,8 @@ master); its findings land in the Review tab."
          (count (drgnx-review--git root "rev-list" "--count" (format "%s..HEAD" base))))
     (when (member count '(nil "0")) (user-error "Nothing to review against %s" base))
     (require 'drgnx-job)
-    (require 'drgnx-agents)
-    (let* ((s (drgnx-agents-start (car (drgnx-job-route 'review)) (file-name-as-directory root)))
+    (require 'drgnx-agents-mirror)
+    (let* ((s (drgnx-agents-mirror-start (car (drgnx-job-route 'review)) (file-name-as-directory root)))
            (sid (drgnx-agent-session-id s)))
       (puthash sid (list :root (file-name-as-directory root) :base base
                          :branch (or (drgnx-review--git root "rev-parse" "--abbrev-ref" "HEAD") "HEAD")

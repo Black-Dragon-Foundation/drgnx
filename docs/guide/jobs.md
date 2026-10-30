@@ -1,4 +1,102 @@
-# Jobs: agents working through a plan
+# Jobs: commands the hub runs, and plan runs
+
+## Command jobs
+
+A **job** is long work an agent or you start: a build, the tests, a loop, CI. The hub runs it as a unit of its own, so
+it does not depend on the agent that started it or on the editor, and it survives a hub restart.
+
+- **Where it runs.** In the starter's sandbox: an agent's job gets that agent's Gleipnir rules (its worktree is the only
+  project folder it can write, and the lock's protected files in it stay read-only: `.claude`, `.codex`, `.gemini`,
+  `.envrc`, `mise.toml` and `.git/hooks`, a missing one made empty so it can be pinned; the empty ones the hub made are
+  removed when the session ends, and a branch that adds or changes any of them is refused at the merge gate with the
+  paths on the card). The tree of a plan-run task or a manager's worker is always a **snapshot**: its own `.git`, a
+  reflink copy of a store the hub keeps per run (a plain copy where the filesystem cannot reflink: it then costs the
+  store's size per task). The agent commits there; the hub fetches the branch back as a bundle (verified, fsck'd) when
+  it reviews, trial-merges or merges it. The user's own repository is never writable to a sandboxed agent. In the
+  snapshot's `.git` the `hooks` folder, `config`, `config.worktree` and those of each submodule are read-only, since
+  git runs what it finds there; the network its matrix grants). An agent's job works in its session's
+  worktree or in a folder inside it: the hub resolves the `cwd` the agent names (links and `..` included) and refuses
+  any other ("… is outside your worktree …"); `job_start` without a `cwd` uses the worktree. Your own jobs run with
+  your rights, in the folder they name. On Linux the job is
+  a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G); without a user systemd it
+  has a session and process group of its own. A job on another machine is refused: part 1 runs jobs on this machine.
+- **Its files.** `<state>/hub/exec/<id>/` holds the log, the exit code and the result. The hub reads the same files
+  after a restart: a job still running is picked up again (by its process and start time, not just its pid), one that
+  ended meanwhile gets its result, one that vanished without an exit is marked lost. A picked-up job is waited on by
+  its process's end (a pidfd on Linux), not by polling; where no pidfd can be had the hub looks every 100 ms.
+  The hub keeps the folders of the newest 200 finished jobs and none older than 14 days (a job that ended in the last
+  hour is always kept); older ones are removed, so `exec/get` and `exec/log` answer "no job" for them, while the
+  job's row in the graph stays.
+- **Time box.** 1 to 86400 seconds (default 3600). At the end the job's process group gets SIGTERM, then SIGKILL, and
+  its status is `timed-out`. `exec/stop` ends it by hand (`stopped`).
+- **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
+  `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
+  (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
+  waits at no cost and is woken by the end.
+- **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call); agents use
+  the `job_*` tools.
+
+### Container jobs
+
+A job of kind `container` runs a command inside an image you allowed, with `podman`. The agent names an image (a name
+on `agents-container-images`) and a command; the hub builds the whole `podman run` line from a fixed spec, so the
+agent can add no option. The container has no capabilities and cannot gain privileges, its root is read-only (with a
+tmpfs `/tmp`), and the only folder it sees is the starting session's worktree, at `/work` (the hub takes the worktree
+from the session, never from the request; the command runs in the job's `cwd` inside it, which must be the worktree or
+a folder in it). The worktree is mounted writable as a whole: the protected files above are pinned for jobs that run
+in the sandbox, not for a container job. It has a process limit, and
+`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. Those limits are enforced or the job does not
+run: before each container job the hub asks `podman info`, and unless podman uses cgroup v2 with the systemd cgroup
+manager and the memory, pids and cpu controllers, the job is refused with the reason. Rootless podman needs a systemd
+user session for that (a login, or `loginctl enable-linger`); without one it would run the container with no limits.
+It has **no network of its own**
+(`--network=none`, only a loopback). When the matrix's Network cell allows it (a job you start yourself has none unless it asks), the
+job gets the one route there is: the job's own allow-list proxy, a Unix socket the hub mounts read-only into the
+container, and a small forwarder (`drgnx-fwd`, mounted read-only, next to the hub) that listens on `127.0.0.1:3128`
+inside the job and runs the command in its place. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
+hosts on the allow-list are reached: the setting `agents-net-hosts` (an alist tier to `"host:port"` strings; the
+`packages` tier is a granted network's). Its default is `crates.io`, `index.crates.io`, `static.crates.io`,
+`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`; without `drgnx-fwd`, or if the socket cannot be made, a job that was allowed a network is refused. An Ask on the Network cell refuses the start with the matrix card. The request has no
+other fields: `exec/start` refuses a field it does not know (a `mounts` or `privileged` is an `invalid-params` error,
+not ignored).
+
+The image is the allow-list's reference pinned by digest; the hub pulls it before the job starts and the job never
+pulls (`--pull=never`); a pull that takes longer than 600 s refuses the job. A name that is not on the list is refused. A starting agent needs the matrix's `job.container`
+(Cautious asks, Balanced and Autonomous allow). Without `podman` on the PATH when the hub starts, container jobs are
+refused and the message points at `drgnx doctor`. The hub names each container `drgnx-job-<id>`, and at start removes any such container whose job is not running (a hub
+that was killed leaves none behind). Otherwise a container job is a job like any other: unit, log, exit,
+summary, time box and restart behaviour.
+
+### An agent starts a job and is woken
+
+An agent that runs on the hub has the job tools (`job_start`, `job_result`, `job_log`, `job_stop`). `job_start` answers
+the job's id and "end your turn; you will be woken": the agent finishes its turn, the session shows **waiting** (and
+names the job), and **no model request is made until the job ends**. The job's end is a plain prompt to the same
+session: `[job ID finished — exit N]`, the failing tests, the log lines of the summary and the log's path. The prompt
+goes to the same ACP session, so the provider's prompt cache stays warm (a worker's Claude profile asks for a one-hour
+cache for this).
+
+- **No waiting.** While one of its own jobs runs, an agent's `job_result` and `job_log` of it, and shell loops that wait
+  (`sleep`, `pgrep`, `watch`, `until`, `tail -f`), are refused with the text above. After `agents-wait-refusals`
+  refusals (default 3) in one turn the hub cancels the turn; the wake prompts the agent again. A finished job, and a
+  job of someone else, can be read at any time.
+- **Idle on a job.** A session waiting longer than `agents-close-idle-after` seconds (default 1800; 0 never) is closed:
+  the agent's process ends (`session/close` first, for the CLIs that have it). The job's end, or your next message,
+  resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with
+  `session/load`).
+- **Machine slots.** This machine runs four jobs at once. A fifth is recorded as queued and `job_start` answers at once
+  ("queued ... you will be woken"): the agent ends its turn like for any job. The queued job (its row says `queued`,
+  with no unit yet) starts when a slot frees, oldest first, and also after a hub restart; `exec/stop` ends it without
+  it ever starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the
+  reason in its log, and its starter is woken. Waiting for a job is a `job-wait` step.
+- **Tools in a hub-started session.** An agent the hub starts gets the coordination tools (including the job tools)
+  through `ratatoskr mcp-bridge` on a socket the hub made for that session; the socket goes when the session ends.
+
+## Plan runs
+
+The rest of this page is about **plan runs**: a plan's tasks dispatched to agents, which keep the `job/*` methods and
+`drgnx job`. (In the text below, "job" means a plan run.)
+
 
 You hand drgnx a plan; drgnx proposes a **job** — the plan's tasks, what waits on what, which agent profile takes
 each role, an estimate — and nothing starts until you approve it. Then the hub runs one agent per ready task, each

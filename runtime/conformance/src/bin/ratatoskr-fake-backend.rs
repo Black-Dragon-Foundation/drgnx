@@ -8,8 +8,8 @@
 //!   JSON object, to `$XDG_STATE_HOME/drgnx/fake-backend.env`;
 //! - answers from the script in `DRGNX_FAKE_BACKEND_SCRIPT` (JSON): `{METHOD: ANSWER}`, ANSWER being an object
 //!   with `result` or `error` (sent with the request's id), a string (sent as the whole line, `$ID` replaced by the
-//!   id), `null` (never answered), `{"exit": CODE}` (it exits at once) or `{"from_file": PATH}` (the answer object
-//!   is read from PATH at each call, which a scenario rewrites meanwhile).  Without one: `ping` `{pid}`, `subscribe`
+//!   id), `null` (never answered), `{"exit": CODE}` (it exits at once) or `{"from_file": PATH}` (the entry, any of
+//!   these or a `call_front` one, is read from PATH at each call, which a scenario rewrites meanwhile).  Without one: `ping` `{pid}`, `subscribe`
 //!   and `coord/notify` `true`, `status` `{pid, gateway_port: 0, registrations: 0}`, anything else an error;
 //! - a script entry `{METHOD: {"call_front": {"method": M, "params": P}, "then": ANSWER}}` makes it, on METHOD, call M
 //!   on the front's main socket as a proven user (the cap file's HMAC, one connection kept for later calls), wait up
@@ -260,7 +260,8 @@ fn serve(stream: UnixStream, shared: &Shared) {
                 json!({"method": method, "params": req.get("params").cloned().unwrap_or(Value::Null)})
             ));
         }
-        let entry = shared.script.get(&method);
+        let entry = shared.script.get(&method).map(from_file);
+        let entry = entry.as_ref();
         let answer = match entry.and_then(|e| e.get("call_front")) {
             Some(call) => {
                 let reply = shared.call_front(call);
@@ -282,7 +283,7 @@ fn serve(stream: UnixStream, shared: &Shared) {
                 // a string ANSWER is the whole line (as in a plain script entry); `$front` was resolved above
                 answer_for(Some(&resolved), &method)
             }
-            None => answer(&shared.script, &method),
+            None => answer_for(entry, &method),
         };
         match answer {
             // a notification (the front's coalesced `coord/notify`) is never answered
@@ -317,8 +318,17 @@ enum Answer {
     Exit(i32),
 }
 
-fn answer(script: &Map<String, Value>, method: &str) -> Answer {
-    answer_for(script.get(method), method)
+/// A script entry as it stands now: `{"from_file": PATH}` is the entry read from PATH at each call (a scenario rewrites
+/// it meanwhile, so one method can answer, then exit, then call the front); a file that does not read is `null`, an
+/// answer that never comes.
+fn from_file(entry: &Value) -> Value {
+    match entry.get("from_file") {
+        Some(file) => std::fs::read_to_string(file.as_str().unwrap_or_default())
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .unwrap_or(Value::Null),
+        None => entry.clone(),
+    }
 }
 
 fn answer_for(entry: Option<&Value>, method: &str) -> Answer {
@@ -327,17 +337,6 @@ fn answer_for(entry: Option<&Value>, method: &str) -> Answer {
         Some(Value::String(s)) => Answer::Raw(s.clone()),
         Some(Value::Object(o)) if o.contains_key("exit") => {
             Answer::Exit(o["exit"].as_i64().unwrap_or(1) as i32)
-        }
-        // `{"from_file": PATH}`: the answer object is read from PATH at each call (a scenario rewrites it meanwhile)
-        Some(Value::Object(o)) if o.contains_key("from_file") => {
-            let file = o["from_file"].as_str().unwrap_or_default();
-            match std::fs::read_to_string(file)
-                .ok()
-                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            {
-                Some(v) => Answer::Line(v),
-                None => Answer::Never,
-            }
         }
         Some(v) => Answer::Line(v.clone()),
         None => Answer::Line(match method {

@@ -1,0 +1,13 @@
+{"scenario": "locks/codex-worker-refused-under-balanced-until-enforced", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 9 (activated by Task 8b): while Codex's lock is not proven (lock::plan answers Enforced::No), a Codex profile is refused as a worker under the Balanced preset; as a chat it starts and is listed with enforced false."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": {"$contains": [{"id": "$sid", "enforced": false}]}}}}

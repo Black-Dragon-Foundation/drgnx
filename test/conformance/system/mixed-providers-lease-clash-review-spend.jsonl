@@ -1,0 +1,40 @@
+{"scenario": "system/mixed-providers-lease-clash-review-spend", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Exit criterion 8 (and 7), on mocks. One plan run whose two tasks run on two providers (a Claude and a Gemini mock) and both change note.txt (Claude appends a line, Gemini changes the first, so both merge cleanly; identical edits would leave the second with nothing to merge): each task is claimed by its own session of its own profile (the leases), both reach review while the reviewers (a second Gemini profile) are still deliberating, so the hub makes one clash card of the overlap rule (kind `overlap`, advisory: the reviews go on) naming both tasks and the file; each task's review is handed to the reviewer profile with the review prompt, both pass, both merge and the job is done with two review events. Spend and anchors per agent: each worker's rollup tokens equal its own step rows summed in SQL, the steps of the two workers name two providers and every closed think or tool step carries its turn id and decision-log version (part 4's anchors), and every worker step carries its plan and task. It fails if a task is claimed by the wrong session, if the overlap is not carded (or carded twice), if a review is not handed over, if the job does not finish, or if a step lacks its anchors or its plan."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' > note.txt && git add note.txt && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/g.txt\" \"--log\" \"$ROOT/g.log\")) (\"mock-reviewer\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement . \"mock-claude\") (docs . \"mock-gemini\") (review . \"mock-reviewer\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Mixed\n\n**Repo:** $ROOT/repo\n\n### Task 1: Claude edits the note\n\n**Role:** implement\n\nEdit note.txt.\n\n### Task 2: Gemini edits the note\n\n**Role:** docs\n\nEdit note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\\ncommit claude\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/g.txt", "text": "silent 3\\ntool:exec printf gemini- > n.tmp && cat note.txt >> n.tmp && mv n.tmp note.txt\\ncommit gemini\\ncall:complete_task {\"task\": \"$job#2\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "silent 10\\nsay **VERDICT: pass**\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "expect_silent", "conn": "q", "for_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": {"$contains": [{"id": "$capture:w1", "profile": "mock-claude", "role": "worker", "job": "$job"}, {"id": "$capture:w2", "profile": "mock-gemini", "role": "worker", "job": "$job"}]}}}, "within_ms": 60000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"tasks": [{"n": 1, "agent": "$w1"}, {"n": 2, "agent": "$w2"}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"job": "$job", "kind": "overlap", "title": "Task 1 and Task 2 both change note.txt"}}, "within_ms": 90000}
+{"do": "file", "path": "$ROOT/r.log", "contains": "[drgnx review $job#1]", "within_ms": 120000}
+{"do": "file", "path": "$ROOT/r.log", "contains": "[drgnx review $job#2]", "within_ms": 120000}
+{"do": "expect_silent", "conn": "q", "for_ms": 25000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$job", "status": "done", "tasks": [{"n": 1, "status": "done"}, {"n": 2, "status": "done"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*), min(title like '%Task 1 and Task 2 both change note.txt%') from card where job = '$job' and kind = 'overlap'", "rows": [[1, 1]]}
+{"do": "sql_expect", "sql": "select count(*), min(summary) from event where kind = 'review'", "rows": [[2, "pass"]]}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "timeline/get", "params": {"scope": "session", "id": "$w1", "rollup": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"rollup": {"tokens": {"in": "$capture:in1", "out": "$capture:out1"}}}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "timeline/get", "params": {"scope": "session", "id": "$w2", "rollup": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"rollup": {"tokens": {"in": "$capture:in2", "out": "$capture:out2"}}}}}
+{"do": "sql_expect", "sql": "select (select sum(tokens_in) from step where session = 'session:$w1') = $in1, (select sum(tokens_out) from step where session = 'session:$w1') = $out1, (select sum(tokens_in) from step where session = 'session:$w2') = $in2, (select sum(tokens_out) from step where session = 'session:$w2') = $out2, (select sum(tokens_in) from step where session = 'session:$w1') > 0", "rows": [[1, 1, 1, 1, 1]]}
+{"do": "sql_expect", "sql": "select count(distinct provider) from step where session in ('session:$w1', 'session:$w2')", "rows": [[2]]}
+{"do": "sql_expect", "sql": "select min(turn_id is not null), min(log_version is not null) from step where session in ('session:$w1', 'session:$w2') and class in ('think', 'tool') and end is not null", "rows": [[1, 1]]}
+{"do": "sql_expect", "sql": "select min(task is not null and plan is not null) from step where session in ('session:$w1', 'session:$w2')", "rows": [[1]]}

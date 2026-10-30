@@ -12,7 +12,9 @@
 //! - [`agents`]: the editor as the agents' settings tools reach it (`settings/proposed`, `settings/explain`).
 
 pub mod agents;
+pub mod containers;
 pub mod load;
+pub mod matrix;
 pub mod overrides;
 pub mod profiles;
 pub mod providers;
@@ -84,6 +86,23 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         OnError::LastGood,
     ),
     setting("drgnx-ai-roles", "Vec<RoleChain>", OnError::LastGood),
+    setting("drgnx-agents-matrix", "AgentsMatrix", OnError::Strict),
+    setting("drgnx-agents-away-after", "u64", OnError::Strict),
+    setting("drgnx-agents-wait-refusals", "u32", OnError::Strict),
+    setting("drgnx-agents-close-idle-after", "u64", OnError::Strict),
+    setting("drgnx-agents-checkpoint-cap", "u64", OnError::Strict),
+    setting("drgnx-agents-job-memory", "String", OnError::Strict),
+    setting("drgnx-agents-job-cpus", "u32", OnError::Strict),
+    setting("drgnx-agents-net-hosts", "NetHosts", OnError::Strict),
+    setting(
+        "drgnx-agents-container-images",
+        "Vec<ContainerImage>",
+        OnError::Strict,
+    ),
+    setting("drgnx-agents-silent-after", "SilentAfter", OnError::Strict),
+    setting("drgnx-agents-repeat-limit", "u32", OnError::Strict),
+    setting("drgnx-agents-no-progress-tokens", "u64", OnError::Strict),
+    setting("drgnx-agents-manager-context", "f64", OnError::Strict),
 ];
 
 /// The names of [`RUNTIME`].
@@ -111,6 +130,38 @@ pub struct RuntimeValues {
     pub ai_providers: Vec<ProviderEntry>,
     /// The user's role chains (a role not named here has its shipped chain, [`Defaults::roles`]).
     pub ai_roles: Vec<RoleChain>,
+    /// `drgnx-agents-matrix` in the wire's words (`matrix::decode` reads it); null until read.
+    pub agents_matrix: Value,
+    pub agents_away_after: u64,
+    pub agents_wait_refusals: u32,
+    pub agents_close_idle_after: u64,
+    pub agents_checkpoint_cap: u64,
+    pub agents_job_memory: String,
+    pub agents_job_cpus: u32,
+    pub agents_net_hosts: NetHosts,
+    pub agents_container_images: Vec<ContainerImage>,
+    pub agents_silent_after: SilentAfter,
+    pub agents_repeat_limit: u32,
+    pub agents_no_progress_tokens: u64,
+    pub agents_manager_context: f64,
+}
+
+/// One entry of `drgnx-agents-container-images`: a name and its image reference pinned by digest.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContainerImage {
+    pub name: String,
+    pub image: String,
+}
+
+/// `drgnx-agents-net-hosts`: the hosts (`host:port`) a granted network reaches, per tier name, in order.
+pub type NetHosts = Vec<(String, Vec<String>)>;
+
+/// `drgnx-agents-silent-after`: seconds without an update per kind of work, in order.
+pub type SilentAfter = Vec<(String, u64)>;
+
+/// An `agents-matrix` value that is valid, as a message when it is not.
+pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
+    matrix::decode(v).map(drop)
 }
 
 impl RuntimeValues {
@@ -177,6 +228,32 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-allow-unsandboxed" => values.agents_allow_unsandboxed = de(node)?,
         "drgnx-ai-providers" => values.ai_providers = providers::entries(node)?,
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
+        "drgnx-agents-matrix" => {
+            let v: Value = de(node)?;
+            check_matrix(&v).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_matrix = v;
+        }
+        "drgnx-agents-away-after" => values.agents_away_after = de(node)?,
+        "drgnx-agents-wait-refusals" => values.agents_wait_refusals = de(node)?,
+        "drgnx-agents-close-idle-after" => values.agents_close_idle_after = de(node)?,
+        "drgnx-agents-checkpoint-cap" => values.agents_checkpoint_cap = de(node)?,
+        "drgnx-agents-job-memory" => values.agents_job_memory = de(node)?,
+        "drgnx-agents-job-cpus" => values.agents_job_cpus = de(node)?,
+        "drgnx-agents-net-hosts" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<Vec<String>>>(node)?;
+            values.agents_net_hosts = pairs;
+        }
+        "drgnx-agents-container-images" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<String>>(node)?;
+            values.agents_container_images = images(pairs);
+        }
+        "drgnx-agents-silent-after" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<u64>>(node)?;
+            values.agents_silent_after = pairs;
+        }
+        "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(node)?,
+        "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(node)?,
+        "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
         other => {
             return Err(Bad::at(
                 node,
@@ -186,6 +263,13 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         }
     }
     Ok(())
+}
+
+pub(crate) fn images(pairs: Vec<(String, String)>) -> Vec<ContainerImage> {
+    pairs
+        .into_iter()
+        .map(|(name, image)| ContainerImage { name, image })
+        .collect()
 }
 
 /// The shipped defaults, read once from [`DEFAULTS`].

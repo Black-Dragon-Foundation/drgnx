@@ -6,11 +6,11 @@
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
-{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["7"]]}
+{"do": "sql_expect", "sql": "select value from kv where key = 'schema'", "rows": [["8"]]}
 {"do": "sql_expect", "sql": "select count(*) from node", "rows": [[967]]}
 {"do": "sql_expect", "sql": "select count(*) from edge", "rows": [[165]]}
 {"do": "sql_expect", "sql": "select count(*) from entity where kind = 'decision'", "rows": [[4]]}
 {"do": "sql_expect", "sql": "select count(*) from entity where title like '%CANARY%'", "rows": [[0]]}
 {"do": "sql_expect", "sql": "select json_extract(value, '$.tables.node') from kv where key = 'migrate-7'", "rows": [["[970,967]"]]}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "status"}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 7, "store": {"schema": 7, "writer": "ready", "migrated_at": "$number", "failed": "$absent"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"schema": 8, "store": {"schema": 8, "writer": "ready", "migrated_at": "$number", "failed": "$absent"}}}}

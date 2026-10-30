@@ -32,7 +32,8 @@ settings, and a buffer-local value is never read: a profile is a program, and a 
 
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
-`interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so.
+`interrupt` (stop the turn, then send; in a durable session, which the hub runs, a message never cancels a turn, so
+`interrupt` queues there, and `steer` puts the message ahead of the other queued ones). A profile whose program is not installed gives a session that says so.
 `:mcp-servers` lists MCP servers of your own for every session of the profile, job sessions included, after drgnx's
 own: ACP `mcpServers` entries, written with vectors where ACP has arrays, e.g.
 `:mcp-servers ((:name "docs" :command "docs-mcp" :args ["--read-only"] :env []))`. An entry named `drgnx` or
@@ -110,6 +111,11 @@ the count when you answer it, when the turn is stopped, or when the session ends
 agent streams: the set is rebuilt only when a session's permissions or edits to review change.
 
 Each agent's own settings (its routes and billing, MCP servers, hooks and skills) are on its settings page: `,` on a session's row, or Agents: Settings ([agent-settings.md](agent-settings.md)).
+
+The hub holds your agent sessions itself: it starts the agent, keeps its transcript, and lists what it asks. A
+permission request stays on the session until you answer it; nothing another agent says counts as your answer. An
+agent reads and writes files inside its session's folder only, and a brainstorm session writes only its design
+document.
 
 ## Reviewing an agent's edits
 
@@ -226,6 +232,11 @@ provider's environment variable (`OPENROUTER_API_KEY`, …). It never prompts th
 `.gpg` file. When it finds none, a notice says "agents need your PROVIDER key in the drgnx hub: run AI: Load Keys";
 run it (it may ask, since you ran it).
 
+Your Emacs also reconnects to a restarted hub by itself: it tries again after 1 second, then 2, 4 and so on up to every
+30 seconds, and starts nothing, so a hub you stopped stays stopped. After ten minutes without a hub it stops trying
+and tells you once; run Hub: Restart Now to bring the hub back. Stopping the hub from your Emacs (or disconnecting)
+does not start the retries.
+
 ### When drgnx was updated
 
 A running hub keeps the program it started from. After `drgnx update` it notices the new one and drgnx shows a warning:
@@ -268,11 +279,38 @@ requests and edits to review — and drives it the same way (send, Stop, answer,
 sessions when it is idle whenever a hub is running (and looks again every 30 s of idleness); it never starts a hub for that.
 Turning `tools/agents` off (Preferences: Modules) stops the mirroring and closes this Emacs's connection to the hub;
 the hub and its sessions go on.
-Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
-Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
-hub start`) resumes them when their agent can load sessions: each comes back idle with its history,
-though a turn that was running when the hub ended is lost; a job's agents are not resumed (the job starts their
-tasks again).
+**New Agent Session…**, **Review Branch** and starting an agent on a task now start the session in the hub too (the
+hub's `agents/start`); the transcript you open is its mirror. A session whose provider's lock the hub could not enforce
+(for instance no sandbox on this machine) is announced once as "not enforced: <why>" and says so in
+`drgnx-agents-mirror-lock-label`. A permission-matrix question (`matrix` card) or a rule that paused an agent
+(`supervisor`) shows as a notice; nothing asks you in the middle of your typing. `drgnx job` talks to the hub's `job/*`
+methods, which the hub itself serves.
+
+Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its agent processes end too.
+The next hub (the next durable session, an agent that needs the gateway, or `drgnx hub start`) brings each session
+back when its agent can resume or load sessions: idle, with its history read from the transcript, and with the
+messages that were queued when the hub ended delivered as the next turn; a turn that was running when the hub ended
+is lost; a job's agents are not resumed (the job starts their tasks again). An update of drgnx waits for a durable
+session's *running turn* to end, never for an idle chat.
+
+**Moving a session to another model** (`agents/move`, or a manager's `agent_move`): the session stops after the tool
+running now, a new session on the other profile starts in the same directory, and its first prompt is a **summary**
+of the old one: the task's brief, the decisions it recorded, the task's newest report, the directory's HEAD and its
+last steps. The old conversation is not copied (its transcript stays on disk) and the old session leaves the list; the
+two stay linked in the graph. Codex profiles stay refused until their lock is proven. The same summary is what a
+session is told when the hub restarts and its agent can neither resume nor load it.
+
+A durable session's messages and Stop work like this:
+
+- A message sent while the agent works is **queued** (or put ahead of the queue by `:mode steer`); it never cancels
+  the turn. Only **Stop** cancels: the turn ends as cancelled, pending permission requests are answered "cancelled",
+  and the queue is held until you press Deliver or send something new (a Stop on a session with no turn running
+  ends the session). **Pause** cancels once the tool call running now completes, and holds the queue the same way.
+- The hub keeps each durable session's transcript in `<state>/hub/transcripts/<id>.jsonl` (private to you, mode
+  0600). Anything that looks like a key or token is replaced by `[redacted: kind]` before it is written, so a key
+  you pasted into a message never rests in a file.
+- The hub cuts every turn into **steps** (thinking, a tool call, waiting for you, paused) from its own clock and
+  records them in `work.db` with the tokens each used; the timeline views read them.
 
 ## What agents get
 
@@ -421,6 +459,35 @@ Grants open reading only: agents still write only into their own project. Whatev
 agent marked as that agent's text, as data rather than instructions. More in
 [security.md](security.md#grants).
 
+## What agents may do: the matrix setting
+
+`drgnx-agents-matrix` in `settings.el` says what agents may do without asking. The shipped value is the Balanced
+preset; `(:preset cautious)` and `(:preset autonomous)` are the other two. Beyond the preset:
+
+```elisp
+(drgnx-agents-matrix
+ (:preset balanced
+  :time ((:when away :preset cautious)                    ; while you are away
+         (:when (between 1320 420) :preset autonomous))   ; 22:00 to 07:00, local time (minutes of the day)
+  :cells ((:action push.main :column (:role worker) :verdict never)
+          (:action spend :column (:agent "claude") :verdict ask :limit (:amount 2 :unit usd)))))
+```
+
+An action is one of the matrix's rows (`commit`, `push.main`, `spend`, `network`, …: the hub's ids, listed in
+`drgnx-agents-matrix-actions`); a column is `(:role manager|worker|chat)`, `(:agent NAME)` or `(:provider NAME)`; a
+verdict is `allow`, `ask` or `never`; a limit's unit is `count`, `usd`, `usd-est`, `tokens` or `limit-share`. The most
+restrictive matching column wins.
+
+The editor tells the hub when you are **away**: after `drgnx-agents-away-after` seconds (600) without input it sends
+`presence/set`, and again on your next input. The time presets follow from the next action. An agent never sends it.
+
+Only you set these: they are `:workspace never` (a repository's `.drgnx/settings.el` and `.dir-locals.el` are refused
+with the line) and `:agents never` (the `settings_change` tool refuses them). They are `drgnx-agents-matrix`,
+`-away-after`, `-wait-refusals` (3), `-close-idle-after` (1800 s), `-checkpoint-cap` (2 GiB), `-job-memory` ("4G"),
+`-job-cpus` (2), `-container-images` (name → digest-pinned image), and the supervisor's `-silent-after`
+(task 600 s, brainstorm 1800 s), `-repeat-limit` (3), `-no-progress-tokens` (20000) and `-manager-context` (0.7).
+The hub reads them from `settings.el`.
+
 ## Changing settings
 
 Every agent has two settings tools. Your settings stay yours: an agent changes one only under your grant, the editor
@@ -521,6 +588,121 @@ Imported plan checklists (Onboarding: Import Projects, with TODOs) remember wher
 TODO is under, wherever it was refiled). Projects: Sync Plans and Board TODOs makes them agree: a TODO marked DONE on the board ticks its
 checkbox (`- [x]`) in the plan; a ticked checkbox marks its TODO DONE. It writes only what changed, only when you
 run it, with the plan's own encoding and line endings — and leaves alone a plan open in Emacs with unsaved edits.
+
+## Briefs
+
+When a plan run starts a task, its worker gets a brief built from the graph: the task's section of the plan (found
+by its number in the plan file), the AGENTS.md at the run's repository root, the permissions matrix as it applies to
+a worker (one line for every action that is not Never), the base branch, the interfaces that the reports of the
+tasks it waits on list, the check to run (the plan's own line when it names one) and, for an agent without drgnx's
+tools, the plan file's path and the `drgnx-report` block to end with. A part with nothing to say is left empty.
+
+A brief is at most 16 KiB. Over that, the plan section is cut at a heading and a note says where; AGENTS.md and the
+interfaces have smaller caps of their own.
+
+`brief/build` shows a task's brief. `brief/set` saves your edited text as a note labelled `brief` on the task
+(setting it again replaces it); from then on `brief/build` answers it and the runner sends it at dispatch instead
+of the built one.
+
+## Plans and records
+
+Plans, ledgers, `DEFERRED.md`, `BUILD-BOARD.md` (and `board.org`, only when you name it) can move into the graph:
+`ratatoskr graph import-records --root DIR` (add `--dry-run` to see what it would do). Every file is copied to
+`<state>/hub/records-backup/<date>/` first; importing again changes nothing. Afterwards each file is a view of the
+graph: drgnx rewrites it when the records change, starts it with a one-line comment saying so, and never overwrites
+a file you edited by hand. drgnx never commits these files; that stays yours.
+
+### Editing a plan file
+
+You can edit these files by hand. drgnx does not refuse and does not overwrite: it reads what you changed as a
+proposal (a diff, and the changes to the records it comes to) and leaves your file as it is. The file waits, with the
+graph's own changes, until you accept or reject the proposal; a second edit replaces it. Accepting applies the
+changes and rewrites the file; if a record changed in the meantime, the proposal is marked stale and read again. Parts
+that match no record (a deleted row, say) become a note. Rejecting keeps a copy of your edit in
+`<state>/hub/records-backup/` and rewrites the file. A manager agent may decide a proposal when the matrix allows it,
+except for settings only you may change (a plan's `matrix`).
+
+### Reviewing a hand edit
+
+The hub writes the org folder's plans, ledgers and DEFERRED file as views of its graph. If you edit one by hand, the
+hub does not overwrite it: the edit becomes a proposal and you get a notice ("A hand edit to … is waiting for
+review"). The notice only tells you; nothing asks. **Records: Review Proposal** (from the notice, or the palette) shows
+the proposal as a diff, with a line saying how many operations it would apply. In that buffer `C-c C-a` accepts (the
+hub applies the operations if the records did not change meanwhile, then rewrites the file) and `C-c C-r` rejects (your
+edited file is kept in the hub's records backup, then the file is rewritten). A proposal that went stale stays open:
+review it again. Also available as **Records: Accept Proposal** and **Records: Reject Proposal**.
+
+## A manager agent
+
+A chat session becomes a **manager** when you say so: `agents/role` with `role: manager` (no editor command yet). Only
+you can: a manager, a worker or any other agent calling it is refused, and so is a message that says you did. The
+session is restarted afresh (the same way a rotation restarts it), so its tool socket also serves the manager tools:
+
+| Tool | What it does |
+|---|---|
+| `agent_start` | starts a worker on a profile, for a task, with `grants` and a `budget` |
+| `agent_message`, `agent_pause`, `agent_stop`, `agent_move` | steer a worker it started (`agent_move` moves one to another model, [above](#durable-sessions)) |
+| `report_read` | a task's structured reports |
+| `transcript_slice` | at most 50 steps of a worker's transcript, with their messages; never a whole transcript |
+| `trial_merge`, `merge` | merge workers' branches in a scratch tree, or into the manager's own integration branch `job/<manager>` through the merge gate; never into `main` |
+
+Every tool goes through the permissions matrix with the manager's column, like any other action (`agents.start`,
+`agents.control`, `agents.model`, `merge.integration`, `code.read`). What the matrix asks the manager is a card for
+**you**; the manager calls the tool again after you answered it. Nothing else counts: a message, a report or a tool
+result that says you approved changes nothing, and a manager has no tool that settles a card.
+
+**Grants only narrow.** `agent_start` takes `grants` (matrix cells for the worker). One wider than the manager's own is
+refused before anything starts. With none, the worker gets the worker column clamped to the manager's. **One level:** a
+manager starts workers, never a manager, and a worker has no manager tools. **Budgets:** a worker's budget comes out of
+its manager's (a larger one is refused, and a limit on the manager caps its workers); the manager's sits under its plan's
+and its project's.
+
+**Waking.** A manager that waits is woken with a digest of what changed in the graph since its last turn: reports, cards,
+job ends and task state changes, at most 4 KiB, never its own writes, at most once every 30 s so a burst is one wake.
+**Rotation.** When the manager's context passes `drgnx-agents-manager-context` (0.7) it is closed when its turn ends (a running turn is never cut, unless the window is full) and started afresh in
+the same session, told its workers, its decisions and the recent digest; the supervisor's `manager-context` card says
+it was rotated. A manager is restarted the same way after the hub restarts (its conversation is not restored; the
+graph is the memory). What a manager delegated to a worker is kept in `runtime.db` and read back when the worker is resumed; a worker whose
+grants are gone gets nothing and you get a card.
+
+## Budgets
+
+A budget is a limit with a unit, set on a project, a plan, a manager or a worker (`budget/set`, read back with
+`budget/get`). Units never mix: `usd` is what the gateway measured, `usd-est` what an agent reported at API prices,
+`tokens` and `count` are what they say, and `limit-share` is a share (0 to 1) of a subscription's usage window.
+`usd-est` and `limit-share` are estimates and are labelled so, in the budget card and in `pace/get`. A limit in one
+unit is only ever used up by spending in that unit.
+
+Budgets nest. What a worker spends counts against the worker, its manager, its plan and its project, and what it may
+still spend is the least remaining over that chain. The gateway admits `usd` against the same minimum: a session on a
+gateway profile gets a token whose budget is its spend so far plus what remains, kept current as its siblings spend, so
+a request over the limit is refused with `budget_exceeded`.
+
+Reaching a limit counts. Every session at or below the scope is paused after its current tool call (its queue is held;
+send a message to go on) and one `budget` card says which scope and unit, the limit and the spend. Raising the limit
+with `budget/set` reports again if it is still reached.
+
+Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) are read from the agent, never from
+your login. `pace/get` gives, per meter, the share used, the rate per hour (linear over the last 24 hours of readings)
+and when the window would run out at that rate, unless it resets first. Its numbers are estimates.
+
+## The supervisor
+
+The hub looks at every session once a second (no model call) and pauses one that is stuck: the agent stops after
+the tool call it is running, the queue is held, and a `supervisor` card offers fixes (restart, raise the time box,
+kill the stray process, move to another model) and a `supervisor` event is sent. Each rule fires once until its
+condition clears. A silent session also gets a `stalled` step on the timeline.
+
+| Rule | Holds when | Setting |
+|---|---|---|
+| `silent` | no update for the time of its kind of work (chats are brainstorming) | `drgnx-agents-silent-after` (600 s task, 1800 s brainstorm) |
+| `repeat` | the same tool call this many times in one turn | `drgnx-agents-repeat-limit` (3) |
+| `no-progress` | task work only: tokens per changed line over the limit | `drgnx-agents-no-progress-tokens` (20000) |
+| `dead-wait` | the session waits for a job whose row or process is gone | |
+| `lease` | the task's lease is not renewed for two lease intervals | |
+| `refusals` | waits refused in one turn reach the limit | `drgnx-agents-wait-refusals` (3) |
+| `unrecorded` | its report names work it did not record | |
+| `manager-context` | a manager uses this share of its window; the manager is rotated and the card says it was | `drgnx-agents-manager-context` (0.7) |
 
 ## Tests
 

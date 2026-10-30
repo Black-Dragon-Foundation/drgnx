@@ -1,10 +1,10 @@
-{"scenario": "grants/the-backend-cannot-settle-an-access-card", "requires": ["v1", "fake-backend"], "doc": "Only the user grants (storage §6.4): the fake backend's call_front cards/settle of an access card with choice project is not-allowed; the card stays open and no grant is made. The user's own settle with refuse then closes it."}
+{"scenario": "grants/the-backend-cannot-settle-an-access-card", "requires": ["v1", "fake-backend"], "doc": "Only the user grants (storage §6.4): the fake backend's call_front (on env/set, the method it still serves) cards/settle of an access card with choice project is not-allowed; the card stays open and no grant is made. The user's own settle with refuse then closes it."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into card (id, kind, title, data, state, at) values (7, 'access', 's1 asks to read beta', '{\"session\": \"s1\", \"profile\": null, \"project\": \"alpha\", \"target\": \"beta\", \"reason\": \"r\", \"known\": false, \"choices\": [\"session\", \"project\", \"profile\", \"refuse\"]}', 'open', 1.0)"]}
-{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"job/stop\": {\"call_front\": {\"method\": \"cards/settle\", \"params\": {\"card\": 7, \"choice\": \"project\"}}, \"then\": {\"result\": {\"id\": \"j1\"}}}}"}}
+{"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"call_front\": {\"method\": \"cards/settle\", \"params\": {\"card\": 7, \"choice\": \"project\"}}, \"then\": {\"result\": {\"applied\": []}}}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/stop", "params": {"id": "j1"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "j1"}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": []}}}
 {"do": "backend_log", "expect_line": "not-allowed"}
 {"do": "sql_expect", "sql": "select state, choice from card where id = 7", "rows": [["open", null]]}
 {"do": "sql_expect", "sql": "select count(*) from entity where kind = 'grant'", "rows": [[0]]}

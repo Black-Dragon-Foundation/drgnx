@@ -19,15 +19,19 @@ path = "src/main.rs"
 # Every test-only surface (the `__test_flood` method, `--agent-socket`, `sandbox run`): off in the binary install.sh
 # builds. The migration's seams too (`DRGNX_TEST_MIGRATE7_FAIL`, `_PAUSE`).
 test-hooks = ["gleipnir/test-hooks", "norn/test-hooks"]
+# The fuzz crate's entry into the session reducer (`agents::session::fuzz_apply`); off everywhere else.
+fuzzing = []
 
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
+saga = { path = "../saga", version = "0.1.0" }
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
 eitri = { path = "../eitri", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 norn = { path = "../norn", version = "0.1.0" }
+hermod = { path = "../hermod", version = "0.1.0" }  # the ACP client of every session (agents::session)
 bifrost = { path = "../bifrost", version = "0.1.0" }
 huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
 serde_path_to_error.workspace = true  # where in a setting's value a mistake is
@@ -42,7 +46,11 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 lexopt.workspace = true
+sha2.workspace = true  # the merge gate's diff hashes
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
 
 [dev-dependencies]
+# `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
+# other crate turning it on)
+urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 tempfile.workspace = true

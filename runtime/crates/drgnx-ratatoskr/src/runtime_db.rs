@@ -9,6 +9,18 @@
 //! - `msession.profile` and `msession.tools` (4): the profile a session runs as and its tool sets (`{"tracker": B}`,
 //!   none when the profile says nothing), so a socket bound again serves the same tools.
 //!
+//! - `asession` (5): the agent sessions the hub holds (id, name, profile, role, cwd, task, job, ACP session id,
+//!   enforced, parent), so a restart knows what it held ([`crate::agents`]).
+//! - `op` (6): the touched-folder ledger (`kind = 'touched'`): the run folders a sandboxed agent worked in, so plain
+//!   git never runs there, across restarts ([`crate::runner::git`]).
+//!
+//! - `wake` (7): a job's end that has to reach the session that started it, `pending` until the hub prompts it,
+//!   `sending` while it does, `done` once the session has the prompt (the mark that tells a restart it was woken; pruned
+//!   with the job), so a restart wakes once ([`crate::agents::wake`]).
+//!
+//! - `delegation` (8): the cells a manager handed a worker (`sid` → JSON), so a restarted worker never runs wider than
+//!   its manager delegated ([`crate::manager`]); a worker whose row is missing gets nothing and a card.
+//!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
 //! their sockets do not come back after the restart, which is accepted (installs are disposable).
@@ -37,6 +49,25 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         4,
         "alter table msession add column profile text; alter table msession add column tools text;",
+    ),
+    (
+        5,
+        "create table asession(sid text primary key, name text not null, profile text not null, role text, \
+         cwd text, task text, job text, acp text, enforced integer not null default 0, parent text, \
+         at real not null);",
+    ),
+    (
+        6,
+        "create table op(folder text not null, kind text not null, at real not null, \
+         primary key(folder, kind));",
+    ),
+    (
+        7,
+        "create table wake(job text primary key, session text not null, state text not null, at real not null);",
+    ),
+    (
+        8,
+        "create table delegation(sid text primary key, cells text not null, at real not null);",
     ),
 ];
 
@@ -110,7 +141,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("4"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("8"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600

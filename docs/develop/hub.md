@@ -337,14 +337,14 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 7, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 7. A newer file (above 7) makes the hub read-only; a
+missing file is made at schema 8, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 8. A newer file (above 8) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
-It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 7,
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 8,
 the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
 
 **Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
@@ -395,6 +395,11 @@ goes to the Lisp backend (next section).
 
 Until each part moves to Rust, Ratatoskr runs the Lisp hub as its child, the **backend**, and forwards to it every
 method the front does not serve (`runtime/crates/drgnx-ratatoskr/src/{backend,forward,relay,shape}.rs`).
+
+**The agent core is the front's** (agent system part 1): `agents/*` and `job/*`, and every method the agent core adds
+(`exec/*`, `matrix/*`, `presence/set`, `messages/retract`, `plans/*`, `brief/*`, `reports/get`, `decisions/effects`,
+`timeline/get`, `budget/*`, `pace/get`, `records/*`), are routed by `src/agent_core.rs` to the module that serves
+each. The backend serves none of them.
 
 **The command.** `DRGNX_RATATOSKR_BACKEND` when set (an absolute executable, no arguments: the tests' fake backend or
 `test/conformance/lisp-hub.sh`), else `EMACS --batch -Q --eval "(setq load-prefer-newer t)" -L DRGNX/core -l
@@ -568,6 +573,16 @@ back again. `drgnx-hub-call-sync` (commands and the CLI only) waits for the same
    and tells the user (a `fail` notice of source `hub`, id `unproven`). A refused hello, or a cap this Emacs cannot
    read, closes it the same way (without the notice). A hello answered `no method hello` is `legacy`.
 
+**The subscription is redialled (HUB-RESUBSCRIBE-1).** When the subscribed connection closes and the editor did not
+ask for it, the sentinel forgets the editor token (`drgnx-hub--editor` nil) and the held keys (`drgnx-hub--keys-held`
+`:unknown`), says so to `drgnx-hub-disconnect-functions`, and `drgnx-hub--resubscribe-schedule` arms the layer timer
+`hub-resubscribe`: `drgnx-hub-connect` after 1 s, then 2, 4 … up to 30 s between tries (a dial that fails at once, a
+socket that is gone, arms the next one). The hand-over (settings, keys, token) runs on the new subscription as on
+any other. After `drgnx-hub-resubscribe-give-up` (600 s) from the first loss it stops and posts one notice (id
+`resubscribe-gave-up`) naming Hub: Restart Now. It **never runs `ensure`**: a hub the user stopped stays stopped.
+Asked ends do not redial: `drgnx-hub-disconnect` and a `shutdown` call this editor sent set
+`drgnx-hub--asked-disconnect` (cleared by the next `drgnx-hub-connect`) and cancel the timer.
+
 **Keys go only to a hub that proved itself** (or this Emacs's own): on any other connection, a `legacy` one or a
 service one, `gateway/keys` is never written (its callback gets "keys go only to a hub that proved itself") and
 `gateway/register` goes without its `keys`. A legacy hub otherwise gets every call as before.
@@ -675,6 +690,17 @@ counts reach the status bar (`drgnx-statusbar-note-tests`) through `drgnx-status
 `drgnx-statusbar-mode` adds to `drgnx-hub-event-functions` and removes when it is off; the hub client knows nothing of
 the status bar.
 
+## Session start: lock, sandbox and matrix
+
+A session starts in this order (`agents/session.rs`): the matrix's cells for the session's columns, `lock::plan` (Claude's
+managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `-c` overrides plus
+`projects."<cwd>".trust_level="untrusted"`, Gemini's `--approval-mode default`), a refusal of a worker or manager whose
+lock is not enforced unless the preset is autonomous, `launch::spawn` (`spawn_plain` for a chat in its own scratch
+directory; test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
+handshake, `lock::verify` (a lock that does not hold kills the session). Every permission request then goes through
+`MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
+refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way.
+
 ## Sessions across a restart
 
 On each change to a session the hub keeps `<state>/hub/sessions.eld` (mode 0600, written like registrations.eld,
@@ -688,9 +714,33 @@ history into the transcript and the session is idle; an editor that reconnects f
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
 
+**Everything kept across a restart (Task 24).** The hub starts in this order: the jobs a hub before this one left running
+are watched again (`exec::ensure_open`; a session's wake would otherwise wait for its first `exec/*` call), the plan
+runner's tick pauses (`Runs::set_recovering`: a task whose worker is not back yet is not a dead one), the sessions
+resume, the tick goes on from the store with the same workers, and the wakes still on file are delivered.
+
+- **A resumed session is launched exactly as a new one**: `session/resume` and `session/load` carry the same
+  `_meta` options (`hermod::Conn::resume_session`/`load_session` take `meta`), so a resumed Claude session has its lock
+  (`managedSettings`) as before. `restart/resumed-session-gets-the-options`.
+- **A session that waited on a job still waits** (status `waiting`, the `job-wait` step, idle close as before) when
+  its job is still running.
+- **If the agent can neither resume nor load**: a fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`, followed by the
+  summary handoff when there is one). A manager is restarted from the graph (`restart_manager_from_graph`): a new
+  session told its digest and open decisions, its conversation not restored.
+- **A job's end wakes once.** `runtime.db` table `wake` (migration 7): a row `pending` when the end is announced,
+  `sending` while it is delivered, `done` once the session has the prompt (the mark; pruned with the job). After the
+  sessions are back (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's
+  queue and transcript do not hold the `[job ID finished` prompt, one of a job that is gone is dropped, and a finished
+  job of a live session with no row and no such prompt (the hub died between its result and the row) is woken.
+- **A message is `sending` before its prompt is queued**; at the next start (`deliver::recover`) a `sending` one whose
+  prompt the session holds is marked `read`, else it is `queued` again: delivered once across a crash.
+- **A queued message stays in the store** and is delivered after the sessions are back
+  ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
+  `<sid>.queue.json`.
+
 ## The store
 
-The front serves the store (`work.db`, schema 7) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 8) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`, never forwarded to the backend. A write the backend's connection asks for among
 them (grants, settings, excise, import, revert, proposed txs, scrub, compact, `tasks/write`) is `not-allowed`. `cards/settle` of an `access` card makes a
@@ -803,14 +853,21 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes | Home |
 |---|---|---|---|---|---|
-| `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes | backend |
-| `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no | backend |
-| `agents/kill` | user | `{id: Id}` | `boolean` | yes | backend |
-| `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no | backend |
-| `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes | backend |
-| `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | backend |
-| `agents/start` | user | `{cwd?: AbsPath, job?: Id, profile: string, task?: TaskRef}` | `{id: string, name: string}` | yes | backend |
-| `agents/stop` | user | `{id: Id}` | `boolean` | yes | backend |
+| `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes | front |
+| `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no | front |
+| `agents/kill` | user | `{id: Id}` | `boolean` | yes | front |
+| `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no | front |
+| `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes | front |
+| `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes | front |
+| `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes | front |
+| `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | front |
+| `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no | front |
+| `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes | front |
+| `agents/stop` | user | `{id: Id}` | `boolean` | yes | front |
+| `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no | front |
+| `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes | front |
+| `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no | front |
+| `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes | front |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes | front |
 | `config/changed` | user | `{}` | `boolean` | no | front |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no | front |
@@ -825,9 +882,15 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no | front |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes | front |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes | front |
+| `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no | front |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no | backend |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes | front |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no | front |
+| `exec/get` | user | `{id: Id}` | `ExecRow` | no | front |
+| `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no | front |
+| `exec/log` | user | `{from?: natnum, id: Id, n?: natnum}` | `{from: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no | front |
+| `exec/start` | user | `{argv: [string], cwd?: AbsPath, image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, network?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes | front |
+| `exec/stop` | user | `{id: Id}` | `ExecRow` | yes | front |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no | front |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | front |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no | front |
@@ -853,25 +916,37 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes | front |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no | front |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no | front |
-| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
-| `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | backend |
-| `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes | backend |
-| `job/dismiss` | user | `{message: natnum}` | `boolean` | yes | backend |
-| `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes | backend |
-| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: AbsPath, repo?: AbsPath}` | `JobSummary` | yes | backend |
-| `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes | backend |
-| `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes | backend |
-| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | backend |
-| `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: natnum, plan: AbsPath}` | `JobSummary` | yes | backend |
-| `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no | backend |
-| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | backend |
-| `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes | backend |
+| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | front |
+| `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes | front |
+| `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes | front |
+| `job/dismiss` | user | `{message: natnum}` | `boolean` | yes | front |
+| `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes | front |
+| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: PlanRef, repo?: AbsPath}` | `JobSummary` | yes | front |
+| `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes | front |
+| `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes | front |
+| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes | front |
+| `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: TaskNo, plan: PlanRef}` | `JobSummary` | yes | front |
+| `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no | front |
+| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | front |
+| `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes | front |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no | front |
+| `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no | front |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no | front |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no | front |
 | `mcp/session-close` | user | `{sid: SessionId}` | `boolean` | no | front |
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes | front |
+| `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes | front |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes | front |
+| `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no | front |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |
+| `plans/get` | user | `{plan: string}` | `PlanView` | no | front |
+| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], interfaces?: Text, model?: string, number: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes | front |
+| `presence/set` | user | `{away: boolean}` | `boolean` | no | front |
+| `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes | front |
+| `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes | front |
+| `records/proposals` | user | `{path?: AbsPath}` | `{proposals?: [Proposal]}` | no | front |
+| `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no | front |
+| `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no | front |
 | `restart` | user | `{}` | `boolean` | no | front |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes | front |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes | front |
@@ -884,6 +959,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no | front |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no | front |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes | front |
+| `timeline/get` | user | `{id: string, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no | front |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -921,6 +997,8 @@ type's schema carries the same `pattern` and `maxLength`.
 |---|---|
 | `Id` | `^[A-Za-z0-9][A-Za-z0-9._:+-]*$`, at most 128 |
 | `AbsPath` | `^/[^/:\0]*(/[^\0]*)?$`, at most 4096: absolute, no NUL, and no `:` in the first component, so a TRAMP name (`/ssh:host:/x`) is refused |
+| `PlanId` | `plan:` and a name, no control characters, at most 4352 (the scan's plan entity id) |
+| `PlanRef` | an `AbsPath` (the plan's file, imported first) or a `PlanId`: anything else, a TRAMP name included, is refused |
 | `EnvName` | `^[A-Za-z_][A-Za-z0-9_]*$`, at most 128 |
 | `Prompt` | at most 1 MiB (1048576 characters) |
 | `Text` | at most 64 KiB (65536 characters) |
@@ -966,9 +1044,15 @@ result is (`event(NAME).check`):
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
 | `settings/proposed` | the front (`settings_change`) | `{tx, scope, name, value, root?, agent, reason}`: the editor checks it, writes the file, answers `settings/confirm` ([Agents change settings](#agents-change-settings)) |
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
+| `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
+| `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
+| `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
+| `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
 
-Each event type says which side sends it (`from`, in `methods.json`): `events`, `challenge` and `notice` the front,
-the rest the backend. The first nine are what the Lisp backend broadcasts on main (its `events` is dropped under
+Each event type says which side sends it (`from`, in `methods.json`): `card` and `lease-released` the backend, the
+rest the front (`agent`, `agent-entries` and `job` since the hub serves `agents/*` and `job/*`: agent system part 1).
+The first nine are what the Lisp backend broadcasts on main (its `events` is dropped under
 Ratatoskr until it stops sending it); a test reads `core/*.el` for its `(drgnx-hub--broadcast
 'NAME`, `(drgnx-job--broadcast 'NAME` and `drgnx-gateway--emit 'NAME` calls and fails when the two lists differ.
 
@@ -1014,6 +1098,73 @@ connection. `search.sock` is unchanged.
   Every other session, interactive agents included, keeps the stdio servers.
 
 Tests: `test/unit/sandbox-mcp-test.el` (`drgnx-sandbox-mcp/`).
+
+## Sessions
+
+The hub holds agent sessions itself (`drgnx-ratatoskr/src/agents/`; agent system part 1, Task 8a). It is each
+session's ACP client (`hermod`): `agents/start` takes a profile (settings: `drgnx-agents-profiles`), starts the
+agent, runs `initialize` (with `fs` read and write offered, never `terminal`) and `session/new`, and answers the id
+and name. The session is recorded in `runtime.db` (`asession`, migration 5) and in the graph as a `session` entity
+(`run_by` its agent, `works_on` its task; a brainstorm's topic note and design document are in its `data`).
+
+- **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
+  mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
+  updates are one `tool` entry; a plan is replaced, not repeated. `agent` and `agent-entries` events come at most
+  once per session per 50 ms. `agents/list` for an `agent` or `service` caller is shaped by `shape::result`.
+- **Permissions.** A permission request of the agent waits in the snapshot's `permissions` until the user answers it
+  with `agents/permission` (an option the agent offered, or none to reject). Only the user's connection answers: no
+  peer's or manager's message is approval. The matrix (Task 12) is asked first; a `Never` rejects at once. A request
+  the matrix asks about carries its `matrix` card's id: the answer settles the card, settling the card
+  (`cards/settle`) answers the request, and the matrix is checked again before the agent goes on. A request without a
+  card (the store made none) has the id `r<n>`.
+- **Files.** `fs/read_text_file` and `fs/write_text_file` are served inside the session's directory only (symlinks
+  resolved first). A brainstorm session may read the project and write only its design document.
+- **Launch.** A session starts inside Gleipnir (`agents/launch.rs`); only test builds (`test-hooks`) can start one
+  unsandboxed.
+- **Stop and kill.** `agents/stop` on a running turn cancels it (`session/cancel`), answers the pending permission
+  requests cancelled and holds the queue (`paused`); an agent that has not ended the turn after 2 s loses its process
+  group. On a session with no turn running it ends the session (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it
+  at once.
+
+### Prompts, queue and steer (Task 8b)
+
+`Hub::prompt(sid, text, Origin::{User, Peer(name), Hub})` (`Hub::send` is the user's). Idle, the prompt goes behind
+whatever a Stop held back and the queue is delivered; during a turn it is queued, and nothing but Stop cancels:
+`:mode interrupt` is `queue`, and `:mode steer` puts the prompt ahead of the ordinary queued ones (a steer into the
+running turn needs an adapter request `hermod` does not send yet). A peer's prompt is quoted under a header naming the
+peer; its entry carries `origin: "peer:NAME"`. `agents/do`: `deliver-queue` releases the hold and sends the next
+prompt; `unqueue` (`n`) removes the Nth waiting prompt; `requeue` (`n`, `text`) replaces it (empty removes it). The
+snapshot's `queue` lists the waiting texts and `paused` is true while they are held. `Hub::cancel_after_tool(sid)` is
+the pause: the running tool call completes, then the turn is cancelled and the queue held.
+
+A turn ending as cancelled holds the queue, an error does too; an end-of-turn stop delivers the next prompt at once.
+
+### Transcripts
+
+`<state>/hub/transcripts/<sid>.jsonl` (0600; the folder 0700): one line `{"n": INDEX, "entry": ENTRY}` per entry,
+written when a turn starts and ends and when the agent exits; a later line for an index replaces the earlier one.
+Every string goes through `runstav::secrets::looks_like_secret` first: a private key replaces the whole text, any
+other hit the word (or the line) with `[redacted: KIND]`. Beside it: `<sid>.queue.json` (the held queue and the
+pause, unredacted because the prompts are still to be sent; removed when empty) and `<sid>.meta.json` (a brainstorm's
+topic note and design document, so that a resumed brainstorm keeps its write fence).
+
+### Steps
+
+The hub cuts each turn into steps from its own clock (`think` between tool calls, `tool` from the tool call to its
+`completed`/`failed` with the title and ACP kind, `user-wait` while a permission request waits, `paused` while the
+queue is held) and writes each closed step to schema 8's `step` table (`norn::write::steps`), in order, from one
+writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). Each write is
+announced as an `agent-step` event (`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready
+loses the row (logged), not the event.
+
+### After a restart
+
+`Hub::shutdown` (server end) ends every session's process group and leaves the rows, transcripts and queues.
+`Hub::resume_all` (a background task after the settings are read) reads `asession`, starts each profile's agent and
+brings the session back: `session/resume` when the agent advertises it, else `session/load` (the agent replays its
+history, and the transcript is not used), else the row stays for the next start. The transcript and the queue are
+read back, and the first queued prompt is delivered. `restart-when-idle` counts the hub's busy sessions with the
+backend's: a running turn delays the restart, an idle session does not.
 
 ## Sessions and their sockets
 
@@ -1293,7 +1444,8 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `settings.el`, else the shipped default; `seen` is false when the project never sent a set. The global overrides are
   also what `Settings::current()` (and so the gateway) reads. `config/changed {}` checks `settings.el`'s stamp now.
 - **When.** At start, before anything is served, again when the file's stamp (device, inode, size, mtime, mode, owner)
-  changed when a session starts (`mcp/session`), and on `config/changed`.
+  changed when a session starts (`mcp/session`, and `agents/start` before it looks up the profile), and on
+  `config/changed`.
 - **Problems.** Each is a `notice` event (`source` `hub`, `id` `settings-file` or `settings-<setting>`, `life`
   `event`): a read's new problems go to the subscribers, and a new subscriber hears the current ones after its
   `subscribe` answer. They are logged too.
@@ -1307,3 +1459,44 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `test/conformance/settings/*.jsonl` (`fake-backend`): `the-hub-reads-settings-el`,
   `no-editor-still-has-presets-and-profiles`, `a-package-entry-never-stops-the-hub`,
   `a-broken-file-gives-strict-agents-and-last-good-providers`.
+
+## Jobs (`exec/*`)
+
+`drgnx-ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice}`. A job's folder
+`<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
+(`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
+`result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
+read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
+and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
+command stays the hub's child. `Runner::open` re-attaches every folder without a result. The graph record is
+`norn::write::exec`. The `exec/runs-in-the-starters-sandbox` row (`exec::tests::exec_runs_in_the_starters_sandbox`) is
+`#[ignore]`d where bwrap is missing (build containers): run it on the desktop or in CI with `-- --ignored`. So are
+the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch spec run in a real sandbox): a
+container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
+tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
+
+## The timeline
+
+Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the
+session's step writer (`agents/session.rs`) and announced as `agent-step`. The classifier sees the updates as they
+arrive: text between tool calls is `think`; a tool call is `tool` from `in_progress` to `completed`; a permission
+request is `user-wait` (the hub answers it, so it is the user's time, not the tool's); a paused session is `paused`.
+`job-wait`, `machine-queue` and `stalled` are written by the tasks that own those events (exec, the supervisor).
+A step's `provider` is the profile's gateway provider environment (`:ai`) when it has one, else whose CLI it starts
+(`claude`, `codex`, `gemini`), so a subscription session's steps say where they ran (the matrix's `(:provider NAME)`
+column still matches `:ai` only).
+
+Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
+message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
+decision log's version when the step closed) and `snapshot`.
+
+A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
+tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
+session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
+sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
+`drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
+the repositories are collected (`git gc --prune=now`); with nothing finished left, snapshots stop and the editors get
+one `notice` (a running task's refs are never removed). Restore and fork are part 4's.
+
+`timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
+continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.

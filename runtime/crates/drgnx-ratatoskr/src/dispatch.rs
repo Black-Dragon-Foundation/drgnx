@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(r.error.code, ErrorCode::Schema);
         assert_eq!(
             r.error.message,
-            "work.db is schema 9, newer than this hub's 7: update drgnx"
+            "work.db is schema 9, newer than this hub's 8: update drgnx"
         );
         // a method that only reads still runs on a read-only hub, and its dropped keys are listed
         let c = prelude(
@@ -450,7 +450,7 @@ mod tests {
             true,
             1,
             None,
-            r#"{"id":1,"method":"job/status"}"#,
+            r#"{"id":1,"method":"env/set","params":{"env":[]}}"#,
         ));
         assert_eq!(
             (r.error.code, r.error.message.as_str()),
@@ -625,11 +625,11 @@ mod tests {
             answers.iter().all(|a| a.contains("\"invalid-params\"")),
             "{answers:?}"
         );
-        // the spy counts: a good call is forwarded once
+        // the spy counts: a good call is forwarded once (env/set: the backend's last method)
         f.line(
             &mut s,
             &out,
-            r#"{"id":9,"method":"job/stop","params":{"id":"j1"}}"#,
+            r#"{"id":9,"method":"env/set","params":{"env":[]}}"#,
         )
         .await;
         assert_eq!(spy.0.load(Ordering::SeqCst), 1);

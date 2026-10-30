@@ -1,0 +1,19 @@
+{"scenario": "agents/mirror-shapes-unchanged", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8a: a session's snapshot and entries are the records-2 shapes the mirror reads: a turn gives a user entry, the agent's text and a stop entry, agents/get returns the snapshot, the entries and a change number, and the events carry the same shapes. A brainstorm start without its document is refused."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "seq": "$number", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "status": "idle", "entries-count": "$number"}, "seq": "$number", "entries": {"$contains": [{"type": "user", "text": "hello"}, {"type": "agent", "text": "$string"}, {"type": "stop"}]}}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "about": "note:topic"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "message": "$string"}}}

@@ -1,0 +1,17 @@
+{"scenario": "container/survives-a-hub-restart", "requires": ["v1", "podman", "linux"], "doc": "Task 11b: a container job still running when the hub stops is picked up by the next hub on the same root and ends with its exit code; needs podman (skipped without it)."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; podman pull -q docker.io/library/busybox:1.36 >/dev/null; d=$(podman image inspect --format '{{.Digest}}' docker.io/library/busybox:1.36); mkdir -p $ROOT/work; printf '(drgnx-settings :version 1 (drgnx-agents-container-images ((\"busybox\" . \"docker.io/library/busybox@%s\"))))\\n' \"$d\" > $CONFIG/settings.el; chmod 600 $CONFIG/settings.el"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "sleep 8; echo done-after-restart"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 120000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "connect", "conn": "e2", "hub": "h2"}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "expect", "conn": "e2", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0}}}, "within_ms": 60000}
+{"do": "send", "conn": "c2", "json": {"id": 2, "method": "exec/get", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"id": "$job", "kind": "container", "image": "busybox", "status": "done"}}, "within_ms": 10000}

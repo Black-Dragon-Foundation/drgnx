@@ -248,6 +248,93 @@ jobs:
           name: escape-report-host-${{ runner.arch }}
           path: ${{ runner.temp }}/escape/escape-${{ runner.arch }}.json
           if-no-files-found: warn
+      # The agent core's sandbox lane (agent system part 1): the tests marked #[ignore] because they need the real
+      # bubblewrap (exec runs in the starter's sandbox). Caches are restored before the build and saved right after it
+      # (actions/cache/restore and /save, never the plain step: a later red step keeps what the build made).
+      - name: cargo cache (agent core)
+        id: core-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-core-${{ hashFiles('runtime/Cargo.lock') }}
+      - name: build the agent core's tests (test hooks)
+        id: core-build
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --no-run
+      - name: cargo cache save (agent core)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && steps.core-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-core-${{ hashFiles('runtime/Cargo.lock') }}
+      # Landlock ABI 9 is the reduced tier's floor; on a runner kernel below it the launch rows of the reduced tier run
+      # on the full tier (tests/launch_sandboxed.rs), which needs bubblewrap 0.12 only. --no-fail-fast: every test
+      # binary's failures in one run.
+      - name: agent core, sandbox lane (--ignored)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
+        run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1
+
+  # The agent core's container rows (agent system part 1, Tasks 11b/11c): a container job runs only an allowed image,
+  # with only its worktree mounted, inside its caps, and every escape row is refused. GitHub's Ubuntu runners ship
+  # podman; the rows pull busybox (digest-pinned at run time) and skip without podman.
+  agent-containers:
+    name: agent core container rows (podman)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: podman --version
+      - run: rustup toolchain install stable --profile minimal
+      - name: cargo cache (containers)
+        id: ctr-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ hashFiles('runtime/Cargo.lock') }}
+      # + the forwarder a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir) and
+      # beside the hub, where the hub looks for it
+      - id: build
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
+          cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
+      - name: cargo cache save (containers)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.ctr-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            runtime/target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ hashFiles('runtime/Cargo.lock') }}
+      # The runner's user has no systemd user session, so rootless podman would fall back to cgroupfs and drop the
+      # caps (the hub refuses container jobs then: exec/container.rs, check_limits). Lingering starts the user's
+      # systemd; the hub's podman reaches it over the session bus (domr passes DBUS_SESSION_BUS_ADDRESS through).
+      - name: a systemd user session for podman
+        run: |
+          uid=$(id -u)
+          sudo loginctl enable-linger "$(id -un)"
+          timeout 60 sh -c "until [ -S /run/user/$uid/bus ]; do sleep 0.5; done"
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus \
+            podman info --format '{{.Host.CgroupsVersion}} {{.Host.CgroupManager}} {{.Host.CgroupControllers}}'
+      # --require-all: a skipped container row fails here (podman is on the runner)
+      - name: container and container-escape rows
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
+            --fake-backend runtime/target/debug/ratatoskr-fake-backend --scenarios test/conformance \
+            --only 'container*/*' --require-all
 
   # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
   # is for urdr's bundled SQLite: a type-check does not link.
@@ -291,7 +378,7 @@ jobs:
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
   # a pull request runs none. A crash uploads its input.
   fuzz:
-    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, mcp_message, jsonrpc_parse, text_one_line, put_parsed, task_write_args, graph_read_args, trust_fence, sqlro_sql, sse_usage, provider_merge, gateway_admit, huginn_read)
+    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, mcp_message, jsonrpc_parse, text_one_line, put_parsed, task_write_args, graph_read_args, acp_update, report_submit, saga_plan, saga_deferred, saga_org, trust_fence, sqlro_sql, sse_usage, provider_merge, gateway_admit, huginn_read)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -326,7 +413,7 @@ jobs:
       - name: Run each target
         run: |
           failed=""
-          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec mcp_message jsonrpc_parse text_one_line put_parsed task_write_args graph_read_args trust_fence sqlro_sql sse_usage provider_merge gateway_admit huginn_read; do
+          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec mcp_message jsonrpc_parse text_one_line put_parsed task_write_args graph_read_args acp_update report_submit saga_plan saga_deferred saga_org trust_fence sqlro_sql sse_usage provider_merge gateway_admit huginn_read; do
             echo "::group::$target ($FUZZ_SECONDS s)"
             cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS" || failed="$failed $target"
             echo "::endgroup::"

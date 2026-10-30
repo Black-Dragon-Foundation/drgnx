@@ -1,9 +1,8 @@
-# The store (Urdr): `work.db` schema 7
+# The store (Urdr): `work.db` schema 8
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
-caller's); drgnx's policy, the migration and the tracker are in `norn`. This page is being written: each section
-below is filled with the change that builds it.
+caller's); drgnx's policy, the migration and the tracker are in `norn`.
 
 ## Tables (Task 2)
 
@@ -82,7 +81,9 @@ nothing else in the process writes it, and no request runs SQLite on its caller'
 All in `urdr::graph::{entity, link}`; every function takes the write's `&mut Tx`.
 
 - `entity::create` inserts at `ver = 1` with `field_tx` naming the tx for each non-null field (`data` only when not
-  `{}`) and the FTS row; a duplicate `id` is `Refused("id exists")`.
+  `{}`) and the FTS row; a duplicate `id` is `Refused("id exists")`. Every write (create, update, revert, restore,
+  import) also names in `field_tx` the writer of each top-level `data` key it changes, as `data.<key>`, so a policy
+  can trust one key by its own author (the matrix gate's `data.matrix`); `changed_since` lists `data` only.
 - `entity::update(tx, n, expect_ver, changes)`:
   - A stale `expect_ver` answers `Conflict { ver, changed_since }` and writes nothing. `changed_since` lists the
     fields whose `field_tx` is newer than the tx that wrote the caller's version, each with its new value, the
@@ -619,10 +620,11 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then `Ready { 7 }` |
-| schema 7 | `Ready { 7 }` |
-| above 7 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 8: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 8, then `Ready { 8 }` |
+| schema 7 | moved to 8 (next section), then `Ready { 8 }` |
+| schema 8 | `Ready { 8 }` |
+| above 8 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -684,6 +686,29 @@ transactions and the time. Never a path of the user's content, a title or a body
   to a temporary name first (a copy that fails is skipped; the backups are never changed), then moves `work.db`,
   `work.db-wal` and `work.db-shm` aside together to `work.db.schema7-<unix>` (`-wal`, `-shm`), and renames the copy
   into place. A schema-7 WAL beside the restored file would corrupt it. Without `--yes` it says what it would do.
+
+## Schema 8: exec, report, proposal and the step table (agent system part 1, Task 4)
+
+`norn::migrate8` moves a schema-7 file to 8 in one `BEGIN IMMEDIATE` transaction (the opening rule runs it after
+schema 7 is made, migrated or found, so schema 6 and a fresh file arrive at 8 too; a crash leaves 7). It adds the
+`step` table and sets `schema = 8`; no row is rewritten (`migration_7_to_8_keeps_every_row`).
+
+- **Kinds** (`norn::kinds`): `exec` (a job the hub runs: `norn::write::exec`, status `running` then `done`, `stopped`,
+  `timed-out` or `lost`), `report` (what an agent ends a task with: `write::reports::submit`, linked `report_of` its
+  task) and `proposal` (a generated view's edit, decided by the user; Task 14b).
+- **Status** `waiting` (on a job, a machine or another agent). `norn::tracker::board_column(status)` maps statuses to the
+  board's columns: queued (`open`, `blocked`, computed `ready`), running (`claimed`, `running`), waiting, needs-you
+  (`needs-input`), review (`in-review`), done (`done`, `dropped`).
+- **Links**: `waits_on` (session or task to exec), `report_of` (report to task), `proposes` (proposal to plan, task,
+  note or report), `narrows` (grant to grant); `implements` now also reaches a `decision`.
+- **`step`** (one row per unit of an agent's timeline): `id, session, task, plan, project, agent, provider, seq, class,
+  start, end, tool, tool_kind, message_id, turn_id, snapshot, log_version, tokens_in, tokens_out, cache_read,
+  cache_write, cost, cost_unit`. The owners are entity ids (text); `seq` counts a session's steps from 1 (assigned by
+  `write::steps::open`); `class` is `think`, `tool`, `job-wait`, `machine-queue`, `user-wait`, `paused` or `stalled`;
+  `end` is null while the step runs. `write::steps::{open, close}` write it; `read::steps::for_session(conn, sid,
+  since_seq)` lists a session's steps and `rollup(conn, Scope::{Session, Task, Plan, Project}, id)` sums seconds by
+  class (closed steps only), cost by unit (units never mix) and tokens.
+- `status.schema`, `store.schema` and the hub's read-only rule now say 8; a file of schema 9 or above is read-only.
 
 ## Parsed entities (Task 15a)
 

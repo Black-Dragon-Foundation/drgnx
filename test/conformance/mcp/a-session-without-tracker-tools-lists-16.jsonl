@@ -1,4 +1,4 @@
-{"scenario": "mcp/a-session-without-tracker-tools-lists-16", "requires": ["v1", "fake-backend"], "doc": "A profile that turns the tracker tools off (mcp/session tools {tracker: false}) gets the 16 tools of before and the two settings tools every agent has: tools/list has 18, and tools/call task_read is the JSON-RPC error -32602 Unknown tool; msession keeps the setting."}
+{"scenario": "mcp/a-session-without-tracker-tools-lists-16", "requires": ["v1", "fake-backend"], "doc": "A profile that turns the tracker tools off (mcp/session tools {tracker: false}) gets the 16 tools of before and the two settings tools every agent has: tools/list has 25 (the four job tools included), and tools/call task_read is the JSON-RPC error -32602 Unknown tool; msession keeps the setting."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}
@@ -10,6 +10,6 @@
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
 {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
-{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any","$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any","$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_read", "arguments": {"op": "ready"}}}}
 {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "error": {"code": -32602, "message": "Unknown tool: task_read"}}}

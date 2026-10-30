@@ -2,6 +2,9 @@
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-agents)
+;; loaded before the tests stub `drgnx-agents-mirror-start': `drgnx-review-branch' requires it, and a first load
+;; inside the stub's `cl-letf' would put the real function (a hub call) back
+(require 'drgnx-agents-mirror)
 (require 'drgnx-job)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
@@ -25,7 +28,7 @@
      (let* ((default-directory repo) (delivered nil) (drgnx-review--runs (make-hash-table :test #'equal))
             (drgnx-review--current nil)
             (s (drgnx-agents--make :id "rev-1" :name "reviewer" :status 'idle :conn 'fake :cwd repo)))
-       (cl-letf (((symbol-function 'drgnx-agents-start) (lambda (_profile _cwd &rest _) s))
+       (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (_profile _cwd &rest _) s))
                  ((symbol-function 'drgnx-agents-deliver) (lambda (_s text) (push text delivered) t))
                  ((symbol-function 'drgnx-agents-kill) #'ignore))
          (unwind-protect (progn ,@body)

@@ -190,6 +190,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         Some(graph),
         Arc::new(ToBackend(backend.clone())),
     ));
+    front.tool_hub.bind(&front);
     let _ = front.dirs.set(crate::graph::StoreDirs {
         home,
         config: paths::config_dir(&env),
@@ -210,14 +211,41 @@ pub async fn run(args: ServeArgs) -> Exit {
         .mcp
         .open_store(env.clone(), socket.clone(), runtime.clone());
     front.mcp.restore().await;
+    front.core.agents.open_store(runtime.clone());
     tokio::spawn(sessions::watch(front.clone()));
+    // a job's end wakes the session that started it
+    tokio::spawn(crate::agents::wake::run(
+        front.clone(),
+        front.core.exec.subscribe(),
+    ));
+    // a queued message reaches its session once that is free
+    tokio::spawn(crate::agents::deliver::run(front.clone()));
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
         .open(paths::config_dir(&env), runtime.clone());
     front.refresh_settings().await;
+    // the sessions recorded before this start: resumed (their profiles are in the settings now), queues delivered
+    // (in the background: a slow agent never delays serving)
+    // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),
+    // and a job end that reached no session is delivered once they are back.
+    crate::exec::ensure_open(&front);
+    front.core.runs.set_recovering(true);
+    {
+        let f = front.clone();
+        tokio::spawn(async move {
+            f.core.agents.resume_all(&f).await;
+            f.core.runs.set_recovering(false);
+            crate::agents::wake::recover(&f).await;
+            crate::agents::deliver::recover(&f).await;
+        });
+    }
     // the gateway: listening, then the registrations of live owners (and their sessions' sockets) kept
-    front.gate.open_store(runtime);
+    front.core.budgets.open_store(runtime.clone()).await;
+    if let Some(notes) = front.core.budgets.take_notes() {
+        tokio::spawn(crate::budget::run(front.clone(), notes));
+    }
+    front.gate.open_store(runtime.clone());
     match front.gate.listen(gateway_port).await {
         Ok(events) => {
             front.gate.restore(&front.mcp).await;
@@ -240,7 +268,25 @@ pub async fn run(args: ServeArgs) -> Exit {
     tokio::spawn(watch_schema(front.clone()));
     tokio::spawn(relay::run(events_rx, front.clone()));
     tokio::spawn(coord::broadcast_events(front.clone()));
+    crate::records::install_tool(&front);
+    tokio::spawn(crate::records::follow(front.clone()));
     tokio::spawn(coord::notify_backend(front.clone()));
+    front
+        .core
+        .runs
+        .set_git(Arc::new(crate::runner::git::HubGit::new(
+            crate::sandbox::runs_root(&env),
+            crate::runner::TreeMode::Snapshot,
+            Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
+            Some(runtime.clone()),
+        )));
+    front
+        .core
+        .runs
+        .set_hooks(Arc::new(crate::runner::review::PlanHooks::default()));
+    tokio::spawn(crate::runner::tick::run(front.clone()));
+    tokio::spawn(crate::supervisor::run(front.clone()));
+    tokio::spawn(crate::manager::run(front.clone()));
     let supervisor = tokio::spawn(backend.clone().supervise());
     #[cfg(feature = "test-hooks")]
     let tick = args.idle_tick_ms.map_or(idle::TICK, Duration::from_millis);
@@ -319,6 +365,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     {
         tracing::warn!("the Lisp backend did not stop within 10 s");
     }
+    // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
+    front.core.agents.shutdown().await;
     // the lock is still held: these are ours (the sessions' rows stay for the next start)
     front.mcp.unbind_all();
     remove_all(&agent_paths);

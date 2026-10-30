@@ -48,6 +48,18 @@ pub fn resolve_exe() -> std::io::Result<&'static Path> {
     Ok(START_EXE.get_or_init(|| path).as_path())
 }
 
+/// Tests: take PATH as the executable resolved at start.  A unit test's own binary is libtest's harness, which is no
+/// sandbox helper (it refuses `sandbox-inner --spec-fd`); a test that runs the real sandbox pins the built hub instead.
+/// Panics when another path was resolved first.
+#[cfg(test)]
+pub(crate) fn pin_exe_for_test(path: PathBuf) {
+    let got = START_EXE.get_or_init(|| path.clone());
+    assert_eq!(
+        got, &path,
+        "the executable was resolved before the test pinned it"
+    );
+}
+
 /// What identifies a file's content for the watch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stamp {
@@ -293,6 +305,8 @@ pub fn notice(n: Option<u64>) -> Value {
 struct Real {
     watch: ExeWatch,
     backend: Arc<Backend>,
+    /// The hub's own sessions: a running turn of theirs delays a restart, an idle chat does not.
+    front: Arc<Front>,
 }
 
 impl Source for Real {
@@ -305,7 +319,8 @@ impl Source for Real {
     }
 
     async fn busy(&self) -> Option<u64> {
-        self.backend.busy().await
+        let mine = self.front.core.agents.busy_count();
+        self.backend.busy().await.map(|b| b + mine)
     }
 }
 
@@ -326,7 +341,11 @@ pub async fn run(front: Arc<Front>, backend: Arc<Backend>, tick: Duration) {
         }
     };
     let mut state = Watcher::new(Some(watch.start()));
-    let src = Real { watch, backend };
+    let src = Real {
+        watch,
+        backend,
+        front: front.clone(),
+    };
     let mut every = tokio::time::interval(tick);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     every.tick().await;

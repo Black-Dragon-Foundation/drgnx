@@ -16,8 +16,13 @@ pub mod graph;
 pub mod guard;
 pub mod identity;
 pub mod job;
+pub mod jobs;
+pub mod manager;
+pub mod plan;
 pub mod read;
+pub mod records;
 pub mod report;
+pub mod reports;
 pub mod settings;
 pub mod tracker;
 
@@ -90,6 +95,42 @@ pub trait Hub: Send + Sync {
     ) -> BoxFuture<'_, Option<Vec<serde_json::Value>>> {
         Box::pin(async { None })
     }
+
+    /// A view proposal (Task 14b): ID read (`accept` none) or decided; SESSION is the agent asking.  The answer is
+    /// the tool's text.  A hub with no records: an error.
+    fn proposal(
+        &self,
+        _id: String,
+        _accept: Option<bool>,
+        _session: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("this hub has no records".to_string()) })
+    }
+
+    /// The hub's `exec/METHOD` (a job) called as the session SID: its result, or the refusal's text.  The default (no
+    /// hub): no jobs.
+    fn exec(
+        &self,
+        _sid: &str,
+        _method: &'static str,
+        _params: serde_json::Value,
+    ) -> BoxFuture<'_, Result<serde_json::Value, String>> {
+        Box::pin(async { Err("jobs are the hub's: none here".to_string()) })
+    }
+
+    /// A manager tool OP (`agent_start`, …) called as the session SID with ARGS: the answer's text, or the refusal's.
+    /// The hub checks the session is a manager, the matrix and the grants.  The default (no hub): no managers.
+    fn manager(
+        &self,
+        _sid: &str,
+        _op: &'static str,
+        _args: serde_json::Value,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("managers are the hub's: none here".to_string()) })
+    }
+
+    /// The session SID waited on a job that runs (refused): the hub counts it and cancels the turn at the limit.
+    fn wait_refused(&self, _sid: &str) {}
 
     /// The runtime settings the hub read itself (`settings.el`, the shipped defaults, the editor's overrides) as rows
     /// `{name, value, source}`: NAMES only, or all.
@@ -195,4 +236,102 @@ pub fn tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     all.extend(graph::tools());
     all.extend(settings::tools());
     all
+}
+
+/// The agent core's tools every worker gets (agent system part 1): jobs (Task 15), the structured report and the
+/// plan tools (Task 21), view proposals (Task 14b).  The job tools are in [`tools_for`] (Task 15); the others answer
+/// "not yet" and are not served until their tasks fill them.
+pub const CORE_TOOLS: [&str; 9] = [
+    "job_start",
+    "job_result",
+    "job_log",
+    "job_stop",
+    "report_submit",
+    "plan_read",
+    "plan_write",
+    "proposal_read",
+    "proposal_decide",
+];
+
+/// The manager's tools, served on a manager session's socket only (Task 25), each checked by the hub's matrix with
+/// the manager's column.
+pub const MANAGER_TOOLS: [&str; 9] = [
+    "agent_start",
+    "agent_message",
+    "agent_pause",
+    "agent_stop",
+    "agent_move",
+    "report_read",
+    "transcript_slice",
+    "trial_merge",
+    "merge",
+];
+
+/// The tools of [`CORE_TOOLS`], in that order.
+pub fn core_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
+    let mut all = jobs::tools();
+    all.extend(reports::tools());
+    all.extend(plan::tools());
+    all.extend(records::tools());
+    all
+}
+
+/// The tools of [`MANAGER_TOOLS`], in that order.
+pub fn manager_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
+    manager::tools()
+}
+
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+    use mimir::{Tool, ToolResult};
+
+    #[test]
+    fn the_core_and_manager_tools_are_their_lists_and_new_names() {
+        let names = |v: Vec<Box<dyn Tool<Ctx>>>| v.iter().map(|t| t.name()).collect::<Vec<_>>();
+        assert_eq!(names(core_tools()), CORE_TOOLS);
+        assert_eq!(names(manager_tools()), MANAGER_TOOLS);
+        let served = names(tools());
+        for n in CORE_TOOLS.iter().chain(&MANAGER_TOOLS) {
+            assert!(!served.contains(n), "{n} is already a tool");
+        }
+        for t in core_tools().iter().chain(&manager_tools()) {
+            assert!(t.input_schema().is_object(), "{}", t.name());
+        }
+    }
+
+    struct NoHub;
+    impl Hub for NoHub {
+        fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
+            Box::pin(async { None })
+        }
+        fn notify(&self) {}
+    }
+
+    #[tokio::test]
+    async fn a_manager_tool_without_a_hub_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord = Arc::new(Coord::new(
+            CoordDb::spawn(dir.path().join("work.db")),
+            Arc::new(NoHub),
+        ));
+        let who = Identity::Session {
+            agent: "a".into(),
+            sid: "s".into(),
+            profile: None,
+            job: None,
+            task: None,
+            home: dir.path().to_path_buf(),
+        };
+        let all = manager_tools();
+        let stop = all.iter().find(|t| t.name() == "agent_stop").unwrap();
+        let args = serde_json::json!({"id": "s1"});
+        stop.check(&args).unwrap();
+        match stop.call(&(coord, who), args).await {
+            ToolResult::Err(text) => {
+                assert_eq!(text, "managers are the hub's: none here")
+            }
+            _ => panic!("a hub-less tool answered"),
+        }
+    }
 }

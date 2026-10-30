@@ -42,6 +42,8 @@ runtime/
 | `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
 | `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
+| `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
+| `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
@@ -130,6 +132,36 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
 compile-fail doc test that `Cap` has no `Debug`, and the proptest `tests/proptest_line.rs`: random byte streams, read in
 random pieces, through the codec and `parse_strict` never panic, and the codec never holds more than one line's limit
 plus the read that went past it.
+
+## hermod: the ACP client
+
+hermod speaks the Agent Client Protocol to one agent process (Claude Code's or Codex's ACP adapter, `gemini --acp`).
+It is generic (no drgnx type) and sits on `agent-client-protocol-schema` (the types), runstav's `jsonrpc` and `line`
+(the codec: lines of at most 1 MiB, a longer one is dropped) and draugr's `spawn` (own process group, bounded stderr
+tail). There is no SDK role framework.
+
+- **Tasks.** A connection is one child, a writer task (lines to its stdin), a reader task (lines from its stdout) and
+  a watchdog that waits for the child. `Conn::spawn(spec, ConnOpts { deadline, stderr_tail })` returns the `Conn`
+  (cheap to clone; dropping every clone closes the child's stdin) and the event receiver, which the owner drains
+  (1024 events buffer).
+- **Calls.** `initialize` (always without the `terminal` capability; `terminal/*` requests from an agent get -32601),
+  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork`. Every
+  call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
+  connection keeps working. A `prompt` ends by the agent's answer, `cancel`, or the child's exit (`Error::Closed`).
+  `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
+- **Fork.** `fork(sid, Some(ForkPoint { message_id }))` sends `session/fork` with
+  `_meta.jetbrains.air.fork {version: 1, messageId}`; without a point, a plain fork. The new session starts in the
+  directory of the session it forks (the connection remembers the `cwd` of every session it opened or loaded).
+- **Events.** `Update { at, sid, update, message_id }`: `at` is the receipt time in seconds since the epoch, taken
+  when the line is read and never going backwards; `message_id` is the `messageId` of a message or thought chunk.
+  `Request(Incoming)`: `Permission`, `ReadFile` or `WriteFile`, each with a `Responder`. A responder dropped
+  unanswered answers -32800 "cancelled"; once the child has exited, `respond` fails with `Error::Closed` and
+  `is_cancelled()` is true. `Exit { code, signal, stderr }` comes exactly once, after every update the child wrote
+  (the reader gets two seconds to drain), with the last `stderr_tail` characters of stderr; calls still waiting fail
+  with `Error::Closed`.
+- Unknown notifications are ignored; unknown requests get -32601.
+- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children; the mock agent is
+  `ratatoskr-mock acp`.
 
 ## eitri: no-link file access
 
@@ -484,7 +516,13 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **Tags** (`requires`): `v0` (any hub), `v1` (hello v1: Ratatoskr), `fake-backend`, `lisp-backend`, `sudo` (euid 0, or
 `sudo -n true` succeeds), `test-hooks` (the binary's `version --json` says `"test_hooks": true`), `linux`, `macos`,
-`perf`. A row whose requirement is missing is skipped (with `--target lisp`, rows without `v0` are not selected at all).
+`perf`, `podman` (`podman` is on the PATH; an excused skip otherwise). A row whose requirement is missing is skipped (with `--target lisp`, rows without `v0` are not selected at all).
+
+**Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): on Ratatoskr the
+row runs, and a failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a
+row that passes while marked fails the run, so the mark goes as soon as its task lands. With `--target lisp` the mark
+is ignored. It is for behaviour a plan moves out of the frozen Lisp backend into the hub, between the move of the
+methods and the task that ports it; a row is never deleted for it.
 
 | VERB | Keys | Meaning |
 |---|---|---|
@@ -504,6 +542,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `pause` | `conn` | stop reading the connection (what arrives stays in the socket): a client that stopped reading. The next step that reads it reads again |
 | `expect` | `conn`, `json` (pattern), `within_ms` (5000) | the first buffered or arriving line that matches; earlier non-matching lines stay buffered |
 | `expect_next` | as `expect` | the very next line must match |
+| `poll` | `conn`, `json` (a request with an `id`), `expect` (pattern), `within_ms` (5000), `every_ms` (200) | send the request and take its reply (by id) again until one matches: for state the hub reaches in the background (sessions resumed after a restart), read back instead of an event that may have gone before the row subscribed |
 | `expect_closed` | `conn`, `within_ms`, `silent` | the hub closed the connection; with `"silent": true`, without sending a line first (a refusal answers nothing) |
 | `expect_silent` | `conn`, `for_ms` (300) | no line arrives |
 | `kill` | `hub` or `pid`, `signal` (`TERM KILL STOP CONT INT HUP QUIT USR1 USR2`) | signal the hub (or a captured pid) |
@@ -514,6 +553,7 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 | `sqlite` | `path`, `sql_file`, `sql: [...]`, `query`, `expect` | set up a database (bundled SQLite): the statements of `sql_file` (a schema such as `$SCENARIOS/../fixtures/work-db-6.sql`), then `sql`; `query`'s rows, as `[[value…]…]`, must match the pattern `expect` |
 | `spawn_conn` | `conn`, `argv`, `env`, `cwd` | start a child (for example `ratatoskr mcp-bridge …`) whose stdin and stdout are connection `conn` for `send` / `expect`. `env` is its whole environment (`{}` is empty, never the harness's). Its stderr is kept in `spawn-conn-CONN.err` in the root; it is killed at the scenario's end. `expect_closed` means its stdout closed; `expect_exit` with `conn` reads its status |
 | `sql_expect` | `path` (`$DATA/work.db`), `sql`, `rows` | run a read-only query and match its rows (`[[value…]…]`) against the pattern `rows` |
+| `db_digest` | `path` (`$DATA/work.db`), `capture` or `same_as`, `except` (tables, each with a reason in the row) | a digest of every table (row count and sha256 of its rows); `same_as` fails when any table appeared, went or changed since the capture |
 | `capture_file` | `path`, `capture`, `json_path`, `within_ms` (5000) | read a JSON file (waiting for it to exist) and capture the value at `json_path` (dot-separated keys and array indexes, `$` or absent: the whole file), for example a socket path a helper wrote |
 | `backend_log` | `hub`, `expect_line`, `expect_no_line`, `count` (`at_least`, `at_most`), `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON; `count`: after `for_ms`, how many lines match is within the bounds |
 | `pid` | `capture`, `alive` (true), `within_ms` (5000), `stays_for_ms` | a captured pid is (or is no longer) running; a reused pid does not count. With `stays_for_ms` a pid that is running must stay so that long (a signal sent a moment ago has landed by then) |
@@ -523,6 +563,17 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
+- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]` is a scripted ACP agent on stdio
+  (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
+  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `ask:permission KIND`,
+  `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
+  `commit MSG`, `sleep-loop` (asks to run `sleep 30; pgrep …`), `silent N` (a `session/cancel` ends it),
+  `crash` (exit 3); anything else is echoed. `--script` gives the n-th prompt its n-th line. Every answer carries
+  `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
+  (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
+  `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
+  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  to a `ratatoskr-mock llm` once per turn, so its log counts requests.
 - `llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and serves a scripted
   provider on 127.0.0.1 (a port of `test/fixtures/mock-llm.el`). With `--tls` it makes a certificate authority and a
   leaf for `localhost` and 127.0.0.1 at start (`rcgen`), writes the CA's certificate (no key) to CA_FILE, prints
@@ -546,7 +597,8 @@ $HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the 
 **Patterns** are JSON. An object matches when it has every key of the pattern (extra keys are fine). Arrays match element
 by element and in length, unless the pattern is `{"$contains": [...]}` (every listed pattern matches some element).
 Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (the key must be missing), `"$capture:NAME"`
-(matches anything, remembers it) and `"$NAME"` (equal to the value captured earlier).
+(matches anything, remembers it) and `"$NAME"` (equal to the value captured earlier); `"$NAME#1"` (a captured string
+followed by more text, such as a task id `JOB#1`) is the capture with that text appended.
 
 **The `hello` proofs** are computed by the harness itself, with its own HMAC-SHA256: the client proof is
 `HMAC(cap hex as ASCII, "drgnx-hub client " + hub_nonce + " " + client_nonce)` and the hub's is
@@ -630,13 +682,13 @@ Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`)
 | `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer; `internal` from a fake backend's answer that does not fit) |
 | `readonly/` | `a-newer-work-db-refuses-writes` (work.db at schema 9: `schema` for a writing method within the 2 s tick) |
 | `basics/` | `status-shape-v1`, `events-since-without-a-work-db`, `events-since-from-the-store` (rows written into work.db with `sqlite`) |
-| `forward/` (`fake-backend`) | `a-raw-duplicate-key-never-reaches-the-backend`, `a-tramp-path-never-reaches-the-backend`, `params-are-re-encoded-with-the-caller`, `a-malformed-backend-answer-is-internal`, `the-backend-gets-no-provider-key`, `the-backend-keeps-ssh-and-proxy-env`, `the-backend-gets-the-serve-socket-only`, `events-are-relayed-and-decoded` (and the backend's `events` dropped), `every-backend-event-kind-is-relayed` (`fixtures/backend-events.json`: one event of each of the nine kinds, as main sends it; `events`, `request`, `budget` and the job-less `fallback` are the front's and dropped, the hub log says so three times for the gateway's), `a-malformed-backend-event-is-dropped`, `backend-gone-calls-fail-once-and-it-restarts`, `an-oversized-forward-is-refused`; with `test-hooks` too: `agents-list-is-shaped-per-class`, `spend-is-own-job-for-an-agent` (summed from work.db's rows; the backend is never asked) |
+| `forward/` (`fake-backend`) | `a-raw-duplicate-key-never-reaches-the-backend`, `a-tramp-path-never-reaches-the-backend`, `params-are-re-encoded-with-the-caller`, `a-malformed-backend-answer-is-internal`, `the-backend-gets-no-provider-key`, `the-backend-keeps-ssh-and-proxy-env`, `the-backend-gets-the-serve-socket-only`, `events-are-relayed-and-decoded` (and the backend's `events` dropped), `every-backend-event-kind-is-relayed` (`fixtures/backend-events.json`: one event of each of the nine kinds, as main sends it; `events`, `request`, `budget` and the job-less `fallback` are the front's and dropped, the hub log says so three times for the gateway's), `a-malformed-backend-event-is-dropped`, `backend-gone-calls-fail-once-and-it-restarts`, `an-oversized-forward-is-refused`, `empty-lists-are-arrays` (A-17: `{applied: null}` reaches the client as `[]`); with `test-hooks` too: `spend-is-own-job-for-an-agent` (summed from work.db's rows; the backend is never asked). Since agent system part 1 the backend serves only `env/set`, so it is these rows' vehicle (with `from_file` when one row needs several answers); `agents/list` per class is `agents/list-is-shaped-per-class` (the hub's sessions) |
 | `gateway/` (`fake-backend`; [hub.md](hub.md#registrations)) | `register-keeps-only-the-hash` (the token's SHA-256, computed by `sh`, is the row's `hash`; `file_grep` finds the token in no file under the root), `a-gone-owners-registrations-are-pruned` (owner a `spawn`ed `sleep`, killed: `status --json` with `retry_ms`), `config-providers-refuses-a-bad-url`, `a-lan-http-provider-is-allowed-with-a-warning` (logged once after two calls: `file` with `count` and `at_most`; `doctor --json`), `the-backend-never-gets-keys`, `budget-reaches-the-backend-as-a-notification` (a request through the gateway to `ratatoskr-mock llm`, the spend row in work.db, `notification {"method":"budget",…}` in the backend log), `no-usable-step-is-refused`; with `test-hooks` too: `keys-only-on-a-user-connection` (service and agent connections) |
 | `coord/` (`fake-backend`) | the front's writes (`sqlite` makes a schema-6 work.db from `fixtures/work-db-6.sql`): `cards-settle-once`, `messages-send-held-by-version`, `only-the-backend-names-a-sender` (`call_front`), `events-add-is-broadcast-once`, `review-mark-and-its-event-commit-together` (a trigger refuses the second event: neither is written), `a-write-before-work-db-is-ready-says-so`, `a-newer-work-db-refuses-coord-writes`, `notify-is-coalesced` (100 `coord/notify` → at most 2 notifications, `backend_log` `count`); with `lisp-backend`: `results-are-typed` |
 | `graph/` (`fake-backend`; [store.md](store.md#parsed-entities-task-15a)) | `put-parsed-round-trip` (read back through the `node`, `file` and `link` rows; the same scan again writes nothing; a derived status; `gone`), `put-parsed-refuses-a-denied-source` (a personal-notes fixture under the row's HOME as a `file` source, a `spec` source and a plan's link end: refused whole, no row holds its canary or path), `record-twice-is-one` (keyed by the collected key) |
-| `seam/` (`fake-backend`) | `a-backend-call-to-the-front-never-deadlocks` (the backend's `job/stop` calls `events/add` on the front before it answers), `the-backend-may-call-only-what-the-front-serves` (`job/status` and `subscribe` from the backend's connection: `not-allowed`) |
-| `seam/` (`lisp-backend`) | `a-lisp-job-writes-through-the-front` (`job/propose` and `job/stop`: `status.store.writes` 0 → 3 → 6, the rows in work.db), `the-backend-sends-no-events` (the front broadcasts the event log; the backend's `events` is never dropped since none comes), `a-lisp-job-reads-its-own-writes` |
-| `forward/` (`lisp-backend`) | `empty-lists-are-arrays` (A-17), `results-match-schemas` (a populated store: a proposed job, a review card, a mock-acp session with entries; every read method answers without `internal`) |
+| `seam/` (`fake-backend`) | `a-backend-call-to-the-front-never-deadlocks` (the backend's `env/set` calls `events/add` on the front before it answers), `the-backend-may-call-only-what-the-front-serves` (`env/set` and `subscribe` from the backend's connection: `not-allowed`) |
+| `seam/` (`lisp-backend`; `pending` until Task 16a ports plan runs) | `a-lisp-job-writes-through-the-front` (`job/propose` and `job/stop`: `status.store.writes` 0 → 3 → 6, the rows in work.db), `the-backend-sends-no-events` (the front broadcasts the event log; the backend's `events` is never dropped since none comes), `a-lisp-job-reads-its-own-writes` |
+| `forward/` (`lisp-backend`) | `results-match-schemas` (a populated store: a proposed job, a review card, a mock-acp session with entries; every read method answers without `internal`; `pending` until Task 16a) |
 | `settings/` (`fake-backend`; [hub.md](hub.md#settings)) | `the-hub-reads-settings-el` (a profile and a provider of the user's join the built-in ones: `status.settings`), `no-editor-still-has-presets-and-profiles` (16 and 7 with no file), `a-package-entry-never-stops-the-hub` (entries of any shape the hub does not know: no problem), `a-broken-file-gives-strict-agents-and-last-good-providers` (the file breaks; the next `mcp/session` reads it again: a `notice`, the profile gone, the provider kept from `kv`, and the same after a restart) |
 | `backpressure/` (`fake-backend`) | `a-stopped-reader-is-dropped-others-keep-going` (the backend floods 400 events of 64 KiB; a subscriber that `pause`d is closed, another gets every event) |
 | `lifecycle/` (Task 16) | `ensure-starts-once` (two `ensure`s at once with no supervisor: one hub), `stop-ends-it`, `kill-9-then-ensure-restarts`, `stop-ends-a-non-dumpable-hub` (`test-hooks`: `--test-ignore-shutdown`, so `stop` reaches its SIGTERM through the listener's pidfd; `drop_ptrace`), `stop-never-signals-a-forged-argv0` (`test-hooks`, `linux`: the lock's text rewritten to name a `sleep` started as `exec -a ratatoskr`, with its true start time; `stop` exits 1 and both live), `stop-with-a-stale-lock-signals-nothing` (a lock file naming a live `sleep` that nobody holds: not running, no signal), `stop-ends-a-lisp-hub` (`lisp-backend`) |
@@ -663,15 +715,15 @@ registry's test and the `class_matrix` step read.
 ### The perf rows
 
 `perf/` rows (`requires` `v1` and `perf`) run only with `--perf OUT.json`; without it they are skipped, and
-`--require-all` lets that be. Each is a `measure` step; the file lists every sample and the median. There are no
-budgets: this is a recorded baseline, not a regression gate.
+`--require-all` lets that be. Each is a `measure` step; the file lists every sample and the median. Most have no
+budgets (a recorded baseline, not a regression gate); the `agents-*` rows check theirs in the row.
 
 | Row | Measures | Samples |
 |---|---|---|
 | `start` | starting the hub to its first answered `ping` on a proven connection | 1 |
 | `hello-round-trip` | `ping` and its answer on a proven connection | 100 |
-| `a-1-mib-request-line` | an `agents/send` line of about 1 MiB read, re-encoded, forwarded to the fake backend and answered | 20 |
-| `a-4-mb-snapshot` | `agents/get` with a transcript of about 4 MB from the fake backend, to the client | 10 |
+| `a-1-mib-request-line` | an `env/set` line of about 1 MiB read and decoded: its 16 values of 32 KiB re-encoded, forwarded to the fake backend and answered, a 500 KB unknown key dropped (`env/set` is the one method the backend still serves; `agents/*` are the hub's own) | 20 |
+| `a-4-mb-snapshot` | an answer of about 4 MB from the fake backend (an `env/set` result), checked and written to the client | 10 |
 | `mcp-tool-call` | `tools/call read_inbox` over a session socket (initialized, `hello` called once before) | 100 |
 | `coord-write` | `events/add` through the main socket, answered with the new id | 100 |
 | `gateway-added-latency` | an agent's `POST /v1/messages` to the mock provider, head read: `direct-first-byte` against the mock, `gateway-first-byte` through the gateway with an agent token (the difference is the gateway's) | 50 each |
@@ -680,6 +732,8 @@ budgets: this is a recorded baseline, not a regression gate.
 | `group-commit` | eight connections each send an `events/add` and wait for all eight answers (one round, group-committed) | 500 |
 | `as-of-churn` | `graph/neighbors` as of a tx inside 200,000 versions of one link, one hop and two, and the same hop now | 20 each |
 | `find` | `tasks/find` on 10^5 tasks: a word 1,000 hold, and a word one holds | 20 each |
+| `agents-streaming-20` | 20 mock agents stream at once (25 chunks and 25 tool calls each) with an editor subscribed, 100 `ping` round trips meanwhile. **Budgets in the row** (`/proc`, Linux only): the hub's CPU (utime + stime) under 40 % of one core over the window, resident set under 400 MB. The ping samples are the keystroke-latency proxy (p95 < 16 ms, judged on the desktop lane) |
+| `agents-idle-20` | 20 idle mock agents for 10 s: the hub's CPU under 3 % of one core (budget in the row) |
 
 The writer-level group-commit number, with `secure_delete` on and off, is `urdr`'s ignored bench
 (`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
@@ -693,6 +747,27 @@ runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/
 
 CI runs this on Linux and macOS and keeps the files as artifacts ([ci.md](ci.md)). Numbers are for a release build on a
 quiet machine.
+
+### The system rows (the agent core's exit criteria)
+
+`test/conformance/system/*.jsonl` prove the agent core's exit criteria across groups, on mocks only (`ratatoskr-mock acp` and
+`llm`; no live run). Each row says in its `doc` what makes it fail. Time-compressed rows shrink the hub's settings (the
+silent limit, the idle close) and hold the build for a multiple of the limit instead of sleeping for minutes.
+
+| Row | Criterion | Fails when |
+|---|---|---|
+| `three-providers-one-plan-under-balanced` | 1, 3 | a task starts on the wrong profile; an in-matrix action makes a card or waits; an ask runs without a card or the user's answer, or never reaches the event stream; Codex starts as a worker. Three providers means Claude, Gemini and an API-key `:ai` profile (Codex stays refused until `CODEX_LOCK_PROVEN`) |
+| `a-manager-runs-the-plan` | 1 (the manager half) | the manager cannot start a worker per task through `agent_start`; a worker is not its child or not on its task; an in-matrix action makes a card or waits; the Gemini ask runs without a card or the user's answer; a worker the manager asks to fetch (network, which the manager lacks) is allowed or asked; Codex starts |
+| `mixed-providers-lease-clash-review-spend` | 7, 8 | a task is claimed by the wrong session; the overlap (an `overlap` card) is not carded once; a review is not handed to the reviewer profile; the job does not finish; a step lacks its turn id, log version, plan or task, or the two workers' steps do not name two providers; a worker's rollup differs from its step rows |
+| `ten-minute-build-zero-requests` | 4 | any model request (supervisor, reminder, heartbeat) during the wait; the waiting agent is judged silent; the wake opens a new session |
+| `stall-paused` | 5 | the stuck agent is not paused within its limit, or with the wrong rule or limit; the card names another session or is made twice; the waiting agent is judged, or its wait is not one `job-wait` step longer than the limit (steps are written when they close) |
+| `cost-matches-records` | 6 | the budget adds each cumulative cost report to the last; a rollup differs from the step table; gateway request events, spend rows, `spend` and the status count differ |
+
+Criterion 2 is the laundering rows (`exec/`, `locks/`, `grants/`, `matrix/`), 10 the `restart/*` rows. The perf rows
+`perf/agents-*` are the hub half of "20 agents streaming": hub CPU and resident set from `/proc` with budgets in the row
+(run with `--perf`), and ping round trips while they stream. The editor half (the mirror redraws at most once per frame;
+keystroke p95 under 16 ms) needs a GUI session with a live hub and 20 mock agents; the hub already coalesces a session's
+events to one `agent` and `agent-entries` pair per 50 ms. It runs on the desktop timing lane.
 
 ### The gateway rows
 
@@ -784,6 +859,11 @@ daily, `fuzz_minutes` on demand: [ci.md](ci.md)).
 | `gateway_admit` | a request head (token class, listener, header style from the first byte; target and headers as lines) through `admit::head`: an admission belongs to its listener, takes a path of its class and stays under the body cap; a refusal is a 4xx with a JSON body |
 | `huginn_read` | bytes through `huginn::read::read_all` under the default limits and under tight ones (512 bytes, depth 6): no panic; a refusal's span inside the input; every node's span inside its parent's, on character boundaries; nesting within the limit; the source of each top-level datum reads alone to the same datum |
 | `bridge_line` | bytes (the first picks a line limit) through the bridge's `read_bounded`; every kept line is within the limit and has no newline; `classify` on each text line and `id_in_prefix` on the line cut at every position: no panic |
+| `acp_update` | JSON (an object, or an array of them) as an agent's `session/update`s through the session reducer (`agents::session::fuzz_apply`, feature `fuzzing`): each update counts once in `seq`, no panic |
+| `report_submit` | JSON as `report_submit`'s arguments over a schema-7 store (as `task_write_args`) |
+| `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
+| `saga_deferred` | the same through `saga::deferred` |
+| `saga_org` | the same through `saga::org` (`board.org`) |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
