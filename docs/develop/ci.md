@@ -55,7 +55,9 @@ graph tests on an Emacs without SVG), so the two Emacs jobs skip different tests
 
 The macOS workflow has no GUI tier: the GUI tests (`--ui`) stay Linux-only (they run under headless mutter), so the
 Mac UI is checked by hand with the session checklist. The weekly `install` job is a real install on a fresh runner
-(it installs Emacs with Homebrew); it stays out of the per-push run.
+(it installs Emacs with Homebrew); it stays out of the per-push run. Homebrew neither updates itself nor cleans up
+after an install in either job (`HOMEBREW_NO_AUTO_UPDATE`, `HOMEBREW_NO_INSTALL_CLEANUP`): the image's formulae are
+what the run gets, and no step spends minutes on either.
 
 The unit suite runs on both systems, so a test never assumes Linux: no `/proc` (the mock ACP agent is started through
 `test/fixtures/mock-acp-stdin.sh`, which hands it its stdin through a FIFO; a process's command line or memory comes

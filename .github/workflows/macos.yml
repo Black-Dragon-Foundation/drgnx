@@ -15,6 +15,11 @@ on:
 permissions:
   contents: read
 
+# the image's formulae as they are: no self-update or cleanup minutes in a run (docs/develop/ci.md)
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
 # a push never cancels the weekly install; a newer push to a ci/* branch cancels the older run, one on main never
 concurrency:
   group: macos-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}

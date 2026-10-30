@@ -673,13 +673,50 @@ hold any test."
       (error (setq open t)))
     (cons (nreverse names) open)))
 
+(defun drgnx-run-ert--tagged-p (file tag)
+  "Whether the test FILE may hold a test tagged TAG.  Only plain top-level `ert-deftest' forms are read for their
+quoted `:tags' list; anything else may hold any tag, so it keeps the file: a file's own `…--deftest' macro (it may
+add tags), an `ert-deftest' inside another form (a loop making tests), a computed `:tags', a file that does not read."
+  ;; read into an obarray of its own, as `drgnx-run-ert--index' does: symbols are compared by name
+  (let ((found nil) (obarray (obarray-make)) (name (symbol-name tag)))
+    (cl-labels ((named (x s) (and (symbolp x) (equal (symbol-name x) s)))
+                (deftest-p (x) (and (symbolp x) (string-suffix-p "deftest" (symbol-name x))))
+                (inside-p (form) (and (consp form)
+                                      (or (deftest-p (car form))
+                                          (let ((rest (cdr form)) (hit nil))   ; a dotted tail ends the walk
+                                            (while (and (consp rest) (not hit))
+                                              (setq hit (inside-p (car rest)) rest (cdr rest)))
+                                            hit)))))
+      (condition-case nil
+          (with-temp-buffer
+            (insert-file-contents file)
+            (condition-case nil
+                (while (not found)
+                  (let ((form (read (current-buffer))))
+                    (cond ((not (consp form)))
+                          ((named (car form) "ert-deftest")
+                           (let ((tags (cadr (seq-drop-while (lambda (x) (not (named x ":tags"))) (nthcdr 3 form)))))
+                             (when tags
+                               (setq found (or (not (and (named (car-safe tags) "quote") (listp (cadr tags))))
+                                               (seq-some (lambda (x) (named x name)) (cadr tags)))))))
+                          ((deftest-p (car form)) (setq found t))
+                          ((and (not (named (car form) "defmacro")) (not (named (car form) "defun")) (inside-p form))
+                           (setq found t)))))
+              (end-of-file nil)))
+        (error (setq found t))))
+    found))
+
 (defun drgnx-run-ert--file-selected-p (file selector)
   "Whether the test FILE can hold a test SELECTOR picks: with a string selector (a regexp on test names), only a
-file that defines such a test (`drgnx-run-ert--index') or may (a computed name); any other selector, every file.  A
-narrow run then starts an Emacs only for the files it needs."
-  (or (not (stringp selector))
-      (let ((index (drgnx-run-ert--index file)))
-        (or (cdr index) (cl-some (lambda (n) (string-match-p selector n)) (car index))))))
+file that defines such a test (`drgnx-run-ert--index') or may (a computed name); with (tag TAG), only a file that
+may hold a test tagged TAG (`drgnx-run-ert--tagged-p'); any other selector, every file.  A narrow run then starts
+an Emacs only for the files it needs."
+  (cond ((stringp selector)
+         (let ((index (drgnx-run-ert--index file)))
+           (or (cdr index) (cl-some (lambda (n) (string-match-p selector n)) (car index)))))
+        ((and (eq (car-safe selector) 'tag) (symbolp (cadr selector)) (null (cddr selector)))
+         (drgnx-run-ert--tagged-p file (cadr selector)))
+        (t t)))
 
 (defun drgnx-run-ert--unindexed (stats dir)
   "Failures (:name :condition), one for each test of STATS in a test file of DIR that its file's index does not

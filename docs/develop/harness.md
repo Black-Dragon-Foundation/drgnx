@@ -69,7 +69,9 @@ budget allows.
 
 `bin/drgnx test --one-process` (or `DRGNX_TEST_ONE_PROCESS=1`) runs every file in one Emacs instead: for hunting a
 leak from one file into another (run the files in question this way; a test that fails only here depends on what an
-earlier file left). `bin/drgnx check`'s `unit-timing` job uses it too (16 tests across all files). The runner unsets
+earlier file left). `bin/drgnx check`'s `unit-timing` job does not: it runs a file per Emacs, as CI does, and the
+tag prefilter starts one only for the files that hold a `:timing` test (a test that scans what is loaded, as the
+fingerprint's does, measures its own file's load, not every test file's). The runner unsets
 the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
 GUI and live tiers and the tests that start an Emacs of their own keep their own runners.
 

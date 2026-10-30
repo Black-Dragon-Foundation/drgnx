@@ -616,8 +616,9 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/a-narrow-run-starts-an-emacs-only-for-its-files ()
-  ;; A name selector (a regexp) starts an Emacs only for the files that define a test it names; any other selector
-  ;; (a tag can come from anywhere) runs every file.
+  ;; A name selector (a regexp) starts an Emacs only for the files that define a test it names; a (tag TAG) selector
+  ;; only for the files whose plain `ert-deftest's name TAG, or that may hold it some other way (their own deftest
+  ;; macro, a test made inside another form); any other selector runs every file.
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
          (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp))
          (files (lambda (selector)
@@ -628,10 +629,13 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
         (progn
           (drgnx-run-ert-test--suite
            suite '(("one-test.el" . "(ert-deftest iso-one/a () (should t))")
-                   ("two-test.el" . "(ert-deftest\n    iso-two/b () :tags '(:timing) (should t))")))
+                   ("two-test.el" . "(ert-deftest\n    iso-two/b () :tags '(:timing) (should t))")
+                   ("three-test.el" . "(defmacro iso-three--deftest (n) `(ert-deftest ,n () (should t)))\n(iso-three--deftest iso-three/c)")
+                   ("four-test.el" . "(dolist (n '(iso-four/d)) (eval `(ert-deftest ,n () (should t))))")))
           (should (equal (funcall files "\"^iso-two/\"") '("two-test.el")))
           (should (equal (funcall files "\"iso-\\\\(one\\\\|nothing\\\\)\"") '("one-test.el")))
-          (should (equal (funcall files "(tag :timing)") '("one-test.el" "two-test.el"))))
+          (should (equal (funcall files "(tag :timing)") '("four-test.el" "three-test.el" "two-test.el")))
+          (should (equal (funcall files "(not (tag :timing))") '("four-test.el" "one-test.el" "three-test.el" "two-test.el"))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/a-session-run-loads-only-the-selected-files ()

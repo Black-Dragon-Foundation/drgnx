@@ -29,8 +29,9 @@
   :why "an Emacs library wiring itself into a hook (its own, or a stock one) when it loads; drgnx's hook variables (drgnx-…) are not covered")
  (:what "\\`hook \\(?:tramp[a-z-]*\\|native-comp-never-optimize-functions\\) \\+"
   :why "lambdas Tramp puts on its own hooks when it loads, and the function native compilation of a trampoline puts on its list")
- (:what "\\`buffer [+-] \\*\\(?:code-conversion-work\\|code-converting-work\\|tab-line-hscroll\\|jka-compr-wr-temp\\|string-pixel-width\\|Minibuf-[0-9]+\\)\\*\\'"
-  :why "hidden work buffers Emacs makes for itself and keeps")
+ (:what "\\`buffer [+-] \\*\\(?:code-conversion-work\\|code-converting-work\\|tab-line-hscroll\\|jka-compr-wr-temp\\|string-pixel-width\\|work\\|Minibuf-[0-9]+\\)\\*\\'"
+  :why "hidden work buffers Emacs makes for itself and keeps (` *work*': the pool of `with-work-buffer', which shr's
+string-pixel-width uses)")
  (:what "\\`buffer \\+\\*\\(?:Compile-Log\\|Native-compile-Log\\|Warnings\\)\\*\\'"
   :why "the logs byte and native compilation, and warnings, write to")
  (:what "\\`drgnx-keys--applied length nil -> 0\\'"
