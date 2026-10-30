@@ -1,6 +1,7 @@
 ;;; mod-replace-engine-test.el --- batch tests: the replace engine — text through rg/git grep/grep, symbols through the server, one-step undo -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (require 'eglot)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
@@ -8,12 +9,11 @@
 
 (defun drgnx-replace-test--run (query)
   "Search QUERY to the end: (MATCHES . EVENTS), EVENTS being every non-batch value the callback got, in order."
-  (let ((matches nil) (events nil) (deadline (+ (float-time) 10)))
+  (let ((matches nil) (events nil))
     (drgnx-replace-search query (lambda (x)
                                   (if (and (consp x) (consp (car x))) (setq matches (append matches x))
                                     (setq events (append events (list x))))))
-    (while (and (not (memq :done events)) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    (should (memq :done events))
+    (drgnx-test-wait (lambda () (memq :done events)) :secs 10 :what "the search to finish")
     (cons matches events)))
 
 (defun drgnx-replace-test--files (matches root)
@@ -297,8 +297,7 @@
                  (lambda (&optional p) (error "Process %s not running: finished\n" (process-name p)))))
         (drgnx-replace-search (drgnx-replace-test--q repo "foo")
                               (lambda (x) (if (eq x :done) (setq done t) (setq got (append got x))))))
-      (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-      (should done))))
+      (drgnx-test-wait (lambda () done) :secs 10 :what "the search to finish"))))
 
 (ert-deftest drgnx-replace/no-rg-falls-back ()
   (let ((real (symbol-function 'executable-find)))
@@ -339,15 +338,14 @@
       (should (process-live-p h))
       (drgnx-replace-cancel h)
       (should-not (process-live-p h))
-      (let ((deadline (+ (float-time) 0.5))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+      (drgnx-test-pause 0.5)
       (should (null got))
       ;; a newer search replaces the one still running
       (let* ((first-got nil) (second-got nil)
              (h1 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x first-got))))
              (h2 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x second-got)))))
         (should-not (process-live-p h1))
-        (let ((deadline (+ (float-time) 10))) (while (and (not (memq :done second-got)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-        (should (memq :done second-got))
+        (drgnx-test-wait (lambda () (memq :done second-got)) :secs 10 :what "the newer search to finish")
         (should (null first-got))
         (should-not (process-live-p h2))))))
 
