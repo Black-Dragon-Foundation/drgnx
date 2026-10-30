@@ -11,6 +11,7 @@ patterns=(
   'gh[pousr]_[A-Za-z0-9]{30,}'         # GitHub tokens
   'github_pat_[A-Za-z0-9_]{22,}'       # GitHub fine-grained tokens
   'AKIA[0-9A-Z]{16}'                   # AWS access keys
+  'AGE-SECRET-KEY-1[0-9A-Z]{58}'          # age identities
   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
   '/home/[a-z][a-z0-9_-]*/'            # absolute home paths
   '/Users/[A-Za-z][A-Za-z0-9_-]*/'

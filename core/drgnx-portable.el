@@ -101,6 +101,14 @@ with `expand-file-name'."
   (let ((new (concat to ".drgnx-new")))
     (when (or (file-exists-p new) (file-symlink-p new)) (drgnx-portable--delete new))))
 
+(defun drgnx-portable--fsync-tree (path)
+  "Write PATH (a file, or the regular files under a directory) to disk: each is rewritten with the same bytes, fsynced."
+  (dolist (f (if (file-directory-p path) (directory-files-recursively path "" nil nil nil) (list path)))
+    (when (and (file-regular-p f) (not (file-symlink-p f)))
+      (let ((bytes (drgnx-portable--bytes f)) (write-region-inhibit-fsync nil)
+            (coding-system-for-write 'no-conversion))
+        (write-region bytes nil f nil 'silent)))))
+
 (defun drgnx-portable--copy-into-place (from to)
   "Copy FROM (a file or a directory) to TO, which is not there: into TO.drgnx-new, verified, then renamed to TO.
 An error leaves neither TO nor TO.drgnx-new; a crash can leave only TO.drgnx-new."
@@ -110,6 +118,7 @@ An error leaves neither TO nor TO.drgnx-new; a crash can leave only TO.drgnx-new
           (if (file-directory-p from) (copy-directory from new t t) (copy-file from new nil t t t))
           (unless (drgnx-portable--same-p from new)
             (error "drgnx: copying %s to %s did not give the same files: nothing moved" from to))
+          (drgnx-portable--fsync-tree new)       ; on disk before the rename makes it the item
           (rename-file new to))
       (drgnx-portable--delete-new to))))
 

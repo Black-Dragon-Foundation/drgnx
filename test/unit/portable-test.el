@@ -240,7 +240,8 @@
 (defconst drgnx-portable-test--keys
   (list (concat "sk-proj-" (make-string 24 ?x)) (concat "sk-svcacct-" (make-string 24 ?x))
         (concat "sk-admin-" (make-string 24 ?x)) (concat "github_pat_" (make-string 30 ?x))
-        (concat "xsk-or-v1-" (make-string 24 ?x)) (concat "KEY_sk-ant-" (make-string 24 ?x)))
+        (concat "xsk-or-v1-" (make-string 24 ?x)) (concat "KEY_sk-ant-" (make-string 24 ?x))
+        (concat "AGE-SECRET-" "KEY-1" (make-string 58 ?A)))
   "Keys of today's formats, and keys after a word character.  Built here: no key is in a file of the repository.")
 
 (ert-deftest drgnx-portable/todays-key-formats-are-found ()
@@ -262,7 +263,7 @@
     (unwind-protect
         (let ((default-directory (file-name-as-directory repo)))
           (call-process "git" nil nil nil "init" "-q")
-          (dolist (k (seq-take drgnx-portable-test--keys 4))
+          (dolist (k drgnx-portable-test--keys)
             (write-region (concat "x = " k "\n") nil "f.txt")
             (call-process "git" nil nil nil "add" "f.txt")
             (should (= 1 (call-process "bash" nil nil nil hook "--all"))))
@@ -342,3 +343,17 @@
     (should (file-exists-p (expand-file-name "keys.eld.bak-20261019-120000-000" (drgnx-user-dir))))))
 
 ;;; portable-test.el ends here
+
+(ert-deftest drgnx-portable/a-move-syncs-the-copy-before-the-rename ()
+  (drgnx-portable-test--with root
+    (drgnx-portable-test--write (expand-file-name "systemd/a.service" (drgnx-user-dir)) "[Unit]\nA\n")
+    (let (order)
+      (cl-letf* ((sync (symbol-function 'drgnx-portable--fsync-tree))
+                 (ren (symbol-function 'rename-file))
+                 ((symbol-function 'drgnx-portable--fsync-tree)
+                  (lambda (p) (push 'fsync order) (funcall sync p)))
+                 ((symbol-function 'rename-file)
+                  (lambda (&rest a) (push 'rename order) (apply ren a))))
+        (drgnx-portable-move-machine-local))
+      (should (equal (reverse order) '(fsync rename)))
+      (should (equal (drgnx-portable-test--text (expand-file-name "systemd/a.service" (drgnx-data-dir))) "[Unit]\nA\n")))))

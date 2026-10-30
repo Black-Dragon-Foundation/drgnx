@@ -294,3 +294,14 @@ and no list buffer; the list's buffer, view type and hook are gone after."
 
 (provide 'core-notices-test)
 ;;; core-notices-test.el ends here
+
+(ert-deftest drgnx-notices/a-hub-notice-command-must-be-a-registry-id ()
+  (require 'drgnx-hub-client)
+  (drgnx-notices-test--with
+    (let (seen)
+      (cl-letf (((symbol-function 'drgnx-notify)
+                 (lambda (&rest args) (push (plist-get (nthcdr 3 args) :command) seen))))
+        (dolist (c '("thing" "delete-file" "no-such-command-at-all"))
+          (drgnx-hub--note-notice "notice" (list :id "n" :text "t" :severity "info" :command c))))
+      (should (equal (nreverse seen) '(thing nil nil)))
+      (should-not (intern-soft "no-such-command-at-all")))))
