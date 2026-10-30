@@ -438,7 +438,9 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 ;; macOS's bash reads "$name…" as a variable named "name" plus the first byte of "…" (its libc calls bytes above 127
 ;; letters in a UTF-8 locale), so under `set -u' the script stops: "name\342: unbound variable".  ${name}… is safe.
 (ert-deftest drgnx-bin/no-shell-variable-runs-into-a-non-ascii-character ()
-  (dolist (file '("bin/drgnx" "install.sh"))
+  (dolist (file (append '("bin/drgnx" "install.sh")
+                        (mapcar (lambda (f) (file-relative-name f drgnx-bin-test--root))
+                                (directory-files-recursively (expand-file-name "test" drgnx-bin-test--root) "\\.sh\\'"))))
     (with-temp-buffer
       (insert-file-contents (expand-file-name file drgnx-bin-test--root))
       (let (hits)
@@ -1040,6 +1042,24 @@ macOS (no /proc there)."
                                 (copy-file (expand-file-name (concat "bin/" f) wt) (expand-file-name (concat "bin/" f) main) t))
                               (drgnx-bin-test--container-argv dir nil))))
             (should-not (seq-find (lambda (a) (string-suffix-p "/.git:ro" a)) args))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/a-batch-container-run-is-memory-capped-without-swap ()
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                         (format "for a in \"$@\"; do echo \"$a\" >> %s; done" log)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                     (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image")
+                               "test" "--container"))))
+          (let ((args (split-string (drgnx-bin-test--slurp log) "\n" t)))
+            (should (equal (cadr (member "--memory" args)) "4g"))
+            (should (equal (cadr (member "--memory-swap" args)) "4g"))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()

@@ -566,6 +566,12 @@ it runs a sentinel.  `process-live-p' is nil earlier: a buffer killed then, with
 chunk's filter fail, which ends a batch Emacs (the whole run)."
   (unless (process-live-p p) (process-put p :ended t)))
 
+(defun drgnx-run-ert--ignoring-sigpipe (command)
+  "COMMAND (a list) run with SIGPIPE ignored; `drgnx-command-ignoring-sigpipe', which this file cannot load (it has only
+harness/ on its load path).  A test keeps the two the same."
+  (if (eq system-type 'windows-nt) command
+    (append (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\"") command)))
+
 (defun drgnx-run-ert--start-file (file tmp json buffer)
   "Start an Emacs that runs the test FILE alone (`drgnx-run-ert-batch', this Emacs's `load-path' and environment),
 in the temp directory TMP (its DRGNX_RUN_TMP: used, never deleted, by it), its summary to JSON.  Its output goes
@@ -582,11 +588,11 @@ to BUFFER, or to this Emacs's standard error when BUFFER is nil."
              ;; SIGPIPE ignored, as bin/drgnx runs this Emacs: Emacs starts its children with the default action,
              ;; and a write to a reader that left (the gateway answering an agent that hung up) would end the file's
              ;; Emacs with no summary (`drgnx-command-ignoring-sigpipe', which the harness cannot load)
-             :command (append (and (not (eq system-type 'windows-nt)) (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""))
-                              (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                    "--eval" (format "(setq load-prefer-newer %S load-path '%S debug-on-event 'sigusr2)"
-                                                     load-prefer-newer load-path)
-                                    "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" file))
+             :command (drgnx-run-ert--ignoring-sigpipe
+                       (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                             "--eval" (format "(setq load-prefer-newer %S load-path '%S debug-on-event 'sigusr2)"
+                                              load-prefer-newer load-path)
+                             "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" file))
              :filter (lambda (_ s) (if buffer
                                        (with-current-buffer buffer (goto-char (point-max)) (insert s))
                                      (princ s #'external-debugging-output)))
@@ -705,6 +711,11 @@ sets it, for one of its two batches may hold none of the tests a narrow selector
   (list :name "selector"
         :condition (format "DRGNX_TEST_SELECTOR %S matched 0 tests (an Emacs regexp: \\| for alternation, not |)" selector)))
 
+(defun drgnx-run-ert--awake (awake last now)
+  "AWAKE seconds plus the time from LAST to NOW, at most 5 s of it: the loop ticks every 0.05 s, so a longer gap is the
+machine asleep, which a file's time limit must not count."
+  (+ awake (min 5.0 (max 0.0 (- now last)))))
+
 (defun drgnx-run-ert-files (files results-file)
   "Run each test file of FILES in an Emacs of its own, as Emacs's own `make check' does: a hook, timer, feature or
 variable one file leaves never reaches the next.  Each gets this Emacs's `load-path' and environment (selector,
@@ -720,7 +731,7 @@ file passed."
          (out-dir (make-temp-file "drgnx-files" t))
          (queue (cl-loop for file in files for i from 1
                          collect (list :file file :json (expand-file-name (format "%d.json" i) out-dir))))
-         (count (length queue)) (running nil) (done nil) (t0 (float-time))
+         (count (length queue)) (running nil) (done nil) (t0 (float-time)) (last (float-time))
          (rerun (equal (drgnx-run-ert--env "DRGNX_TEST_RERUN") "1"))
          (seed (drgnx-run-ert--shuffle-seed)))     ; the files' Emacsen inherit it; this one says it once
     (when seed (drgnx-run-ert--say-seed seed))
@@ -740,9 +751,13 @@ file passed."
                                       :process (drgnx-run-ert--start-file (plist-get f :file) tmp (plist-get f :json) buffer)))
                       running)))
             (accept-process-output nil 0.05)
+            (let ((now (float-time)))
+              (dolist (f running)
+                (plist-put f :awake (drgnx-run-ert--awake (or (plist-get f :awake) 0.0) last now)))
+              (setq last now))
             (dolist (f (copy-sequence running))
               (let ((p (plist-get f :process)))
-                (when (and (process-live-p p) (> (- (float-time) (plist-get f :start)) timeout))
+                (when (and (process-live-p p) (> (plist-get f :awake) timeout))
                   (message "drgnx: %s ran %d s: ending it" (plist-get f :file) timeout)
                   (plist-put f :timed-out t)
                   (drgnx-run-ert--backtrace-process p)     ; where it hangs, in the file's output (CI-REMOTE-MAC-1)
@@ -817,15 +832,16 @@ file passed."
     (unwind-protect
         (let* ((p (make-process
                    :name "drgnx-polluter" :noquery t :connection-type 'pipe :coding 'utf-8 :buffer out
-                   :command (append (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                          "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
-                                          "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch")
-                                    files)
-                   :sentinel #'ignore))
+                   :command (drgnx-run-ert--ignoring-sigpipe
+                             (append (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                           "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
+                                           "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch")
+                                     files))
+                   :sentinel #'drgnx-run-ert--file-ended))
                (deadline (+ (float-time) timeout)))
           (process-send-eof p)
           (push p drgnx-run-ert--file-processes)
-          (while (process-live-p p)
+          (while (not (process-get p :ended))   ; over once the sentinel ran: all its output is read
             (accept-process-output p 0.05)
             (when (> (float-time) deadline)
               (setq timed-out t)
@@ -1102,9 +1118,12 @@ which tests failed how often, as `bin/drgnx test --stress' does at LOAD busy loo
                  (process-environment (append (list (concat "DRGNX_TEST_RESULTS=" json) "DRGNX_RUN_TMP" "DRGNX_TEST_STRESS"
                                                     "DRGNX_TEST_LOAD" "DRGNX_TEST_RERUN")
                                               process-environment))
-                 (exit (apply #'call-process "sh" nil nil nil "-c" "trap '' PIPE; exec \"$0\" \"$@\"" emacs "--batch" "-Q"
-                              "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
-                              "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch" args))
+                 (exit (let ((cmd (drgnx-run-ert--ignoring-sigpipe
+                                   (append (list emacs "--batch" "-Q"
+                                                 "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
+                                                 "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch")
+                                           args))))
+                         (apply #'call-process (car cmd) nil nil nil (cdr cmd))))
                  (summary (drgnx-run-ert--read-summary json))
                  (names (if summary
                             (mapcar (lambda (x) (plist-get x :name)) (plist-get summary :failures))

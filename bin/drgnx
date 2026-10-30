@@ -335,6 +335,10 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     build=(--build-arg "FEDORA=$fedora")
     args=(--security-opt seccomp=unconfined --security-opt label=disable --memory 3g)   # the GUI tier's options; tmux and Emacs sessions
     mount="$here:/src:ro"
+  else
+    # the batch tier: capped like the others, no swap beyond it; DRGNX_TEST_BATCH_MEMORY (default 4g) for a bigger run
+    local bmem_run="${DRGNX_TEST_BATCH_MEMORY:-4g}"
+    args=(--memory "$bmem_run" --memory-swap "$bmem_run")
   fi
   # packages the tests load (kkp, corfu, gptel, …), read-only, in every tier; without them those tests skip
   if [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
@@ -502,7 +506,7 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
     log="$logs/$name.log"
     printf '%-14s %s … ' "$name" "$image" >&2
     # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit)
-    if test_run "drgnx-install-$$-$name" --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" ${nidhogg[@]+"${nidhogg[@]}"} "$image" \
+    if test_run "drgnx-install-$$-$name" --memory 6g --memory-swap 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" ${nidhogg[@]+"${nidhogg[@]}"} "$image" \
          bash /src/test/install/in-container.sh >"$log" 2>&1; then
       echo "ok" >&2
     else
