@@ -3,6 +3,7 @@
 ;; which run the real `bin/drgnx work …' against DRGNX_RATATOSKR_BIN.  The fixture tree is the parity oracle's
 ;; (test/fixtures/work-scan-parity/gen.el).
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-paths)
@@ -309,7 +310,7 @@ Ratatoskr (DRGNX_RATATOSKR_BIN) starts for it, and the test's environment in eff
          (progn (make-directory (concat ,root "config") t) (make-directory (concat ,root "home") t)
                 ,@body)
        (ignore-errors (funcall ,cli "hub" "stop"))
-       (let ((deadline (+ (float-time) 5))) (while (and (drgnx-hub-running-p) (< (float-time) deadline)) (sleep-for 0.1)))
+       (drgnx-test-wait (lambda () (not (drgnx-hub-running-p))) :secs 5 :what "the hub to stop")
        (drgnx-work-db-close-all)
        (delete-directory ,root t))))
 

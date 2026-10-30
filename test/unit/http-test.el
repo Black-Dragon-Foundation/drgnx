@@ -1,5 +1,6 @@
 ;;; http-test.el --- batch tests: HTTP request parsing, SSE usage, the streaming mock -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-http)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
@@ -79,8 +80,7 @@
           (let ((c (open-network-stream "c" nil "127.0.0.1" port :coding 'binary)))
             (set-process-filter c (lambda (_p s) (setq got (concat got s)) (push got seen)))
             (process-send-string c "GET /s HTTP/1.1\r\n\r\n")
-            (let ((deadline (+ (float-time) 5)))
-              (while (and (process-live-p c) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+            (drgnx-test-wait (lambda () (not (process-live-p c))) :secs 5 :what "the connection to close")
             (should (string-match-p "\\`HTTP/1.1 200" got))
             (should-not (string-match-p "Content-Length" got))
             (should (string-suffix-p "\r\n\r\naabb" got))

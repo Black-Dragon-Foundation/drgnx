@@ -1,5 +1,6 @@
 ;;; work-ui-test.el --- batch tests: the Work tab (tree, open, filter, refresh, graph, agents on a task) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx)
 (require 'drgnx-agents)                ; loaded before any test stubs its functions
 (load (expand-file-name "modules/tools/drgnx-work-ui" drgnx-dir) nil t)
@@ -302,8 +303,7 @@ without SVG (librsvg), e.g. a terminal-only build."
               (should-not (string-search "Plan Gamma" (buffer-string)))
               (let ((p (drgnx-work-ui-refresh)))
                 (should (processp p))                           ; not the scan itself: Emacs stays free
-                (let ((d (+ (float-time) 60)))
-                  (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
+                (drgnx-test-wait (lambda () (not (process-live-p p))) :secs 60 :what "the scan process to end")
                 (accept-process-output nil 0.2)
                 (let ((out (with-current-buffer (process-buffer p) (buffer-string))))   ; its output, when it failed
                   (should (equal (cons (process-exit-status p) out) (cons 0 out)))))
@@ -332,7 +332,7 @@ without SVG (librsvg), e.g. a terminal-only build."
             (let* ((default-directory (file-name-as-directory gone))
                    (p (drgnx-work-ui-refresh)))
               (should (processp p))
-              (let ((d (+ (float-time) 30))) (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
+              (drgnx-test-wait (lambda () (not (process-live-p p))) :secs 30 :what "the scan process to end")
               (accept-process-output nil 0.1)
               (should (equal said '("Work: the scan failed: this-scan-failed")))
               (kill-buffer (process-buffer p))

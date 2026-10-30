@@ -3,6 +3,7 @@
 ;; The hub test compiles the hub's four files into a temp folder and loads them in a child `emacs --batch -Q',
 ;; waited for under a 30 s bound.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -620,9 +621,8 @@ A file's mistake is a notice (`drgnx-config--notify'): `drgnx-modules', required
                        :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-L" dir
                                       "--eval" "(let ((before features)) (require 'drgnx-config)
                                                   (let ((new nil)) (dolist (f features) (unless (memq f before) (push f new)))
-                                                    (prin1 new)))")))
-                (deadline (+ (float-time) 30)))
-            (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+                                                    (prin1 new)))"))))
+            (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 30 :what "the Emacs to end")
             (should (eq (process-status proc) 'exit))
             (should (eql (process-exit-status proc) 0))
             (let ((new (car (read-from-string (with-current-buffer buf (buffer-string))))))
