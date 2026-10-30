@@ -2,7 +2,9 @@
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-area)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-persist)
+
 (require 'server)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
@@ -53,13 +55,10 @@ panel's rules on."
 
 (defun drgnx-terminal-test--wait-for-file (file)
   "FILE's text once the shell has written it (waits up to 5 s), else nil."
-  (let ((until (+ (float-time) 5)))
-    (while (and (< (float-time) until)
-                (not (and (file-exists-p file) (> (file-attribute-size (file-attributes file)) 0))))
-      (accept-process-output nil 0.1))
-    (when (file-exists-p file)
-      (sleep-for 0.2)
-      (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+  (drgnx-terminal-test--wait-until (lambda () (and (file-exists-p file) (> (file-attribute-size (file-attributes file)) 0))))
+  (when (file-exists-p file)
+    (drgnx-test-pause 0.2)
+    (with-temp-buffer (insert-file-contents file) (buffer-string))))
 
 (ert-deftest drgnx-terminal/new-terminal-is-eat-running-the-users-shell ()
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
@@ -240,9 +239,7 @@ panel's rules on."
 
 (defun drgnx-terminal-test--wait-until (pred)
   "Non-nil once PRED is (waits up to 5 s)."
-  (let ((until (+ (float-time) 5)))
-    (while (and (< (float-time) until) (not (funcall pred))) (accept-process-output nil 0.1))
-    (funcall pred)))
+  (condition-case nil (drgnx-test-wait pred :secs 5 :what "the terminal") (ert-test-failed nil)))
 
 (defmacro drgnx-terminal-test--shell (body &rest forms)
   "Run FORMS with `buf' and `proc' bound to a new eat terminal whose \"shell\" is a script running BODY."
