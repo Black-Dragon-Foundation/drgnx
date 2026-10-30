@@ -518,3 +518,48 @@
 
 (provide 'wb-state-events-test)
 ;;; wb-state-events-test.el ends here
+
+(ert-deftest drgnx-state-events/idle-calls-of-editor-windows-are-kept-apart ()
+  (drgnx-state-events-test--with
+    (let* ((f (selected-frame)) (a (selected-window)) (b (split-window a nil 'below)))
+      (drgnx-state-sync f)
+      (setq drgnx-state-events-test--inside nil)
+      (drgnx-state-subscribe 'pane-resized #'drgnx-state-events-test--idle-note)
+      (window-resize a 1) (drgnx-state-sync f)
+      (should (= 2 (length (seq-filter (lambda (d) (memq (plist-get d :window) (list a b)))
+                                       (mapcar #'identity (mapcar #'cdr (mapcar (lambda (c) (cons nil (nth 4 c))) drgnx-state--queue))))))))))
+
+(ert-deftest drgnx-state-events/idle-queue-without-the-bus-does-not-abort ()
+  (drgnx-state-events-test--with
+    (let ((drgnx-state--queue nil))
+      (cl-letf (((symbol-function 'drgnx-signal--schedule) nil))
+        (should-not (condition-case err (progn (drgnx-state--queue-call #'ignore 'pane-resized (list :frame (selected-frame))) nil)
+                      (error err)))
+        (should drgnx-state--queue)))))
+
+(ert-deftest drgnx-state-events/a-frame-border-drag-is-not-a-user-pane-resize ()
+  (drgnx-state-events-test--with
+    (let* ((f (selected-frame)) (a (selected-window)))
+      (split-window a nil 'below)
+      (drgnx-state-sync f)
+      (drgnx-state-events-test--listen 'pane-resized)
+      (setq drgnx-state--in-command t)
+      (let ((this-command (lambda (_e) (interactive "e"))) (track-mouse 'dragging))
+        (enlarge-window 2)
+        (cl-letf (((symbol-function 'drgnx-state--fr-size) (lambda (r) (if (eq r (gethash f drgnx-state--frames)) '(1 1 1 1) '(2 2 2 2)))))
+          (should (eq 'other (car (drgnx-state--cause t)))))
+        (should (eq 'user (car (drgnx-state--cause nil))))))))
+
+(ert-deftest drgnx-state-events/window-role-follows-a-parameter-changed-in-place ()
+  (drgnx-state-events-test--with
+    (let* ((f (selected-frame)) (a (selected-window)) (w (split-window a nil 'below)))
+      (drgnx-state-sync f)
+      (should (eq 'editor (drgnx-state-window-role w)))
+      (set-window-parameter w 'drgnx-popup '(:borrowed nil))
+      (should (eq 'popup (drgnx-state-window-role w))))))
+
+(ert-deftest drgnx-wb-show-in-editor-without-an-editor-window-does-nothing ()
+  (cl-letf (((symbol-function 'drgnx-wb-editor-window) (lambda () nil)))
+    (let ((buf (get-buffer-create " *df-c1b*")) (before (window-buffer)))
+      (should-not (drgnx-wb-show-in-editor buf t))
+      (should (eq before (window-buffer))))))

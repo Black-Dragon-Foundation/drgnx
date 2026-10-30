@@ -468,14 +468,15 @@ it was not subscribed before, and only while it is still on LANE (`drgnx-module-
 (defun drgnx-state--queue-call (fn event data)
   "Queue FN's call for EVENT with DATA, replacing the data of a waiting call for the same frame and kind;
 arm the bus's idle flush (one timer for the store and the bus)."
-  (let ((frame (plist-get data :frame)) (kind (plist-get data :kind)) (found nil))
+  (let ((frame (plist-get data :frame)) (found nil)
+        (kind (or (plist-get data :kind) (plist-get data :window))))   ; an editor window has no kind: its own key
     (dolist (c drgnx-state--queue)
       (when (and (not found) (eq (car c) fn) (eq (nth 1 c) event) (eq (nth 2 c) frame) (eq (nth 3 c) kind))
         (setq found c)))
     (if found
         (setcar (nthcdr 4 found) data)
       (push (list fn event frame kind data) drgnx-state--queue)))
-  (drgnx-signal--schedule))
+  (when (fboundp 'drgnx-signal--schedule) (drgnx-signal--schedule)))
 
 (defun drgnx-state--deliver-idle ()
   "Make the waiting idle calls, oldest first (the bus's flush calls it, after `drgnx-state-sync')."
@@ -488,13 +489,14 @@ arm the bus's idle flush (one timer for the store and the bus)."
   "Forget the waiting idle calls (the bus's flush stays armed while the bus is on: it has its own edges)."
   (setq drgnx-state--queue nil))
 
-(defun drgnx-state--cause ()
+(defun drgnx-state--cause (&optional frame-resized)
   "(CAUSE . BY) for the change being observed: (write . BY) inside a write (`drgnx-state-with-write');
-\(user . user) inside one of `drgnx-state-user-resize-commands' or a mouse drag of a divider; else (other)."
+\(user . user) inside one of `drgnx-state-user-resize-commands' or a mouse drag of a divider (not while the
+frame itself changed size: dragging a frame's border also sets `track-mouse'); else (other)."
   (cond (drgnx-state--writing (cons 'write (plist-get drgnx-state--writing :by)))
         ((and drgnx-state--in-command
               (or (memq this-command drgnx-state-user-resize-commands)
-                  (eq track-mouse 'dragging)))  ; each step of a divider drag runs a transient-map closure
+                  (and (eq track-mouse 'dragging) (not frame-resized))))  ; each step of a divider drag runs a transient-map closure
          '(user . user))
         (t '(other))))
 
@@ -537,7 +539,8 @@ arm the bus's idle flush (one timer for the store and the bus)."
   "Emit what changed on FRAME from OLD (nil: FRAME is new) to NEW, in the order of `drgnx-state-events'.
 SWITCHED: FRAME has just become the selected frame; PREV: the frame selected before it.  An event nobody
 subscribes to is not computed."
-  (let* ((cause (drgnx-state--cause)) (by (cdr cause)) (cause (car cause))
+  (let* ((cause (drgnx-state--cause (and old (not (equal (drgnx-state--fr-size old) (drgnx-state--fr-size new))))))
+         (by (cdr cause)) (cause (car cause))
          (ow (and old (drgnx-state--fr-windows old))) (nw (drgnx-state--fr-windows new)))
     (when (and (null old) (drgnx-state--wants 'frame-added))
       (drgnx-state--emit 'frame-added (list :frame frame :kind (drgnx-state--fr-kind new))))
@@ -653,10 +656,9 @@ subscribes to is not computed."
 
 (defun drgnx-state-window-role (window)
   "WINDOW's role: a role of the table, `side', `editor', or nil (the minibuffer, a dead window).
-From the record; a window not observed yet is classified live by the same rule."
-  (when (window-live-p window)
-    (let ((r (drgnx-state--window-record window)))
-      (if r (drgnx-state--win-role r) (drgnx-state--classify window)))))
+Classified live (three parameter reads, no allocation), so a role parameter changed in place on an
+observed window reads right at once."
+  (when (window-live-p window) (drgnx-state--classify window)))
 
 (defun drgnx-state-edges (window)
   "WINDOW's pixel edges as last observed: (LEFT TOP WIDTH HEIGHT), or nil."
