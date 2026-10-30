@@ -92,6 +92,7 @@ KEY and SUBKEY as `drgnx-state-intent'.  VALUE: for `:sizes' the pixels (N, or (
 tab; for `:view' the view (SUBKEY nil).  The value goes to today's parameter (no copy) and BY to
 `drgnx-intent-by'.  BY: nil means the running write's (`drgnx-state-with-write'), else
 `drgnx-state-default-by'.
+A `:sizes' VALUE nil with BY `restore' clears the size (the pane returns to its default) and writes nothing.
 A size you chose (`user') is not replaced by `auto', `layout', `teardown' or `other' — a squeezed panel being
 hidden, a layout's size — only by `user' or `restore'.  A `restore' replaces anything and counts as `user'
 afterwards.  The front tab and the view are what shows until the grid, so every write of them lands.
@@ -107,11 +108,17 @@ the grid: nil."
                  (:sizes
                   (let ((param (alist-get subkey drgnx-state-intent--sizes))
                         (px (if (integerp value) value (plist-get value :px))))
-                    (when (and param (natnump px)
-                               (or (memq by '(user restore))
-                                   (not (eq 'user (drgnx-state-intent--by frame key subkey)))))
-                      (set-frame-parameter frame param px)
-                      t)))
+                    (if (and param (null px) (eq by 'restore))
+                        ;; a restore with no saved size: the pane goes back to its default
+                        (progn (set-frame-parameter frame param nil)
+                               (set-frame-parameter frame 'drgnx-intent-by
+                                                    (assoc-delete-all (cons key subkey) (copy-alist (frame-parameter frame 'drgnx-intent-by))))
+                               nil)
+                      (when (and param (natnump px)
+                                 (or (memq by '(user restore))
+                                     (not (eq 'user (drgnx-state-intent--by frame key subkey)))))
+                        (set-frame-parameter frame param px)
+                        t))))
                  (:front
                   (when (and subkey (symbolp subkey) (symbolp value))
                     (let ((areas (copy-alist (frame-parameter frame 'drgnx-wb-areas))))
