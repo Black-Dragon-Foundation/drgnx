@@ -119,6 +119,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         },
         "socket_dir": socket_dir(&socket, env.uid),
         "sqlite": crate::version::sqlite(),
+        "sqlite_wal_fixed": urdr::wal_reset_fixed(urdr::sqlite_version_number()),
         "job_agents": JOB_AGENTS,
         "sandbox": sandbox_section(sandbox),
     });
@@ -450,6 +451,15 @@ fn text(v: &Value, sandbox: &Check) -> String {
         out.push_str(&store_lines(s));
     }
     out.push_str(&keys_refused_line(&v["gateway"]));
+    out.push_str(&format!(
+        "\nsqlite: {} ({})",
+        t(&v["sqlite"]),
+        if v["sqlite_wal_fixed"] == true {
+            "WAL-reset bug fixed"
+        } else {
+            "in the WAL-reset corruption range: update"
+        }
+    ));
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
     out
@@ -508,6 +518,8 @@ mod tests {
         assert_eq!(v["socket_dir"]["mode"], "0700");
         assert_eq!(v["socket_dir"]["ok"], true);
         assert!(v["sqlite"].as_str().unwrap().starts_with("3."));
+        assert_eq!(v["sqlite_wal_fixed"], true);
+        assert!(text(&v, &working()).contains("WAL-reset bug fixed"));
         assert_eq!(v["job_agents"], JOB_AGENTS);
         assert!(v.get("running").is_none());
         // too open: not ok

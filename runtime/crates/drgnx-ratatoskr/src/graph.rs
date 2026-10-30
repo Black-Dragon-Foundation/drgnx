@@ -18,6 +18,7 @@
 //! - **Errors** as the front's other writes: a refusal is `invalid-params` with its text, a newer file `schema`, the
 //!   rest `internal`; what only the user may do, asked by the backend's connection, is `not-allowed`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -1693,6 +1694,21 @@ async fn settings(w: &Writer, caller: &Caller, p: api::SettingsParams) -> Result
     }))
 }
 
+/// The backups and set-aside copies a revoke found still holding excised text, per work.db, until they are deleted
+/// or gone: the excise blanks the values, so nothing could find them again once the user said no. Each answer of
+/// `graph/privacy` re-offers them.
+static HELD_COPIES: Mutex<BTreeMap<PathBuf, BTreeSet<PathBuf>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Remember FOUND for DB, forget REMOVED and any copy that no longer exists; those still held.
+fn held_copies(db: &Path, found: &[PathBuf], removed: &[PathBuf]) -> Vec<PathBuf> {
+    let mut all = HELD_COPIES.lock().unwrap_or_else(|e| e.into_inner());
+    let set = all.entry(db.to_path_buf()).or_default();
+    set.extend(found.iter().cloned());
+    set.retain(|p| !removed.contains(p) && p.is_file());
+    set.iter().cloned().collect()
+}
+
 /// `graph/privacy {reload}`: the opt-ins read again, in force at once (so no door lets back in what goes), then
 /// applied (`norn::privacy`, Task 9b): its notice is an `event` row, and the backend hears `coord/notify`. With
 /// `delete_copies` (the user's revoke command, after asking), those of the named copies that are backups or set-aside
@@ -1739,12 +1755,13 @@ async fn privacy(
             .map_err(|e| internal(e.to_string()))?
     };
     let paths = |v: &[PathBuf]| v.iter().map(|p| show(p)).collect::<Vec<_>>();
+    let holding = held_copies(g.writer.path(), &r.backups_holding, &removed);
     Ok(json!(api::PrivacyAnswer {
         added: paths(&r.added),
         removed: paths(&r.removed),
         ignored: r.ignored,
         excised: r.excised,
-        backups_holding: paths(&r.backups_holding),
+        backups_holding: paths(&holding),
         exports_holding: paths(&r.exports_holding),
         backups_removed: paths(&removed),
     }))
@@ -2277,6 +2294,56 @@ mod tests {
                 .await
                 .unwrap()
         }
+    }
+
+    /// After a revoke the user says no to deleting the backups that hold the file's text; a later `graph/privacy`
+    /// still lists them (the excise blanked the values, so only the hub's memory can), and deleting them empties it.
+    #[tokio::test]
+    async fn backups_held_after_a_no_are_offered_again() {
+        let race = Race::new().await;
+        let r = race.reading().to_string_lossy().into_owned();
+        let p: api::PutParsedParams = serde_json::from_value(json!({"sources": [
+            {"source": {"kind": "spec", "path": r}, "mtime": 1.0,
+             "entities": [{"id": format!("spec:{r}"), "kind": "spec", "title": CANARY,
+                           "data": {"path": r, "line": 1}}]}
+        ]}))
+        .unwrap();
+        put_parsed(&race.w, &race.coord, p).await.unwrap();
+        let backup = race.dir.path().join("backup/old.db");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        std::fs::write(&backup, format!("row {CANARY} end")).unwrap();
+        let dirs = StoreDirs {
+            home: race.home.clone(),
+            config: race.config.clone(),
+            hub: race.dir.path().join("hub"),
+        };
+        let ask = |delete: Value| {
+            let (w, coord, dirs) = (race.w.clone(), race.coord.clone(), dirs.clone());
+            async move {
+                let mut p = json!({"reload": true});
+                if !delete.is_null() {
+                    p["delete_copies"] = delete;
+                }
+                privacy(
+                    &w,
+                    &coord,
+                    Some(&dirs),
+                    &user(false),
+                    serde_json::from_value(p).unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        race.allow(&[]);
+        let held = json!([backup.to_string_lossy()]);
+        assert_eq!(ask(Value::Null).await["backups_holding"], held);
+        // The user said no: the next answer, with nothing new revoked, lists the copy again.
+        assert_eq!(ask(Value::Null).await["backups_holding"], held);
+        let a = ask(held.clone()).await;
+        assert_eq!(a["backups_removed"], held, "{a}");
+        assert_eq!(a["backups_holding"], json!([]), "{a}");
+        assert_eq!(ask(Value::Null).await["backups_holding"], json!([]));
     }
 
     /// The revoke race (call 8), the scan's half: a `graph/put-parsed` that resolved its projects before the opt-in
