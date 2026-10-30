@@ -286,6 +286,35 @@ async fn outside_is_refused_the_job_tools() {
     );
 }
 
+#[tokio::test]
+async fn report_rate_window_and_card_hour_end_exactly_on_the_boundary() {
+    let w = World::new(&[]);
+    let who = session("s-1", Some("j1"), w.dir.path());
+    let report = || w.call(&who, "report_test", json!({"command": "make check"}));
+    let cards = || w.count("select count(*) from card where kind = 'rate' and job = 'j1'");
+    let t0 = 1_700_000_000.5;
+    w.at(t0);
+    for _ in 0..20 {
+        assert!(!held(&report().await.1));
+    }
+    assert!(held(&report().await.1));
+    assert_eq!(cards(), 1);
+    // reports exactly a minute old no longer count
+    w.at(t0 + 60.0);
+    for i in 0..20 {
+        assert!(!held(&report().await.1), "report {i} a minute on");
+    }
+    assert!(held(&report().await.1));
+    assert_eq!(cards(), 1);
+    // exactly an hour after the card, the user is told again
+    w.at(t0 + 3600.0);
+    for _ in 0..20 {
+        assert!(!held(&report().await.1));
+    }
+    assert!(held(&report().await.1));
+    assert_eq!(cards(), 2, "an hour is not within the hour");
+}
+
 fn held(text: &str) -> bool {
     text.starts_with("HELD: more than 20 reports a minute (20 a minute is the limit)")
 }

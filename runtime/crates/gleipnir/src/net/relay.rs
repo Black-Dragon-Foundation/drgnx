@@ -527,6 +527,10 @@ mod tests {
         assert_eq!(parse(&["--parent-pid", "5", "1=/a"]), Ok(1), "the control");
         assert!(parse(&["--parent-pid", "0", "1=/a"]).is_err());
         assert!(parse(&["--parent-pid", "5"]).is_err(), "no pair");
+        assert!(
+            parse(&["--ready-fd", "-1", "--parent-pid", "5", "1=/a"]).is_err(),
+            "a negative fd is refused"
+        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))] // only the /proc liveness probe below uses it

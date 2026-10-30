@@ -328,6 +328,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let coord = Coord::new(CoordDb::spawn(dir.path().join("work.db")), Arc::new(NoHub));
         let tool = guarded(Ran);
+        assert_eq!(tool.description(), "a tool that would take an identity");
+        assert!(tool.input_schema().to_string().contains("agent"));
         let who = Identity::Session {
             agent: "s-1".into(),
             sid: "s1".into(),
