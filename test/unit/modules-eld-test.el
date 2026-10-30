@@ -45,7 +45,7 @@ Fails the test unless every child exits 0."
                  forms)))
     (unwind-protect
         (progn
-          (drgnx-test-wait (lambda () (not (cl-some #'process-live-p procs))) :secs 30 :what "the writer processes to end")
+          (drgnx-test-wait-ended procs :secs 30 :what "the writer processes to end")
           (dolist (p procs) (should (not (process-live-p p))))
           (cl-loop for p in procs for b in (reverse bufs)
                    do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))

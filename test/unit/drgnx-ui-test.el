@@ -739,7 +739,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (dolist (r (list a b))
         (dotimes (_ 250)
           (push (plist-get (drgnx-ui-prepare-run (drgnx-ui-next-name r) nil nil r) :name) names)))
-      (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 120 :what "the second Emacs to end")
+      (drgnx-test-wait-ended proc :secs 120 :what "the second Emacs to end")
       (unless (eq 0 (process-exit-status proc))
         (ert-fail (list "the second Emacs failed" (process-exit-status proc) (with-current-buffer (process-buffer proc) (buffer-string)))))
       (kill-buffer (process-buffer proc))

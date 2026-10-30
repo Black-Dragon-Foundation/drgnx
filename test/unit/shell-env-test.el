@@ -56,8 +56,7 @@ its environment, then AFTER."
          (proc (drgnx-shell-env-start (lambda (c) (setq done t changed c) (when callback (funcall callback c))))))
     (should (processp proc))
     (drgnx-test-wait (lambda ()
-                       (and (not (process-live-p proc))
-                            (or done (seq-find #'drgnx-shell-env-test--failure-p messages))))
+                       done)
                      :secs 5 :what "the shell environment read")
     (cons proc changed)))
 
@@ -118,7 +117,7 @@ its environment, then AFTER."
            (t0 (float-time))
            (proc (drgnx-shell-env-start (lambda (_) (setq called t)))))
       (should (processp proc))
-      (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 3 :what "the slow shell to be given up on")
+      (drgnx-test-wait-ended proc :secs 3 :what "the slow shell to be given up on")
       (should-not (process-live-p proc))
       (should (< (- (float-time) t0) 1))
       (should (equal (getenv "PATH") before))

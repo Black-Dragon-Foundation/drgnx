@@ -33,6 +33,26 @@ Wait on the sentinel's done flag, never on `process-live-p': it turns nil before
                       :processes (mapcar (lambda (p) (list (process-name p) (process-status p))) (process-list))
                       :timers (mapcar #'timer--function (append timer-list timer-idle-list)))))))
 
+(defun drgnx-test--sentinel-ran-p (proc)
+  "Non-nil once PROC's sentinel has run (see `drgnx-test-wait-ended')."
+  (process-get proc :drgnx-test-ended))
+
+(cl-defun drgnx-test-wait-ended (procs &key (secs 30) what)
+  "Wait until the sentinel of every process in PROCS (a process or a list) has run: `process-live-p' turns nil before it.
+A done flag is set by a sentinel added after the process's own, so call this before the process can end unobserved
+\(right after it starts); a process already dead has its pending sentinel delivered first, and one whose sentinel ran
+long before counts as ended."
+  (let ((procs (if (processp procs) (list procs) procs)))
+    (dolist (p procs)
+      (unless (process-get p :drgnx-test-hooked)
+        (process-put p :drgnx-test-hooked t)
+        (add-function :after (process-sentinel p)
+                      (lambda (pr _event) (unless (process-live-p pr) (process-put pr :drgnx-test-ended t))))))
+    (when (cl-some (lambda (p) (not (process-live-p p))) procs)
+      (accept-process-output nil 0.01)        ; delivers a sentinel still pending
+      (dolist (p procs) (unless (process-live-p p) (process-put p :drgnx-test-ended t))))
+    (drgnx-test-wait (lambda () (cl-every #'drgnx-test--sentinel-ran-p procs)) :secs secs :what what)))
+
 (defun drgnx-test-pause (secs)
   "Let processes and timers run for SECS of real time; nil.  Only for a test that asserts something does NOT happen
 in a short window (a second answer, a tick that starts nothing): a wait for something uses `drgnx-test-wait'.

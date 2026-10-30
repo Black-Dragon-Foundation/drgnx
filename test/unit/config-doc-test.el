@@ -31,7 +31,7 @@
          (proc (make-process :name "drgnx-config-doc-cmd" :buffer buf :noquery t :command (list "sh" "-c" command))))
     (unwind-protect
         (progn
-          (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 60 :what "the config doc command to end")
+          (drgnx-test-wait-ended proc :secs 60 :what "the config doc command to end")
           (should (eq (process-status proc) 'exit))
           (should (eql (process-exit-status proc) 0)))
       (delete-directory home t)
@@ -47,7 +47,7 @@
                                "--eval" "(setq load-prefer-newer t)"
                                "-L" "core" "-L" "wb" "-L" "harness" "-L" "modules/tools" "-L" "modules/editor" "-l" "drgnx-config-doc"
                                "--eval" (prin1-to-string form)))))
-    (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 30 :what "the config doc Emacs to end")
+    (drgnx-test-wait-ended proc :secs 30 :what "the config doc Emacs to end")
     (should (eq (process-status proc) 'exit))
     (should (eql (process-exit-status proc) 0))
     (with-current-buffer buf (buffer-string))))

@@ -448,7 +448,7 @@ STORED-CALLS a list of the ids `drgnx-ai-store-key' was called with (newest firs
           (progn
             (drgnx-secrets-import-keys)
             (should (= cleared 0))
-            (drgnx-test-wait (lambda () (not (process-live-p (get-buffer-process buf)))) :secs 5 :what "the process to end")
+            (drgnx-test-wait (lambda () (= cleared 1)) :secs 5 :what "the sentinel to clear the keys")
             (should (= cleared 1)))
         (when (buffer-live-p buf) (let ((kill-buffer-query-functions nil)) (kill-buffer buf)))))))
 

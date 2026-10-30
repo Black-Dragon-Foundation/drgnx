@@ -622,7 +622,7 @@ A file's mistake is a notice (`drgnx-config--notify'): `drgnx-modules', required
                                       "--eval" "(let ((before features)) (require 'drgnx-config)
                                                   (let ((new nil)) (dolist (f features) (unless (memq f before) (push f new)))
                                                     (prin1 new)))"))))
-            (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 30 :what "the Emacs to end")
+            (drgnx-test-wait-ended proc :secs 30 :what "the Emacs to end")
             (should (eq (process-status proc) 'exit))
             (should (eql (process-exit-status proc) 0))
             (let ((new (car (read-from-string (with-current-buffer buf (buffer-string))))))
