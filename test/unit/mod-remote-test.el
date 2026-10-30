@@ -607,7 +607,7 @@ choice of two nobody has."
                 (let ((p (make-process :name "drgnx-test-sentinel" :command '("sh" "-c" "true") :noquery t
                                        :sentinel (lambda (p _e) (unwind-protect (funcall try) (process-put p :done t))))))
                   (drgnx-test-wait (lambda () (process-get p :done)) :what "the sentinel's process"))
-                (accept-process-output nil 0.4)
+                (drgnx-test-pause 0.4)
                 (should (equal results '(refused refused refused refused)))
                 (should (= connects 0))
                 (setq results nil)
@@ -640,7 +640,7 @@ choice of two nobody has."
 (defun drgnx-remote-test--wait-for-server (buffer)
   "Wait until a server has answered for BUFFER's project, then let the attaching finish."
   (drgnx-test-wait (lambda () (with-current-buffer buffer (eglot-current-server))) :what "a server answering for the buffer's project")
-  (accept-process-output nil 0.5))
+  (drgnx-test-pause 0.5))
 
 (ert-deftest drgnx-remote/the-starting-buffer-and-the-project-are-managed ()
   "Eglot attaches buffers to a new server in a process filter; the guard skips remote buffers there, so the lang

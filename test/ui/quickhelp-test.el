@@ -1,6 +1,7 @@
 ;;; quickhelp-test.el --- GUI tests: quick help — a card beside the symbol, never over its line (run by `drgnx test --ui') -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-uitest)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-quickhelp-ui-test--repo                     ; the session runs the repository's test/ui
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
@@ -34,8 +35,7 @@
           (redisplay t)
           (let ((editor (selected-window)) (line (line-number-at-pos)))
             (call-interactively #'drgnx-quickhelp-show)
-            (let ((deadline (+ (float-time) 3)))
-              (while (and (not (drgnx-quickhelp-shown-p)) (< (float-time) deadline)) (sit-for 0.05)))
+            (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
             (redisplay t) (sit-for 0.3)
             (should (drgnx-quickhelp-shown-p))
             (should (eq (selected-window) editor))              ; the card never takes the focus
@@ -96,8 +96,7 @@
           (let ((editor (selected-window)) (line (line-number-at-pos)))
             (should (> (count-screen-lines (line-beginning-position) (line-end-position)) 1))
             (call-interactively #'drgnx-quickhelp-show)
-            (let ((deadline (+ (float-time) 3)))
-              (while (and (not (drgnx-quickhelp-shown-p)) (< (float-time) deadline)) (sit-for 0.05)))
+            (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
             (redisplay t) (sit-for 0.3)
             (should (drgnx-quickhelp-shown-p))
             (let* ((card drgnx-quickhelp--frame) (e (frame-edges card 'outer-edges)) (x (+ (nth 0 e) 4)))
@@ -137,8 +136,7 @@
           (when (frame-live-p drgnx-quickhelp--frame)  ; an earlier test's card was made without the chrome
             (delete-frame drgnx-quickhelp--frame) (setq drgnx-quickhelp--frame nil drgnx-quickhelp--card-up nil))
           (call-interactively #'drgnx-quickhelp-show)
-          (let ((deadline (+ (float-time) 3)))
-            (while (and (not (drgnx-quickhelp-shown-p)) (< (float-time) deadline)) (sit-for 0.05)))
+          (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
           (redisplay t) (sit-for 0.3)
           (should (drgnx-quickhelp-shown-p))
           (let* ((card drgnx-quickhelp--frame) (s (frame-scale-factor root))

@@ -1,5 +1,6 @@
 ;;; wb-explorer-test.el --- batch tests: the Explorer -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
@@ -36,6 +37,13 @@
          (drgnx-explorer-set-roots nil)                 ; its watches go: no events from the folder's removal
          (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
          (delete-directory ,root t)))))
+
+(defun drgnx-explorer-test--pause (secs)
+  "Let timers and queued file-notify events run for SECS (a window in which something must not happen)."
+  (let ((end (+ (drgnx-test-wait-now) secs)))
+    (while (< (drgnx-test-wait-now) end)
+      (drgnx-run-ert-drain-events)
+      (drgnx-test-pause 0.05))))
 
 (defun drgnx-explorer-test--rows ()
   "The Explorer's rows as (DEPTH NAME) lists."
@@ -319,10 +327,7 @@
   (skip-unless (and (featurep 'filenotify) file-notify--library))
   (drgnx-explorer-test--with root
     (write-region "" nil (expand-file-name "watched.txt" root) nil 'silent)
-    (let ((deadline (+ (float-time) 3)))
-      (while (and (< (float-time) deadline) (not (member '(1 "watched.txt") (drgnx-explorer-test--rows))))
-        (read-event nil nil 0.05)))
-    (should (member '(1 "watched.txt") (drgnx-explorer-test--rows)))))
+    (drgnx-test-wait (lambda () (drgnx-run-ert-drain-events) (member '(1 "watched.txt") (drgnx-explorer-test--rows))) :secs 3 :what "the watched file in the tree")))
 
 (ert-deftest drgnx-explorer/no-update-while-a-button-is-held ()
   (drgnx-explorer-test--with root
@@ -502,11 +507,10 @@
             (should (member '(1 "README.md") (drgnx-explorer-test--rows)))
             (let ((exec-path (cons bin exec-path)))
               (with-current-buffer other (should (drgnx-explorer--gio-trash file))))
-            (let ((deadline (+ (float-time) 10)))
-              (while (and (seq-some (lambda (p) (string-prefix-p "drgnx-gio-trash" (process-name p))) (process-list))
-                          (< (float-time) deadline))
-                (drgnx-run-ert-drain-events)             ; a queued file-notify event would hold the sentinel back
-                (sit-for 0.05)))                          ; the sentinel has run when its process is gone
+            (drgnx-test-wait (lambda ()
+                               (drgnx-run-ert-drain-events)             ; a queued file-notify event would hold the sentinel back
+                               (not (seq-some (lambda (p) (string-prefix-p "drgnx-gio-trash" (process-name p))) (process-list))))
+                             :what "the trash process")
             (should-not (file-exists-p file))
             (should-not (member '(1 "README.md") (drgnx-explorer-test--rows))))
         (kill-buffer other)
@@ -686,12 +690,9 @@
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
       (delete-directory docs t)
       (make-directory docs)                            ; rm -rf docs && mkdir docs
-      (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (read-event nil nil 0.05)))
+      (drgnx-explorer-test--pause 2)
       (write-region "" nil (expand-file-name "fresh.txt" docs) nil 'silent)
-      (let ((deadline (+ (float-time) 3)))
-        (while (and (< (float-time) deadline) (not (member '(2 "fresh.txt") (drgnx-explorer-test--rows))))
-          (read-event nil nil 0.05)))
-      (should (member '(2 "fresh.txt") (drgnx-explorer-test--rows))))))
+      (drgnx-test-wait (lambda () (drgnx-run-ert-drain-events) (member '(2 "fresh.txt") (drgnx-explorer-test--rows))) :secs 3 :what "the new file in the tree"))))
 
 (ert-deftest drgnx-explorer/a-storm-across-many-folders-renders-once ()
   (drgnx-explorer-test--with root
@@ -741,7 +742,7 @@
     (let ((drgnx-explorer--relists 0) (drgnx-explorer--renders 0))
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
-      (let ((deadline (+ (float-time) 0.5))) (while (< (float-time) deadline) (read-event nil nil 0.05)))
+      (drgnx-explorer-test--pause 0.5)
       (should (= drgnx-explorer--relists 0))
       (should (= drgnx-explorer--renders 0)))))
 

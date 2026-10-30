@@ -16,6 +16,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 
 (defconst drgnx-portable-machine-local '("emacs" "systemd/" "applications/")
   "The config dir's items that belong to one machine (a trailing slash: a directory).  They live in the data dir.")
@@ -105,9 +106,8 @@ with `expand-file-name'."
   "Write PATH (a file, or the regular files under a directory) to disk: each is rewritten with the same bytes, fsynced."
   (dolist (f (if (file-directory-p path) (directory-files-recursively path "" nil nil nil) (list path)))
     (when (and (file-regular-p f) (not (file-symlink-p f)))
-      (let ((bytes (drgnx-portable--bytes f)) (write-region-inhibit-fsync nil)
-            (coding-system-for-write 'no-conversion))
-        (write-region bytes nil f nil 'silent)))))
+      ;; A unibyte string is written as it is, so the bytes stay the same; the file layer fsyncs.
+      (drgnx-file-write-text f (drgnx-portable--bytes f)))))
 
 (defun drgnx-portable--copy-into-place (from to)
   "Copy FROM (a file or a directory) to TO, which is not there: into TO.drgnx-new, verified, then renamed to TO.

@@ -2,6 +2,7 @@
 ;; Fake emacs, emacsclient, infocmp and kitty scripts on a temp PATH record their argv; bin/drgnx runs in a temp
 ;; HOME, never the user's.  The environment each test sets is complete for what the decision reads (DISPLAY, SSH_*,
 ;; VTE_VERSION, TERM…), so the host's own does not matter.
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)
@@ -211,8 +212,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
     ;; the frame opens in kitty: this terminal's description does not matter
     (should (eql 0 (car (call '("-t") '(("VTE_VERSION" . "7600") ("TERM" . "xterm-unknown"))))))
-    (let ((deadline (+ (float-time) 10)))
-      (while (and (null (tty-bin-test--calls dir "kitty.log")) (< (float-time) deadline)) (sleep-for 0.05)))
+    (drgnx-test-wait (lambda () (tty-bin-test--calls dir "kitty.log")) :secs 10 :what "the terminal to start")
     (should (tty-bin-test--calls dir "kitty.log"))
     (should-not (file-exists-p (expand-file-name "infocmp.log" dir)))
     ;; no capable terminal (the option is off): it matters, and says so
@@ -240,8 +240,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     (tty-bin-test--script (expand-file-name "uname" pathdir) "echo Linux")
     (should (equal (call '("-t" "proj") '(("VTE_VERSION" . "7600"))) '(0 . "")))
     ;; the new terminal runs the client; this one does not
-    (let ((deadline (+ (float-time) 10)))
-      (while (and (null (tty-bin-test--calls dir "kitty.log")) (< (float-time) deadline)) (sleep-for 0.05)))
+    (drgnx-test-wait (lambda () (tty-bin-test--calls dir "kitty.log")) :secs 10 :what "the terminal to start")
     (let ((kitty (car (tty-bin-test--calls dir "kitty.log"))))
       (should (equal (car kitty) "--"))
       (should (string-suffix-p "/path/emacsclient" (nth 1 kitty)))

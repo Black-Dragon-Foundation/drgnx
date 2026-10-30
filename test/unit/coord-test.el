@@ -1,5 +1,6 @@
 ;;; coord-test.el --- batch tests: the coordination store (jobs, tasks, leases, decisions, messages) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-paths)
 (load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'drgnx-coord)
@@ -47,7 +48,7 @@
                                                                          (princ (format \"RESULT:%%S\\n\" (drgnx-coord-claim (format \"race#%%d\" (1+ i)) %S (drgnx-coord-version))))))"
                                                                     at agent))))))
            (procs (list (funcall start "a") (funcall start "b"))))
-      (let ((deadline (+ (float-time) 30))) (while (and (seq-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+      (drgnx-test-wait (lambda () (not (seq-some #'process-live-p procs))) :secs 30 :what "the claim processes to end")
       (let ((answers (apply #'append
                             (mapcar (lambda (b) (with-current-buffer b
                                                   (goto-char (point-min))

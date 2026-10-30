@@ -456,11 +456,10 @@ file is readable; /run/user and the runtime dir are absent; /run/drgnx is read-o
                                                                    :env (drgnx-sandbox-base-env))
                                                (list emacs "--batch" "-Q" "--eval" client)))
                (buf (generate-new-buffer " *drgnx-sb-client*"))
-               (proc (make-process :name "drgnx-sb-client" :buffer buf :command argv :connection-type 'pipe))
-               (deadline (+ (float-time) 30)))
+               (proc (make-process :name "drgnx-sb-client" :buffer buf :command argv :connection-type 'pipe)))
           (unwind-protect
               (progn
-                (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output nil 0.05))
+                (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 30 :what "the sandboxed client to end")
                 (ert-info ((with-current-buffer buf (buffer-string)))
                   (should (eq (process-exit-status proc) 0))
                   (should (string-match-p "pong" (with-current-buffer buf (buffer-string))))))
@@ -522,9 +521,7 @@ a refused spec writes nothing."
 
 (defun drgnx-sandbox-test--wait (pred &optional seconds)
   "Wait until PRED is true, at most SECONDS (default 10)."
-  (let ((deadline (+ (float-time) (or seconds 10))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02))
-    (funcall pred)))
+  (condition-case nil (drgnx-test-wait pred :secs (or seconds 10) :what "the sandbox condition") (ert-test-failed nil)))
 
 (ert-deftest drgnx-sandbox/check-reports-a-missing-bwrap ()
   "With no bwrap where it is trusted nor on `exec-path', the check fails, says so, and says how to install it on this

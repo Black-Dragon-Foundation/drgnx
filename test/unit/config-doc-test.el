@@ -3,6 +3,7 @@
 ;; definitions never reach it; the test waits for the child under a 30 s bound.
 (require 'ert)
 (require 'cl-lib)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
 (add-to-list 'load-path (expand-file-name "harness" drgnx-dir))
@@ -27,11 +28,10 @@
                         (concat "XDG_STATE_HOME=" home "/state") (concat "XDG_DATA_HOME=" home "/data")
                         (concat "XDG_CACHE_HOME=" home "/cache"))
                   process-environment))
-         (proc (make-process :name "drgnx-config-doc-cmd" :buffer buf :noquery t :command (list "sh" "-c" command)))
-         (deadline (+ (float-time) 60)))
+         (proc (make-process :name "drgnx-config-doc-cmd" :buffer buf :noquery t :command (list "sh" "-c" command))))
     (unwind-protect
         (progn
-          (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+          (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 60 :what "the config doc command to end")
           (should (eq (process-status proc) 'exit))
           (should (eql (process-exit-status proc) 0)))
       (delete-directory home t)
@@ -46,9 +46,8 @@
                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                "--eval" "(setq load-prefer-newer t)"
                                "-L" "core" "-L" "wb" "-L" "harness" "-L" "modules/tools" "-L" "modules/editor" "-l" "drgnx-config-doc"
-                               "--eval" (prin1-to-string form))))
-         (deadline (+ (float-time) 30)))
-    (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+                               "--eval" (prin1-to-string form)))))
+    (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 30 :what "the config doc Emacs to end")
     (should (eq (process-status proc) 'exit))
     (should (eql (process-exit-status proc) 0))
     (with-current-buffer buf (buffer-string))))

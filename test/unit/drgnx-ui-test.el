@@ -1,5 +1,6 @@
 ;;; drgnx-ui-test.el --- batch tests: harness session controller -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 (require 'drgnx-uitest)
 (require 'drgnx-check)
@@ -738,8 +739,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (dolist (r (list a b))
         (dotimes (_ 250)
           (push (plist-get (drgnx-ui-prepare-run (drgnx-ui-next-name r) nil nil r) :name) names)))
-      (let ((deadline (+ (float-time) 120)))
-        (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.1)))
+      (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 120 :what "the second Emacs to end")
       (unless (eq 0 (process-exit-status proc))
         (ert-fail (list "the second Emacs failed" (process-exit-status proc) (with-current-buffer (process-buffer proc) (buffer-string)))))
       (kill-buffer (process-buffer proc))
