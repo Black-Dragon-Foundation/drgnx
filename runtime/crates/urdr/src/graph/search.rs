@@ -40,8 +40,19 @@ pub fn fts_put(
 /// which such a table refuses), so the delete is followed by `optimize`: every segment is rewritten without its
 /// tombstoned entries (this row's and every replaced version's), and `secure_delete=ON` zeroes the old pages.
 pub fn fts_delete(tx: &mut Tx<'_>, n: i64) -> Result<(), WriteError> {
-    tx.sql()
-        .execute("delete from entity_fts where rowid = ?1", params![n])?;
+    fts_delete_many(tx, &[n])
+}
+
+/// [`fts_delete`] for every row of NS with ONE `optimize` at the end: `optimize` rewrites the whole index, so a
+/// batch of deletes pays for it once, not once per row.
+pub fn fts_delete_many(tx: &mut Tx<'_>, ns: &[i64]) -> Result<(), WriteError> {
+    if ns.is_empty() {
+        return Ok(());
+    }
+    for n in ns {
+        tx.sql()
+            .execute("delete from entity_fts where rowid = ?1", params![n])?;
+    }
     fts_optimize(tx)
 }
 
@@ -451,6 +462,35 @@ mod tests {
             tx.commit_for_test().unwrap();
         }
         assert!(find_fts(&c, "second", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fts_delete_many_removes_every_row_and_keeps_the_others() {
+        let mut c = db();
+        let gone: Vec<i64> = (0..3)
+            .map(|i| {
+                put(
+                    &mut c,
+                    &format!("task:g{i}"),
+                    Some(&format!("doomed{i}")),
+                    None,
+                )
+            })
+            .collect();
+        let kept = put(&mut c, "task:k", Some("survivor"), None);
+        {
+            let mut tx = Tx::for_test(
+                &mut c,
+                TxMeta::new("user", Class::User, "test"),
+                Arc::default(),
+            );
+            fts_delete_many(&mut tx, &gone).unwrap();
+            tx.commit_for_test().unwrap();
+        }
+        for i in 0..3 {
+            assert!(find_fts(&c, &format!("doomed{i}"), 5).unwrap().is_empty());
+        }
+        assert_eq!(find_fts(&c, "survivor", 5).unwrap()[0].n, kept);
     }
 
     #[derive(Deserialize)]

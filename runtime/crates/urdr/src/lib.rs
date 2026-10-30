@@ -112,6 +112,20 @@ pub fn sqlite_version_number() -> i32 {
     rusqlite::version_number()
 }
 
+/// Whether SQLite version number N (`sqlite3_libversion_number()`) has the WAL-reset corruption fix: 3.51.3,
+/// 3.50.7 and 3.44.6 carry it, as does every release after 3.51.
+pub fn wal_reset_fixed(n: i32) -> bool {
+    let (minor, patch) = (n / 1000 % 1000, n % 1000);
+    n / 1_000_000 > 3
+        || (n / 1_000_000 == 3
+            && match minor {
+                44 => patch >= 6,
+                50 => patch >= 7,
+                51 => patch >= 3,
+                m => m > 51,
+            })
+}
+
 /// Refuse when the linked SQLite is older than `min`.
 pub fn check_floor(min: i32) -> Result<()> {
     let have = sqlite_version_number();
@@ -135,6 +149,23 @@ pub fn meta(conn: &Connection, key: &str) -> Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_wal_reset_fix_is_judged_by_release() {
+        for (n, fixed) in [
+            (3_051_002, false),
+            (3_051_003, true),
+            (3_050_006, false),
+            (3_050_007, true),
+            (3_044_005, false),
+            (3_044_006, true),
+            (3_045_000, false),
+            (3_053_002, true),
+        ] {
+            assert_eq!(crate::wal_reset_fixed(n), fixed, "{n}");
+        }
+        assert!(crate::wal_reset_fixed(crate::sqlite_version_number()));
+    }
+
     #[test]
     fn floor_check() {
         assert!(crate::check_floor(3051003).is_ok());
