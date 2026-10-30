@@ -576,7 +576,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                     (set-frame-parameter job 'drgnx-persist-restore '(ignore))
                                     (drgnx-monitors--place-restored main)
                                     (should (drgnx-platform-test--await (lambda () drgnx-monitors-test--places)))
-                                    (drgnx-platform-test--await (lambda () nil) 0.1)
+                                    (drgnx-test-pause 0.1)
                                     (should (equal drgnx-monitors-test--places (list (cons aux "DP-2"))))
                                     (should (eq (frame-parameter aux 'fullscreen) 'fullboth))
                                     (dolist (f (list main editor job plain))
@@ -585,7 +585,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                     (should-not messages)
                                     ;; a second call does not place it again
                                     (drgnx-monitors--place-restored main)
-                                    (drgnx-platform-test--await (lambda () nil) 0.1)
+                                    (drgnx-test-pause 0.1)
                                     (should (= 1 (length drgnx-monitors-test--places)))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/the-monitor-is-matched-by-identity-not-by-the-pgtk-name ()
@@ -606,8 +606,8 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                   (let ((one (drgnx-monitors-test--fake "one" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell)))
                                         (home (drgnx-monitors-test--fake "home" 'aux (drgnx-monitors-test--extra '(:name "DP-1" :geometry (0 0 1920 1080))))))
                                     (drgnx-monitors--place-restored (selected-frame))
-                                    (drgnx-platform-test--await (lambda () (and messages drgnx-monitors-test--places)) 1)
-                                    (drgnx-platform-test--await (lambda () nil) 0.1)
+                                    (drgnx-platform-test--await-maybe (lambda () (and messages drgnx-monitors-test--places)) 1)
+                                    (drgnx-test-pause 0.1)
                                     (should (equal drgnx-monitors-test--places (list (cons home "DP-1"))))   ; the missing one is not placed
                                     (should (equal messages
                                                    '("monitors: 1 window's monitor is not connected (DELL U2720Q); the window manager placed it")))
@@ -620,8 +620,8 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                   (drgnx-monitors-test--fake "b" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
                                   (drgnx-monitors-test--fake "c" 'aux (drgnx-monitors-test--extra '(:name "" :geometry (5000 0 800 600))))
                                   (drgnx-monitors--place-restored (selected-frame))
-                                  (drgnx-platform-test--await (lambda () messages) 1)
-                                  (drgnx-platform-test--await (lambda () nil) 0.1)
+                                  (drgnx-platform-test--await-maybe (lambda () messages) 1)
+                                  (drgnx-test-pause 0.1)
                                   (should (equal drgnx-monitors-test--places nil))
                                   (should (equal messages
                                                  '("monitors: 3 windows' monitors are not connected (DELL U2720Q, 800×600 at 5000,0); the window manager placed them"))))))
@@ -634,7 +634,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                   (drgnx-monitors-test--fake "old" 'aux nil)
                                   (drgnx-monitors-test--fake "other" 'aux '(:layout code))
                                   (drgnx-monitors--place-restored (selected-frame))
-                                  (drgnx-platform-test--await (lambda () nil) 0.2)
+                                  (drgnx-test-pause 0.2)
                                   (should-not drgnx-monitors-test--places)
                                   (should-not (plist-get drgnx-monitors-test--calls :monitors))
                                   (should-not messages))))
@@ -645,8 +645,8 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                   (drgnx-monitors-test--fake "a" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
                                   (drgnx-monitors-test--fake "b" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
                                   (drgnx-monitors--place-restored (selected-frame))
-                                  (drgnx-platform-test--await (lambda () messages) 1)
-                                  (drgnx-platform-test--await (lambda () nil) 0.1)
+                                  (drgnx-platform-test--await-maybe (lambda () messages) 1)
+                                  (drgnx-test-pause 0.1)
                                   (should (= 1 (length drgnx-monitors-test--places)))        ; the second is not tried
                                   (should (= 1 (length messages)))
                                   (should (string-match-p "no such output" (car messages))))))
@@ -692,8 +692,8 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                   (let ((gone (drgnx-monitors-test--fake "gone" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))))
                                     (drgnx-monitors--place-restored (selected-frame))
                                     (setq drgnx-monitors-test--fakes (assq-delete-all gone drgnx-monitors-test--fakes))   ; closed meanwhile
-                                    (drgnx-platform-test--await (lambda () (plist-get drgnx-monitors-test--calls :monitors)) 1)
-                                    (drgnx-platform-test--await (lambda () nil) 0.3)
+                                    (drgnx-platform-test--await-maybe (lambda () (plist-get drgnx-monitors-test--calls :monitors)) 1)
+                                    (drgnx-test-pause 0.3)
                                     (should-not messages)
                                     (should-not drgnx-monitors-test--places)))))
 

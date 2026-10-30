@@ -41,7 +41,7 @@
   (let ((before (make-symbol "before")) (idle (make-symbol "idle")))
     `(let ((,before (copy-sequence timer-list)) (,idle (copy-sequence timer-idle-list)))
        (prog1 (progn ,@body)
-         (drgnx-platform-test--await (lambda () nil) 0.1)
+         (drgnx-test-pause 0.1)
          (should-not (cl-set-difference timer-list ,before))
          (should-not (cl-set-difference timer-idle-list ,idle))))))
 
@@ -81,7 +81,7 @@
   "Call STARTER with a callback; wait for it and return what it was called with (or `none')."
   (let ((res 'none))
     (funcall starter (lambda (r) (setq res r)))
-    (drgnx-platform-test--await (lambda () (not (eq res 'none))) 5)
+    (drgnx-platform-test--await-maybe (lambda () (not (eq res 'none))) 5)
     res))
 
 (defun drgnx-platform-wm-test--commands ()
