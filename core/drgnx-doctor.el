@@ -413,6 +413,13 @@ custom.el is missing."
 IGNORED being `drgnx-paths-ignored'."
   (list :dir (drgnx-user-dir) :moved (drgnx-paths-config-moved-p) :ignored (drgnx-paths-ignored)))
 
+(defun drgnx-doctor--state-in-temp ()
+  "The state directory when it lies inside the temporary directory (TRAMP then asks about autosave on a local
+temporary directory, and a daemon's state would go with the next cleanup), else nil."
+  (let ((state (file-name-as-directory (file-truename (drgnx-state-dir))))
+        (tmp (file-name-as-directory (file-truename temporary-file-directory))))
+    (and (string-prefix-p tmp state) state)))
+
 (defun drgnx-doctor--checkout-init (dir)
   "The fact of the `checkout-clean' check: (:dir DIR :changed LINES), LINES being `git status --porcelain -- init/'
 of the checkout DIR, run with GIT_OPTIONAL_LOCKS=0 and bounded at 5 s; nil without DIR/.git (an installed copy
@@ -480,6 +487,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
            :trust-guards (drgnx-doctor--trust-guards)
            :config-dir (drgnx-doctor--config-dir)
+           :state-in-temp (drgnx-doctor--state-in-temp)
            :config-files (drgnx-doctor--config-files)
            :settings-leftovers (drgnx-doctor--settings-leftovers)
            :settings-stayed (drgnx-doctor--settings-stayed)
@@ -705,6 +713,13 @@ severity, the fix the first `:fix'."
                                       (ignored (list 'warn (string-join ignored "\n")
                                                      "set it to an absolute path (one that begins with /), or unset it"))
                                       (t (list 'ok (abbreviate-file-name (plist-get c :dir)) nil))))))
+
+(drgnx-doctor-define 'state-dir :group "drgnx" :doc "The state folder is not inside the temporary directory"
+                     :check (lambda (f)
+                              (if-let* ((dir (plist-get f :state-in-temp)))
+                                  (list 'warn (format "state is kept in %s, inside the temporary directory" (abbreviate-file-name dir))
+                                        "set XDG_STATE_HOME to a folder outside the temporary directory")
+                                (list 'ok "outside the temporary directory" nil))))
 
 (drgnx-doctor-define 'config-files :group "drgnx" :doc "drgnx's config files read, with no mistakes"
                      :check (lambda (f) (drgnx-doctor--config-files-check (plist-get f :config-files))))
