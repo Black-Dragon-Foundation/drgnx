@@ -1961,7 +1961,8 @@ another stack stops the engine but evil stays loaded until the restart (module t
 ## The Vim engine (`modules/editor/drgnx-evil.el`)
 
 Module `editor/evil` (`:default 'off`, startup stage; packages `evil`, `evil-collection`). `drgnx-evil-setup` sets
-`evil-want-keybinding` nil and `evil-want-C-u-scroll` t before `(require 'evil)`, then `drgnx-evil--settings` applies the
+`evil-want-keybinding` nil and binds `evil-want-C-u-scroll` to t for the `(require 'evil)` only (never a `setq`: the
+settings layer would take it for the user's own), then `drgnx-evil--settings` applies the
 module defaults with `drgnx-module-set`, through each option's setter as `setopt` does (`evil-undo-system` `undo-redo`,
 `evil-search-module` `evil-search`, `evil-want-minibuffer` nil, `evil-mode-line-format` nil; the user's `setopt` in
 config.el runs later and stays when the module is turned off), registers the engine with

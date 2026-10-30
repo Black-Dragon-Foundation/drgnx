@@ -490,6 +490,18 @@ stopped.  Evil's packages are not on `load-path' here."
       (should (eq (drgnx-evil-test--run) 'ok))
       (should (eq (keymap-lookup evil-motion-state-map "C-u") #'evil-scroll-up)))))
 
+(ert-deftest drgnx-evil/setup-does-not-pass-for-the-users-own-setq ()
+  ;; the flag evil reads as it loads is bound for the load, not set: no `changed' stash (the user's value, which
+  ;; would win over the module from then on) and the module's claim holds the value
+  (drgnx-modal-test-with-evil
+    (drgnx-evil-test--config '((vim app editing window)) t
+      (should-not (featurep 'evil))
+      (should (eq (drgnx-evil-test--run) 'ok))
+      (should (eq evil-want-C-u-scroll t))
+      (should-not (assq 'changed (get 'evil-want-C-u-scroll 'theme-value)))
+      (should (assq 'drgnx (get 'evil-want-C-u-scroll 'theme-value)))
+      (should (eq (keymap-lookup evil-motion-state-map "C-u") #'evil-scroll-up)))))
+
 (ert-deftest drgnx-evil/turning-the-module-off-stops-evil-and-gives-the-settings-back ()
   ;; the module's teardown stops the engine as the core stops one and takes it out of the registry; evil's options
   ;; get the values they had before the setup (evil itself stays loaded: it cannot be unloaded)
