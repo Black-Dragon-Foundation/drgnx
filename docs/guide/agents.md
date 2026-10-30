@@ -12,7 +12,7 @@ when the profile asks for it and the agent supports it. Only **Stop** cancels.
 
 Agents: New Agent Session… (palette) starts a **profile** in the current project; Show Agents (`C-k a`, ⌘K A on a
 Mac) opens the Agents tab. Profiles are the setting `drgnx-agents-profiles` in
-`~/.config/drgnx/settings.el` ([settings.md](settings.md)); this file used to be `agents.eld`, and drgnx moved its
+`settings.el` in your config folder ([settings.md](settings.md); [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)); this file used to be `agents.eld`, and drgnx moved its
 keys into `settings.el` once ([Moving from the old files](settings.md#moving-from-the-old-files)):
 
 ```elisp

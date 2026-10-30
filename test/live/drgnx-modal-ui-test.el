@@ -102,6 +102,14 @@
               (should-not (string-search "++" popup)))
             (drgnx-modal-session-act sess "C-g")
             (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
+            ;; M-SPC opens the same popup
+            (drgnx-modal-session-act sess "M-SPC")
+            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*") t)))
+            (should (string-match-p "f : \\+File"
+                                    (drgnx-modal-session-eval
+                                     sess '(with-current-buffer " *which-key*" (buffer-substring-no-properties (point-min) (point-max))))))
+            (drgnx-modal-session-act sess "C-g")
+            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
             ;; SPC SPC the palette, SPC f p Quick Open, SPC s p project search
             (pcase-dolist (`(,keys . ,prompt) '(("SPC SPC" . "Command") ("SPC f p" . "Find file in")
                                                 ("SPC s p" . "Search in project")))

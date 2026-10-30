@@ -229,6 +229,33 @@ hold: non-nil when drgnx had a value.  A variable modules claim goes through the
     (prog1 (drgnx-settings-push var value)
       (push (cons var (- (float-time) start)) drgnx-settings-apply-durations))))
 
+(defun drgnx-settings-apply--applied-file ()
+  "Where the values applied last are kept across restarts: <state>/config-good/settings-applied.eld."
+  (let ((default-directory "/"))
+    (expand-file-name "config-good/settings-applied.eld" (drgnx-state-dir))))
+
+(defun drgnx-settings-apply--load-applied ()
+  "The entries (VAR . ENTRY) the previous sessions applied, from `drgnx-settings-apply--applied-file'; nil when unreadable."
+  (condition-case nil
+      (let ((text (drgnx-file-read-bounded (drgnx-settings-apply--applied-file))))
+        (and text
+             (cl-loop for (var value merge) in (car (read-from-string text))
+                      collect (cons var (make-drgnx-settings-entry :var var :value value :merge merge)))))
+    (error nil)))
+
+(defun drgnx-settings-apply--save-applied (pushed)
+  "Remember the entries PUSHED (VAR . ENTRY) over those remembered; a failure is silent (it is only a fallback)."
+  (when pushed
+    (condition-case nil
+        (let ((all (drgnx-settings-apply--load-applied)))
+          (dolist (cell pushed) (setf (alist-get (car cell) all) (cdr cell)))
+          (drgnx-file-write-text
+           (drgnx-settings-apply--applied-file)
+           (drgnx-settings-file--prin1
+            (mapcar (lambda (c) (list (car c) (drgnx-settings-entry-value (cdr c)) (drgnx-settings-entry-merge (cdr c))))
+                    all))))
+      (error nil))))
+
 (defun drgnx-settings-apply--run (owned-only)
   "Apply settings.el (OWNED-ONLY: drgnx's own settings only); an alist (VAR . RESULT) in the order applied.
 RESULT: `applied', `stored', `default' (torn down: a strict setting whose value could not be used), `problem' (not
@@ -242,7 +269,7 @@ applied; one problem says why) or `failed' (its push signalled)."
          (good-entries (and good (drgnx-settings-apply--global-entries good)))
          (problems (unless failed
                      (mapcar (lambda (p) (append (list :file file) p)) (drgnx-settings-doc-problems doc))))
-         (prev drgnx-settings-apply--entries)
+         (prev (or drgnx-settings-apply--entries (drgnx-settings-apply--load-applied)))
          (results nil) (pushed nil))
     (setq drgnx-settings-apply-durations nil)
     (cl-labels ((problem (entry text)
@@ -289,6 +316,7 @@ applied; one problem says why) or `failed' (its push signalled)."
                               (t (let ((why (drgnx-settings-apply--check entry)))
                                    (if why (fall-back entry why) (push-entry entry))))))
                   results)))))
+    (drgnx-settings-apply--save-applied pushed)
     (setq drgnx-settings-apply--entries (nreverse pushed)
           drgnx-settings-apply-durations (nreverse drgnx-settings-apply-durations)
           drgnx-settings-apply-problems (sort problems (lambda (a b) (< (or (plist-get a :line) 0)

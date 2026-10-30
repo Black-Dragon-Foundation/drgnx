@@ -13,7 +13,7 @@
 (require 'cl-lib)
 (require 'drgnx-view)
 
-(defvar byte-compile-warnings)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 
 (defmacro drgnx-view-test-with-type (spec &rest body)
   "BODY with the view type (car SPEC) defined by `drgnx-view-define' with the arguments (cdr SPEC), removed after.

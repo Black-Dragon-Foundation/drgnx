@@ -191,3 +191,31 @@ graphical one comes first."
         (ignore first)))))
 
 ;;; wb-persist-edge-test.el ends here
+
+(ert-deftest drgnx-persist-edge/strip-handles-long-and-circular-lists ()
+  "Stripping walks a list iteratively: a very long list does not exhaust the Lisp stack, a circular one ends,
+and the window parameters go in both."
+  (let* ((long (append (make-list 200000 'x) (list '(parameters (a . 1)) 'end)))
+         (out (drgnx-persist--strip long)))
+    (should (= 200001 (length out)))
+    (should (eq 'end (car (last out)))))
+  (let ((circ (list 'a '(parameters (a . 1)) 'b)))
+    (setcdr (last circ) circ)
+    (let ((out (drgnx-persist--strip circ)))
+      (should (proper-list-p out))
+      (should (equal (seq-take out 2) '(a b)))))
+  (should (equal (drgnx-persist--strip '(leaf (parameters (k . v)) (:x 1) . tail)) '(leaf (:x 1) . tail))))
+
+(ert-deftest drgnx-persist-edge/restore-without-px-clears-the-size ()
+  "A file with no usable :px resets the dock sizes to their defaults (they are not kept from before)."
+  (drgnx-persist-edge-test--with dir
+    (with-temp-file drgnx-persist-file
+      (prin1 '(:version 2 :frames ((:role main :left (:shown nil :view explorer) :panel (:shown nil :tab output)
+                                          :right (:shown nil) :groups nil :main nil)))
+             (current-buffer)))
+    (drgnx-state-note-intent nil :sizes 'left 33 :by 'user)
+    (drgnx-state-note-intent nil :sizes 'panel 7 :by 'user)
+    (should (drgnx-persist-restore))
+    (should-not (drgnx-state-intent nil :sizes 'left))
+    (should-not (drgnx-state-intent nil :sizes 'panel))
+    (should-not (drgnx-state-intent nil :sizes 'right))))

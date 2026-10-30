@@ -6,7 +6,7 @@
 ;; The tests run on source, and an interpreted call conses: FN, the memo library (`drgnx-memo', `drgnx-epoch' and
 ;; `drgnx-cache' functions) and each of SYMBOLS (the client's functions FN calls) are byte-compiled in place first.
 (require 'cl-lib)
-(defvar byte-compile-warnings)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 
 (defun drgnx-memo-fixture--compile (symbol)
   "Byte-compile SYMBOL's function in place unless it is compiled already."

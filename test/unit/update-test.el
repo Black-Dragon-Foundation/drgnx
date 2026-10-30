@@ -297,6 +297,9 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p (format "^Environment=\"XDG_STATE_HOME=%s/state\"$" (regexp-quote dir)) service-text))
         ;; …and the config dir: XDG_CONFIG_HOME counts for it
         (should (string-match-p (format "^Environment=\"XDG_CONFIG_HOME=%s/config\"$" (regexp-quote dir)) service-text))
+        ;; …and the data dir: DRGNX_DATA_DIR and XDG_DATA_HOME
+        (should (string-match-p (format "^Environment=\"DRGNX_DATA_DIR=%s/data\"$" (regexp-quote dir)) service-text))
+        (should (string-match-p "^Environment=\"XDG_DATA_HOME=/" service-text))
         (should (string-match-p (format "^ExecStart=\"%s\" update --quiet$" (regexp-quote bin)) service-text)))
       (should (string-match-p "--user enable --now drgnx-update.timer" (drgnx-update-test--slurp ctl)))
       (drgnx-update-test--run dir env bin "update")    ; a run to report
@@ -322,7 +325,9 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p "<string>update</string>\\s-*<string>--quiet</string>" text))
         (should (string-match-p "<key>StartCalendarInterval</key>" text))
         (should (string-match-p "<key>ExitTimeOut</key><integer>1800</integer>" text))
-        (should (string-match-p "<key>Hour</key><integer>[0-9]+</integer>" text)))
+        (should (string-match-p "<key>Hour</key><integer>[0-9]+</integer>" text))
+        (should (string-match-p (format "<key>DRGNX_DATA_DIR</key><string>%s/data</string>" (regexp-quote dir)) text))
+        (should (string-match-p (format "<key>XDG_STATE_HOME</key><string>%s/state</string>" (regexp-quote dir)) text)))
       (should (string-match-p "bootstrap gui/[0-9]+ " (drgnx-update-test--slurp ctl)))
       (should (string-match-p "automatic updates: on" (cdr (drgnx-update-test--run dir env bin "update" "--auto" "status"))))
       (should (eq 0 (car (drgnx-update-test--run dir env bin "update" "--auto" "off"))))

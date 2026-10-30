@@ -31,7 +31,7 @@
 
 (defvar drgnx-memo-test--builds 0 "How many times a memo's BUILD ran.")
 
-(defvar byte-compile-warnings)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (defvar drgnx-memo-test--ticks 0)
 (defun drgnx-memo-test--tick () (setq drgnx-memo-test--ticks (1+ drgnx-memo-test--ticks)))
 

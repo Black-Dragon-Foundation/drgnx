@@ -387,6 +387,8 @@
        (should (equal (drgnx-timer-describe (car timer-idle-list))
                       (list :key (cons 'tm-b (current-buffer)) :owner (current-buffer) :kind 'start
                             :fn 'drgnx-timer-test--note)))
+       (should (eq (drgnx-timer-fn (car timer-list)) 'drgnx-timer-test--note))
+       (should-not (drgnx-timer-fn raw))
        (should-not (drgnx-timer-describe raw))
        (should-not (drgnx-timer-describe 'tm-a))
        (cancel-timer raw)

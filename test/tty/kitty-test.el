@@ -24,7 +24,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
              (setq ,(car spec) (drgnx-tty-session-kitty-start
                                 :size ,(plist-get (cdr spec) :size)
                                 :env (and (drgnx-tty-keys-test--kkp-dir) (drgnx-tty-keys-test--env))))
-             (drgnx-tty-session-wait-screen ,(car spec) "\\*scratch\\*" 30)
+             (drgnx-tty-session-wait-screen ,(car spec) "\\*\\(?:scratch\\|drgnx start\\)\\*" 30)
              ,@body)
          (when ,(car spec) (drgnx-tty-session-kitty-stop ,(car spec)))
          (delete-directory root t)))))

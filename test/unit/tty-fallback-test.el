@@ -19,7 +19,7 @@
   (let ((k (cons preset platform)))
     (or (gethash k tty-fallback-test--resolved)
         (puthash k (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-                         (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+                         (drgnx-modules--table nil) (drgnx-modules--report nil)
                          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
                          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
                      (drgnx--core-commands)
@@ -31,6 +31,13 @@
                                                     :defaults tty-fallback-test--defaults :platform platform)
                                 :bindings))
                  tty-fallback-test--resolved))))
+
+;; Resolved here, once, before any test stubs terminals, messages or timers: a first call made inside a test's stubs
+;; fills the global key-table caches under them, and one unstubbed call then poisons every later test.
+(tty-fallback-test--bindings "VS Code")
+
+(ert-deftest drgnx-tty-fallback/the-key-bindings-were-resolved-before-any-stub ()
+  (should (gethash (cons "VS Code" nil) tty-fallback-test--resolved)))
 
 (defun tty-fallback-test--keys (preset &optional platform)
   (seq-uniq (mapcar (lambda (b) (plist-get b :key)) (tty-fallback-test--bindings preset platform))))
@@ -425,7 +432,6 @@ binding are taken off afterwards."
   ;; commands, set up and torn down after; the modules are loaded before the terminal is faked (loading them
   ;; defines the functions the fake replaces)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil)
         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
         (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)

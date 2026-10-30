@@ -383,7 +383,7 @@ else `other' (process output, redisplay, …)."
   '(drgnx-uitest--tick drgnx-uitest-record--poll drgnx-uitest--run-watch)
   "The harness's own timers: never a cause.")
 
-(declare-function drgnx-timer-describe "drgnx-timer")
+(declare-function drgnx-timer-fn "drgnx-timer")
 
 (defun drgnx-uitest-record--after-timer (orig timer)
   "Snapshot just before and right after each timer, so what it changed is attributed to it
@@ -391,8 +391,7 @@ else `other' (process output, redisplay, …)."
 window function — and what changed before it (the running command's work, process output)
 is not."
   (let ((fn (and (timerp timer)         ; a layer timer's function is named by its entry, not `drgnx-timer--fire'
-                 (let ((layer (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe timer))))
-                   (if layer (plist-get layer :fn) (timer--function timer))))))
+                 (or (and (fboundp 'drgnx-timer-fn) (drgnx-timer-fn timer)) (timer--function timer)))))
     (if (memq fn drgnx-uitest-record--harness-timers)
         (funcall orig timer)
       (drgnx-uitest-record--snapshot (drgnx-uitest-record--ambient-cause))

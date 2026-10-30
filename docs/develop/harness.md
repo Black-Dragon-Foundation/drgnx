@@ -1143,7 +1143,10 @@ evil-collection that needs it) as the directories `drgnx sync` makes. The fixtur
 directory lacking one of them) the test is skipped with the message "evil is not available: set DRGNX_MODAL_ELPA to a
 package directory with evil, goto-chg and evil-collection", so a checkout without evil still passes.
 
-Build the directory once, in temporary directories (never your own configuration):
+To get exactly the pinned packages without `drgnx sync`, run `test/container/modal-elpa.sh DIR` in a container: it
+downloads evil, goto-chg, evil-collection and kkp from MELPA, checks each tarball's sha256 against `etc/drgnx.lock.eld`
+and unpacks them into DIR. Pass DIR as both `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` (the real-kkp tests read the
+latter). Or build the directory yourself, once, in temporary directories (never your own configuration):
 
 ```sh
 S=.claude/tmp/modal-sync; mkdir -p $S/config $S/data $S/state $S/cache

@@ -26,7 +26,7 @@ and no list buffer; the list's buffer, view type and hook are gone after."
   `(drgnx-notice-test-with-model
      (drgnx-test-with-clock ()
        (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-             (drgnx-commands-problems nil) (drgnx-notices-test--ran nil))
+             (drgnx-notices-test--ran nil))
          (drgnx-command-define 'thing :category "Test" :title "Open Thing" :command #'drgnx-notices-test--open
                                :doc "test")
          (unwind-protect (progn ,@body)
@@ -175,8 +175,7 @@ and no list buffer; the list's buffer, view type and hook are gone after."
     (should (string-search "arrived later" (drgnx-notices-test--text)))))
 
 (ert-deftest drgnx-notices/the-command-and-its-keys-rows ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (drgnx--core-commands)
     (let ((show (drgnx-commands-get 'notices)) (dismiss (drgnx-commands-get 'notices-dismiss)))
       (should (equal (drgnx-cmd-title show) "Show Notices"))

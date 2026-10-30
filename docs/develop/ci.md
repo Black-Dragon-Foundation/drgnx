@@ -172,7 +172,7 @@ on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snaps
 Measured on the runs of 2026-10-19/20 (`gh run view ID --json jobs`): the unit suite is 3.5–4 min on Linux and about
 16 min on macOS, a GUI job 1.5–5.5 min, the image pull 18–28 s, `brew install emacs ripgrep` 8 s. Nothing in the unit
 suite downloads: no ELPA package, no grammar, no `drgnx sync` (CI sets no `DRGNX_USER_ELPA` or `DRGNX_MODAL_ELPA`,
-so the tests that need those packages skip). So the caches are few:
+so the tests that need those packages skip; the nightly terminal tier alone fetches the pinned kkp, checks its sha256 against `etc/drgnx.lock.eld` and sets `DRGNX_USER_ELPA`, so kitty's kkp tests run there). So the caches are few:
 
 | What | Key | Saves | Bust it |
 |---|---|---|---|

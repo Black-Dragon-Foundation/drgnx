@@ -7,7 +7,7 @@ here ever asks you a question; you trust a folder when you choose to.
 
 ## What is trusted
 
-- drgnx's own folders: its checkout, its config dir (`~/.config/drgnx/`) and its packages dir, and the Lisp
+- drgnx's own folders: its checkout, its config dir (`~/.config/drgnx/` by default: [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)) and its packages dir, and the Lisp
   files Emacs itself came with.
 - The folders you trusted with **Trust This Folder**. They are kept in `~/.local/state/drgnx/trusted-folders.eld`,
   so they stay trusted in the next session. A file drgnx cannot use trusts none of its folders: one that cannot be
@@ -213,7 +213,7 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 
 - **Always kept out:** `~/org/notes.org`, and under `~/org` any file whose name starts with `notes`, `journal`,
   `diary` or `personal` (any case), or anything inside a folder so named. You cannot open these.
-- **Your own additions:** `~/.config/drgnx/personal-notes-deny.json` lists more files, folders and globs to keep
+- **Your own additions:** `personal-notes-deny.json` in your config folder lists more files, folders and globs to keep
   out, anywhere, as firmly as the built-in ones:
 
   ```json
@@ -223,7 +223,7 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 
   A glob has `*` and `?` in its last part only. The built-in list cannot be shortened. If this file cannot be read
   or has a mistake, the built-in list still applies and no personal file is opened (below) until you fix it.
-- **Opening one file:** `~/.config/drgnx/personal-notes-allow.json` names single files under `~/org` that the store
+- **Opening one file:** `personal-notes-allow.json` in your config folder names single files under `~/org` that the store
   may read, for example a reading list a plan refers to: `{"version": 1, "paths": ["~/org/reading.org"]}`. Only
   existing regular files count: a folder, a glob or a path outside `~/org` is ignored. A file that is always kept out
   stays out even if listed.

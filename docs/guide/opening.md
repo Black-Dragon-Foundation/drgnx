@@ -188,7 +188,7 @@ drgnx beside it). Close it like any Emacs.
 
 Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md#the-steps)).
 Change the choice with **Preferences: Keep drgnx Running in the Background** (palette, Options menu): it switches
-between the two and says which one is on. The choice is kept in `~/.config/drgnx/session.eld` as
+between the two and says which one is on. The choice is kept in `session.eld` in your config folder ([where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)) as
 `(:keep-running t)` or `(:keep-running nil)` and read at every start. drgnx never asks it when a window closes.
 Changing the choice edits only that key: comments and other keys you added stay as they are. If the file has a mistake,
 drgnx keeps using the last good choice and says where the mistake is (`drgnx doctor` too); the toggle then refuses to

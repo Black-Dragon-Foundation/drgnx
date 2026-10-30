@@ -89,6 +89,21 @@ once TEXT is on its screen."
         (should (= (drgnx-tty-session-eval s `(length ,drgnx-tty-frames-test--clients)) 2))
         (drgnx-tty-session-wait-screen w "EXPLORER")))))
 
+(ert-deftest drgnx-tty-frames/move-editor-into-new-window-from-a-terminal-client ()
+  ;; the command made from a terminal client's frame (a key there) is one command, not an "Unknown terminal type" error
+  (drgnx-tty-session-with (s :daemon t)
+    (progn
+      (drgnx-tty-frames-test--workbench s (lambda (form) (drgnx-tty-frames-test--in-client s form)))
+      (should (equal (drgnx-tty-frames-test--in-client
+                      s '(condition-case err
+                             (progn (find-file-noselect (expand-file-name "kx-move.txt" temporary-file-directory))
+                                    (switch-to-buffer "kx-move.txt")
+                                    (call-interactively #'drgnx-frames-move-editor)
+                                    'moved)
+                           (error (list 'error (error-message-string err)))))
+                     'moved))
+      (should (drgnx-tty-session-eval s '(and (get-buffer-window "kx-move.txt" t) t))))))
+
 (ert-deftest drgnx-tty-frames/closing-an-unsaved-editor-tab-asks-to-save ()
   (drgnx-tty-session-with (s :daemon t :keys 'vscode)
     (pcase-let ((`(,c . ,file) (drgnx-tty-frames-test--editor-client s "\n# Please enter the commit message\n")))

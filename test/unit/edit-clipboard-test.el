@@ -165,7 +165,7 @@ on a Mac the VS Code profile's copy, cut and paste are Cmd keys (`drgnx-editing/
 (ert-deftest drgnx-editing/the-explorer-keeps-its-own-copy-and-paste ()
   ;; The Explorer's C-c/C-x/C-v live in its mode map; the editor's C-v is a global key, which a local map beats.
   (require 'drgnx-explorer)
-  (let ((drgnx-commands-problems nil) (drgnx-modules--table (copy-sequence drgnx-modules--table))
+  (let ((drgnx-modules--table (copy-sequence drgnx-modules--table))
         (drgnx-modules--report nil))
     (drgnx-edit-clip-test--keys '((vscode app editing window))
       (drgnx--core-commands)

@@ -229,8 +229,9 @@ Like VS Code's Ctrl+Shift+F;
 (defun drgnx-wb-editor-window () (drgnx-signal-editor-window))
 
 (defun drgnx-wb-show-in-editor (buffer &optional select)
-  "Show BUFFER in the most recently used editor window, never splitting; SELECT it if asked."
-  (let ((w (drgnx-wb-editor-window)))
+  "Show BUFFER in the most recently used editor window, never splitting; SELECT it if asked.
+Nil, and nothing shown, when the frame has no editor window (the daemon's initial frame)."
+  (when-let* ((w (drgnx-wb-editor-window)))
     (set-window-buffer w buffer)
     (drgnx-state-use-editor w)
     (when select (select-window w))

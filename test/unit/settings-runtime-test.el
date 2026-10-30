@@ -33,12 +33,15 @@
   (drgnx-settings-runtime-test--with settings
     (cl-letf (((symbol-function 'drgnx-setting-for-root) (lambda (&rest _) "theirs"))
               ((symbol-function 'drgnx-settings-workspace-project) (lambda (_) '("proj" . "/r/"))))
-      (should (equal (drgnx-settings-runtime-overrides "/r/")
-                     '((:name "drgnx-agents-default" :value "theirs" :source "workspace"))))
-      (drgnx-settings-runtime-send "/r/")
-      (should (equal (car calls)
-                     '("config/settings" (:project "proj" :overrides
-                                                   [(:name "drgnx-agents-default" :value "theirs" :source "workspace")])))))
+      ;; the hub refuses a project override of a setting that is not `:scope project': it is not sent
+      (should-not (drgnx-settings-runtime-overrides "/r/"))
+      (cl-letf (((symbol-function 'drgnx-setting-meta) (lambda (_) '(:scope project))))
+        (should (equal (drgnx-settings-runtime-overrides "/r/")
+                       '((:name "drgnx-agents-default" :value "theirs" :source "workspace"))))
+        (drgnx-settings-runtime-send "/r/")
+        (should (equal (car calls)
+                       '("config/settings" (:project "proj" :overrides
+                                                     [(:name "drgnx-agents-default" :value "theirs" :source "workspace")]))))))
     ;; a root whose project Urdr does not know yet sends nothing
     (setq calls nil)
     (cl-letf (((symbol-function 'drgnx-settings-workspace-project) (lambda (_) nil)))

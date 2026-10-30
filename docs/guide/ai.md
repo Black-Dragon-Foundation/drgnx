@@ -30,7 +30,7 @@ forward can accept the connection and then reset it, which curl-based clients do
 
 The presets ship in `settings/runtime-defaults.el` in the checkout (data, read by the editor and by the hub).
 Add your own, or move one, with the settings `drgnx-ai-providers` and `drgnx-ai-roles` in `settings.el` in drgnx's
-config directory (`~/.config/drgnx/settings.el`, [settings.md](settings.md)); this used to be `ai.eld`, and drgnx moved
+config directory (`settings.el`, [settings.md](settings.md); [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)); this used to be `ai.eld`, and drgnx moved
 its keys there once. A project's `.drgnx/ai.eld` at its
 root can choose **roles** (and wins), among the providers the presets and your `drgnx-ai-providers` define — never a
 provider or a key variable of its own, so a cloned repository cannot send your code, or a key, somewhere you did not

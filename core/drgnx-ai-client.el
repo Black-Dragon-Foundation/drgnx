@@ -53,8 +53,8 @@ status (0 when no answer came) and the answer.  Returns the process."
                                            (funcall callback (if (eql 0 (process-exit-status p)) status 0)
                                                     (if cut (substring text 0 cut) text))))))))
                  (error (kill-buffer out) (kill-buffer err) (signal (car e) (cdr e))))))
-    (process-send-string proc (encode-coding-string config 'utf-8))
-    (process-send-eof proc)
+    ;; a curl that exits at once is gone before its config: its sentinel has the answer
+    (ignore-errors (process-send-string proc (encode-coding-string config 'utf-8)) (process-send-eof proc))
     proc))
 
 ;;;; What to send where, and what comes back

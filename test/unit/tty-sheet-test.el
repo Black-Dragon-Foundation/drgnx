@@ -19,7 +19,7 @@ frame with CAPS; for legacy CAPS the terminal holds the fallback table of the th
 CAPS nil is a graphical frame."
   (declare (indent 1))
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil) (drgnx-surfaces-contexts nil)
+         (drgnx-surfaces-contexts nil)
          (params (make-hash-table :test #'equal)) (caps ,caps)
          (drgnx-tty-fallback t) (drgnx-tty-chord-prefix "<f6>"))
      (drgnx-command-define 'palette :title "Command Palette" :category "Commands" :command #'tty-sheet-test--noop)
