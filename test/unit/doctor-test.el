@@ -16,6 +16,24 @@
 (defun drgnx-doctor-test--status (name facts)
   (car (drgnx-doctor-check name facts)))
 
+(ert-deftest drgnx-doctor/emacs-version-behind-the-pin ()
+  (let* ((f (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.1" :nidhogg-pin "31.1-nidhogg.4"))
+         (r (drgnx-doctor-check 'emacs-version f)))
+    (should (eq (car r) 'warn))
+    (should (string-search "this drgnx pins Nidhogg 31.1-nidhogg.4" (nth 1 r)))
+    (should (string-search "installer" (nth 2 r))))
+  (should (eq (drgnx-doctor-test--status 'emacs-version
+                                         (drgnx-doctor-test--facts :nidhogg "31.1-nidhogg.4" :nidhogg-pin "31.2-nidhogg.1"))
+              'warn))
+  (dolist (pin '("31.1-nidhogg.1" "31.1-nidhogg.0" "31.0-nidhogg.9" nil))
+    (should (eq (drgnx-doctor-test--status 'emacs-version (drgnx-doctor-test--facts :nidhogg-pin pin)) 'ok)))
+  ;; the pin comes from the checkout's install.sh
+  (should (equal (drgnx-doctor--nidhogg-pin) (with-temp-buffer
+                                               (insert-file-contents (expand-file-name "install.sh" drgnx-dir))
+                                               (re-search-forward "^NIDHOGG_VERSION=\\(.*\\)$")
+                                               (match-string 1))))
+  (should-not (drgnx-doctor--nidhogg-pin (expand-file-name "no-such-install.sh" drgnx-dir))))
+
 (ert-deftest drgnx-doctor/emacs-version ()
   (let ((nid (drgnx-doctor-test--facts)))
     (should (eq (drgnx-doctor-test--status 'emacs-version nid) 'ok))
