@@ -116,6 +116,11 @@ this Emacs connected: it holds the editor token and the hub holds a's key.  Skip
            (should (drgnx-hub-ensure))                         ; the table and the key, waited for
            (drgnx-test-wait (lambda () (and drgnx-hub--editor (listp (drgnx-hub-keys-held)) (member "a" (drgnx-hub-keys-held))))
                             :secs 30 :what "the editor token and the held keys")
+           ;; the ensure's hand-over went on the call connection; the event connection subscribes on its own and hands
+           ;; over again when it is done.  Events sent before that are missed, and that second keys-held answer would
+           ;; overwrite what the body changes: the body starts when the subscription is in and nothing is pending
+           (drgnx-test-wait (lambda () (and (process-live-p drgnx-hub--events) (zerop (hash-table-count drgnx-hub--pending))))
+                            :secs 30 :what "the event connection subscribed and the hand-over answered")
            (advice-add 'drgnx-ai--curl :around #'drgnx-ai-gateway-test--record)
            ,@body)
        (advice-remove 'drgnx-ai--curl #'drgnx-ai-gateway-test--record)
