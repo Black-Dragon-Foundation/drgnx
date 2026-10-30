@@ -13,7 +13,8 @@
 (defun drgnx-evil-flag-test--flag (root)
   "In the temp configuration under ROOT: editor/evil is chosen and has the flag no-collection."
   (write-region (concat "(drgnx-settings :version 1 (drgnx-modules-enabled (editor/evil))"
-                        " (drgnx-modules-flags ((editor/evil no-collection))))\n")
+                        " (drgnx-modules-flags ((editor/evil no-collection)))"
+                        " (drgnx-keys-layers ((vim app editing window))))\n")
                 nil (concat root "config/settings.el") nil 'silent))
 
 ;; dired is loaded in this process already (the Explorer needs it); ediff is not.
@@ -22,7 +23,7 @@
   (drgnx-evil-test--with
     (drgnx-evil-flag-test--flag root)
     (should (drgnx-module-flag-p 'editor/evil 'no-collection))
-    (should (featurep 'dired))
+    (require 'dired)                    ; the Explorer no longer loads it
     (should (eq (drgnx-evil-test--run) 'ok))
     (should (eq drgnx-modal-running 'evil))
     (should-not (featurep 'evil-collection))

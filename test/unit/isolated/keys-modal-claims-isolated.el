@@ -200,5 +200,45 @@ started by an apply (the after-apply functions are off)."
         (drgnx-keys--restore)
         (should (equal (funcall changed record) nil))))))
 
+(defvar evil-state)
+(declare-function evil-local-mode "evil-core")
+(declare-function evil-normal-state "evil-states")
+
+(ert-deftest drgnx-keys-claims/a-key-in-a-mode-map-works-in-evils-normal-state ()
+  ;; evil's normal state sits above every mode map: a key another layer (here keys.eld) binds in a mode map has
+  ;; to go in evil's auxiliary map for that mode map too, and leave with the next apply.
+  (drgnx-keys-claims-evil-test--with
+    (drgnx-keys-claims-evil-test--live
+      (drgnx-keys-claims-evil-test--user
+       '(:layers ((emacs app editing window)) :bind ((go-quick-open "j" :map text-mode-map))))
+      (drgnx-keys-apply)
+      (with-temp-buffer
+        (text-mode)
+        (evil-local-mode 1)
+        (evil-normal-state)
+        (should (eq evil-state 'normal))
+        (should (eq (key-binding "j") #'project-find-file)))
+      (drgnx-keys--restore)
+      (with-temp-buffer
+        (text-mode)
+        (evil-local-mode 1)
+        (evil-normal-state)
+        (should (eq (key-binding "j") #'evil-next-line))))))
+
+(ert-deftest drgnx-keys-claims/a-binding-in-evils-maps-after-it-loaded-is-claimed ()
+  ;; the snapshot is read again at every apply: a config.el binding made after evil loaded is in the claims
+  (drgnx-keys-claims-evil-test--with
+    (drgnx-keys-claims-evil-test--live
+      (let ((evil-key (lookup-key evil-normal-state-map (kbd "C-s"))))
+        (unwind-protect
+            (progn
+              (should-not (commandp evil-key))
+              (keymap-set evil-normal-state-map "C-s" #'delete-char)
+              (drgnx-keys-use drgnx-keys-claims-evil-test--mixed)
+              (should (seq-find (lambda (c) (and (equal (plist-get c :key) "C-s") (memq 'normal (plist-get c :states))))
+                                (plist-get drgnx-keys-last :conflicts))))
+          (drgnx-keys--restore)
+          (keymap-unset evil-normal-state-map "C-s" t))))))
+
 (provide 'keys-modal-claims-isolated)
 ;;; keys-modal-claims-isolated.el ends here

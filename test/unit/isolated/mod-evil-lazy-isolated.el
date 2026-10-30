@@ -13,6 +13,7 @@
 ;; library that arrives later.
 (ert-deftest drgnx-evil-lazy/collection-waits-for-each-mode ()
   (drgnx-evil-test--fresh 'evil 'evil-collection 'info 'magit 'evil-collection-info)
+  (require 'dired)                      ; the Explorer no longer loads it
   (drgnx-evil-test--running
     (should (featurep 'evil-collection))
     (should (featurep 'evil-collection-dired))
