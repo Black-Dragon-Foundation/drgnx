@@ -1139,3 +1139,10 @@ this test are not passed on."
           (should-not (file-exists-p run)))
       (ignore-errors (call-process "chmod" nil nil nil "-R" "u+w" tmp))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-suspended-machine-does-not-count-toward-a-files-time-limit ()
+  (should (= 0.5 (drgnx-run-ert--awake 0.0 10.0 10.5)))
+  ;; a gap of an hour (the laptop slept) adds one tick's worth at most
+  (should (<= (drgnx-run-ert--awake 1.0 10.0 3610.0) 6.0))
+  ;; a clock that stepped back adds nothing
+  (should (= 2.0 (drgnx-run-ert--awake 2.0 10.0 5.0))))

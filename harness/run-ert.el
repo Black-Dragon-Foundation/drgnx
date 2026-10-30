@@ -711,6 +711,11 @@ sets it, for one of its two batches may hold none of the tests a narrow selector
   (list :name "selector"
         :condition (format "DRGNX_TEST_SELECTOR %S matched 0 tests (an Emacs regexp: \\| for alternation, not |)" selector)))
 
+(defun drgnx-run-ert--awake (awake last now)
+  "AWAKE seconds plus the time from LAST to NOW, at most 5 s of it: the loop ticks every 0.05 s, so a longer gap is the
+machine asleep, which a file's time limit must not count."
+  (+ awake (min 5.0 (max 0.0 (- now last)))))
+
 (defun drgnx-run-ert-files (files results-file)
   "Run each test file of FILES in an Emacs of its own, as Emacs's own `make check' does: a hook, timer, feature or
 variable one file leaves never reaches the next.  Each gets this Emacs's `load-path' and environment (selector,
@@ -726,7 +731,7 @@ file passed."
          (out-dir (make-temp-file "drgnx-files" t))
          (queue (cl-loop for file in files for i from 1
                          collect (list :file file :json (expand-file-name (format "%d.json" i) out-dir))))
-         (count (length queue)) (running nil) (done nil) (t0 (float-time))
+         (count (length queue)) (running nil) (done nil) (t0 (float-time)) (last (float-time))
          (rerun (equal (drgnx-run-ert--env "DRGNX_TEST_RERUN") "1"))
          (seed (drgnx-run-ert--shuffle-seed)))     ; the files' Emacsen inherit it; this one says it once
     (when seed (drgnx-run-ert--say-seed seed))
@@ -746,9 +751,13 @@ file passed."
                                       :process (drgnx-run-ert--start-file (plist-get f :file) tmp (plist-get f :json) buffer)))
                       running)))
             (accept-process-output nil 0.05)
+            (let ((now (float-time)))
+              (dolist (f running)
+                (plist-put f :awake (drgnx-run-ert--awake (or (plist-get f :awake) 0.0) last now)))
+              (setq last now))
             (dolist (f (copy-sequence running))
               (let ((p (plist-get f :process)))
-                (when (and (process-live-p p) (> (- (float-time) (plist-get f :start)) timeout))
+                (when (and (process-live-p p) (> (plist-get f :awake) timeout))
                   (message "drgnx: %s ran %d s: ending it" (plist-get f :file) timeout)
                   (plist-put f :timed-out t)
                   (drgnx-run-ert--backtrace-process p)     ; where it hangs, in the file's output (CI-REMOTE-MAC-1)

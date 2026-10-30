@@ -125,8 +125,8 @@ replaces one still running), never waiting for it."
                                                (kill-buffer err)))
                                            "markdown preview"))))
           (setq drgnx-markdown--proc p)
-          (process-send-string p text)
-          (process-send-eof p)))
+          ;; a converter that exits at once is gone before its input: its sentinel has the answer
+          (ignore-errors (process-send-string p text) (process-send-eof p))))
       (setq drgnx-markdown--source src))
     buf))
 
