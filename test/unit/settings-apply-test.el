@@ -222,6 +222,22 @@
     (should (equal (mapcar (lambda (p) (list (plist-get p :var) (plist-get p :line))) drgnx-settings-apply-problems)
                    '((drgnx-sat--a 3) (drgnx-sat--strict 5))))))
 
+(ert-deftest drgnx-settings-apply/a-bad-entry-keeps-its-last-good-value-across-a-restart ()
+  ;; the config layer's copy of settings.el holds the bad entry too (the file reads); the applier remembers per entry
+  (drgnx-settings-apply-test--with (drgnx-sat--a drgnx-sat--b)
+    (drgnx-settings-apply-test--def 'drgnx-sat--a)
+    (drgnx-settings-apply-test--def 'drgnx-sat--b)
+    (drgnx-settings-apply-test--settings "(drgnx-sat--a 50)" "(drgnx-sat--b 1)")
+    (drgnx-settings-apply-global)
+    (drgnx-settings-apply-test--settings "(drgnx-sat--a \"wide\")" "(drgnx-sat--b 2)")
+    (drgnx-settings-apply-global)                        ; the bad text becomes the copy
+    (setq drgnx-settings-apply--entries nil)             ; a restart: no session memory
+    (drgnx-settings-teardown 'drgnx-sat--a)
+    (drgnx-settings-teardown 'drgnx-sat--b)
+    (let ((r (drgnx-settings-apply-global)))
+      (should (eq (alist-get 'drgnx-sat--a r) 'applied)))
+    (should (equal (list drgnx-sat--a drgnx-sat--b) '(50 2)))))
+
 (ert-deftest drgnx-settings-apply/a-dormant-entry-applies-when-its-package-loads ()
   ;; P7: set in the theme before its package loads, the value applies at the defcustom and :set runs; nothing loaded.
   (drgnx-settings-apply-test--with (drgnx-sat--later)

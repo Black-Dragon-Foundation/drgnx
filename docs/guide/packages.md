@@ -28,7 +28,7 @@ The **manifest** is:
 
 - the `:packages` of every enabled module (Preferences: Modules — a module you turn off stops asking for its
   packages);
-- `:packages` in `~/.config/drgnx/packages.eld`:
+- `:packages` in `packages.eld` in your config folder ([where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)):
 
   ```elisp
   (:packages (rainbow-delimiters treesit-auto)
@@ -98,7 +98,7 @@ newest commit of `:rev`, and `drgnx sync --offline` installs it from the cached 
 
 ## The lock
 
-`~/.config/drgnx/drgnx.lock.eld` pins every installed package: version, archive, file and its sha256 (commit it
+`drgnx.lock.eld` in your config folder pins every installed package: version, archive, file and its sha256 (commit it
 with your configuration) — or, for a package from Git, its URL, `:rev` and the commit. A sync installs the locked version — from the cache when the archive moved on, replacing
 another installed version — and refuses a file whose hash differs from the lock (a changed file, or a tampered
 cache; the file is dropped from the cache): nothing changes then. A locked version that no archive and no cache has
@@ -147,7 +147,7 @@ sync without network. A manifest package the lock does not have is reported ("sy
 drgnx comes with a known-good lock, `etc/drgnx.lock.eld` in its checkout: the packages of **every** module (all
 presets) with what they need, at versions tested together — GNU ELPA and NonGNU ELPA releases where those archives
 have the package, MELPA's build otherwise (forge and its dependencies, apheleia), and eglot-booster from Git at a
-commit. When you have no lock yet, `drgnx sync` first copies it to `~/.config/drgnx/drgnx.lock.eld` (marked
+commit. When you have no lock yet, `drgnx sync` first copies it to `drgnx.lock.eld` in your config folder (marked
 `:from-shipped t`) and then installs those versions (hashes checked as always) — only the packages of the modules
 you have on. A sync with `--seed DIR` does not: the packages it copies are your choice, and the lock records them.
 Deleting your lock on purpose gets you the shipped set again, the same way.

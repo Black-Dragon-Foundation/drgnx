@@ -1368,7 +1368,7 @@ update_service_text() { # the oneshot service the timer starts
   printf '[Service]\nType=oneshot\nNice=10\nTimeoutStartSec=1h\nTimeoutStopSec=30min\n'
   printf 'Environment=%s\n' "$(systemd_word "PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")"
   local v   # what makes the timer's run find the same Emacs, config and state as yours
-  for v in DRGNX_EMACS DRGNX_CONFIG_DIR XDG_CONFIG_HOME XDG_STATE_HOME; do
+  for v in DRGNX_EMACS DRGNX_CONFIG_DIR XDG_CONFIG_HOME XDG_STATE_HOME DRGNX_DATA_DIR XDG_DATA_HOME; do
     if [[ "${!v:-}" == /* ]]; then printf 'Environment=%s\n' "$(systemd_word "$v=${!v}")"; fi
   done
   printf 'ExecStart=%s update --quiet\n' "$(systemd_word "$here/bin/drgnx")"
@@ -1378,9 +1378,9 @@ update_timer_text() {
   printf '[Unit]\nDescription=Update drgnx daily\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n'
 }
 
-update_plist_env() { # DRGNX_EMACS, DRGNX_CONFIG_DIR, XDG_CONFIG_HOME, XDG_STATE_HOME as plist keys, when set
+update_plist_env() { # DRGNX_EMACS, the config, state and data variables as plist keys, when set
   local v
-  for v in DRGNX_EMACS DRGNX_CONFIG_DIR XDG_CONFIG_HOME XDG_STATE_HOME; do
+  for v in DRGNX_EMACS DRGNX_CONFIG_DIR XDG_CONFIG_HOME XDG_STATE_HOME DRGNX_DATA_DIR XDG_DATA_HOME; do
     if [[ "${!v:-}" == /* ]]; then printf '<key>%s</key><string>%s</string>' "$v" "$(xml_escape "${!v}")"; fi
   done
 }
