@@ -3,6 +3,7 @@
 ;; repositories and boards live in that root, never in ~/workspace or ~/org.  The concurrency tests start child
 ;; `emacs --batch' processes (the runner's environment) and wait for them under a 30 s bound.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
@@ -52,11 +53,10 @@ Fails the test unless every child exits 0."
                                      "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
                                      "--eval" "(require 'drgnx-projects)"
                                      "--eval" (format "(progn (sleep-for (max 0 (- %f (float-time)))) %s)" at form)))))
-                 forms))
-         (deadline (+ (float-time) 30)))
+                 forms)))
     (unwind-protect
         (progn
-          (while (and (cl-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05))
+          (drgnx-test-wait (lambda () (not (cl-some #'process-live-p procs))) :secs 30 :what "the writer processes to end")
           (dolist (p procs) (should (not (process-live-p p))))
           (cl-loop for p in procs for b in (reverse bufs)
                    do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))

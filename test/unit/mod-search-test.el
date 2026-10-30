@@ -1,5 +1,6 @@
 ;;; mod-search-test.el --- batch tests: Semantic Search commands, index on save -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'cl-lib)
@@ -459,7 +460,6 @@ pending at the end is cancelled."
             (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (list job))))
               (drgnx-search--teardown))
             (should-not (file-exists-p lock))                   ; at once: no stale lock
-            (let ((deadline (+ (float-time) 5)))                 ; the signal does the rest, nothing here waited
-              (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+            (drgnx-test-wait (lambda () (not (process-live-p proc))) :secs 5 :what "the signal to end the process")                 ; the signal does the rest, nothing here waited
             (should-not (process-live-p proc)))
         (when (process-live-p proc) (kill-process proc))))))

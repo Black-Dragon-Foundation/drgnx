@@ -2,6 +2,7 @@
 ;; Offline and in temp dirs, like pkg-test.el (its fixture): archives are local directories, nothing is installed
 ;; from a network.  The wanted-file test starts two child `emacs --batch -Q' processes, waited for under a 30 s bound.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-pkg)
@@ -246,8 +247,7 @@
                                               at tag file))))))
            (procs (list (funcall start "a") (funcall start "b"))))
       (drgnx-pkg-test--write file '(old-one))
-      (let ((deadline (+ (float-time) 30)))
-        (while (and (cl-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+      (drgnx-test-wait (lambda () (not (cl-some #'process-live-p procs))) :secs 30 :what "the writer processes to end")
       (unwind-protect
           (progn
             (should (cl-every (lambda (p) (and (not (process-live-p p)) (= (process-exit-status p) 0))) procs))

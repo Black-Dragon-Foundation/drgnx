@@ -3,6 +3,7 @@
 ;; state folders under a temp root).  The concurrency test starts two batch Emacsen with this Emacs's environment and
 ;; waits for them under a 90 s bound.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
@@ -524,8 +525,7 @@
                                                       (princ \"DONE\\n\"))"
                                               at f tag))))))
            (procs (list (funcall start "a") (funcall start "b"))))
-      (let ((deadline (+ (float-time) 90)))
-        (while (and (cl-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+      (drgnx-test-wait (lambda () (not (cl-some #'process-live-p procs))) :secs 90 :what "the writer processes to end")
       (unwind-protect
           (progn
             (should (cl-every (lambda (p) (and (not (process-live-p p)) (= (process-exit-status p) 0))) procs))

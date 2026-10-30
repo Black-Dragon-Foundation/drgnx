@@ -3,6 +3,7 @@
 ;; sockets at their outside paths, through the bridge (as the agent does) or directly (as anything else in the
 ;; sandbox could).  Every path is in the test's temporary directory: its HOME, runtime, data and state dirs.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-sandbox-mcp)
 (require 'drgnx-sandbox)
@@ -43,10 +44,7 @@ after."
 
 (defun drgnx-sandbox-mcp-test--wait (pred &optional secs)
   "Wait until PRED is true (at most SECS, default 20): its value."
-  (let ((deadline (+ (float-time) (or secs 20))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  (drgnx-test-wait pred :secs (or secs 20) :what "the sandbox condition"))
 
 (defun drgnx-sandbox-mcp-test--collect (p s) (process-put p :out (concat (process-get p :out) s)))
 

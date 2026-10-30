@@ -27,10 +27,7 @@ with REPLY, if any."
 
 (defun drgnx-sandbox-proxy-test--wait (pred &optional secs)
   "Wait until PRED is true (at most SECS, default 20): its value."
-  (let ((deadline (+ (float-time) (or secs 20))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  (drgnx-test-wait pred :secs (or secs 20) :what "the sandbox condition"))
 
 (defun drgnx-sandbox-proxy-test--connect (proxy text)
   "A client connection to PROXY (its socket path, or a port on 127.0.0.1) that sends TEXT; it records the answer."
