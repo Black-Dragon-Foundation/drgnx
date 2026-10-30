@@ -133,9 +133,11 @@ workspace of ROOT (W1, W2) sets instead (`drgnx-setting-for-root' differs from t
   (let (out)
     (dolist (var (drgnx-settings-runtime--vars))
       (if root
-          (let ((global (default-value var)) (here (drgnx-setting-for-root var root)))
-            (unless (equal global here)
-              (push (drgnx-settings-runtime--override var here "workspace") out)))
+          ;; the hub takes a project override of a `:scope project' setting only
+          (when (eq (plist-get (drgnx-setting-meta var) :scope) 'project)
+            (let ((global (default-value var)) (here (drgnx-setting-for-root var root)))
+              (unless (equal global here)
+                (push (drgnx-settings-runtime--override var here "workspace") out))))
         (let ((e (with-temp-buffer (drgnx-settings-explain var (current-buffer)))))
           (when (memq (plist-get e :kind) drgnx-settings-runtime--editor-kinds)
             (push (drgnx-settings-runtime--override
