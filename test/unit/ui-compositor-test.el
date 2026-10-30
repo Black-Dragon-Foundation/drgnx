@@ -700,3 +700,24 @@ paths no WM serves."
       (delete-directory dir t))))
 
 ;;; ui-compositor-test.el ends here
+
+(ert-deftest drgnx-ui-compositor/a-lock-another-taker-replaced-is-not-held-and-not-removed ()
+  ;; two takers both found the old lock stale: the second deleted the first's fresh lock and made its own.  The first
+  ;; reads its token back, finds another's, and does not go on; and a holder never removes a lock that is not its own.
+  (drgnx-ui-compositor-test--with
+    (let* ((lock (expand-file-name ".lock" (drgnx-ui--display-reservations)))
+           (drgnx-ui--reservation-lock-wait 0.3) (ran nil))
+      (make-directory (drgnx-ui--display-reservations) t)
+      (cl-letf* ((orig (symbol-function 'drgnx-ui--write))
+                 ((symbol-function 'drgnx-ui--write)
+                  (lambda (file text)   ; the other taker's token lands over this one's
+                    (funcall orig file (if (string-suffix-p ".lock/owner" file) "someone-else" text)))))
+        (should-not (drgnx-ui--call-with-reservation-lock (lambda () (setq ran t)))))
+      (should-not ran)
+      (should (equal (drgnx-ui--lock-token lock) "someone-else"))   ; theirs, left alone
+      (delete-directory lock t)
+      ;; a holder that finds its token replaced while it works leaves the new lock
+      (should (drgnx-ui--call-with-reservation-lock
+               (lambda () (write-region "other" nil (expand-file-name "owner" lock) nil 'silent) t)))
+      (should (equal (drgnx-ui--lock-token lock) "other"))
+      (delete-directory lock t))))

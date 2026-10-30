@@ -271,23 +271,42 @@ run directory is gone (a crashed session) is taken over."
 (defvar drgnx-ui--reservation-lock-wait 2.0
   "Seconds a start waits for the reservations' lock before it skips the number it wanted.")
 
+(defun drgnx-ui--lock-token (lock)
+  "The owner token written in the lock directory LOCK, or nil."
+  (ignore-errors
+    (with-temp-buffer (insert-file-contents (expand-file-name "owner" lock)) (buffer-string))))
+
+(defun drgnx-ui--lock-stale-p (lock)
+  "Whether the lock directory LOCK is older than 10 s."
+  (let ((mt (file-attribute-modification-time (file-attributes lock))))
+    (and mt (< (float-time mt) (- (float-time) 10)))))
+
 (defun drgnx-ui--call-with-reservation-lock (fn)
   "Call FN holding the reservations' lock (`x11/.lock', made with `make-directory'); its value, or nil when
 the lock stays taken for `drgnx-ui--reservation-lock-wait' seconds.  A lock older than 10 s is a crashed
-holder's and is taken over."
-  (let ((lock (expand-file-name ".lock" (drgnx-ui--display-reservations)))
-        (deadline (+ (float-time) drgnx-ui--reservation-lock-wait))
-        held)
+holder's and is taken over.  The holder writes a token into the lock and reads it back before it goes on: of two
+takers that both found the old lock stale, the one whose token was overwritten (the other deleted its fresh lock)
+does not hold it and tries again.  It removes the lock afterwards only while the token is still its own."
+  (let* ((lock (expand-file-name ".lock" (drgnx-ui--display-reservations)))
+         (token (format "%d-%d-%d" (emacs-pid) (random 1000000000) (truncate (* 1000 (float-time)))))
+         (deadline (+ (float-time) drgnx-ui--reservation-lock-wait))
+         held)
     (while (and (not held) (< (float-time) deadline))
       (if (condition-case nil (progn (make-directory lock) t) (file-already-exists nil))
-          (setq held t)
-        (let ((mt (file-attribute-modification-time (file-attributes lock))))
-          (when (and mt (< (float-time mt) (- (float-time) 10)))
-            (ignore-errors (delete-directory lock)))
-          ;; still there (held, or an old one that cannot be removed): wait, never spin
-          (when (file-exists-p lock) (sleep-for 0.02)))))
+          (progn
+            (ignore-errors (drgnx-ui--write (expand-file-name "owner" lock) token))
+            (if (equal (drgnx-ui--lock-token lock) token)
+                (setq held t)
+              (sleep-for 0.02)))
+        ;; the age is read again right before the removal, so a lock another taker just made is left alone
+        (when (and (drgnx-ui--lock-stale-p lock) (drgnx-ui--lock-stale-p lock))
+          (ignore-errors (delete-directory lock t)))
+        ;; still there (held, or an old one that cannot be removed): wait, never spin
+        (when (file-exists-p lock) (sleep-for 0.02))))
     (when held
-      (unwind-protect (funcall fn) (ignore-errors (delete-directory lock))))))
+      (unwind-protect (funcall fn)
+        (when (equal (drgnx-ui--lock-token lock) token)
+          (ignore-errors (delete-directory lock t)))))))
 
 (defun drgnx-ui--take-over-reservation (n run)
   "Give the stale reservation of display N to RUN; non-nil if this call won it.  Under the reservations' lock
