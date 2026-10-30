@@ -3,6 +3,7 @@
 ;; A fake upstream (the proxy's or the gateway's socket) listens on a Unix socket in the test's temporary directory,
 ;; and the ports are free ones on the host's 127.0.0.1, found at run time: no real host is reached.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-sandbox-relay)
 
@@ -28,10 +29,7 @@ refused once the queue (Emacs's default, 5) is full, where Linux waits."
 
 (defun drgnx-sandbox-relay-test--wait (pred &optional secs)
   "Wait until PRED is true (at most SECS, default 20): its value."
-  (let ((deadline (+ (float-time) (or secs 20))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  (drgnx-test-wait pred :secs (or secs 20) :what "the sandbox condition"))
 
 (defun drgnx-sandbox-relay-test--start (pairs command)
   "`drgnx-sandbox-relay-entry' of PAIRS around COMMAND, started: its process (stdout and stderr in buffers)."

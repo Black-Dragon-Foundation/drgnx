@@ -4,6 +4,7 @@
 ;; `drgnx-ai--stored-key' and `drgnx-ai-store-key'.  Keys are built at run time.  The runner gives every test a temp
 ;; HOME, config, data, state and cache.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'subr-x)
 (require 'rot13)
@@ -447,10 +448,7 @@ STORED-CALLS a list of the ids `drgnx-ai-store-key' was called with (newest firs
           (progn
             (drgnx-secrets-import-keys)
             (should (= cleared 0))
-            (let ((deadline (+ (float-time) 5)))
-              (while (and (process-live-p (get-buffer-process buf)) (< (float-time) deadline))
-                (accept-process-output nil 0.05)))
-            (accept-process-output nil 0.1)
+            (drgnx-test-wait (lambda () (not (process-live-p (get-buffer-process buf)))) :secs 5 :what "the process to end")
             (should (= cleared 1)))
         (when (buffer-live-p buf) (let ((kill-buffer-query-functions nil)) (kill-buffer buf)))))))
 

@@ -1,6 +1,7 @@
 ;;; coord-mcp-test.el --- batch tests: the coordination MCP server -*- lexical-binding: t -*-
 ;; The server runs as a child batch Emacs, as an agent would start it; the test speaks JSON-RPC over its stdio.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-paths)
 (load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer
 (require 'drgnx-coord)
@@ -33,12 +34,12 @@
   "Send METHOD and wait for its answer (a plist)."
   (let ((id (cl-incf drgnx-coord-mcp-test--id)) (answer nil))
     (process-send-string proc (concat (json-serialize (list :jsonrpc "2.0" :id id :method method :params (or params (make-hash-table)))) "\n"))
-    (let ((deadline (+ (float-time) 10)))
-      (while (and (not answer) (< (float-time) deadline))
-        (accept-process-output proc 0.05)
-        (dolist (line (split-string drgnx-coord-mcp-test--out "\n" t))
-          (let ((j (ignore-errors (json-parse-string line :object-type 'plist :null-object nil :false-object nil))))
-            (when (equal (plist-get j :id) id) (setq answer j))))))
+    (drgnx-test-wait (lambda ()
+                       (dolist (line (split-string drgnx-coord-mcp-test--out "\n" t))
+                         (let ((j (ignore-errors (json-parse-string line :object-type 'plist :null-object nil :false-object nil))))
+                           (when (equal (plist-get j :id) id) (setq answer j))))
+                       answer)
+                     :secs 10 :what (format "the answer to %s" method))
     answer))
 
 (defun drgnx-coord-mcp-test--tool (proc name args)

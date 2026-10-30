@@ -1,5 +1,6 @@
 ;;; mod-amenities-test.el --- batch tests: M11a's package modules — they wait without their package, run with it -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
@@ -80,7 +81,7 @@
                                      (python-mode)
                                      (goto-char (point-max)) (insert "y  =  2\n")
                                      (save-buffer)
-                                     (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+                                     (drgnx-test-pause 2)
                                      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "x  =  1\ny  =  2\n"))
                                      (set-buffer-modified-p nil) (kill-buffer))))
       (delete-file file))))

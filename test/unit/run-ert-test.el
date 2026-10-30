@@ -1,5 +1,6 @@
 ;;; run-ert-test.el --- batch tier sanity -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (ert-deftest drgnx-run-ert/loaded ()
   (should (fboundp 'drgnx-run-ert)))
 
@@ -149,10 +150,8 @@
           (write-region "x" nil (expand-file-name "a" dir) nil 'silent)
           (accept-process-output nil 0.3)                                     ; the event arrives
           (drgnx-run-ert-drain-events)
-          (let* ((got nil) (p (make-process :name "after-watch" :command '("true") :sentinel (lambda (&rest _) (setq got t))))
-                 (deadline (+ (float-time) 3)))
-            (while (and (not got) (< (float-time) deadline)) (accept-process-output nil 0.05))
-            (should got)
+          (let* ((got nil) (p (make-process :name "after-watch" :command '("true") :sentinel (lambda (&rest _) (setq got t)))))
+            (drgnx-test-wait (lambda () got) :secs 3 :what "the process sentinel")
             (ignore p)))
       (file-notify-rm-watch w)
       (drgnx-run-ert-drain-events)

@@ -4,6 +4,7 @@
 ;; "reached" and leave its trace (a listener's connection, a settled card, a deleted object).  The sandbox's own
 ;; tests (escape tests) then read the same lines as "blocked".  Everything lives in the test's temporary directory.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'subr-x)
 (require (quote drgnx-agents))
@@ -18,9 +19,7 @@
   "Every probe that takes no argument (and has a target on this system).")
 
 (defun drgnx-sandbox-fixture-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 60))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (accept-process-output nil 0.05))
-    v))
+  (drgnx-test-wait pred :secs (or secs 60) :what "the sandbox fixture condition"))
 
 (defun drgnx-sandbox-fixture-test--ask (prompt)
   "The mock agent's answer to PROMPT, run with the fixture's probe environment and no sandbox."

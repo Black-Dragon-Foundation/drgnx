@@ -1,5 +1,6 @@
 ;;; mod-cockpit-cards-test.el --- batch tests: what needs you and the decision log in the Work cockpit (the job window's parts) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-persist)
@@ -92,7 +93,7 @@ their hooks and timers."
       found)))
 
 (defun drgnx-cockpit-cards-test--wait (secs)
-  (let ((deadline (+ (float-time) secs))) (while (< (float-time) deadline) (accept-process-output nil 0.05))))
+  (drgnx-test-pause secs))
 
 (defun drgnx-cockpit-cards-test--show ()
   "Both parts in windows of this frame, as the cockpit shows them; the state store sees them."

@@ -4,6 +4,7 @@
 ;; as in real use.  Keys, copies and the screen go through the outer one.  The inner tmux's defaults are tmux's
 ;; own (set-clipboard external, extended-keys off, focus-events off), so every test says what it turns on.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 (defconst drgnx-tty-tmux-test--log
@@ -29,9 +30,7 @@
 
 (defun drgnx-tty-tmux-test--clipboard (sess)
   "The outer tmux's paste buffer once something is in it (5 s), else nil."
-  (let ((deadline (+ (float-time) 5)))
-    (while (and (not (drgnx-tty-session-clipboard sess)) (< (float-time) deadline)) (sleep-for 0.05))
-    (drgnx-tty-session-clipboard sess)))
+  (condition-case nil (drgnx-test-wait (lambda () (drgnx-tty-session-clipboard sess)) :secs 5 :what "the tmux paste buffer") (ert-test-failed nil)))
 
 (ert-deftest drgnx-tty-tmux/identified-inside-tmux ()
   (drgnx-tty-session-with (s :keys "vscode" :nested '("# tmux's own defaults"))

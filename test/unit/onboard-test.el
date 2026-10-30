@@ -1,6 +1,7 @@
 ;;; onboard-test.el --- batch tests: onboarding steps, projects onto the board -*- lexical-binding: t -*-
 ;; Fixture git repos, boards and configs live in temp dirs: never ~/workspace, ~/org or ~/.config.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-file)
 (require 'drgnx-onboard)
 (require 'drgnx-projects)
@@ -1477,11 +1478,10 @@ record the prompts and the default in the lists they return as the cars of (PROM
                                      "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
                                      "--eval" "(require 'drgnx-onboard)"
                                      "--eval" (format "(progn (sleep-for (max 0 (- %f (float-time)))) %s)" at form)))))
-                 forms))
-         (deadline (+ (float-time) 30)))
+                 forms)))
     (unwind-protect
         (progn
-          (while (and (cl-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05))
+          (drgnx-test-wait (lambda () (not (cl-some #'process-live-p procs))) :secs 30 :what "the writer processes to end")
           (dolist (p procs) (should (not (process-live-p p))))
           (cl-loop for p in procs for b in (reverse bufs)
                    do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))
