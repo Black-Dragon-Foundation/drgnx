@@ -32,6 +32,7 @@ jobs:
     if: github.event_name != 'schedule'
     permissions:
       contents: read
+      packages: read
     uses: ./.github/workflows/drgnx-tiers.yml
     with:
       nidhogg: release

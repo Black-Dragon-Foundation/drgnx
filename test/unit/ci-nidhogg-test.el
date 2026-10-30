@@ -49,3 +49,13 @@
     (should-not (string-match-p "brew install emacs" tiers))
     (should (string-search "test/container/nidhogg.sh macos" tiers))
     (should (string-search "timeout-minutes: 180" s))))
+
+(ert-deftest drgnx-ci/tiers-callers-grant-what-the-tiers-ask ()
+  ;; a called workflow gets no more than its caller grants, and asking for more fails the whole run at startup, jobs none
+  (let ((callers 0))
+    (dolist (f (directory-files (drgnx-ci-test--path ".github/workflows") t "\\.yml\\'"))
+      (let ((s (drgnx-ci-test--slurp f)))
+        (when (string-search "uses: ./.github/workflows/drgnx-tiers.yml" s)
+          (setq callers (1+ callers))
+          (should (string-match-p "packages: read\n *uses: \\./\\.github/workflows/drgnx-tiers\\.yml" s)))))
+    (should (>= callers 3))))
