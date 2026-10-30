@@ -1059,7 +1059,16 @@ macOS (no /proc there)."
                                "test" "--container"))))
           (let ((args (split-string (drgnx-bin-test--slurp log) "\n" t)))
             (should (equal (cadr (member "--memory" args)) "4g"))
-            (should (equal (cadr (member "--memory-swap" args)) "4g"))))
+            (should (equal (cadr (member "--memory-swap" args)) "4g"))
+            (should-not (seq-find (lambda (a) (string-prefix-p "LC_ALL=" a)) args)))
+          ;; DRGNX_TEST_LOCALE puts the run under that locale
+          (delete-file log)
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                     (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image" "DRGNX_TEST_LOCALE=C.UTF-8")
+                               "test" "--container"))))
+          (should (member "LC_ALL=C.UTF-8" (split-string (drgnx-bin-test--slurp log) "\n" t))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()

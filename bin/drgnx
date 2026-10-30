@@ -371,6 +371,8 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
     if [ -n "${!v:-}" ]; then args+=(-e "$v=${!v}"); fi
   done
+  # DRGNX_TEST_LOCALE (CI: C.UTF-8) is the locale of the run; without it the image's own (none) applies
+  if [ -n "${DRGNX_TEST_LOCALE:-}" ]; then args+=(-e "LC_ALL=$DRGNX_TEST_LOCALE"); fi
   if [ -n "${DRGNX_PERF_RESULTS:-}" ]; then   # FILE on the host (relative: to here), written through /out
     local res="$DRGNX_PERF_RESULTS" resdir
     case "$res" in /*) ;; *) res="$PWD/$res" ;; esac
