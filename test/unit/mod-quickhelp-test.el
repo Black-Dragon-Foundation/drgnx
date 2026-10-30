@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
@@ -39,10 +40,7 @@
 
 (defun drgnx-quickhelp-test--wait (pred seconds)
   "Run timers until PRED is non-nil or SECONDS pass; PRED's value."
-  (let ((deadline (+ (float-time) seconds)) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    v))
+  (drgnx-test-wait pred :secs seconds :what "quick help"))
 
 (defun drgnx-quickhelp-test--overlaps-p (y h top bottom)
   "Non-nil when the rows Y..Y+H intersect TOP..BOTTOM."
@@ -150,7 +148,7 @@
         (funcall (car pending) "again")
         (should (equal got2 '(("one" :thing car) ("two") ("four"))))
         ;; the older request's timeout never fires its callback
-        (drgnx-quickhelp-test--wait (lambda () nil) 1.2)
+        (drgnx-test-pause 1.2)
         (should (eq got1 :none))))))
 
 (ert-deftest drgnx-quickhelp/collect-never-waits ()
@@ -370,7 +368,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
           (drgnx-quickhelp--hover-look)          ; the card for `car' goes, `cdr' starts resting
           (should-not drgnx-quickhelp--origin)
           (should-not requests)
-          (sleep-for 0.08)
+          (drgnx-test-pause 0.08)
           (drgnx-quickhelp--hover-look)          ; rested: its card, the pointer did not have to move again
           (should (equal requests (list (list (selected-window) 10 nil)))))))))
 
