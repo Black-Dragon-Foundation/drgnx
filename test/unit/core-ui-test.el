@@ -146,7 +146,7 @@
 (defmacro drgnx-ui-kit-test--with-registry (&rest body)
   "BODY with a command table holding only `kit-cmd', no usage counter, and nothing run yet."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil) (drgnx-surfaces-run-functions nil) (drgnx-ui-kit-test--ran nil))
+         (drgnx-surfaces-run-functions nil) (drgnx-ui-kit-test--ran nil))
      (drgnx-command-define 'kit-cmd :title "Kit" :category "Test" :command #'drgnx-ui-kit-test--cmd)
      ,@body))
 

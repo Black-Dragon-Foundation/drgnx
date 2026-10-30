@@ -11,6 +11,8 @@
   (mapc #'require (drgnx-test-modules--requires (expand-file-name (concat "modules/" f ".el") drgnx-dir))))
 
 (defvar drgnx-trust-mode)
+(defvar drgnx-state--idle)
+(defvar drgnx-state--now)
 
 (defconst drgnx-mod-core-test--options
   '(ring-bell-function use-dialog-box use-short-answers inhibit-startup-screen
@@ -40,6 +42,13 @@
                              (should (equal (drgnx-module-teardown 'core/workbench) '("restart")))
                              (should (equal (seq-filter #'symbol-value modes) modes)))
     (should-not (seq-filter (lambda (m) (and (boundp m) (symbol-value m))) modes))))
+
+(ert-deftest drgnx-mod-core/workbench-subscribes-the-size-intent-on-the-idle-lane ()
+  ;; a size set by hand is intent the docks keep: without this subscriber the store never learns it
+  (drgnx-test-with-modules '(core/workbench) :strict t
+                           (should (memq #'drgnx-state-intent--user-resized (alist-get 'pane-resized drgnx-state--idle)))
+                           (should-not (memq #'drgnx-state-intent--user-resized (alist-get 'pane-resized drgnx-state--now))))
+  (should-not (memq #'drgnx-state-intent--user-resized (alist-get 'pane-resized drgnx-state--idle))))
 
 (provide 'mod-core-test)
 ;;; mod-core-test.el ends here

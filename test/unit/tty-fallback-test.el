@@ -19,7 +19,7 @@
   (let ((k (cons preset platform)))
     (or (gethash k tty-fallback-test--resolved)
         (puthash k (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-                         (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+                         (drgnx-modules--table nil) (drgnx-modules--report nil)
                          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
                          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
                      (drgnx--core-commands)
@@ -425,7 +425,6 @@ binding are taken off afterwards."
   ;; commands, set up and torn down after; the modules are loaded before the terminal is faked (loading them
   ;; defines the functions the fake replaces)
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil)
         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
         (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)

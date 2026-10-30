@@ -9,20 +9,20 @@
 (defmacro drgnx-signal-test--with (events-var &rest body)
   "BODY with a fresh bus; every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
   (declare (indent 1))
-  `(let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal-errors nil)
-         (,events-var nil)
-         (dir (make-temp-file "drgnx-signal" t)))
-     (unwind-protect
-         (progn
-           (dolist (e '(editor-changed buffer-set-changed modified-changed))
-             (let ((e e)) (drgnx-signal-subscribe e (lambda (data) (push (cons e data) ,events-var)))))
-           (drgnx-signal--flush)                   ; the starting state is not an edge
-           (setq ,events-var nil)
-           ,@body)
-       (dolist (b (buffer-list))
-         (when (and (buffer-file-name b) (string-prefix-p dir (buffer-file-name b)))
-           (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
-       (delete-directory dir t))))
+  `(drgnx-test-with-state
+     (let ((,events-var nil)
+           (dir (make-temp-file "drgnx-signal" t)))
+       (unwind-protect
+           (progn
+             (dolist (e '(editor-changed buffer-set-changed modified-changed))
+               (let ((e e)) (drgnx-signal-subscribe e (lambda (data) (push (cons e data) ,events-var)))))
+             (drgnx-signal--flush)                   ; the starting state is not an edge
+             (setq ,events-var nil)
+             ,@body)
+         (dolist (b (buffer-list))
+           (when (and (buffer-file-name b) (string-prefix-p dir (buffer-file-name b)))
+             (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+         (delete-directory dir t)))))
 
 (defun drgnx-signal-test--file (dir name)
   (let ((f (expand-file-name name dir))) (write-region "x\n" nil f nil 'silent) (find-file-noselect f)))

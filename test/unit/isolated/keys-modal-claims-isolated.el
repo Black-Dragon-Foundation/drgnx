@@ -27,7 +27,7 @@
      (setq evil-want-keybinding nil)
      (require 'evil)
      (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-           (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+           (drgnx-modules--table nil) (drgnx-modules--report nil)
            (find-file-hook find-file-hook))
        (drgnx--core-commands)
        (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))

@@ -866,8 +866,8 @@ file passed."
       fails)))
 
 (defun drgnx-run-ert--defining-file (dir test)
-  "The test file under DIR that has `(ert-deftest TEST', or nil."
-  (let ((re (concat "(ert-deftest[ \t\n]+" (regexp-quote test) "[ \t\n()]")))
+  "The test file under DIR that has `(ert-deftest TEST' (or a file's own `…--deftest' macro), or nil."
+  (let ((re (concat "([^ \t\n()]*deftest[ \t\n]+" (regexp-quote test) "[ \t\n()]")))
     (seq-find (lambda (f) (with-temp-buffer (insert-file-contents f) (re-search-forward re nil t)))
               (drgnx-run-ert--files dir))))
 

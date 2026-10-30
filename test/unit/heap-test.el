@@ -128,8 +128,7 @@ Undo lists are not truncated by the collection meanwhile."
         (should (string-search "Not the Lisp heap" (buffer-string)))))))
 
 (ert-deftest drgnx-heap/command-is-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (drgnx--core-commands)
     (let ((cmd (drgnx-commands-get 'heap-audit)))
       (should (equal (drgnx-cmd-title cmd) "Heap Audit"))

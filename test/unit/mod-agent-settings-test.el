@@ -394,7 +394,7 @@ the first time (a fresh eln cache, as in CI), and those runs are not THUNK's."
 
 (ert-deftest drgnx-agent-settings/keys-in-all-three-profiles ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-        (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+        (drgnx-modules--table nil) (drgnx-modules--report nil)
         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
         (profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))
