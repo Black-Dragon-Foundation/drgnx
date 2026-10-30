@@ -1,0 +1,25 @@
+# A push workflow's gate (the check branch protection requires): every needed job succeeded. `allow-skipped` names the
+# jobs that may be skipped instead, only where the workflow says so (a joint round's tiers, docs/develop/ci.md "Joint
+# rounds"); a failed, cancelled or any other skipped job fails it. docs/develop/ci.md, "Gates"
+name: drgnx gate
+description: Fail unless every needed job succeeded (or is one allowed to be skipped)
+inputs:
+  needs:
+    description: toJSON(needs) of the gate job
+    required: true
+  allow-skipped:
+    description: Space-separated job ids that may be skipped
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Every needed job succeeded
+      shell: bash
+      env:
+        NEEDS: ${{ inputs.needs }}
+        ALLOW: ${{ inputs.allow-skipped }}
+      run: |
+        jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+        jq -e --arg allow " $ALLOW " \
+          'to_entries | all(.value.result == "success" or (.value.result == "skipped" and (.key as $k | $allow | contains(" " + $k + " "))))' \
+          <<<"$NEEDS" >/dev/null

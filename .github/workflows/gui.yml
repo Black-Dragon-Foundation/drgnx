@@ -1,11 +1,12 @@
-# Every push to main or a ci/* branch, nightly and on demand: the GUI, live, scenario and perf tiers — real Emacs 31.1
-# (pgtk) sessions under headless mutter, in test/container/Containerfile.gui. The `gate` job ("GUI tier gate") is the
-# check branch protection requires. docs/develop/ci.md
+# Every push to main or a ci/* branch, nightly and on demand: the GUI, live, scenario and perf tiers — real Nidhogg
+# sessions under headless mutter, in test/container/Containerfile.gui (drgnx-tiers.yml, on the pinned release). Not on a
+# joint round's branch (ci/joint/*): Nidhogg's run tests the GUI tier on its new build. The `gate` job ("GUI tier gate")
+# is the check branch protection requires. docs/develop/ci.md
 name: GUI tier
 
 on:
   push:
-    branches: [main, "ci/**"]
+    branches: [main, "ci/**", "!ci/joint/**"]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -19,115 +20,29 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  ui:
-    name: GUI tests (Emacs 31.1 pgtk, headless mutter)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90          # the Glitnir child-frame matrix (test/ui/childframe-chrome-test.el) runs here once Nidhogg ships it
+  tiers:
+    name: Tiers
     permissions:
       contents: read
       packages: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prebuilt image for this Containerfile (else the tier builds it)
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
-          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
-          if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            runtime/target
-          key: cargo-${{ runner.os }}-gui-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
-      # the live tests that need the hub start their own against this Ratatoskr (DRGNX_RATATOSKR_BIN; built as in
-      # ci.yml's Nidhogg job, test/no-skip.eld)
-      - name: Ratatoskr (cargo build, for the live tests that need the hub)
-        run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr \
-            --features drgnx-ratatoskr/test-hooks --bin ratatoskr
-          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
-      - name: GUI tier in test/container/Containerfile.gui (the :timing tests left out by name)
-        env:
-          DRGNX_CONTAINER: podman
-          DRGNX_TEST_NO_TIMING: "1"
-          DRGNX_UI_TEST_TIMEOUT: "3000"
-        run: bin/drgnx test --container --ui
-
-  scenario:
-    name: Scenario tier, frame budget reported (Emacs 31.1 pgtk, headless mutter)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prebuilt image for this Containerfile (else the tier builds it)
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
-          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
-          if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      - name: Scenario tier in test/container/Containerfile.gui (the frame budget reported, not judged)
-        env:
-          DRGNX_CONTAINER: podman
-          DRGNX_TEST_NO_TIMING: "1"
-        run: bin/drgnx test --container --scenario
-
-  perf:
-    name: Perf lab (Emacs 31.1 pgtk, headless mutter)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prebuilt image for this Containerfile (else the tier builds it)
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
-          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
-          if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      - name: Perf lab in test/container/Containerfile.gui, judged against test/perf/budgets.eld
-        env:
-          DRGNX_CONTAINER: podman
-          DRGNX_PERF_CPU_FACTOR: "2"
-          DRGNX_PERF_RESULTS: perf-results.json
-        run: bin/drgnx test --container --perf
-      - name: Upload the perf results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: perf-results
-          path: perf-results.json
-          if-no-files-found: warn
+    uses: ./.github/workflows/drgnx-tiers.yml
+    with:
+      nidhogg: release
+      tiers: ui scenario perf
 
   # The one check branch protection requires of this workflow: the three tiers succeeded. It always runs, and a
   # failed, cancelled or skipped job fails it (docs/develop/ci.md, "Gates").
   gate:
     name: GUI tier gate
     if: always()
-    needs: [ui, scenario, perf]
+    needs: [tiers]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every needed job succeeded
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/gate
+        with:
+          needs: ${{ toJSON(needs) }}

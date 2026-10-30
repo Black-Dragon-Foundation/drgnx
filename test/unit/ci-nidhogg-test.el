@@ -42,7 +42,10 @@
       (should (string-match-p (concat d "[^\n]*[0-9a-f]\\{64\\}") s)))))
 
 (ert-deftest drgnx-ci/macos-unit-job-uses-nidhogg ()
-  (let ((s (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/macos.yml"))))
+  ;; macos.yml calls the tiers workflow's macos job, which installs the tarball; the weekly install stays in macos.yml
+  (let ((s (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/macos.yml")))
+        (tiers (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/drgnx-tiers.yml"))))
     (should-not (string-match-p "brew install emacs" s))
-    (should (string-search "test/container/nidhogg.sh macos" s))
+    (should-not (string-match-p "brew install emacs" tiers))
+    (should (string-search "test/container/nidhogg.sh macos" tiers))
     (should (string-search "timeout-minutes: 180" s))))

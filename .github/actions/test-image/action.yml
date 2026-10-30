@@ -1,0 +1,72 @@
+# The test image for a tier: the prebuilt one tagged with its Containerfile's hash (Test images), else none (`bin/drgnx
+# test --container` builds it). With `nidhogg-artifact`, the run's own Nidhogg build goes in on top: a thin image FROM
+# the prebuilt one (or one built here) that runs test/container/nidhogg.sh with that tarball, the same install the
+# images make of the pinned release. Writes the image to the variable `bin/drgnx test --container` reads.
+# docs/develop/ci.md
+name: drgnx test image
+description: Pull a drgnx test image, optionally with this run's Nidhogg tarball installed on top
+inputs:
+  dir:
+    description: The drgnx checkout
+    default: drgnx
+  containerfile:
+    description: test/container/<this> (Containerfile, Containerfile.gui)
+    required: true
+  image:
+    description: Its name under ghcr.io/black-dragon-foundation (drgnx-test, drgnx-test-gui)
+    required: true
+  variable:
+    description: The variable bin/drgnx reads (DRGNX_TEST_IMAGE, DRGNX_TEST_GUI_IMAGE)
+    required: true
+  nidhogg-artifact:
+    description: "This run's Nidhogg tarball artifact to install (tarball-fedora-45); empty: the image's pinned release"
+    default: ""
+  token:
+    description: Reads the prebuilt images
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: This run's Nidhogg tarball
+      if: ${{ inputs.nidhogg-artifact != '' }}
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.nidhogg-artifact }}
+        path: ${{ runner.temp }}/nidhogg-dist
+    - name: The image
+      shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+        FILE: ${{ inputs.containerfile }}
+        NAME: ${{ inputs.image }}
+        VAR: ${{ inputs.variable }}
+        OVERLAY: ${{ inputs.nidhogg-artifact }}
+        TOKEN: ${{ inputs.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        cd "$DIR"
+        image="ghcr.io/black-dragon-foundation/$NAME:$(sha256sum "test/container/$FILE" | cut -c1-16)"
+        printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
+        base=""
+        if podman pull -q "$image"; then base="$image"; else echo "no $image yet: building"; fi
+        if [ -z "$OVERLAY" ]; then
+          if [ -n "$base" ]; then echo "$VAR=$base" >> "$GITHUB_ENV"; fi
+          exit 0
+        fi
+        # the overlay needs a base: build the image here when there is no prebuilt one (capped, as bin/drgnx builds it)
+        if [ -z "$base" ]; then
+          base="localhost/$NAME-base:run"
+          podman build --memory 3g --memory-swap 3g -q -t "$base" -f "test/container/$FILE" test/container >/dev/null
+        fi
+        tarballs=("$RUNNER_TEMP"/nidhogg-dist/*.tar.xz)
+        [ "${#tarballs[@]}" = 1 ] && [ -f "${tarballs[0]}" ] || { echo "::error::expected one Nidhogg tarball in $OVERLAY"; exit 1; }
+        ctx="$(mktemp -d "$RUNNER_TEMP/overlay.XXXXXX")"
+        cp test/container/nidhogg.sh "$ctx/nidhogg.sh"
+        cp "${tarballs[0]}" "$ctx/nidhogg.tar.xz"
+        printf '%s\n' "FROM $base" \
+          "COPY nidhogg.sh nidhogg.tar.xz /tmp/" \
+          "RUN bash /tmp/nidhogg.sh fedora-45 /tmp/nidhogg.tar.xz && rm /tmp/nidhogg.sh /tmp/nidhogg.tar.xz" \
+          "ENV DRGNX_EMACS=/usr/local/bin/nidhogg" > "$ctx/Containerfile"
+        podman build --memory 3g --memory-swap 3g -q -t "localhost/$NAME-nidhogg:run" -f "$ctx/Containerfile" "$ctx" >/dev/null
+        podman run --rm "localhost/$NAME-nidhogg:run" /usr/local/bin/nidhogg --version | sed -n 1p
+        echo "$VAR=localhost/$NAME-nidhogg:run" >> "$GITHUB_ENV"

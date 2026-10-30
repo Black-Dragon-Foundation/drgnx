@@ -1,0 +1,31 @@
+# The binaries drgnx's tests run against, built from the checkout and cached by its Cargo.lock: Ratatoskr with the test
+# hooks (some client tests need --idle-tick-ms) and ratatoskr-mock beside it (the gateway tests' provider,
+# test/unit/ai-gateway-test.el), and huginn's dump example (drgnx-huginn/differential-fresh-seed). The tests that need
+# them fail rather than skip (test/no-skip.eld). Sets DRGNX_RATATOSKR_BIN and DRGNX_HUGINN_DUMP. Built on the runner
+# (its glibc is older than Fedora 45's, so they run in the test container). docs/develop/ci.md
+name: drgnx test binaries (build)
+description: Build Ratatoskr (test hooks), ratatoskr-mock and huginn's dump example from a drgnx checkout
+inputs:
+  dir:
+    description: The drgnx checkout
+    default: drgnx
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ${{ inputs.dir }}/runtime/target
+        key: cargo-${{ runner.os }}-drgnx-test-bins-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir)) }}
+    - name: Ratatoskr (test hooks), ratatoskr-mock, huginn's dump example
+      shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: |
+        cargo build --locked --manifest-path "$DIR/runtime/Cargo.toml" -p drgnx-ratatoskr -p domr \
+          --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
+        cargo build --locked --manifest-path "$DIR/runtime/Cargo.toml" -p huginn --example dump
+        t="$(cd "$DIR/runtime/target/debug" && pwd)"
+        echo "DRGNX_RATATOSKR_BIN=$t/ratatoskr" >> "$GITHUB_ENV"
+        echo "DRGNX_HUGINN_DUMP=$t/examples/dump" >> "$GITHUB_ENV"

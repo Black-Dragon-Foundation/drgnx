@@ -1,7 +1,8 @@
 # Every push to main or a ci/* branch and every pull request: the Rust runtime (runtime.yml, called as the `runtime`
-# job), the unit suite (formatting, byte-compile with no warnings and the lints are tests in it) on Emacs 31.1 against a
-# test-hooks `ratatoskr` it builds itself, shellcheck, and the leak scan. The `gate` job ("CI gate") is the check
-# branch protection requires. docs/develop/ci.md
+# job), the unit suite in plain and gate mode (formatting, byte-compile with no warnings and the lints are tests in it)
+# on the pinned Nidhogg (drgnx-tiers.yml), shellcheck, and the leak scan. The `gate` job ("CI gate") is the check
+# branch protection requires. On a joint round's branch (ci/joint/*) the tiers run in Nidhogg's run on its new build
+# instead, so they are skipped here and the gate allows exactly that. docs/develop/ci.md
 name: CI
 
 on:
@@ -33,109 +34,18 @@ jobs:
     with:
       fuzz_minutes: ${{ inputs.fuzz_minutes }}
 
-  # No `needs:`: it builds the Ratatoskr its tests use, so a red runtime job never skips or starves it (a `needs:
-  # runtime` skipped this suite on three pushes in a row and failed it for a missing artifact on a fourth).
-  emacs-31:
-    name: Nidhogg 31.1 (Fedora 45)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+  # No `needs:`: the tiers build the Ratatoskr their tests use, so a red runtime job never skips or starves them (a
+  # `needs:` on the runtime job skipped this suite on three pushes in a row and failed it for a missing artifact on a fourth).
+  tiers:
+    name: Tiers
+    if: ${{ !startsWith(github.ref, 'refs/heads/ci/joint/') }}
     permissions:
       contents: read
       packages: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            runtime/target
-          key: cargo-${{ runner.os }}-unit-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
-      # the client's tests run against Ratatoskr (DRGNX_RATATOSKR_BIN; those that need it fail rather than skip,
-      # test/no-skip.eld), with its test hooks: some need --idle-tick-ms. Built on the runner (glibc older than Fedora
-      # 45's, so it runs in the test container); runtime.yml's linux job tests the runtime itself. ratatoskr-mock beside
-      # it: the gateway tests' provider (test/unit/ai-gateway-test.el).
-      - name: Ratatoskr (cargo build, for the client's tests)
-        run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr \
-            --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
-          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
-      # huginn's dump example, built here like Ratatoskr: drgnx-huginn/differential-fresh-seed reads a fresh seed of
-      # random data with it and with Emacs's reader, and the dumps must agree (it must run, test/no-skip.eld)
-      - name: huginn's dump example (DRGNX_HUGINN_DUMP)
-        run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p huginn --example dump
-          echo "DRGNX_HUGINN_DUMP=$GITHUB_WORKSPACE/runtime/target/debug/examples/dump" >> "$GITHUB_ENV"
-      - name: Prebuilt image for this Containerfile (else the suite builds it)
-        if: ${{ !cancelled() }}
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          image="ghcr.io/black-dragon-foundation/drgnx-test:$(sha256sum test/container/Containerfile | cut -c1-16)"
-          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
-          if podman pull -q "$image"; then echo "DRGNX_TEST_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
-      # Whatever the Ratatoskr build said: without the binary only the tests that need it fail
-      - name: Unit suite in test/container/Containerfile, the files in parallel (no :timing tests)
-        if: ${{ !cancelled() }}
-        env:
-          DRGNX_CONTAINER: podman
-          DRGNX_TEST_RERUN: "1"
-          DRGNX_TEST_NO_TIMING: "1"
-          DRGNX_TEST_LOCALE: C.UTF-8      # the one job under a UTF-8 locale; the others run with none
-        run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
-
-  # The one-writer gate (Urdr schema 7, storage §9 step 4): the whole unit suite once with DRGNX_WORK_DB_GATE=1, where
-  # opening work.db read-write signals (test/support/work-db-gate.el) and only the tests tagged :work-db-writer (the
-  # `local' writer mode of Rust-bound Lisp, kept to that code by a lint) are left out. Same steps as emacs-31; the
-  # evidence that no Lisp path but the standalone Lisp hub's still writes the tracker's database. docs/develop/ci.md
-  no-lisp-writes:
-    name: No Lisp writes work.db (gate mode)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            runtime/target
-          key: cargo-${{ runner.os }}-unit-ratatoskr-${{ hashFiles('runtime/Cargo.lock') }}
-      # as emacs-31's: ratatoskr-mock beside it, the gateway tests' provider (they must run here too, test/no-skip.eld)
-      - name: Ratatoskr (cargo build, for the client's tests)
-        run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr \
-            --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
-          echo "DRGNX_RATATOSKR_BIN=$GITHUB_WORKSPACE/runtime/target/debug/ratatoskr" >> "$GITHUB_ENV"
-      # as emacs-31's: the differential test must run here too (test/no-skip.eld)
-      - name: huginn's dump example (DRGNX_HUGINN_DUMP)
-        run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p huginn --example dump
-          echo "DRGNX_HUGINN_DUMP=$GITHUB_WORKSPACE/runtime/target/debug/examples/dump" >> "$GITHUB_ENV"
-      - name: Prebuilt image for this Containerfile (else the suite builds it)
-        if: ${{ !cancelled() }}
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          image="ghcr.io/black-dragon-foundation/drgnx-test:$(sha256sum test/container/Containerfile | cut -c1-16)"
-          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
-          if podman pull -q "$image"; then echo "DRGNX_TEST_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
-      - name: Unit suite in gate mode, the files in parallel (no :timing tests)
-        if: ${{ !cancelled() }}
-        env:
-          DRGNX_CONTAINER: podman
-          DRGNX_TEST_RERUN: "1"
-          DRGNX_TEST_NO_TIMING: "1"
-          DRGNX_WORK_DB_GATE: "1"
-        run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
+    uses: ./.github/workflows/drgnx-tiers.yml
+    with:
+      nidhogg: release
+      tiers: unit no-lisp-writes
 
   scripts:
     name: Shell scripts and leak scan
@@ -146,23 +56,26 @@ jobs:
         with:
           persist-credentials: false
       - name: shellcheck
-        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit
+        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh
       - name: Leak scan (the pre-commit hook's patterns over every tracked file)
         if: ${{ !cancelled() }}
         run: .githooks/pre-commit --all
 
-  # The one check branch protection requires of this workflow: every job above succeeded. It always runs, and a
-  # failed, cancelled or skipped job fails it (docs/develop/ci.md, "Gates").
+  # The one check branch protection requires of this workflow: every job above succeeded (the tiers may be skipped on
+  # a joint round's branch only). It always runs, and a failed, cancelled or other skipped job fails it
+  # (docs/develop/ci.md, "Gates").
   gate:
     name: CI gate
     if: always()
-    needs: [runtime, emacs-31, no-lisp-writes, scripts]
+    needs: [runtime, tiers, scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every needed job succeeded
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          allow-skipped: ${{ startsWith(github.ref, 'refs/heads/ci/joint/') && 'tiers' || '' }}

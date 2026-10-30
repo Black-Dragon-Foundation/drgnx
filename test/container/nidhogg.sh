@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Install Nidhogg's release tarball for drgnx's CI: the test images (Containerfile*) and the macOS job use it, so the
-# suite runs on the Emacs drgnx ships on.  Usage: nidhogg.sh DISTRO   (fedora-44 | fedora-45 | ubuntu-26.04 | macos)
+# suite runs on the Emacs drgnx ships on.  Usage: nidhogg.sh DISTRO [TARBALL]   (fedora-44 | fedora-45 | ubuntu-26.04 | macos)
+#
+# TARBALL: install that Nidhogg tarball instead of the pinned release (Nidhogg's CI runs drgnx's tiers on the tarball it
+# just built, .github/workflows/drgnx-tiers.yml): no download and no pinned checksum (the run built it), the version is
+# the tarball's top directory (nidhogg-VERSION).
 #
 # This file is the single place the pin lives (install.sh pins the same version, checked by
 # test/unit/ci-nidhogg-test.el): bump NIDHOGG_VERSION and the sha256 lines together, from the release's SHA256SUMS.
@@ -24,11 +28,19 @@ case "$distro" in
   *) echo "usage: nidhogg.sh fedora-44|fedora-45|ubuntu-26.04|macos" >&2; exit 2 ;;
 esac
 
+local_tarball=${2:-}
+if [ -n "$local_tarball" ] && [ ! -f "$local_tarball" ]; then echo "nidhogg.sh: $local_tarball does not exist" >&2; exit 2; fi
 tarball="nidhogg-$NIDHOGG_VERSION-$asset.tar.xz"
 work=$(mktemp -d "${TMPDIR:-/tmp}/nidhogg.XXXXXX")
 trap 'rm -r "$work"' EXIT
 
-fetch() { # download and verify the tarball into $work
+fetch() { # download and verify the tarball into $work (TARBALL given: copy it, and take its version)
+  if [ -n "$local_tarball" ]; then
+    cp "$local_tarball" "$work/$tarball"
+    NIDHOGG_VERSION=$(tar -tJf "$work/$tarball" | head -n 1 | cut -d/ -f1)
+    NIDHOGG_VERSION=${NIDHOGG_VERSION#nidhogg-}
+    return
+  fi
   curl -fsSL --retry 3 -o "$work/$tarball" "$NIDHOGG_URL/v$NIDHOGG_VERSION/$tarball"
   if command -v sha256sum >/dev/null 2>&1; then
     echo "$sha  $work/$tarball" | sha256sum -c -

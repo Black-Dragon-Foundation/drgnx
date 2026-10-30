@@ -804,7 +804,7 @@ opens it read-write. The gate proves that.
 - **The lint** `drgnx-lint/work-db-writer-tags-only-in-local-mode` (`test/unit/lint-work-db-writers-test.el`) keeps
   the tag to the test files of the Rust-bound Lisp (a fixed list in the lint), and requires the test to bind
   `local`, so the tag cannot hide an editor writer or a backend reader. Phase 7 deletes the tagged tests and the list.
-- **CI:** the job `no-lisp-writes` runs the whole unit suite once in gate mode on Linux (`docs/develop/ci.md`). The
+- **CI:** the job `no-lisp-writes` (`.github/workflows/drgnx-tiers.yml`) runs the whole unit suite once in gate mode on Linux (`docs/develop/ci.md`). The
   `lisp-backend` rows (`seam/*`, `coord/*` through the Lisp backend, `store/the-lisp-backend-starts-on-schema-7`) run
   with the backend under `DRGNX_WORK_DB_GATE=1` before a push.
 - **Readers' conformance:** `drgnx-work-db/every-reader-reads-schema-7` (`test/unit/work-db-readers-test.el`) loads

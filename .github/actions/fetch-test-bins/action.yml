@@ -1,0 +1,25 @@
+# The test binaries the run's bins-linux job built (build-test-bins), put back where a build would leave them: under the
+# checkout's runtime/target/debug, so `bin/drgnx test --container` sees them at /src with ratatoskr-mock beside
+# Ratatoskr. Sets DRGNX_RATATOSKR_BIN and DRGNX_HUGINN_DUMP. docs/develop/ci.md
+name: drgnx test binaries (fetch)
+description: Download the run's drgnx test binaries into a drgnx checkout
+inputs:
+  dir:
+    description: The drgnx checkout
+    default: drgnx
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: drgnx-test-bins-linux
+        path: ${{ inputs.dir }}/runtime/target/debug
+    - name: Executable again (artifacts keep no modes), and named
+      shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: |
+        t="$(cd "$DIR/runtime/target/debug" && pwd)"
+        chmod +x "$t/ratatoskr" "$t/ratatoskr-mock" "$t/examples/dump"
+        echo "DRGNX_RATATOSKR_BIN=$t/ratatoskr" >> "$GITHUB_ENV"
+        echo "DRGNX_HUGINN_DUMP=$t/examples/dump" >> "$GITHUB_ENV"

@@ -1,0 +1,292 @@
+# drgnx's Emacs-side tiers on one Nidhogg: the one definition of them. drgnx's ci.yml, gui.yml and macos.yml call it on
+# the pinned release (`nidhogg: release`); Nidhogg's CI calls it at a pinned commit on the tarballs its run just built
+# (`nidhogg: artifact`, the run's tarball-fedora-45 and tarball-macos), so a joint round of both repositories tests
+# each pair once. `tiers` picks the jobs; the others are skipped. Every job checks drgnx out into drgnx/ (in Nidhogg's
+# run the caller's checkout is Nidhogg) and takes the local actions from there. docs/develop/ci.md, "The tiers workflow"
+name: drgnx tiers
+
+on:
+  workflow_call:
+    inputs:
+      drgnx_ref:
+        description: "drgnx commit, branch or tag to test; empty: the caller's own commit (drgnx calling itself)"
+        type: string
+        default: ""
+      nidhogg:
+        description: "release: the images' pinned release (test/container/nidhogg.sh); artifact: this run's tarballs"
+        type: string
+        default: release
+      tiers:
+        description: "Space-separated jobs to run: unit no-lisp-writes ui scenario perf macos"
+        type: string
+        required: true
+    outputs:
+      drgnx_commit:
+        description: The drgnx commit tested
+        value: ${{ jobs.unit.outputs.commit || jobs.macos.outputs.commit }}
+
+permissions:
+  contents: read
+
+jobs:
+  # the test binaries, built once for every Linux job that needs them (fetch-test-bins)
+  bins-linux:
+    name: Test binaries (Linux)
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' unit ') || contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') || contains(format(' {0} ', inputs.tiers), ' ui ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/build-test-bins
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: drgnx-test-bins-linux
+          path: |
+            drgnx/runtime/target/debug/ratatoskr
+            drgnx/runtime/target/debug/ratatoskr-mock
+            drgnx/runtime/target/debug/examples/dump
+          if-no-files-found: error
+          retention-days: 1
+
+  # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
+  # Whatever the binaries' job said: without them only the tests that need them fail
+  unit:
+    name: Unit suite (Linux, Fedora 45)
+    needs: bins-linux
+    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' unit ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      commit: ${{ steps.commit.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - id: commit
+        run: echo "commit=$(git -C drgnx rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: ./drgnx/.github/actions/fetch-test-bins
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile
+          image: drgnx-test
+          variable: DRGNX_TEST_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: Unit suite in test/container/Containerfile, the files in parallel (no :timing tests)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_RERUN: "1"
+          DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_TEST_LOCALE: C.UTF-8      # the one job under a UTF-8 locale; the others run with none
+        run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
+
+  # The one-writer gate (Urdr schema 7, storage §9 step 4): the whole unit suite once with DRGNX_WORK_DB_GATE=1, where
+  # opening work.db read-write signals (test/support/work-db-gate.el) and only the tests tagged :work-db-writer (the
+  # `local' writer mode of Rust-bound Lisp, kept to that code by a lint) are left out. Same steps as unit; the evidence
+  # that no Lisp path but the standalone Lisp hub's still writes the tracker's database. docs/develop/ci.md
+  no-lisp-writes:
+    name: No Lisp writes work.db (gate mode)
+    needs: bins-linux
+    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/fetch-test-bins
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile
+          image: drgnx-test
+          variable: DRGNX_TEST_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: Unit suite in gate mode, the files in parallel (no :timing tests)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_RERUN: "1"
+          DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_WORK_DB_GATE: "1"
+        run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
+
+  # The GUI tier: real Nidhogg sessions under headless mutter, in test/container/Containerfile.gui; the live tests that
+  # need the hub start their own against the run's Ratatoskr (test/no-skip.eld)
+  ui:
+    name: GUI tests (headless mutter)
+    needs: bins-linux
+    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' ui ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90          # the Glitnir child-frame matrix (test/ui/childframe-chrome-test.el) runs here once Nidhogg ships it
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/fetch-test-bins
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile.gui
+          image: drgnx-test-gui
+          variable: DRGNX_TEST_GUI_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: GUI tier in test/container/Containerfile.gui (the :timing tests left out by name)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_UI_TEST_TIMEOUT: "3000"
+        run: bin/drgnx test --container --ui
+
+  scenario:
+    name: Scenario tier, frame budget reported (headless mutter)
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' scenario ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile.gui
+          image: drgnx-test-gui
+          variable: DRGNX_TEST_GUI_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: Scenario tier in test/container/Containerfile.gui (the frame budget reported, not judged)
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_TEST_NO_TIMING: "1"
+        run: bin/drgnx test --container --scenario
+
+  perf:
+    name: Perf lab (headless mutter)
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' perf ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile.gui
+          image: drgnx-test-gui
+          variable: DRGNX_TEST_GUI_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: Perf lab in test/container/Containerfile.gui, judged against test/perf/budgets.eld
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+          DRGNX_PERF_CPU_FACTOR: "2"
+          DRGNX_PERF_RESULTS: perf-results.json
+        run: bin/drgnx test --container --perf
+      - name: Upload the perf results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-results
+          path: drgnx/perf-results.json
+          if-no-files-found: warn
+
+  # macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27): the unit suite and the install plan,
+  # with macOS's own bash 3.2. The test binaries are built here (one macOS job: no second macOS runner for them)
+  macos:
+    name: Unit suite and install plan (macOS 27)
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' macos ') }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"      # the image's formulae as they are: no self-update or cleanup minutes in a run
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    outputs:
+      commit: ${{ steps.commit.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - id: commit
+        run: echo "commit=$(git -C drgnx rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: ripgrep and Rust (Homebrew)
+        run: brew install ripgrep rust
+      - uses: ./drgnx/.github/actions/build-test-bins
+      - name: install.sh parses under macOS's bash 3.2
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        run: /bin/bash -n install.sh
+      - name: install.sh prints the macOS plan and changes nothing
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        run: /bin/bash install.sh --dry-run
+      - name: This run's Nidhogg tarball
+        if: ${{ !cancelled() && inputs.nidhogg == 'artifact' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarball-macos
+          path: ${{ runner.temp }}/nidhogg-dist
+      - name: Nidhogg for the suite (the pinned release, or this run's tarball)
+        id: nidhogg
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        env:
+          MODE: ${{ inputs.nidhogg }}
+        run: |
+          if [ "$MODE" = artifact ]; then
+            tarball="$(ls "$RUNNER_TEMP"/nidhogg-dist/*.tar.xz)"   # none: the step fails (never the release instead)
+            /bin/bash test/container/nidhogg.sh macos "$tarball"
+          else
+            /bin/bash test/container/nidhogg.sh macos
+          fi
+      # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
+      # Whatever the steps before said, once there is an Emacs: without Ratatoskr only the tests that need it fail
+      - name: Unit suite, the files in parallel (no :timing tests)
+        if: ${{ !cancelled() && steps.nidhogg.outcome == 'success' }}
+        working-directory: drgnx
+        env:
+          DRGNX_TEST_RERUN: "1"
+          DRGNX_TEST_NO_TIMING: "1"
+        run: DRGNX_TEST_JOBS="$(sysctl -n hw.ncpu)" bin/drgnx test
