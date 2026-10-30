@@ -184,11 +184,11 @@
 
 ;;;; The texts
 
-(defvar drgnx-notice--needs-memo (vector -1 nil nil nil)
-  "[TICK GLYPHS TABLE TEXT] of the last `drgnx-notice-needs-you-text'.")
+(defvar drgnx-notice--needs-memo (vector -1 nil nil nil nil)
+  "[TICK GLYPHS TABLE TEXT TERMINAL] of the last `drgnx-notice-needs-you-text'.")
 
-(defvar drgnx-notice--problems-memo (vector -1 nil nil nil)
-  "[TICK GLYPHS TABLE TEXT] of the last `drgnx-notice-problems-text'.")
+(defvar drgnx-notice--problems-memo (vector -1 nil nil nil nil)
+  "[TICK GLYPHS TABLE TEXT TERMINAL] of the last `drgnx-notice-problems-text'.")
 
 (defvar drgnx-notice--line-memo (vector nil nil nil)
   "[NEEDS-YOU-TEXT PROBLEMS-TEXT LINE] of the last `drgnx-notice-mode-line'.")
@@ -206,20 +206,22 @@
 (defun drgnx-notice-needs-you-text ()
   "`◐ N waiting on you' in `drgnx-status-needs-you', or nil.  Memoised on the tick: a read allocates nothing."
   (let ((m drgnx-notice--needs-memo))
-    (if (and (eq (aref m 0) drgnx-notice--tick) (eq (aref m 1) drgnx-face-glyphs) (eq (aref m 2) drgnx-notice--table))
+    (if (and (eq (aref m 0) drgnx-notice--tick) (eq (aref m 1) drgnx-face-glyphs) (eq (aref m 2) drgnx-notice--table)
+             (eq (aref m 4) (frame-terminal)))   ; the glyphs differ between a UTF-8 and an ASCII terminal
         (aref m 3)
       (let ((n drgnx-notice--needs-you))
         (aset m 3 (and (> n 0)
                        (drgnx-ui-button (format "%s %d waiting on you" (drgnx-face-glyph 'waiting) n)
                                         #'drgnx-notice-needs-you-click :face 'drgnx-status-needs-you
                                         :where 'mode-line :help "Things waiting on you (mouse-1: act or list)")))
-        (aset m 0 drgnx-notice--tick) (aset m 1 drgnx-face-glyphs) (aset m 2 drgnx-notice--table)
+        (aset m 0 drgnx-notice--tick) (aset m 1 drgnx-face-glyphs) (aset m 2 drgnx-notice--table) (aset m 4 (frame-terminal))
         (aref m 3)))))
 
 (defun drgnx-notice-problems-text ()
   "`✕ F', `⚠ W' or `✕ F ⚠ W' (failed, then warned conditions), or nil.  Memoised like the needs-you text."
   (let ((m drgnx-notice--problems-memo))
-    (if (and (eq (aref m 0) drgnx-notice--tick) (eq (aref m 1) drgnx-face-glyphs) (eq (aref m 2) drgnx-notice--table))
+    (if (and (eq (aref m 0) drgnx-notice--tick) (eq (aref m 1) drgnx-face-glyphs) (eq (aref m 2) drgnx-notice--table)
+             (eq (aref m 4) (frame-terminal)))   ; the glyphs differ between a UTF-8 and an ASCII terminal
         (aref m 3)
       (let* ((p drgnx-notice--problems) (warn (car p)) (fail (cdr p)))
         (aset m 3 (and (or (> warn 0) (> fail 0))
@@ -230,7 +232,7 @@
                               (t (format "%s %d" (drgnx-face-glyph 'warn) warn)))
                         #'drgnx-notices-show :face (if (> fail 0) 'drgnx-status-fail 'drgnx-status-warn)
                         :where 'mode-line :help "Problems (mouse-1: the Notices list)")))
-        (aset m 0 drgnx-notice--tick) (aset m 1 drgnx-face-glyphs) (aset m 2 drgnx-notice--table)
+        (aset m 0 drgnx-notice--tick) (aset m 1 drgnx-face-glyphs) (aset m 2 drgnx-notice--table) (aset m 4 (frame-terminal))
         (aref m 3)))))
 
 (defun drgnx-notice-mode-line ()

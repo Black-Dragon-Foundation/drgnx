@@ -287,7 +287,7 @@
                      :size "100x30"
                      :command (format "env TERM=xterm-256color VTE_VERSION=7800 %s -a false -t -s %s; sh"
                                       (drgnx-ui--emacsclient) (shell-quote-argument (plist-get gui :socket)))))
-          (drgnx-tty-session-wait-screen tty "\\*scratch\\*" 30)
+          (drgnx-tty-session-wait-screen tty "\\*drgnx start\\*" 30)   ; a fresh client opens on the start page
           (let ((g '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
                 (tf '(seq-find (lambda (f) (and (not (display-graphic-p f)) (frame-parameter f 'client))) (frame-list))))
             (drgnx-tty-session-wait gui `(terminal-parameter (frame-terminal ,tf) 'drgnx-tty-fallback) 20)

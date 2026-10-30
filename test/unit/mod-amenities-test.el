@@ -73,6 +73,7 @@
   (let* ((load-path (append load-path (drgnx-amenities-test--elpa-path)))
          (file (make-temp-file "drgnx-format" nil ".py" "x  =  1\n")) (exec-path nil))
     (require 'python)                   ; python.el's own load-time registrations are not the module's
+    (with-temp-buffer (python-mode))    ; nor are the ones its mode makes when a .py file is opened (an after-load entry for grep)
     (unwind-protect
         (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Prompted")))
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "Prompted"))))
