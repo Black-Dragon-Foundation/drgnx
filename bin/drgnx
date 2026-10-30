@@ -1331,6 +1331,24 @@ update_run() { # the update itself (UPD_QUIET: the timer's way)
   update_record_run "updated ${old:0:7}..${new:0:7}"
 }
 
+update_nidhogg() { # an interactive update builds the Nidhogg install.sh pins when it is newer than the running one; never the timer
+  [[ "${UPD_QUIET:-0}" != 1 ]] || return 0
+  case "${DRGNX_UPDATE_TTY:-}" in yes) ;; none) return 0 ;; *) [[ -t 0 && -t 1 ]] || return 0 ;; esac
+  local pin running newest
+  pin="$(sed -n 's/^NIDHOGG_VERSION=\([0-9][0-9.]*-nidhogg\.[0-9][0-9]*\)$/\1/p' "$here/install.sh" 2>/dev/null | head -1)"
+  [[ -n "$pin" ]] || return 0
+  running="$("$(emacs_bin || echo false)" --batch -Q --eval '(princ (if (boundp (quote nidhogg-version)) nidhogg-version "-"))' 2>/dev/null || true)"
+  [[ "$running" == *-nidhogg.* ]] || return 0   # no Nidhogg running (a stock Emacs): the doctor says so
+  [[ "$running" != "$pin" ]] || return 0
+  newest="$(printf '%s\n%s\n' "$running" "$pin" | sort -V | tail -1)"
+  [[ "$newest" == "$pin" ]] || return 0
+  update_say "drgnx update: Nidhogg $pin is pinned, $running is running: building it (30-60 minutes; the old one stays until the new one starts)…"
+  if ! ${DRGNX_UPDATE_NIDHOGG_CMD:-bash "$here/install.sh"} --nidhogg-only; then
+    update_err "the Nidhogg build did not finish; $running stays. Run drgnx update again to retry."
+    return 1
+  fi
+}
+
 update_back() { # return to the commit before the last update, then sync + build
   local state old prev
   state="$(update_state_dir)"
@@ -1553,8 +1571,11 @@ cmd_update() { # [--quiet] [--back] [--restart] [--auto on|off|status]
   command -v git >/dev/null 2>&1 || { update_err "git not found"; return 1; }
   update_lock || return 1
   if ((back)); then update_back || rc=$?; else update_run || rc=$?; fi
+  local nrc=0   # a Nidhogg build that fails leaves the updated drgnx as it is, and the old Nidhogg running
+  if [[ "$rc" == 0 && "$back" == 0 ]]; then update_nidhogg || nrc=$?; fi
   if [[ "$rc" == 0 ]]; then update_refresh_unit; fi
   if [[ "$rc" == 0 && "$restart" == 1 ]]; then update_restart || rc=$?; fi
+  if [[ "$rc" == 0 ]]; then rc=$nrc; fi
   return "$rc"
 }
 

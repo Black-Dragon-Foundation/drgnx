@@ -519,3 +519,46 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (dolist (n '("ratatoskr" "rtsk"))
         (should (equal (file-truename (expand-file-name (concat "prefix/bin/" n) dir))
                        (file-truename (expand-file-name "data/bin/ratatoskr" dir))))))))
+
+(defun drgnx-update-test--nidhogg-setup (dir running pin)
+  "A fake Emacs in DIR that reports nidhogg-version RUNNING, and an install.sh in the seed pinning PIN.
+Returns the env entries for a run that builds through a recording stub (DIR/nidhogg.log)."
+  (let ((emacs (expand-file-name "fake-emacs" dir)) (stub (expand-file-name "nidhogg-stub" dir)))
+    (write-region (format "#!/bin/sh\nprintf %%s '%s'\n" running) nil emacs)
+    (write-region (format "#!/bin/sh\necho \"$*\" >> '%s/nidhogg.log'\n" dir) nil stub)
+    (set-file-modes emacs #o755)
+    (set-file-modes stub #o755)
+    (unless (equal (format "NIDHOGG_VERSION=%s\n" pin)
+                   (drgnx-update-test--slurp (expand-file-name "seed/install.sh" dir)))
+      (drgnx-update-test--push dir "install.sh" (format "NIDHOGG_VERSION=%s\n" pin) "pin")
+      (drgnx-update-test--git dir "install" "pull" "-q"))
+    (list (concat "DRGNX_EMACS=" emacs) (concat "DRGNX_UPDATE_NIDHOGG_CMD=" stub) "DRGNX_UPDATE_TTY=yes")))
+
+(ert-deftest drgnx-update/an-interactive-update-builds-a-newer-pinned-nidhogg ()
+  (drgnx-update-test--with-install
+    (let* ((env (drgnx-update-test--nidhogg-setup dir "31.1-nidhogg.1" "31.1-nidhogg.4"))
+           (r (drgnx-update-test--run dir env bin "update")))
+      (should (eq (car r) 0))
+      (should (equal "--nidhogg-only\n" (drgnx-update-test--slurp (expand-file-name "nidhogg.log" dir)))))))
+
+(ert-deftest drgnx-update/the-timer-and-a-current-nidhogg-never-build ()
+  (drgnx-update-test--with-install
+    (let ((env (drgnx-update-test--nidhogg-setup dir "31.1-nidhogg.1" "31.1-nidhogg.4")))
+      ;; --quiet is the timer's way
+      (drgnx-update-test--run dir env bin "update" "--quiet")
+      ;; no terminal
+      (drgnx-update-test--run dir (cons "DRGNX_UPDATE_TTY=none" env) bin "update")
+      (should-not (file-exists-p (expand-file-name "nidhogg.log" dir))))
+    ;; the running Nidhogg is the pin, or newer
+    (dolist (running '("31.1-nidhogg.4" "31.1-nidhogg.10"))
+      (let ((env (drgnx-update-test--nidhogg-setup dir running "31.1-nidhogg.4")))
+        (drgnx-update-test--run dir env bin "update")
+        (should-not (file-exists-p (expand-file-name "nidhogg.log" dir)))))))
+
+(ert-deftest drgnx-update/a-failed-nidhogg-build-keeps-the-updated-drgnx ()
+  (drgnx-update-test--with-install
+    (let* ((env (drgnx-update-test--nidhogg-setup dir "31.1-nidhogg.1" "31.1-nidhogg.4"))
+           (r (drgnx-update-test--run dir (cons "DRGNX_UPDATE_NIDHOGG_CMD=false" env) bin "update")))
+      (should (eq (car r) 1))
+      (should (string-match-p "old\\|stays" (cdr r)))
+      (should (equal (drgnx-update-test--git dir "seed" "rev-parse" "HEAD") (drgnx-update-test--head dir))))))
