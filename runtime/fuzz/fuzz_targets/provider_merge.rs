@@ -6,11 +6,14 @@
 //! comes back as it came.
 #![no_main]
 
+use std::collections::HashMap;
+
 use bifrost::Restrictions;
 use bifrost::rewrite;
 use bytes::Bytes;
 use libfuzzer_sys::fuzz_target;
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 fn slugs(line: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(line)
@@ -60,6 +63,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(&out) else {
+        // `Value` alone refuses serde_json's private raw-value key; `rewrite` reads it as any other key
+        if serde_json::from_slice::<HashMap<String, &RawValue>>(&out).is_ok() {
+            return;
+        }
         // a body that is not an object stays as it came, unless restrictions apply (then it is refused)
         assert!(!applies && out == input, "not a JSON object: {out:?}");
         return;

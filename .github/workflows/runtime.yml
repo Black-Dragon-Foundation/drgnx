@@ -376,16 +376,22 @@ jobs:
 
   # libFuzzer targets on the pinned nightly (the ledger's: nightly-2026-10-15, cargo-fuzz 0.13.2). The ubuntu runner has
   # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
-  # a pull request runs none. A crash uploads its input.
+  # a pull request runs none. A crash uploads its input. Four shards of `cargo fuzz list`'s targets, so a nightly takes
+  # about 70 minutes, and a new target runs with no change here.
   fuzz:
-    name: fuzz (line_codec, request_prelude, hello, connect_head, host_target, sbpl_quote, bwrap_version, inner_spec, mcp_message, jsonrpc_parse, text_one_line, put_parsed, task_write_args, graph_read_args, acp_update, report_submit, saga_plan, saga_deferred, saga_org, trust_fence, sqlro_sql, sse_usage, provider_merge, gateway_admit, huginn_read)
+    name: fuzz (shard ${{ matrix.shard }} of 4)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     env:
       NIGHTLY: nightly-2026-10-15
       EVENT: ${{ github.event_name }}
       MINUTES: ${{ inputs.fuzz_minutes }}
+      SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -409,11 +415,13 @@ jobs:
           key: cargo-${{ runner.os }}-fuzz-${{ hashFiles('runtime/fuzz/Cargo.lock', '.github/workflows/runtime.yml') }}
       - name: cargo-fuzz 0.13.2
         run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
-      # every target runs, whatever an earlier one found; the step fails at the end naming each that failed
+      # every target of the shard runs, whatever an earlier one found; the step fails at the end naming each that failed
       - name: Run each target
         run: |
           failed=""
-          for target in line_codec request_prelude hello connect_head host_target sbpl_quote bwrap_version inner_spec mcp_message jsonrpc_parse text_one_line put_parsed task_write_args graph_read_args acp_update report_submit saga_plan saga_deferred saga_org trust_fence sqlro_sql sse_usage provider_merge gateway_admit huginn_read; do
+          targets=$(cargo "+$NIGHTLY" fuzz list --fuzz-dir runtime/fuzz | sort | awk -v s="$SHARD" 'NR % 4 == s')
+          test -n "$targets"
+          for target in $targets; do
             echo "::group::$target ($FUZZ_SECONDS s)"
             cargo "+$NIGHTLY" fuzz run "$target" --fuzz-dir runtime/fuzz -- "-max_total_time=$FUZZ_SECONDS" || failed="$failed $target"
             echo "::endgroup::"
@@ -422,7 +430,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: fuzz-crashes
+          name: fuzz-crashes-${{ matrix.shard }}
           path: runtime/fuzz/artifacts
           if-no-files-found: ignore
 

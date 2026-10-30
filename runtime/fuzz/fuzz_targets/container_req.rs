@@ -48,11 +48,13 @@ fuzz_target!(|data: &[u8]| {
             socket: "/run/h/job.sock".into(),
             forwarder: "/opt/drgnx-fwd".into(),
         }),
+        net_hosts: Vec::new(),
     };
     let req = ContainerReq {
         image: name,
         argv: cmd.clone(),
         worktree: worktree.into(),
+        subdir: "".into(),
         job,
         net,
     };
