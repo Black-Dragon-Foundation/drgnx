@@ -83,13 +83,19 @@ Its size is fixed: one copy per keymap the profiles' `:modal' `:maps' name.")
 (defun drgnx-keys-modal-take-snapshots (feature profiles)
   "Copy the keymaps of FEATURE that the `:modal' `:maps' of PROFILES (alist PROFILE → plist) name into
 `drgnx-keys-modal-snapshots'; a keymap not defined (yet) is skipped.  Returns the snapshots."
+  (setq drgnx-keys-modal-snapshots (drgnx-keys-modal-read-snapshots feature profiles)))
+
+(defun drgnx-keys-modal-read-snapshots (feature profiles)
+  "Copies of the keymaps of FEATURE that the `:modal' `:maps' of PROFILES name, as they are now (alist
+KEYMAP-SYMBOL → keymap); a keymap not defined (yet) is skipped.  `drgnx-keys-apply' reads them again once its own
+bindings are out, so the claims see what a config.el bound in evil's maps since evil loaded."
   (let (out)
     (dolist (p profiles)
       (dolist (m (drgnx-keys-modal--engine-maps (plist-get (cdr p) :modal)))
         (let ((sym (cdar m)))
           (when (and (eq (caar m) feature) (not (assq sym out)) (boundp sym) (keymapp (symbol-value sym)))
             (push (cons sym (copy-keymap (symbol-value sym))) out)))))
-    (setq drgnx-keys-modal-snapshots (nreverse out))))
+    (nreverse out)))
 
 (defun drgnx-keys-modal--snapshot-evil ()
   "When evil has loaded: snapshot its state maps (`drgnx-keys-modal-take-snapshots').  Never an error."

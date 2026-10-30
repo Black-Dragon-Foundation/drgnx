@@ -511,6 +511,9 @@ adds `drgnx-modal-sync-engine' so a runtime switch starts and stops the engine. 
   "Emacs' own global bindings, taken before drgnx binds anything.")
 
 (defvar drgnx-keys--applied nil "What drgnx bound, newest first: (MAPSYM KEY PREVIOUS OURS).")
+(defvar drgnx-keys--evil-aux nil
+  "What drgnx bound in evil's auxiliary keymaps (a mode map's keys in normal and motion state), newest first:
+(AUX-KEYMAP KEY PREVIOUS).")
 (defvar drgnx-keys--generation 0 "Incremented by every apply; stale deferred bindings check it.")
 (defvar drgnx-keys--session-layers nil "Layers chosen in this session; win over keys.eld and the default.")
 (defvar drgnx-keys-last nil "The last applied resolution, plus :layers, :problems from loading too.")
@@ -608,6 +611,9 @@ was lifted, \"COMMAND (PREFIX)\", or nil."
       (let* ((map (symbol-value mapsym)) (now (drgnx-keys--lookup map key)))
         (when (if (eq ours :prefix) (or (null now) (equal now '(keymap))) (equal now ours))
           (drgnx-keys--set map key prev)))))
+  (pcase-dolist (`(,aux ,key ,prev) drgnx-keys--evil-aux)
+    (drgnx-keys--set aux key prev))
+  (setq drgnx-keys--evil-aux nil)
   (drgnx-keys--set-everywhere nil)
   (setq drgnx-keys--applied nil))
 
@@ -637,6 +643,22 @@ emptied and leaves the list, so a profile switch leaves nothing behind."
       (add-to-list 'emulation-mode-map-alists 'drgnx-keys--everywhere-alist)
     (setq emulation-mode-map-alists (delq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))))
 
+(defun drgnx-keys--bind-evil-aux (b mapsym key def)
+  "When evil is loaded: also bind KEY to DEF in evil's auxiliary maps of MAPSYM's keymap (normal and motion state),
+because evil's state maps sit above every mode map and would shadow it there.  Only for a mode map (`...-mode-map')
+and for a binding of a layer without modal keys (keys.eld, another editor's profile): a modal profile's own keys
+are written for its states."
+  (when-let* (((featurep 'evil)) ((fboundp 'evil-get-auxiliary-keymap))
+              ((string-suffix-p "-mode-map" (symbol-name mapsym)))
+              (layer (plist-get b :layer))
+              ((not (plist-get (cdr (assq layer drgnx-keys-profiles)) :modal))))
+    (dolist (state '(normal motion))
+      (let* ((aux (evil-get-auxiliary-keymap (symbol-value mapsym) state t))
+             (prev (drgnx-keys--lookup aux key)))
+        (unless (numberp prev)                ; a shorter key is bound there already: leave it
+          (push (list aux key prev) drgnx-keys--evil-aux)
+          (define-key aux (key-parse key) def))))))
+
 (defun drgnx-keys--apply-binding (b cmd generation)
   "Bind resolution binding B (command CMD) now, or when its keymap's feature loads.  A late binding
 adds what it finds (a failure, a lifted prefix) to `drgnx-keys-last' and rewrites the report."
@@ -646,6 +668,7 @@ adds what it finds (a failure, a lifted prefix) to `drgnx-keys-last' and rewrite
                        (when (= generation drgnx-keys--generation)
                          (condition-case err
                              (let ((lifted (drgnx-keys--bind mapsym key (drgnx-cmd-command cmd))))
+                               (drgnx-keys--bind-evil-aux b mapsym key (drgnx-cmd-command cmd))
                                (when (and late lifted)   ; at apply time the resolver saw this prefix
                                  (setq drgnx-keys-last
                                        (plist-put drgnx-keys-last :conflicts
@@ -707,7 +730,9 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
                                       :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
                                       :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m)))
-                                      :snapshots drgnx-keys-modal-snapshots)))
+                                      :snapshots (or (and drgnx-keys-modal-snapshots (featurep 'evil)
+                                                          (drgnx-keys-modal-read-snapshots 'evil drgnx-keys-profiles))
+                                                     drgnx-keys-modal-snapshots))))
           (drgnx-keys--set-mac-modifiers layers (plist-get user :mac-option))
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))
