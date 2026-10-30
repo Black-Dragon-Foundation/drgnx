@@ -41,7 +41,7 @@
         (should (drgnx-live--nonblank-p (plist-get shot :path))))
       (drgnx-ui-stop name)
       (should-not (drgnx-ui-unit-active-p name))
-      (should-not (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir))))   ; mutter's Wayland socket
+      (should-not (file-exists-p (drgnx-ui-session-runtime-dir name)))   ; its runtime directory, with mutter's Wayland socket
       (should (equal (drgnx-live--processes (concat "--wayland-display " name)) "")))))
 
 (ert-deftest drgnx-live/init-error-still-ready ()
@@ -85,7 +85,7 @@
             (drgnx-ui-stop name))
         (delete-directory other t))
       (should (drgnx-ui-alive-p s))
-      (should (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir))))
+      (should (file-exists-p (expand-file-name name (drgnx-ui-session-runtime-dir name))))   ; mutter's Wayland socket, in the session's own directory
       (should (drgnx-ui-state (drgnx-ui-own-session name))))))
 
 (ert-deftest drgnx-live/measure-resolves-each-action-after-the-previous-one ()

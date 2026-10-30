@@ -68,10 +68,14 @@ paths no WM serves."
                                (and monitors '("--virtual-monitor" "1024x768"))
                                (list "--" (drgnx-ui-emacs-bin) "--init-directory"
                                      (expand-file-name "init" (plist-get s :run)) "--fullscreen"))))
-        (should (member (concat "XDG_RUNTIME_DIR=" runtime) env))
-        (should-not (seq-find (lambda (kv) (string-match-p "\\`\\(WLR_\\|DISPLAY=\\)" kv)) env))
-        (should (equal (drgnx-ui--display-env s)
-                       (list (concat "WAYLAND_DISPLAY=" name) (concat "XDG_RUNTIME_DIR=" runtime))))))))
+        ;; mutter's own runtime directory too, so its Wayland display is not in the caller's
+        (let ((xdg (drgnx-ui-session-runtime-dir name root)))
+          (should (member (concat "XDG_RUNTIME_DIR=" xdg) env))
+          (should-not (member (concat "XDG_RUNTIME_DIR=" runtime) env))
+          (should (file-directory-p xdg))
+          (should-not (seq-find (lambda (kv) (string-match-p "\\`\\(WLR_\\|DISPLAY=\\)" kv)) env))
+          (should (equal (drgnx-ui--display-env s)
+                         (list (concat "WAYLAND_DISPLAY=" name) (concat "XDG_RUNTIME_DIR=" xdg)))))))))
 
 (ert-deftest drgnx-ui-compositor/sway-config-places-outputs-side-by-side ()
   (drgnx-ui-compositor-test--with
@@ -401,9 +405,7 @@ paths no WM serves."
             (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-1-00000a") :name) "drgnx-ui-1-00000a"))
             (dolist (forged (list (list :name "drgnx-ui-7-00000a")
                                   (list :name "../00000000/drgnx-ui-1-00000a")
-                                  (list :run (expand-file-name "drgnx-ui-7-00000a" root))
-                                  ;; M12c-2-2: a sway session saying mutter would get the caller's runtime dir
-                                  (list :compositor "mutter")))
+                                  (list :run (expand-file-name "drgnx-ui-7-00000a" root))))
               (drgnx-ui--write json (drgnx-ui--json (apply #'plist-put (copy-sequence s) forged)))
               (should-error (drgnx-ui-own-session "drgnx-ui-1-00000a") :type 'drgnx-ui-refused)))
         (delete-process server)))))

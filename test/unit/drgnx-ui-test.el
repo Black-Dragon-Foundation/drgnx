@@ -399,7 +399,8 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (equal (drgnx-ui-runtime-dir)
                      (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
       (should (= (file-modes (drgnx-ui-runtime-dir)) #o700))
-      (should (member (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir)) (drgnx-ui-session-env s)))
+      (should (member (concat "XDG_RUNTIME_DIR=" (drgnx-ui-session-runtime-dir "drgnx-ui-1-00000a")) (drgnx-ui-session-env s)))
+      (should-not (member (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir)) (drgnx-ui-session-env s)))   ; mutter too
       (drgnx-ui-stop "drgnx-ui-1-00000a"))))
 
 (ert-deftest drgnx-ui/runtime-dir-fallback-must-be-private ()
