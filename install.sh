@@ -20,12 +20,12 @@
 set -euo pipefail
 
 EMACS_VERSION=31.1
-NIDHOGG_VERSION=31.1-nidhogg.1
+NIDHOGG_VERSION=31.1-nidhogg.4
 NIDHOGG_TAG="v$NIDHOGG_VERSION"
 NIDHOGG_REPO="${DRGNX_INSTALL_NIDHOGG_REPO:-https://github.com/Black-Dragon-Foundation/nidhogg.git}"
 # The commit $NIDHOGG_TAG must be: a moved or replaced tag installs nothing.  The head of the published series;
 # the tag is created on this commit at release (until then the fetch of the tag fails and nothing is installed).
-NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-29f76866bd1d7a19307ffe2eb330556c5291e0cf}"
+NIDHOGG_COMMIT="${DRGNX_INSTALL_NIDHOGG_COMMIT:-562b5d44de2184886f6d4b52ad5de5978ede5012}"
 DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drgnx.git}"
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/guide/install.md
 HOMEBREW_INSTALLER_URL=https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh

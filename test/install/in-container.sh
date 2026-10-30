@@ -65,7 +65,7 @@ as_tester bash /src/install.sh --yes || fail "install.sh exited $?"
 step "drgnx doctor"
 out="$(as_tester drgnx doctor)" || { printf '%s\n' "$out"; fail "the doctor reports a failure"; }
 printf '%s\n' "$out"
-grep -q '^OK    emacs-version .*Nidhogg 31.1-nidhogg.1' <<<"$out" || fail "emacs-version is not Nidhogg 31.1-nidhogg.1"
+grep -q '^OK    emacs-version .*Nidhogg 31.1-nidhogg.4' <<<"$out" || fail "emacs-version is not Nidhogg 31.1-nidhogg.4"
 grep -q '^OK    native-compilation ' <<<"$out" || fail "native compilation is not ok"
 grep -q '^OK    gui ' <<<"$out" || fail "not a graphical build"
 grep -q '^OK    tree-sitter ' <<<"$out" || fail "no tree-sitter"

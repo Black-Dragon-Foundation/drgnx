@@ -13,4 +13,4 @@ RUN dnf -y --setopt=tsflags= install info diffutils findutils git mutter python3
 RUN setcap -r /usr/bin/sway
 COPY nidhogg.sh /tmp/nidhogg.sh
 RUN bash /tmp/nidhogg.sh fedora-45 && rm /tmp/nidhogg.sh
-ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.1/bin/nidhogg
+ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.4/bin/nidhogg

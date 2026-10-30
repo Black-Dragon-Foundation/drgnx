@@ -167,7 +167,7 @@ machine has."
             (should-not (string-search "Install Homebrew" (cdr r))))
           (let ((r (funcall run old)))
             (should (= (car r) 0))
-            (should (string-search "build Nidhogg 31.1-nidhogg.1" (cdr r)))
+            (should (string-search "build Nidhogg 31.1-nidhogg.4" (cdr r)))
             (should-not (string-search "keep the installed" (cdr r))))
           ;; DRGNX_INSTALL_EMACS still comes first
           (let ((r (drgnx-install-test--run (append (list (concat "DRGNX_INSTALL_EMACS=" good) (concat "DRGNX_INSTALL_MACOS_APP=" old)
@@ -437,7 +437,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
                                       "DRGNX_INSTALL_BREW=none")
                                     nil)
                             "--dry-run")
-   "Remember Emacs: " "/.local/opt/nidhogg/31.1-nidhogg.1/Nidhogg.app/Contents/MacOS/Emacs")
+   "Remember Emacs: " "/.local/opt/nidhogg/31.1-nidhogg.4/Nidhogg.app/Contents/MacOS/Emacs")
   (let ((tmp (make-temp-file "drgnx-install" t)))
     (unwind-protect
         (let ((fake (drgnx-install-test--fake-emacs tmp "31.1 t ns")))
@@ -631,14 +631,14 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
     (drgnx-install-test--expect
      (apply #'drgnx-install-test--plan "fedora-44"
             (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0)) drgnx-install-test--roomy)
-     "build Nidhogg 31.1-nidhogg.1" "podman container (registry.fedoraproject.org/fedora:44)" "capped at 6g"
-     "make -j4" "/.local/opt/nidhogg/31.1-nidhogg.1" "nidhogg/deps/fedora-44.runtime"
-     "Remember Emacs: " "/.local/opt/nidhogg/31.1-nidhogg.1/bin/nidhogg"
+     "build Nidhogg 31.1-nidhogg.4" "podman container (registry.fedoraproject.org/fedora:44)" "capped at 6g"
+     "make -j4" "/.local/opt/nidhogg/31.1-nidhogg.4" "nidhogg/deps/fedora-44.runtime"
+     "Remember Emacs: " "/.local/opt/nidhogg/31.1-nidhogg.4/bin/nidhogg"
      "check that it is commit " "link " "/bin/nidhogg and " "refresh drgnx.service's Emacs if it is installed")))
 
 (ert-deftest drgnx-install/without-podman-nidhogg-builds-on-the-host ()
   (let ((out (cdr (apply #'drgnx-install-test--plan "fedora-44" "DRGNX_INSTALL_PODMAN=none" drgnx-install-test--roomy))))
-    (dolist (s '("build Nidhogg 31.1-nidhogg.1" "build on this machine (podman is not installed): make -j10"
+    (dolist (s '("build Nidhogg 31.1-nidhogg.4" "build on this machine (podman is not installed): make -j10"
                  "nidhogg/deps/fedora-44.build"))
       (should (string-search s out)))
     (should-not (string-search "podman container" out))))
@@ -670,7 +670,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   (let* ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=/opt/homebrew/bin/brew" drgnx-install-test--macos) "--dry-run"))
          (out (cdr r)))
     (should (= (car r) 0))
-    (dolist (s '("build Nidhogg 31.1-nidhogg.1" "Nidhogg.app into " "/.local/opt/nidhogg/31.1-nidhogg.1"
+    (dolist (s '("build Nidhogg 31.1-nidhogg.4" "Nidhogg.app into " "/.local/opt/nidhogg/31.1-nidhogg.4"
                  "nidhogg/deps/macos.build" "Nidhogg.app/Contents/MacOS/Emacs"))
       (should (string-search s out)))
     (should-not (string-search "emacs-plus" out))
@@ -678,9 +678,9 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
 
 (ert-deftest drgnx-install/a-current-nidhogg-is-kept ()
   (drgnx-install-test--with-tmp tmp
-    (let ((r (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.1")))))
+    (let ((r (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.4")))))
       (should (= (car r) 0))
-      (should (string-search "keep the installed Nidhogg 31.1-nidhogg.1 (" (cdr r)))
+      (should (string-search "keep the installed Nidhogg 31.1-nidhogg.4 (" (cdr r)))
       (should-not (string-search "build Nidhogg" (cdr r)))
       (should-not (string-search "build on this machine" (cdr r))))))
 
@@ -688,12 +688,12 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   (drgnx-install-test--with-tmp tmp
     (drgnx-install-test--expect
      (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.0")))
-     "build Nidhogg 31.1-nidhogg.1")))
+     "build Nidhogg 31.1-nidhogg.4")))
 
 (ert-deftest drgnx-install/a-stock-emacs-gets-nidhogg-unless-kept ()
   (drgnx-install-test--with-tmp tmp
     (let ((emacs (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk"))))
-      (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" emacs) "build Nidhogg 31.1-nidhogg.1")
+      (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" emacs) "build Nidhogg 31.1-nidhogg.4")
       (let ((out (cdr (drgnx-install-test--plan "fedora-44" emacs "--method" "keep"))))
         (should (string-search "keep the installed Emacs 31.1" out))
         (should-not (string-search "build Nidhogg" out)))
@@ -719,7 +719,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
   (set-file-modes file #o755))
 
 (defun drgnx-install-test--nidhogg-fixture (tmp)
-  "In TMP: a git repo `nidhogg' (tag v31.1-nidhogg.1) with a stub nidhogg/build.sh that logs its arguments to $NH_LOG
+  "In TMP: a git repo `nidhogg' (tag v31.1-nidhogg.4) with a stub nidhogg/build.sh that logs its arguments to $NH_LOG
 and writes PREFIX/bin/{nidhogg,emacs,nidhoggclient} answering the probe (NH_FAIL=1: exits 1; NH_BROKEN=1: binaries that do
 not start) and deps lists; `bin' with a sudo and an rpm stub (RPM_ALL=1: everything installed); `drgnx', a checkout whose
 bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real run on Fedora 44."
@@ -736,11 +736,11 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
              "while [ $# -gt 0 ]; do case $1 in --prefix) P=$2; shift ;; esac; shift; done\nmkdir -p \"$P/bin\"\n"
              "for n in nidhogg emacs nidhoggclient; do\n"
              "  if [ -n \"$NH_BROKEN\" ]; then printf '#!/bin/sh\\nexit 127\\n' > \"$P/bin/$n\"\n"
-             "  else printf '#!/bin/sh\\necho \"31.1 t pgtk 31.1-nidhogg.1\"\\n' > \"$P/bin/$n\"; fi\n"
+             "  else printf '#!/bin/sh\\necho \"31.1 t pgtk 31.1-nidhogg.4\"\\n' > \"$P/bin/$n\"; fi\n"
              "  chmod +x \"$P/bin/$n\"\ndone\n"
              ;; and the macOS layout (Nidhogg.app)
              "A=\"$P/Nidhogg.app/Contents/MacOS\"; mkdir -p \"$A/bin\"\n"
-             "printf '#!/bin/sh\\necho \"31.1 t ns 31.1-nidhogg.1\"\\n' > \"$A/Emacs\"; chmod +x \"$A/Emacs\"\n"
+             "printf '#!/bin/sh\\necho \"31.1 t ns 31.1-nidhogg.4\"\\n' > \"$A/Emacs\"; chmod +x \"$A/Emacs\"\n"
              "cp \"$A/Emacs\" \"$A/bin/emacsclient\"\n"))
     (dolist (f '(("fedora-44.runtime" . "# runtime\nlibfoo\nlibbar\n") ("fedora-44.build" . "# build\n\nlibbuildfoo\nlibbuildbar\n")
                  ("macos.build" . "# build\nlibmacfoo\n")))
@@ -748,7 +748,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
     (funcall git "init" "-q")
     (funcall git "add" "-A")
     (funcall git "commit" "-qm" "nidhogg: fixture")
-    (funcall git "tag" "v31.1-nidhogg.1")
+    (funcall git "tag" "v31.1-nidhogg.4")
     (drgnx-install-test--script (expand-file-name "sudo" bin) "#!/bin/sh\necho \"sudo $*\" >> \"$NH_LOG\"\n")
     (drgnx-install-test--script (expand-file-name "rpm" bin) "#!/bin/sh\n[ -n \"$RPM_ALL\" ]\n")
     (drgnx-install-test--script (expand-file-name "bin/drgnx" checkout)
@@ -793,7 +793,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
            (r (drgnx-install-test--nidhogg-run
                tmp fx (append (list (concat "DRGNX_INSTALL_PODMAN=" (drgnx-install-test--podman tmp 0))) drgnx-install-test--roomy)))
            (log (drgnx-install-test--file (expand-file-name "log" tmp)))
-           (prefix (concat home "/.local/opt/nidhogg/31.1-nidhogg.1")))
+           (prefix (concat home "/.local/opt/nidhogg/31.1-nidhogg.4")))
       (should (= (car r) 0))
       (should (string-search (concat "build.sh --container fedora-44 --memory 6g --jobs 4 --prefix " prefix) log))
       (should (string-search "--build-dir " log))
@@ -843,7 +843,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
         (should (string-search "drgnx still uses the Emacs it used" (cdr r)))
         (should (equal (drgnx-install-test--file record) "/old/emacs\n"))
         (should-not (file-exists-p (expand-file-name ".local/bin/nidhogg" home)))
-        (should-not (file-exists-p (expand-file-name ".local/opt/nidhogg/31.1-nidhogg.1" home)))
+        (should-not (file-exists-p (expand-file-name ".local/opt/nidhogg/31.1-nidhogg.4" home)))
         (should-not (string-search "drgnx build" (drgnx-install-test--file (expand-file-name "log" tmp))))))))
 
 (ert-deftest drgnx-install/a-built-nidhogg-that-does-not-start-is-refused ()
@@ -867,7 +867,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
     (let* ((fx (drgnx-install-test--nidhogg-fixture tmp))
            (r (drgnx-install-test--nidhogg-run tmp fx))
            (log (drgnx-install-test--file (expand-file-name "log" tmp)))
-           (prefix (concat tmp "/home/.local/opt/nidhogg/31.1-nidhogg.1")))
+           (prefix (concat tmp "/home/.local/opt/nidhogg/31.1-nidhogg.4")))
       (should (= (car r) 0))
       (should (string-search (concat "drgnx service-unit --refresh [DRGNX_EMACS=" prefix "/bin/nidhogg]") log))
       ;; after the build, before the doctor
@@ -878,10 +878,10 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
 
 (defun drgnx-install-test--installed-nidhogg (tmp)
   "Put a Nidhogg of the pinned version at the fixture's prefix in TMP; return its nidhogg binary."
-  (let* ((prefix (concat tmp "/home/.local/opt/nidhogg/31.1-nidhogg.1")) (bin (concat prefix "/bin")))
+  (let* ((prefix (concat tmp "/home/.local/opt/nidhogg/31.1-nidhogg.4")) (bin (concat prefix "/bin")))
     (make-directory bin t)
     (dolist (n '("nidhogg" "emacs" "nidhoggclient"))
-      (drgnx-install-test--script (concat bin "/" n) "#!/bin/sh\necho \"31.1 t pgtk 31.1-nidhogg.1\"\n"))
+      (drgnx-install-test--script (concat bin "/" n) "#!/bin/sh\necho \"31.1 t pgtk 31.1-nidhogg.4\"\n"))
     (concat bin "/nidhogg")))
 
 (ert-deftest drgnx-install/keep-of-an-installed-nidhogg-links-it ()
@@ -945,7 +945,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
 
 (ert-deftest drgnx-install/the-pin-is-the-published-series-head ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-44" "--method" "nidhogg")
-                              "at v31.1-nidhogg.1" "commit 29f76866bd1d"))
+                              "at v31.1-nidhogg.4" "commit 562b5d44de21"))
 
 ;;; Ratatoskr: the Rust toolchain and the build (Task 19)
 ;; A PATH of its own (symlinks to the basic tools plus stubs) keeps this machine's cargo, dnf and apt out of the plan.
@@ -1003,7 +1003,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
     ;; 4. Debian trixie (1.85) and no versioned package: a private rustup, from the versioned archive
     (let ((out (cdr (drgnx-install-test--rust-plan "debian-13" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.85.0+dfsg1-1"
                                                    ;; no Nidhogg recipe for Debian 13: a Nidhogg already installed is kept
-                                                   (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.1"))
+                                                   (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.4"))
                                                    "APT_SEARCH=rustc-1.85 - Rust\ncargo-1.85 - Cargo\n"))))
       (should (string-search "Rust toolchain: a private rustup 1.28.2" out))
       (should (string-search "/rustup with Rust 1.93.1" out))
@@ -1027,7 +1027,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       (should (string-search "C compiler: sudo pacman -S --needed --noconfirm gcc"
                              (cdr (drgnx-install-test--rust-plan   ; no recipe for Arch: an installed Nidhogg is kept
                                    "arch" tmp stubs
-                                   (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.1"))))))
+                                   (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.4"))))))
       (should (string-search "C compiler: xcode-select --install"
                              (cdr (apply #'drgnx-install-test--run
                                          (append (list "DRGNX_INSTALL_RUNTIME=" (drgnx-install-test--rust-path tmp stubs)

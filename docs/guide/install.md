@@ -184,13 +184,13 @@ the check for a terminal (so the tests need no `setsid`). `DRGNX_INSTALL_RUNTIME
 ## Nidhogg
 
 Nidhogg is drgnx's own Emacs build: GNU Emacs 31.1 plus a small patch series, with the command `nidhogg` and the
-variable `nidhogg-version` (for example `31.1-nidhogg.1`; `emacs-version` stays GNU's own, `"31.1"`). `drgnx doctor`'s
+variable `nidhogg-version` (for example `31.1-nidhogg.4`; `emacs-version` stays GNU's own, `"31.1"`). `drgnx doctor`'s
 `emacs-version` check says `OK` on Nidhogg and `FAIL` on a stock GNU Emacs of any version ("GNU Emacs 31.1 is not Nidhogg,
 drgnx's own Emacs build"), and on anything older than 31.1. Fix: run the installer again, which builds Nidhogg. It says
 `WARN` when the running Nidhogg is older than the release this drgnx checkout's `install.sh` pins (after a `drgnx update`
 brought a newer pin): "this drgnx pins Nidhogg …"; the same fix builds the pinned release.
 
-The installer builds Nidhogg from a pinned release: it fetches the tag (`v31.1-nidhogg.1`) of the Nidhogg repository and
+The installer builds Nidhogg from a pinned release: it fetches the tag (`v31.1-nidhogg.4`) of the Nidhogg repository and
 checks that it is the exact commit the installer pins, before building anything. Where it goes: `~/.local/opt/nidhogg/<version>`
 (under `--prefix`), with `~/.local/bin/nidhogg` and `nidhoggclient` linking to it; the Emacs drgnx records is that
 `nidhogg`. A Nidhogg of the pinned version that is already installed at that prefix is kept, whether `auto` or
@@ -213,7 +213,7 @@ start leaves the Emacs drgnx used, its record and the `nidhogg` link as they wer
    as root, asked — skipped when `rpm -q` / `dpkg -s` / `brew list` say they are all there, so a second run needs no root.
 3. Run the release's `nidhogg/build.sh` (`--container <system> --memory <N>g` or `--host`, `--jobs`, `--prefix`,
    `--build-dir ~/.cache/drgnx/build/nidhogg-build`; logs stay in that directory). A leftover prefix of a failed earlier run is removed first.
-4. Start the new binary: it must answer as Nidhogg 31.1-nidhogg.1 with native compilation and a graphical build, else the run stops.
+4. Start the new binary: it must answer as Nidhogg 31.1-nidhogg.4 with native compilation and a graphical build, else the run stops.
 5. Link `~/.local/bin/nidhogg` and `nidhoggclient` (macOS: a two-line script that starts `Nidhogg.app`) and record the
    `nidhogg` binary as the Emacs drgnx runs in ([Which Emacs drgnx runs in](#which-emacs-drgnx-runs-in)).
 

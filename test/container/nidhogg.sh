@@ -16,15 +16,15 @@
 # bash 3.2-safe (macOS).
 set -eu
 
-NIDHOGG_VERSION=31.1-nidhogg.1
+NIDHOGG_VERSION=31.1-nidhogg.4
 NIDHOGG_URL=https://github.com/Black-Dragon-Foundation/nidhogg/releases/download
 
 distro=${1:-}
 case "$distro" in
-  fedora-44)    asset=fedora-44-x86_64;    sha=e4b934427cb1a03bbe549fe22ee3825ba27c11fce84b2c114bbec83809ffad33 ;;
-  fedora-45)    asset=fedora-45-x86_64;    sha=58fa531725c088fdfd4a6d935fab76d363942cce6715a5b21f5d34d38df5132c ;;
-  ubuntu-26.04) asset=ubuntu-26.04-x86_64; sha=8fa824afe2a18b176511eaca99f51a33146b5d097aca2baeb91fc314f2bc54ef ;;
-  macos)        asset=macos-arm64;         sha=4870517af55f14b53facc72a382101fd4c15970b1bf4686437e49bf39bf5f682 ;;
+  fedora-44)    asset=fedora-44-x86_64;    sha=2efba5d6390464a58ea58b6de90727dc01e6adb36ca8228a148910cc71edd4f5 ;;
+  fedora-45)    asset=fedora-45-x86_64;    sha=1ba5572e1f30701c30cd728cab667a7297dd7af7fe7cc16c84eeac30897e1697 ;;
+  ubuntu-26.04) asset=ubuntu-26.04-x86_64; sha=ff23b8786643eefa24ffcfa488657f3c3bec38acc659c02f2ab4b0408f2b1841 ;;
+  macos)        asset=macos-arm64;         sha=31b51429e662603eec3f5faf5ce9086dca7fa4aa0b00eee18fb769c7eb908f1c ;;
   *) echo "usage: nidhogg.sh fedora-44|fedora-45|ubuntu-26.04|macos" >&2; exit 2 ;;
 esac
 
