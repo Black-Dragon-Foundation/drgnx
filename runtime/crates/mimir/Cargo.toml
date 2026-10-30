@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# Exposes the bridge's line handling to the fuzz crate (`bridge::fuzzing`).
+fuzzing = []
+
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 tokio.workspace = true

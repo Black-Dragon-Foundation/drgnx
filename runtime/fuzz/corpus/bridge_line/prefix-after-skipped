@@ -1,0 +1,3 @@
+{"id":7,"method":"tools/call","params":{"name":"x","arguments":{}}}
+{"jsonrpc":"2.0","id":"a","result":{}}
+{"x":[1,{"a":"}"}],"id":3,"y":

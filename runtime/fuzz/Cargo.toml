@@ -19,7 +19,7 @@ runstav = { path = "../crates/runstav" }
 drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
 huginn = { path = "../crates/huginn" }
-mimir = { path = "../crates/mimir" }
+mimir = { path = "../crates/mimir", features = ["fuzzing"] }
 # no platform verifier: the targets make no TLS connection, and it is the one optional piece with a system dependency
 bifrost = { path = "../crates/bifrost", default-features = false }
 http = "1"
@@ -165,6 +165,13 @@ bench = false
 [[bin]]
 name = "gateway_admit"
 path = "fuzz_targets/gateway_admit.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge_line"
+path = "fuzz_targets/bridge_line.rs"
 test = false
 doc = false
 bench = false
