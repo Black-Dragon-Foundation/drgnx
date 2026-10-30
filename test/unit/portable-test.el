@@ -353,7 +353,10 @@
                  ((symbol-function 'drgnx-portable--fsync-tree)
                   (lambda (p) (push 'fsync order) (funcall sync p)))
                  ((symbol-function 'rename-file)
-                  (lambda (&rest a) (push 'rename order) (apply ren a))))
+                  (lambda (&rest a)
+                    ;; the file layer renames its own temp files too; only the move into place counts
+                    (when (string-suffix-p ".drgnx-new" (car a)) (push 'rename order))
+                    (apply ren a))))
         (drgnx-portable-move-machine-local))
       (should (equal (reverse order) '(fsync rename)))
       (should (equal (drgnx-portable-test--text (expand-file-name "systemd/a.service" (drgnx-data-dir))) "[Unit]\nA\n")))))
