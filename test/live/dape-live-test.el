@@ -1,4 +1,5 @@
 ;;; dape-live-test.el --- live test: dape drives a real adapter (debugpy) to a breakpoint -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The unit tests check dape against its source; this runs it once against debugpy.  It needs python3 with debugpy and
 ;; dape, so it skips on a machine without them: test/container/Containerfile.tools has both (docs/develop/harness.md,
 ;; "Real-tool tests").  dape comes from $DRGNX_TOOLS_ELPA when set, else from the load path; nothing under ~ is used.

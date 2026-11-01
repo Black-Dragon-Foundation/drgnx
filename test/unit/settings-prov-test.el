@@ -1,4 +1,5 @@
 ;;; settings-prov-test.el --- provenance and drgnx-settings-explain -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

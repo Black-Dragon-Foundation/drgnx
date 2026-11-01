@@ -1,4 +1,5 @@
 ;;; layouts-eld-test.el --- batch tests: layouts.eld through the config layer -*- lexical-binding: t -*-
+;; test-class: det
 ;; Save Layout As… needs a frame's arrangement; these tests stub the snapshot, so they check the file side only
 ;; (the frame side is in mod-layouts-test.el).  Every test runs under `drgnx-test-with-config'.
 (require 'ert)

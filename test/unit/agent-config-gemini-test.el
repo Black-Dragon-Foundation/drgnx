@@ -1,4 +1,5 @@
 ;;; agent-config-gemini-test.el --- batch tests: Gemini CLI's settings (MCP servers, hooks, skills, extensions) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

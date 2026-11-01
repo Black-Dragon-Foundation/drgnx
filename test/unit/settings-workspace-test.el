@@ -1,4 +1,5 @@
 ;;; settings-workspace-test.el --- batch tests: the workspace layers W1 and W2 -*- lexical-binding: t -*-
+;; test-class: det
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

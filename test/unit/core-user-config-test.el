@@ -1,4 +1,5 @@
 ;;; core-user-config-test.el --- batch tests: the user's config.el -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-file)
 (require 'drgnx)

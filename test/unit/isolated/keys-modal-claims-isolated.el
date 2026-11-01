@@ -1,4 +1,5 @@
 ;;; keys-modal-claims-isolated.el --- batch tests (own Emacs, test/unit/keys-modal-claims-test.el): Vim's claims read from evil's maps -*- lexical-binding: t -*-
+;; test-class: det
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it those tests skip.
 ;; Evil is loaded, not started (no engine): what is tested is the key resolution and evil's keymaps.  Every apply runs
 ;; in a temp configuration and state dir and is undone after.

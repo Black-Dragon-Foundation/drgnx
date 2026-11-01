@@ -1,4 +1,5 @@
 ;;; core-palette-test.el --- batch tests: the command palette -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-palette)
 

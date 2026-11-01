@@ -1,4 +1,5 @@
 ;;; config-doc-test.el --- batch tests: the generated reference of drgnx's config files -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The reference is generated in a child `emacs --batch -Q' (as docs/develop/core.md says), so this process's own
 ;; definitions never reach it; the test waits for the child under a 30 s bound.
 (require 'ert)

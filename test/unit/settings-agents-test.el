@@ -1,4 +1,5 @@
 ;;; settings-agents-test.el --- batch tests: the editor applies an agent's granted settings change, checks it first -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A fake hub: `drgnx-hub-call' collects (METHOD PARAMS) in `drgnx-sat--sent'; the events come from a connection
 ;; that proved itself (`drgnx-hub--event-conn').  Everything runs under a temp config and state folder
 ;; (`drgnx-test-with-config') and temp project roots.

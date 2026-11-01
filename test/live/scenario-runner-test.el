@@ -1,4 +1,5 @@
 ;;; scenario-runner-test.el --- live tests: the scenario tier -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
 

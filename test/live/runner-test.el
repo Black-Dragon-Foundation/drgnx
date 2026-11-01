@@ -1,4 +1,5 @@
 ;;; runner-test.el --- live tests: the GUI suite runner -*- lexical-binding: t -*-
+;; test-class: timing
 (require 'ert)
 (require 'drgnx-ui)
 

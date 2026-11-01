@@ -1,4 +1,5 @@
 ;;; notices-ui-test.el --- GUI tests: the status bar reads the two notice counts (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A module that fails shows in the bar and the echo area at once; a click on the needs-you count runs the command
 ;; of the newest item.  The notice model is a fresh one for each test and the session's comes back after.
 (require 'ert)

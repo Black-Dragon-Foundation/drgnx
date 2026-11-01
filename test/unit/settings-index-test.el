@@ -1,4 +1,5 @@
 ;;; settings-index-test.el --- The settings index, descriptions and other tools' files -*- lexical-binding: t -*-
+;; test-class: det
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

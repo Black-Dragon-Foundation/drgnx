@@ -1,4 +1,5 @@
 ;;; state-intent-ui-test.el --- GUI tests: a size you set by hand is intent and docks keep it (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-uitest)

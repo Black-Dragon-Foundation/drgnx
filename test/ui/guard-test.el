@@ -1,4 +1,5 @@
 ;;; guard-test.el --- GUI tests: guard sees real timers, not commands -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

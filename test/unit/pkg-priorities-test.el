@@ -1,4 +1,5 @@
 ;;; pkg-priorities-test.el --- batch tests: archive priorities — releases over snapshots unless the user says otherwise -*- lexical-binding: t -*-
+;; test-class: det
 ;; Offline and in temp dirs: the archives are local directories NAMED gnu, nongnu and melpa (the names the default
 ;; priorities are keyed by); never the network or the real ELPA.
 (require 'ert)

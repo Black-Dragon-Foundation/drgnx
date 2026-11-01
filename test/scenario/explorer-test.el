@@ -1,4 +1,5 @@
 ;;; explorer-test.el --- Scenarios: the Explorer (file tree) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; The reference is VS Code's Explorer.  See docs/develop/scenarios.md.
 

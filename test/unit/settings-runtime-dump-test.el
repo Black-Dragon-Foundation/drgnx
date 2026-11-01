@@ -1,4 +1,5 @@
 ;;; settings-runtime-dump-test.el --- batch tests: the editor's side of the hub's settings conformance -*- lexical-binding: t -*-
+;; test-class: cond
 ;; test/conformance/settings/lisp-dump.json is what the editor reads of the shipped runtime defaults and of a
 ;; providers fixture, and which settings it declares `:runtime'; the hub's tests
 ;; (runtime/crates/drgnx-ratatoskr/src/settings/conformance.rs) hold the hub to it.  Here a child `emacs --batch -Q'

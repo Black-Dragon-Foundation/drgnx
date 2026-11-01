@@ -1,4 +1,5 @@
 ;;; large-file-core-test.el --- batch tests: the large-file flag and the predicate producers check -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-large-file)
 

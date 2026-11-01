@@ -1,4 +1,5 @@
 ;;; drgnx-frames-test.el --- live: several windows (frames) in a GUI session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Frames need a graphical session: batch Emacs cannot make them.
 (require 'ert)
 (require 'drgnx-ui)

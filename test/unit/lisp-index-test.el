@@ -1,4 +1,5 @@
 ;;; lisp-index-test.el --- the static Lisp index -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

@@ -1,4 +1,5 @@
 ;;; settings-page-ui-test.el --- GUI tests: the Settings page on a graphical frame (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Preferences: Settings is opened on the root frame; the rows of the group in the window are drawn (the visible ones
 ;; first, then the rest in slices), a search narrows them, and the jank guard sees no window move by a timer.  A
 ;; screenshot of the page is taken (its path is printed).

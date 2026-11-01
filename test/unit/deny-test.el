@@ -1,4 +1,5 @@
 ;;; deny-test.el --- batch tests: the personal-notes deny-list, Lisp side (one table with norn's deny.rs) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Each case runs in its own temp HOME and config dir; nothing here reaches the real ~ or the user's notes.
 (require 'ert)
 (require 'cl-lib)

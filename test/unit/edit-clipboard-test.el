@@ -1,4 +1,5 @@
 ;;; edit-clipboard-test.el --- batch tests: copy, cut and paste by key profile (M12b Task 14) -*- lexical-binding: t -*-
+;; test-class: det
 ;; The keys are really applied (the module's commands, the real profiles) and the keys are pressed with a keyboard
 ;; macro, so the region-only map, Emacs' prefixes and the command loop's own deactivation are all in play.
 (require 'ert)

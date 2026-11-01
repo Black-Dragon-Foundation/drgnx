@@ -1,4 +1,5 @@
 ;;; tty-sheet-test.el --- batch tests: the shared surfaces show keys as this terminal can send them -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has no terminal: the selected frame's terminal and its parameters are stubbed (the caps drgnx
 ;; found, and for a legacy one the fallback table the layer would hold).  The layer itself is tested in
 ;; tty-fallback-test.el and test/tty/fallback-test.el.

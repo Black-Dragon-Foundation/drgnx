@@ -1,4 +1,5 @@
 ;;; agents-mirror-permission-test.el --- batch tests: a permission request outlives the editor that saw it -*- lexical-binding: t -*-
+;; test-class: timing
 ;; The hub runs as its own process (as it does for the user); this Emacs plays the editor, twice.
 (require 'ert)
 (require 'drgnx-agents)

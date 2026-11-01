@@ -1,4 +1,5 @@
 ;;; drgnx-env-test.el --- batch tests: container environment detection -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-env)
 

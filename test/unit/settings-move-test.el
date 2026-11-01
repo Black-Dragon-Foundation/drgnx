@@ -1,4 +1,5 @@
 ;;; settings-move-test.el --- Move into Settings, and back -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

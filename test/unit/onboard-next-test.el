@@ -1,4 +1,5 @@
 ;;; onboard-next-test.el --- batch tests: the Welcome's Next button and `n' (M12a-61) -*- lexical-binding: t -*-
+;; test-class: det
 ;; State lives in a temp dir: never ~/.local/state.
 (require 'ert)
 (require 'button)

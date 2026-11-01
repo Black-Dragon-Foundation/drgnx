@@ -1,4 +1,5 @@
 ;;; core-notice-test.el --- batch tests: the notice model (events, conditions, attention sets, the now lane) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'ert-x)
 (require 'cl-lib)

@@ -1,4 +1,5 @@
 ;;; projects-eld-test.el --- batch tests: projects.eld and projects-imported.eld on the config layer -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Every test runs under `drgnx-test-with-config' (config and state folders in a fresh temp root).  Fixture
 ;; repositories and boards live in that root, never in ~/workspace or ~/org.  The concurrency tests start child
 ;; `emacs --batch' processes (the runner's environment) and wait for them under a 30 s bound.

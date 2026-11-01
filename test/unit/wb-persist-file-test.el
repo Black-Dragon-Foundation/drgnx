@@ -1,4 +1,5 @@
 ;;; wb-persist-file-test.el --- batch tests: workbench.eld is written and read through drgnx-file -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every file lives in a fresh temp folder (never the user's state dir).  `drgnx-persist-state' is stubbed with a small
 ;; plist where the layout itself is not the point.
 (require 'ert)

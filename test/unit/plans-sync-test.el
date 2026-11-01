@@ -1,4 +1,5 @@
 ;;; plans-sync-test.el --- batch tests: plan checklists and board TODOs stay in step -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-projects)
 

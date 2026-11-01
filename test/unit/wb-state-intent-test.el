@@ -1,4 +1,5 @@
 ;;; wb-state-intent-test.el --- batch tests: intent — what was asked for a frame's panes, and by whom -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

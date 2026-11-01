@@ -1,4 +1,5 @@
 ;;; mod-sticky-test.el --- batch tests: sticky scroll — the scopes scrolled past, in the header after the breadcrumb -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/memo-alloc-fixture" drgnx-dir) nil t)

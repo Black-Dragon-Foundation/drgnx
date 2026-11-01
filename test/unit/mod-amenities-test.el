@@ -1,4 +1,5 @@
 ;;; mod-amenities-test.el --- batch tests: M11a's package modules — they wait without their package, run with it -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx)

@@ -1,4 +1,5 @@
 ;;; drgnx-persist-geometry-test.el --- live: a window that rebuilds itself keeps its size across restarts -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A real graphical frame, nothing stubbed: the size saved is the size `set-frame-size' sets, so saving, restoring
 ;; and saving again does not make the window bigger (it did, by the frame's borders, at every restart).
 (require 'ert)

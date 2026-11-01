@@ -1,4 +1,5 @@
 ;;; state-ui-test.el --- GUI tests: the workbench state store moves nothing; minibuffer-only frames (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-uitest)

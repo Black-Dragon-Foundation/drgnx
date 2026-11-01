@@ -1,4 +1,5 @@
 ;;; tty-persist-test.el --- batch tests: a terminal window neither saves nor restores the layout -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has one frame, on the initial terminal.  A real terminal window is told apart by its terminal's
 ;; name, so these tests make that frame look like one by stubbing `terminal-name'; a second, graphical frame
 ;; cannot exist in batch, so it is a symbol and `select-frame' records the frames the code selects.

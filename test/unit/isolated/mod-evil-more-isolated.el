@@ -1,4 +1,5 @@
 ;;; mod-evil-more-isolated.el --- batch tests (own Emacs, test/unit/modal-isolated-test.el): evil-collection per mode, insert-state keys by stack, multiple cursors -*- lexical-binding: t -*-
+;; test-class: det
 ;; Needs the real evil and evil-collection: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it
 ;; those tests skip.  The macros come from mod-evil-isolated.el (its tests are defined too, never selected here).
 ;; Tests that need a process where evil-collection or a library is not loaded yet have their own files

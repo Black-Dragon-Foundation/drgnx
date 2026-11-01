@@ -1,4 +1,5 @@
 ;;; core-registry-test.el --- batch tests: the command registry -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 

@@ -1,4 +1,5 @@
 ;;; terminal-keys-test.el --- batch tests: which keys reach drgnx in a terminal, which the shell -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (require 'seq)

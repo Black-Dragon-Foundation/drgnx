@@ -1,4 +1,5 @@
 ;;; drgnx-work-test.el --- live: the Work tab in a GUI session -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The tab scans in another Emacs and fills in, sits in the right dock, a task opens its plan in the
 ;; editor at its line, the graph opens in the editor and a click on a box opens its plan, nothing unrouted.
 (require 'ert)

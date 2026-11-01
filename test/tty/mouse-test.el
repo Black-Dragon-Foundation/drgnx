@@ -1,4 +1,5 @@
 ;;; mouse-test.el --- tty tier: the mouse in terminal windows (SGR reports in, Emacs's state out) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  Positions
 ;; come from the screen (`drgnx-tty-session-find'), never computed from Emacs's idea of the layout.
 (require 'ert)

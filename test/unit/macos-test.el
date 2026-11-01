@@ -1,4 +1,5 @@
 ;;; macos-test.el --- batch tests: the drgnx app on macOS (applet, Info.plist, install) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Fake osacompile, plutil, codesign and lsregister log their argv in a temp dir; the app goes into a temp
 ;; directory — never /Applications or ~/Applications.  `drgnx-platform' is stubbed.
 (require 'ert)

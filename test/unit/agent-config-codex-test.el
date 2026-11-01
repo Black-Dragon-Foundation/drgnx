@@ -1,4 +1,5 @@
 ;;; agent-config-codex-test.el --- batch tests: Codex's settings (TOML, hooks.json, trusted projects, the OpenRouter route) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

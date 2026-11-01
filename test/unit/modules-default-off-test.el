@@ -1,4 +1,5 @@
 ;;; modules-default-off-test.el --- batch tests: modules that are off until chosen -*- lexical-binding: t -*-
+;; test-class: det
 ;; Everything in temp dirs: a temp configuration and state dir, a temp modules dir; never the user's.
 (require 'ert)
 (require 'drgnx-paths)

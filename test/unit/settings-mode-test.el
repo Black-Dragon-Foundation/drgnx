@@ -1,4 +1,5 @@
 ;;; settings-mode-test.el --- batch tests: per-language overrides (L1) -*- lexical-binding: t -*-
+;; test-class: det
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

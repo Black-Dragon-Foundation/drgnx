@@ -1,4 +1,5 @@
 ;;; rf2-process-test.el --- GUI tests: a process finishing in another window moves no other window (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 ;; RF2: output from a process (a compilation ending) must not scroll, resize or refocus the windows the user is in.
 ;; The finish comes from a real process while the recorder runs, not from a command.
 (require 'ert)

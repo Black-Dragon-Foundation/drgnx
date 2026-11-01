@@ -1,4 +1,5 @@
 ;;; settings-compat-mode-test.el --- compatibility rows C12 and C21: language overrides in a child Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

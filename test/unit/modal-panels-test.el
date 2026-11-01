@@ -1,4 +1,5 @@
 ;;; modal-panels-test.el --- batch tests: panels under the Vim stack (evil in its own Emacs) -*- lexical-binding: t -*-
+;; test-class: det
 ;; The tests that load evil are test/unit/isolated/modal-panels-isolated.el, run in a fresh batch Emacs
 ;; (docs/develop/harness.md, "Modal tests"); this file starts them.
 (require 'ert)

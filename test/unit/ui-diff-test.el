@@ -1,4 +1,5 @@
 ;;; ui-diff-test.el --- batch tests: ui_diff and ui_record -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-uitest)
 (require 'drgnx-ui-mcp)

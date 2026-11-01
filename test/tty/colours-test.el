@@ -1,4 +1,5 @@
 ;;; colours-test.el --- tty tier: colours in terminal windows (true colour from the client, no invisible face, states without colour) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The colour depth
 ;; of a client is chosen by its own environment (TERM, COLORTERM), as a user's terminal does.
 (require 'ert)

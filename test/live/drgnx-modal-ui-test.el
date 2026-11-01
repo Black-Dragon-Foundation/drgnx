@@ -1,4 +1,5 @@
 ;;; drgnx-modal-ui-test.el --- live: Vim keys end to end in a GUI drgnx session (evil from DRGNX_MODAL_ELPA) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Each test starts a session of config drgnx (the checkout's own init, not the GUI tier's minimal session: evil and
 ;; drgnx's startup cannot be undone in a shared Emacs), starts evil there and applies a key stack, then presses real
 ;; keys through the harness queue.  Files are temp dirs; screenshots go to $DRGNX_TEST_SHOTS when set (the UI

@@ -1,4 +1,5 @@
 ;;; lint-work-db-writers-test.el --- lint: the one-writer gate's exemption stays with Rust-bound code -*- lexical-binding: t -*-
+;; test-class: det
 ;; In gate mode (DRGNX_WORK_DB_GATE=1, test/support/work-db-gate.el) opening work.db read-write signals, and the
 ;; tests tagged `:work-db-writer' are left out.  The tag is for tests of the `local' writer mode of Lisp that a plan
 ;; replaces with Rust: it may be used only in the test files listed here, and the test's body must bind

@@ -1,4 +1,5 @@
 ;;; tty-chrome-test.el --- batch tests: the chrome reads the terminal frame's breadcrumb parameter -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-chrome)
 

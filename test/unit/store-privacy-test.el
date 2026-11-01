@@ -1,4 +1,5 @@
 ;;; store-privacy-test.el --- batch tests: the personal-file opt-in and deny commands -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test makes its own HOME and config dir under a temp dir (`process-environment'), with fixture files under its
 ;; org/; nothing reads or writes the real ~.  The hub is a stub of `drgnx-hub-call-sync' that records its calls, and
 ;; `yes-or-no-p' a stub that records its prompts and says yes.

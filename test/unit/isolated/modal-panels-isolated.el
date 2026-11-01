@@ -1,4 +1,5 @@
 ;;; modal-panels-isolated.el --- batch tests (own Emacs, test/unit/modal-panels-test.el): panels under the Vim stack -*- lexical-binding: t -*-
+;; test-class: det
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it those tests skip.
 ;; The full registry and the startup modules run in a temp configuration (editor/evil chosen, the Vim stack applied),
 ;; so the keys are the shipped ones.  Keys are pressed with `execute-kbd-macro' in a panel buffer shown in the

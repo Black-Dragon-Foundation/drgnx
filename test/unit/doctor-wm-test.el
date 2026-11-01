@@ -1,4 +1,5 @@
 ;;; doctor-wm-test.el --- batch tests: the doctor's Desktop row (the window manager) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Nothing here reaches the session the tests run in: every window-manager variable is set or unset per test, the
 ;; session bus is a dead address and D-Bus calls signal, the tools are scripts in a temp bin (the WM's one query is
 ;; test/fixtures/wm/fake-wm.sh), the system is a fixture os-release.

@@ -1,4 +1,5 @@
 ;;; tty-doctor-test.el --- batch tests: the doctor's Terminal group -*- lexical-binding: t -*-
+;; test-class: det
 ;; The facts are injected: nothing here asks a terminal or runs tmux.  PATH is a temp dir of fake executables
 ;; that log their calls, so "the doctor never installs" is checked by an empty log.
 (require 'ert)

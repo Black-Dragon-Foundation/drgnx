@@ -1,4 +1,5 @@
 ;;; schema-test.el --- batch tests: the schema DSL -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-schema)
 

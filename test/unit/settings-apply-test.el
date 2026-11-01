@@ -1,4 +1,5 @@
 ;;; settings-apply-test.el --- batch tests: theme drgnx, the winner rule, store in place, teardown -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Each test declares its own variables (`drgnx-sat--…') and forgets them afterwards: unbound, their custom
 ;; properties gone, out of every theme's settings.  settings.el lives under `drgnx-test-with-config' (a temp
 ;; config and state dir).  `applying-adds-only-the-named-custom-loads' runs in two child Emacsen (test/settings-child.el).

@@ -1,4 +1,5 @@
 ;;; editor-m11c2-test.el --- GUI tests: agent settings pages, MCP Test, Open Remote and Reconnect (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 ;; One walk through M11c-2's surfaces on a graphical frame, a screenshot of each (their paths are printed).  Every agent
 ;; home is a temp directory (test/fixtures/agent-config-fixture.el); the MCP servers are test/fixtures/mock-mcp.el in
 ;; a batch Emacs.  Open Remote goes into a podman container the test starts and removes (no podman: that part is

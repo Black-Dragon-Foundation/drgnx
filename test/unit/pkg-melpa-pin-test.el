@@ -1,4 +1,5 @@
 ;;; pkg-melpa-pin-test.el --- batch tests: the lock records an archive's commit; a locked version that left the archive is restored from it -*- lexical-binding: t -*-
+;; test-class: det
 ;; Offline and in temp dirs: archives are local directories whose archive-contents carry MELPA's :commit and :url, the
 ;; repositories they name are local git repositories made here.  Never the network or the real MELPA.
 (require 'ert)

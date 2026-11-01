@@ -1,4 +1,5 @@
 ;;; modal-isolated-test.el --- batch tests: the tests that load evil run in their own Emacs -*- lexical-binding: t -*-
+;; test-class: det
 ;; Evil cannot be unloaded from a process, so test/unit/isolated/*.el (not picked up by the main run) run in a
 ;; fresh batch Emacs through the runner; one test here per file reports the child's result and output.
 (require 'ert)

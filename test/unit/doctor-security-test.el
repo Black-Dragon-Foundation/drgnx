@@ -1,4 +1,5 @@
 ;;; doctor-security-test.el --- batch tests: the doctor's security check -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The check reads the facts plist (:version, :trust-guards = `drgnx-trust-guards-status'); nothing here touches
 ;; the machine except the one test that gathers the real guard facts (the mode is put back as it was).
 (require 'ert)

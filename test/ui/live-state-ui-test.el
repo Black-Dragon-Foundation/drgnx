@@ -1,4 +1,5 @@
 ;;; live-state-ui-test.el --- GUI tests: the Live view follows its window through the state store (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-uitest)

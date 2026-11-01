@@ -1,4 +1,5 @@
 ;;; settings-history-test.el --- batch tests: every settings change is recorded with who made it; undo; the journal -*- lexical-binding: t -*-
+;; test-class: det
 ;; A fake hub: `drgnx-hub-call' collects (METHOD PARAMS) in `drgnx-sht--sent' (or fails with `drgnx-sht--down'),
 ;; `drgnx-hub-call-sync' answers from `drgnx-sht--model' (option id -> versions, oldest first).  Everything runs under
 ;; a temp config and state folder (`drgnx-test-with-config').

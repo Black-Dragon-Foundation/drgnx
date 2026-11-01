@@ -1,4 +1,5 @@
 ;;; handler-trap-fixture-test.el --- batch tests: the file name handler trap itself -*- lexical-binding: t -*-
+;; test-class: det
 ;; The trap (test/fixtures/handler-trap.el) records the handler calls an agent's name causes.  Emacs loading one of
 ;; its own libraries while a test visits a file (`set-auto-mode' autoloads image.el; a warning loads warnings.el) is
 ;; not one: installs that ship the lisp as `.el.gz' (Homebrew, Debian/Ubuntu, Fedora) load it through jka-compr.

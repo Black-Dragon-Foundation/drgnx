@@ -1,4 +1,5 @@
 ;;; settings-compat-custom-test.el --- design §15's rows C4 and C20: what writes custom.el -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

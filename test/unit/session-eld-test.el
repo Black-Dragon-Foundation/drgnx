@@ -1,4 +1,5 @@
 ;;; session-eld-test.el --- batch tests: the keep-running choice, a setting -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs under `drgnx-test-with-areas' (temp config and state folders), so nothing reaches ~.
 (require 'ert)
 (require 'cl-lib)

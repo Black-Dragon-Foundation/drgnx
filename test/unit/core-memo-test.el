@@ -1,4 +1,5 @@
 ;;; core-memo-test.el --- batch tests: epochs, memos and capped caches (core/drgnx-memo.el) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

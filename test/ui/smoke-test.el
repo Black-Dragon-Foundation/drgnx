@@ -1,4 +1,5 @@
 ;;; smoke-test.el --- GUI smoke tests (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

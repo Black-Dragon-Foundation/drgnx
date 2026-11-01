@@ -1,4 +1,5 @@
 ;;; toml-test.el --- batch tests: the TOML reader and the one-table writer -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-toml)
 

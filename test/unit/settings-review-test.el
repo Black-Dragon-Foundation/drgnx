@@ -1,4 +1,5 @@
 ;;; settings-review-test.el --- batch tests: Review and Allow, and the quiet path -*- lexical-binding: t -*-
+;; test-class: det
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

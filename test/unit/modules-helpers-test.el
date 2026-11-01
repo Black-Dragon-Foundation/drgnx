@@ -1,4 +1,5 @@
 ;;; modules-helpers-test.el --- batch tests: options, alist keys, face specs, global-map remaps -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-modules)
 

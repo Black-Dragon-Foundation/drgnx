@@ -1,4 +1,5 @@
 ;;; settings-compat-trust-test.el --- compatibility rows C8, C24: workspace trust in a child Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

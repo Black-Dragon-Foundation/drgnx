@@ -1,4 +1,5 @@
 ;;; search-deny-test.el --- batch tests: the search indexer never reads ~/org (personal notes) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Storage §5.6, door 3: a project root inside ~/org is refused, and every path into ~/org is skipped (the board
 ;; excepted, opt-ins ignored).  Everything lives under a temp HOME; the canaries are random bytes made here.  A stub
 ;; embedder records what would have been sent; nothing reaches the network or the real ~.

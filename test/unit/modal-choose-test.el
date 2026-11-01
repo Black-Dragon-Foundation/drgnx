@@ -1,4 +1,5 @@
 ;;; modal-choose-test.el --- batch tests: choosing a modal key stack (onboarding, Keyboard Profile…), evil missing -*- lexical-binding: t -*-
+;; test-class: det
 ;; A temp configuration (config, data, state, home); evil is not installed here.  The tests that load evil or run
 ;; the startup modules are in
 ;; test/unit/isolated/modal-choose-isolated.el, each run in its own Emacs by the test of the same name below

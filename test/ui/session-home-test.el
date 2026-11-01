@@ -1,4 +1,5 @@
 ;;; session-home-test.el --- GUI test: a session's home is its run's -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

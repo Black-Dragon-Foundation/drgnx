@@ -1,4 +1,5 @@
 ;;; drgnx-popup-test.el --- live: the popup lane in a GUI session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
 

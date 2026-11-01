@@ -1,4 +1,5 @@
 ;;; mod-layouts-persist-test.el --- batch tests: the layout and the sidebar view survive a restart -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)

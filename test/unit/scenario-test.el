@@ -1,4 +1,5 @@
 ;;; scenario-test.el --- batch tests: scenario helpers -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-scenario)
 

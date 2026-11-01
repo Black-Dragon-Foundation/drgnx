@@ -1,4 +1,5 @@
 ;;; drgnx-onboard-test.el --- live: onboarding in a fresh GUI session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The M6 exit: a fresh session with fixture repos completes onboarding non-interactively with no
 ;; failed step and no failing doctor check; the board file is not created; the Welcome
 ;; list opens in the editor; running it again changes nothing.

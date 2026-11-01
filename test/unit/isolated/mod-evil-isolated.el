@@ -1,4 +1,5 @@
 ;;; mod-evil-isolated.el --- batch tests (own Emacs, test/unit/modal-isolated-test.el): editor/evil, evil as drgnx's Vim engine (states, indicator, cursor, toggle) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it those tests skip.
 ;; Everything runs in a temp configuration, state dir and HOME; the module table, the engine registry and the
 ;; mode line are put back after each test.

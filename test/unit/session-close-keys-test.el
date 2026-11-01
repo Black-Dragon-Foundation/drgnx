@@ -1,4 +1,5 @@
 ;;; session-close-keys-test.el --- batch tests: C-x C-c and C-x 5 0 close the last window like its close button -*- lexical-binding: t -*-
+;; test-class: det
 ;; M12a-32.  Frames, `kill-emacs', `delete-frame' and the stock commands are stubs.
 (require 'ert)
 (require 'cl-lib)

@@ -1,4 +1,5 @@
 ;;; drgnx-keys-test.el --- live: key profiles in a drgnx session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
 

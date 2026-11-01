@@ -1,4 +1,5 @@
 ;;; core-ui-test.el --- batch tests: the UI kit in core — glyphs by meaning, status faces, buttons -*- lexical-binding: t -*-
+;; test-class: det
 ;; The batch terminal is not UTF-8, so each test says which kind of frame it draws on.
 (require 'ert)
 (require 'cl-lib)

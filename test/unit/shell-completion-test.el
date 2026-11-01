@@ -1,4 +1,5 @@
 ;;; shell-completion-test.el --- batch tests: `drgnx <TAB>' in zsh, bash and fish -*- lexical-binding: t -*-
+;; test-class: det
 ;; The completion files are static lists.  This test reads bin/drgnx (never runs it) so they cannot fall out of
 ;; date: every dispatch arm and every --flag of `usage' must appear in each file.  Real shells run with a temp HOME
 ;; and their rc files off; fish is not on every machine (the container tier has it): its parts skip.

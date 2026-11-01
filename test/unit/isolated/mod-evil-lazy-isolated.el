@@ -1,4 +1,5 @@
 ;;; mod-evil-lazy-isolated.el --- batch tests (own Emacs, test/unit/modal-isolated-test.el): evil-collection loads each mode's keys with the mode's library -*- lexical-binding: t -*-
+;; test-class: det
 ;; Needs the real evil and evil-collection: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it the
 ;; test skips.  Its own file because a library cannot be unloaded: the test needs a process where `info' and `magit'
 ;; are not loaded.  The macros come from mod-evil-isolated.el (its tests are defined too, never selected here).

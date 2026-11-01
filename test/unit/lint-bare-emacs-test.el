@@ -1,4 +1,5 @@
 ;;; lint-bare-emacs-test.el --- lint: no subprocess runs a bare `emacs' -*- lexical-binding: t -*-
+;; test-class: det
 ;; drgnx runs only on Nidhogg, and a machine with only Nidhogg has no `emacs' on PATH.  A subprocess that starts
 ;; "emacs" by that name fails there (exit 127).  In Lisp the Emacs to run is `(drgnx-emacs-program)'; in bash it is
 ;; `$(emacs_bin)' / $DRGNX_EMACS.  The lint reads core, wb, modules, harness, test, bin, install.sh and etc line by

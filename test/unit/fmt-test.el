@@ -1,4 +1,5 @@
 ;;; fmt-test.el --- batch tests: drgnx fmt, the Emacs Lisp formatter -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-fmt)
 

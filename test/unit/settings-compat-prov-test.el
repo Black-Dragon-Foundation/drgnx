@@ -1,4 +1,5 @@
 ;;; settings-compat-prov-test.el --- compatibility rows C1b, C6, C23: the source drgnx shows -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

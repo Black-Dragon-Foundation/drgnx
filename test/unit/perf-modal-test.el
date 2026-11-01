@@ -1,4 +1,5 @@
 ;;; perf-modal-test.el --- batch tests: the perf workloads for typing, motions and the Explorer with evil -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-perf-run)
 

@@ -1,4 +1,5 @@
 ;;; mod-extras-test.el --- batch tests: modules that need packages -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
