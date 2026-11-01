@@ -520,7 +520,7 @@ test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the orde
     if [ -s "$work/$1.red" ]; then reds=$((reds + 1)); say "RED  $1"; sed 's/^/     /' "$work/$1.red" | tee -a "$out" >&2
     else passes=$((passes + 1)); say "PASS $1"; fi
   }
-  local i a b
+  local i
   # P1
   # a det test that really uses real time (the runtime audit, harness/run-ert.el) fails here: the audit is on and fails
   local audit=(DRGNX_TEST_AUDIT=1 DRGNX_TEST_AUDIT_FAIL=1)
