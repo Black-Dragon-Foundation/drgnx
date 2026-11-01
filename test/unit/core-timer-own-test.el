@@ -1,4 +1,5 @@
 ;;; core-timer-own-test.el --- batch tests: a module's timers die with its run (teardown wiring) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

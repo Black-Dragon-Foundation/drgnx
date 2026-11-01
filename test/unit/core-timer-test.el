@@ -1,10 +1,12 @@
 ;;; core-timer-test.el --- batch tests: the timer layer — keys, owners, the fire wrapper, failures -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-timer-test--calls nil "What the test functions saw, newest first.")
 (defvar drgnx-timer-test--plan nil "What `drgnx-timer-test--maybe-fail' does at each call, in order: `fail' or `ok'.")
@@ -140,6 +142,7 @@
 ;;;; Owners
 
 (ert-deftest drgnx-timer/a-dead-owner-is-never-called ()
+  :tags '(:cond)                                        ; a real process ends and its sentinel runs
   (drgnx-timer-test--with
    ;; a killed buffer: its own kill-buffer-hook entry cancels the timer at once (no global hook)
    (let ((buf (generate-new-buffer " tm-owner")))
@@ -162,10 +165,9 @@
    ;; a dead process: dropped when it fires
    (let* ((done nil)
           (proc (make-process :name "tm-owner" :command '("true") :noquery t :connection-type 'pipe
-                              :sentinel (lambda (_p _e) (setq done t))))
-          (until (+ (drgnx-test-real-time) 30)))
+                              :sentinel (lambda (_p _e) (setq done t)))))
      (drgnx-timer-start (cons 'tm-k proc) 1 #'drgnx-timer-test--note :owner proc :repeat 1)
-     (while (and (not done) (< (drgnx-test-real-time) until)) (accept-process-output proc 0.05))
+     (drgnx-test-wait (lambda () done) :what "the sentinel")
      (should done)
      (should-not (drgnx-timer-start 'tm-other 1 #'drgnx-timer-test--note :owner proc))   ; already gone: refused
      (drgnx-test-advance 2)

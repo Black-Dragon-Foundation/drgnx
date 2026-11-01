@@ -1,4 +1,5 @@
 ;;; core-gc-test.el --- batch tests: GC during and after startup -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-gc)
 (require 'drgnx-paths)
