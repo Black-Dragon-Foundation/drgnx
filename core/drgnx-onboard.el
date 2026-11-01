@@ -1355,7 +1355,7 @@ started and asked ACP initialize.  Without interaction nothing is installed: the
 (declare-function drgnx-pkg-service-unit "drgnx-pkg")
 
 (defconst drgnx-onboard-desktop-entry
-  "[Desktop Entry]\nName=drgnx\nGenericName=Text Editor\nComment=Edit text (drgnx, an Emacs workbench)\nExec=emacsclient -s drgnx -c %F\nIcon=emacs\nType=Application\nTerminal=false\nCategories=Development;TextEditor;\nMimeType=text/plain;\n")
+  "[Desktop Entry]\nName=drgnx\nGenericName=Text Editor\nComment=Edit text (drgnx, an Emacs workbench)\nExec=emacsclient -s drgnx -c %F\nIcon=drgnx\nStartupWMClass=nidhogg\nType=Application\nTerminal=false\nCategories=Development;TextEditor;\nMimeType=text/plain;\n")
 
 (defconst drgnx-onboard-keep-running-question
   "Keep drgnx running in the background when you close its last window? (recommended, like VS Code) ")
@@ -1453,7 +1453,7 @@ terminal note (`drgnx-onboard--terminal-note'); the desktop (`drgnx-onboard--des
          (desktop (expand-file-name "applications/drgnx.desktop" dir))
          (unit-target (expand-file-name "~/.config/systemd/user/drgnx.service"))
          (desktop-target (expand-file-name "~/.local/share/applications/drgnx.desktop"))
-         (how (format "mkdir -p %s %s && cp %s %s && cp %s %s && systemctl --user daemon-reload && systemctl --user enable --now drgnx; and in your shell's rc file: export EDITOR='emacsclient -s drgnx -t' VISUAL='emacsclient -s drgnx -c'"
+         (how (format "mkdir -p %s %s && cp %s %s && cp %s %s && drgnx service-unit --refresh && systemctl --user daemon-reload && systemctl --user enable --now drgnx; and in your shell's rc file: export EDITOR='emacsclient -s drgnx -t' VISUAL='emacsclient -s drgnx -c'"
                       (shell-quote-argument (file-name-directory unit-target)) (shell-quote-argument (file-name-directory desktop-target))
                       (shell-quote-argument unit) (shell-quote-argument unit-target)
                       (shell-quote-argument desktop) (shell-quote-argument desktop-target))))
@@ -1467,6 +1467,7 @@ terminal note (`drgnx-onboard--terminal-note'); the desktop (`drgnx-onboard--des
           (dolist (p (list (cons unit unit-target) (cons desktop desktop-target)))
             (make-directory (file-name-directory (cdr p)) t)
             (copy-file (car p) (cdr p) t))
+          (drgnx-pkg-desktop-refresh desktop-target)
           (call-process "systemctl" nil nil nil "--user" "daemon-reload")
           (list 'ok (format "installed; start it with: systemctl --user enable --now drgnx")))
       (list 'info (format "written (not installed): %s and %s. To install: %s" unit desktop how)))))

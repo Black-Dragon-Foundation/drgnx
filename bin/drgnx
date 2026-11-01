@@ -1762,7 +1762,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx bisect [-- CMD…]  find the module or Lisp file that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR | --refresh]
                                the systemd user unit (printed, or written to DIR; never installed);
-                               --refresh points an installed unit at the Emacs drgnx uses
+                               --refresh points an installed unit at the Emacs drgnx uses, and an installed desktop
+                               entry at drgnx's icon and Nidhogg's windows
        drgnx shell install [--shell zsh|bash|fish] [--yes]
                                add one line to your shell's rc file, after you say yes (--yes: print it,
                                write nothing); drgnx shell line prints the line (docs/guide/shell.md)
