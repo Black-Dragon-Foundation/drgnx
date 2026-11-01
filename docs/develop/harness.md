@@ -1027,8 +1027,8 @@ deleted or replaced by a plan) are listed in `test/class-exempt.eld` as `(FILE :
   `test/ui` it gives a reason (`(drgnx-test-pause SECS "WHY")`), and a wait for a frame is `drgnx-test-wait-presented`.
 - **timing**: may assert elapsed time; no other class may `should` over a wall-clock comparison.
 
-`test/unit/lint-test-classes-test.el` has a lint for each rule, and reports the files without a class until
-`drgnx-lint-classes--all-classified` is set; a row for a file that is gone fails always.
+`test/unit/lint-test-classes-test.el` has a lint for each rule. Every test file has a class, so
+`drgnx-lint-classes--all-classified` is set and a file without one fails; a row for a file that is gone fails always.
 
 `NIDHOGG_TEST_CLOCK` and `NIDHOGG_TEST_SEED` pass into the container; a failed run prints the seed.
 

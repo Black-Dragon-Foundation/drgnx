@@ -10,7 +10,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-run-ert)
 
-(defvar drgnx-lint-classes--all-classified nil
+(defvar drgnx-lint-classes--all-classified t
   "Non-nil once every live test file has a class: `drgnx-lint/every-test-has-a-class' then fails on a file without one
 (until then it only reports the count).")
 
@@ -306,7 +306,7 @@ a test reaches by a call: a command a test binds to a key is named by `function'
   (should-not (drgnx-lint-classes--own-class '(ert-deftest a/b () (ignore)))))
 
 (ert-deftest drgnx-lint/every-test-has-a-class ()
-  ;; report mode until `drgnx-lint-classes--all-classified' is t: a test has a class by its file's line or its own tag
+  ;; fails while `drgnx-lint-classes--all-classified' is t (else reports): a test has a class by its file's line or its own tag
   (let (without (n 0))
     (dolist (rel (drgnx-lint-classes--files))
       (let ((file (expand-file-name rel drgnx-dir)))
