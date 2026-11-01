@@ -7,6 +7,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
 (defconst drgnx-pass-a-ui-test--repo                        ; the session runs the repository's test/ui
@@ -22,9 +23,9 @@
 (require 'drgnx-explorer)
 
 (defun drgnx-pass-a-ui-test--wait (pred &optional secs)
-  "Wait (SECS, default 15) until PRED holds; `sit-for' runs the process sentinels from this timer-started test (`accept-process-output' does not).  PRED's last value."
+  "Wait (SECS, default 15) until PRED holds; `drgnx-test-pause' runs the process sentinels and timers.  PRED's last value."
   (let ((deadline (+ (float-time) (or secs 15))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (sit-for 0.05)))
+    (while (and (not (funcall pred)) (< (float-time) deadline)) (drgnx-test-pause 0.05)))
   (funcall pred))
 
 (defun drgnx-pass-a-ui-test--shot (dir name)

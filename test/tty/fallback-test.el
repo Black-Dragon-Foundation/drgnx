@@ -1,9 +1,11 @@
 ;;; fallback-test.el --- tty tier: the fallback layer — Alt+Shift where it is free, F6 then the key always -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  A legacy client
 ;; is a VTE (Ptyxis, GNOME Terminal): TERM=xterm-256color, VTE_VERSION, and VTE's answer to XTVERSION (the test
 ;; gives it: tmux would answer as tmux).  Keys are the bytes such a terminal sends: Alt+Shift+F is ESC F, F6 is
 ;; ESC [ 1 7 ~.  The helpers for recording commands, kkp and the clients' frames are tty-keys-helpers.el's.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 (unless (featurep 'tty-keys-helpers)
   (load (expand-file-name "tty-keys-helpers" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -44,7 +46,7 @@
   (drgnx-tty-session-eval s '(setq kx-seen nil))
   (drgnx-tty-session-send c bytes)
   (drgnx-tty-session-wait s 'kx-seen 10)
-  (sleep-for 0.3)
+  (drgnx-test-pause 0.3)
   (should-not (drgnx-tty-session-eval s `(assq ',command kx-seen))))
 
 (ert-deftest drgnx-tty-fallback/alt-shift-p-is-not-the-palette ()
@@ -79,10 +81,10 @@
                        (how-many "This terminal can't send Ctrl\\+Shift keys: use Alt\\+Shift (or F6 then the key)\\. drgnx doctor has details\\."
                                  (point-min) (point-max))))
              (before (progn (drgnx-tty-session-wait s `(> ,count 0))
-                            (sleep-for 1.5)       ; every hint already on its way has arrived
+                            (drgnx-test-pause 1.5) ; every hint already on its way has arrived
                             (drgnx-tty-session-eval s count))))
         (drgnx-tty-fallback-test--legacy s)
-        (sleep-for 1.5)
+        (drgnx-test-pause 1.5)
         (should (= before (drgnx-tty-session-eval s count))))
       (should (= 1 (seq-count (lambda (id) (eq id 'vte)) (drgnx-tty-session-eval s '(plist-get (drgnx-tty--read-report) :hinted))))))))
 
@@ -143,7 +145,7 @@
       (drgnx-tty-session-send c (concat "\C-x" f6))
       (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
       (drgnx-tty-session-send c "\a")
-      (sleep-for 0.5)
+      (drgnx-test-pause 0.5)
       (should-not (drgnx-tty-session-eval s '(seq-remove (lambda (c) (memq (car c) '(keyboard-quit nil))) kx-seen)))
       ;; a click after F6 is a click: F6 is dropped, nothing of the mouse report is typed
       (let ((text `(with-current-buffer "*scratch*" (buffer-string))))
@@ -151,7 +153,7 @@
           (drgnx-tty-session-send c f6)
           (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
           (drgnx-tty-session-send c "\e[<0;60;6M\e[<0;60;6m")
-          (sleep-for 0.5)
+          (drgnx-test-pause 0.5)
           (should (equal (drgnx-tty-session-eval s text) before))
           (should-not (drgnx-tty-session-find c "60;6\\|\\[<0"))
           (should-not (drgnx-tty-session-find c "Ctrl\\+Shift\\+…"))))

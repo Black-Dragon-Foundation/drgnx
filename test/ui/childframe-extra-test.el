@@ -1,4 +1,5 @@
 ;;; childframe-extra-test.el --- GUI tests: Glitnir's §10.3 additions -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; The compositor design's added scenarios (§10.3) on top of the §3.4 matrix (childframe-chrome-test.el, whose helpers
 ;; these use): the core rows (the four §3.3 criterion-1 scenarios) at 1.5 and at the user's five 125 % setups, the core
@@ -8,6 +9,7 @@
 ;; monitors) skips in any other, so one run of this file per kind runs its tests: see docs/develop/harness.md.
 
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'seq)
 (require 'dbus)
@@ -173,7 +175,7 @@ the new scale, and `:scale-mismatch' counted paints only during the wait."
                 (apply #'drgnx-test-extra--gdctl "set" (drgnx-test-extra--logical-monitors (list (cons 1 (nth 1 scales)))))
                 (setq moved t)
                 ;; the wait: ≥ 1.5 s, redisplaying, before any probe
-                (let ((end (+ (float-time) 1.6))) (while (< (float-time) end) (redisplay t) (sit-for 0.1)))
+                (let ((end (+ (float-time) 1.6))) (while (< (float-time) end) (redisplay t) (drgnx-test-pause 0.1)))
                 (drgnx-test-chrome--wait-stable (lambda () (list (frame-pixel-width root) (frame-pixel-height root)
                                                                  (frame-edges f 'outer-edges))))
                 (unless (= (frame-scale-factor root) (ceiling (nth 1 scales)))

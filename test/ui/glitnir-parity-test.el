@@ -1,4 +1,5 @@
 ;;; glitnir-parity-test.el --- GUI tests: Glitnir's picture equals the stock picture (PD-9) -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; Parity of Glitnir (the compositor) with the stock path, in the parts the plan (PD-9) can prove at run time:
 ;; (c) with `glitnir-enable' nil the snapshot equals `x-export-frames' (scale 1 only: the export is a 1x picture);
@@ -8,6 +9,7 @@
 ;; skipped).  The fixture has no chrome (`child-frame-chrome' nil): the pictures must be the same, pixel for pixel.
 
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-uitest)
@@ -48,7 +50,7 @@ A macro: `skip-unless' exists only inside the body of `ert-deftest'."
 (defun drgnx-test-glitnir--settle ()
   "Redisplay, wait, and clear the echo area (a message would be in one picture and not the other)."
   (redisplay t)
-  (sit-for 0.3)
+  (drgnx-test-pause 0.3)
   (message nil)
   (redisplay t))
 
@@ -56,7 +58,7 @@ A macro: `skip-unless' exists only inside the body of `ert-deftest'."
   "Redisplay until PRED is non-nil or TIMEOUT (default 3) seconds pass; PRED's value."
   (let ((end (+ (float-time) (or timeout 3))) v)
     (while (and (not (setq v (funcall pred))) (< (float-time) end))
-      (redisplay t) (sit-for 0.05))
+      (redisplay t) (drgnx-test-pause 0.05))
     v))
 
 (defun drgnx-test-glitnir--rect (snap)
@@ -263,7 +265,7 @@ comparison (and must differ there: the snapshot shows the popups)."
             (setq panicked t)
             (should-not (drgnx-test-glitnir--diff (drgnx-uitest-snapshot root) off)))
         (let ((glitnir-debug 'verify)) (glitnir--debug-panic 'revive))
-        (redraw-frame root) (redisplay t) (sit-for 0.2))
+        (redraw-frame root) (redisplay t) (drgnx-test-pause 0.2))
       (should panicked)
       (should (glitnir-active-p)))))
 

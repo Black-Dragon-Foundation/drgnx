@@ -1,9 +1,11 @@
 ;;; drgnx-wm-test.el --- live: move and restore across monitors under sway, X11 and i3; mutter explains -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Each test runs only in its compositor's tier (`bin/drgnx test --ui --compositor sway|x11|i3', or in the GUI
 ;; container: `bin/drgnx test --container --ui --compositor C'; the default tier is mutter); elsewhere it is skipped.
 ;; Every session has two monitors of 1280x800 (one in the missing-monitor test), config `drgnx', a temp state root.
 ;; The sessions are daemons: `emacsclient -c' opens the main window, as a user does.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-ui)
@@ -19,7 +21,7 @@
   "Call THUNK every 0.2 s until it returns non-nil (that value) or SECONDS (default 8) pass (nil)."
   (let ((deadline (+ (float-time) (or seconds 8))) r)
     (while (and (not (setq r (funcall thunk))) (< (float-time) deadline))
-      (sleep-for 0.2))
+      (drgnx-test-pause 0.2))
     r))
 
 (defmacro drgnx-wm-move--in-root (root &rest body)
@@ -274,7 +276,7 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (should (drgnx-wm-move--until
                        (lambda () (string-match-p "monitor is not connected" (drgnx-wm-move--eval sess messages)))
                        6))
-              (sleep-for 1)
+              (drgnx-test-pause 1)
               (let ((text (drgnx-wm-move--eval sess messages)))
                 (should (= 1 (drgnx-wm-move--count "monitor is not connected" text)))
                 (should-not (string-match-p "after-restore function\\|was not restored" text))
@@ -318,7 +320,7 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (let ((r (drgnx-wm-move--move sess 2)))
                 (should (eq :error (car-safe r)))
                 (should (string-match-p "its own key" (cadr r))))
-              (sleep-for 1)
+              (drgnx-test-pause 1)
               (should (equal (drgnx-wm-move--eval sess where) before))))
         (drgnx-ui-stop (plist-get sess :name))))))
 

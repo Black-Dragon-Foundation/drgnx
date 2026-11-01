@@ -7,6 +7,7 @@
 ;; (`frame-monitor-attributes', from the compositor's Wayland output events), not the adapter's.
 ;; niri runs nested in a headless sway and has exactly one output there: its move between outputs cannot run.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-ui)
@@ -22,7 +23,7 @@
   "Call THUNK every 0.2 s until it returns non-nil (that value) or SECONDS (default 8) pass (nil)."
   (let ((deadline (+ (float-time) (or seconds 8))) r)
     (while (and (not (setq r (funcall thunk))) (< (float-time) deadline))
-      (sleep-for 0.2))
+      (drgnx-test-pause 0.2))
     r))
 
 (defmacro drgnx-wm-other--in-root (root &rest body)

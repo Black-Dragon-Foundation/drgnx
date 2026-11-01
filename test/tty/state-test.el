@@ -1,6 +1,8 @@
 ;;; state-test.el --- tty tier: the workbench state store sees changes made outside commands, per frame -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 (defconst drgnx-state-tty-test--listen
@@ -110,7 +112,7 @@
              s '(progn (dolist (f (list drgnx-state-tty-test--a drgnx-state-tty-test--b))
                          (with-selected-frame f (drgnx-state-sync f) (drgnx-state-with-write (f 'restore) nil)))
                        t)))
-    (sleep-for 0.5)                                       ; redisplays and a command-free interval pass
+    (drgnx-test-pause 0.5)                                   ; redisplays and a command-free interval pass
     (should-not (drgnx-tty-session-eval s '(assq 'selected-changed drgnx-state-tty-test--log)))))
 
 ;;; state-test.el ends here

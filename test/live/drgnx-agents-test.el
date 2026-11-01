@@ -1,4 +1,5 @@
 ;;; drgnx-agents-test.el --- live: the Agents tab with the mock ACP agent in a GUI session -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Sending during a running turn queues (shown in the list), Stop ends the turn within a second,
 ;; the transcript is in the editor and the list in the right dock, nothing unrouted.
 (require 'ert)

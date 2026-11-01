@@ -1,5 +1,7 @@
 ;;; code-editing-test.el --- GUI tests: sticky scroll, indent guides, smooth scrolling on a graphical frame (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
 (defconst drgnx-code-ui-test--repo                          ; the session runs the repository's test/ui
@@ -30,7 +32,7 @@
           (re-search-forward "^(defun drgnx-job-step ")
           (forward-line 12)
           (set-window-start (selected-window) (line-beginning-position))
-          (redisplay t) (sit-for 0.3)
+          (redisplay t) (drgnx-test-pause 0.3)
           (should (string-search "(defun drgnx-job-step" (drgnx-sticky--segment (selected-window))))
           (should (or (bound-and-true-p ultra-scroll-mode) (bound-and-true-p pixel-scroll-precision-mode)))
           (when guides (should (bound-and-true-p indent-bars-mode)))

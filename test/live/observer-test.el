@@ -1,5 +1,7 @@
 ;;; observer-test.el --- live tests: the harness does not perturb the session -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 
 (defmacro drgnx-observer--with-session (var &rest body)
@@ -39,7 +41,7 @@
       (add-hook 'post-command-hook #'obs-schedule)
       (add-hook 'first-change-hook #'obs-schedule)
       (drgnx-uitest--json (list :ok t)))")
-    (sleep-for 0.5)
+    (drgnx-test-pause 0.5)
     (let ((r (drgnx-ui-measure sess (list (list :buffer "*obs*" :text "line 10")))))
       (should (>= (plist-get r :oscillations) 1))
       (should (>= (plist-get r :settle_ms) 100)))))

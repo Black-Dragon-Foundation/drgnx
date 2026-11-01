@@ -1,4 +1,5 @@
 ;;; tmux-test.el --- tty tier: drgnx inside tmux — keys, copy, focus, colour, what is reported -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs).  Every test has two private tmux servers: the outer
 ;; one the harness always has (the terminal) and an inner one (`:nested' LINES = its config) with Emacs in it,
 ;; as in real use.  Keys, copies and the screen go through the outer one.  The inner tmux's defaults are tmux's
@@ -58,6 +59,7 @@
 (ert-deftest drgnx-tty-tmux/nested-keys-arrive ()
   ;; extended-keys on, modifyOtherKeys level 1 (the default): C-. arrives, C-g stays one byte and stops busy Lisp,
   ;; and the chords tmux folds (C-S-p arrives as C-p) are reported as not sendable
+  :tags '(:timing)
   (drgnx-tty-session-with (s :keys "vscode" :nested '("set -s extended-keys on"))
     (drgnx-tty-tmux-test--ready s)
     (let ((caps (drgnx-tty-tmux-test--caps s)))
@@ -80,7 +82,7 @@
     ;; C-g stops busy Lisp
     (drgnx-tty-session-eval s drgnx-tty-tmux-test--busy)
     (drgnx-tty-session-key s "<f12>" 'mok)
-    (sleep-for 0.5)
+    (drgnx-test-pause 0.5)                ; Emacs is blocked in the program: nothing to ask it
     (let ((sent (float-time)))
       (drgnx-tty-session-key s "C-g")
       (should (< (- (drgnx-tty-session-wait s 'kx-returned 10) sent) 2)))))
@@ -135,7 +137,7 @@
     (should-not (drgnx-tty-session-eval s '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :osc52)))
     (drgnx-tty-tmux-test--copy s "stays here")
     (should (equal (drgnx-tty-session-eval s '(car kill-ring)) "stays here"))
-    (sleep-for 0.5)
+    (drgnx-test-pause 0.5)                ; no copy may reach the clipboard in this window
     (should-not (drgnx-tty-session-clipboard s))))
 
 (ert-deftest drgnx-tty-tmux/focus-events-reach-drgnx ()

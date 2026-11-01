@@ -1,4 +1,5 @@
 ;;; keys-test.el --- tty tier: C-S- chords through kkp or modifyOtherKeys; C-g still interrupts -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The keys are
 ;; the bytes a terminal sends (`drgnx-tty-session-key'), fed to the pane unchanged.  tmux does not speak the kitty
 ;; keyboard protocol: the test answers kkp's question ("yes") and names the terminal (its XTVERSION answer, which
@@ -74,6 +75,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
 (ert-deftest drgnx-tty-keys/a-terminal-with-both-gets-modify-other-keys ()
   ;; a terminal that speaks both (WezTerm here) would answer kkp's question with yes, but kkp is never asked:
   ;; modifyOtherKeys is preferred, the chords arrive, and C-g stays a plain byte that stops busy Lisp
+  :tags '(:timing)
   (drgnx-tty-keys-test--need-kkp)
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
     (should (eq (drgnx-tty-session-eval s '(plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :status)) 'ok))
@@ -138,6 +140,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
       (drgnx-tty-keys-test--five s c 'kkp))))
 
 (ert-deftest drgnx-tty-keys/c-g-interrupts-a-blocking-git-call ()
+  :tags '(:timing)
   (drgnx-tty-keys-test--need-kkp)
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
     (let* ((run (plist-get s :run))

@@ -1,4 +1,5 @@
 ;;; quickhelp-test.el --- GUI tests: quick help — a card beside the symbol, never over its line (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -36,7 +37,7 @@
           (let ((editor (selected-window)) (line (line-number-at-pos)))
             (call-interactively #'drgnx-quickhelp-show)
             (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
-            (redisplay t) (sit-for 0.3)
+            (redisplay t) (drgnx-test-pause 0.3)
             (should (drgnx-quickhelp-shown-p))
             (should (eq (selected-window) editor))              ; the card never takes the focus
             (should (= (point) (save-excursion (goto-char (point-min)) (forward-line 20) (search-forward "(car ") (- (point) 4))))
@@ -97,7 +98,7 @@
             (should (> (count-screen-lines (line-beginning-position) (line-end-position)) 1))
             (call-interactively #'drgnx-quickhelp-show)
             (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
-            (redisplay t) (sit-for 0.3)
+            (redisplay t) (drgnx-test-pause 0.3)
             (should (drgnx-quickhelp-shown-p))
             (let* ((card drgnx-quickhelp--frame) (e (frame-edges card 'outer-edges)) (x (+ (nth 0 e) 4)))
               ;; no row of the card is on any screen row of point's (wrapped) line
@@ -131,13 +132,13 @@
           (emacs-lisp-mode)
           (goto-char (point-min)) (forward-line 20) (search-forward "(car ") (backward-char 4)
           (recenter 10)
-          (redisplay t) (sit-for 0.3)
+          (redisplay t) (drgnx-test-pause 0.3)
           (setq none (drgnx-uitest-snapshot root))
           (when (frame-live-p drgnx-quickhelp--frame)  ; an earlier test's card was made without the chrome
             (delete-frame drgnx-quickhelp--frame) (setq drgnx-quickhelp--frame nil drgnx-quickhelp--card-up nil))
           (call-interactively #'drgnx-quickhelp-show)
           (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
-          (redisplay t) (sit-for 0.3)
+          (redisplay t) (drgnx-test-pause 0.3)
           (should (drgnx-quickhelp-shown-p))
           (let* ((card drgnx-quickhelp--frame) (s (frame-scale-factor root))
                  (e (frame-edges card 'outer-edges)) (p (frame-edges root 'native-edges))

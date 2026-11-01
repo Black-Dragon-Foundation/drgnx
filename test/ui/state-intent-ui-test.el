@@ -2,6 +2,7 @@
 ;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
 (defconst drgnx-ui-intent-test--repo                         ; the session runs the repository's test/ui
@@ -21,7 +22,7 @@
 (defun drgnx-ui-intent-test--wait (pred &optional secs)
   "Wait until PRED, up to SECS (default 3) seconds; return its value."
   (let ((deadline (+ (float-time) (or secs 3))) (v nil))
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (sit-for 0.05))
+    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (drgnx-test-pause 0.05))
     v))
 
 (ert-deftest drgnx-state-intent-ui/a-dragged-dock-keeps-its-width-when-the-frame-resizes ()

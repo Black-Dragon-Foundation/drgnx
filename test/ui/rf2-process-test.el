@@ -4,6 +4,7 @@
 ;; The finish comes from a real process while the recorder runs, not from a command.
 (require 'ert)
 (require 'compile)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
 (defun drgnx-rf2-test--text-buffer (name lines)
@@ -47,8 +48,8 @@ SHOWN non-nil: its buffer is displayed in a third window C beforehand."
                                                       display-buffer-alist))))
                     (compile "sleep 0.6; echo done"))))
       (drgnx-uitest-measure-begin)
-      (while (process-live-p proc) (sit-for 0.05))
-      (sit-for 0.4)                      ; the sentinel's output and the redisplay after it
+      (drgnx-test-wait-ended proc :what "the compilation to end")   ; its sentinel has run
+      (redisplay t)                      ; the redisplay after the sentinel's output
       (list before-a before-b (drgnx-uitest-measure-end) a b c))))
 
 (defun drgnx-rf2-test--clean ()

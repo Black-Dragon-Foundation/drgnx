@@ -1,9 +1,11 @@
 ;;; drgnx-modal-daemon-test.el --- live: Vim's quit commands close windows, never the drgnx daemon -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A daemon session of config drgnx that keeps running in the background, evil from DRGNX_MODAL_ELPA and the Vim
 ;; stack: `:q' in the only window (one tab), `ZZ' on a changed file, `:qa' — after each the window is gone, the daemon
 ;; answers on its socket, the layout was saved and ZZ's file was written; with two windows `:q' closes only its own.
 ;; Without evil the test skips (docs/develop/harness.md, "Modal tests").
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-ui)
 (load (expand-file-name "test/fixtures/modal-session" drgnx-ui-repo-dir) nil t)
@@ -15,7 +17,7 @@
 (defun drgnx-modal-daemon-test--windows-become (sess n)
   "Wait (10 s at most) until SESS has N graphical windows; non-nil when it has."
   (let ((deadline (+ (float-time) 10)))
-    (while (and (/= (drgnx-modal-daemon-test--windows sess) n) (< (float-time) deadline)) (sleep-for 0.1))
+    (while (and (/= (drgnx-modal-daemon-test--windows sess) n) (< (float-time) deadline)) (drgnx-test-pause 0.1))
     (= (drgnx-modal-daemon-test--windows sess) n)))
 
 (defun drgnx-modal-daemon-test--answers-p (sess)
@@ -67,7 +69,7 @@
             (should (= 2 (drgnx-modal-daemon-test--windows sess)))
             (drgnx-modal-session-act sess ":" '(:type "q") "RET")
             (should (drgnx-modal-daemon-test--windows-become sess 1))
-            (sleep-for 0.5)                                    ; nothing closes the other a moment later
+            (drgnx-test-pause 0.5)                             ; nothing closes the other a moment later
             (should (= 1 (drgnx-modal-daemon-test--windows sess)))
             (should (drgnx-modal-daemon-test--answers-p sess)))
         (delete-directory dir t)))))

@@ -1,4 +1,5 @@
 ;;; clipboard-test.el --- tty tier: a copy reaches the terminal's clipboard (OSC 52); what a paste does -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The tmux of
 ;; the harness has `set-clipboard on': an OSC 52 copy becomes its paste buffer (`drgnx-tty-session-clipboard').
 (require 'ert)
@@ -94,7 +95,7 @@
     (drgnx-tty-clip-test--select-five s)
     (drgnx-tty-session-send s "\C-xh")
     (drgnx-tty-session-wait s '(with-current-buffer "*sel*" (and (use-region-p) (= (- (region-end) (region-beginning)) 11))))
-    (sleep-for 0.6)                                          ; past the delay: still no cut
+    (drgnx-test-pause 0.6)                                       ; past the delay: still no cut
     (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*sel*" (buffer-string))) "hello drgnx"))
     (should-not (drgnx-tty-session-eval s '(car kill-ring)))))
 
