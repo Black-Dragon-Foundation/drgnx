@@ -1,4 +1,5 @@
 ;;; bin-lease-test.el --- the host lease: bin/drgnx lease light|heavy|exclusive -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Every test uses a temp DRGNX_LEASE_DIR, a short poll, no systemd cap, and unsets DRGNX_LEASE_HELD and CI for the
 ;; bin/drgnx it starts (the suite itself may run inside a lease, in CI).  Holders are real processes; each test kills
 ;; the ones it started.

@@ -1,4 +1,5 @@
 ;;; install-test.el --- batch tests: install.sh plans (dry runs) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The installer is bash (it must run before any Emacs exists); these tests call it with
 ;; detection overridden through DRGNX_INSTALL_* and check the plan it prints.
 (require 'ert)

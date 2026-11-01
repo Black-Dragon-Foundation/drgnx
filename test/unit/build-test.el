@@ -1,4 +1,5 @@
 ;;; build-test.el --- batch tests: drgnx builds its own Lisp cleanly -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-build)
 (require 'drgnx-paths)
@@ -37,8 +38,10 @@
           (with-temp-file a (insert ";;; -*- lexical-binding: t -*-\n(defsubst drgnx-test-a-val () 1)\n(provide 'drgnx-test-2a)\n"))
           (with-temp-file (expand-file-name "drgnx-test-1b.el" core)
             (insert ";;; -*- lexical-binding: t -*-\n(require 'drgnx-test-2a)\n(defun drgnx-test-b () (drgnx-test-a-val))\n(provide 'drgnx-test-1b)\n"))
+          (dolist (f (directory-files core t "\\.el\\'")) (set-file-times f (time-subtract nil 20)))
           (drgnx-build-test--emacs `(load ,(expand-file-name "core/drgnx-build.el" drgnx-dir) nil t) `(drgnx-build ,root))
-          (sleep-for 1.1)
+          ;; the first build's outputs are backdated (still newer than their sources), so the rewrite below is strictly newer without a pause
+          (dolist (f (directory-files core t "\\.elc\\'")) (set-file-times f (time-subtract nil 10)))
           (with-temp-file a (insert ";;; -*- lexical-binding: t -*-\n(defsubst drgnx-test-a-val () 2)\n(provide 'drgnx-test-2a)\n"))
           (drgnx-build-test--emacs `(load ,(expand-file-name "core/drgnx-build.el" drgnx-dir) nil t) `(drgnx-build ,root))
           (should (string-search "value=2" (drgnx-build-test--emacs

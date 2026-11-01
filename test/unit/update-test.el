@@ -1,4 +1,5 @@
 ;;; update-test.el --- batch tests: drgnx update (bin/drgnx updates its own checkout) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A temp "origin" (bare), a seed clone that pushes to it and an install clone (holding a copy of bin/drgnx) are built per
 ;; test; sync and build are stubbed through DRGNX_UPDATE_SYNC_CMD / DRGNX_UPDATE_BUILD_CMD; systemctl and launchctl are
 ;; stubs on PATH that log their arguments.  Nothing here touches the real HOME, XDG directories, systemd, launchd, the

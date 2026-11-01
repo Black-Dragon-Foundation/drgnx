@@ -1,4 +1,5 @@
 ;;; bin-test.el --- batch tests: bin/drgnx runs every subcommand in one Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Fake Emacs scripts record their argv; bin/drgnx runs in a temp HOME and config dir, never the user's.
 (require 'ert)
 (require 'seq)
