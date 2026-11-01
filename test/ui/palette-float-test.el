@@ -98,7 +98,10 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
   "FRAME shows the minibuffer buffer with its candidates."
   (and (frame-live-p frame) (frame-visible-p frame)
        (with-current-buffer (window-buffer (frame-root-window frame))
-         (and (minibufferp) (string-search "Do It" (buffer-string))))))
+         ;; vertico draws the candidates as the after-string of an overlay, not as buffer text
+         (and (minibufferp)
+              (seq-some (lambda (o) (let ((s (overlay-get o 'after-string))) (and (stringp s) (string-search "Do It" s))))
+                        (overlays-in (point-min) (point-max)))))))
 
 (ert-deftest palette-float-shows-child-frame-with-look ()
   (drgnx-palette-float-test--with-palette
