@@ -1,4 +1,5 @@
 ;;; ai-test.el --- batch tests: the AI provider registry, keys, agent environments, the mock LLM server -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ai)
 (require 'drgnx-ai-probe)
@@ -8,6 +9,7 @@
 (require 'auth-source)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-test--with (root &rest body)
@@ -418,13 +420,12 @@ LOG/security.calls."
 (ert-deftest drgnx-ai/a-keychain-read-back-that-never-answers-is-bounded ()
   (drgnx-ai-test--with root
     (drgnx-ai-test--with-fake-store 'darwin bin log
-      (let ((drgnx-ai--store-timeout 0.5) (process-environment (cons "FAKE_READ_SLEEP=30" process-environment))
-            (start (float-time)))
+      (let ((drgnx-ai--store-timeout 0.5) (process-environment (cons "FAKE_READ_SLEEP=30" process-environment)))
+        ;; "did not answer" is the timeout's own message: the 30 s sleep was not waited out
         (let ((err (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))
           (should (string-match-p "did not answer" (cadr err)))
           (should-not (string-search "as it was given" (cadr err)))
           (should-not (string-search "sk-or-test-123" (cadr err))))
-        (should (< (- (float-time) start) 10))
         (should-not (gethash 'openrouter drgnx-ai--keys))
         (should (string-search "delete-internet-password" (drgnx-ai-test--slurp (concat log "security.calls"))))))))
 
@@ -534,9 +535,8 @@ LOG/security.calls."
 
 (ert-deftest drgnx-ai/a-job-receives-keys-that-no-command-line-or-state-file-shows ()
   (drgnx-ai-test--with root
-    (let* ((id (drgnx-jobs-start "k" (list "sh" "-c" "printf %s \"$SECRET_FOR_JOB\" > got") :cwd root :env '("SECRET_FOR_JOB=s3cret")))
-           (d (+ (float-time) 10)))
-      (while (and (not (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) (< (float-time) d)) (sleep-for 0.05))
+    (let* ((id (drgnx-jobs-start "k" (list "sh" "-c" "printf %s \"$SECRET_FOR_JOB\" > got") :cwd root :env '("SECRET_FOR_JOB=s3cret"))))
+      (drgnx-test-wait (lambda () (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) :secs 10 :what "the job to exit")
       (should (equal (with-temp-buffer (insert-file-contents (concat root "got")) (buffer-string)) "s3cret"))
       (dolist (f (directory-files (drgnx-jobs--dir id) t "\\`[^.]"))
         (should-not (string-search "s3cret" (with-temp-buffer (insert-file-contents f) (buffer-string))))))

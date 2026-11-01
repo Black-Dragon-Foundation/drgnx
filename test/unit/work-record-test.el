@@ -1,4 +1,5 @@
 ;;; work-record-test.el --- batch tests: commits recorded for the tasks drgnx starts -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-work)
 (require 'drgnx-agents)
@@ -6,6 +7,7 @@
 (require 'drgnx-projects)
 (require 'drgnx-sandbox-vc)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defun drgnx-work-rec--git (dir &rest args)
   (with-temp-buffer
@@ -57,7 +59,7 @@
                                               (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
            (drgnx-agents--sessions nil)
            (s (drgnx-agents-start "mock" repo "task:/p.md#2"))
-           (wait (lambda (pred) (let ((d (+ (float-time) 10))) (while (and (not (funcall pred)) (< (float-time) d)) (accept-process-output nil 0.02))))))
+           (wait (lambda (pred) (drgnx-test-wait pred :secs 10 :what "the agent's turn"))))
       (unwind-protect
           (progn
             (funcall wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
@@ -70,7 +72,7 @@
   (drgnx-work-rec--with repo
     (let ((id (drgnx-jobs-start "j" (list "sh" "-c" "echo x > j.txt && git add j.txt && git -c user.name=t -c user.email=t@t.invalid commit -q -m 'job work'")
                                 :cwd repo :task "task:/p.md#3")))
-      (let ((d (+ (float-time) 10))) (while (and (not (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) (< (float-time) d)) (sleep-for 0.05)))
+      (drgnx-test-wait (lambda () (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) :secs 10 :what "the job to exit")
       (drgnx-work-collect-jobs)
       (should (equal (drgnx-work-rec--titles "task:/p.md#3") '("job work")))
       (drgnx-work-rec--commit repo "later, not the job's")                ; the job ended before this
@@ -159,7 +161,9 @@
 (defun drgnx-work-rec--session (task repo)
   (drgnx-agents--make :name task :profile "mock" :cwd repo :task task))
 
-(defun drgnx-work-rec--pump () (dotimes (_ 5) (accept-process-output nil 0.02)))
+(defun drgnx-work-rec--pump ()
+  "Let the zero timer that records a turn's commits run: wait until no timer is due."
+  (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :secs 5 :what "the due timers"))
 
 (ert-deftest drgnx-work/a-turn-s-commits-are-recorded-after-the-turn-not-inside-it ()
   (drgnx-work-rec--with repo
@@ -215,7 +219,7 @@
       (drgnx-work-rec--git repo "worktree" "add" "-q" wt "-b" "w")
       (let ((id (drgnx-jobs-start "j" (list "sh" "-c" "echo x > j.txt && git add j.txt && git commit -q -m 'job in a worktree'")
                                   :cwd wt :task "task:/p.md#14")))
-        (let ((d (+ (float-time) 10))) (while (and (not (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) (< (float-time) d)) (sleep-for 0.05)))
+        (drgnx-test-wait (lambda () (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) :secs 10 :what "the job to exit")
         (drgnx-work-rec--git repo "merge" "-q" "--ff-only" "w")
         (drgnx-work-rec--git repo "worktree" "remove" "--force" wt)
         (drgnx-work-collect-jobs)

@@ -1,6 +1,7 @@
 ;;; shell-env-test.el --- batch tests: the login shell's environment in the daemon -*- lexical-binding: t -*-
 ;; Fake shells are scripts in a temp dir (the runner's HOME is a temp dir too); the one real shell (zsh) runs with a
 ;; temp HOME and ZDOTDIR.  Never the user's rc files, keyring or live Emacs.
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)
