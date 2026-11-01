@@ -1,4 +1,5 @@
 ;;; test-env-test.el --- drgnx-test-env: one environment for every tier -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
@@ -143,6 +144,7 @@ real HOME (macOS CI's Nidhogg.app, a local build in ~/.local/opt) — never unse
 
 (ert-deftest drgnx-test-env/the-runner-uses-it ()
   "A one-process run of a one-test suite: the test's environment holds every entry of the unit tier's list."
+  :tags '(:cond)                                        ; a child Emacs
   (let* ((root (make-temp-file "drgnx-test-env-suite" t))
          (suite (expand-file-name "suite" root))
          (run (expand-file-name "drgnx-run.abc123" root))

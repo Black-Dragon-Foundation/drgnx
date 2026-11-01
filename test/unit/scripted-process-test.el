@@ -1,4 +1,5 @@
 ;;; scripted-process-test.el --- scripted processes force the class C orderings -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Each ordering is forced 100 times and asserted every time: under load it would only happen sometimes.
 (require 'ert)
 (require 'cl-lib)
