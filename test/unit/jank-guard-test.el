@@ -1,4 +1,5 @@
 ;;; jank-guard-test.el --- batch tests: jank guard -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-jank-guard)
 (require 'drgnx-timer)

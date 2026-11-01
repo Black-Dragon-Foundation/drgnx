@@ -1,4 +1,5 @@
 ;;; core-notice-echo-test.el --- batch tests: the echo rule and the startup line (virtual time, one echo area stubbed) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'ert-x)
 (require 'cl-lib)

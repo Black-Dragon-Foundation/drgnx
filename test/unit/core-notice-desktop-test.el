@@ -1,4 +1,5 @@
 ;;; core-notice-desktop-test.el --- batch tests: desktop notifications for what waits on you (backends stubbed) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

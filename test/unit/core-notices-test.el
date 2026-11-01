@@ -1,4 +1,5 @@
 ;;; core-notices-test.el --- batch tests: the Notices list and the mode-line pair -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
