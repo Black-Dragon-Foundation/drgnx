@@ -2,6 +2,7 @@
 ;; vlf comes from the user's ELPA, read-only (DRGNX_USER_ELPA, else ~/.config/emacs/elpa), as
 ;; `drgnx-extras/with-packages-they-run' finds packages; every test that needs it skips without it.  No large file is
 ;; ever written: :ask-above 16 KiB, :chunks-above 64 KiB, :chunk-size 32 KiB and a file of 128 KiB.
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

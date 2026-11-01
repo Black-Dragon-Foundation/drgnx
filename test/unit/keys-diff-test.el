@@ -1,4 +1,5 @@
 ;;; keys-diff-test.el --- batch tests: the key-sheet diff against gryphn -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-keys-diff)
 (require 'drgnx-paths)

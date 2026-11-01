@@ -2,6 +2,7 @@
 ;; The 15 `extra/' modules (teardown batch): what a setup sets in another package's options comes back, a mode a
 ;; module turned on in live buffers goes off, gptel's backend returns.  A module whose package is missing here
 ;; (`extra/debug': dape) is covered by its teardown function alone.
+;; test-class: det
 (require 'ert)
 (require 'ert-x)
 (require 'cl-lib)

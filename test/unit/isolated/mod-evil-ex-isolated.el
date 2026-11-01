@@ -2,6 +2,7 @@
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it those tests skip.
 ;; The full registry and the startup modules run in a temp configuration (editor/evil chosen, the Vim stack
 ;; applied), so the keys are the shipped ones; the commands that would close windows or quit are recorded.
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

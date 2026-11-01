@@ -1,4 +1,5 @@
 ;;; mod-grammars-test.el --- batch tests: tree-sitter grammars on request — a hint, never a prompt; installs as a job -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
