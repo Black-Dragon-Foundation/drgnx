@@ -1,4 +1,5 @@
 ;;; mod-quickhelp-test.el --- batch tests: quick help — a card beside the symbol, a strip in terminals (M12f A8) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
@@ -121,6 +122,7 @@
 ;;;; Collecting docs (eldoc's functions)
 
 (ert-deftest drgnx-quickhelp/collect-gathers-every-backend-and-drops-stale-answers ()
+  :tags '(:cond)
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
       (let* ((pending nil) (seen-point nil) (got1 :none) (got2 :none)
@@ -152,6 +154,7 @@
         (should (eq got1 :none))))))
 
 (ert-deftest drgnx-quickhelp/collect-never-waits ()
+  :tags '(:timing)
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "(car x)\n"
       (let ((got :none) (t0 (float-time)))
@@ -358,6 +361,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
           (should-not (drgnx-timer-active-p 'quickhelp-look)))))))
 
 (ert-deftest drgnx-quickhelp/a-quick-move-to-the-next-symbol-gets-its-card ()
+  :tags '(:cond)
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
       (drgnx-quickhelp-test--pointer
@@ -404,6 +408,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         drgnx-quickhelp--card-up t))
 
 (ert-deftest drgnx-quickhelp/a-resize-puts-the-card-away ()
+  :tags '(:cond)
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "(car x)\n"
       (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'right)) (w3 (split-window w2 nil 'below)))
@@ -426,6 +431,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         (ignore w3)))))
 
 (ert-deftest drgnx-quickhelp/a-window-change-puts-the-card-away ()
+  :tags '(:cond)
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "(car x)\n"
       (let* ((w1 (selected-window)) (w2 (split-window w1 nil 'right)))
@@ -445,6 +451,7 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
         (should (drgnx-quickhelp-test--wait (lambda () (null drgnx-quickhelp--origin)) 2))))))
 
 (ert-deftest drgnx-quickhelp/a-resize-of-a-kindless-window-puts-the-card-away ()
+  :tags '(:cond)
   ;; the store tells pane-resized for panes and editors only: a card over a role window (no pane kind) goes when
   ;; a neighbour editor's event shows the card's own window has other edges
   (drgnx-quickhelp-test--with
