@@ -311,7 +311,9 @@ rebuilds what is stale, and the key names the toolchain, whose change would rebu
 stale entry is never saved again under the same name). The workspace's own crates are always rebuilt (a fresh
 checkout's sources are newer than any cached output), so before a save `.github/ci/cargo-prune.sh` drops their
 artifacts, the top-level binaries (but `build-test-bins` keeps them for the upload), incremental data (CI builds with
-`CARGO_INCREMENTAL=0`) and the registry's unpacked sources: the cache holds the dependencies only. A job saves at its
+`CARGO_INCREMENTAL=0`) and the registry's unpacked sources: the cache holds the dependencies only. It finds the local
+packages offline without downloading anything (`cargo metadata --no-deps`, and `Cargo.lock`'s packages without a
+source), and it never fails a job: what it cannot work out it leaves, with a warning. A job saves at its
 end when its build passed, whatever its tests said (a red test keeps the dependencies), and only when its key was not
 already there. Who saves (`CACHE_SAVE` in `runtime.yml`): pushes and manual runs of `main` and `ci/*`, never a pull
 request, so an untrusted change never writes what a trusted run reads; GitHub scopes a `ci/*` branch's entries to

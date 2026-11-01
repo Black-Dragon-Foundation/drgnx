@@ -7,17 +7,33 @@
 #   cargo-prune.sh MANIFEST TARGET_DIR [--keep-bins]
 #
 # --keep-bins: leave the local packages' top-level binaries (a later step of the job runs or uploads them).
-# Needs jq; bash 3.2-safe. Deleting too much only costs a rebuild, never a wrong result.
-set -euo pipefail
+# It never fails a job: whatever it cannot work out, it warns and leaves as it is (an unpruned cache is only bigger).
+# The local packages come from `cargo metadata --no-deps` (the workspace, offline, nothing to download) and Cargo.lock
+# (the packages without a source: path dependencies outside the workspace). Deleting too much only costs a rebuild,
+# never a wrong result. Needs jq; bash 3.2-safe.
+set -uo pipefail
 [ $# -ge 2 ] || { echo "usage: cargo-prune.sh MANIFEST TARGET_DIR [--keep-bins]" >&2; exit 2; }
 manifest=$1 target=$2 keep=${3:-}
-[ -d "$target" ] || { echo "cargo-prune.sh: no $target" >&2; exit 0; }
+skip() { echo "::warning::cargo-prune.sh: $*; nothing pruned"; exit 0; }
+[ -d "$target" ] || skip "no $target"
+command -v jq >/dev/null || skip "no jq"
+meta=$(cargo metadata --format-version 1 --no-deps --offline --manifest-path "$manifest") || skip "cargo metadata failed"
 
-# the local packages' names (dashes, as in .fingerprint/ and build/) and their targets' crate names (underscores)
-meta=$(cargo metadata --format-version 1 --offline --manifest-path "$manifest")
-pkgs=$(jq -r '.packages[] | select(.source == null) | .name' <<<"$meta" | sort -u)
-crates=$(jq -r '.packages[] | select(.source == null) | .targets[].name | gsub("-"; "_")' <<<"$meta" | sort -u)
-bins=$(jq -r '.packages[] | select(.source == null) | .targets[] | select(any(.kind[]; . == "bin" or . == "example")) | .name' <<<"$meta" | sort -u)
+# the local packages' names (dashes, as in .fingerprint/ and build/), their targets' crate names (underscores) and
+# their binaries and examples
+lock="$(jq -r .workspace_root <<<"$meta")/Cargo.lock"
+paths=""
+if [ -f "$lock" ]; then
+  paths=$(awk '/^\[\[package\]\]/ { if (n != "" && !s) print n; n = ""; s = 0; next }
+               /^name = / { n = $3; gsub(/"/, "", n) }
+               /^source = / { s = 1 }
+               END { if (n != "" && !s) print n }' "$lock") || skip "cannot read $lock"
+fi
+members=$(jq -r '.packages[].name' <<<"$meta") || skip "no packages in the metadata"
+pkgs=$(printf '%s\n%s\n' "$members" "$paths" | sort -u)
+crates=$( { jq -r '.packages[].targets[].name' <<<"$meta"; printf '%s\n' "$paths"; } | tr - _ | sort -u)
+bins=$(jq -r '.packages[].targets[] | select(any(.kind[]; . == "bin" or . == "example")) | .name' <<<"$meta" | sort -u)
+[ -n "$pkgs" ] || skip "no local packages"
 
 before=$(du -sk "$target" | cut -f1)
 # every profile directory, of the host and of each --target triple: the ones with a .fingerprint
@@ -32,3 +48,4 @@ find "$target" -type d -name .fingerprint -prune | while IFS= read -r fp; do
 done
 rm -rf "${CARGO_HOME:-$HOME/.cargo}/registry/src"
 echo "cargo-prune.sh: $target ${before} KiB -> $(du -sk "$target" | cut -f1) KiB"
+exit 0
