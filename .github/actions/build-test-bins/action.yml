@@ -12,20 +12,28 @@ inputs:
 runs:
   using: composite
   steps:
-    # Restored on every ref, saved only on a default branch (`main` here, `nidhogg-31` when Nidhogg's run calls
-    # drgnx-tiers.yml: `github.ref` in a called workflow is the caller's): the same key saved again per ref would count
-    # against the repository's cache limit once per ref.
+    # Keyed by the toolchain and the hash of Cargo.lock and the manifests, restored from the newest entry of the same
+    # toolchain when they moved (cargo rebuilds whatever is stale). Saved, without what every run rebuilds
+    # (.github/ci/cargo-prune.sh), by a push or a manual run of `main`, `nidhogg-31` (when Nidhogg's run calls
+    # drgnx-tiers.yml: `github.ref` in a called workflow is the caller's) or a `ci/*` branch; never by a pull request.
+    - id: rv
+      shell: bash
+      run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
     - id: bins-cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.cargo/registry
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
           ${{ inputs.dir }}/runtime/target
-        key: cargo-${{ runner.os }}-drgnx-test-bins-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir)) }}
+        key: cargo-${{ runner.os }}-drgnx-test-bins-${{ steps.rv.outputs.v }}-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir), format('{0}/runtime/Cargo.toml', inputs.dir), format('{0}/runtime/*/Cargo.toml', inputs.dir), format('{0}/runtime/crates/*/Cargo.toml', inputs.dir)) }}
+        restore-keys: cargo-${{ runner.os }}-drgnx-test-bins-${{ steps.rv.outputs.v }}-
     - name: Ratatoskr (test hooks), ratatoskr-mock, huginn's dump example
+      id: build
       shell: bash
       env:
         DIR: ${{ inputs.dir }}
+        CARGO_INCREMENTAL: "0"
       run: |
         cargo build --locked --manifest-path "$DIR/runtime/Cargo.toml" -p drgnx-ratatoskr -p domr \
           --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
@@ -33,10 +41,18 @@ runs:
         t="$(cd "$DIR/runtime/target/debug" && pwd)"
         echo "DRGNX_RATATOSKR_BIN=$t/ratatoskr" >> "$GITHUB_ENV"
         echo "DRGNX_HUGINN_DUMP=$t/examples/dump" >> "$GITHUB_ENV"
-    - if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/nidhogg-31') && steps.bins-cache.outputs.cache-hit != 'true' }}
+    # --keep-bins: the job uploads or runs them next
+    - id: prune
+      if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/nidhogg-31' || startsWith(github.ref, 'refs/heads/ci/')) && steps.bins-cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: bash "$DIR/.github/ci/cargo-prune.sh" "$DIR/runtime/Cargo.toml" "$DIR/runtime/target" --keep-bins
+    - if: ${{ steps.prune.outcome == 'success' }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.cargo/registry
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
           ${{ inputs.dir }}/runtime/target
-        key: cargo-${{ runner.os }}-drgnx-test-bins-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir)) }}
+        key: ${{ steps.bins-cache.outputs.cache-primary-key }}

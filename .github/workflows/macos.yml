@@ -27,9 +27,41 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # What the change can affect (.github/ci/changes.sh over .github/ci/paths.txt; ci.yml's job, with this workflow's
+  # gate and jobs)
+  changes:
+    name: What the change can affect
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      tiers: ${{ steps.c.outputs.tiers }}
+      partial: ${{ steps.c.outputs.partial }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/ci
+      - id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          GATE: macOS gate
+          PUSH: macos
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/ci/changes.sh .github/ci/paths.txt | tee -a "$GITHUB_OUTPUT"
+
   tiers:
     name: Tiers
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
     permissions:
       contents: read
       packages: read
@@ -64,12 +96,13 @@ jobs:
       - name: drgnx open --check (a headless start)
         run: drgnx open --check
 
-  # The one check branch protection requires of this workflow: the push jobs (tiers) succeeded. It always runs, and a
-  # failed, cancelled or skipped job fails it; the weekly run has no tiers job and no gate (docs/develop/ci.md, "Gates").
+  # The one check branch protection requires of this workflow: the push jobs (tiers) succeeded, or were skipped because
+  # the change cannot affect them. It always runs, and a failed, cancelled or other skipped job fails it; the weekly
+  # run has no tiers job and no gate (docs/develop/ci.md, "Gates").
   gate:
     name: macOS gate
     if: ${{ always() && github.event_name != 'schedule' }}
-    needs: [tiers]
+    needs: [changes, tiers]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -80,3 +113,4 @@ jobs:
       - uses: ./.github/actions/gate
         with:
           needs: ${{ toJSON(needs) }}
+          allow-skipped: ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}

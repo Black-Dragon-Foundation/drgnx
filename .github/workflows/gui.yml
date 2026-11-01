@@ -20,22 +20,53 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # What the change can affect (.github/ci/changes.sh over .github/ci/paths.txt; ci.yml's job, with this workflow's
+  # gate and jobs): a ci/* push runs only the tiers its change can affect
+  changes:
+    name: What the change can affect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      tiers: ${{ steps.c.outputs.tiers }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/ci
+      - id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GATE: GUI tier gate
+          PUSH: ui scenario perf
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/ci/changes.sh .github/ci/paths.txt | tee -a "$GITHUB_OUTPUT"
+
   tiers:
     name: Tiers
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
     permissions:
       contents: read
       packages: read
     uses: ./.github/workflows/drgnx-tiers.yml
     with:
       nidhogg: release
-      tiers: ui scenario perf
+      tiers: ${{ needs.changes.outputs.tiers || 'ui scenario perf' }}
 
-  # The one check branch protection requires of this workflow: the three tiers succeeded. It always runs, and a
-  # failed, cancelled or skipped job fails it (docs/develop/ci.md, "Gates").
+  # The one check branch protection requires of this workflow: the three tiers succeeded, or those the change cannot
+  # affect were skipped. It always runs, and a failed, cancelled or other skipped job fails it (docs/develop/ci.md,
+  # "Gates").
   gate:
     name: GUI tier gate
     if: always()
-    needs: [tiers]
+    needs: [changes, tiers]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -46,3 +77,4 @@ jobs:
       - uses: ./.github/actions/gate
         with:
           needs: ${{ toJSON(needs) }}
+          allow-skipped: ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}

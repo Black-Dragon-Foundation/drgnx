@@ -35,7 +35,10 @@
 ;; The tiers: one definition (drgnx-tiers.yml) of drgnx's Emacs-side jobs, called by drgnx's push workflows on the
 ;; pinned release and by Nidhogg's CI on the tarballs it built (docs/develop/ci.md, "The tiers workflow").
 (ert-deftest drgnx-ci/the-push-workflows-call-the-tiers-workflow ()
-  (dolist (spec '(("ci.yml" "unit no-lisp-writes") ("gui.yml" "ui scenario perf") ("macos.yml" "macos") ("tty.yml" "tty")))
+  ;; (file, its `tiers:' line): the path filter's tiers, all of the workflow's when it said nothing
+  (dolist (spec '(("ci.yml" "${{ needs.changes.outputs.tiers || 'unit no-lisp-writes' }}")
+                  ("gui.yml" "${{ needs.changes.outputs.tiers || 'ui scenario perf' }}")
+                  ("macos.yml" "macos") ("tty.yml" "tty")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
       (skip-unless yml)
       (drgnx-ci-test--has yml "uses: ./.github/workflows/drgnx-tiers.yml" "nidhogg: release"
@@ -145,8 +148,10 @@
   (drgnx-ci-test--matches "^  \\([a-z0-9-]+\\):$" (substring yml (string-search "\njobs:\n" yml))))
 
 (ert-deftest drgnx-ci/each-push-workflow-ends-in-one-gate-over-its-push-jobs ()
-  ;; (file, the gate's name, the jobs that never run on a push, its push branches)
-  (dolist (spec '(("ci.yml" "CI gate" nil "[main, \"ci/**\"]")
+  ;; (file, the gate's name line, the jobs that never run on a push, its push branches); a narrowed run's CI gate is
+  ;; "CI gate (partial)", which branch protection never takes for the full one
+  (dolist (spec '(("ci.yml" "${{ needs.changes.outputs.partial == 'true' && 'CI gate (partial)' || 'CI gate' }}" nil
+                   "[main, \"ci/**\"]")
                   ("macos.yml" "macOS gate" ("install") "[main, \"ci/**\", \"!ci/joint/**\"]")
                   ("gui.yml" "GUI tier gate" nil "[main, \"ci/**\", \"!ci/joint/**\"]")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
@@ -163,9 +168,15 @@
         (should (equal (sort (copy-sequence needs) #'string<)
                        (sort (cl-set-difference (drgnx-ci-test--job-ids yml) (cons "gate" (nth 2 spec)) :test #'equal)
                              #'string<)))
-        ;; the gate's are the only `needs:' (no job waits on another it does not take data from); a job's own key,
-        ;; not the gate action's `needs' input
-        (should (= 1 (length (drgnx-ci-test--matches "^    \\(needs\\):" yml))))))
+        ;; besides the gate's, the only `needs:' is the path filter's (no job waits on another it does not take data
+        ;; from); a job's own key, not the gate action's `needs' input
+        (should (= 1 (length (drgnx-ci-test--matches "^    needs: \\(\\[\\)" yml))))
+        (dolist (n (drgnx-ci-test--matches "^    needs: \\([^[\n]*\\)$" yml))
+          (should (equal n "changes")))
+        ;; the gate lets a job be skipped only when the path filter skipped it (or on a joint round, below)
+        (dolist (line (drgnx-ci-test--matches "^ *\\(\\${{ needs.changes[^\n]*\\)$" gate))
+          (should (string-match-p "\\`\\${{ needs.changes.result == 'success' && needs.changes.outputs.[a-z]+ == '' && '[a-z]+' || '' }}\\'"
+                                  line)))))
     (drgnx-ci-test--has (drgnx-ci-test--action "gate")
                         "all(.value.result == \"success\" or (.value.result == \"skipped\" and")))
 
@@ -174,12 +185,12 @@
 (ert-deftest drgnx-ci/a-joint-round-skips-the-tiers-only-on-its-own-branch ()
   (let ((ci (drgnx-ci-test--yml "ci.yml")))
     (skip-unless ci)
-    (drgnx-ci-test--has (drgnx-ci-test--job ci "tiers") "if: ${{ !startsWith(github.ref, 'refs/heads/ci/joint/') }}")
+    (drgnx-ci-test--has (drgnx-ci-test--job ci "tiers") "if: ${{ !cancelled() && !startsWith(github.ref, 'refs/heads/ci/joint/') && ")
     ;; the gate lets the tiers be skipped there and nowhere else, and nothing but the tiers
     (drgnx-ci-test--has (drgnx-ci-test--job ci "gate")
-                        "allow-skipped: ${{ startsWith(github.ref, 'refs/heads/ci/joint/') && 'tiers' || '' }}")
+                        "allow-skipped: >-\n            ${{ startsWith(github.ref, 'refs/heads/ci/joint/') && 'tiers' || '' }}\n")
     (dolist (f '("gui.yml" "macos.yml"))
-      (should-not (string-search "allow-skipped" (drgnx-ci-test--yml f))))))
+      (should-not (string-search "ci/joint/" (drgnx-ci-test--job (drgnx-ci-test--yml f) "gate"))))))
 
 (ert-deftest drgnx-ci/nothing-stops-early ()
   (dolist (yml (drgnx-ci-test--workflows-and-actions
@@ -203,29 +214,81 @@
   (dolist (yml (drgnx-ci-test--workflows-and-actions
                 '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml")))
     (skip-unless yml)
-    ;; each actions/cache step: its key line hashes files (hashFiles) and a restore-keys line, when there is one,
-    ;; stops short of the hash only by a trailing part (never a bare OS prefix)
+    ;; each actions/cache step: its key line hashes files (hashFiles), or is a save's that takes its restore's key;
+    ;; a restore-keys line, when there is one, stops short of the hash only by a trailing part (never a bare OS
+    ;; prefix), except where any older entry is safe: cargo's (cargo rebuilds what is stale; the key names the
+    ;; toolchain) and the fuzz corpora (more inputs only reach further)
     (dolist (step (cdr (split-string yml "uses: actions/cache\\(?:/restore\\|/save\\)?@")))
       (let ((head (car (split-string step "\n *- " t))))
         (should (string-match "^ *key: \\(.*\\)$" head))
-        (should (string-search "hashFiles(" (match-string 1 head)))
+        (let ((key (match-string 1 head)))
+          (should (or (string-search "hashFiles(" key)
+                      (string-match-p "\\`\\${{ steps\\.[a-z-]+\\.outputs\\.cache-primary-key }}\\'" key))))
         (when (string-match "^ *restore-keys: \\(.*\\)$" head)
-          (should (string-search "hashFiles(" (match-string 1 head))))))))
+          (let ((rk (match-string 1 head)))
+            (should (or (string-search "hashFiles(" rk)
+                        (and (string-prefix-p "cargo-" rk)
+                             (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.88\\.0\\|env\\.NIGHTLY" rk))
+                        (string-prefix-p "fuzz-corpus-" rk)))))))))
 
-(ert-deftest drgnx-ci/test-binaries-cache-is-saved-only-on-a-default-branch ()
-  ;; drgnx-tiers.yml runs from Nidhogg too, where github.ref is Nidhogg's: the same key saved per ref fills the cache
+;; A cache is written only by a trusted run (a push or a manual run of main, ci/* or, from Nidhogg, nidhogg-31; the
+;; daily run), never by a pull request, and the cargo caches are pruned first (.github/ci/cargo-prune.sh).
+(ert-deftest drgnx-ci/no-pull-request-writes-a-cache ()
+  (dolist (yml (drgnx-ci-test--workflows-and-actions
+                '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml")))
+    (skip-unless yml)
+    (dolist (c (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml))
+      (should (or (string-search "steps.prune.outcome == 'success'" c)
+                  (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
+    (dolist (c (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml))
+      (should (or (string-search "env.CACHE_SAVE == 'true'" c)
+                  (string-search "github.event_name != 'pull_request' && (" c)))))
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")))
+    (skip-unless rt)
+    (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) }}"
+                        "CARGO_INCREMENTAL: \"0\"")))
+
+(ert-deftest drgnx-ci/test-binaries-cache-is-saved-only-by-trusted-runs ()
+  ;; drgnx-tiers.yml runs from Nidhogg too, where github.ref is Nidhogg's
   (let ((bins (drgnx-ci-test--action "build-test-bins")))
     (skip-unless bins)
     (should-not (string-search "uses: actions/cache@" bins))
     (should (= 1 (length (drgnx-ci-test--matches "uses: \\(actions/cache/restore@\\)" bins))))
-    (should (string-match "if: \\(.*\\)\n *uses: actions/cache/save@" bins))
+    (should (string-match "id: prune\n *if: \\(.*\\)\n" bins))
     (let ((cond (match-string 1 bins)))
-      (should (string-search "github.ref == 'refs/heads/main'" cond))
-      (should (string-search "github.ref == 'refs/heads/nidhogg-31'" cond)))
-    ;; the save and restore steps use one key
-    (let ((keys (drgnx-ci-test--matches "^ *key: \\(cargo-.*\\)$" bins)))
-      (should (= 2 (length keys)))
-      (should (equal (car keys) (cadr keys))))))
+      (dolist (s '("github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
+                   "github.ref == 'refs/heads/nidhogg-31'" "startsWith(github.ref, 'refs/heads/ci/')"))
+        (should (string-search s cond))))
+    ;; the binaries stay for the upload; the save takes the restore's key
+    (drgnx-ci-test--has bins "cargo-prune.sh\" \"$DIR/runtime/Cargo.toml\" \"$DIR/runtime/target\" --keep-bins"
+                        "key: ${{ steps.bins-cache.outputs.cache-primary-key }}")))
+
+;; The path filter (docs/develop/ci.md, "Path filter"): its rules and the table's bite cases, and the workflows pass on
+;; what it decided.
+(ert-deftest drgnx-ci/the-path-filter-bites ()
+  :tags '(:cond)
+  (let ((script (expand-file-name ".github/ci/changes.sh" drgnx-ci-test--root))
+        (table (expand-file-name ".github/ci/paths.txt" drgnx-ci-test--root)))
+    (skip-unless (and (file-exists-p script) (executable-find "bash")))
+    (with-temp-buffer
+      (should (eq 0 (call-process "bash" nil t nil script table "--self-test")))
+      (should (string-match-p "changes.sh self-test: ok" (buffer-string))))
+    ;; every id of the table is a job of the workflow it names
+    (let* ((text (drgnx-ci-test--file ".github/ci/paths.txt"))
+           (ids (and (string-match "^jobs: \\(.*\\)$" text) (split-string (match-string 1 text))))
+           (rt (drgnx-ci-test--yml "runtime.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
+      (should (member "rt-linux" ids))
+      (dolist (id ids)
+        (if (string-prefix-p "rt-" id)
+            (should (string-search (format "contains(format(' {0} ', inputs.only), ' %s ')" id) rt))
+          (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" id) tiers)))))
+    (dolist (spec '(("ci.yml" "CI gate") ("macos.yml" "macOS gate") ("gui.yml" "GUI tier gate")))
+      (let ((yml (drgnx-ci-test--yml (car spec))))
+        (drgnx-ci-test--has (drgnx-ci-test--job yml "changes")
+                            "run: bash .github/ci/changes.sh .github/ci/paths.txt | tee -a \"$GITHUB_OUTPUT\""
+                            (concat "GATE: " (cadr spec) "\n") "checks: read")))
+    (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml") "only: ${{ needs.changes.outputs.runtime }}"
+                        "selector: ${{ inputs.selector }}" "SELECTOR: ${{ inputs.selector }}" "REQUEST: ${{ inputs.jobs }}")))
 
 (ert-deftest drgnx-ci/prebuilt-images-are-addressed-by-their-containerfile-hash ()
   (let ((images (drgnx-ci-test--yml "images.yml")) (tty (drgnx-ci-test--yml "tty.yml"))
