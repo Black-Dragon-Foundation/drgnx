@@ -1602,33 +1602,46 @@ while :; do wait; done" job job job job job)))
 
 ;;;; drgnx childframe-elpa — the pinned child-frame packages (test/container/childframe-packages.eld)
 
-(defun drgnx-bin-test--childframe-run (hash)
-  "Run `drgnx childframe-elpa' on a local archive of two packages whose pins say HASH for corfu (nil: its real hash);
-return (EXIT OUTPUT INSTALLED-DIRECTORY-NAMES)."
-  (load (expand-file-name "test/fixtures/pkg-fixture" drgnx-bin-test--root) nil t)
+(defun drgnx-bin-test--git (dir &rest args)
+  "Run git ARGS in DIR; its output, trimmed."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory dir))
+          (process-environment (append '("GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@example.org" "GIT_COMMITTER_NAME=t"
+                                         "GIT_COMMITTER_EMAIL=t@example.org" "GIT_CONFIG_GLOBAL=/dev/null") process-environment)))
+      (should (eql 0 (apply #'call-process "git" nil t nil args)))
+      (string-trim (buffer-string)))))
+
+(defun drgnx-bin-test--childframe-run (bad-tree)
+  "Run `drgnx childframe-elpa' on a pins file naming two local repositories, the second with a tree that is BAD-TREE
+when that is non-nil; return (EXIT OUTPUT INSTALLED-DIRECTORY-NAMES)."
   (drgnx-bin-test--with-setup ((emacs (expand-file-name invocation-name invocation-directory)))
-    (let* ((arch (expand-file-name "arch" dir)) (out (expand-file-name "out" dir)) (pins (expand-file-name "pins.eld" dir))
-           (sha (lambda (f) (secure-hash 'sha256 (drgnx-pkg-test--bytes (expand-file-name f arch))))))
-      (drgnx-pkg-test--archive arch '((posframe "1.5.3") (corfu "2.16")))
-      (with-temp-file pins
-        (prin1 `((posframe "1.5.3" :archive "fx" :sha256 ,(funcall sha "posframe-1.5.3.el"))
-                 (corfu "2.16" :archive "fx" :sha256 ,(or hash (funcall sha "corfu-2.16.el"))))
-               (current-buffer)))
+    (let ((out (expand-file-name "out" dir)) (pins (expand-file-name "pins.eld" dir)) (entries nil))
+      (dolist (spec '(("posframe" "1.5.4") ("corfu" "2.16")))
+        (let ((repo (expand-file-name (car spec) dir)))
+          (make-directory (expand-file-name "extensions" repo) t)
+          (write-region "(provide 'x)\n" nil (expand-file-name (concat (car spec) ".el") repo) nil 'silent)
+          (write-region "(provide 'ext)\n" nil (expand-file-name (concat "extensions/" (car spec) "-ext.el") repo) nil 'silent)
+          (drgnx-bin-test--git repo "init" "-q")
+          (drgnx-bin-test--git repo "add" ".")
+          (drgnx-bin-test--git repo "commit" "-q" "-m" "x")
+          (push `(,(intern (car spec)) ,(cadr spec) :repo ,(concat "file://" repo)
+                  :commit ,(drgnx-bin-test--git repo "rev-parse" "HEAD")
+                  :tree ,(if (and bad-tree (equal (car spec) "corfu")) bad-tree (drgnx-bin-test--git repo "rev-parse" "HEAD^{tree}")))
+                entries)))
+      (with-temp-file pins (prin1 (nreverse entries) (current-buffer)))
       (let ((r (drgnx-bin-test--call drgnx-bin-test--bin
-                                     (append env (list (concat "DRGNX_EMACS=" emacs) (concat "DRGNX_CHILDFRAME_PINS=" pins)
-                                                       (concat "DRGNX_CHILDFRAME_ARCHIVES=fx=" arch)))
+                                     (append env (list (concat "DRGNX_EMACS=" emacs) (concat "DRGNX_CHILDFRAME_PINS=" pins)))
                                      "childframe-elpa" out)))
         (list (car r) (cdr r)
               (and (file-directory-p out) (seq-remove (lambda (f) (string-prefix-p "." f)) (directory-files out))))))))
 
-(ert-deftest drgnx-bin/childframe-elpa-installs-the-pins ()
+(ert-deftest drgnx-bin/childframe-elpa-checks-out-the-pins ()
   (pcase-let ((`(,exit ,output ,dirs) (drgnx-bin-test--childframe-run nil)))
     (ert-info (output) (should (eql 0 exit)))
-    (should (member "posframe-1.5.3" dirs))
-    (should (member "corfu-2.16" dirs))))
+    (should (equal (sort (copy-sequence dirs) #'string<) '("corfu-2.16" "posframe-1.5.4")))))
 
-(ert-deftest drgnx-bin/childframe-elpa-refuses-a-bad-hash ()
-  (pcase-let ((`(,exit ,output ,dirs) (drgnx-bin-test--childframe-run (make-string 64 ?0))))
+(ert-deftest drgnx-bin/childframe-elpa-refuses-a-tree-that-differs ()
+  (pcase-let ((`(,exit ,output ,dirs) (drgnx-bin-test--childframe-run (make-string 40 ?0))))
     (should-not (eql exit 0))
-    (should (string-match-p "sha256" output))
-    (should-not (member "corfu-2.16" dirs))))
+    (should (string-match-p "tree" output))
+    (should-not dirs)))

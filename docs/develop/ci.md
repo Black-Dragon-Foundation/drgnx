@@ -255,7 +255,7 @@ so the tests that need those packages skip; the nightly terminal tier alone fetc
 
 | What | Key | Saves | Bust it |
 |---|---|---|---|
-| the three test images (`Test images`, GHCR; the GUI one also holds the pinned child-frame packages, sha256-checked at build, so the tier fetches none) | tag = first 16 hex of `sha256sum test/container/Containerfile{,.gui,.tty}` (and `f45`); a pin bump edits `Containerfile.gui` too | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min (the tty tier now pulls instead of building every night) | edit the Containerfile, or run `Test images` by hand (the weekly run refreshes the tag with Fedora's updates) |
+| the three test images (`Test images`, GHCR; the GUI one also holds the pinned child-frame packages, checked out at pinned upstream commits at build, so the tier fetches none) | tag = first 16 hex of `sha256sum test/container/Containerfile{,.gui,.tty}` (and `f45`); a pin bump edits `Containerfile.gui` too | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min (the tty tier now pulls instead of building every night) | edit the Containerfile, or run `Test images` by hand (the weekly run refreshes the tag with Fedora's updates) |
 
 An image is addressed by the hash of the file it is built from, and a job whose hash has no image builds it itself, so
 a job never runs on an image from another Containerfile; a cold cache (no image) gives the same result, only slower.
