@@ -98,9 +98,9 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
   "FRAME shows the minibuffer buffer with its candidates."
   (and (frame-live-p frame) (frame-visible-p frame)
        (with-current-buffer (window-buffer (frame-root-window frame))
-         ;; vertico draws the candidates as the after-string of an overlay, not as buffer text
+         ;; vertico draws the candidates as the before-string of an overlay at the end, not as buffer text
          (and (minibufferp)
-              (seq-some (lambda (o) (let ((s (overlay-get o 'after-string))) (and (stringp s) (string-search "Do It" s))))
+              (seq-some (lambda (o) (let ((s (overlay-get o 'before-string))) (and (stringp s) (string-search "Do It" s))))
                         (overlays-in (point-min) (point-max)))))))
 
 (defun drgnx-palette-float-test--wait-shown (frame)
@@ -113,7 +113,7 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
                                   (with-current-buffer (window-buffer (frame-root-window frame))
                                     (list (buffer-name) (minibufferp) (buffer-string)
                                           (mapcar (lambda (o) (list (overlay-start o) (overlay-end o)
-                                                                    (overlay-get o 'window) (overlay-get o 'after-string)))
+                                                                    (overlay-get o 'window) (overlay-get o 'before-string)))
                                                   (overlays-in (point-min) (point-max)))
                                           vertico-count (bound-and-true-p vertico--input) (bound-and-true-p vertico--total)
                                           (bound-and-true-p vertico--candidates) (bound-and-true-p vertico-multiform--stack)
