@@ -13,11 +13,15 @@ fn adapter() -> String {
     std::env::var("DRGNX_TEST_ADAPTER").expect("DRGNX_TEST_ADAPTER names the adapter")
 }
 
-fn load(tuning: Tuning) -> LocalEmbedder {
+fn load_on(device: Device, tuning: Tuning) -> LocalEmbedder {
     let spec = &MODELS[0];
     let dir =
         PathBuf::from(std::env::var("DRGNX_TEST_MODELS").expect("DRGNX_TEST_MODELS")).join(spec.id);
-    LocalEmbedder::load_tuned(spec, &dir, &Device::Gpu { adapter: adapter() }, tuning).unwrap()
+    LocalEmbedder::load_tuned(spec, &dir, &device, tuning).unwrap()
+}
+
+fn load(tuning: Tuning) -> LocalEmbedder {
+    load_on(Device::Gpu { adapter: adapter() }, tuning)
 }
 
 fn corpus() -> Vec<String> {
@@ -139,10 +143,37 @@ fn bench_tokens_per_s() {
     );
 }
 
+/// Four threads, the spike's figures: 64 of the corpus's chunks, in single-chunk batches as the worker's CPU mode would.
+#[test]
+#[ignore = "a long row"]
+fn bench_cpu() {
+    let mut model = load_on(Device::Cpu { threads: 4 }, Tuning::default());
+    let texts = corpus();
+    let ids: Vec<Vec<u32>> = texts.iter().take(64).map(|t| model.encode_doc(t)).collect();
+    let tokens: usize = ids.iter().map(Vec::len).sum();
+    let start = Instant::now();
+    for batch in in_batches(&ids, 1) {
+        model.embed_ids(&batch).unwrap();
+    }
+    let s = start.elapsed().as_secs_f64();
+    println!(
+        "BENCH cpu threads=4 chunks={} tokens={tokens} chunks_per_s={:.2} tokens_per_s={:.0} {}",
+        ids.len(),
+        ids.len() as f64 / s,
+        tokens as f64 / s,
+        peak_rss(),
+    );
+    query_times(&mut model, "cpu");
+    println!("after queries {}", peak_rss());
+}
+
 #[test]
 #[ignore = "a real GPU's row"]
 fn query_p95() {
-    let mut model = load(Tuning::default());
+    query_times(&mut load(Tuning::default()), "gpu");
+}
+
+fn query_times(model: &mut LocalEmbedder, name: &str) {
     let queries = [
         "where is the timer removed when a module is turned off",
         "parse a stream of json lines",
@@ -158,7 +189,7 @@ fn query_p95() {
     let mut times = times.split_off(4); // the first ones warm up
     times.sort();
     println!(
-        "QUERY p50={:?} p95={:?} max={:?}",
+        "QUERY {name} p50={:?} p95={:?} max={:?}",
         times[times.len() / 2],
         times[times.len() * 95 / 100],
         times[times.len() - 1]

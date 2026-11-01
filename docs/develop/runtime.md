@@ -839,6 +839,11 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   buffer. A timeout, the device-lost callback, any
   uncaptured error, or the panic `wgpu` raises out of `poll` on a lost device all end in `EmbedFail::DeviceLost`, so the
   caller can take the CPU path. `libvulkan` is opened at run time, so a machine with no loader has no adapters.
+- **The CPU path (`cpu/`).** The same forward pass in pure Rust, for machines with no usable GPU and for a lost device, and it
+  must agree with the GPU path because vectors from both land in one index. `gemm` does the matmuls and the rest runs row by
+  row, on a `rayon` pool of `threads` that the embedder owns. The non-linear kernels are built twice on x86-64, baseline and
+  AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON. No AVX-512: it ran slower
+  here. `worst_submit` is zero on this path.
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
@@ -849,7 +854,9 @@ text of 167 tokens, longer than the local span so both attention paths run, with
 GPU tests name their adapter in `DRGNX_TEST_ADAPTER` (a substring of its name) and fail when it's unset or matches nothing;
 production skips software adapters, a test's named adapter doesn't. `tests/parity_gpu.rs` runs the real shaders on llvmpipe, Mesa's
 software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/gpu_bench.rs`,
-which print throughput, query time and the stall a second process sees on the same card, and assert nothing.
+which print throughput, query time and the stall a second process sees on the same card, and assert nothing. Its `bench_cpu`
+row prints the CPU path's figures and needs no GPU. `tests/parity_cpu.rs` holds the CPU path against the references, and
+`cpu_and_gpu_agree` in `parity_gpu.rs` holds the two paths against each other.
 
 ## Building and installing Ratatoskr
 

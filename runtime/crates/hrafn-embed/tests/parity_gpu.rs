@@ -171,6 +171,27 @@ fn f32_weights_match_f16() {
     }
 }
 
+/// Vectors from both paths land in one index: this is the fallback's premise.
+#[test]
+fn cpu_and_gpu_agree() {
+    let mut paths = [(GTE, gte()), (GRANITE, granite())];
+    for (id, gpu) in &mut paths {
+        let mut cpu = LocalEmbedder::load(spec(id), &dir(id), &Device::Cpu { threads: 2 }).unwrap();
+        for (ids, _) in sweep(id) {
+            let one = std::slice::from_ref(&ids);
+            let c = cos(
+                &cpu.embed_ids(one).unwrap().vectors[0],
+                &gpu.embed_ids(one).unwrap().vectors[0],
+            );
+            println!(
+                "PARITY {id} cpu against gpu length {} cosine {c:.6}",
+                ids.len()
+            );
+            assert!(c >= 0.999, "{id} at {} tokens: {c}", ids.len());
+        }
+    }
+}
+
 #[test]
 fn normalised() {
     let mut model = granite();

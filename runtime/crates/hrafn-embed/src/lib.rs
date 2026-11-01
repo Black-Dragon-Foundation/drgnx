@@ -6,6 +6,7 @@
 //! See `docs/develop/runtime.md`, "Hrafn".
 
 pub mod cache;
+mod cpu;
 mod gpu;
 mod local;
 pub mod models;

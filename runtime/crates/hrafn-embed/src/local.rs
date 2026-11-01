@@ -5,6 +5,7 @@
 //! fits any adapter's largest binding.
 
 use crate::cache::{self, ModelState};
+use crate::cpu::CpuEngine;
 use crate::gpu::GpuEngine;
 use crate::models::{Arch, LoadError, ModelConfig, ModelSpec};
 use crate::tokens::Tokens;
@@ -46,6 +47,8 @@ pub struct Tuning {
     pub f32_weights: bool,
     /// wgpu's bounds checks in the shaders. Production runs without them: they cost 14 to 29 % on the Radeon.
     pub checked: bool,
+    /// The CPU path's baseline kernels, even where this CPU has better.
+    pub baseline_cpu: bool,
 }
 
 pub(crate) trait Engine: Send {
@@ -199,7 +202,13 @@ impl LocalEmbedder {
         let weights = Weights::read(dir)?;
         let tokens = Tokens::load(spec, dir)?;
         let engine: Box<dyn Engine> = match device {
-            Device::Cpu { .. } => return Err(LoadError::Device("no CPU path yet".into())),
+            Device::Cpu { threads } => Box::new(CpuEngine::load(
+                &config,
+                spec.max_tokens,
+                &weights,
+                *threads,
+                tuning,
+            )?),
             Device::Gpu { adapter } => Box::new(GpuEngine::load(
                 &config,
                 spec.max_tokens,
