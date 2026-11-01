@@ -853,6 +853,7 @@ dependencies = [
 name = "hrafn"
 version = "0.1.0"
 dependencies = [
+ "eitri",
  "rusqlite",
  "sha2",
  "tempfile",

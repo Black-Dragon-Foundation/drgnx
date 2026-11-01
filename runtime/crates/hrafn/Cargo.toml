@@ -13,6 +13,7 @@ default = ["host"]
 host = []
 
 [dependencies]
+eitri = { path = "../eitri", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
 rusqlite.workspace = true
 sha2.workspace = true

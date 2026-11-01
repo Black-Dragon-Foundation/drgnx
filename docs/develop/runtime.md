@@ -832,6 +832,26 @@ column. So the `symbols` column holds names encoded by `encode_symbol`, which ma
 private-use character (a token character in `unicode61`): a whole name matches only the whole name, and `body`
 still splits it. Queries encode the same way.
 
+### The file list and coverage
+
+`files::list(root, git, config, allow)` is the one place a path enters the index. Git sits behind the `Git` trait
+(`GitCli` runs the `git` executable; `blobs` hashes the working tree with `hash-object --stdin-paths`, so an
+uncommitted edit changes the blob), file bytes are read through `eitri` (a link, FIFO, missing or over-1-MiB file is
+skipped), and `allow` is the hub's deny-list check on the relative path. A path is listed unless:
+
+- a component starts with a dot, or the basename looks like a key, certificate, secret or credential file;
+- it is inside a nested repository (an untracked clone or a submodule);
+- it has a NUL byte in its first 8,000 bytes;
+- the project's `include`/`exclude` globs (the rules of `drgnx-search-config`) leave it out, or `off` is set.
+
+`.drgnx/search.eld` that is there but cannot be read (a directory, a link, empty, over 64 KiB) is an error that
+stops the listing, never the defaults. Each file gets a class (`code`, `test`, `docs`) and a language, from its extension, or
+from a `#!` line when it has none. A file is marked `generated` (listed, not dropped) by `.gitattributes`
+`linguist-generated`/`linguist-vendored`, by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
+`*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
+
+`coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
+
 ## Building and installing Ratatoskr
 
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
