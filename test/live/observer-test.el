@@ -1,4 +1,5 @@
 ;;; observer-test.el --- live tests: the harness does not perturb the session -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
 

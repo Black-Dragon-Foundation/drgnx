@@ -1,4 +1,5 @@
 ;;; drgnx-perf-test.el --- live: the latency probe sees redisplay work -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Redisplay work of 30 ms (a pre-redisplay function) must show in input latency: the probe measures key →
 ;; screen, not only the command.
 (require 'ert)

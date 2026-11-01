@@ -1,9 +1,11 @@
 ;;; drgnx-persist-first-client-test.el --- live: a daemon's first `emacsclient -c' keeps the restored files -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A layout with two editor groups (a.txt | b.txt) is saved by one daemon session; a fresh daemon gets that
 ;; state file and its first `emacsclient -c' (no file) opens: every editor group shows its saved file — the
 ;; server's *scratch* (shown in a client window that asked for no file) does not replace one — and the
 ;; workbench was restored exactly once.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 
 (defun drgnx-persist-first-client--eval (sess form)
@@ -62,7 +64,7 @@
                                       (list (list a b) nil))))
                 (sleep-for 0.2))
               (should (equal shown (list (list a b) nil))))
-            (sleep-for 1)                         ; nothing restores again a moment later
+            (drgnx-test-pause 1)                  ; nothing restores again a moment later
             (should (eql 1 (drgnx-persist-first-client--eval sess "drgnx-persist-first-client--restores")))
             (should (equal (drgnx-persist-first-client--eval sess drgnx-persist-first-client--shown) (list (list a b) nil)))))
       (mapc #'drgnx-ui-stop names)

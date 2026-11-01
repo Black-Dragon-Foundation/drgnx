@@ -1,4 +1,5 @@
 ;;; drgnx-persist-reopen-test.el --- live: a daemon that keeps running restores the layout when a window opens again -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The keep-running case: the last window closes, the daemon stays, `emacsclient -c' brings the layout back.
 (require 'ert)
 (require 'drgnx-ui)

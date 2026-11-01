@@ -1,4 +1,5 @@
 ;;; session-test.el --- live tests: real sessions through the controller -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run by `drgnx test --ui' in batch Emacs; each test starts real headless sessions.
 (require 'ert)
 (require 'drgnx-ui)

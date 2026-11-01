@@ -1,8 +1,10 @@
 ;;; drgnx-session-keep-or-quit-test.el --- live: drgnx PATH reaches the daemon; the last window closes, it stays or quits -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Scenario session-keep-or-quit: a daemon session of config drgnx.  `bin/drgnx open' reaches it (its socket as
 ;; DRGNX_SERVER_NAME), a file and a folder with a space and an accent; then the last window's close button (the
 ;; `delete-frame' event's binding) in keep-running mode → the daemon stays; in quit mode → it is gone.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 
 (defun drgnx-session-live--eval (sess form)
@@ -59,7 +61,7 @@ request returns before drgnx may quit."
           (let ((deadline (+ (float-time) 10)))
             (while (and (< (float-time) deadline) (/= 0 (drgnx-session-live--gui-count sess))) (sleep-for 0.1)))
           (should (= 0 (drgnx-session-live--gui-count sess)))
-          (sleep-for 1)
+          (drgnx-test-pause 1)
           (should (drgnx-session-live--alive-p sess))
           (should (eq t (drgnx-session-live--eval sess "(daemonp)")))
           ;; Quit when the last window closes: it opens again, closes, and drgnx is gone.

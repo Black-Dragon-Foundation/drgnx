@@ -1,4 +1,5 @@
 ;;; drgnx-terminal-test.el --- live: drgnx's terminal (eat running zsh) in a GUI session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Real keys in a headless session.  The terminal runs zsh with a temp ZDOTDIR whose .zshrc sources etc/shell/drgnx.zsh,
 ;; the checkout's bin/ first on PATH (never an installed drgnx), and git's identity from the environment; HOME is the
 ;; runner's temp home.  eat is loaded read-only from the user's packages (DRGNX_USER_ELPA).
