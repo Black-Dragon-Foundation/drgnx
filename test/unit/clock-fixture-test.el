@@ -27,6 +27,10 @@
   "BODY on the clock with `drgnx-clock-test--runs' empty, a timer left over cancelled so the end check passes."
   `(let ((drgnx-clock-test--runs nil)) (drgnx-test-with-clock () ,@body (mapc #'cancel-timer (append timer-list timer-idle-list)))))
 
+(defmacro drgnx-clock-test--with-auto (&rest body)
+  "BODY as `drgnx-clock-test--with' does it, on the auto clock."
+  `(let ((drgnx-clock-test--runs nil)) (drgnx-test-with-clock (:auto t) ,@body)))
+
 (ert-deftest drgnx-test-clock/float-time-and-current-time-read-virtual-time ()
   :tags '(:timing)                      ; bounds the virtual start against the real clock
   (drgnx-test-with-clock ()
@@ -360,6 +364,69 @@ them and native code that calls `current-time' (ERT itself) jumps into unmapped 
         (should found)
         (dolist (file found)                                  ; the run's directory or Emacs's own, never ~
           (should-not (string-prefix-p home file)))))))
+
+;;;; Which clock: `drgnx-test-clock/' above is the contract on both; these look at what differs
+
+(ert-deftest drgnx-test-clock-core/the-real-time-stays-real-under-an-advance ()
+  :tags '(:timing)                      ; bounds the real time against a virtual hour
+  (drgnx-test-with-clock ()
+    (let ((real (drgnx-test-real-time)))
+      (drgnx-test-advance 3600)
+      (should (< (abs (- (drgnx-test-real-time) real)) 60)))))
+
+(ert-deftest drgnx-test-clock-core/the-clock-replaces-the-reads-and-the-guard ()
+  (skip-unless (drgnx-test--core-p))
+  (drgnx-test-with-clock ()
+    (should (nidhogg-test-clock-active-p))
+    (should (eq drgnx-test--core 'manual))
+    (dolist (f '(float-time current-time timer--activate))
+      (should-not (advice--p (advice--symbol-function f)))))
+  (should-not (nidhogg-test-clock-active-p)))
+
+(ert-deftest drgnx-test-clock-core/every-read-of-the-time-is-virtual ()
+  (skip-unless (drgnx-test--core-p))
+  (drgnx-test-with-clock ()
+    (let ((t0 (current-time)))
+      (drgnx-test-advance 3600)
+      (should (drgnx-clock-test--close (float-time (time-since t0)) 3600))
+      (should (equal (format-time-string "%s") (format-time-string "%s" (current-time)))))))
+
+(ert-deftest drgnx-test-clock-core/an-error-in-the-body-stops-the-clock ()
+  (skip-unless (drgnx-test--core-p))
+  (should-error (drgnx-test-with-clock () (error "boom")))
+  (should-not (nidhogg-test-clock-active-p)))
+
+(ert-deftest drgnx-test-clock-core/auto-a-wait-moves-the-clock-past-its-timers ()
+  (skip-unless (drgnx-test--core-p))
+  (let (ran)
+    (drgnx-test-with-clock (:auto t)
+      (should (eq drgnx-test--core 'auto))
+      (let ((t0 (float-time)))
+        (run-at-time 60 nil (lambda () (push (- (float-time) t0) ran)))
+        (should (eq t (sit-for 120)))
+        (should (drgnx-clock-test--close (drgnx-test-clock-now) 120))))
+    (should (= 1 (length ran)))
+    (should (drgnx-clock-test--close (car ran) 60))))
+
+(ert-deftest drgnx-test-clock-core/auto-advance-and-the-pause-work-too ()
+  (skip-unless (drgnx-test--core-p))
+  (drgnx-clock-test--with-auto
+   (run-at-time 5 nil #'drgnx-clock-test--note)
+   (drgnx-test-advance 5)
+   (should (= 1 (length drgnx-clock-test--runs)))
+   (run-with-idle-timer 0.5 nil #'drgnx-clock-test--note)
+   (drgnx-test-idle 1)
+   (should (= 2 (length drgnx-clock-test--runs)))
+   (should (drgnx-clock-test--close (drgnx-test-clock-now) 6))))
+
+(ert-deftest drgnx-test-clock-core/without-the-switch-the-advice-runs-and-ignores-auto ()
+  (let ((process-environment (cons "NIDHOGG_TEST_CLOCK=0" process-environment)) ran)
+    (drgnx-test-with-clock (:auto t)
+      (should-not drgnx-test--core)
+      (run-at-time 5 nil (lambda () (setq ran t)))
+      (sleep-for 5)
+      (should ran)
+      (should (drgnx-clock-test--close (drgnx-test-clock-now) 5)))))
 
 (provide 'clock-fixture-test)
 ;;; clock-fixture-test.el ends here

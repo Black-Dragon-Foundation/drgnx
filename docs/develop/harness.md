@@ -1050,23 +1050,47 @@ sees the runner's switches. `bin/drgnx test --preflight` runs its `det` step wit
 for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)`.
 
 ```elisp
-(drgnx-test-with-clock ()                 ; or (drgnx-test-with-clock (:allow-pending t) ...)
+(drgnx-test-with-clock ()                 ; or (:allow-pending t), (:auto t)
   (run-at-time 1 1 #'tick)
   (drgnx-test-advance 3)                  ; tick ran at 1, 2 and 3
   (run-with-idle-timer 0.2 nil #'step)
   (drgnx-test-idle 2.5 :input-at 1.0))    ; one pause; you type 1 s into it
 ```
 
+- **Two clocks, one API.** In a batch Emacs with Nidhogg's test clock and `NIDHOGG_TEST_CLOCK=1`
+  (`drgnx-test--core-p`; it also needs `/proc`, see below), the body runs on that clock, started at entry and stopped at
+  the end; `bin/drgnx test`'s unit tier sets the variable, and `NIDHOGG_TEST_CLOCK=0` turns it off. Anywhere else (an
+  Emacs without the clock, the `--ui` tier) the clock reads and the timers' stamps are advice, as described below.
+  What differs on Nidhogg's clock:
+  - every read of the time is virtual: `time-since`, `(time-subtract nil ...)` and `format-time-string` too, and
+    `(float-time nil)`. `drgnx-test-real-time` reads `/proc/uptime` then, because nothing else in Emacs stays real
+    (`nidhogg-test-clock--readings` has a real monotonic clock only on a manual clock). File times stay real.
+  - a timer due at the frozen time, a zero delay, is ripe for a real wait, so `(funcall drgnx-test--accept nil 0.02)`
+    can run it; on the advice nothing fires in a real wait. `drgnx-test-clock-horizon` is 0, and delays are not rounded.
+  - the pause is still advice (`current-idle-time`, `input-pending-p`): a batch Emacs has no idle state in C. So are
+    the waits of a manual clock, because Nidhogg's manual clock keeps a wait's own timeout real and moves no time in
+    it: the fixture's `sleep-for`, `sit-for` and `accept-process-output` are what move it.
+  - `drgnx-test-advance` and `drgnx-test-idle` move the clock with `nidhogg-test-clock-advance`, one timer at a time
+    and with the timer list out of its sight, and run the timers themselves: C's loop would never come back from a
+    timer that re-arms with no delay, where the fixture stops at `drgnx-test-clock-max-runs`.
+- **`:auto t`** starts the clock with AUTO: a wait, now Emacs's own, moves the clock once nothing can run, straight to
+  the earliest deadline, and a wait with no deadline for a process that can never answer signals
+  `nidhogg-test-clock-deadlock`. A real child
+  process holds the clock while it lives. `drgnx-test-advance` and `drgnx-test-idle` work as ever. `drgnx-test-wait`
+  stops at each timer to look at its PRED and fails at once when nothing can run, with the clock's state under `:clock`;
+  `drgnx-test-pause` is virtual seconds. The advice layer ignores `:auto`, so a test that uses it also has to pass on
+  manual waits, or `skip-unless` `drgnx-test--core-p`. Manual stays the default: about 350 `drgnx-test-advance` calls
+  rely on time standing still in a wait for a process.
 - **The macro.** The body runs with `timer-list` and `timer-idle-list` bound to nil, so every timer it starts, whoever
   starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
   argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and
   the pause's length inside one; `input-pending-p` is nil, or t from `:input-at` on. Virtual time starts at the real
-  time (`drgnx-test-clock-now` is the virtual seconds since entry). Timers made by `run-at-time` are stamped by Emacs
-  from the real clock; a `:before` advice on `timer--activate` moves them to the virtual due time plus 10^6 s
-  (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer ripe, and a timer made at virtual *v* with
-  delay *d* is due at *v* + *d*, also after an advance (a delay of 2 ms or more is rounded to the millisecond: Emacs
+  time (`drgnx-test-clock-now` is the virtual seconds since entry). On the advice, timers made by `run-at-time` are
+  stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them to the virtual due time plus
+  10^6 s (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer ripe, and a timer made at virtual *v*
+  with delay *d* is due at *v* + *d*, also after an advance (a delay of 2 ms or more is rounded to the millisecond: Emacs
   stamps the timer a few microseconds before the advice runs).
-  Before the lists are swapped, the macro advises and unadvises each primitive it advises once, on scratch lists: Emacs 31
+  Before the lists are swapped, the macro advises and unadvises each primitive the advice layer advises once, on scratch lists: Emacs 31
   compiles a native advice trampoline on the first `advice-add` of a primitive, and logging that compile arms
   `undo-auto--boundary-timer`. That timer, and any like it armed during the body, is cancelled by the macro (it is
   Emacs's, not the code under test's), so it never counts as pending.
@@ -1087,9 +1111,9 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   (`drgnx-timer-pending`, when the timer layer is loaded) and then the raw functions; `:allow-pending t` allows it.
   Then `drgnx-timer-reset` runs, when bound. The timer layer's seams (`drgnx-timer--now`, `drgnx-timer--idle-time`,
   `drgnx-timer--input-pending-p`), when defined, follow the same clock, pause and input.
-- **What stays real:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read the real
-  clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for waits
-  and reports. `sleep-for` and `sit-for` move virtual time by their argument and a timed
+- **What stays real on the advice:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read
+  the real clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for
+  waits and reports, on both clocks. `sleep-for` and `sit-for` move virtual time by their argument and a timed
   `accept-process-output` by the real time it waited, each running the timers that come due ([core.md](core.md),
   "Testing: time, waits and processes").
 - **The contract with the timer layer** ([core.md](core.md), Timers): the layer's three seams follow the virtual

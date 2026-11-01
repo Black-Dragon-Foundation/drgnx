@@ -3003,9 +3003,11 @@ Its API and examples are in [harness.md](harness.md), "Virtual time"; this is wh
 **The clock.** `drgnx-test-with-clock` runs its body with `timer-list` and `timer-idle-list` bound to nil, so every
 timer the body starts, whoever starts it, lands in lists of its own. `float-time` and `current-time` without an argument
 return the real time at entry plus the virtual seconds so far (timestamps stay plausible); with an argument they are
-Emacs's own. `drgnx-test-clock-now` is the virtual seconds so far (0.0 at entry).
+Emacs's own. `drgnx-test-clock-now` is the virtual seconds so far (0.0 at entry). Where Nidhogg's test clock is available
+the body runs on it, else on advice; the guarantees here hold on both, and [harness.md](harness.md#virtual-time) lists
+what differs.
 
-**What moves time.** Only these:
+**What moves time.** Only these, on the default manual clock (with `:auto t`, on Nidhogg's clock, any wait does):
 
 - `drgnx-test-advance` runs the wall timers due within its argument in due order, repeats included, and
   `drgnx-test-idle` is one idle pause (`current-idle-time` is the pause so far, `input-pending-p` turns t at
@@ -3022,7 +3024,7 @@ A polling loop with a `float-time` deadline therefore ends at once under virtual
 process keeps a realistic deadline. More than `drgnx-test-clock-max-runs` (10000) timer runs in one
 `drgnx-test-advance` is an error (a timer that re-arms with no delay).
 
-**The guard.** A wall timer is stamped by Emacs from the real clock. While the fixture is active a `:before` advice on
+**The guard.** Only on the advice, where a wall timer is stamped by Emacs from the real clock. While the fixture is active a `:before` advice on
 `timer--activate` moves such a timer to the virtual due time plus `drgnx-test-clock-horizon` (10^6 s), so C's timer
 check never finds it ripe during a real wait: a real wait fires no virtual timer. A timer is due at virtual *v* + *d*
 when it was made at *v* with delay *d*, also after an advance. A re-armed repeat is already in that era and is left
@@ -3038,19 +3040,22 @@ Emacs's own `undo-auto--boundary-timer` is dropped first: it is never the body's
 `drgnx-timer--idle-time`, `drgnx-timer--input-pending-p`) follow the same clock, pause and input. Require the timer
 layer before the fixture: loading it inside the body is an error (the fixture could not unbind its seams on exit).
 
-**What stays real.** `time-since`, `(time-subtract nil …)` and `format-time-string` with no time read the real clock;
-a test of code that uses them uses real time.
+**What stays real on the advice.** `time-since`, `(time-subtract nil …)` and `format-time-string` with no time read the
+real clock; a test of code that uses them uses real time.
 
 **Native trampolines.** Advising a primitive compiles a native trampoline for it. The fixture advises
 `float-time`, `current-time`, `current-idle-time`, `input-pending-p`, `sleep-for` and `accept-process-output` (and
-`sit-for`); the batch runner sends the trampolines to the run's eln directory (`DRGNX_TEST_ELN_DIR`), never to `~`
+`sit-for`), and warms all of them on either clock, so a run's eln directory holds the same on both; the batch runner
+sends the trampolines to the run's eln directory (`DRGNX_TEST_ELN_DIR`), never to `~`
 (the test `drgnx-test-clock/trampolines-land-in-the-runs-eln-dir` checks it).
 
 ### Waits (`test/fixtures/wait-fixture.el`)
 
 A test that waits for real asynchronous work (a process, its filter or sentinel) calls
 `(drgnx-test-wait PRED &key (secs 30) what)` and nothing else: no hand-rolled `accept-process-output` loops. It
-returns PRED's first non-nil value, polling with `(accept-process-output nil 0.02)` against real time.
+returns PRED's first non-nil value, polling with `(accept-process-output nil 0.02)` against real time. Under
+`(drgnx-test-with-clock (:auto t) …)` on Nidhogg's clock it waits instead for PRED or for idleness, stopping at each
+timer; when nothing can run and nothing is left to wait for it fails at once, with the clock's state under `:clock`.
 
 - **The deadline is generous.** It is SECS times `(drgnx-uitest-settle-scale)` (the load per core, or
   `DRGNX_UITEST_SETTLE_SCALE`) and only bounds a failure; a pass costs what the work costs. A correctness test

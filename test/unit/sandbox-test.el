@@ -961,7 +961,9 @@ the step is ended and DONE gets (:timeout . MSG); a step that ends first takes i
             (should (string-match-p "5 s" (cdr r)))
             (should-not (drgnx-timer-active-p key))
             (setq r nil)
-            (let ((q (drgnx-sandbox--spawn "drgnx-sandbox-test-step" '("/bin/sh" "-c" "true") 5 (lambda (x) (setq r x)))))
+            ;; `read' ends at the eof the spawn sends after it starts the timer; a `true' could be gone first, its timer
+            ;; then never started (the owner is gone), and the check below would fail on a loaded machine
+            (let ((q (drgnx-sandbox--spawn "drgnx-sandbox-test-step" '("/bin/sh" "-c" "read x; exit 0") 5 (lambda (x) (setq r x)))))
               (should (drgnx-timer-active-p (cons 'sandbox-step-timeout q)))
               (should (drgnx-test-wait (lambda () r) :what "the step's sentinel"))
               (should (eql 0 (car r)))

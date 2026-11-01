@@ -5,21 +5,26 @@
 ;; (drgnx-test-idle SECS &key input-at)                 one idle pause; wall timers due in it run too
 ;; (drgnx-test-clock-now) / (drgnx-test-real-time)      virtual seconds since the fixture began / real time, both floats
 ;;
-;; Nothing in the code under test changes: `float-time', `current-time', `current-idle-time', `input-pending-p',
-;; `sleep-for', `sit-for' and `accept-process-output' are advised while BODY runs, and `timer-list'/`timer-idle-list'
-;; are bound to nil, so every timer BODY starts, whoever starts it, lands in lists of its own and runs only when the
-;; test (or a wait that moves virtual time) says so.  Docs: docs/develop/core.md "Testing: time, waits and processes",
-;; docs/develop/harness.md "Virtual time".
+;; Nothing in the code under test changes: `timer-list'/`timer-idle-list' are bound to nil, so every timer BODY starts,
+;; whoever starts it, lands in lists of its own and runs only when the test (or a wait that moves virtual time) says
+;; so.  In a batch Emacs with Nidhogg's test clock and NIDHOGG_TEST_CLOCK=1 the clock is Emacs's own; anywhere else
+;; `float-time', `current-time' and `timer--activate' are advised while BODY runs.  `current-idle-time',
+;; `input-pending-p', `sleep-for', `sit-for' and `accept-process-output' are advised on both (`drgnx-test--advice' says
+;; why).  Docs: docs/develop/core.md "Testing: time, waits and processes", docs/develop/harness.md "Virtual time".
 (require 'ert)
 (require 'cl-lib)
 (require 'timer)
 
 (defvar drgnx-test-clock-horizon 1000000
-  "H, seconds: a wall timer's time is its virtual due time plus H, so a real wait never finds one ripe.")
+  "H, seconds: a wall timer's time is its virtual due time plus H, so a real wait never finds one ripe.
+On Nidhogg's test clock it is 0: the timers are on the virtual clock from the start.")
 
 (defvar drgnx-test-clock-max-runs 10000
   "More timer runs than this in one `drgnx-test-advance' is an error (a timer that re-arms with no delay).")
 
+(defvar drgnx-test--core nil
+  "What BODY's clock is: `manual' or `auto' on Nidhogg's test clock, nil on the advice.")
+(defvar drgnx-test--real-base nil "On Nidhogg's test clock: the real time, a float, when `drgnx-test--uptime' was 0.")
 (defvar drgnx-test--active nil "Non-nil while `drgnx-test-with-clock' runs its body.")
 (defvar drgnx-test--start nil "T0: the real time at entry, a Lisp time (exact).")
 (defvar drgnx-test--now nil "Virtual wall time, T0 plus the virtual seconds so far, a Lisp time (exact).")
@@ -27,13 +32,33 @@
 (defvar drgnx-test--input-at nil "Virtual time from which simulated input is pending (inside a pause), or nil.")
 (defvar drgnx-test--accept nil "The original `accept-process-output', for a real zero-length look at process output.")
 
+(defun drgnx-test--core-p ()
+  "Non-nil when `drgnx-test-with-clock' runs on Nidhogg's test clock.
+That takes a batch Emacs with the clock and NIDHOGG_TEST_CLOCK=1, and /proc for `drgnx-test-real-time'."
+  (and noninteractive (fboundp 'nidhogg-test-clock-start)
+       (equal (getenv "NIDHOGG_TEST_CLOCK") "1")
+       (file-readable-p "/proc/uptime")))
+
+(defun drgnx-test--uptime ()
+  "Seconds since boot, a float.  On the test clock every time Emacs reports is virtual; this one is the kernel's."
+  (with-temp-buffer
+    (insert-file-contents-literally "/proc/uptime")
+    (read (current-buffer))))
+
 (defun drgnx-test-real-time ()
   "The real time as a float: for waits and reports, which stay on the wall clock."
-  (float-time (time-convert nil t)))
+  (if drgnx-test--core
+      (+ drgnx-test--real-base (drgnx-test--uptime))
+    (float-time (time-convert nil t))))
+
+(defun drgnx-test--sync ()
+  "`drgnx-test--now' reads Nidhogg's test clock, which moves by itself in a wait when it is `auto'."
+  (when drgnx-test--core (setq drgnx-test--now (time-convert nil t))))
 
 (defun drgnx-test-clock-now ()
   "Virtual seconds since `drgnx-test-with-clock' began, a float (0.0 at entry); an error outside it."
   (unless drgnx-test--active (error "No virtual clock: use drgnx-test-with-clock"))
+  (drgnx-test--sync)
   (float-time (time-subtract drgnx-test--now drgnx-test--start)))
 
 (defun drgnx-test--secs (secs)
@@ -60,6 +85,7 @@ binary).  Any other float is rounded to the microsecond, so repeated sums do not
 
 (defun drgnx-test--current-idle-time ()
   "`current-idle-time': nil outside a pause, the pause's virtual length inside one."
+  (drgnx-test--sync)
   (and drgnx-test--pause
        (time-convert (time-subtract drgnx-test--now drgnx-test--pause) (if current-time-list 'list t))))
 
@@ -67,7 +93,9 @@ binary).  Any other float is rounded to the microsecond, so repeated sums do not
   "`input-pending-p': t from the pause's INPUT-AT on, nil otherwise."
   (and drgnx-test--input-at (not (time-less-p drgnx-test--now drgnx-test--input-at))))
 
-(defun drgnx-test--seam-now (&rest _) (float-time drgnx-test--now))
+(defun drgnx-test--seam-now (&rest _)
+  (drgnx-test--sync)
+  (float-time drgnx-test--now))
 
 (defun drgnx-test-clock--shift (timer &optional _triggered _cell idle)
   "A wall timer stamped from the real clock (by `run-at-time', whoever calls it) moves onto the virtual clock plus H.
@@ -119,16 +147,21 @@ real stamp: give timers delays, not absolute times."
     (drgnx-timer--input-pending-p . drgnx-test--input-pending-p))
   "The timer layer's three seams, and the fixture function each follows (contract point 1).")
 
-(defun drgnx-test--advice ()
-  "The advice the fixture installs: (SYMBOL HOW FUNCTION), the layer's seams last and only when they exist."
-  (append '((float-time :around drgnx-test--float-time)
-            (current-time :override drgnx-test--current-time)
-            (current-idle-time :override drgnx-test--current-idle-time)
-            (input-pending-p :override drgnx-test--input-pending-p)
-            (sleep-for :override drgnx-test--sleep-for)
-            (sit-for :override drgnx-test--sit-for)
-            (accept-process-output :around drgnx-test--accept-process-output)
-            (timer--activate :before drgnx-test-clock--shift))
+(defun drgnx-test--advice (core)
+  "The advice the fixture installs: (SYMBOL HOW FUNCTION), the layer's seams last and only when they exist.
+CORE is what `drgnx-test--core' will be.  Nidhogg's test clock makes the clock reads and the timers' stamps virtual, so
+nil alone has those.  The pause stays advice on all three: a batch Emacs has no idle state for C to report.  The waits
+stay on `manual' too: a wait on a manual clock is a real wait, which moves no time, and `auto' moves it in C."
+  (append (unless core
+            '((float-time :around drgnx-test--float-time)
+              (current-time :override drgnx-test--current-time)
+              (timer--activate :before drgnx-test-clock--shift)))
+          '((current-idle-time :override drgnx-test--current-idle-time)
+            (input-pending-p :override drgnx-test--input-pending-p))
+          (unless (eq core 'auto)
+            '((sleep-for :override drgnx-test--sleep-for)
+              (sit-for :override drgnx-test--sit-for)
+              (accept-process-output :around drgnx-test--accept-process-output)))
           (cl-loop for (seam . fn) in drgnx-test--seams
                    when (fboundp seam) collect (list seam :override fn))))
 
@@ -138,8 +171,16 @@ real stamp: give timers delays, not absolute times."
   (unless drgnx-test--active (error "No virtual clock: use drgnx-test-with-clock")))
 
 (defun drgnx-test--move-to (time)
-  "Virtual time becomes TIME if that is later than it is (a wait inside a timer function may have moved it on)."
-  (when (time-less-p drgnx-test--now time) (setq drgnx-test--now time)))
+  "Virtual time becomes TIME if that is later than it is (a wait inside a timer function may have moved it on).
+On Nidhogg's test clock the timer list is out of sight of the move: the callers run the timers and count them, and C
+would never come back from a timer that re-arms with no delay."
+  (drgnx-test--sync)
+  (when (time-less-p drgnx-test--now time)
+    (if (not drgnx-test--core)
+        (setq drgnx-test--now time)
+      (let ((timer-list nil))
+        (nidhogg-test-clock-advance (float-time (time-subtract time drgnx-test--now))))
+      (drgnx-test--sync))))
 
 (defun drgnx-test-advance (secs)
   "Move virtual time forward SECS seconds, running every wall timer that comes due, in order.
@@ -147,6 +188,7 @@ A timer runs by `timer-event-handler' while still on `timer-list' (popping it fi
 cancelled), and a repeating one runs again each time it is due again within SECS.  More than
 `drgnx-test-clock-max-runs' runs is an error."
   (drgnx-test--check-active)
+  (drgnx-test--sync)
   (let ((target (time-add drgnx-test--now (drgnx-test--secs secs))) (runs 0) timer)
     (while (and (setq timer (cl-find-if-not #'timer--triggered timer-list))
                 (not (time-less-p target (drgnx-test--due timer))))
@@ -167,6 +209,7 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
 `input-pending-p' is t until this returns."
   (drgnx-test--check-active)
   (when drgnx-test--pause (error "drgnx-test-idle: already in a pause"))
+  (drgnx-test--sync)
   (let* ((start drgnx-test--now) (secs (drgnx-test--secs secs)) (input-at (and input-at (drgnx-test--secs input-at)))
          (end (if (and input-at (time-less-p input-at secs)) input-at secs)) (runs 0) done)
     (dolist (timer timer-idle-list) (setf (timer--triggered timer) nil))
@@ -176,8 +219,9 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
         (while (not done)
           (let* ((idle (cl-find-if-not #'timer--triggered timer-idle-list))
                  (wall (cl-find-if-not #'timer--triggered timer-list))
-                 (idle-at (and idle (drgnx-test--secs (float-time (timer--time idle)))))   ; stored truncated to a picosecond
-                 (wall-at (and wall (time-subtract (drgnx-test--due wall) start)))
+                 ;; both are stored truncated to a picosecond: 0.3 is 0.299999999999, before a key at 0.3
+                 (idle-at (and idle (drgnx-test--secs (float-time (timer--time idle)))))
+                 (wall-at (and wall (drgnx-test--secs (float-time (time-subtract (drgnx-test--due wall) start)))))
                  (next (cond ((and idle wall) (if (time-less-p wall-at idle-at) wall idle))
                              (t (or idle wall))))
                  (at (and next (if (eq next wall) wall-at idle-at))))
@@ -220,27 +264,32 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
       (when (eq timer undo-auto-current-boundary-timer) (setq undo-auto-current-boundary-timer nil)))))
 
 (defun drgnx-test--warm-trampolines ()
-  "Advise and unadvise each primitive the fixture advises, on scratch timer lists.
+  "Advise and unadvise each primitive the fixture can advise, on scratch timer lists.
 Emacs 31 native-compiles a primitive's advice trampoline on the first `advice-add' of it, and logging that compile
-arms `undo-auto--boundary-timer'; done here, the body's lists never see it and the real lists are left as they were."
+arms `undo-auto--boundary-timer'; done here, the body's lists never see it and the real lists are left as they were.
+The whole list on every clock, so what a run leaves in its eln directory does not depend on the clock it ran on."
   (let ((timer-list nil) (timer-idle-list nil))
-    (dolist (a (drgnx-test--advice))
+    (dolist (a (drgnx-test--advice nil))
       (when (subrp (symbol-function (nth 0 a)))
         (advice-add (nth 0 a) :around #'ignore)
         (advice-remove (nth 0 a) #'ignore)))
     (drgnx-test--drop-emacs-timers)))
 
-(defun drgnx-test--call-with-clock (body allow-pending)
+(defun drgnx-test--call-with-clock (body allow-pending &optional auto)
   "Run BODY (a function) on the virtual clock; see `drgnx-test-with-clock'."
   (when drgnx-test--active (error "drgnx-test-with-clock: already inside one"))
   (drgnx-test--warm-trampolines)
   (let* ((timer-list nil) (timer-idle-list nil)
-         (start (time-convert nil t))
+         (drgnx-test--core (and (drgnx-test--core-p) (if auto 'auto 'manual)))
+         (drgnx-test-clock-horizon (if drgnx-test--core 0 drgnx-test-clock-horizon))
+         (drgnx-test--real-base (and drgnx-test--core (- (float-time (time-convert nil t)) (drgnx-test--uptime))))
+         (start (progn (when drgnx-test--core (nidhogg-test-clock-start auto)) ; before this read: T0 is the clock's
+                       (time-convert nil t)))
          (drgnx-test--active t) (drgnx-test--start start) (drgnx-test--now start)
          (drgnx-test--pause nil) (drgnx-test--input-at nil)
          (drgnx-test--accept (symbol-function 'accept-process-output))
          (layer (fboundp 'drgnx-timer--now))
-         (advice (drgnx-test--advice)) names)
+         (advice (drgnx-test--advice drgnx-test--core)) names)
     (unwind-protect
         (progn (dolist (a advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
                (funcall body)
@@ -252,27 +301,31 @@ arms `undo-auto--boundary-timer'; done here, the body's lists never see it and t
                (when (and (not allow-pending) (or timer-list timer-idle-list))
                  (setq names (drgnx-test--pending-names))))
       (dolist (a advice) (advice-remove (nth 0 a) (nth 2 a)))
+      (when drgnx-test--core (nidhogg-test-clock-stop))
       (mapc #'cancel-timer (append timer-list timer-idle-list))
       (when (fboundp 'drgnx-timer-reset) (ignore-errors (drgnx-timer-reset))))
     (when names
       (ert-fail (list "timers still pending at the end of drgnx-test-with-clock" names)))))
 
-(cl-defmacro drgnx-test-with-clock ((&key allow-pending) &rest body)
+(cl-defmacro drgnx-test-with-clock ((&key allow-pending auto) &rest body)
   "Run BODY on a virtual clock.
 BODY sees fresh `timer-list' and `timer-idle-list'.  `float-time' and `current-time' without an argument return
 the real time at entry plus the virtual seconds so far, moved only by `drgnx-test-advance', `drgnx-test-idle',
 `sleep-for', `sit-for' and a timed `accept-process-output' (by the real time it waited); due timers run right after.
-`current-idle-time' and `input-pending-p' follow `drgnx-test-idle'.  Timers made by `run-at-time' are moved onto the
-virtual clock plus `drgnx-test-clock-horizon' when activated, so a real wait never finds one ripe.  At the end a pending
-timer fails the test (naming the layer's keys and owners, then raw functions) unless `:allow-pending' is t, and
-`drgnx-timer-reset' runs.  Nesting is an error.  If `drgnx-timer--now' is defined at entry, the timer layer's three
-seams follow the clock too; load the layer before entering, not inside.
+`current-idle-time' and `input-pending-p' follow `drgnx-test-idle'.  On the advice, timers made by `run-at-time' are
+moved onto the virtual clock plus `drgnx-test-clock-horizon' when activated, so a real wait never finds one ripe.  At
+the end a pending timer fails the test (naming the layer's keys and owners, then raw functions) unless
+`:allow-pending' is t, and `drgnx-timer-reset' runs.  Nesting is an error.  If `drgnx-timer--now' is defined at entry,
+the timer layer's three seams follow the clock too; load the layer before entering, not inside.
 
-Stays real: `time-since', `(time-subtract nil ...)' and `format-time-string' with no time read the real clock;
-tests of code that uses them use real time.  Use: (drgnx-test-with-clock () ...) or
+`:auto' t, on Nidhogg's test clock (`drgnx-test--core-p'; the advice ignores it): a wait, Emacs's own, moves the clock
+once nothing can run, straight to the earliest deadline, so a wait for a process's output takes no timed guess.
+
+Stays real on the advice: `time-since', `(time-subtract nil ...)' and `format-time-string' with no time read the real
+clock; tests of code that uses them use real time.  Use: (drgnx-test-with-clock () ...) or
 (drgnx-test-with-clock (:allow-pending t) ...)."
   (declare (indent 1))
-  `(drgnx-test--call-with-clock (lambda () ,@body) ,allow-pending))
+  `(drgnx-test--call-with-clock (lambda () ,@body) ,allow-pending ,auto))
 
 (provide 'clock-fixture)
 (provide 'drgnx-clock-fixture)

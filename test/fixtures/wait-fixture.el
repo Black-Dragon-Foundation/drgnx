@@ -15,23 +15,47 @@
 timers however long it waits, so with a timer due the wait polls without a timeout: the chain runs back to back."
   (and timer-list (not (time-less-p nil (timer--time (car timer-list))))))
 
+(defun drgnx-test-wait--auto-p ()
+  "Non-nil inside `drgnx-test-with-clock' on Nidhogg's test clock with `:auto' t."
+  (eq (bound-and-true-p drgnx-test--core) 'auto))
+
+(defun drgnx-test-wait--auto-step ()
+  "One wait on the auto clock: to the next wall timer, else a virtual second at most.
+A wait moves the clock past its timers, so PRED gets a look at each.  Return the clock's state when nothing can run
+and nothing is left to wait for, else nil.  (`accept-process-output' with no process and no time returns at once, so
+the clock's own deadlock signal, which only a wait without a deadline raises, cannot say that here.)"
+  (let ((next (cl-find-if-not #'timer--triggered timer-list)))
+    (if next
+        (ignore (accept-process-output nil (max 1e-6 (float-time (time-subtract (timer--time next) nil)))))
+      (accept-process-output nil 0)
+      (let ((state (nidhogg-test-clock-state)))
+        (if (and (nidhogg-test-clock--quiet-p) (zerop (plist-get state :deadlines)))
+            state
+          (ignore (accept-process-output nil 1)))))))
+
 (cl-defun drgnx-test-wait (pred &key (secs 30) what)
   "Call PRED until it returns non-nil, letting processes run between calls; return that value.
 The deadline is SECS times `drgnx-uitest-settle-scale' of real time.  While a timer is due the wait polls without a
-timeout, so a chain of timers (a view drawing in slices) runs back to back.  On timeout signal `ert-test-failed' with
-\(:waited-for WHAT :secs S :last-value V :processes ((NAME STATUS)…) :timers (FUNCTION…)).
+timeout, so a chain of timers (a view drawing in slices) runs back to back.  On the auto clock it waits for PRED or
+for idleness: nothing can run and nothing is left to wait for.  On timeout or idleness signal `ert-test-failed' with
+\(:waited-for WHAT :secs S :last-value V :processes ((NAME STATUS)…) :timers (FUNCTION…)), and after idleness
+`:clock' with `nidhogg-test-clock-state's plist.
 Wait on the sentinel's done flag, never on `process-live-p': it turns nil before the sentinel has run."
   (let* ((limit (* secs (drgnx-uitest-settle-scale)))
          (deadline (+ (drgnx-test-wait-now) limit))
-         (value (funcall pred)))
-    (while (and (not value) (< (drgnx-test-wait-now) deadline))
-      (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02))
+         (value (funcall pred))
+         idle)
+    (while (and (not value) (not idle) (< (drgnx-test-wait-now) deadline))
+      (if (drgnx-test-wait--auto-p)
+          (setq idle (drgnx-test-wait--auto-step))
+        (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02)))
       (setq value (funcall pred)))
     (or value
         (signal 'ert-test-failed
-                (list :waited-for what :secs limit :last-value value
-                      :processes (mapcar (lambda (p) (list (process-name p) (process-status p))) (process-list))
-                      :timers (mapcar #'timer--function (append timer-list timer-idle-list)))))))
+                (append (list :waited-for what :secs limit :last-value value
+                              :processes (mapcar (lambda (p) (list (process-name p) (process-status p))) (process-list))
+                              :timers (mapcar #'timer--function (append timer-list timer-idle-list)))
+                        (and idle (list :clock idle)))))))
 
 (defun drgnx-test--sentinel-ran-p (proc)
   "Non-nil once PROC's sentinel has run (see `drgnx-test-wait-ended')."
@@ -56,10 +80,13 @@ long before counts as ended."
 (defun drgnx-test-pause (secs)
   "Let processes and timers run for SECS of real time; nil.  Only for a test that asserts something does NOT happen
 in a short window (a second answer, a tick that starts nothing): a wait for something uses `drgnx-test-wait'.
-Unlike `sleep-for', which runs one link of a chain of timers, it runs the chain back to back."
-  (let ((end (+ (drgnx-test-wait-now) secs)))
-    (while (< (drgnx-test-wait-now) end)
-      (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02)))))
+Unlike `sleep-for', which runs one link of a chain of timers, it runs the chain back to back.  On the auto clock it
+is SECS of virtual time: a wait returns at once there, and polling real time would spin."
+  (if (drgnx-test-wait--auto-p)
+      (ignore (sleep-for secs))
+    (let ((end (+ (drgnx-test-wait-now) secs)))
+      (while (< (drgnx-test-wait-now) end)
+        (accept-process-output nil (if (drgnx-test-wait--due-p) 0 0.02))))))
 
 ;; Emacs itself creates these buffers when native compilation runs mid-test (a cold eln cache, as in a fresh CI
 ;; container); a before/after comparison of the buffer list must not see them.
