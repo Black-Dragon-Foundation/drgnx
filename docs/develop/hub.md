@@ -624,6 +624,15 @@ never waits: CALLBACK gets nil when a hub answers, or the reason (the process's 
 path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
 no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
 
+**At daemon start.** The nightly graph backup (`backup_timer.rs`) runs inside the hub, so a daemon must not wait for AI
+to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) schedules the layer timer
+`hub-daemon-start` (2 s, owner `:core`) in a daemon only: not in batch, not in a plain Emacs, not with
+`DRGNX_NO_HUB_START`. The timer calls `drgnx-hub--ensure-running` without waiting; a missing binary is silent, a failed
+start is a `hub` warning notice. It does not connect and hands over no keys or settings: a key-less hub starts no
+provider; keys arrive with the first AI use (`drgnx-hub-hand-over-keys`) or when the hub asks (`gateway/need-keys`).
+`drgnx doctor` (the `store` check) says the hub is down, and the nightly cannot run, when the last backup is old and no
+hub runs.
+
 The hub's `notice` event (sent when the binary on disk changed) is posted by `drgnx-hub--note-notice` (an editor's
 subscription) as a notice of source `hub`, a condition with command `hub-restart-now`. A hello that finds the hub
 current (`ok`) clears it. A `legacy` hub (the Lisp hub of an install updated while it ran) gets the same notice with

@@ -149,6 +149,11 @@ The store keeps dated copies of `work.db` (`backup/work-YYYYMMDD.db`: the last 7
 copy is checked and a bad one is deleted, so the previous good one stays). `work-pre7-*.db`, made before the move to
 the new store, is only ever removed by you.
 
+The nightly copy (03:00) is made by the drgnx hub, so it runs only while the hub does. A drgnx daemon asks for the hub
+a couple of seconds after it has started (not where `DRGNX_NO_HUB_START` is set), and it hands the hub no keys. If the
+hub is down and the last copy is old, `drgnx doctor` says so: start the hub with `drgnx hub start`, then run
+`drgnx graph backup`.
+
 ### The move to the new store
 
 The first time the new hub starts it moves your `work.db` to the new store (schema 7) before it answers anything:
