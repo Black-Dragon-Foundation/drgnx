@@ -286,8 +286,8 @@ async fn unknown_notifications_are_ignored_unknown_requests_get_32601() {
         matches!(next(&mut rx).await, Event::Update { .. }),
         "the update after the unknown ones"
     );
-    // our side answered the terminal request; the child then echoes that line when its stdin closes
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // our side queued the answer to the terminal request before the update above reached us, and the writer
+    // sends everything queued before it closes the child's stdin; the child then echoes that line
     drop(conn);
     let Event::Exit { stderr, .. } = next(&mut rx).await else {
         panic!("exit")
