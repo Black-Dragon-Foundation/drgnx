@@ -1,4 +1,5 @@
 ;;; peer-fixture-test.el --- scripted peers -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/peer-fixture" drgnx-dir) nil t)

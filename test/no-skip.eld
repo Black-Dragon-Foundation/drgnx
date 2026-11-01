@@ -65,7 +65,6 @@
   "drgnx-search-files/only-regular-files"
   "drgnx-search-files/timed-git-gets-all-of-a-big-input"
   "drgnx-search-mcp/the-project-is-the-git-toplevel"
-  "drgnx-search-setup/doctor-facts-return-within-the-budget-with-a-slow-git"
   "drgnx-search-ui/a-job-still-running-when-the-timer-fires-waits-again"
   "drgnx-search-ui/a-rebuild-while-a-job-runs-says-to-wait"
   "drgnx-search-ui/a-save-with-the-module-off-schedules-nothing"

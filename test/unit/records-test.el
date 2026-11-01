@@ -240,6 +240,7 @@
            (dolist (b (buffer-list)) (when (buffer-local-value 'drgnx-records-review--id b) (kill-buffer b))))))))
 
 (ert-deftest drgnx-records/notice-on-proposal ()
+  :tags '(:cond)                        ; a real hub process and socket
   (records-test--with-proposal
     (should (stringp id))
     (let ((n (car (drgnx-notices :source 'hub))))
@@ -247,6 +248,7 @@
       (should (string-match-p "DEFERRED.md" (plist-get n :text))))))
 
 (ert-deftest drgnx-records/review-shows-the-diff ()
+  :tags '(:cond)                        ; a real hub process and socket
   (records-test--with-proposal
     (drgnx-records-review id)
     (with-current-buffer (get-buffer "*drgnx proposal: DEFERRED.md*")
@@ -255,6 +257,7 @@
       (should (string-match-p "fixed in M2" (buffer-string))))))
 
 (ert-deftest drgnx-records/accept-calls-decide ()
+  :tags '(:cond)                        ; a real hub process and socket
   (records-test--with-proposal
     (drgnx-records-review id)
     (with-current-buffer (get-buffer "*drgnx proposal: DEFERRED.md*")

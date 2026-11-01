@@ -1,4 +1,5 @@
 ;;; preflight-test.el --- bin/drgnx test --preflight -*- lexical-binding: t -*-
+;; test-class: det
 ;; The runner of each pre-flight step is a stub script (DRGNX_PREFLIGHT_RUNNER), so no container starts.
 (require 'ert)
 (require 'seq)
