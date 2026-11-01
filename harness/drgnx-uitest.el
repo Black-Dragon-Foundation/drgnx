@@ -948,7 +948,7 @@ Removes the timing advice: it must not stay and slow down what is measured later
 (declare-function drgnx-elpa-dir "drgnx-paths")
 
 (defconst drgnx-uitest--childframe-pins-file
-  (expand-file-name "../test/fixtures/childframe-packages.eld"
+  (expand-file-name "../test/container/childframe-packages.eld"
                     (file-name-directory (or load-file-name buffer-file-name default-directory)))
   "The pins: (NAME VERSION :archive ARCHIVE :sha256 HASH), the file's only form.")
 

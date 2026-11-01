@@ -1126,12 +1126,11 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
 
 Tests of child frames against real packages (the compositor's popups, the popup perf workloads) use posframe, corfu,
 eldoc-box, company-box, which-key-posframe, transient-posframe, vertico-posframe and mini-frame, pinned in
-`test/fixtures/childframe-packages.eld`: `(NAME VERSION :archive ARCHIVE :sha256 HASH)`, the hash of the archive file.
+`test/container/childframe-packages.eld`: `(NAME VERSION :archive ARCHIVE :sha256 HASH)`, the hash of the archive file.
 `bin/drgnx childframe-elpa DIR` installs exactly those versions into the new directory `DIR` the way `drgnx sync`
 does, in a private data directory (never your configuration or `elpa`): the hash is checked before the file enters
 the cache, the signature where the archive signs (GNU ELPA), and a hash that differs is refused and leaves `DIR`
-absent. What the packages need (compat, dash, company, vertico, …) comes along at the archives' newest, unpinned.
-MELPA serves only its newest build of a package, so when one is replaced the install fails until its pin is bumped.
+absent. What the packages need beyond the pinned ones comes along at the archives' newest.
 
 ```sh
 bin/drgnx childframe-elpa .claude/tmp/childframe-elpa
@@ -1143,14 +1142,17 @@ their names, or nil when the variable is unset or the directory lacks one, so te
 tests do with `DRGNX_MODAL_ELPA`. A session inherits the variable (`drgnx-ui-keep-env`). The tests of the command
 point `DRGNX_CHILDFRAME_PINS` and `DRGNX_CHILDFRAME_ARCHIVES` (`NAME=DIR,…`) at a local archive.
 
-In a container the GUI tier needs them: `test/container/childframe-elpa.sh DIR` installs them inside the GUI image
-(so the byte code matches its Emacs; it writes `DIR/elpa` only), and `bin/drgnx test --container --ui` takes
-`DRGNX_CHILDFRAME_ELPA=DIR/elpa`, mounts it read-only and sets `DRGNX_CHILDFRAME_REQUIRED=1`. A whole tier (no
-`DRGNX_TEST_SELECTOR`) without the variable is refused; with it set, a chrome, parity or extra row that finds the packages
-missing fails (`drgnx-uitest-require-childframe-packages`) instead of skipping. A narrowed run without the variable
-skips those rows as before. CI's `ui` job installs them through `actions/cache` keyed on the pins, the GUI
-Containerfile and `nidhogg.sh` (a run on its own Nidhogg build installs afresh). GNU ELPA and MELPA serve only the newest
-build of a package, so when one moves on the install fails until its pin in `childframe-packages.eld` is bumped.
+In a container the GUI tier has them in its image: `Containerfile.gui` runs `test/container/childframe-elpa.sh`, which
+downloads the pinned tarballs (the eight packages and what they need: company, dash, vertico, frame-local, all pinned),
+checks each sha256 and unpacks them to `/opt/childframe-elpa`. `bin/drgnx test --container --ui` points
+`DRGNX_CHILDFRAME_ELPA` there (a host directory in the variable is mounted read-only instead) and sets
+`DRGNX_CHILDFRAME_REQUIRED=1`, so a chrome, parity or extra row that finds the packages missing fails
+(`drgnx-uitest-require-childframe-packages`) instead of skipping, narrowed run or not. CI and local runs reach no
+archive for them. The archives keep only their newest build, so a pin is bumped on purpose: edit
+`test/container/childframe-packages.eld` (version and hash) and the pins' sha256 written in `Containerfile.gui`
+(`drgnx-ci/the-gui-image-bakes-the-pinned-child-frame-packages` fails otherwise); the Containerfile's hash is the image's
+tag, so `Test images` builds a new image, and the old tag keeps working until then. The other packages in the
+install (`drgnx childframe-elpa`) are now pinned the same way.
 
 `test/ui/childframe-chrome-test.el` holds the compositor's four popup scenarios (`drgnx-ui-chrome/…`: corfu with
 popupinfo, posframe shown and hidden 100 times, eldoc-box beside corfu, a popup at the right and bottom edge). Each

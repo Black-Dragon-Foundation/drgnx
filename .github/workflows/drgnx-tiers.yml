@@ -157,30 +157,13 @@ jobs:
           image: drgnx-test-gui
           variable: DRGNX_TEST_GUI_IMAGE
           nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
-      # the pinned child-frame packages the chrome, parity and extra rows load (versions and archive hashes in
-      # test/fixtures/childframe-packages.eld), installed in the GUI image so the byte code matches its Emacs; the
-      # cache holds them per pin set and image (this run's own Nidhogg: not shared). The tier below refuses to start
-      # without them and fails a row that finds them missing.
-      - name: Child-frame packages (cache)
-        id: childframe-cache
-        if: ${{ !cancelled() }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/childframe
-          key: childframe-elpa-${{ hashFiles('drgnx/test/fixtures/childframe-packages.eld', 'drgnx/test/container/Containerfile.gui', 'drgnx/test/container/nidhogg.sh') }}-${{ inputs.nidhogg == 'release' && 'release' || github.run_id }}
-      - name: Child-frame packages (install)
-        if: ${{ !cancelled() && steps.childframe-cache.outputs.cache-hit != 'true' }}
-        working-directory: drgnx
-        env:
-          DRGNX_CONTAINER: podman
-          CHILDFRAME_DIR: ${{ runner.temp }}/childframe
-        run: test/container/childframe-elpa.sh "$CHILDFRAME_DIR"
+      # the pinned child-frame packages (test/container/childframe-packages.eld) are baked into this image, so the tier
+      # reaches no archive; a row that finds them missing fails (bin/drgnx sets DRGNX_CHILDFRAME_REQUIRED)
       - name: GUI tier in test/container/Containerfile.gui (the :timing tests left out by name)
         if: ${{ !cancelled() }}
         working-directory: drgnx
         env:
           DRGNX_CONTAINER: podman
-          DRGNX_CHILDFRAME_ELPA: ${{ runner.temp }}/childframe/elpa
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_UI_TEST_TIMEOUT: "3000"
         run: bin/drgnx test --container --ui

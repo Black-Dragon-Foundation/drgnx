@@ -91,11 +91,10 @@
           (switch-to-buffer buf)
           (dotimes (i 60) (insert (format "(defun fixture-%d (x) \"A function.\" (car (cdr x)))\n" i)))
           (emacs-lisp-mode)
-          (goto-char (point-min))
-          (forward-line 30)
-          (search-forward "(car ")
-          (backward-char 4)
-          (recenter -2)                           ; the second row from the bottom
+          (goto-char (point-max))
+          (search-backward "(car ")               ; the last line, on the window's last row: nothing below it
+          (forward-char 1)
+          (recenter -1)
           (redisplay t)
           (let ((editor (selected-window)) (line (line-number-at-pos)))
             (call-interactively #'drgnx-quickhelp-show)

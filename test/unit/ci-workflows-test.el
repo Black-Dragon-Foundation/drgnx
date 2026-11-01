@@ -74,14 +74,22 @@
     (drgnx-ci-test--has tiers "bin/drgnx test --container --ui" "bin/drgnx test --container --scenario"
                         "bin/drgnx test --container --perf" "DRGNX_PERF_CPU_FACTOR: \"2\""
                         "DRGNX_PERF_RESULTS: perf-results.json" "if: always()" "name: perf-results")
-    ;; the ui job installs the pinned child-frame packages (cached) and hands them to the tier
-    (drgnx-ci-test--has (drgnx-ci-test--job tiers "ui")
-                        "test/container/childframe-elpa.sh" "hashFiles('drgnx/test/fixtures/childframe-packages.eld'"
-                        "DRGNX_CHILDFRAME_ELPA: ${{ runner.temp }}/childframe/elpa")
+    ;; the pinned child-frame packages are in the image: the ui job fetches nothing for them
+    (should-not (string-search "actions/cache" (drgnx-ci-test--job tiers "ui")))
+    (should-not (string-search "childframe-elpa.sh" (drgnx-ci-test--job tiers "ui")))
     ;; the ui job leaves the :timing tests out too (no CI job runs one)
     (should (string-match-p (concat "DRGNX_TEST_NO_TIMING: \"1\"\n\\(?:          [A-Z_]+: .*\n\\)*"
                                     "        run: bin/drgnx test --container --ui")
                             (drgnx-ci-test--job tiers "ui")))))
+
+(ert-deftest drgnx-ci/the-gui-image-bakes-the-pinned-child-frame-packages ()
+  ;; The image's tag is the hash of Containerfile.gui, so the pins' sha256 is written in it: a bump of the pins that
+  ;; forgets it would leave the old image in use.
+  (let ((file (drgnx-ci-test--file "test/container/Containerfile.gui"))
+        (pins (drgnx-ci-test--file "test/container/childframe-packages.eld")))
+    (skip-unless (and file pins))
+    (should (string-search (secure-hash 'sha256 pins) file))
+    (drgnx-ci-test--has file "childframe-elpa.sh /opt/childframe-elpa")))
 
 (ert-deftest drgnx-ci/unit-jobs-rerun-and-skip-wall-clock ()
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))

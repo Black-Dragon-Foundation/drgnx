@@ -400,7 +400,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
   local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
-                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE
+                DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE DRGNX_UI_TEST_TIMEOUT
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
     [ "$v" = DRGNX_PERF_RESULTS ] && continue   # below: the checkout is read-only, so the file goes through a mount
@@ -442,21 +442,19 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     [ "$rt" = podman ] && [ "${1:-}" != --ui ] && elpa="$elpa,z"
     args+=(-v "$elpa" -e DRGNX_MODAL_ELPA=/modal-elpa)
   fi
-  # the pinned child-frame packages (posframe, corfu, …; test/container/childframe-elpa.sh makes the directory) for the
-  # chrome, parity and extra rows. A whole GUI tier (no selector) must have them: it is refused without, and the session is
-  # told to fail a row that finds them missing (DRGNX_CHILDFRAME_REQUIRED), never to skip it. A narrowed run without
-  # them skips those rows as before.
-  if [ "$tier" = ui ] && [ -z "${DRGNX_TEST_SELECTOR:-}" ] && [ -z "${DRGNX_CHILDFRAME_ELPA:-}" ]; then
-    echo "drgnx: the GUI tier needs the pinned child-frame packages: test/container/childframe-elpa.sh DIR, then DRGNX_CHILDFRAME_ELPA=DIR/elpa (docs/develop/harness.md)" >&2
-    return 2
-  fi
+  # the pinned child-frame packages (posframe, corfu, …) for the chrome, parity and extra rows are baked into the GUI image
+  # (/opt/childframe-elpa, test/container/childframe-elpa.sh): the GUI tier uses them and the session fails a row that
+  # finds them missing (DRGNX_CHILDFRAME_REQUIRED), never skips it. A host directory in DRGNX_CHILDFRAME_ELPA is mounted
+  # read-only instead (the other tiers use only that).
   if [ -n "${DRGNX_CHILDFRAME_ELPA:-}" ]; then
     [ -d "$DRGNX_CHILDFRAME_ELPA" ] || { echo "drgnx: DRGNX_CHILDFRAME_ELPA is not a directory: $DRGNX_CHILDFRAME_ELPA" >&2; return 2; }
     local cfe; cfe="$(cd "$DRGNX_CHILDFRAME_ELPA" && pwd -P)"
     case "$cfe" in *:*) echo "drgnx: DRGNX_CHILDFRAME_ELPA must not contain ':' (it is mounted with -v): $cfe" >&2; return 2 ;; esac
     args+=(-v "$cfe:/childframe-elpa:ro" -e DRGNX_CHILDFRAME_ELPA=/childframe-elpa)
-    [ "$tier" = ui ] && args+=(-e DRGNX_CHILDFRAME_REQUIRED=1)
+  elif [ "$tier" = ui ]; then
+    args+=(-e DRGNX_CHILDFRAME_ELPA=/opt/childframe-elpa)
   fi
+  if [ "$tier" = ui ]; then args+=(-e DRGNX_CHILDFRAME_REQUIRED=1); fi
   # a git worktree's `.git' is a file naming an absolute host path (the common git dir's worktrees/NAME): mount that
   # dir read-only at the same path, or git in the container exits 128. Read-only is enough: the tests only read the
   # repository (a test that commits does so in a repository of its own under a temporary directory)

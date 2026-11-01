@@ -1005,7 +1005,7 @@ macOS (no /proc there)."
   ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (vars '("DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_TEST_JOBS=4" "DRGNX_TEST_RERUN=1" "DRGNX_TEST_NO_TIMING=1"
-                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3"
+                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3" "DRGNX_UI_TEST_TIMEOUT=3000"
                  ;; UI-SCALE-1: the sessions' size and scale (without them a container run was silently 1600x900 at 1)
                  "DRGNX_UI_SIZE=2880x1800" "DRGNX_UI_SCALE=1.5" "DRGNX_UI_SCALES=1 2")))
     (unwind-protect
@@ -1021,32 +1021,31 @@ macOS (no /proc there)."
           (let ((args (drgnx-bin-test--container-argv   ; unset in the environment: a bare NAME removes it
                        dir '("DRGNX_TEST_SELECTOR" "DRGNX_TEST_JOBS" "DRGNX_TEST_RERUN" "DRGNX_TEST_NO_TIMING"
                              "DRGNX_PERF_RESULTS" "DRGNX_PERF_CPU_FACTOR" "DRGNX_PERF_WORKLOADS"
-                             "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UI_SIZE" "DRGNX_UI_SCALE" "DRGNX_UI_SCALES"))))
+                             "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UI_TEST_TIMEOUT" "DRGNX_UI_SIZE" "DRGNX_UI_SCALE" "DRGNX_UI_SCALES"))))
             (should (member "DRGNX_LEASE=off" args))
             (should-not (seq-find (lambda (a) (string-match-p "\\`DRGNX_\\(TEST_\\|PERF_\\|UITEST_\\|UI_S\\)[A-Z_]+=" a)) args))
             (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/the-container-gui-tier-needs-the-child-frame-packages ()
-  ;; A whole GUI tier is refused without DRGNX_CHILDFRAME_ELPA; with it the directory is mounted read-only and the
-  ;; session is told to fail, not skip, a row that lacks the packages.  A narrowed run and the other tiers are not bound.
+  ;; The GUI tier reads the packages baked into its image (narrowed or not) and the session is told to fail, not skip,
+  ;; a row that lacks them; a host directory in DRGNX_CHILDFRAME_ELPA is mounted read-only instead.  The other tiers
+  ;; take only the host directory.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
     (unwind-protect
         (let* ((elpa (progn (make-directory (expand-file-name "elpa" dir)) (file-truename (expand-file-name "elpa" dir))))
-               (evid (concat "DRGNX_UI_EVIDENCE_DIR=" dir "/evidence"))
-               (base (list (concat "HOME=" dir) "DRGNX_CONTAINER=true" "DRGNX_TEST_GUI_IMAGE=gui-image" evid
-                           "DRGNX_CHILDFRAME_ELPA" "DRGNX_TEST_SELECTOR")))
-          (let ((r (let ((drgnx-bin-test--cwd dir))
-                     (drgnx-bin-test--call drgnx-bin-test--bin base "test" "--container" "--ui"))))
-            (should-not (eql 0 (car r)))
-            (should (string-search "DRGNX_CHILDFRAME_ELPA" (cdr r))))
+               (evid (concat "DRGNX_UI_EVIDENCE_DIR=" dir "/evidence")))
+          (dolist (env (list (list "DRGNX_CHILDFRAME_ELPA") (list "DRGNX_CHILDFRAME_ELPA" "DRGNX_TEST_SELECTOR=\"x\"")))
+            (let ((args (drgnx-bin-test--container-argv dir (append (list "DRGNX_TEST_GUI_IMAGE=gui-image" evid) env) "--ui")))
+              (should (member "DRGNX_CHILDFRAME_ELPA=/opt/childframe-elpa" args))
+              (should (member "DRGNX_CHILDFRAME_REQUIRED=1" args))))
           (let ((args (drgnx-bin-test--container-argv
                        dir (list "DRGNX_TEST_GUI_IMAGE=gui-image" evid (concat "DRGNX_CHILDFRAME_ELPA=" elpa)) "--ui")))
             (should (member (concat elpa ":/childframe-elpa:ro") args))
             (should (member "DRGNX_CHILDFRAME_ELPA=/childframe-elpa" args))
             (should (member "DRGNX_CHILDFRAME_REQUIRED=1" args)))
           (let ((args (drgnx-bin-test--container-argv
-                       dir (list "DRGNX_TEST_GUI_IMAGE=gui-image" evid "DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_CHILDFRAME_ELPA") "--ui")))
+                       dir (list "DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_CHILDFRAME_ELPA") "--perf")))
             (should-not (seq-find (lambda (a) (string-search "CHILDFRAME" a)) args)))
           (let ((args (drgnx-bin-test--container-argv
                        dir (list "DRGNX_TEST_GUI_IMAGE=gui-image" (concat "DRGNX_CHILDFRAME_ELPA=" elpa)) "--perf")))
@@ -1601,7 +1600,7 @@ while :; do wait; done" job job job job job)))
       (drgnx-bin-test--call bin env "onboard" "--non-interactive" "--step" "ai")
       (should (member "ensure --timeout 5" (split-string (drgnx-bin-test--slurp log) "\n" t))))))
 
-;;;; drgnx childframe-elpa — the pinned child-frame packages (test/fixtures/childframe-packages.eld)
+;;;; drgnx childframe-elpa — the pinned child-frame packages (test/container/childframe-packages.eld)
 
 (defun drgnx-bin-test--childframe-run (hash)
   "Run `drgnx childframe-elpa' on a local archive of two packages whose pins say HASH for corfu (nil: its real hash);
