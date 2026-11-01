@@ -3,6 +3,7 @@
 ;; core/drgnx-file.el) gave; huginn's tests (runtime/crates/huginn/tests/differential.rs) hold huginn to them.  Here
 ;; Emacs regenerates them and must agree with the files (no drift), and a fresh seed is read by both live: the
 ;; `dump' example of huginn is run on a file of random data (DRGNX_HUGINN_DUMP names the built binary).
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
@@ -59,6 +60,7 @@ here (but for the listed divergence, kind CharName, which Emacs reads); no dump 
 
 (ert-deftest drgnx-huginn/differential-fresh-seed ()
   "A seed from the clock: 500 random data, read by Emacs here and by huginn's dump example; the dumps agree."
+  :tags '(:cond)                        ; runs huginn's dump example
   (let ((dump (getenv "DRGNX_HUGINN_DUMP")))
     (unless (and dump (file-executable-p dump))
       (ert-skip "DRGNX_HUGINN_DUMP is not set to the built huginn dump example (CI sets it)"))

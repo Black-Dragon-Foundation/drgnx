@@ -1,6 +1,8 @@
 ;;; mock-llm-test.el --- batch tests: the mock LLM server never outlives the test that started it -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 
 (ert-deftest drgnx-mock-llm/it-ends-when-its-test-emacs-is-killed ()
@@ -15,15 +17,13 @@
          (mock nil))
     (unwind-protect
         (progn
-          (let ((deadline (+ (float-time) 15)))
-            (while (and (not (string-match "MOCK \\([0-9]+\\)" out)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+          (ignore-errors (drgnx-test-wait (lambda () (string-match "MOCK \\([0-9]+\\)" out)) :secs 15 :what "the mock's pid"))
           (should (string-match "MOCK \\([0-9]+\\)" out))   ; (OUT shows why, when not)
           (setq mock (string-to-number (match-string 1 out)))
           (should (process-attributes mock))
           (signal-process parent 'KILL)
-          (let ((gone (lambda () (let ((a (process-attributes mock))) (or (null a) (equal (alist-get 'state a) "Z")))))
-                (deadline (+ (float-time) 5)))
-            (while (and (not (funcall gone)) (< (float-time) deadline)) (sleep-for 0.1))
+          (let ((gone (lambda () (let ((a (process-attributes mock))) (or (null a) (equal (alist-get 'state a) "Z"))))))
+            (ignore-errors (drgnx-test-wait gone :secs 5 :what "the mock to end"))
             (should (funcall gone))))   ; a zombie where PID 1 never reaps (a CI container)
       (when (process-live-p parent) (delete-process parent))
       (when (and mock (process-attributes mock)) (signal-process mock 'KILL))
@@ -36,8 +36,7 @@
                                            :filter (lambda (_p s) (setq out (concat out s))))))
     (unwind-protect
         (progn (process-send-string c "GET /x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n")
-               (let ((deadline (+ (float-time) 5)))
-                 (while (and (not (string-match-p "404" out)) (< (float-time) deadline)) (accept-process-output c 0.05)))
+               (ignore-errors (drgnx-test-wait (lambda () (string-match-p "404" out)) :secs 5 :what "the mock's 404"))
                (string-match-p "404" out))
       (delete-process c))))
 
