@@ -453,6 +453,11 @@ When Glitnir (the compositor) draws the frames (`glitnir-active-p`), the child f
 frame's picture, so capture writes Glitnir's snapshot as `root.png` (device pixels: at scale 2 twice `width` ×
 `height`) and reports no children; `ui shot` then has nothing to composite.
 
+Nidhogg's native Wayland shell has no `x-export-frames`, and its child frames are subsurfaces that the Wayland
+compositor puts together, so a frame's snapshot is that frame alone (`drgnx-uitest-snapshot-holds-children-p` is nil).
+Capture writes one snapshot per frame in device pixels, each child with its offset, and `ui shot` composites them as
+above. A pixel row that looks for a child frame in the root's snapshot does not see it there.
+
 ### Snapshots and pixel probes
 
 For tests that compare pixels. A snapshot is `(W H BYTES)`: `BYTES` holds W×H ARGB32 pixels, rows tightly packed,
@@ -462,7 +467,7 @@ each a 32-bit word in the machine's byte order (little-endian: B G R A). Rectang
 | Function | Returns |
 |---|---|
 | `(drgnx-uitest-snapshot &optional FRAME)` | the device buffer: Glitnir's raw snapshot when `glitnir-snapshot` is bound (W H = frame pixel size × scale), else the export |
-| `(drgnx-uitest-export &optional FRAME)` | the `x-export-frames` composite decoded to the same layout; always logical pixels (1x), whatever the scale |
+| `(drgnx-uitest-export &optional FRAME)` | the `x-export-frames` composite decoded to the same layout; always logical pixels (1x), whatever the scale; not on the native shell |
 | `(drgnx-uitest-pixel SNAP X Y)` | `(A R G B)` |
 | `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |

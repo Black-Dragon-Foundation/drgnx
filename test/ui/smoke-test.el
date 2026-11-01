@@ -1,7 +1,22 @@
 ;;; smoke-test.el --- GUI smoke tests (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
+
+(ert-deftest drgnx-ui-smoke/the-presented-wait-reads-the-presenter ()
+  "On the native shell `drgnx-test-wait-presented' waits on real counters, and what it settles on grows with a change."
+  (skip-unless (featurep 'nidhogg-wayland))
+  (let ((root (drgnx-uitest-root-frame)))
+    (drgnx-test-wait-presented)
+    (let ((before drgnx-test--settled-counts))
+      (should (natnump (car before)))
+      (should (natnump (cdr before)))
+      (with-temp-buffer
+        (switch-to-buffer (current-buffer))
+        (insert "a change the presenter has to commit")
+        (drgnx-test-wait-presented :frame root))
+      (should (> (cdr drgnx-test--settled-counts) (cdr before))))))
 
 (ert-deftest drgnx-ui-smoke/frame-is-visible-and-graphical ()
   (let ((f (drgnx-uitest-root-frame)))

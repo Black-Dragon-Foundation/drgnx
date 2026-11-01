@@ -611,7 +611,7 @@ with redisplay between them, while the test waits.  The plist has :settled."
   (let ((coding-system-for-write 'binary))
     (with-temp-buffer
       (set-buffer-multibyte nil)
-      (insert (x-export-frames frame 'png))
+      (insert (if (fboundp 'x-export-frames) (x-export-frames frame 'png) (glitnir-snapshot frame 'png)))
       (write-region nil nil file nil 'silent)))
   (drgnx-uitest--evidence file))
 
@@ -635,8 +635,14 @@ Never signals."
 ;; machine's byte order (little-endian: B G R A), the layout of `glitnir-snapshot' with FORMAT `raw'.
 
 (defun drgnx-uitest-glitnir-p ()
-  "Non-nil when Glitnir (the compositor) draws this session's frames, so its snapshot is the whole picture."
+  "Non-nil when Glitnir (the compositor) draws this session's frames."
   (and (fboundp 'glitnir-active-p) (fboundp 'glitnir-snapshot) (glitnir-active-p)))
+
+(defun drgnx-uitest-snapshot-holds-children-p ()
+  "Non-nil when the root frame's snapshot shows its child frames.
+Under Glitnir on pgtk it does.  On the native shell a child frame is a subsurface of its parent, which the Wayland
+compositor puts together: each frame's snapshot is that frame alone."
+  (and (drgnx-uitest-glitnir-p) (not (featurep 'nidhogg-wayland))))
 
 (defun drgnx-uitest--png-raw (png)
   "Decode PNG (a unibyte string: 8-bit RGB or RGBA, not interlaced, as cairo writes) into a snapshot."
@@ -748,14 +754,17 @@ Every channel may differ by TOLERANCE; IGNORE-ALPHA leaves the alpha channel out
   "Export the root frame and its visible child frames as PNGs into DIR.
 `x-export-frames' cannot put several frames in one PNG, so each child comes with its
 offset (parent-relative native edges) for compositing.  When Glitnir draws the frames
-(`drgnx-uitest-glitnir-p') its snapshot already holds the children: root.png is that
-snapshot (device pixels) and there are no children."
+(`drgnx-uitest-glitnir-p') root.png is its snapshot (device pixels), which already holds
+the children on pgtk (`drgnx-uitest-snapshot-holds-children-p'): none comes apart.  The
+native shell has no `x-export-frames': each child is its own snapshot, its offset in
+device pixels."
   (unless (display-graphic-p (drgnx-uitest-root-frame))
     (error "drgnx-uitest: no graphical frame to capture (a daemon session without a client frame? open one with ui_frame)"))
   (redisplay t)
   (make-directory dir t)
   (let* ((f (drgnx-uitest-root-frame))
          (root (expand-file-name "root.png" dir))
+         (s (if (fboundp 'x-export-frames) 1 (frame-scale-factor f)))
          (i -1))
     (if (drgnx-uitest-glitnir-p)
         (let ((coding-system-for-write 'binary))
@@ -765,12 +774,12 @@ snapshot (device pixels) and there are no children."
             (write-region nil nil root nil 'silent)))
       (drgnx-uitest--export f root))
     (list :root root :width (frame-pixel-width f) :height (frame-pixel-height f)
-          :children (vconcat (and (not (drgnx-uitest-glitnir-p))
+          :children (vconcat (and (not (drgnx-uitest-snapshot-holds-children-p))
                                   (mapcar (lambda (c)
                                             (let ((file (expand-file-name (format "child-%d.png" (cl-incf i)) dir))
                                                   (e (frame-edges c 'native-edges)))
                                               (drgnx-uitest--export c file)
-                                              (list :path file :x (nth 0 e) :y (nth 1 e))))
+                                              (list :path file :x (round (* s (nth 0 e))) :y (round (* s (nth 1 e))))))
                                           (drgnx-uitest-child-frames f)))))))
 
 ;;;; JSON API (for emacsclient; see harness/drgnx-ui.el)

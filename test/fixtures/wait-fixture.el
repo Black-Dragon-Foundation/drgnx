@@ -93,8 +93,8 @@ those merged into one still waiting) and the commits sent.  Nil where there is n
 
 (defun drgnx-test--presented-p (frame)
   "Non-nil when every packet of FRAME's display published since the last presented wait has gone out as a commit.
-A packet makes at least one commit, and a tree with child frames makes more.  With no presenter (pgtk) it is t: there
-`glitnir-snapshot' itself returns after a paint."
+A packet makes at least one commit, and a tree with child frames makes more.  With no presenter (macOS, a pgtk build)
+it is t: there `glitnir-snapshot' itself returns after a paint."
   (let ((now (drgnx-test--presenter-counts frame)) (then drgnx-test--settled-counts))
     (or (null now) (null then)
         (>= (- (cdr now) (cdr then)) (- (car now) (car then))))))

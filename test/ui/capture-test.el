@@ -21,7 +21,7 @@
           (drgnx-test-wait-presented)
           (let ((c (drgnx-uitest-capture dir)))
             (should (file-exists-p (plist-get c :root)))
-            (if (drgnx-uitest-glitnir-p)
+            (if (drgnx-uitest-snapshot-holds-children-p)
                 ;; Glitnir's snapshot is the whole picture (device pixels): the child is in root.png and none comes apart
                 (let* ((s (frame-scale-factor root))
                        (snap (with-temp-buffer
@@ -37,13 +37,15 @@
                   (should (equal (cdr (drgnx-uitest-pixel snap (nth 0 mid) (nth 1 mid)))
                                  (mapcar (lambda (v) (/ v 256))
                                          (color-values (frame-parameter child 'background-color))))))
-              (should (equal (drgnx-test--png-size (plist-get c :root))
-                             (cons (frame-pixel-width root) (frame-pixel-height root))))
-              (should (= (length (plist-get c :children)) 1))
-              (let ((k (aref (plist-get c :children) 0)))
-                (should (equal (list (plist-get k :x) (plist-get k :y))
-                               (seq-take (frame-edges child 'native-edges) 2)))
-                (should (file-exists-p (plist-get k :path)))))))
+              ;; an export is logical pixels; the native shell's snapshots are device pixels
+              (let ((s (if (fboundp 'x-export-frames) 1 (frame-scale-factor root))))
+                (should (equal (drgnx-test--png-size (plist-get c :root))
+                               (cons (round (* s (frame-pixel-width root))) (round (* s (frame-pixel-height root))))))
+                (should (= (length (plist-get c :children)) 1))
+                (let ((k (aref (plist-get c :children) 0)))
+                  (should (equal (list (plist-get k :x) (plist-get k :y))
+                                 (mapcar (lambda (v) (round (* s v))) (seq-take (frame-edges child 'native-edges) 2))))
+                  (should (file-exists-p (plist-get k :path))))))))
       (delete-frame child)
       (kill-buffer empty)
       (delete-directory dir t))))
@@ -64,7 +66,7 @@
 
 (ert-deftest drgnx-ui-capture/snapshot-equals-export-at-scale-1 ()
   (let ((f (drgnx-uitest-root-frame)))
-    (skip-unless (= (frame-scale-factor f) 1))
+    (skip-unless (and (= (frame-scale-factor f) 1) (fboundp 'x-export-frames))) ; the native shell has no export
     (drgnx-uitest-bare-frame)
     (drgnx-test-wait-presented)
     (let ((snap (drgnx-uitest-snapshot f)) (exp (drgnx-uitest-export f)))
