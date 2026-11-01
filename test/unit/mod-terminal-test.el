@@ -1,4 +1,5 @@
 ;;; mod-terminal-test.el --- batch tests: New Terminal is eat, with eshell as the fallback -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-area)
