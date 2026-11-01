@@ -1224,6 +1224,11 @@ with the no-popup picture taken before the read."
   (drgnx-test-chrome--wait-stable
    (lambda () (list (frame-pixel-width root) (frame-pixel-height root) (frame-parameter root 'fullscreen))) 8))
 
+(defun drgnx-test-chrome--restored (root size)
+  "Wait until ROOT is SIZE (WIDTH HEIGHT) again: the compositor's answer to a size can come well after the paints."
+  (drgnx-test-wait (lambda () (redisplay t) (equal size (list (frame-pixel-width root) (frame-pixel-height root))))
+                   :secs 8 :what (list "the root's size back" size)))
+
 (defun drgnx-test-chrome--reshown (root name f string)
   "Hide posframe NAME (frame F), take the no-popup picture, show it again with STRING and wait for GTK's layout.
 Return (NONE . FRAME): the picture without the popup and the reused frame."
@@ -1241,6 +1246,7 @@ Return (NONE . FRAME): the picture without the popup and the reused frame."
   "The parent shrunk with a popup shown: the popup keeps its chrome, shadow and corners, on the resized picture."
   (drgnx-test-chrome--with-scratch
     (let* ((name " *chrome-parent*") (orig (frame-parameter root 'fullscreen))
+           (size (list (frame-pixel-width root) (frame-pixel-height root)))
            (f (drgnx-test-chrome--pf name "parent resize" :position '(240 . 160))) w1 h1)
       (drgnx-test-chrome--settle)
       (unwind-protect
@@ -1254,16 +1260,16 @@ Return (NONE . FRAME): the picture without the popup and the reused frame."
                          (rects (drgnx-test-chrome--shown root (list f2) none2)))
               (posframe-hide name)
               (drgnx-test-chrome--hidden root rects none2)))
-        (when w1
-          (set-frame-size root w1 h1 t)
-          (drgnx-test-chrome--wait-stable (lambda () (list (frame-pixel-width root) (frame-pixel-height root)))))
+        (when w1 (set-frame-size root w1 h1 t))
         (drgnx-test-chrome--set-fullscreen root orig)
+        (drgnx-test-chrome--restored root size)
         (drgnx-test-chrome--settle)))))
 
 (ert-deftest drgnx-ui-chrome/generic-parent-fullscreen-moves-shadows ()
   "The parent made fullscreen and back with a popup shown: chrome right on both pictures."
   (drgnx-test-chrome--with-scratch
     (let* ((name " *chrome-fullscreen*") (orig (frame-parameter root 'fullscreen))
+           (size (list (frame-pixel-width root) (frame-pixel-height root)))
            (f (drgnx-test-chrome--pf name "fullscreen" :position '(240 . 160))))
       (drgnx-test-chrome--settle)
       (unwind-protect
@@ -1275,6 +1281,7 @@ Return (NONE . FRAME): the picture without the popup and the reused frame."
               (posframe-hide name)
               (drgnx-test-chrome--hidden root rects none2)))
         (drgnx-test-chrome--set-fullscreen root orig)
+        (drgnx-test-chrome--restored root size)
         (drgnx-test-chrome--settle)))))
 
 (defun drgnx-test-chrome--plain-child (root &rest params)
