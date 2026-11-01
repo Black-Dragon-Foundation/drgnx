@@ -438,6 +438,7 @@ types `infocmp' was asked about."
     (should (eq (default-value 'drgnx-tty-true-colour) 'known))))
 
 (ert-deftest drgnx-tty-frames/the-frame-is-created-with-the-direct-type ()
+  :tags '(:cond)
   (let* ((proc (make-pipe-process :name "kx-colours" :noquery t)) seen)
     (unwind-protect
         (drgnx-tty-frames-test--terminfos '("xterm-direct")
@@ -453,6 +454,7 @@ types `infocmp' was asked about."
       (delete-process proc))))
 
 (ert-deftest drgnx-tty-frames/a-direct-type-emacs-cannot-load-falls-back-to-the-asked-one ()
+  :tags '(:cond)
   ;; infocmp and Emacs's tgetent can see different terminfo databases: the client keeps its frame
   (let* ((proc (make-pipe-process :name "kx-colours" :noquery t)) tried)
     (unwind-protect
@@ -791,6 +793,7 @@ types `infocmp' was asked about."
     (set-default 'drgnx-tty-tmux-mok-level 1)))
 
 (ert-deftest drgnx-tty-frames/a-visited-frame-is-an-editor-in-the-store ()
+  :tags '(:cond)
   ;; The role is a frame parameter, no window change: `drgnx-tty-frames--visit' tells the store itself.
   (drgnx-test-with-state
     (let ((frame (selected-frame)) (proc (make-pipe-process :name "drgnx-visit-test")))

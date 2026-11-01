@@ -264,6 +264,7 @@
     (should-not (drgnx-notices :source 'hub))))
 
 (ert-deftest drgnx-records/no-prompt-from-the-event ()
+  :tags '(:cond)
   (drgnx-notice-test-with-model
     (let ((conn (make-pipe-process :name "records-test" :noquery t)) (calls 0))
       (unwind-protect

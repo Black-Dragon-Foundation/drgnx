@@ -302,6 +302,7 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
 ;;;; modifyOtherKeys under tmux
 
 (ert-deftest drgnx-tty-keys/tmux-gets-modify-other-keys ()
+  :tags '(:cond)
   ;; TERM=xterm-256color inside tmux: Emacs asked tmux (DA2: version 0) and did not turn modifyOtherKeys on;
   ;; extended-keys is on, so drgnx asks for it, and decodes what tmux then sends
   (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TMUX=/tmp/kx-sock,1,0") "3.4|xterm-kitty|256|\nset-clipboard external\nextended-keys on\n"
@@ -331,6 +332,7 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))))
 
 (ert-deftest drgnx-tty-keys/tmux-without-extended-keys-is-legacy ()
+  :tags '(:cond)
   ;; tmux's default: extended-keys off.  tmux sends no modifyOtherKeys then, so the request Emacs's
   ;; term/tmux.el made is withdrawn and the terminal is legacy: the report lists C-S-p as unsendable
   (drgnx-tty-keys-test--terminal '((tty-mode-set-strings . ("\e[?2004h" "\e[>4;1m"))

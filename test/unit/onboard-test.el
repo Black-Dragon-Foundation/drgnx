@@ -843,6 +843,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           cell)))
 
 (ert-deftest drgnx-onboard/claude-missing-is-installed-with-permission ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t)))))
       ;; without interaction: nothing installed, the commands said, no job
@@ -871,6 +872,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   (should (equal drgnx-onboard-claude-package drgnx-agents-claude-package)))
 
 (ert-deftest drgnx-onboard/a-deprecated-adapter-keeps-working-and-the-step-says-how-to-move ()
+  :tags '(:cond)
   ;; C2-3: the deprecated @zed-industries package installed earlier: the profile is checked with it, the step warns
   ;; with the command — and nothing is installed or removed without that command
   (drgnx-onboard-test--claude 'linux
@@ -932,6 +934,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   `(progn (drgnx-onboard-test--have bin "claude" "claude-agent-acp" "npm") ,@body))
 
 (ert-deftest drgnx-onboard/claude-not-logged-in-opens-its-login ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (let ((asked (drgnx-onboard-test--asked '(("log in" . t)))))
@@ -957,6 +960,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
        (should (= 1 (length (car (cdr asked)))))))))
 
 (ert-deftest drgnx-onboard/a-claude-that-cannot-say-is-offered-the-login-and-never-fails-the-step ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (let ((process-environment (cons "FAKE_OLD_CLAUDE=1" process-environment))
@@ -990,6 +994,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
        (should (string-match-p "did not answer within 1 second" (cadr r)))))))
 
 (ert-deftest drgnx-onboard/an-npm-failure-says-how-to-retry ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
           (process-environment (cons "FAKE_NPM_FAIL=1" process-environment)))
@@ -1366,6 +1371,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
               (delete-directory drgnx-macos-app-dir t))))))))
 
 (ert-deftest drgnx-onboard/finish-names-spotlight-only-with-the-app ()
+  :tags '(:cond)
   ;; M12a-76: Spotlight finds drgnx.app; without the app the sentence would send you to a search that finds nothing
   (let ((drgnx-macos-app-dir (file-name-as-directory (make-temp-file "drgnx-apps" t))) (drgnx-onboard--restart-needed nil))
     (unwind-protect
@@ -1398,6 +1404,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 (require 'drgnx-hub)                    ; so a stub of `drgnx-hub-running-p' is not replaced by the load
 
 (ert-deftest drgnx-ai-onboard/path-added-with-a-hub-says-hub-stop ()
+  :tags '(:cond)
   ;; The hub keeps the PATH it started with: when the step added a directory and a hub runs, the result says so.
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--have bin "claude")
@@ -1432,6 +1439,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 ;; M12a-48, -49, -50: the Agents step's smaller corners
 
 (ert-deftest drgnx-ai-onboard/quit-during-auth-status-kills-it ()
+  :tags '(:cond)
   ;; C-g while `claude auth status' is being waited for leaves nothing running, and quits on
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--script (concat bin "slow-claude") "exec sleep 30\n")
@@ -1440,6 +1448,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (should-not (seq-some (lambda (p) (and (string-prefix-p "drgnx-claude-auth" (process-name p)) (process-live-p p))) (process-list)))))
 
 (ert-deftest drgnx-ai-onboard/non-homebrew-npm-on-macos-uses-local-prefix ()
+  :tags '(:cond)
   ;; A Node that is not Homebrew's has a global directory that is not yours (EACCES): the adapter goes to ~/.local
   (drgnx-onboard-test--claude 'macos
     (let ((other (concat root "other/")))
@@ -1458,6 +1467,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (file-executable-p (concat home ".local/bin/claude-agent-acp"))))))
 
 (ert-deftest drgnx-ai-onboard/failed-claude-installer-names-the-command ()
+  :tags '(:cond)
   ;; A failed Linux installer run ends with the command to try in a terminal, as the adapter's does
   (drgnx-onboard-test--claude 'linux
     (drgnx-onboard-test--script (concat bin "curl") "echo 'echo installer broke; exit 7'\n")
@@ -1477,6 +1487,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
           prompts defaults)))
 
 (ert-deftest drgnx-ai-onboard/agents-offer-mcp-servers-and-a-default-profile ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
@@ -1509,6 +1520,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
                           (directory-file-name root)))))))))
 
 (ert-deftest drgnx-ai-onboard/agent-defaults-are-never-asked-without-interaction ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))

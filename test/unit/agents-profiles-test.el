@@ -1,6 +1,6 @@
 ;;; agents-profiles-test.el --- batch tests: Kimi and DeepSeek in Claude Code, on their own APIs or through OpenRouter -*- lexical-binding: t -*-
 ;; Keys here are fakes in a let-bound environment; no assertion prints one (booleans are asserted, not values).
-;; test-class: det
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)

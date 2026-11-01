@@ -74,6 +74,7 @@ Returns (RESULT QUESTIONS)."
       (should (string-match-p "not a git repository" (cadr (car r)))))))
 
 (ert-deftest drgnx-onboard-portability/never-commits-a-plain-key ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (write-region (format "(setq my-key %S)\n" (concat "sk-or-v1-" (make-string 24 ?x))) nil
                   (concat root "config/config.el") nil 'silent)
@@ -138,6 +139,7 @@ Returns (RESULT QUESTIONS)."
       (should (string-match-p "--config YOUR-REPO-URL" (cadr (car r)))))))
 
 (ert-deftest drgnx-onboard-portability/a-missing-git-identity-says-how ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (let ((process-environment (append (list (concat "GIT_CONFIG_GLOBAL=" root "gitconfig"))
                                        (seq-remove (lambda (e) (string-match-p "\\`GIT_\\(AUTHOR\\|COMMITTER\\)_" e))
@@ -149,6 +151,7 @@ Returns (RESULT QUESTIONS)."
         (should (string-match-p "git config --global user.email" (cadr (car r))))))))
 
 (ert-deftest drgnx-onboard-portability/chezmoi-is-explained-not-run ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (drgnx-onboard-portability-test--chezmoi root nil)
     (let ((r (drgnx-onboard-portability-test--run t '(("git repository" . nil)))))
@@ -167,6 +170,7 @@ Returns (RESULT QUESTIONS)."
       (should-not (file-exists-p (concat root "config/.git"))))))
 
 (ert-deftest drgnx-onboard-portability/non-interactive-changes-nothing ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (write-region "/usr/bin/emacs\n" nil (concat root "config/emacs") nil 'silent)
     (let ((r (drgnx-onboard-portability-test--run nil)))   ; any question fails the test
@@ -179,6 +183,7 @@ Returns (RESULT QUESTIONS)."
       (should (string-match-p "bash -s -- --config YOUR-REPO-URL" (cadr (car r)))))))
 
 (ert-deftest drgnx-onboard-portability/export-opens-the-terminal ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (let ((calls nil))
       (cl-letf (((symbol-function 'drgnx-onboard--keys-to-export-p) (lambda () t))
@@ -266,6 +271,7 @@ Returns (RESULT QUESTIONS)."
           (should-not (string-match-p "u:tok\\|u:pw\\|tok@\\|pw@" saved)))))))
 
 (ert-deftest drgnx-onboard-portability/no-export-question-when-secrets-age-is-there ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (write-region "age ciphertext\n" nil (concat root "config/secrets.age") nil 'silent)
     (let ((calls nil))
@@ -322,6 +328,7 @@ Returns (RESULT QUESTIONS)."
                      ".gitignore\nkeys.eld")))))
 
 (ert-deftest drgnx-onboard-portability/the-gitignore-is-written-once ()
+  :tags '(:cond)
   ;; none there: written with the leftovers' lines
   (drgnx-onboard-portability-test--with root
     (let* ((file (concat root "config/.gitignore"))

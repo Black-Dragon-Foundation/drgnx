@@ -181,6 +181,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 
 ;; URGENT-3-UI-LIVE: `test --ui' ran test/live in its own process with the real HOME, state directory, bus and keys
 (ert-deftest drgnx-ui/the-ui-tiers-live-half-runs-sandboxed ()
+  :tags '(:cond)
   (let* ((base (make-temp-file "drgnx-ui-live" t))
          (real-home (expand-file-name "real-home" base))
          (suite (expand-file-name "suite" base))
@@ -768,6 +769,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (should (equal (string-trim (drgnx-ui-test--slurp (expand-file-name "counter" root))) "41"))))
 
 (ert-deftest drgnx-ui/test-sessions-use-the-generator ()
+  :tags '(:cond)
   (drgnx-ui-test--with-state
     (should (string-match-p "\\`drgnx-ui-test-1-[0-9a-f]\\{6\\}\\'" (drgnx-ui-next-name root "test")))
     ;; …and the session `drgnx-ui-run-ert-session' makes is named so, not drgnx-ui-test-PID-RANDOM

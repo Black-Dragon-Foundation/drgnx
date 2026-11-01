@@ -123,6 +123,7 @@
 ;;;; The doctor's portable-config check
 
 (ert-deftest drgnx-portable/a-plain-key-is-found-by-file-not-by-value ()
+  :tags '(:cond)
   (drgnx-portable-test--with root
     (let* ((config (drgnx-user-dir)) (key (drgnx-portable-test--key)))
       (drgnx-portable-test--write (expand-file-name "config.el" config) (format "(setenv \"OPENROUTER_API_KEY\" %S)\n" key))

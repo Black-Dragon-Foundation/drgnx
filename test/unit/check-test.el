@@ -45,6 +45,7 @@ for that file to exist (up to 20 s) instead of sleeping."
     (apply #'max (mapcar (lambda (s) (seq-count (lambda (o) (and (<= (car o) (car s)) (< (car s) (cdr o)))) spans)) spans))))
 
 (ert-deftest drgnx-check/phases-run-in-order-and-jobs-of-a-phase-together ()
+  :tags '(:cond)
   (drgnx-check-test--with dir
     (let* ((jobs (list (drgnx-check-test--job dir "build" 1)
                        (drgnx-check-test--job dir "u1" 2 :wait-for '("u1" "u2" "u3")) (drgnx-check-test--job dir "u2" 2 :wait-for '("u1" "u2" "u3"))
@@ -58,6 +59,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (dolist (u '("u1" "u2" "u3")) (should (<= (cddr (assoc u tm)) (cadr (assoc "perf" tm))))))))   ; perf alone, last
 
 (ert-deftest drgnx-check/gui-jobs-never-exceed-the-slots-memory-allows ()
+  :tags '(:cond)
   ;; u1 and the first two GUI jobs wait for each other, so the three run together whatever the machine does; a third
   ;; GUI job started early would overlap them (the sleep after the wait is what gives it the chance).
   (drgnx-check-test--with dir
@@ -74,6 +76,7 @@ for that file to exist (up to 20 s) instead of sleeping."
   (should (= 4 (drgnx-check-gui-slots 64000))))
 
 (ert-deftest drgnx-check/a-failing-job-is-named-with-its-log-and-the-rest-still-run ()
+  :tags '(:cond)
   (drgnx-check-test--with dir
     (let* ((r (drgnx-check-run (list (drgnx-check-test--job dir "bad" 2 :code 3) (drgnx-check-test--job dir "good" 2)
                                      (drgnx-check-test--job dir "later" 3))
@@ -89,6 +92,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (should (eql (drgnx-check-exit-code r) 1)))))
 
 (ert-deftest drgnx-check/a-short-job-is-seen-ending-while-a-long-one-runs ()
+  :tags '(:cond)
   ;; the first real run noticed every job of the parallel phase only when the last ended.  The long job ends when the
   ;; run has said (verbose) that the short one is done: a run that noticed it only at the end finds it after the long
   ;; job's 20 s bound, with the short job's seconds above the long one's; the long job must end well under that bound (10 s).
@@ -105,6 +109,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (should (< (plist-get long :seconds) 10)))))
 
 (ert-deftest drgnx-check/a-failing-build-stops-everything ()
+  :tags '(:cond)
   (drgnx-check-test--with dir
     (let ((r (drgnx-check-run (list (drgnx-check-test--job dir "build" 1 :code 1) (drgnx-check-test--job dir "u1" 2))
                               :dir dir :jobs 4 :gui-slots 1)))
@@ -180,6 +185,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (dolist (e (drgnx-test-env-outer)) (should (member e env))))))
 
 (ert-deftest drgnx-check/a-live-shard-never-sees-the-real-home-or-provider-keys ()
+  :tags '(:cond)
   ;; A live shard ran with the environment check was started in: the real HOME, session bus and API keys.  It runs
   ;; in the unit tier's sandbox (harness/run-ert.el): a temp HOME, a dead bus, the keys unset.
   (drgnx-check-test--with dir
@@ -210,6 +216,7 @@ for that file to exist (up to 20 s) instead of sleeping."
 ;;;; Final review fixes
 
 (ert-deftest drgnx-check/a-job-ended-early-gets-time-to-clean-up ()
+  :tags '(:cond)
   ;; a job's Emacs stops its sessions when told to end: TERM, then time for that, then KILL
   (drgnx-check-test--with dir
     (let ((job (list :name "slow-exit" :phase 2 :timeout 1
@@ -234,6 +241,7 @@ for that file to exist (up to 20 s) instead of sleeping."
                  '(:jobs 6 :shards 4 :perf nil :gui t))))
 
 (ert-deftest drgnx-check/perf-is-a-plain-job ()
+  :tags '(:cond)
   ;; --perf exits 0 or 1: a busy machine does not make it a third outcome (it judges what load does not move)
   (should-not (plist-member (seq-find (lambda (j) (equal (plist-get j :name) "perf"))
                                       (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1 :perf t))
@@ -255,6 +263,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (should (drgnx-check--group-running-p 200)))))
 
 (ert-deftest drgnx-check/shards-run-files-apart ()
+  :tags '(:cond)
   ;; Each unit shard runs every file of its share in an Emacs of its own (a hook or feature one file leaves never
   ;; reaches the next); the timing tests, alone in their phase, keep one Emacs.
   (drgnx-check-test--with dir

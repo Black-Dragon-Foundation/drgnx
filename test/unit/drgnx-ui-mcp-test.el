@@ -101,6 +101,7 @@
     (should (equal (drgnx-ui-mcp-test--text (drgnx-ui-mcp-test--call "ui_list" nil)) "[]"))))
 
 (ert-deftest drgnx-ui-mcp/stdio-roundtrip-utf8-without-locale ()
+  :tags '(:cond)
   (drgnx-ui-mcp-test--with-state
     (let* ((process-environment (append '("LANG" "LC_ALL" "LC_CTYPE") process-environment))  ; unset
            (client (drgnx-ui-mcp-client-start)))

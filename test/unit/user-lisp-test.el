@@ -1,5 +1,5 @@
 ;;; user-lisp-test.el --- your Lisp files: on/off, early files, :emacs-dir, findings, bisect -*- lexical-binding: t -*-
-;; test-class: det
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

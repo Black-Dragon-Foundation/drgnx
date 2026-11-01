@@ -442,6 +442,7 @@ changed on disk).  The buffers and folder go after."
   (should (advice-member-p #'drgnx-session--visit-unasked 'server-visit-files)))
 
 (ert-deftest drgnx-session/drgnx-open-reverts-a-changed-file-unasked ()
+  :tags '(:cond)
   ;; `drgnx open a.txt' while an unmodified buffer holds it and the file changed: Emacs's `server-visit-files'
   ;; reverts it with (revert-buffer t nil), which asks "Revert buffer from file …?"; drgnx reverts it unasked
   (should-not (advice-member-p 'drgnx-editor/large-files--server 'server-execute))
@@ -454,6 +455,7 @@ changed on disk).  The buffers and folder go after."
       (should-not (buffer-modified-p)))))
 
 (ert-deftest drgnx-session/drgnx-open-t-reverts-a-changed-file-unasked ()
+  :tags '(:cond)
   ;; `drgnx -t a.txt' sends -e (drgnx-session-open-file "a.txt"): `find-file' would ask "Reread from disk?"
   (drgnx-session-test--changed ((b "a.txt" "one\n" "two\n"))
     (drgnx-session-test--never-asks
@@ -462,6 +464,7 @@ changed on disk).  The buffers and folder go after."
     (should (equal (with-current-buffer b (buffer-string)) "two\n"))))
 
 (ert-deftest drgnx-session/drgnx-open-leaves-a-modified-changed-file-and-says-so ()
+  :tags '(:cond)
   ;; unsaved changes are never reverted silently, nor asked about: left as they are, the echo area says so
   (drgnx-session-test--changed ((b "a.txt" "one\n" "two\n" "mine\n"))
     (let ((said nil))
@@ -480,6 +483,7 @@ changed on disk).  The buffers and folder go after."
                              said :test #'equal))))))
 
 (ert-deftest drgnx-session/drgnx-open-reverts-a-file-that-grew-large-unasked ()
+  :tags '(:cond)
   ;; without editor/large-files a file that grew past Emacs's own large-file threshold is reverted as any other
   (let ((large-file-warning-threshold 1000))
     (drgnx-session-test--changed ((b "big.log" "one\n" (make-string 4000 ?x)))

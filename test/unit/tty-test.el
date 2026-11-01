@@ -196,6 +196,7 @@ cat %s\n"
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-tty/tmux-options-with-a-fake-tmux ()
+  :tags '(:cond)
   (let* ((tmp (drgnx-tty-test--tmp))
          (ran (expand-file-name "ran" tmp))
          ;; drgnx finds tmux through exec-path: only the fake; the fake itself keeps the system's PATH
@@ -222,6 +223,7 @@ cat %s\n"
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-tty/tmux-options-and-the-conf-lines ()
+  :tags '(:cond)
   (let ((lines (lambda (answer) (drgnx-tty-tmux-conf-lines (drgnx-tty-test--options-from answer)))))
     ;; everything off, tmux 3.2 (no allow-passthrough option, no extended-keys-format): what is missing, in order
     (should (equal (funcall lines "3.2|xterm-256color|256|\nset-clipboard external\nextended-keys off\nfocus-events off\n")
@@ -305,6 +307,7 @@ cat %s\n"
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-tty/the-client-environment-wins ()
+  :tags '(:cond)
   ;; in a daemon, process-environment is the daemon's own: the client's ENV (or its FRAME) decides
   (let* ((tmp (drgnx-tty-test--tmp))
          (ran (expand-file-name "ran" tmp))
@@ -353,6 +356,7 @@ cat %s\n"
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-tty/tmux-names-the-outer-terminal ()
+  :tags '(:cond)
   ;; tmux 3.4+ knows its client's terminal (#{client_termtype}): better than a variable inherited by the server
   (let* ((tmp (drgnx-tty-test--tmp))
          (exec-path (list tmp))
@@ -370,6 +374,7 @@ cat %s\n"
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-tty/env-is-the-frame-s-then-its-client-s-then-this-emacs-s ()
+  :tags '(:cond)
   ;; a frame made later on a client's terminal has the client but no environment of its own
   (let ((client (make-pipe-process :name "kx-client" :noquery t))
         (process-environment (cons "TERM=xterm-own" process-environment))

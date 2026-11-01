@@ -404,6 +404,7 @@ sent the client."
     errors))
 
 (ert-deftest drgnx-large-files/an-eval-form-from-the-server-is-automatic ()
+  :tags '(:cond)
   ;; `drgnx -t FILE' sends -e (find-file "FILE"): no file argument
   (drgnx-large-files-test--door
     (let ((f (drgnx-large-files-test--file "big.log" 32768)) (buf nil))
@@ -412,6 +413,7 @@ sent the client."
         (should (eq (buffer-local-value 'drgnx-large-file buf) 'raw))))))
 
 (ert-deftest drgnx-large-files/a-nowait-file-from-the-server-is-automatic ()
+  :tags '(:cond)
   ;; `drgnx open FILE': emacsclient -n FILE
   (drgnx-large-files-test--door
     (let ((f (drgnx-large-files-test--file "big.log" 32768)))
@@ -420,6 +422,7 @@ sent the client."
         (should (eq (buffer-local-value 'drgnx-large-file (get-file-buffer f)) 'raw))))))
 
 (ert-deftest drgnx-large-files/a-waiting-file-from-the-server-is-whole ()
+  :tags '(:cond)
   ;; `drgnx open --wait FILE' (drgnx as $EDITOR): the whole file, lean
   (drgnx-large-files-test--door
     (let ((f (drgnx-large-files-test--file "big.log" 131072)))
@@ -436,6 +439,7 @@ sent the client."
   (set-file-times file (time-add nil 10)))
 
 (ert-deftest drgnx-large-files/drgnx-open-reverts-a-changed-lean-or-raw-buffer-unasked ()
+  :tags '(:cond)
   ;; `drgnx open BIG' while a lean or raw buffer holds BIG and the file grew: Emacs's `server-visit-files' reverts
   ;; the buffer with (revert-buffer t nil), which asks; here it is reverted without the question
   (drgnx-large-files-test--door
@@ -457,6 +461,7 @@ sent the client."
         (should-not (buffer-modified-p b))))))
 
 (ert-deftest drgnx-large-files/drgnx-open-leaves-a-modified-lean-buffer-unasked ()
+  :tags '(:cond)
   ;; unsaved changes are never reverted silently: the open leaves the buffer as it is and says so
   (drgnx-large-files-test--door
     (let* ((f (drgnx-large-files-test--file "big.log" 32768))
@@ -478,6 +483,7 @@ sent the client."
       (should (member "big.log changed on disk; its buffer has unsaved changes and is left as it is" said)))))
 
 (ert-deftest drgnx-large-files/drgnx-open-reverts-a-changed-normal-buffer-unasked ()
+  :tags '(:cond)
   ;; below `:ask-above' the module changes nothing: the core reverts it unasked, and it stays normal
   (drgnx-large-files-test--door
     (let* ((f (drgnx-large-files-test--file "small.log" 4096))
@@ -491,6 +497,7 @@ sent the client."
       (should-not (buffer-local-value 'drgnx-large-file b)))))
 
 (ert-deftest drgnx-large-files/drgnx-open-leaves-a-modified-normal-buffer-that-grew-large ()
+  :tags '(:cond)
   ;; unsaved changes: never reopened, reverted or asked about, even past `:ask-above'
   (drgnx-large-files-test--door
     (let* ((f (drgnx-large-files-test--file "small.log" 4096))
@@ -511,6 +518,7 @@ sent the client."
       (should (member "small.log changed on disk; its buffer has unsaved changes and is left as it is" said)))))
 
 (ert-deftest drgnx-large-files/drgnx-open-reopens-a-normal-buffer-that-grew-large-unasked ()
+  :tags '(:cond)
   ;; a normal buffer whose file grew past `:ask-above' goes through the door again, as an automatic open: raw here
   ;; (chunks without the chunks module), never a question, never the whole file read into the normal buffer
   (drgnx-large-files-test--door
