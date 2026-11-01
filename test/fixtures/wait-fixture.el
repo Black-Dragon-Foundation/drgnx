@@ -1,6 +1,7 @@
 ;;; wait-fixture.el --- one wait for real async work in tests -*- lexical-binding: t -*-
 ;; `drgnx-test-wait' is the only way a test waits for a process, a sentinel or a filter.  The deadline only
 ;; bounds a failure, so it is generous (and scaled on a loaded machine); a pass costs what the work costs.
+;; `drgnx-test-wait-presented' is the wait of a GUI test for what the frame shows.
 ;; `drgnx-test-pause' is the short window of a test that asserts something does not happen.
 (require 'ert)
 (require 'cl-lib)
@@ -53,9 +54,52 @@ long before counts as ended."
       (dolist (p procs) (unless (process-live-p p) (process-put p :drgnx-test-ended t))))
     (drgnx-test-wait (lambda () (cl-every #'drgnx-test--sentinel-ran-p procs)) :secs secs :what what)))
 
-(defun drgnx-test-pause (secs)
+(declare-function nhwl-presenter-stats "nhwlterm.c")
+
+(defvar drgnx-test--settled-counts nil
+  "`drgnx-test--presenter-counts' at the end of the last `drgnx-test-wait-presented'.")
+
+(defun drgnx-test--presenter-counts (frame)
+  "(OWED . SENT) of FRAME's display on the native shell: the packets that need a commit of their own (published, less
+those merged into one still waiting) and the commits sent.  Nil where there is no presenter."
+  (when-let* (((fboundp 'nhwl-presenter-stats))
+              (s (ignore-errors (nhwl-presenter-stats frame))))
+    (cons (- (plist-get s :packets) (plist-get s :superseded))
+          (+ (plist-get s :commits) (plist-get s :bare-commits)))))
+
+(defun drgnx-test--presented-p (frame)
+  "Non-nil when every packet of FRAME's display published since the last presented wait has gone out as a commit.
+A packet makes at least one commit, and a tree with child frames makes more.  With no presenter (pgtk) it is t: there
+`glitnir-snapshot' itself returns after a paint."
+  (let ((now (drgnx-test--presenter-counts frame)) (then drgnx-test--settled-counts))
+    (or (null now) (null then)
+        (>= (- (cdr now) (cdr then)) (- (car now) (car then))))))
+
+(cl-defun drgnx-test-wait-presented (&key frame value (frames 2) (secs 30))
+  "Wait until FRAME's root frame (default the session's) shows what was changed; return the last sample.
+Each sample is `drgnx-uitest-snapshot' after a redisplay: under Glitnir that presents what was drawn, forces a paint,
+and returns the picture the paint committed, so every sample is one trip through the compositor.  The wait ends when
+FRAMES samples in a row are the same and no commit is owed.  A sample is the picture, or VALUE's result (a function of
+no arguments, called after the paint) for a state the picture does not show, such as a frame's size.  A size or a map
+is answered by the compositor in order with those paints, so what is still on its way shows up in a later sample.
+The deadline (SECS as in `drgnx-test-wait') only bounds a failure: a timeout fails the test.
+A test with a popup that has no parent passes FRAME: `drgnx-uitest-root-frame' can find that popup."
+  (let* ((root (or frame (drgnx-uitest-root-frame))) (last nil) (seen 0) (err (list nil)))
+    (drgnx-test-wait
+     (lambda ()
+       (when-let* ((snap (condition-case e (drgnx-uitest-snapshot root) ; no paint in its 1 s: the next try
+                           (error (setcar err e) nil))))
+         (let ((v (if value (funcall value) snap)))
+           (setq seen (if (and (> seen 0) (equal v last)) (1+ seen) 1) last v))
+         (and (>= seen frames) (drgnx-test--presented-p root))))
+     :secs secs :what (list "a presented frame" root :last-error err))
+    (setq drgnx-test--settled-counts (drgnx-test--presenter-counts root))
+    last))
+
+(defun drgnx-test-pause (secs &optional _why)
   "Let processes and timers run for SECS of real time; nil.  Only for a test that asserts something does NOT happen
-in a short window (a second answer, a tick that starts nothing): a wait for something uses `drgnx-test-wait'.
+in a short window (a second answer, a tick that starts nothing): a wait for something uses `drgnx-test-wait', and a
+wait for a frame `drgnx-test-wait-presented'.  WHY says what may not happen: the GUI tier's lint wants it.
 Unlike `sleep-for', which runs one link of a chain of timers, it runs the chain back to back."
   (let ((end (+ (drgnx-test-wait-now) secs)))
     (while (< (drgnx-test-wait-now) end)

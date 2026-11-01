@@ -86,6 +86,59 @@
           (should (< (- (float-time) t0) 5)))
       (cancel-function-timers #'drgnx-wait-test--rearm))))
 
+(defmacro drgnx-wait-test--with-frames (samples &rest body)
+  "Run BODY with `drgnx-uitest-snapshot' giving SAMPLES in turn (the last one again and again; an `error' in them
+is signalled) and the root frame stubbed; the variable `calls' counts the samples taken."
+  (declare (indent 1))
+  `(let ((queue ,samples) (calls 0) (drgnx-test--settled-counts nil))
+     (ignore calls)
+     (cl-letf (((symbol-function 'drgnx-uitest-root-frame) (lambda () 'root))
+               ((symbol-function 'drgnx-uitest-snapshot)
+                (lambda (_frame)
+                  (cl-incf calls)
+                  (let ((s (if (cdr queue) (pop queue) (car queue))))
+                    (if (eq s 'error) (error "No paint within 1 s") s)))))
+       ,@body)))
+
+(ert-deftest drgnx-test-wait-presented/ends-on-two-same-pictures-in-a-row ()
+  (drgnx-wait-test--with-frames '("a" "b" "b")
+    (should (equal (drgnx-test-wait-presented) "b"))
+    (should (= calls 3))))
+
+(ert-deftest drgnx-test-wait-presented/a-paint-that-did-not-come-is-the-next-try ()
+  (drgnx-wait-test--with-frames '(error "a" error "a" "a")
+    (should (equal (drgnx-test-wait-presented) "a"))
+    (should (= calls 4))))              ; the second "a": a paint that did not come breaks no run of samples
+
+(ert-deftest drgnx-test-wait-presented/a-picture-that-never-stands-fails-the-test ()
+  (let ((n 0))
+    (cl-letf (((symbol-function 'drgnx-uitest-root-frame) (lambda () 'root))
+              ((symbol-function 'drgnx-uitest-snapshot) (lambda (_frame) (cl-incf n))))
+      (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 0.1)))))
+        (should (equal (car (plist-get d :waited-for)) "a presented frame"))))))
+
+(ert-deftest drgnx-test-wait-presented/no-paint-at-all-fails-and-says-why ()
+  (drgnx-wait-test--with-frames '(error)
+    (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 0.1)))))
+      (should (equal (cadr (memq :last-error (plist-get d :waited-for)))
+                     '((error "No paint within 1 s")))))))
+
+(ert-deftest drgnx-test-wait-presented/value-counts-its-samples-not-the-picture ()
+  (let ((sizes (list 10 20 20 20)))
+    (drgnx-wait-test--with-frames '("a" "b" "c" "d")
+      (should (equal (drgnx-test-wait-presented :value (lambda () (pop sizes)) :frames 3) 20))
+      (should (= calls 4)))))
+
+(ert-deftest drgnx-test-wait-presented/a-commit-still-owed-keeps-it-waiting ()
+  ;; the native shell: the same picture twice, but a packet published since the last wait has no commit yet
+  (let ((counts (list '(5 . 5) '(6 . 5) '(6 . 5) '(6 . 6) '(6 . 6))))
+    (drgnx-wait-test--with-frames '("a")
+      (cl-letf (((symbol-function 'drgnx-test--presenter-counts) (lambda (_frame) (if (cdr counts) (pop counts) (car counts)))))
+        (setq drgnx-test--settled-counts (drgnx-test--presenter-counts 'root))
+        (drgnx-test-wait-presented)
+        (should (equal drgnx-test--settled-counts '(6 . 6)))
+        (should (>= calls 4))))))
+
 (ert-deftest drgnx-test-pause/runs-processes-and-a-timer-chain-for-its-window ()
   ;; A test that asserts something does NOT happen gives it a short window: the whole window, every link of a chain
   ;; (a `sleep-for' runs one).  The clock is a counter here, 1/16 s per read: about 60 polls, 50 of them the links.

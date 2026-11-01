@@ -3065,11 +3065,22 @@ returns PRED's first non-nil value, polling with `(accept-process-output nil 0.0
 - **A chain of timers runs back to back.** One `accept-process-output` runs one link of a chain of zero-delay
   timers (a view drawing in slices) however long it waits, so while a timer is due the wait polls without a timeout.
   A 20 ms poll per link starved the Search view's 10,100 rows (`drgnx-view-ui/replace-retype-has-no-jank`).
+- **A wait for a frame.** A GUI test waits for what the frame shows with
+  `(drgnx-test-wait-presented &key frame value (frames 2) (secs 30))`, never a short pause after `redisplay`. Each
+  sample redisplays and takes `drgnx-uitest-snapshot`: `glitnir-snapshot` presents what was drawn, forces a paint and
+  returns what that paint committed, so a sample is one trip through the compositor, which answers a size or a map in
+  order with those paints. The wait ends when FRAMES samples in a row are the same (the picture, or VALUE's result for
+  a state the picture does not show) and, on the native shell, `nhwl-presenter-stats` shows no commit owed since the
+  last such wait. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
+  not use it across a count of draws: the samples are paints. A row with a popup that has no parent (mini-frame detaches
+  its frame) passes FRAME, since `drgnx-uitest-root-frame` can find that popup. The session's output lists every test
+  that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.
 - **A window for what must not happen.** A test that asserts something does *not* happen (a second answer, a tick
   that starts nothing) lets processes and timers run with `(drgnx-test-pause SECS)` and then asserts. It is the only
   fixed real-time window in a test, and it can only miss a bug on a loaded machine, never fail a correct one. Not
   `sleep-for`: that runs one link of a timer chain. A helper converted to `drgnx-test-wait` never takes
-  `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline.
+  `(lambda () nil)` or `#'ignore` for a pause, since that now fails at the deadline. In `test/ui` it says what may not
+  happen, `(drgnx-test-pause SECS "WHY")`, checked by `drgnx-lint/cond-tests-have-no-fixed-pause`.
 - **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
   `drgnx-test-real-time`, and each timed `accept-process-output` advances virtual time by the real wait.
 - **A GUI test that makes a frame waits for it to be mapped**: `(drgnx-test-wait (lambda () (eq (frame-visible-p F)

@@ -106,10 +106,9 @@ A macro: `skip-unless' exists only inside the body of `ert-deftest'."
          (make-frame-invisible c))
        (drgnx-test-chrome--settle))))
 
-(defun drgnx-test-chrome--settle ()
-  (redisplay t)
-  (drgnx-test-pause 0.3)
-  (redisplay t))
+(defun drgnx-test-chrome--settle (&optional root)
+  "Wait until ROOT shows what was changed.  A row with a popup that has no parent passes it: see `drgnx-test-wait-presented'."
+  (drgnx-test-wait-presented :frame root))
 
 (defun drgnx-test-chrome--scale (frame) (frame-scale-factor frame))
 
@@ -136,11 +135,11 @@ moves when it is resized or made fullscreen)."
   (let ((old glitnir-enable))
     (unwind-protect
         (progn (setq glitnir-enable nil)
-               (drgnx-test-chrome--settle)
+               (drgnx-test-chrome--settle root)
                (drgnx-uitest-snapshot root))
       (setq glitnir-enable old)
       (redraw-frame root)               ; the picture Glitnir draws again, whole
-      (drgnx-test-chrome--settle))))
+      (drgnx-test-chrome--settle root))))
 
 (defun drgnx-test-chrome--equal-except-p (a b rect excluded)
   "Non-nil when snapshots A and B agree (alpha ignored) on RECT (L T R B) outside the rectangles EXCLUDED."
@@ -264,11 +263,8 @@ After the caller hides the popups it checks the no-popup picture with `drgnx-tes
          (kill-buffer "*chrome-scratch*")))))
 
 (defun drgnx-test-chrome--wait-for (pred &optional timeout)
-  "Redisplay until PRED is non-nil or TIMEOUT (default 3) seconds pass; PRED's value."
-  (let ((end (+ (float-time) (or timeout 3))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) end))
-      (redisplay t) (drgnx-test-pause 0.05))
-    v))
+  "Redisplay until PRED is non-nil, PRED's value; a failed test after TIMEOUT (default 3) seconds."
+  (drgnx-test-wait (lambda () (redisplay t) (funcall pred)) :secs (or timeout 3) :what pred))
 
 ;;;; Scenarios
 
@@ -467,7 +463,7 @@ NONE is the no-popup snapshot.  Return the popups' rectangles."
 
 (defun drgnx-test-chrome--hidden (root rects none)
   "After the caller hid the popups whose rectangles were RECTS: settle, compare with NONE, no violations."
-  (drgnx-test-chrome--settle)
+  (drgnx-test-chrome--settle root)
   ;; RECTS: rectangles, or lists of them as `drgnx-test-chrome--shown' returns
   (drgnx-test-chrome--check-hidden
    root (apply #'append (mapcar (lambda (r) (if (numberp (car r)) (list r) r)) rects)) none)
@@ -499,13 +495,9 @@ NONE is the no-popup snapshot.  Return the popups' rectangles."
          (<= (abs (- (/ (+ (nth 1 rect) (nth 3 rect)) 2) (/ (nth 1 snap) 2))) tol))))
 
 (defun drgnx-test-chrome--wait-stable (fn &optional timeout)
-  "Redisplay until FN's value has not changed for four samples 0.1 s apart (GTK's layout has followed), or TIMEOUT."
-  (let ((end (+ (float-time) (or timeout 5))) (last nil) (same 0))
-    (while (and (< same 4) (< (float-time) end))
-      (redisplay t) (drgnx-test-pause 0.1)
-      (let ((v (funcall fn)))
-        (setq same (if (equal v last) (1+ same) 0) last v)))
-    last))
+  "Wait until FN's value has not changed over five presented frames (GTK's layout has followed); that value.
+A failed test after TIMEOUT (default 5) seconds."
+  (drgnx-test-wait-presented :value fn :frames 5 :secs (or timeout 5)))
 
 (defun drgnx-test-chrome--children (root)
   (drgnx-uitest-child-frames root))
@@ -513,7 +505,8 @@ NONE is the no-popup snapshot.  Return the popups' rectangles."
 (defun drgnx-test-chrome--reading (reader typed probe)
   "Call READER (it opens the minibuffer) while TYPED arrives as keys; PROBE runs when it shows them, then Return ends it.
 Return PROBE's value; an error PROBE signalled (a failed `should') is signalled again here."
-  (let ((result nil) (drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil))
+  (let ((result nil) (drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil)
+        (drgnx-uitest--queue (list 'typed-from-the-timers-below))) ; the session's idle-prompt guard: the answer is coming
     (run-at-time 0.5 nil (lambda () (setq unread-command-events
                                           (append (listify-key-sequence typed) unread-command-events))))
     (run-at-time 3.0 nil (lambda ()
@@ -526,12 +519,17 @@ Return PROBE's value; an error PROBE signalled (a failed `should') is signalled 
       (_ (error "The probe never ran")))))
 
 (defun drgnx-test-chrome--blink-corners (root popups none)
-  "Blink the cursor for a moment: at every sample each popup's two upper corner pixels are still NONE's."
+  "Blink the cursor eight times: after every blink each popup's two upper corner pixels are still NONE's."
   (let ((old (list blink-cursor-interval blink-cursor-delay blink-cursor-blinks)) (snaps nil))
     (setq blink-cursor-interval 0.1 blink-cursor-delay 0 blink-cursor-blinks 0)
     (unwind-protect
         (progn (blink-cursor-mode 1)
-               (dotimes (_ 8) (drgnx-test-pause 0.07) (redisplay t) (push (drgnx-uitest-snapshot root) snaps)))
+               (blink-cursor-start)     ; the mode starts it from an idle timer, and a test is not idle
+               (dotimes (_ 8)
+                 (let ((shown (internal-show-cursor-p)))
+                   (drgnx-test-wait (lambda () (not (eq shown (internal-show-cursor-p))))
+                                    :secs 5 :what "the cursor's next blink"))
+                 (push (drgnx-uitest-snapshot root) snaps)))
       (blink-cursor-mode -1)
       (setq blink-cursor-interval (nth 0 old) blink-cursor-delay (nth 1 old) blink-cursor-blinks (nth 2 old)))
     (dolist (snap snaps)
@@ -614,7 +612,10 @@ scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the asser
         (let ((before (glitnir--draw-count root)))
           (set-frame-size-and-position-pixelwise f (+ 200 (* 20 (% i 3))) (+ 60 (* 10 (% i 2)))
                                                  (+ 200 (* 15 i)) (+ 150 (* 5 i)))
-          (drgnx-test-chrome--settle)
+          (redisplay t)
+          ;; not the settle: its forced paints would count here
+          (drgnx-test-pause 0.3 "no draw of this call may come after the window: the count is the row's result")
+          (redisplay t)
           (push (- (glitnir--draw-count root) before) counts)))
       (setq counts (nreverse counts))
       (should (<= 1 (nth (/ (length counts) 2) (sort (copy-sequence counts) #'<)) 2))
@@ -942,7 +943,7 @@ scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the asser
   (drgnx-test-chrome--with-eldoc
     (let* ((box (drgnx-test-chrome--eldoc-show #'eldoc-box--default-upper-corner-position-function))
            (rect (drgnx-test-chrome--rect box root)))
-      (dotimes (_ 4) (scroll-up-command 6) (redisplay t) (drgnx-test-pause 0.05))
+      (dotimes (_ 4) (scroll-up-command 6) (drgnx-test-wait-presented))
       (drgnx-test-chrome--settle)
       (let ((off (drgnx-test-chrome--off-snapshot root))
             (m (ceiling (* (drgnx-test-chrome--scale root) drgnx-test-chrome--margin))))
@@ -1024,7 +1025,7 @@ scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the asser
 (ert-deftest drgnx-ui-chrome/company-box-scroll ()
   "Scrolling company-box's candidates (the selection runs past the visible rows): chrome holds, no residue."
   (drgnx-test-chrome--with-company-box
-    (dotimes (_ 15) (company-select-next) (redisplay t) (drgnx-test-pause 0.05))
+    (dotimes (_ 15) (company-select-next) (drgnx-test-wait-presented))
     (drgnx-test-chrome--settle)
     (let* ((popups (drgnx-test-chrome--children root))
            (rects (drgnx-test-chrome--shown root popups none)))
@@ -1165,7 +1166,7 @@ with the no-popup picture taken before the read."
   (let ((glitnir-enable on) (name " *chrome-geometry*") (out nil) (f nil))
     (drgnx-test-chrome--settle)
     (unwind-protect
-        (cl-flet ((note () (redisplay t) (drgnx-test-pause 0.1)
+        (cl-flet ((note () (drgnx-test-wait-presented)
                     (push (list (frame-edges f) (frame-edges f 'native-edges) (frame-position f)
                                 (frame-visible-p f) (frame-width f) (frame-height f))
                           out)))
@@ -1194,7 +1195,8 @@ with the no-popup picture taken before the read."
   (let ((glitnir-enable on) (name " *chrome-focus*") (out nil) (root (drgnx-uitest-root-frame)))
     (drgnx-test-chrome--settle)
     (unwind-protect
-        (cl-flet ((note (what) (redisplay t) (drgnx-test-pause 0.1)
+        (cl-flet ((note (what) (drgnx-test-wait-presented)
+                    (drgnx-test-pause 0.1 "no focus event may follow the call: the picture does not show the focus")
                     (push (list what (eq (selected-frame) root) (buffer-name (window-buffer (selected-window)))
                                 (frame-focus-state root))
                           out)))

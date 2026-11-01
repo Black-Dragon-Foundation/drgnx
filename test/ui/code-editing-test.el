@@ -32,7 +32,7 @@
           (re-search-forward "^(defun drgnx-job-step ")
           (forward-line 12)
           (set-window-start (selected-window) (line-beginning-position))
-          (redisplay t) (drgnx-test-pause 0.3)
+          (drgnx-test-wait-presented)
           (should (string-search "(defun drgnx-job-step" (drgnx-sticky--segment (selected-window))))
           (should (or (bound-and-true-p ultra-scroll-mode) (bound-and-true-p pixel-scroll-precision-mode)))
           (when guides (should (bound-and-true-p indent-bars-mode)))

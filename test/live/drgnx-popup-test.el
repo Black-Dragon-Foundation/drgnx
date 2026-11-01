@@ -2,6 +2,7 @@
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-live-popup--edges
   "(drgnx-uitest--json (list :edges (format \"%S\" (mapcar (lambda (w) (list (buffer-name (window-buffer w)) (window-pixel-edges w))) (window-list nil 'nomini)))
@@ -22,6 +23,13 @@
                                         (transient-define-prefix drgnx-live-tr () [(\"a\" \"Do A\" ignore)])
                                         (keymap-global-set \"<f19>\" #'drgnx-live-tr)
                                         (drgnx-uitest--json (list :ok t)))")
+           ;; the start page comes from a 1 s idle timer, after the session is ready: a picture of the windows taken
+           ;; before it has *scratch* where the picture after has the page
+           (drgnx-test-wait
+            (lambda ()
+              (eq t (plist-get (drgnx-ui-call ,sess "(drgnx-uitest--json (list :shown (if (get-buffer-window drgnx-start-buffer-name) t :false)))")
+                               :shown)))
+            :what "the start page")
            ,@body)
        (drgnx-ui-stop (plist-get s :name))
        (delete-directory root t))))

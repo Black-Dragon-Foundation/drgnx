@@ -23,10 +23,9 @@
 (require 'drgnx-explorer)
 
 (defun drgnx-pass-a-ui-test--wait (pred &optional secs)
-  "Wait (SECS, default 15) until PRED holds; `drgnx-test-pause' runs the process sentinels and timers.  PRED's last value."
-  (let ((deadline (+ (float-time) (or secs 15))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (drgnx-test-pause 0.05)))
-  (funcall pred))
+  "Wait (SECS, default 15) until PRED holds; `drgnx-test-wait' runs the process sentinels and timers.  PRED's value, nil
+at the deadline (the caller says what is off)."
+  (ignore-error ert-test-failed (drgnx-test-wait pred :secs (or secs 15))))
 
 (defun drgnx-pass-a-ui-test--shot (dir name)
   "Capture the root frame into DIR and keep it as NAME in the session's temp dir; print where."

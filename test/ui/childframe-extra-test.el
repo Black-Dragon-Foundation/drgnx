@@ -157,8 +157,8 @@ are written out: the runner's selector prefilter reads their names from the `ert
 
 (ert-deftest drgnx-ui-chrome/mixed-dpi-move ()
   "The root moved to a monitor of another scale with a popup shown (`DRGNX_UI_MONITORS=2', `DRGNX_UI_SCALES=\"1 2\"').
-The first monitor is taken out of mutter's layout (gdctl), so mutter moves the root to the second.  After 1.5 s (pgtk
-looks at a monitor's scale on a 1 s timer) the root is at the new scale, every pixel outside the popup is the stock
+The first monitor is taken out of mutter's layout (gdctl), so mutter moves the root to the second.  Once pgtk has
+looked at the monitor's scale (on a 1 s timer) the root is at the new scale, every pixel outside the popup is the stock
 picture's (full damage: nothing of the old scale is left), the popup's chrome and shadow are those of a popup shown at
 the new scale, and `:scale-mismatch' counted paints only during the wait."
   (let ((scales (drgnx-test-extra--scales)))
@@ -167,20 +167,19 @@ the new scale, and `:scale-mismatch' counted paints only during the wait."
     (drgnx-test-chrome--with-scratch
       (let ((name " *extra-mixed*") (moved nil))
         (unwind-protect
-            (let* ((f (drgnx-test-chrome--pf name "a popup that moves with its root" :position '(200 . 120)))
-                   (s1 (progn (drgnx-test-chrome--settle) (frame-scale-factor root))))
+            (let* ((f (drgnx-test-chrome--pf name "a popup that moves with its root" :position '(200 . 120))))
+              (drgnx-test-chrome--settle)
               (drgnx-test-extra--check-scale root (nth 0 scales))
               (drgnx-test-chrome--shown root (list f) none)
               (let ((n0 (drgnx-test-extra--mismatches root)))
                 (apply #'drgnx-test-extra--gdctl "set" (drgnx-test-extra--logical-monitors (list (cons 1 (nth 1 scales)))))
                 (setq moved t)
-                ;; the wait: ≥ 1.5 s, redisplaying, before any probe
-                (let ((end (+ (float-time) 1.6))) (while (< (float-time) end) (redisplay t) (drgnx-test-pause 0.1)))
+                ;; the wait, redisplaying, before any probe: pgtk's 1 s timer finds the new scale.  The factor moves
+                ;; first; the frame's surface follows, and until it has every paint counts a mismatch
+                (drgnx-test-chrome--wait-for (lambda () (= (frame-scale-factor root) (ceiling (nth 1 scales)))) 5)
                 (drgnx-test-chrome--wait-stable (lambda () (list (frame-pixel-width root) (frame-pixel-height root)
-                                                                 (frame-edges f 'outer-edges))))
-                (unless (= (frame-scale-factor root) (ceiling (nth 1 scales)))
-                  (ert-fail (list "the root did not reach the second monitor's scale" :before s1
-                                  :after (frame-scale-factor root) :monitor (frame-monitor-attributes root))))
+                                                                 (frame-edges f 'outer-edges)
+                                                                 (drgnx-test-extra--mismatches root))))
                 (let* ((n1 (drgnx-test-extra--mismatches root))
                        (moved-snap (drgnx-uitest-snapshot root))   ; before anything redraws the root whole
                        (off (drgnx-test-chrome--off-snapshot root))
@@ -278,13 +277,13 @@ is what Glitnir off reads, the keys typed next reach the root, and the popup has
   "Read with READER while TYPED arrives, with Glitnir ON (or off); the notes on the focus while it reads and after.
 ON: the popups' chrome is asserted while it reads (`drgnx-test-chrome--shown') and their place after."
   (let* ((glitnir-enable on)
-         (none (progn (drgnx-test-chrome--settle) (drgnx-uitest-snapshot root)))
+         (none (progn (drgnx-test-chrome--settle root) (drgnx-uitest-snapshot root)))
          (rects nil) (during nil) (result nil))
     (drgnx-test-chrome--reading
      (lambda () (setq result (funcall reader))) typed
      (lambda ()
        (should (drgnx-test-chrome--wait-for (lambda () (drgnx-test-chrome--children root)) 5))
-       (drgnx-test-chrome--settle)
+       (drgnx-test-chrome--settle root)
        (let ((sel (selected-frame)))
          (setq during (list :selected-is-root (eq sel root) :selected-is-child (eq (frame-parent sel) root)
                             :minibuffer-selected (minibufferp (window-buffer (selected-window)))
@@ -316,7 +315,7 @@ child takes it) and after, the typed text arrives, and the popups have chrome."
                    (off (drgnx-test-extra--focus-read root reader "focus" nil)))
               (setq glitnir-enable t)
               (redraw-frame root)
-              (drgnx-test-chrome--settle)
+              (drgnx-test-chrome--settle root)
               (should (equal (plist-get (plist-get on :during) :contents) "focus"))
               (should (plist-get on :after-root-selected))
               (when (eq pkg 'mini-frame) (should (plist-get (plist-get on :during) :selected-is-child)))

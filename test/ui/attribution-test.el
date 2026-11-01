@@ -41,16 +41,21 @@
       (should step)
       (should (equal (plist-get step :fields) ["point"])))))
 
+(defvar drgnx-attr--other nil "The window `drgnx-attr--slow-command''s timer scrolls.")
+
 (defun drgnx-attr--slow-command ()
+  "Start a timer and stay in the command until it has run, so the timer runs during the command."
   (interactive)
-  (drgnx-test-pause 0.4))
+  (let ((ran nil))
+    (run-with-timer 0.05 nil (lambda () (set-window-start drgnx-attr--other 900) (setq ran t)))
+    (drgnx-test-wait (lambda () ran) :secs 5 :what "the timer inside the command")))
 
 (ert-deftest drgnx-ui-attribution/timer-during-a-command ()
   (let ((other (drgnx-attr--two-windows)))
+    (setq drgnx-attr--other other)
     (keymap-global-set "C-c z" #'drgnx-attr--slow-command)
     (unwind-protect
         (progn
-          (run-with-timer 0.15 nil (lambda () (set-window-start other 900)))
           (let* ((r (drgnx-uitest-run (drgnx-uitest-key-events "C-c z")))
                  (moved (seq-find (lambda (s) (equal (plist-get s :window) (drgnx-uitest-window-id other)))
                                   (append (plist-get r :trace) nil))))
@@ -60,8 +65,9 @@
 
 (defun drgnx-attr--move-then-wait ()
   (interactive)
-  (forward-line 3)
-  (drgnx-test-pause 0.3))
+  (let ((seen (length drgnx-uitest-record--log)))
+    (forward-line 3)
+    (drgnx-test-wait (lambda () (> (length drgnx-uitest-record--log) seen)) :secs 5 :what "the recorder's poll")))
 
 (ert-deftest drgnx-ui-attribution/command-change-before-its-sit-for ()
   ;; The poll and other timers run inside the command's sit-for; the command's own change
@@ -78,12 +84,12 @@
 
 (ert-deftest drgnx-ui-attribution/nested-timers-keep-their-own-changes ()
   ;; A timer that waits (sit-for) lets other timers run inside it; each keeps its own changes.
-  (let ((other (drgnx-attr--two-windows)) (sel (selected-window)))
-    (defun drgnx-attr--inner-timer () (set-window-start other 900))
+  (let ((other (drgnx-attr--two-windows)) (sel (selected-window)) (ran nil))
+    (defun drgnx-attr--inner-timer () (set-window-start other 900) (setq ran t))
     (defun drgnx-attr--outer-timer ()
       (with-selected-window sel (goto-char 400))
       (run-with-timer 0.05 nil #'drgnx-attr--inner-timer)
-      (drgnx-test-pause 0.2))
+      (drgnx-test-wait (lambda () ran) :secs 5 :what "the timer inside the timer"))
     (run-with-timer 0.05 nil #'drgnx-attr--outer-timer)
     (let* ((r (drgnx-uitest-run nil))
            (cause-of (lambda (win) (plist-get (seq-find (lambda (s) (equal (plist-get s :window) (drgnx-uitest-window-id win)))

@@ -14,10 +14,8 @@
 (load (expand-file-name "modules/tools/drgnx-live" drgnx-live-ui-test--repo) nil t)
 
 (defun drgnx-live-ui-test--wait (pred &optional secs)
-  "Wait until PRED, up to SECS (default 3) seconds; return its value."
-  (let ((deadline (+ (float-time) (or secs 3))) (v nil))
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (drgnx-test-pause 0.05))
-    v))
+  "Wait until PRED, up to SECS (default 3) seconds; return its value, nil at the deadline (the caller says what is off)."
+  (ignore-error ert-test-failed (drgnx-test-wait pred :secs (or secs 3))))
 
 (ert-deftest drgnx-live-ui/a-resize-reaches-the-view ()
   ;; The view's window made narrower (C-x {): the store sees the window change size, and the view asks the
