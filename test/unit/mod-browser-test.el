@@ -1,4 +1,5 @@
 ;;; mod-browser-test.el --- batch tests: the browser pane, Test Report, Agent's Page -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
