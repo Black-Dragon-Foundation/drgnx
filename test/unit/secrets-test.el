@@ -3,6 +3,7 @@
 ;; ARGV.log, -d fails when FAKE_AGE_FAIL is set) on a temp PATH; the keyring is a hash table behind stubs of
 ;; `drgnx-ai--stored-key' and `drgnx-ai-store-key'.  Keys are built at run time.  The runner gives every test a temp
 ;; HOME, config, data, state and cache.
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
@@ -549,7 +550,11 @@ STORED-CALLS a list of the ids `drgnx-ai-store-key' was called with (newest firs
       (with-temp-file id (insert "test identity\n"))
       (set-file-modes id #o600)
       (cl-letf (((symbol-function 'make-process)
-                 (lambda (&rest args) (let ((p (apply orig args))) (sleep-for 0.3) p))))
+                 ;; age is gone before the caller closes its stdin
+                 (lambda (&rest args)
+                   (let ((p (apply orig args)))
+                     (drgnx-test-wait-ended p :secs 10 :what "age to exit")
+                     p))))
         ;; a fast success: the plaintext comes through
         (with-temp-file age (insert "#!/bin/bash\nPATH=/usr/bin:/bin\nfor a; do f=$a; done\ntr 'A-Za-z' 'N-ZA-Mn-za-m' < \"$f\"\n"))
         (set-file-modes age #o755)

@@ -2,9 +2,11 @@
 ;; The tests that load evil are test/unit/isolated/modal-ai-isolated.el, run in a fresh batch Emacs
 ;; (docs/develop/harness.md, "Modal tests"); this file starts them.  The VS Code (and Emacs) stack has no engine:
 ;; that test runs here, where evil is never loaded.
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-modal)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
@@ -39,8 +41,7 @@
             (insert "(defun greet (name)\n  ")
             (save-excursion (insert "\n  name)\n"))
             (drgnx-ai-ghost--trigger)
-            (let ((deadline (+ (float-time) 5)))
-              (while (and (not (drgnx-ai-ghost-text)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+            (drgnx-test-wait #'drgnx-ai-ghost-text :secs 5 :what "the ghost text")
             (should (equal (drgnx-ai-ghost-text) "(message name)"))
             (drgnx-ai-ghost--clear)
             ;; Edit with AI: the active region, else the defun at point

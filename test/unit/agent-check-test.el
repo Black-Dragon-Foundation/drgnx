@@ -1,4 +1,5 @@
 ;;; agent-check-test.el --- batch tests: MCP Test and Hook Test (a separate Emacs, masked, capped in time) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

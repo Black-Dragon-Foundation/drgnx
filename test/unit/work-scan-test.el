@@ -2,6 +2,7 @@
 ;; The hub's calls are recorded (drgnx-hub-call-sync and drgnx-hub-call stubbed) except in the rows marked "binary",
 ;; which run the real `bin/drgnx work …' against DRGNX_RATATOSKR_BIN.  The fixture tree is the parity oracle's
 ;; (test/fixtures/work-scan-parity/gen.el).
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)

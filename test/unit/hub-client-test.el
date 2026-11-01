@@ -1,6 +1,7 @@
 ;;; hub-client-test.el --- batch tests: the editor's v1 client (hello, proofs, deadlines, skew, the line reader) -*- lexical-binding: t -*-
 ;; Fake hubs (test/fixtures/fake-hub.el) lie about their proof or speak protocol 0; the tests marked "binary" run
 ;; against Ratatoskr (DRGNX_RATATOSKR_BIN) with its Lisp backend, and skip without it (test/no-skip.eld lists them).
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -405,11 +406,11 @@ without the binary."
 (ert-deftest drgnx-hub-client/an-in-process-hub-is-not-waited-for ()
   ;; review I13: an in-process Lisp hub never sends a challenge, so the client does not wait for one
   (drgnx-hub-client-test--in-process
-    (let ((drgnx-hub-client-test--timers nil) (t0 (float-time)))
+    (let ((drgnx-hub-client-test--timers nil))
       (advice-add 'drgnx-timer-start :before #'drgnx-hub-client-test--note-timer)
       (unwind-protect (should (natnump (plist-get (drgnx-hub-call-sync "ping" nil 5) :pid)))
         (advice-remove 'drgnx-timer-start #'drgnx-hub-client-test--note-timer))
-      (should (< (- (float-time) t0) 0.1))
+      ;; no challenge timer was started: nothing waited for one
       (should-not (seq-find (lambda (k) (and (consp k) (eq (car k) 'hub-challenge))) drgnx-hub-client-test--timers)))))
 
 ;;;; Skew
@@ -594,11 +595,11 @@ without the binary."
   (drgnx-hub-client-test--with
     (let ((process-environment
            (cons (concat "DRGNX_RATATOSKR_BIN=" (drgnx-hub-client-test--stub root "exec sleep 3")) process-environment))
-          (inhibit-interaction t) (t0 (float-time)))
+          (inhibit-interaction t))
       (unwind-protect
           (progn
             (should-not (drgnx-hub-ensure))
-            (should (< (- (float-time) t0) 1.0))
+            ;; it came back while the stub (which sleeps) still runs: it did not wait for it
             (should (process-live-p drgnx-hub--ensuring)))
         (when (process-live-p drgnx-hub--ensuring) (delete-process drgnx-hub--ensuring))
         (drgnx-timer-cancel 'hub-ensure)))))
@@ -1127,7 +1128,7 @@ without the binary."
       (drgnx-hub-connect)
       (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
       (drgnx-hub-disconnect)
-      (accept-process-output nil 0.3)
+      (drgnx-test-pause 0.3)                                    ; no resubscribe may start
       (should-not (gethash 'hub-resubscribe drgnx-timer--table))
       (should-not drgnx-hub--resubscribe-since)
       (should (= (length dials) 1)))

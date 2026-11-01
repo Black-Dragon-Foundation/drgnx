@@ -3,6 +3,7 @@
 ;; which is the only stand-in here, for the outside provider.  The mock's log says what reached it (path, the key the
 ;; hub added); the editor's own side is recorded at `drgnx-ai--curl' (which address and which bearer token it sent).
 ;; Without the binary (or the mock beside it) these skip; test/no-skip.eld lists them.
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
@@ -42,10 +43,10 @@
               (make-process :name "ratatoskr-mock" :noquery t :buffer nil :connection-type 'pipe
                             :filter (lambda (_p s) (setq out (concat out s)))
                             :command (list bin "llm" "--script" file "--log" (concat root "mock.jsonl")
-                                           "--parent" (number-to-string (emacs-pid))))))
-         (deadline (+ (float-time) 10)))
-    (while (and (< (float-time) deadline) (process-live-p p) (not (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out)))
-      (accept-process-output p 0.05))
+                                           "--parent" (number-to-string (emacs-pid)))))))
+    (ignore-errors
+      (drgnx-test-wait (lambda () (or (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out) (not (process-live-p p))))
+                       :secs 10 :what "the mock's port"))
     (unless (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out) (error "ratatoskr-mock did not start: %s" out))
     (process-put p :port (string-to-number (match-string 1 out)))
     p))
@@ -137,8 +138,7 @@ this Emacs connected: it holds the editor token and the hub holds a's key.  Skip
   (let (result)
     (apply #'drgnx-ai-request 'chat kind payload (lambda (text info) (setq result (cons text info)))
            :chain (or chain '((a . "m"))) :timeout 10 keys)
-    (let ((deadline (+ (float-time) 20)))
-      (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+    (ignore-errors (drgnx-test-wait (lambda () result) :secs 20 :what "the request's answer"))
     result))
 
 (defun drgnx-ai-gateway-test--through (root path)
@@ -211,6 +211,7 @@ no provider key; the mock got the hub's key and never the editor's token."
       (should-not (plist-member (cddr spec) :key)))))
 
 (ert-deftest drgnx-ai-gateway/gptel-streams-through-the-gateway ()
+  :tags '(:timing)                      ; the two chunks arrive a second apart, and the test asserts that gap
   ;; two chunks a second apart: the first reaches gptel's callback before the second is sent.  gptel comes from the
   ;; user's ELPA, read-only (DRGNX_USER_ELPA, else ~/.config/emacs/elpa), as mod-extras-teardown-test.el loads it
   (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
@@ -315,11 +316,10 @@ no provider key; the mock got the hub's key and never the editor's token."
         (drgnx-ai-providers '((a :name "A" :kind openai :url "http://127.0.0.1:1/v1" :key-env "A_KEY" :caps (chat)))))
     (advice-add 'drgnx-hub-ensure :before (lambda (&rest _) (setq waited t)) '((name . gw-test-spy)))
     (unwind-protect
-        (let ((t0 (float-time)))
+        (progn
           (drgnx-ai-request 'chat 'chat '(:messages [(:role "user" :content "x")]) (lambda (text info) (setq result (cons text info)))
                             :chain '((a . "m")) :timeout 5)
           (should result)                                           ; answered synchronously
-          (should (< (- (float-time) t0) 1))
           (should-not (car result))
           (should (string-search "drgnx hub is starting; try again" (plist-get (cdr result) :error)))
           (should-not waited))

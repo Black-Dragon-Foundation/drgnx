@@ -1,4 +1,5 @@
 ;;; ai-onboard-test.el --- batch tests: onboarding step 4, AI providers -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-onboard)
 (require 'drgnx-ai-probe)

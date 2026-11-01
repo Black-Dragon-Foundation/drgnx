@@ -1,6 +1,7 @@
 ;;; agents-matrix-test.el --- batch tests: the matrix setting and the away signal -*- lexical-binding: t -*-
 ;; The ids the setting accepts are the hub's (read from the protocol's golden file); the away signal is driven with
 ;; a fake idle time and a recorded `drgnx-hub-call', never a hub.
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'json)

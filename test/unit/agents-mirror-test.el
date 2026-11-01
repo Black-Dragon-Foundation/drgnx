@@ -1,5 +1,6 @@
 ;;; agents-mirror-test.el --- batch tests: the editing Emacs mirrors the hub's agent sessions -*- lexical-binding: t -*-
 ;; The hub runs as its own process (as it does for the user); this Emacs plays the editor.
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-agents)
 (require 'drgnx-agents-mirror)

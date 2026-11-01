@@ -1,9 +1,11 @@
 ;;; agent-config-claude-test.el --- batch tests: Claude Code's settings (MCP in three scopes, hooks, skills, routes) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-agent-config-claude)
 (load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-agent-config-claude-test--rewrites nil
   "How many times the rewrite stub ran.")
@@ -54,11 +56,9 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
 
 (defun drgnx-agent-config-claude-test--write (op item scope root)
   "Run the write and wait (for a CLI) for its callback; return what the callback got."
-  (let ((result nil) (deadline (+ (float-time) 15)))
+  (let ((result nil))
     (drgnx-agent-config-write 'claude op item scope root (lambda (r) (setq result r)))
-    (while (and (not result) (< (float-time) deadline))
-      (accept-process-output nil 0.05))
-    (or result (error "The write never called back"))))
+    (drgnx-test-wait (lambda () result) :secs 15 :what "the write's callback")))
 
 (defun drgnx-agent-config-claude-test--mcp (name spec)
   "An MCP server item."
@@ -268,11 +268,10 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
           (should-not (string-match-p "secret-looking-output" (plist-get result :error))))
         ;; one that never ends is killed at the limit
         (drgnx-agent-config-claude-test--put (expand-file-name "claude" bin) "#!/bin/sh\nexec sleep 30\n")
+        ;; (a `sleep 30' that was not killed would not call back within the wait's 15 s)
         (let* ((drgnx-agent-config-claude-cli-timeout 0.5)
-               (start (float-time))
                (result (drgnx-agent-config-claude-test--write 'add item 'user root)))
-          (should (string-match-p "did not finish" (plist-get result :error)))
-          (should (< (- (float-time) start) 10)))))))
+          (should (string-match-p "did not finish" (plist-get result :error))))))))
 
 (ert-deftest drgnx-agent-config-claude/no-secret-on-a-command-line ()
   (drgnx-agent-config-claude-test-env
