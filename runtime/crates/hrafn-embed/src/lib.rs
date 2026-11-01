@@ -6,10 +6,14 @@
 //! See `docs/develop/runtime.md`, "Hrafn".
 
 pub mod cache;
+mod gpu;
+mod local;
 pub mod models;
 pub mod tokens;
 pub mod weights;
 
+pub use gpu::{AdapterFacts, AdapterKind, adapters};
+pub use local::{Device, EmbedFail, Forward, LocalEmbedder, TOKEN_CAP, Tuning};
 pub use models::{
     Arch, LoadError, MODELS, ModelConfig, ModelFile, ModelSpec, default_model, download_bytes,
 };

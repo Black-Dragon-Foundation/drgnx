@@ -57,6 +57,9 @@ tokenizers = { version = "0.23", default-features = false, features = ["fancy-re
 safetensors = "0.8"
 half = "2"
 bytemuck = { version = "1", features = ["extern_crate_alloc"] }
+# hrafn-embed's GPU path. wgpu breaks its API about every 3 months: pinned, moved on purpose
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+pollster = "0.4"
 
 [profile.release]
 strip = true

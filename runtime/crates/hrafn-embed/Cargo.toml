@@ -10,10 +10,12 @@ publish = false
 [dependencies]
 bytemuck.workspace = true
 half.workspace = true
+pollster.workspace = true
 safetensors.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokenizers.workspace = true
+wgpu.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

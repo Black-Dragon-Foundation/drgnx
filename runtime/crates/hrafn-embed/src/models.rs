@@ -193,6 +193,7 @@ pub struct ModelConfig {
     pub local_window: usize,
     pub local_theta: f64,
     pub global_theta: f64,
+    pub norm_eps: f32,
 }
 
 fn size(c: &Value, key: &str) -> Result<usize, LoadError> {
@@ -240,6 +241,7 @@ impl ModelConfig {
                     local_window: size(&c, "local_attention")?,
                     local_theta: real(&c, "local_rope_theta")?,
                     global_theta: real(&c, "global_rope_theta")?,
+                    norm_eps: real(&c, "norm_eps")? as f32,
                 })
             }
             // every layer is global, and one theta serves both
@@ -255,11 +257,26 @@ impl ModelConfig {
                     local_window: 0,
                     local_theta: theta,
                     global_theta: theta,
+                    norm_eps: real(&c, "layer_norm_epsilon")? as f32,
                 })
             }
             other => Err(LoadError::Format(format!(
                 "config.json: model_type {other:?}"
             ))),
         }
+    }
+
+    /// The kernels lay rows out in vec4s and halve a head for its cos and sin, so these sizes must divide evenly.
+    pub(crate) fn check_engine_shape(&self, dims: usize) -> Result<(), LoadError> {
+        let even = self.heads > 0
+            && self.hidden.is_multiple_of(self.heads)
+            && (self.hidden / self.heads).is_multiple_of(8)
+            && self.intermediate.is_multiple_of(4);
+        if self.hidden != dims || !even || self.global_every == 0 {
+            return Err(LoadError::Format(format!(
+                "no engine for this shape: {self:?}"
+            )));
+        }
+        Ok(())
     }
 }

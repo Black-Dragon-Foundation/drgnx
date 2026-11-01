@@ -822,11 +822,34 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **Weights and tokens.** `Weights` reads F16, BF16 and F32 tensors, drops the `model.` prefix, and gives a tensor as f32 or as
   f16 bytes, transposed on request. `Tokens` truncates at `max_tokens` (1,024), never pads, and applies the model's prefixes.
 
+- **The embedder (`local.rs`).** `LocalEmbedder` is one interface over a private `Engine` trait, with one impl per path, so a
+  different engine replaces an impl and nothing else. `embed_ids` takes one batch of at most `TOKEN_CAP` (4,096) tokens and
+  returns unit vectors; it checks every id against the vocabulary before anything reaches an engine. `embed_docs` and
+  `embed_query` are conveniences at a 2,048-token budget. Tokens are flat, with no padding: token t of the batch is row t,
+  and the softmax is streamed, so no S × S matrix exists. Word embeddings are gathered on the CPU, so the table costs no
+  VRAM and fits any adapter's largest binding.
+- **The GPU path (`gpu/`).** ModernBERT's forward pass in WGSL on raw `wgpu`: `lineart`, `norm`, `rope`, `attn`, `glu` and `add`.
+  Weights stay f16 where the adapter has `SHADER_F16`, with an f32 sum (`kernels-f16.wgsl`); otherwise f32, at about 0.7× the
+  speed and 2× the weights' VRAM. Linear weights are always transposed. Sizes come from `ModelConfig`: the model's shape
+  is written in front of `kernels.wgsl` as constants, because WGSL sizes a function's arrays with constants only, and a
+  kernel's input and output widths are pipeline overrides. There is one submit per layer, each waited for up to 10 s, so
+  there is a pause point between any two layers and no submit can run into a driver's watchdog (Forward's `worst_submit`
+  reports the longest). The shaders run without `wgpu`'s bounds checks, which cost 14 to 29 % on the Radeon; `embed_ids`
+  bounds every id and length, and `load` checks each weight's shape. `load` refuses an adapter whose limits don't fit a
+  buffer. A timeout, the device-lost callback, any
+  uncaptured error, or the panic `wgpu` raises out of `poll` on a lost device all end in `EmbedFail::DeviceLost`, so the
+  caller can take the CPU path. `libvulkan` is opened at run time, so a machine with no loader has no adapters.
+
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
 and 1,024 tokens (the edges of the 129-token local span and of the 1,024 cap), and for 4 chunks and 2 queries. Those come
 from a direct forward pass in Transformers, f32, batch 1, CLS, L2-normalised. `data/<model>.selfcheck.json` is one fixed
 text of 167 tokens, longer than the local span so both attention paths run, with its vector.
+
+GPU tests name their adapter in `DRGNX_TEST_ADAPTER` (a substring of its name) and fail when it's unset or matches nothing;
+production skips software adapters, a test's named adapter doesn't. `tests/parity_gpu.rs` runs the real shaders on llvmpipe, Mesa's
+software Vulkan, so no GPU is needed; `full_references_*` (`#[ignore]`) are for a real GPU, as are the rows of `tests/gpu_bench.rs`,
+which print throughput, query time and the stall a second process sees on the same card, and assert nothing.
 
 ## Building and installing Ratatoskr
 
