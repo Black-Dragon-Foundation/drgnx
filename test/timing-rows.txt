@@ -1,0 +1,6 @@
+# NAME BUDGET-RATIO (test/timing-lane.sh): NAME `all` is every :timing test of the live files, any other NAME the :timing
+# tests whose name starts with it (a shard). A row is red when the median of its samples exceeds ratio x the runner's
+# calibration.  The ratio is a placeholder until the first desktop run in a pinned CPU island sets it (the median over
+# the calibration of 20 samples, times 1.25: what two calibrations of one run may differ before it is void).
+# island-calibration 1
+all 100

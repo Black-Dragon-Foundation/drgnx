@@ -150,6 +150,24 @@ tested once:
 3. After the Nidhogg release, drgnx's pin moves to it (`nidhogg.sh`, `install.sh`, the Containerfiles) on a plain
    `ci/<name>` branch: the full run there, on the published release, is `main`'s gate (scenario and perf run there).
 
+## The timing lane and the pre-flight
+
+Every tier sets `DRGNX_TEST_NO_TIMING=1`, so the tests tagged `:timing` (wall-clock assertions) run in one place only:
+the `timing` job of the tiers workflow (`tiers: timing`), which runs `test/timing-lane.sh`. It is report-only
+(`continue-on-error`; `CI gate` does not need it). The lane takes 20 samples of each row of `test/timing-rows.txt`
+(`all`, or a test-name prefix when the set must be sharded), measures a fixed workload before and after (the calibration),
+and passes `DRGNX_TEST_TIME_FACTOR` = calibration / the budgets' reference calibration (`# island-calibration` in the rows
+file) to the tests. A row is `void` when the two calibrations differ by over 25 % (retried once), `red` when its median
+time exceeds the ratio times the calibration or over half the samples fail (rerun once; a pass on the rerun is `flaky`).
+`test/timing-lane.sh --self-test` checks the verdicts.
+
+`bin/drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]` hunts ordering bugs: the `det` files twice
+in two shuffle orders (any red, or a difference between the runs, is red), the `cond` files at 1 CPU, 2 CPUs and half a
+core (`DRGNX_TEST_PODMAN_ARGS=--cpus=…`) N times each, and the process and hub-client tests on a chaos Nidhogg image
+(`DRGNX_TEST_CHAOS_IMAGE`, or built from the tarball by `$DRGNX_DET_IMAGE`; without one P3 is skipped). The
+files are chosen by class tag, so exempt and unclassified files are never run. `REPORT.stamp` (`COMMIT PASSES DATE`) is
+written only when every step ran and passed; a failed, skipped-P3 or killed run leaves none.
+
 ## Parallel files
 
 Each unit-suite job (Emacs 31.1, macOS) runs the suite in one step: `DRGNX_TEST_JOBS` is the runner's cores

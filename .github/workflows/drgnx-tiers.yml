@@ -17,7 +17,7 @@ on:
         type: string
         default: release
       tiers:
-        description: "Space-separated jobs to run: unit no-lisp-writes ui scenario perf tty macos"
+        description: "Space-separated jobs to run: unit no-lisp-writes ui scenario perf tty timing macos"
         type: string
         required: true
     outputs:
@@ -269,6 +269,42 @@ jobs:
         env:
           DRGNX_CONTAINER: podman
         run: bin/drgnx test --container --tty --fedora 45
+
+  # The timing lane (report only): the tests tagged :timing, which every other tier leaves out (DRGNX_TEST_NO_TIMING),
+  # judged against the runner's own speed (test/timing-lane.sh). `continue-on-error`, and `CI gate` does not need it
+  timing:
+    name: Timing tests (report only)
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' timing ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile
+          image: drgnx-test
+          variable: DRGNX_TEST_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: Timing lane
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+        run: test/timing-lane.sh --report "$RUNNER_TEMP/timing-report.txt"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: drgnx-timing-report
+          path: ${{ runner.temp }}/timing-report.txt
+          if-no-files-found: ignore
 
   # macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27): the unit suite and the install plan,
   # with macOS's own bash 3.2. The test binaries are built here (one macOS job: no second macOS runner for them)
