@@ -1,4 +1,5 @@
 ;;; records-test.el --- batch tests: records as JSON, guided by schemas -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-records)
@@ -108,6 +109,7 @@
         (should (records-test--round 'drgnx-records-job-data data))))))
 
 (ert-deftest drgnx-records/nodes-a-scan-makes-round-trip ()
+  :tags '(:cond)                        ; runs git
   (records-test--with-root
     (let ((code (concat root "code/")) (shas nil))
       (make-directory code t)

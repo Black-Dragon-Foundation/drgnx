@@ -1,5 +1,6 @@
 ;;; work-test.el --- batch tests: the work tracker — store, scan, links -*- lexical-binding: t -*-
 ;; Fixture roots (a spec, plans, ledgers, a git repo with commits and a worktree, a board) in temp dirs.
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-work-db)
 (require 'drgnx-work-scan)

@@ -1,4 +1,5 @@
 ;;; http-test.el --- batch tests: HTTP request parsing, SSE usage, the streaming mock -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-http)
@@ -71,6 +72,7 @@
     (should-not (multibyte-string-p (plist-get r :body)))))
 
 (ert-deftest drgnx-http/the-mock-streams-chunks ()
+  :tags '(:cond)                        ; a real mock server and connection
   (let* ((dir (make-temp-file "drgnx-http" t)) (script (expand-file-name "s.eld" dir)) (port nil)
          (mock nil) (got nil) (seen nil))
     (unwind-protect
