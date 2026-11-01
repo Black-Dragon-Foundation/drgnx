@@ -103,6 +103,20 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
               (seq-some (lambda (o) (let ((s (overlay-get o 'after-string))) (and (stringp s) (string-search "Do It" s))))
                         (overlays-in (point-min) (point-max)))))))
 
+(defun drgnx-palette-float-test--wait-shown (frame)
+  "Wait until FRAME shows the candidates; a timeout says what the minibuffer buffer and its overlays held."
+  (condition-case err
+      (drgnx-test-wait (lambda () (drgnx-palette-float-test--shown-p frame)) :what "the candidates in the frame")
+    (ert-test-failed
+     (ert-fail (list err :frame-live (frame-live-p frame) :visible (and (frame-live-p frame) (frame-visible-p frame))
+                     :buffer (and (frame-live-p frame)
+                                  (with-current-buffer (window-buffer (frame-root-window frame))
+                                    (list (buffer-name) (minibufferp) (buffer-string)
+                                          (mapcar (lambda (o) (list (overlay-start o) (overlay-end o)
+                                                                    (overlay-get o 'window) (overlay-get o 'after-string)))
+                                                  (overlays-in (point-min) (point-max)))
+                                          vertico-count))))))))
+
 (ert-deftest palette-float-shows-child-frame-with-look ()
   (drgnx-palette-float-test--with-palette
     (let ((root (drgnx-uitest-root-frame)))
@@ -110,7 +124,7 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
        "Test"
        (lambda ()
          (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
-           (drgnx-test-wait (lambda () (drgnx-palette-float-test--shown-p f)) :what "the candidates in the frame")
+           (drgnx-palette-float-test--wait-shown f)
            (drgnx-test-wait-presented)
            (should (eq (frame-parent f) root))
            (should (frame-visible-p f))
@@ -152,7 +166,7 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
        "Test"
        (lambda ()
          (setq first (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame"))
-         (drgnx-test-wait (lambda () (drgnx-palette-float-test--shown-p first)) :what "the candidates in the frame"))
+         (drgnx-palette-float-test--wait-shown first))
        (list ?\C-g))
       (should-not drgnx-palette-float-test--ran)
       (should (frame-live-p first))
@@ -168,7 +182,7 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
        (lambda ()
          (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
            (should (eq f first))
-           (drgnx-test-wait (lambda () (drgnx-palette-float-test--shown-p f)) :what "the candidates in the frame"))))
+           (drgnx-palette-float-test--wait-shown f))))
       (should-not (frame-visible-p first))
       (should (= 1 (length (seq-filter (lambda (f) (frame-parameter f 'drgnx-palette)) (frame-list))))))))
 
@@ -179,7 +193,7 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
        "Test: Do That"
        (lambda ()
          (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
-           (drgnx-test-wait (lambda () (drgnx-palette-float-test--shown-p f)) :what "the candidates in the frame")
+           (drgnx-palette-float-test--wait-shown f)
            (should (eq (window-frame (active-minibuffer-window)) root))
            (should (eq (selected-frame) root))
            (should (eq (selected-window) (active-minibuffer-window)))
@@ -202,7 +216,7 @@ holds child frames, pixel checks: the palette's rectangle differs from the pictu
        "Test"
        (lambda ()
          (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
-           (drgnx-test-wait (lambda () (drgnx-palette-float-test--shown-p f)) :what "the candidates in the frame")
+           (drgnx-palette-float-test--wait-shown f)
            (drgnx-test-wait-presented)
            (let* ((shot (drgnx-uitest-capture (expand-file-name (format "scale-%s" scale) dir)))
                   (snap (drgnx-uitest-snapshot root))
