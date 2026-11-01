@@ -1,4 +1,5 @@
 ;;; popups-test.el --- tty tier: popups in terminal windows (child frames) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The inner Emacs
 ;; is whatever `emacs' is on PATH (31.1 or later: tty child frames).
 (require 'ert)

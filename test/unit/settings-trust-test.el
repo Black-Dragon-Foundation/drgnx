@@ -1,4 +1,5 @@
 ;;; settings-trust-test.el --- batch tests: workspace trust (classes, states, locations, allowed pairs) -*- lexical-binding: t -*-
+;; test-class: det
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

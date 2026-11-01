@@ -1,4 +1,5 @@
 ;;; terminal-bin-test.el --- batch tests: `drgnx PATH' typed in drgnx's own terminal -*- lexical-binding: t -*-
+;; test-class: det
 ;; A fake emacsclient records its argv; bin/drgnx runs in a temp dir with it first on PATH, never a real server.
 (require 'ert)
 (require 'seq)

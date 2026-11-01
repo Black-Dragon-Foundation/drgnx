@@ -1,4 +1,5 @@
 ;;; onboard-wm-test.el --- batch tests: onboarding step 7 shows the doctor's Desktop row -*- lexical-binding: t -*-
+;; test-class: det
 ;; Nothing touches the machine: config, state and data are temp dirs, PATH is an empty temp bin, no display and no
 ;; window-manager variable (unless a test sets one), nothing is asked and every program run is recorded.
 (require 'ert)

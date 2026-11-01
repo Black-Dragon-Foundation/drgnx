@@ -1,4 +1,5 @@
 ;;; settings-compat-modules-test.el --- design §15's module row C26, in a child Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Row C26 (unified-settings Task 9): a module's `drgnx-module-alist-put' key and a settings.el value for the same
 ;; alist, with `:merge replace' and `alist'.  Each case runs in a child Emacs under a temp HOME
 ;; (test/settings-child.el) with a small package (`sat-alist', under ~/sat): settings.el is applied, then a module

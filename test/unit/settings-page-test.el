@@ -1,4 +1,5 @@
 ;;; settings-page-test.el --- the Settings page -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

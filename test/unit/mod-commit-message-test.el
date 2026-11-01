@@ -1,4 +1,5 @@
 ;;; mod-commit-message-test.el --- batch tests: Git: Generate Commit Message — the staged diff, the chat role, no trailers -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-ai-client)                                  ; loaded here: the command's lazy require would undo the mock

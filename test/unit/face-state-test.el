@@ -1,4 +1,5 @@
 ;;; face-state-test.el --- batch tests: face.eld — what the face remembers -*- lexical-binding: t -*-
+;; test-class: det
 ;; Everything runs in a temp state directory: never the user's ~/.local/state, desktop file or systemd unit.
 (require 'ert)
 (require 'drgnx-paths)

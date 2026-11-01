@@ -1,4 +1,5 @@
 ;;; lint-test.el --- lints over drgnx's own code: colours, keys, faces -*- lexical-binding: t -*-
+;; test-class: det
 ;; The forms are read with the Lisp reader, so comments never count; docstrings are strings
 ;; like any other and are checked only for hex colours.
 (require 'ert)

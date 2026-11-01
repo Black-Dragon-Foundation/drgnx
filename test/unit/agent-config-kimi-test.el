@@ -1,4 +1,5 @@
 ;;; agent-config-kimi-test.el --- batch tests: Kimi Code's settings (MCP servers, hooks, skills) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

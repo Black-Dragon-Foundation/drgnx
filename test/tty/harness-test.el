@@ -1,4 +1,5 @@
 ;;; harness-test.el --- tty tier: the tmux harness itself is sound -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.
 (require 'ert)
 (require 'drgnx-tty-session)

@@ -1,4 +1,5 @@
 ;;; uitest-report-test.el --- batch tests: jank report reduction -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-uitest)
 

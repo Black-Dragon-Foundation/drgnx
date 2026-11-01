@@ -1,4 +1,5 @@
 ;;; core-paths-test.el --- batch tests: drgnx paths -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 

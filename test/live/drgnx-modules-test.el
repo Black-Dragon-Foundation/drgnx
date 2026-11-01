@@ -1,4 +1,5 @@
 ;;; drgnx-modules-test.el --- live: modules driven by real keys in a GUI session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
 

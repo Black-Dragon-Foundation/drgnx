@@ -1,4 +1,5 @@
 ;;; wb-rules-edge-test.el --- batch tests: where buffers go, edge cases -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)

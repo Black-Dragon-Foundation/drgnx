@@ -1,4 +1,5 @@
 ;;; ci-nidhogg-test.el --- drgnx's CI images and macOS job run Nidhogg's release tarballs -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 
 (defconst drgnx-ci-test--nidhogg-root

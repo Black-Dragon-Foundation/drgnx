@@ -1,4 +1,5 @@
 ;;; keys-eld-test.el --- batch tests: the keys settings (they were keys.eld) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs under `drgnx-test-with-areas' (temp config and state folders, settings.el not applied in the
 ;; process).  Keys here are fakes; nothing is bound: the tests read, write and refuse settings.el, and the editor's apply
 ;; and surface refresh are stubbed.

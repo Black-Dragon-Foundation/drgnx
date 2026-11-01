@@ -1,4 +1,5 @@
 ;;; keys-modal-test.el --- batch tests: the Vim profile's leader map and additive modal keys -*- lexical-binding: t -*-
+;; test-class: det
 ;; The shipped profiles, no evil: where a key goes (leader map, panel map, evil's state maps, global), what a
 ;; mixed stack keeps, what keys.eld does, the presets and the after-apply hook.
 (require 'ert)

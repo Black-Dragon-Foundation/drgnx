@@ -1,4 +1,5 @@
 ;;; fmt-tree-test.el --- batch test: all of drgnx's Emacs Lisp is formatted (bin/drgnx fmt) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-fmt)
 

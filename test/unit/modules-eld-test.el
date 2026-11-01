@@ -1,4 +1,5 @@
 ;;; modules-eld-test.el --- batch tests: the module choices in settings.el, with the lock -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Every test runs under `drgnx-test-with-areas' (config and state folders in a fresh temp root, settings.el not applied
 ;; in this process).  The concurrency tests start child `emacs --batch' processes (the runner's environment) and wait
 ;; for them under a 30 s bound.

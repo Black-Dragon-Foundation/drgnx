@@ -1,4 +1,5 @@
 ;;; wb-focus-test.el --- batch tests: Focus Left/Right/Above/Below across editor groups and docks -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-actions)
 (require 'drgnx-paths)

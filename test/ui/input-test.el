@@ -1,4 +1,5 @@
 ;;; input-test.el --- GUI tests: paced clicks, keys, typing, targets -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

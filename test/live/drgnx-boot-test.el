@@ -1,4 +1,5 @@
 ;;; drgnx-boot-test.el --- live smoke test: drgnx boots in a session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
 

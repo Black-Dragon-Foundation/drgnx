@@ -1,4 +1,5 @@
 ;;; keys-edit-test.el --- batch tests: writing the keys settings (bind, unbind, reset, undo) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

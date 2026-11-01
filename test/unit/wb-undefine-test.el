@@ -1,4 +1,5 @@
 ;;; wb-undefine-test.el --- batch tests: sections, tabs, rules, places and bus subscriptions undo themselves -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-modules)
 (require 'drgnx-wb)

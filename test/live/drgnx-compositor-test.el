@@ -1,4 +1,5 @@
 ;;; drgnx-compositor-test.el --- live: sessions under headless sway, Xvfb and Xvfb with i3 -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Each test runs only in its compositor's tier (`bin/drgnx test --ui --compositor sway|x11|i3', or in the GUI
 ;; container: `bin/drgnx test --container --ui --compositor C'); elsewhere it is skipped.
 (require 'ert)

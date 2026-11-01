@@ -1,4 +1,5 @@
 ;;; drgnx-wm-other-test.el --- live: move and restore across monitors under KWin; niri on its one output -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Each test runs only in its compositor's tier, in the window managers' image (test/container/Containerfile.wm):
 ;; `DRGNX_TEST_SELECTOR='"^drgnx-wm/"' bin/drgnx test --container --ui --compositor kwin' (or `niri'); elsewhere
 ;; it is skipped.  The sessions are daemons of the `drgnx' config with monitors of 1280x800 in a temp state root;

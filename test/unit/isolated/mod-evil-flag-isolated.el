@@ -1,4 +1,5 @@
 ;;; mod-evil-flag-isolated.el --- batch tests (own Emacs, test/unit/modal-isolated-test.el): the no-collection flag of editor/evil -*- lexical-binding: t -*-
+;; test-class: det
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it the test skips.
 ;; Its own file because evil-collection cannot be unloaded: the first engine start of a process registers it, so
 ;; "the flag keeps it out" needs a process where nothing started the engine before.  The macros come from

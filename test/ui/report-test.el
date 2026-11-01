@@ -1,4 +1,5 @@
 ;;; report-test.el --- GUI tests: recorder and jank report -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

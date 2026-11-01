@@ -1,4 +1,5 @@
 ;;; editor-m11c1-test.el --- GUI tests: the Replace view, the find bar, layouts, the browser fallback, the Live view, the Shortcuts editor (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: timing
 ;; One walk through M11c-1's surfaces on a graphical frame, a screenshot of each (their paths are printed).  Config,
 ;; state and the git repository are temp dirs; the Live view watches a mock browser (test/fixtures/mock-cdp.el), never
 ;; Chrome; the key profile applied for the Shortcuts editor is undone at the end.

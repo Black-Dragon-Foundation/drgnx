@@ -1,4 +1,5 @@
 ;;; setting-test.el --- batch tests: drgnx-defsetting and the setting metadata -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-setting)

@@ -1,4 +1,5 @@
 ;;; registry-when-test.el --- batch tests: palette-only view commands never act on the buffer they are run from -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

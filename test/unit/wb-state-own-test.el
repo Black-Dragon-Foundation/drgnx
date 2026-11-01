@@ -1,4 +1,5 @@
 ;;; wb-state-own-test.el --- batch tests: pane kinds, roles and subscriptions belong to the module that made them -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

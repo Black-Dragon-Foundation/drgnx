@@ -1,4 +1,5 @@
 ;;; lint-files-test.el --- lint: drgnx's files are read and written through drgnx-file -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every file drgnx keeps (a config file, a state file, a report) is read and written through
 ;; `drgnx-file' (core/drgnx-file.el): it locks, backs up, refuses a file it could not read and keeps
 ;; the user's bytes.  This lint reads every .el under core/, wb/ and modules/ form by form and flags a

@@ -1,4 +1,5 @@
 ;;; statusbar-state-ui-test.el --- GUI tests: the status bar follows the store's editor window (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-uitest)

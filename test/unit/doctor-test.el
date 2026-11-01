@@ -1,4 +1,5 @@
 ;;; doctor-test.el --- batch tests: drgnx doctor -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-doctor)
 (require 'drgnx-macos)   ; so `drgnx-macos-app-dir' is special before a test let-binds it

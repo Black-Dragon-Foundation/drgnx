@@ -1,4 +1,5 @@
 ;;; mod-agent-settings-test.el --- batch tests: the agent settings page -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Every agent home is a temp directory (test/fixtures/agent-config-fixture.el); nothing of the user's is read or
 ;; written.  Minibuffer answers come from a queue (`drgnx-agent-settings-test--answering'); Test is stubbed where a
 ;; result is fed by hand.

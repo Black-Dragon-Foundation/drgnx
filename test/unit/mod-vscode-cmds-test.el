@@ -1,4 +1,5 @@
 ;;; mod-vscode-cmds-test.el --- batch tests: the VS Code editing, file, search, code and view commands -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (dolist (m '("core/drgnx-basics" "editor/drgnx-editing" "tools/drgnx-search" "lang/drgnx-lang" "ui/drgnx-look" "extra/drgnx-mc"))

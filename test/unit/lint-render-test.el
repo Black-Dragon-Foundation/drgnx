@@ -1,4 +1,5 @@
 ;;; lint-render-test.el --- lints: live views mark rows instead of erasing; only the GC owner collects -*- lexical-binding: t -*-
+;; test-class: det
 ;; Two habits behind the render pipeline (docs/develop/core.md "Views", "Mark, don't erase"):
 ;;  - a live view is never redrawn by erasing its buffer: `erase-buffer', `tabulated-list-print' without
 ;;    UPDATE and `delete-region' to `(point-max)' throw away every row, its scroll position and its

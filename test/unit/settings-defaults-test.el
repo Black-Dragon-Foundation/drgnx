@@ -1,4 +1,5 @@
 ;;; settings-defaults-test.el --- batch tests: settings/runtime-defaults.el, the shipped data -*- lexical-binding: t -*-
+;; test-class: det
 ;; The file is data: the three constants of drgnx-ai.el and drgnx-agents.el take their values from it, and the strict
 ;; default of every `:on-error strict' setting is in it.  test/fixtures/settings/defconsts-before.eld is those three
 ;; constants as `main' had them, dumped by a batch Emacs.

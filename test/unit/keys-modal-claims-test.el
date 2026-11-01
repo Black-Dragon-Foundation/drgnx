@@ -1,4 +1,5 @@
 ;;; keys-modal-claims-test.el --- batch tests: Vim's key claims per state -*- lexical-binding: t -*-
+;; test-class: det
 ;; The shipped profiles, no evil: the hand-listed claims of keys/vim.eld with their states, the leader and panel
 ;; maps over other layers' keys, the snapshot of evil's maps when evil arrives.  The tests that need the real evil
 ;; are in test/unit/isolated/keys-modal-claims-isolated.el, run in their own Emacs by the last test here.

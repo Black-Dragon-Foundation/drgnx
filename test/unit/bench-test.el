@@ -1,4 +1,5 @@
 ;;; bench-test.el --- batch tests: the workbench benchmark's verdict -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-bench)
 

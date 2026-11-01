@@ -1,4 +1,5 @@
 ;;; mod-core-test.el --- batch tests: core/basics and core/workbench stay on until restart, recorded exactly -*- lexical-binding: t -*-
+;; test-class: det
 ;; Both modules are `:teardown 'restart': Preferences turns them off at the next start.  Their record is exact
 ;; all the same, so a test sets them up strictly and the module helper unwinds them: nothing is left.
 (require 'ert)

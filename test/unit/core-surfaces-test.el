@@ -1,4 +1,5 @@
 ;;; core-surfaces-test.el --- batch tests: surfaces generated from the registry -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-file)
 (require 'drgnx-surfaces)

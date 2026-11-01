@@ -1,4 +1,5 @@
 ;;; mod-tty-layout-test.el --- batch tests: ui/terminal-layout — the workbench's docks in a small terminal -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has one window and no terminal to resize: the frame's size and the docks are stubbed here; the
 ;; tty tier (test/tty/layout-test.el) runs the real thing.
 (require 'ert)

@@ -1,4 +1,5 @@
 ;;; measure-fixture-test.el --- drgnx-test-alloc and drgnx-test-cpu-ms -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

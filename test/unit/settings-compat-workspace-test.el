@@ -1,4 +1,5 @@
 ;;; settings-compat-workspace-test.el --- compatibility rows C9, C10, C11, C19, C25: the workspace layers in a child Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

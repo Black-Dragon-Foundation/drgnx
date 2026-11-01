@@ -1,4 +1,5 @@
 ;;; core-notice-save-test.el --- batch tests: each Emacs writes its own notice session file -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

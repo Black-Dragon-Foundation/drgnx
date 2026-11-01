@@ -1,4 +1,5 @@
 ;;; mixed-test.el --- tty tier: one daemon, a graphical window and a terminal window — a popup stays in its own -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs).  The daemon is a GUI harness session (headless
 ;; compositor, config drgnx) with one graphical frame; the terminal window is `emacsclient -t' on its socket in a
 ;; private tmux server of the tty tier.  Skipped where the GUI harness cannot run (no mutter).

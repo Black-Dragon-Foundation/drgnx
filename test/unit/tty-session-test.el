@@ -1,4 +1,5 @@
 ;;; tty-session-test.el --- batch tests: the tty harness's key, mouse and screen helpers -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-tty-session)
 

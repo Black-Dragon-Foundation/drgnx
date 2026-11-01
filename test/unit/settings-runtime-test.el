@@ -1,4 +1,5 @@
 ;;; settings-runtime-test.el --- batch tests: the editor's override sender (unified settings Task 22) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-settings-runtime)

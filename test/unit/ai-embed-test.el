@@ -1,4 +1,5 @@
 ;;; ai-embed-test.el --- batch tests: embeddings along the embed role (TEI, Ollama, llama.cpp, OpenAI-compatible) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)

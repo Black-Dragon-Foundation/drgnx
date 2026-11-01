@@ -1,4 +1,5 @@
 ;;; settings-child-test.el --- the settings rows' child Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

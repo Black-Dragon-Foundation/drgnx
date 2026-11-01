@@ -1,4 +1,5 @@
 ;;; tty-fallback-test.el --- batch tests: the fallback layer for legacy terminals (Alt+Shift, F6) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has no terminal: terminals and their parameters are stubbed (the batch frame's own
 ;; `input-decode-map' takes the layer's entries, which each test takes off again); the tty tier
 ;; (test/tty/fallback-test.el) sends the real bytes.

@@ -1,4 +1,5 @@
 ;;; trust-test.el --- batch tests: trusted folders and the guards for files from the others -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Harmless only: TRAMP is asked whether a name is its own (nothing connects: connections signal), Flymake runs
 ;; stub backends that record their calls, compile output is parsed with TRAMP's handler stubbed.
 (require 'ert)

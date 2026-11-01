@@ -1,4 +1,5 @@
 ;;; settings-resolve-test.el --- batch tests: module claims resolved with settings.el -*- lexical-binding: t -*-
+;; test-class: det
 ;; Unified-settings Task 9.  Each test declares its own options (`drgnx-srt--…') and forgets them afterwards; the
 ;; claims, the module stacks and the applier's session state are bound fresh, settings.el lives under
 ;; `drgnx-test-with-config'.  A module's setup is `drgnx-settings-resolve-test--as' (or the recorder, for the

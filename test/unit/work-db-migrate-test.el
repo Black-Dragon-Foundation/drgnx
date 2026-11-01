@@ -1,4 +1,5 @@
 ;;; work-db-migrate-test.el --- batch tests: work.db migrations step by step; spend -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below are of the `local' writer

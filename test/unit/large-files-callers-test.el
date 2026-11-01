@@ -1,4 +1,5 @@
 ;;; large-files-callers-test.el --- batch tests: callers that visit files say what they need if a file is large -*- lexical-binding: t -*-
+;; test-class: det
 ;; Persist and layouts open automatically (`auto'), Replace, AI apply-hunk and the agent edit review need the whole
 ;; file (`whole'); they keep their nil `large-file-warning-threshold', so with editor/large-files off nothing asks
 ;; either.  The module is never set up here: only what the callers bind is checked.

@@ -1,4 +1,5 @@
 ;;; modal-fixture-isolated.el --- batch tests: the modal test fixture finds evil in DRGNX_MODAL_ELPA and never writes there -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)

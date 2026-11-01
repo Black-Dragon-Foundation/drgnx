@@ -1,4 +1,5 @@
 ;;; mermaid-live-test.el --- live test: the Markdown module draws a Mermaid diagram with a real mmdc -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The unit tests check the job's command line and the cache; this runs mmdc (mermaid-cli with headless Chromium) once.
 ;; It skips without mmdc: test/container/Containerfile.tools has it (docs/develop/harness.md, "Real-tool tests").
 (require 'ert)

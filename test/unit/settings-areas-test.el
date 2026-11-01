@@ -1,4 +1,5 @@
 ;;; settings-areas-test.el --- batch tests: keys, modules, large files and the session are settings (Task 16) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs under `drgnx-test-with-areas' (temp config and state folders, settings.el not applied in this
 ;; process) or `drgnx-test-with-modules'; nothing reaches ~.  The per-area tests are in keys-eld-test.el,
 ;; keys-edit-test.el, modules-eld-test.el, session-eld-test.el and large-files-test.el.

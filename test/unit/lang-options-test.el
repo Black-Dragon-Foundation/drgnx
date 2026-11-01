@@ -1,4 +1,5 @@
 ;;; lang-options-test.el --- batch tests: lang/eglot sets its options when eglot loads, never over the user's -*- lexical-binding: t -*-
+;; test-class: det
 ;; Its own file (its own Emacs): the test needs eglot not loaded yet, and other tests of lang/eglot load it.
 (require 'ert)
 (require 'drgnx)

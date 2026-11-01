@@ -1,4 +1,5 @@
 ;;; lint-echo-test.el --- lint: drgnx's own messages on automatic paths only fall -*- lexical-binding: t -*-
+;; test-class: det
 ;; A `message' that is the direct reply to a command just run stays a message.  Anything else that drgnx says on its
 ;; own (a filter, sentinel, timer or hook) is a notice (docs/develop/core.md "Notices"), so the user sees it in the
 ;; Notices list and, when it matters, once in the echo area.  This lint counts `(message "drgnx' in `core/', `wb/' and `modules/'

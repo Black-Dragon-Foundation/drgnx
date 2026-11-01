@@ -1,4 +1,5 @@
 ;;; lint-segments-test.el --- lint: the status bar reads no producer module's internals -*- lexical-binding: t -*-
+;; test-class: det
 ;; A segment that shows a module's state belongs to that module (docs/guide/face.md, "Segments of your own"): the
 ;; module defines it in its setup (`drgnx-statusbar-define-segment', recorded, so its teardown takes it back) and
 ;; calls `(drgnx-statusbar-refresh t)' when its state changes.  The bar itself then has no reason to reach into the

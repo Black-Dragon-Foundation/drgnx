@@ -1,4 +1,5 @@
 ;;; core-notice-echo-pass-test.el --- batch tests: drgnx's automatic-path messages in core and wb are notices -*- lexical-binding: t -*-
+;; test-class: det
 ;; Task 20 (N6).  One test per converted site that a stub can reach: the site's failure posts a notice and says
 ;; nothing in *Messages* under its own "drgnx" prefix.  The sites a stub cannot reach are held by the count lint
 ;; (lint-echo-test.el).  Prefixes `drgnx-notice-core/' and `drgnx-notice-wb/'.

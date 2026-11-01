@@ -1,4 +1,5 @@
 ;;; settings-lisp-page-test.el --- the Lisp files page -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

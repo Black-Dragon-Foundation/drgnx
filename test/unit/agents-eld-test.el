@@ -1,4 +1,5 @@
 ;;; agents-eld-test.el --- batch tests: agents.eld folded into settings.el (the drgnx-agents-* settings) -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs under `drgnx-test-with-runtime-settings' (the eight runtime settings at their defaults, a temp
 ;; config folder, the applier's state fresh).  Values here are fakes; the file holds command names and variable
 ;; names, never keys.  The old file's layer behaviours (last good copy, one stat, the hub reading it) are the

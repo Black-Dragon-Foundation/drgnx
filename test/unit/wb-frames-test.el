@@ -1,4 +1,5 @@
 ;;; wb-frames-test.el --- batch tests: frame roles, saving every window, the bus's frame edges -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has one frame: frame lists are mocked here; real frames are tested live.
 (require 'ert)
 (require 'drgnx-paths)

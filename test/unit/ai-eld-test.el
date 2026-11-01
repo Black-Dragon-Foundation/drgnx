@@ -1,4 +1,5 @@
 ;;; ai-eld-test.el --- batch tests: ai.eld folded into settings.el (drgnx-ai-providers, drgnx-ai-roles); the project's ai.eld -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs under `drgnx-test-with-runtime-settings' (the eight runtime settings at their defaults, config and
 ;; state folders in a fresh temp root); the project is ROOT/proj/.  Values are fakes: the settings name environment
 ;; variables, never a key.  A project's .drgnx/ai.eld and ai-project-routes.eld stay on the config layer until the

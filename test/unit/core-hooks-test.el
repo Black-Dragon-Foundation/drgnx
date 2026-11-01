@@ -1,4 +1,5 @@
 ;;; core-hooks-test.el --- batch tests: staged hooks -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-hooks)

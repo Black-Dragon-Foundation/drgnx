@@ -1,4 +1,5 @@
 ;;; statusbar-test.el --- GUI tests: the status bar follows point and the text on a graphical frame (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

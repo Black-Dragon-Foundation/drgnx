@@ -1,4 +1,5 @@
 ;;; modal-core-test.el --- batch tests: the engine-neutral modal core (leader and panel maps, state, indicator, engines) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-outline)

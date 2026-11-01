@@ -1,4 +1,5 @@
 ;;; drgnx-workbench-test.el --- live: the workbench dock in a GUI session (config=drgnx) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-ui)
 

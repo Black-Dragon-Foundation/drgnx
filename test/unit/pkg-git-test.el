@@ -1,4 +1,5 @@
 ;;; pkg-git-test.el --- batch tests: drgnx sync from Git sources — pinned commits, the lock, offline, upgrade -*- lexical-binding: t -*-
+;; test-class: det
 ;; Offline and in temp dirs, like pkg-test.el: the Git sources are local repositories made here.
 (require 'ert)
 (require 'drgnx-paths)

@@ -1,4 +1,5 @@
 ;;; modal-report-test.el --- batch tests: the key sheet, which-key, Shortcuts and the doctor speak Vim -*- lexical-binding: t -*-
+;; test-class: cond
 ;; No evil: the shipped profiles applied for real in a temp config and state dir; the report file, the sheet and the
 ;; doctor read what that apply wrote.
 (require 'ert)

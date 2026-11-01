@@ -1,4 +1,5 @@
 ;;; core-keys-test.el --- batch tests: key profiles, layers and conflicts -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)

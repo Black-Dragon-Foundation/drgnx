@@ -1,4 +1,5 @@
 ;;; settings-compat-global-test.el --- design §15's global rows, each in a child Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Rows C1, C2, C3, C5, C7, C7b, C13, C14, C16, C17, C18, C22 (unified-settings Task 8).  Each row runs in a child
 ;; Emacs under a temp HOME (test/settings-child.el) with a small package (`sat-pkg', under ~/sat), and goes through
 ;; drgnx's start order for the settings layers: settings.el (`drgnx-settings-apply-global'), custom.el, config.el.

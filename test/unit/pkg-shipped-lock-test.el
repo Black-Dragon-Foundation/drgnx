@@ -1,4 +1,5 @@
 ;;; pkg-shipped-lock-test.el --- batch tests: the shipped lock as soft pins for packages added later; its coverage -*- lexical-binding: t -*-
+;; test-class: det
 ;; Offline and in temp dirs, like pkg-test.el: archives are local directories, the shipped lock is the sandbox's.  The
 ;; coverage test alone reads the checkout (modules/ and etc/drgnx.lock.eld), read-only.
 (require 'ert)

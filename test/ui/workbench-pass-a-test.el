@@ -1,4 +1,5 @@
 ;;; workbench-pass-a-test.el --- GUI tests: C-x b's order, the gio trash fallback, compact folders (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 ;; DEFERRED A-40: three fixes of pass A that only batch tests had seen.  Here they run on real frames with real keys,
 ;; clicks and processes: (1) C-x b lists the window's buffers first (M3e-2); (2) trashing on tmpfs falls back to the Emacs
 ;; trash and keeps the buffers until the file is gone (M3b-15); (3) a chain of open single folders is one row (M3b-1).

@@ -1,4 +1,5 @@
 ;;; mod-close-test.el --- batch tests: Esc and q close help panes, popups and side panes (M12f A7) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'comint)

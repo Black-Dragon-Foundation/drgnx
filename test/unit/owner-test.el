@@ -1,4 +1,5 @@
 ;;; owner-test.el --- batch tests: who owns a Lisp file — a package, Emacs or a drgnx module -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'package)                      ; loaded before its variables are let-bound below
 (require 'drgnx-paths)

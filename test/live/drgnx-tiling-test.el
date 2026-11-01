@@ -1,4 +1,5 @@
 ;;; drgnx-tiling-test.el --- live: the workbench under a tiling window manager (headless sway) -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Runs only in the sway tier (`bin/drgnx test --ui --compositor sway', or in the GUI container:
 ;; `bin/drgnx test --container --ui --compositor sway'); elsewhere it is skipped.  I11 is listed in
 ;; docs/guide/workbench.md.

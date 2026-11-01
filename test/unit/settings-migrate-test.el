@@ -1,4 +1,5 @@
 ;;; settings-migrate-test.el --- batch tests: the old config files move into settings.el once; the shim -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs under `drgnx-test-with-config' (config and state folders under a temp root, so nothing reaches
 ;; ~), with `custom-file' in that config folder and `drgnx-notify' recorded.  The old files are copied from
 ;; test/fixtures/settings/migrate/ (synthetic, with comments; ai-mistaken.eld fails ai.eld's schema).

@@ -1,4 +1,5 @@
 ;;; mod-shortcuts-test.el --- batch tests: the Keyboard Shortcuts editor -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-keys-edit)

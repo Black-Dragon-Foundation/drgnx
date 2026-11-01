@@ -1,4 +1,5 @@
 ;;; mod-evil-ex-test.el --- batch tests: Vim's ex commands, ZZ and C-w keys run drgnx's commands (evil in its own Emacs) -*- lexical-binding: t -*-
+;; test-class: det
 ;; The tests that load evil are test/unit/isolated/mod-evil-ex-isolated.el, run in a fresh batch Emacs
 ;; (docs/develop/harness.md, "Modal tests"); this file starts them.
 (require 'ert)

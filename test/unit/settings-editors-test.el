@@ -1,4 +1,5 @@
 ;;; settings-editors-test.el --- the Settings page's editors and their validation -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

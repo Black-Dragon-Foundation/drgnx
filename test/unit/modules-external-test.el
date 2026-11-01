@@ -1,4 +1,5 @@
 ;;; modules-external-test.el --- batch tests: the switch an external module reads -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)

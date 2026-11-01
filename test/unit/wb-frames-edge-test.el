@@ -1,4 +1,5 @@
 ;;; wb-frames-edge-test.el --- batch tests: each window's buffers, on synthetic frames -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has one frame: the frames here are symbols; each owns real windows of the one frame
 ;; (`drgnx-groups-list' is stubbed), whose tabs are real `drgnx-tabs' window parameters.
 (require 'ert)

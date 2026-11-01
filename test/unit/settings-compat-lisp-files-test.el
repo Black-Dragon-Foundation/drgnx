@@ -1,4 +1,5 @@
 ;;; settings-compat-lisp-files-test.el --- design §15's row C15, in a child Emacs -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Row C15 (unified-settings Task 29): an existing ~/.old/init.el added as a Lisp file, with lisp/ and an
 ;; early-init.el beside it; once plain, once with :emacs-dir.  Each case runs in a child Emacs under a temp HOME
 ;; (test/settings-child.el).

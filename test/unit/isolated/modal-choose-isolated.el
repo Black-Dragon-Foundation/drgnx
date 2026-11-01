@@ -1,4 +1,5 @@
 ;;; modal-choose-isolated.el --- batch tests (own Emacs, test/unit/modal-choose-test.el): choosing a Vim stack with evil -*- lexical-binding: t -*-
+;; test-class: det
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it these tests skip (but
 ;; the one without evil).  Each runs in a fresh Emacs (one test per process: evil, once loaded, cannot be unloaded,
 ;; and the startup modules leave their hooks behind), in a temp configuration with the shipped modules' startup stage

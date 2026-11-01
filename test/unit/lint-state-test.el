@@ -1,4 +1,5 @@
 ;;; lint-state-test.el --- lint: modules subscribe to the workbench state instead of hooking windows -*- lexical-binding: t -*-
+;; test-class: det
 ;; A module that wants to know when windows changed, resized or showed a buffer subscribes to the
 ;; workbench state store (`drgnx-state-subscribe'); it does not add its own function to a window-change
 ;; hook, and does not ask `get-buffer-window' whether a buffer shows somewhere (second argument non-nil).

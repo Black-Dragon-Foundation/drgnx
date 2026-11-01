@@ -1,4 +1,5 @@
 ;;; modules-fixture-test.el --- batch tests: drgnx-test-with-modules sets modules up and tears them down -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'ert-x)
 (require 'drgnx)

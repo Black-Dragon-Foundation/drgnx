@@ -1,4 +1,5 @@
 ;;; git-review-test.el --- GUI tests: the diff view, inline blame, the Review and Pull Requests tabs on a graphical frame (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

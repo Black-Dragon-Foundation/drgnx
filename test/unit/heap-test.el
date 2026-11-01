@@ -1,4 +1,5 @@
 ;;; heap-test.el --- batch tests: the heap audit, its snapshot and the budget check (core/drgnx-heap.el) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'package)                      ; loaded before its variables are let-bound below

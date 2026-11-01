@@ -1,4 +1,5 @@
 ;;; drgnx-ai-test.el --- live: ghost text and inline edit in a GUI session, a mock model answering -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Typing pauses, the suggestion shows as ghost text, Tab takes it; an inline edit opens a review, one of its two
 ;; hunks is applied with keys and Done puts only that one in the file's buffer.
 (require 'ert)
