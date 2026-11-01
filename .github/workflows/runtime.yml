@@ -19,10 +19,18 @@ on:
         description: Minutes of fuzzing per target (default 10)
         type: string
         default: "10"
+      only:
+        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos (empty: all)"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       fuzz_minutes:
         description: Minutes of fuzzing per target (empty means 1 minute on a push to main, none on a pull request)
+        type: string
+        default: ""
+      only:
+        description: "The jobs to run (ci.yml's path filter, .github/ci/paths.txt), as above; empty: all"
         type: string
         default: ""
 
@@ -34,13 +42,19 @@ concurrency:
   group: runtime-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# The cargo caches (docs/develop/ci.md, "What is cached"): keyed by the job, the toolchain and the hash of Cargo.lock
+# and the manifests, restored from the newest entry of the same job and toolchain when the lock moved (cargo rebuilds
+# whatever is stale); saved at the end of a job whose build passed, after .github/ci/cargo-prune.sh dropped what every
+# run rebuilds. Saved by main and ci/* runs, never a pull request's. No incremental data: CI never reuses it.
 env:
   CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CACHE_SAVE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')) }}
 
 jobs:
   linux:
     name: fmt, clippy, tests, conformance, perf (Fedora 45)
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
     runs-on: ubuntu-24.04
     container:
       image: registry.fedoraproject.org/fedora:45
@@ -56,16 +70,21 @@ jobs:
       # util-linux; the fedora image has only util-linux-core (draugr's pdeathsig test runs it too)
       - name: Tools
         working-directory: /
-        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng util-linux bubblewrap
+        run: dnf -y install git cargo rust gcc clippy rustfmt tar zstd gzip procps-ng util-linux bubblewrap jq
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             runtime/target
-          key: cargo-${{ runner.os }}-fedora45-${{ hashFiles('runtime/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-fedora45-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-fedora45-${{ steps.rv.outputs.v }}-
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
         run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
@@ -162,24 +181,54 @@ jobs:
           name: ratatoskr-perf-linux
           path: perf-linux.json
           if-no-files-found: error
+      # last, whatever the tests said: a red test keeps the dependencies the build made
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        working-directory: ${{ github.workspace }}
+        run: bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   msrv:
     name: MSRV 1.88 builds
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-msrv ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             runtime/target
-          key: cargo-${{ runner.os }}-msrv188-${{ hashFiles('runtime/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-msrv188-1.88.0-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-msrv188-1.88.0-
       - run: rustup toolchain install 1.88.0 --profile minimal
-      - run: cargo +1.88.0 build --locked --manifest-path runtime/Cargo.toml
+      - id: build
+        run: cargo +1.88.0 build --locked --manifest-path runtime/Cargo.toml
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        env:
+          RUSTUP_TOOLCHAIN: 1.88.0
+        run: bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   # The escape suite on the runner itself, no container: the full tier (bubblewrap with user namespaces) and, on the arm64
   # runner (free for public repositories), a real arm64 Linux run of the seccomp tests (GL-T4-2: the aarch64 syscall
@@ -188,7 +237,7 @@ jobs:
   # It gates (green on both runners since 74be75cf; a failure here fails the CI gate: docs/develop/ci.md).
   escape-host:
     name: escape suite on the runner (${{ matrix.os }})
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -199,12 +248,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            runtime/target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ hashFiles('runtime/Cargo.lock') }}
       - name: bubblewrap 0.12.0 (checksum verified, built from source)
         run: |
           sudo apt-get update
@@ -228,6 +271,18 @@ jobs:
           unshare --user --map-root-user true
           bwrap --unshare-all --ro-bind / / true
       - run: rustup toolchain install stable --profile minimal
+      # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ steps.rv.outputs.v }}-
       # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
       - id: build
@@ -249,41 +304,36 @@ jobs:
           path: ${{ runner.temp }}/escape/escape-${{ runner.arch }}.json
           if-no-files-found: warn
       # The agent core's sandbox lane (agent system part 1): the tests marked #[ignore] because they need the real
-      # bubblewrap (exec runs in the starter's sandbox). Caches are restored before the build and saved right after it
-      # (actions/cache/restore and /save, never the plain step: a later red step keeps what the build made).
-      - name: cargo cache (agent core)
-        id: core-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            runtime/target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-core-${{ hashFiles('runtime/Cargo.lock') }}
+      # bubblewrap (exec runs in the starter's sandbox).
       - name: build the agent core's tests (test hooks)
         id: core-build
         if: ${{ !cancelled() }}
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --no-run
-      - name: cargo cache save (agent core)
-        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && steps.core-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            runtime/target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-core-${{ hashFiles('runtime/Cargo.lock') }}
       # Landlock ABI 9 is the reduced tier's floor; on a runner kernel below it the launch rows of the reduced tier run
       # on the full tier (tests/launch_sandboxed.rs), which needs bubblewrap 0.12 only. --no-fail-fast: every test
       # binary's failures in one run.
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1
+      # last, whatever the tests said
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && (steps.build.outcome == 'success' || steps.core-build.outcome == 'success') }}
+        run: bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   # The agent core's container rows (agent system part 1, Tasks 11b/11c): a container job runs only an allowed image,
   # with only its worktree mounted, inside its caps, and every escape row is refused. GitHub's Ubuntu runners ship
   # podman; the rows pull busybox (digest-pinned at run time) and skip without podman.
   agent-containers:
     name: agent core container rows (podman)
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-containers ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -292,14 +342,18 @@ jobs:
           persist-credentials: false
       - run: podman --version
       - run: rustup toolchain install stable --profile minimal
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - name: cargo cache (containers)
-        id: ctr-cache
+        id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             runtime/target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ hashFiles('runtime/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ steps.rv.outputs.v }}-
       # + the forwarder a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir) and
       # beside the hub, where the hub looks for it
       - id: build
@@ -308,14 +362,6 @@ jobs:
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
           cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
-      - name: cargo cache save (containers)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.ctr-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            runtime/target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-${{ hashFiles('runtime/Cargo.lock') }}
       # The runner's user has no systemd user session, so rootless podman would fall back to cgroupfs and drop the
       # caps (the hub refuses container jobs then: exec/container.rs, check_limits). Lingering starts the user's
       # systemd; the hub's podman reaches it over the session bus (domr passes DBUS_SESSION_BUS_ADDRESS through).
@@ -335,12 +381,24 @@ jobs:
           runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
             --fake-backend runtime/target/debug/ratatoskr-fake-backend --scenarios test/conformance \
             --only 'container*/*' --require-all
+      # last, whatever the rows said
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        run: bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
   # is for urdr's bundled SQLite: a type-check does not link.
   android:
     name: Android type-check
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-android ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -351,13 +409,37 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup target add aarch64-linux-android
-      - run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: cargo-${{ runner.os }}-android-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-android-${{ steps.rv.outputs.v }}-
+      - id: build
+        run: cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
       - if: ${{ !cancelled() }}
         run: cargo clippy --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -- -D warnings
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        run: bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
+    if: ${{ !inputs.only || contains(format(' {0} ', inputs.only), ' rt-deny ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -380,7 +462,7 @@ jobs:
   # about 70 minutes, and a new target runs with no change here.
   fuzz:
     name: fuzz (shard ${{ matrix.shard }} of 4)
-    if: github.event_name != 'pull_request'
+    if: ${{ github.event_name != 'pull_request' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-fuzz ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     strategy:
@@ -405,18 +487,33 @@ jobs:
           esac
           echo "FUZZ_SECONDS=$secs" >> "$GITHUB_ENV"
       - run: rustup toolchain install "$NIGHTLY" --profile minimal
-      # the key hashes this file too: it names the nightly and the cargo-fuzz version, so a bump is a new cache
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # the key names the nightly and the cargo-fuzz version (the step below), so a bump is a new cache
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin/cargo-fuzz
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             runtime/fuzz/target
-          key: cargo-${{ runner.os }}-fuzz-${{ hashFiles('runtime/fuzz/Cargo.lock', '.github/workflows/runtime.yml') }}
+          key: cargo-${{ runner.os }}-fuzz-${{ env.NIGHTLY }}-cargo-fuzz-0.13.2-${{ hashFiles('runtime/fuzz/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-fuzz-${{ env.NIGHTLY }}-cargo-fuzz-0.13.2-
+      # the corpora the fuzzers grew (runtime/fuzz/corpus/TARGET, beside the committed inputs; a file's name is its
+      # hash, so an old one restored over a committed one is the same input): a longer run starts where the last
+      # stopped. More inputs only reach further; a corpus cannot turn a crash into a pass. Grown by the daily run and
+      # main only, restored everywhere.
+      - id: corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/fuzz/corpus
+          key: fuzz-corpus-${{ matrix.shard }}-${{ hashFiles('runtime/fuzz/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.shard }}-
       - name: cargo-fuzz 0.13.2
+        id: tool
         run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
       # every target of the shard runs, whatever an earlier one found; the step fails at the end naming each that failed
       - name: Run each target
+        id: run
         run: |
           failed=""
           targets=$(cargo "+$NIGHTLY" fuzz list --fuzz-dir runtime/fuzz | sort | awk -v s="$SHARD" 'NR % 4 == s')
@@ -433,10 +530,30 @@ jobs:
           name: fuzz-crashes-${{ matrix.shard }}
           path: runtime/fuzz/artifacts
           if-no-files-found: ignore
+      # a run's own targets were built when it fuzzed at all (a red target included)
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.tool.outcome == 'success' && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
+        env:
+          RUSTUP_TOOLCHAIN: ${{ env.NIGHTLY }}
+        run: bash .github/ci/cargo-prune.sh runtime/fuzz/Cargo.toml runtime/fuzz/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-fuzz
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/fuzz/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - if: ${{ !cancelled() && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/fuzz/corpus
+          key: ${{ steps.corpus.outputs.cache-primary-key }}
 
   macos:
     name: tests, conformance, perf (macOS 27)
-    if: github.event_name != 'schedule'
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
     timeout-minutes: 45
     steps:
@@ -444,12 +561,17 @@ jobs:
         with:
           persist-credentials: false
       - run: brew install rust
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             runtime/target
-          key: cargo-${{ runner.os }}-brew-${{ hashFiles('runtime/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-brew-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-brew-${{ steps.rv.outputs.v }}-
       # draugr runs only the git of the developer dir xcode-select's link names, and refuses Xcode under the
       # admin-writable /Applications (on the runner even its git is the runner user's); the Command Line Tools, which
       # the image installs, pass. Before the tests: draugr's git tests and the escape rows run that git.
@@ -522,3 +644,14 @@ jobs:
       - name: clippy on darwin (the pure-Rust crates)
         if: ${{ !cancelled() }}
         run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -- -D warnings
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        run: bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            runtime/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}

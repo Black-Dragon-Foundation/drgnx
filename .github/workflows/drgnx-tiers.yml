@@ -20,6 +20,10 @@ on:
         description: "Space-separated jobs to run: unit no-lisp-writes ui scenario perf tty timing macos"
         type: string
         required: true
+      selector:
+        description: "Narrowed: the ERT selector of each test job (DRGNX_TEST_SELECTOR, an Emacs regexp or a selector form); empty: every test"
+        type: string
+        default: ""
     outputs:
       drgnx_commit:
         description: The drgnx commit tested
@@ -91,6 +95,7 @@ jobs:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_TEST_LOCALE: C.UTF-8      # the one job under a UTF-8 locale; the others run with none
+          DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 
   # The one-writer gate (Urdr schema 7, storage §9 step 4): the whole unit suite once with DRGNX_WORK_DB_GATE=1, where
@@ -129,6 +134,7 @@ jobs:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_WORK_DB_GATE: "1"
+          DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(nproc)" bin/drgnx test --container
 
   # The GUI tier: real Nidhogg sessions under headless mutter, in test/container/Containerfile.gui; the live tests that
@@ -166,6 +172,7 @@ jobs:
           DRGNX_CONTAINER: podman
           DRGNX_TEST_NO_TIMING: "1"
           DRGNX_UI_TEST_TIMEOUT: "3000"
+          DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: bin/drgnx test --container --ui
 
   scenario:
@@ -194,6 +201,7 @@ jobs:
         env:
           DRGNX_CONTAINER: podman
           DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: bin/drgnx test --container --scenario
 
   perf:
@@ -270,6 +278,7 @@ jobs:
         working-directory: drgnx
         env:
           DRGNX_CONTAINER: podman
+          DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: bin/drgnx test --container --tty --fedora 45
 
   # The timing lane (report only): the tests tagged :timing, which every other tier leaves out (DRGNX_TEST_NO_TIMING),
@@ -367,4 +376,5 @@ jobs:
         env:
           DRGNX_TEST_RERUN: "1"
           DRGNX_TEST_NO_TIMING: "1"
+          DRGNX_TEST_SELECTOR: ${{ inputs.selector }}
         run: DRGNX_TEST_JOBS="$(sysctl -n hw.ncpu)" bin/drgnx test

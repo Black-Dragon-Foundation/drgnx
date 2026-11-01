@@ -72,13 +72,18 @@
     (should (> pos 0))))
 
 (ert-deftest drgnx-ci/tiers-callers-name-real-tiers ()
-  ;; each name in a caller's `tiers:' is a job of drgnx-tiers.yml, and tty.yml is one of the callers
+  ;; each name in a caller's `tiers:' is a job of drgnx-tiers.yml (of an expression, the quoted default the path filter's
+  ;; output falls back to), and tty.yml is one of the callers
   (let ((tiers (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/drgnx-tiers.yml"))))
     (dolist (f (directory-files (drgnx-ci-test--path ".github/workflows") t "\\.yml\\'"))
       (let ((s (drgnx-ci-test--slurp f)))
         (when (string-search "uses: ./.github/workflows/drgnx-tiers.yml" s)
-          (should (string-match "^      tiers: \\(.+\\)$" s))
-          (dolist (tier (split-string (match-string 1 s)))
+          ;; the call's input (after the call), not the path filter's output of that name
+          (should (string-match "^      tiers: \\(.+\\)$" s (string-search "uses: ./.github/workflows/drgnx-tiers.yml" s)))
+          (dolist (tier (let ((v (match-string 1 s)))
+                          (split-string (if (string-match "\\`\\${{ needs\\.changes\\.outputs\\.tiers || '\\([a-z -]+\\)' }}\\'" v)
+                                            (match-string 1 v)
+                                          v))))
             (should (string-match-p (concat "^  " (regexp-quote tier) ":\n") tiers))))))
     (should (string-search "uses: ./.github/workflows/drgnx-tiers.yml"
                            (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/tty.yml"))))))

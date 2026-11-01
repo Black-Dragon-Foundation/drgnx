@@ -2,7 +2,9 @@
 # job), the unit suite in plain and gate mode (formatting, byte-compile with no warnings and the lints are tests in it)
 # on the pinned Nidhogg (drgnx-tiers.yml), shellcheck, and the leak scan. The `gate` job ("CI gate") is the check
 # branch protection requires. On a joint round's branch (ci/joint/*) the tiers run in Nidhogg's run on its new build
-# instead, so they are skipped here and the gate allows exactly that. docs/develop/ci.md
+# instead, so they are skipped here and the gate allows exactly that. A pull request or a ci/* push runs only the jobs
+# its change can affect (the `changes` job, .github/ci/paths.txt); a manual run can name jobs and a test selector, and
+# its gate is then "CI gate (partial)". docs/develop/ci.md
 name: CI
 
 on:
@@ -15,6 +17,14 @@ on:
         description: Minutes of fuzzing per target (default 10)
         type: string
         default: "10"
+      jobs:
+        description: "Narrowed: the jobs to run, ids from .github/ci/paths.txt (rt-linux ... unit no-lisp-writes ui ... macos tty); empty: all"
+        type: string
+        default: ""
+      selector:
+        description: "Narrowed: the tiers' ERT selector (DRGNX_TEST_SELECTOR, an Emacs regexp: \\| not |); empty: every test"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -25,27 +35,67 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # What the change can affect (.github/ci/changes.sh over .github/ci/paths.txt). Anything uncertain runs everything;
+  # the jobs below run unless it said they need not, so they run if it failed (and the gate fails).
+  changes:
+    name: What the change can affect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      runtime: ${{ steps.c.outputs.runtime }}
+      tiers: ${{ steps.c.outputs.tiers }}
+      partial: ${{ steps.c.outputs.partial }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/ci
+      - id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          GATE: CI gate
+          PUSH: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes
+          CAN: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes ui scenario perf macos tty timing
+          REQUEST: ${{ inputs.jobs }}
+          SELECTOR: ${{ inputs.selector }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/ci/changes.sh .github/ci/paths.txt | tee -a "$GITHUB_OUTPUT"
+
   # Ratatoskr's CI (a `needs:` cannot reach a job of another workflow file, so the call is the job)
   runtime:
     name: Runtime
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.runtime != '') }}
     permissions:
       contents: read
     uses: ./.github/workflows/runtime.yml
     with:
       fuzz_minutes: ${{ inputs.fuzz_minutes }}
+      only: ${{ needs.changes.outputs.runtime }}
 
-  # No `needs:`: the tiers build the Ratatoskr their tests use, so a red runtime job never skips or starves them (a
-  # `needs:` on the runtime job skipped this suite on three pushes in a row and failed it for a missing artifact on a fourth).
+  # No `needs:` but the changes job: the tiers build the Ratatoskr their tests use, so a red runtime job never skips or
+  # starves them (a `needs:` on the runtime job skipped this suite on three pushes in a row and failed it for a missing
+  # artifact on a fourth).
   tiers:
     name: Tiers
-    if: ${{ !startsWith(github.ref, 'refs/heads/ci/joint/') }}
+    needs: changes
+    if: ${{ !cancelled() && !startsWith(github.ref, 'refs/heads/ci/joint/') && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
     permissions:
       contents: read
       packages: read
     uses: ./.github/workflows/drgnx-tiers.yml
     with:
       nidhogg: release
-      tiers: unit no-lisp-writes
+      tiers: ${{ needs.changes.outputs.tiers || 'unit no-lisp-writes' }}
+      selector: ${{ inputs.selector }}
 
   scripts:
     name: Shell scripts and leak scan
@@ -56,18 +106,22 @@ jobs:
         with:
           persist-credentials: false
       - name: shellcheck
-        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh
+        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit test/container/nidhogg.sh .github/ci/changes.sh .github/ci/cargo-prune.sh
+      - name: The path filter's rules and table (changes.sh --self-test)
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/changes.sh .github/ci/paths.txt --self-test
       - name: Leak scan (the pre-commit hook's patterns over every tracked file)
         if: ${{ !cancelled() }}
         run: .githooks/pre-commit --all
 
-  # The one check branch protection requires of this workflow: every job above succeeded (the tiers may be skipped on
-  # a joint round's branch only). It always runs, and a failed, cancelled or other skipped job fails it
-  # (docs/develop/ci.md, "Gates").
+  # The one check branch protection requires of this workflow: every job above succeeded, or was skipped because the
+  # change cannot affect it (the changes job's outputs), or is the tiers job on a joint round's branch. It always runs,
+  # and a failed, cancelled or other skipped job fails it. A narrowed run's is "CI gate (partial)", which no rule
+  # requires (docs/develop/ci.md, "Gates").
   gate:
-    name: CI gate
+    name: ${{ needs.changes.outputs.partial == 'true' && 'CI gate (partial)' || 'CI gate' }}
     if: always()
-    needs: [runtime, tiers, scripts]
+    needs: [changes, runtime, tiers, scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -78,4 +132,7 @@ jobs:
       - uses: ./.github/actions/gate
         with:
           needs: ${{ toJSON(needs) }}
-          allow-skipped: ${{ startsWith(github.ref, 'refs/heads/ci/joint/') && 'tiers' || '' }}
+          allow-skipped: >-
+            ${{ startsWith(github.ref, 'refs/heads/ci/joint/') && 'tiers' || '' }}
+            ${{ needs.changes.result == 'success' && needs.changes.outputs.runtime == '' && 'runtime' || '' }}
+            ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}

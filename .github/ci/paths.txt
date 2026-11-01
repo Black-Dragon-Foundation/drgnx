@@ -1,0 +1,74 @@
+# The path filter of ci.yml, macos.yml and gui.yml (.github/ci/changes.sh reads it; docs/develop/ci.md, "Path
+# filter"). A row: a glob (`*` matches across `/`) and the jobs a change there can affect; the first row that matches
+# wins, and a path no row matches runs everything. ALL: every job below. -: no job (the changes, scripts and gate jobs
+# always run). rt-*: runtime.yml's jobs; the rest are drgnx-tiers.yml's tiers.
+jobs: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos unit no-lisp-writes ui scenario perf macos tty timing
+
+# the outputs the workflows pass on: runtime.yml's `only`, drgnx-tiers.yml's `tiers`
+list runtime: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuzz rt-macos
+list tiers: unit no-lisp-writes ui scenario perf macos tty timing
+
+# the workflows and CI's scripts, the command and installer, the test harness and its settings, the hooks, the lock
+# and the Nidhogg pin (test/container/nidhogg.sh): everything
+.github/*                     ALL
+.githooks/*                   ALL
+.gitignore                    ALL
+bin/*                         ALL
+install.sh                    ALL
+harness/*                     ALL
+settings/*                    ALL
+etc/drgnx.lock.eld            ALL
+test/container/*              ALL
+test/support/*                ALL
+test/fixtures/*               ALL
+# Rust: its tests read core/ and the hub's method table (docs/develop/hub.md), and the Lisp tiers run its binaries
+runtime/fuzz/*                rt-fuzz
+runtime/*                     ALL
+core/*                        ALL
+docs/develop/hub.md           ALL
+# Lisp outside core/: the tiers; runtime's cargo test reads modules/ too (norn's migration test reads its Lisp)
+modules/*                     rt-linux rt-macos unit no-lisp-writes ui scenario perf macos tty timing
+wb/*                          unit no-lisp-writes ui scenario perf macos tty timing
+keys/*                        unit no-lisp-writes ui scenario perf macos tty timing
+init/*                        unit no-lisp-writes ui scenario perf macos tty timing
+etc/*                         unit no-lisp-writes ui scenario perf macos tty timing
+# tests read the docs and the README (generated references, the guide's examples, the scenario configs)
+docs/*                        unit no-lisp-writes ui scenario perf macos tty timing
+README.md                     unit no-lisp-writes ui scenario perf macos tty timing
+# a tier's own tests; the unit suite's lints read every test file, and the conformance rows run in runtime's jobs
+test/conformance/*            rt-linux rt-macos rt-escape rt-containers unit no-lisp-writes macos timing
+test/unit/*                   unit no-lisp-writes macos timing
+test/ui/*                     unit no-lisp-writes macos ui timing
+test/live/*                   unit no-lisp-writes macos ui timing
+test/scenario/*               unit no-lisp-writes macos scenario
+test/perf/*                   unit no-lisp-writes macos perf
+test/tty/*                    unit no-lisp-writes macos tty timing
+# files nothing builds, installs, tests or reads (the leak scan, which reads every file, always runs)
+SECURITY.md                   -
+LICENSE                       -
+LICENSES/*                    -
+# any other test/ file (the suite's lists, timing rows, bench, install and bootstrap) matches no row: everything
+
+# bite cases (changes.sh --self-test): PATHS | REQUEST | SELECTOR | RUN | PARTIAL
+test wb/drgnx-wb.el                         | -        | -                | unit no-lisp-writes ui scenario perf macos tty timing | false
+test modules/tools/drgnx-browser.el         | -        | -                | rt-linux rt-macos unit no-lisp-writes ui scenario perf macos tty timing | false
+test runtime/crates/huginn/src/lib.rs       | -        | -                | ALL   | false
+test runtime/Cargo.lock                     | -        | -                | ALL   | false
+test core/drgnx-registry.el                 | -        | -                | ALL   | false
+test .github/workflows/ci.yml               | -        | -                | ALL   | false
+test test/container/nidhogg.sh              | -        | -                | ALL   | false
+test some/new/place.txt                     | -        | -                | ALL   | false
+test test/flaky.eld                         | -        | -                | ALL   | false
+test SECURITY.md                            | -        | -                | -     | false
+test SECURITY.md,LICENSES/GPL-3.0.txt       | -        | -                | -     | false
+test docs/guide/modules.md                  | -        | -                | unit no-lisp-writes ui scenario perf macos tty timing | false
+test docs/develop/hub.md                    | -        | -                | ALL   | false
+test runtime/fuzz/fuzz_targets/line.rs      | -        | -                | rt-fuzz | false
+test test/scenario/buffers-test.el          | -        | -                | unit no-lisp-writes scenario macos | false
+test test/unit/ci-workflows-test.el,wb/x.el | -        | -                | unit no-lisp-writes ui scenario perf macos tty timing | false
+# narrowed dispatches: what the change needs and the run leaves out, or a selector, makes the run partial
+test core/drgnx-registry.el                 | rt-linux | -                | rt-linux | true
+test core/drgnx-registry.el                 | unit     | drgnx-registry/  | unit     | true
+test wb/drgnx-wb.el                         | ui       | -                | ui       | true
+test SECURITY.md                            | unit     | -                | unit     | false
+test test/unit/ci-workflows-test.el         | unit no-lisp-writes macos timing | - | unit no-lisp-writes macos timing | false
