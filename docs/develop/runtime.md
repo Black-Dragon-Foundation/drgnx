@@ -805,6 +805,33 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
   scheme, so it proves the `NO_PROXY` rule without TLS). A kill -9 between a registration's row write and its answer is
   declined (phase 6's `op` rows are the target).
 
+## Hrafn
+
+`runtime/crates/hrafn` is the code-search indexer. It is generic: it has no hub types, and the binary passes in its
+paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` under the default feature `host`.
+
+### The code store
+
+`CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
+0600, migrations as data). Schema v1:
+
+| Table | Holds |
+|---|---|
+| `file` | path, git blob, class, language, generated flag, size, indexed time |
+| `chunk` | byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
+| `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
+| `symbol`, `symbol_fts` | defined names with kind, span, chunk and definer; a trigram FTS over the names |
+| `vec` | one quantized vector per `(model, key)` |
+| `meta` | `urdr`'s table: the schema version, `chunker_version`, `built_from` and the like |
+
+`vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
+model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
+
+FTS5 has one tokenizer per table, and `tokenchars '-'` would hide `timer` in `drgnx-timer--fire` from the `body`
+column. So the `symbols` column holds names encoded by `encode_symbol`, which maps each ASCII punctuation character to a
+private-use character (a token character in `unicode61`): a whole name matches only the whole name, and `body`
+still splits it. Queries encode the same way.
+
 ## Building and installing Ratatoskr
 
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
