@@ -1,4 +1,5 @@
 ;;; wb-state-test.el --- batch tests: the workbench state store (classifier, roles, records, observer, reads) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'bytecomp)

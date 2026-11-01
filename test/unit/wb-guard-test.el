@@ -1,4 +1,5 @@
 ;;; wb-guard-test.el --- batch tests: the jank guard knows owned windows (I9) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-wb)
 (require 'drgnx-jank-guard)

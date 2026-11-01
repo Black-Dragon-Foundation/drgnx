@@ -1,4 +1,5 @@
 ;;; wb-buffers-test.el --- batch tests: the Buffers panel -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx-paths)

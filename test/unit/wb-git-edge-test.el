@@ -1,4 +1,5 @@
 ;;; wb-git-edge-test.el --- batch tests: git decorations, edge cases -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-git)
 

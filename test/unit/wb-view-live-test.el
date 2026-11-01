@@ -1,4 +1,5 @@
 ;;; wb-view-live-test.el --- batch tests: views drawing live — timer, visibility, slices, places -*- lexical-binding: t -*-
+;; test-class: det
 ;;
 ;; Every test runs on the virtual clock (test/fixtures/clock-fixture.el): marks arm the view's timers through the
 ;; timer layer, and `drgnx-test-advance' runs them.  Slices read `drgnx-timer-now', which a test replaces with a clock
@@ -135,6 +136,7 @@ core/workbench's setup has it (`drgnx-view-test-store-on'): the store has seen t
     (push (list (drgnx-view-test--text v) (drgnx-view-live-test--stat v :rows-drawn)) drgnx-view-live-test--seen)))
 
 (ert-deftest drgnx-view-live/a-mark-from-a-process-filter-only-marks ()
+  :tags '(:cond)
   (skip-unless (executable-find "cat"))
   (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render)
     (let* ((drgnx-view-live-test--view v) (drgnx-view-live-test--seen nil) (drgnx-view-live-test--lines 0)

@@ -1,4 +1,5 @@
 ;;; wb-state-events-test.el --- batch tests: the workbench state store's events, lanes and causes -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

@@ -1,8 +1,10 @@
 ;;; wb-panes-test.el --- batch tests: pane kinds, forwarded to the docks before the grid -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-panes)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-panes-test--with (&rest body)
@@ -316,6 +318,7 @@
        (select-window editor)))))
 
 (ert-deftest drgnx-panes/show-from-a-timer-or-another-buffer-keeps-focus ()
+  :tags '(:cond)
   (drgnx-panes-test--with
    (drgnx-pane-define-kind 'pane-term :home 'bottom :placeholder (drgnx-panes-test--buffer " *drgnx pane-term*"))
    (let ((editor (selected-window)) (ran nil))
@@ -324,7 +327,7 @@
        (should (eq (selected-window) editor)))
      (drgnx-pane-hide 'pane-term)
      (run-with-timer 0 nil (lambda () (drgnx-pane-show 'pane-term) (setq ran t)))
-     (sleep-for 0.2)
+     (drgnx-test-wait (lambda () ran) :what "the timer ran")
      (should ran)
      (should (drgnx-pane-window 'pane-term))
      (should (eq (selected-window) editor)))))
