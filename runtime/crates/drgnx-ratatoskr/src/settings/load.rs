@@ -367,6 +367,9 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-agents-manager-context" => {
             values.agents_manager_context = default.agents_manager_context;
         }
+        "drgnx-search-model-mirror" => {
+            values.search_model_mirror = default.search_model_mirror.clone();
+        }
         _ => {}
     }
 }

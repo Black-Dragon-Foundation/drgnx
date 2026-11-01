@@ -194,6 +194,11 @@ pub fn state_dir(env: &Env) -> PathBuf {
     PathBuf::from(state(env))
 }
 
+/// `(drgnx-cache-dir)`: a name ending in "/" (Hrafn's models are under its `models/`).
+pub fn cache_dir(env: &Env) -> PathBuf {
+    PathBuf::from(dir(env, None, "XDG_CACHE_HOME", ".cache"))
+}
+
 /// `<tmp>`, Emacs's `temporary-file-directory` on Linux and macOS: the first of TMPDIR, TMP, TEMP that is set, else
 /// /tmp (a relative one is out of scope).
 fn temporary_file_directory(env: &Env) -> String {
@@ -518,6 +523,16 @@ mod tests {
         assert_eq!(
             e(&[("HOME", "/hm"), ("DRGNX_CONFIG_DIR", "c")]),
             Path::new("/hm/.config/drgnx/")
+        );
+    }
+
+    #[test]
+    fn cache_dir_follows_drgnx_paths_dir() {
+        let e = |vars: &[(&str, &str)]| cache_dir(&Env::new(vars, 1));
+        assert_eq!(e(&[("HOME", "/hm")]), Path::new("/hm/.cache/drgnx/"));
+        assert_eq!(
+            e(&[("HOME", "/hm"), ("XDG_CACHE_HOME", "/xc")]),
+            Path::new("/xc/drgnx/")
         );
     }
 

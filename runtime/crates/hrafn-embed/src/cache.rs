@@ -56,7 +56,8 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
     Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn part_path(dir: &Path, file: &ModelFile) -> PathBuf {
+/// Where `file` of a model lives until its sum has passed.
+pub fn part_path(dir: &Path, file: &ModelFile) -> PathBuf {
     dir.join(format!("{}.part", file.name))
 }
 

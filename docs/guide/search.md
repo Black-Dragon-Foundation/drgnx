@@ -219,3 +219,6 @@ machine. If you point the role at a hosted provider such as OpenRouter, the chun
 keep the secrets out with `:exclude`, or turn search off for that project with `:off t`. A project's
 `.drgnx/` files can only choose roles among the providers you configured, never add a provider of their own ([ai.md](ai.md)).
 The vectors and the chunks' text stay in the local index.
+
+Models are only ever downloaded after you agree to the model and its size, from Hugging Face, or from the mirror you name in
+`drgnx-search-model-mirror`, which is laid out as that host. Every file is checked against its pinned sum.

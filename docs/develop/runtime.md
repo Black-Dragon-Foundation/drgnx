@@ -588,6 +588,11 @@ methods and the task that ports it; a row is never deleted for it.
   hangs up before the answer ended. It ends when `--parent` is gone.
 - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
+- `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host. It prints
+  `MOCK-HF-PORT N` and `MOCK-HF-CDN-PORT M`: `/…/resolve/REV/FILE` on N answers 302 to `FILE?sig=1` on M, as the real host
+  sends a download to its CDN, or to URL with `--location`; M serves DIR's files and honours `Range: bytes=START-` unless
+  `--no-range`. `--cut` stops the first response for FILE after BYTES, `--bad` flips FILE's last byte. The log is JSONL:
+  `{server, path, range, credentials}` per request.
 
 **Variables** in strings: `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
 $HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the scenarios' directory, absolute: its
@@ -844,6 +849,16 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   row, on a `rayon` pool of `threads` that the embedder owns. The non-linear kernels are built twice on x86-64, baseline and
   AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON. No AVX-512: it ran slower
   here. `worst_submit` is zero on this path.
+
+- **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
+  `drgnx-search-model-mirror` or the Hugging Face host at `{base}/{repo}/resolve/{revision}/{file}`, and only with a `Consent`
+  whose model and bytes match; the consent is kept in `runtime.db`'s `kv` (`search.consent`). The target of `resolve/` is a
+  signed URL on another host, so redirects are followed by hand: at most 3, to https only (plain http only between loopback
+  addresses, for a local mirror and the test host), with no credentials in the URL. Each file is written to `<file>.part`,
+  verified and renamed. A failed run keeps its parts, and the next one asks `resolve/` again and resumes with `Range`. Nothing
+  retries: `Offline` is reported once, and the hub tries again at its next start or on `search/model-download`. Proxies come
+  from the environment, through `bifrost::upstream::Upstream::get`. `test-tiny` (test-hooks builds, `test/fixtures/test-tiny/`)
+  is a model of no weights for the flows that need no inference.
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023

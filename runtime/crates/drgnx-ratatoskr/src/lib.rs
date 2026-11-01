@@ -88,6 +88,7 @@ pub mod runner;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
+pub mod search;
 pub mod server;
 pub mod sessions;
 pub mod settings;

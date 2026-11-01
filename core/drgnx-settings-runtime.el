@@ -29,6 +29,11 @@
 (defvar drgnx-settings-changed-functions)
 (defvar drgnx-settings-file-written-functions)
 
+(drgnx-defsetting drgnx-search-model-mirror nil
+  "Where embedding models are downloaded from: a URL laid out as the Hugging Face host, or nil for that host."
+  :type '(choice (const :tag "Hugging Face" nil) string) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
 (defun drgnx-settings-runtime--str (x)

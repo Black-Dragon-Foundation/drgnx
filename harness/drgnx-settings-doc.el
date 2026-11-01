@@ -28,6 +28,7 @@
     (require drgnx-look)
     (require drgnx-large-files)
     (require drgnx-search-chunk)          ; Task 17: drgnx-search-{include,exclude,off}
+    (require drgnx-settings-runtime)      ; drgnx-search-model-mirror
     (require drgnx-sandbox)               ; drgnx-sandbox-memory-max, -secret-files (US-WORKSPACE-NEVER-1)
     (require drgnx-sandbox-proxy)         ; drgnx-sandbox-proxy-pinned-addresses
     (require drgnx-settings-trust)        ; Task 18: drgnx-trust-parents

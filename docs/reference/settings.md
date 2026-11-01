@@ -746,6 +746,23 @@ Only files matching one of these globs are indexed (nil: all); see `drgnx-search
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-search-model-mirror
+
+Where embedding models are downloaded from: a URL laid out as the Hugging Face host, or nil for that host.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "Hugging Face" nil) string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
+
 ## drgnx-search-off
 
 Non-nil turns a project's semantic search off; see `drgnx-search-config'.
