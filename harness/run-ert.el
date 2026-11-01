@@ -1039,6 +1039,9 @@ Return the directory, or nil without native compilation."
 (defvar drgnx-run-ert--primitives nil
   "Every primitive as the run found it, before any test: an alist (SYMBOL . SUBR).")
 
+(defvar drgnx-run-ert--real-path nil "The run's PATH, as the run found it, before any test.")
+(defvar drgnx-run-ert--real-exec-path nil "The run's `exec-path', as the run found it, before any test.")
+
 (defun drgnx-run-ert--install-with-real-primitives (install subr-name)
   "Around `comp-subr-trampoline-install': INSTALL SUBR-NAME's trampoline with every primitive a test replaced its own.
 A test that stubs one primitive and then another Emacs has no trampoline for yet (a cold eln dir) makes Emacs compile
@@ -1051,7 +1054,13 @@ trampoline (each replaced primitive has its own already); the test's definitions
     (unwind-protect
         (progn (let ((native-comp-enable-subr-trampolines nil))
                  (dolist (r replaced) (fset (nth 0 r) (nth 1 r))))
-               (funcall install subr-name))
+               ;; …and with the run's own PATH: a test that gives itself an empty one (onboard-wm-test.el) would
+               ;; otherwise have gcc find no `as' when it compiles a trampoline cold (DX-CONTAINER-AS-2)
+               (let ((process-environment (if drgnx-run-ert--real-path
+                                              (cons (concat "PATH=" drgnx-run-ert--real-path) process-environment)
+                                            process-environment))
+                     (exec-path (or drgnx-run-ert--real-exec-path exec-path)))
+                 (funcall install subr-name)))
       (let ((native-comp-enable-subr-trampolines nil))
         (dolist (r replaced) (fset (nth 0 r) (nth 2 r)))))))
 
@@ -1062,6 +1071,7 @@ trampoline (each replaced primitive has its own already); the test's definitions
     (mapatoms (lambda (sym)
                 (when (and (fboundp sym) (subr-primitive-p (symbol-function sym)))
                   (push (cons sym (symbol-function sym)) drgnx-run-ert--primitives))))
+    (setq drgnx-run-ert--real-path (getenv "PATH") drgnx-run-ert--real-exec-path (copy-sequence exec-path))
     (advice-add 'comp-subr-trampoline-install :around #'drgnx-run-ert--install-with-real-primitives)
     ;; DX-CONTAINER-AS-1: a test that stubs one of these under a PATH of its own would compile its trampoline
     ;; then, and gcc finds no `as'; compile it now, with the run's PATH

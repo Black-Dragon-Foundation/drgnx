@@ -98,7 +98,9 @@ stubs `call-process` (a spy that fails the test, or a fake result) and then a pr
 catch Emacs's own compile, but only on a cold directory (a fresh container, or no other file of the run compiled it
 first). The runner records every primitive before the tests and compiles each trampoline with the real ones: around
 `comp-subr-trampoline-install` it puts back each primitive a test replaced and restores the test's definitions after,
-with `native-comp-enable-subr-trampolines` off for those swaps, so they install nothing.
+with `native-comp-enable-subr-trampolines` off for those swaps, so they install nothing, and with the run's own `PATH`
+and `exec-path`: a test that gives itself an empty `PATH` (the onboarding tests) would otherwise have gcc find no `as`
+on a cold directory, and fail when run alone though a whole run (which shares the directory) passes.
 
 An installed trampoline is what all native code then calls for that primitive, and `comp-installed-trampolines-h` is
 what keeps it from being collected. A test that let-binds that table to a fresh one (to compile trampolines cold)
