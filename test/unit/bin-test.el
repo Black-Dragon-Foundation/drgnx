@@ -452,11 +452,22 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 (ert-deftest drgnx-bin/open-waits-for-a-slow-daemon ()
   ;; DRGNX_OPEN_WAIT seconds (30 by default) for the daemon; it says so a third of the way in (10 s of 30).
   (drgnx-bin-test--with-open
-    (write-region "2" nil (expand-file-name "delay" dir))
-    (let ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=3" env) "open")))
-      (should (eql 0 (car r)))
-      (should (string-search "still starting" (cdr r)))
-      (should (file-exists-p (expand-file-name "running" dir))))
+    ;; a handshake, not a pause: the fake daemon starts and never answers on its own; the test makes it answer only
+    ;; once `drgnx open' has said "still starting"
+    (write-region "never" nil (expand-file-name "delay" dir))
+    (let* ((out "") (done nil)
+           (process-environment (append (cons "DRGNX_OPEN_WAIT=3" env) (list "DRGNX_EMACS") process-environment))
+           (proc (make-process :name "drgnx-open" :command (list drgnx-bin-test--bin "open") :connection-type 'pipe
+                               :noquery t :filter (lambda (_p s) (setq out (concat out s)))
+                               :sentinel (lambda (_p _e) (setq done t)))))
+      (unwind-protect
+          (progn
+            (drgnx-test-wait (lambda () (string-search "still starting" out)) :what "the still-starting notice")
+            (write-region "" nil (expand-file-name "running" dir))
+            (drgnx-test-wait (lambda () done) :what "bin/drgnx open's exit")
+            (should (eql 0 (process-exit-status proc)))
+            (should (file-exists-p (expand-file-name "running" dir))))
+        (when (process-live-p proc) (delete-process proc))))
     ;; a daemon that never answers: the wait is DRGNX_OPEN_WAIT, and the message names it
     (delete-file (expand-file-name "running" dir))
     (write-region "never" nil (expand-file-name "delay" dir))

@@ -271,13 +271,13 @@ jobs:
         run: bin/drgnx test --container --tty --fedora 45
 
   # The timing lane (report only): the tests tagged :timing, which every other tier leaves out (DRGNX_TEST_NO_TIMING),
-  # judged against the runner's own speed (test/timing-lane.sh). `continue-on-error`, and `CI gate` does not need it
+  # judged against the runner's own speed (test/timing-lane.sh). Report only because the lane script reports and exits 0
+  # (a red job would make the run red); `CI gate` does not need it
   timing:
     name: Timing tests (report only)
     if: ${{ contains(format(' {0} ', inputs.tiers), ' timing ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    continue-on-error: true
     permissions:
       contents: read
       packages: read

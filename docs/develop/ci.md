@@ -154,7 +154,7 @@ tested once:
 
 Every tier sets `DRGNX_TEST_NO_TIMING=1`, so the tests tagged `:timing` (wall-clock assertions) run in one place only:
 the `timing` job of the tiers workflow (`tiers: timing`), which runs `test/timing-lane.sh`. It is report-only
-(`continue-on-error`; `CI gate` does not need it). The lane takes 20 samples of each row of `test/timing-rows.txt`
+(the script reports and exits 0, so a red verdict never reddens the run; `CI gate` does not need it). The lane takes 20 samples of each row of `test/timing-rows.txt`
 (`all`, or a test-name prefix when the set must be sharded), measures a fixed workload before and after (the calibration),
 and passes `DRGNX_TEST_TIME_FACTOR` = calibration / the budgets' reference calibration (`# island-calibration` in the rows
 file) to the tests. A row is `void` when the two calibrations differ by over 25 % (retried once), `red` when its median

@@ -47,14 +47,14 @@
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
     (drgnx-ci-test--has tiers "workflow_call:" "drgnx_ref:" "nidhogg:" "tiers:" "drgnx_commit:")
-    (dolist (job '("unit" "no-lisp-writes" "ui" "scenario" "perf" "tty" "macos"))
+    (dolist (job '("unit" "no-lisp-writes" "ui" "scenario" "perf" "tty" "timing" "macos"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" job)
                              (drgnx-ci-test--job tiers job))))
     ;; every job checks drgnx out into drgnx/ (in Nidhogg's run the caller's checkout is Nidhogg), at the asked ref
     (let ((count (lambda (needle) (length (drgnx-ci-test--matches (concat "\\(" (regexp-quote needle) "\\)") tiers)))))
-      (should (= 8 (funcall count "runs-on:")))
-      (should (= 8 (funcall count "          path: drgnx\n")))
-      (should (= 8 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
+      (should (= 9 (funcall count "runs-on:")))
+      (should (= 9 (funcall count "          path: drgnx\n")))
+      (should (= 9 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
     (dolist (job '("unit" "no-lisp-writes" "ui"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: bins-linux" "uses: ./drgnx/.github/actions/fetch-test-bins"))
@@ -223,7 +223,7 @@
     (drgnx-ci-test--has action "image=\"ghcr.io/black-dragon-foundation/$NAME:$(sha256sum \"test/container/$FILE\" | cut -c1-16)\""
                         "podman pull -q \"$image\"" "echo \"$VAR=$base\"")
     (let ((pairs (drgnx-ci-test--matches "containerfile: \\([A-Za-z.]+\n *image: [a-z-]+\n *variable: [A-Z_]+\\)" tiers)))
-      (should (= 6 (length pairs)))
+      (should (= 7 (length pairs)))
       (dolist (p pairs)
         (should (string-match "\\`\\([A-Za-z.]+\\)\n *image: \\([a-z-]+\\)\n *variable: \\([A-Z_]+\\)\\'" p))
         (let ((file (match-string 1 p)) (name (match-string 2 p)) (var (match-string 3 p)))

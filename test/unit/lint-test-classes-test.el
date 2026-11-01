@@ -1,4 +1,5 @@
 ;;; lint-test-classes-test.el --- every test file has a class, and a lint for each class -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A test file's class is the comment line `;; test-class: det' (or `cond', `timing'), an exact line within its first
 ;; 15 lines; a test's own `:det', `:cond' or `:timing' tag wins over its file's class.  The files are read with the
 ;; Lisp reader, never loaded.  A lint applies to a file as soon as it has a class line.  Files in
@@ -367,10 +368,10 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
         (progn
           (drgnx-run-ert--audit-advise)
           (let ((drgnx-run-ert--audit-current "x/det"))
-            (sleep-for 0.01)
-            (should (equal drgnx-run-ert--audit-seen '(("x/det" . sleep-for))))
+            (accept-process-output nil 0.01)
+            (should (equal drgnx-run-ert--audit-seen '(("x/det" . accept-process-output))))
             (setq drgnx-run-ert--audit-seen nil)
-            (sleep-for 0)                ; no wait: not a use of real time
+            (accept-process-output nil 0)  ; no wait: not a use of real time
             (drgnx-test-with-clock () (sleep-for 5) (sit-for 1))
             (should-not drgnx-run-ert--audit-seen)))
       (drgnx-run-ert--audit-unadvise))))
@@ -391,5 +392,31 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
           (dolist (p drgnx-run-ert--audit-primitives)
             (should-not (advice-member-p 'drgnx-run-ert-audit p))))
       (drgnx-run-ert--audit-uninstall))))
+
+(ert-deftest drgnx-run-ert/an-audited-run-fails-a-det-test-that-sleeps ()
+  ;; a real runner (drgnx-run-ert-batch, one Emacs per file) on a real det file: the sleeping test is red with
+  ;; DRGNX_TEST_AUDIT_FAIL=1, and the same run without it is green
+  (let* ((file (drgnx-lint-classes-test--tmp ";; test-class: det"
+                                             '(ert-deftest x/sleeps () (sleep-for 0.01) (should t))
+                                             '(ert-deftest x/quiet () (should t))
+                                             '(ert-deftest x/own-tag-is-cond () :tags '(:cond) (sleep-for 0.01) (should t))))
+         (dir (file-name-directory file)) (results (expand-file-name "r.json" dir))
+         (run (lambda (&rest env)
+                (let ((process-environment (append env (list (concat "DRGNX_TEST_RESULTS=" results)
+                                                             "DRGNX_TEST_SELECTOR" "DRGNX_TEST_SHUFFLE" "DRGNX_TEST_RERUN"
+                                                             "DRGNX_TEST_LEAKS" "DRGNX_TEST_AUDIT" "DRGNX_TEST_AUDIT_FAIL"
+                                                             "DRGNX_TEST_AUDIT_ALL")
+                                                   process-environment)))
+                  (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir))))
+         (json (lambda () (json-parse-string (with-temp-buffer (insert-file-contents results) (buffer-string))
+                                             :object-type 'plist))))
+    (should-not (eql 0 (funcall run "DRGNX_TEST_AUDIT=1" "DRGNX_TEST_AUDIT_FAIL=1")))
+    (let ((j (funcall json)))
+      (should (equal 1 (plist-get j :failed)))
+      (should (equal "x/sleeps" (plist-get (aref (plist-get j :failures) 0) :name))))
+    (should (eql 0 (funcall run "DRGNX_TEST_AUDIT=1")))
+    (should (eql 0 (funcall run)))))
 
 ;;; lint-test-classes-test.el ends here
