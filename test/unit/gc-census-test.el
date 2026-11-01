@@ -207,7 +207,7 @@
                     (expand-file-name "settings.el" (getenv "DRGNX_CONFIG_DIR")) nil 'silent)
       (let ((gc-cons-threshold (* 64 1024 1024)) (gc-cons-percentage 0.1)
             (drgnx-settings-apply--entries nil) (drgnx-settings-area--cache nil))
-        (drgnx-test-with-clock ()
+        (drgnx-test-with-clock (:auto t)
           (unwind-protect
               (progn
                 (drgnx-gc-setup)

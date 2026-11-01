@@ -218,7 +218,7 @@
 
 (ert-deftest drgnx-uitest/settled-waits-from-the-start-of-a-measurement ()
   ;; A measurement with no input must still give followers (timers) the quiet period.
-  (drgnx-test-with-clock ()
+  (drgnx-test-with-clock (:auto t)
     (let ((drgnx-uitest--queue nil) (unread-command-events nil)
           (drgnx-uitest--last-delivery 0.0)
           (drgnx-uitest-record--last-change 0.0)
@@ -252,7 +252,7 @@
               ((symbol-function 'drgnx-uitest-enqueue) #'ignore)
               ((symbol-function 'recursive-edit) (lambda () (setq deadline drgnx-uitest--run-deadline)))
               ((symbol-function 'drgnx-uitest-measure-end) (lambda () nil)))
-      (drgnx-test-with-clock ()
+      (drgnx-test-with-clock (:auto t)
         (let ((t0 (float-time)))
           (drgnx-uitest-run nil)
           (should (< 14.9 (- deadline t0) 15.5))               ; 5 s * 3

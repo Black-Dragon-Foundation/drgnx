@@ -354,7 +354,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   (drgnx-onboard-test--with root
     (let ((opened 0) (noninteractive nil)
           (process-environment (cons "DRGNX_UI_RUN" process-environment)))
-      (drgnx-test-with-clock ()
+      (drgnx-test-with-clock (:auto t)
         (cl-letf (((symbol-function 'drgnx-onboard-welcome) (lambda () (cl-incf opened))))
           (drgnx-onboard--on-first-window)
           (should (drgnx-timer-active-p 'onboard-welcome))                ; one idle one-shot in the timer layer

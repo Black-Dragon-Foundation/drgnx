@@ -47,7 +47,7 @@
           (drgnx-modules--table (list (list 'test/tm :doc "a module for the timer tests")))
           (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
           (drgnx-modules--features nil))
-     (unwind-protect (drgnx-test-with-clock () ,@body)
+     (unwind-protect (drgnx-test-with-clock (:auto t) ,@body)
        (delete-directory state t))))
 
 (defun drgnx-timer-test--on (setup)
@@ -451,7 +451,7 @@
 (ert-deftest drgnx-timer/pending-layer-timers-are-named-and-cleared ()
   ;; point 4: the end check names a pending layer timer by key, owner and kind, then the table is empty
   (let ((drgnx-timer-test--calls nil))
-    (let ((err (should-error (drgnx-test-with-clock ()
+    (let ((err (should-error (drgnx-test-with-clock (:auto t)
                                (drgnx-timer-start 'tm-left 5 #'drgnx-timer-test--note))
                              :type 'ert-test-failed)))
       (should (string-match-p "(tm-left :core start)" (format "%S" err))))

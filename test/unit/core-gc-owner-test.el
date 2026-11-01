@@ -15,7 +15,7 @@
   `(let ((gc-cons-threshold gc-cons-threshold) (gc-cons-percentage gc-cons-percentage)
          (drgnx-gc--base drgnx-gc--base))
      (skip-unless (not (boundp 'gcmh-mode)))   ; never shadow a loaded gcmh
-     (drgnx-test-with-clock ()
+     (drgnx-test-with-clock (:auto t)
        (unwind-protect (progn ,@body)
          (drgnx-gc-mode -1)
          (drgnx-timer-cancel 'gc-idle)

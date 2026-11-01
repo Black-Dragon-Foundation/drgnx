@@ -283,7 +283,7 @@ answers recorded in ANSWERS)."
          (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
          (setup (plist-get (cdar drgnx-modules--table) :setup)))
     (unwind-protect
-        (drgnx-test-with-clock (:allow-pending t)
+        (drgnx-test-with-clock (:allow-pending t :auto t)
           (dotimes (_ 3)
             (should-not (drgnx-modules--run-setup 'tools/agents setup))
             (drgnx-modules--record 'tools/agents 'startup 0 'ok)
@@ -329,7 +329,7 @@ current, VIEW its view."
             (,s (drgnx-agents--make :name (format "view-test %d" (cl-incf drgnx-agents-ui-test--n)) ,@(nthcdr 3 spec)))
             (,buffer nil) (,view nil))
        (unwind-protect
-           (drgnx-test-with-clock (:allow-pending t)
+           (drgnx-test-with-clock (:allow-pending t :auto t)
              (should-not (drgnx-modules--run-setup 'tools/agents (plist-get (cdar drgnx-modules--table) :setup)))
              (drgnx-modules--record 'tools/agents 'startup 0 'ok)
              (delete-other-windows)
@@ -603,7 +603,7 @@ mirror does nothing."
               (,buffer nil))
          (unwind-protect
              (cl-letf (((symbol-function 'drgnx-agents-ui--maybe-mirror) #'ignore))
-               (drgnx-test-with-clock (:allow-pending t)
+               (drgnx-test-with-clock (:allow-pending t :auto t)
                  (should-not (drgnx-modules--run-setup 'tools/agents (plist-get (cdar drgnx-modules--table) :setup)))
                  (drgnx-modules--record 'tools/agents 'startup 0 'ok)
                  (delete-other-windows)

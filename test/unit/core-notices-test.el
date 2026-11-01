@@ -25,7 +25,7 @@
 and no list buffer; the list's buffer, view type and hook are gone after."
   (declare (indent 0) (debug t))
   `(drgnx-notice-test-with-model
-     (drgnx-test-with-clock ()
+     (drgnx-test-with-clock (:auto t)
        (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
              (drgnx-notices-test--ran nil))
          (drgnx-command-define 'thing :category "Test" :title "Open Thing" :command #'drgnx-notices-test--open
@@ -275,7 +275,7 @@ and no list buffer; the list's buffer, view type and hook are gone after."
 
 (ert-deftest drgnx-signal/notices-changed-is-posted ()
   (drgnx-notice-test-with-model
-    (drgnx-test-with-clock ()
+    (drgnx-test-with-clock (:auto t)
       (drgnx-test-with-state
         (let ((got nil))
           (unwind-protect

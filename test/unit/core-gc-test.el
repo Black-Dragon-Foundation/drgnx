@@ -9,7 +9,7 @@
 (defmacro drgnx-gc-test--clocked (&rest body)
   "BODY on the virtual clock, the idle GC's key cancelled after it."
   (declare (indent 0))
-  `(drgnx-test-with-clock ()
+  `(drgnx-test-with-clock (:auto t)
      (unwind-protect (progn ,@body) (drgnx-gc-mode -1) (drgnx-timer-cancel 'gc-idle))))
 
 (ert-deftest drgnx-gc/startup-collects-rarely-then-a-steady-threshold-and-idle-collection ()
@@ -51,7 +51,7 @@
   (require 'drgnx)
   ;; on the virtual clock: the timers the steps before the failure start (the notice session file's, …) end with it
   (let ((gc-cons-threshold most-positive-fixnum))
-    (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-test-with-clock (:allow-pending t :auto t)
       (cl-letf (((symbol-function 'drgnx-guard-mode) #'ignore) ((symbol-function 'drgnx-hooks-install) #'ignore)
                 ((symbol-function 'drgnx-pkg-activate) #'ignore) ((symbol-function 'drgnx-pkg-guard-mode) #'ignore)
                 ((symbol-function 'drgnx--core-commands) (lambda () (error "Broken"))))

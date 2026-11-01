@@ -23,7 +23,7 @@
           (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil)
           (drgnx-modules--features nil) (drgnx-modules--left nil)
           (drgnx-timer-own-test--seen 'unset) (drgnx-timer-own-test--later nil))
-     (drgnx-test-with-clock () ,@body)))
+     (drgnx-test-with-clock (:auto t) ,@body)))
 
 (defun drgnx-timer-own-test--on ()
   (drgnx-modules--run-one 'test/a (alist-get 'test/a drgnx-modules--table) 'startup))

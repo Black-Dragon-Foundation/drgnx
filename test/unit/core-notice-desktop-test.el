@@ -13,7 +13,7 @@
 sends are recorded in `sent' as (TITLE . BODY), oldest first, instead of made."
   (declare (indent 0) (debug t))
   `(drgnx-notice-test-with-model
-     (drgnx-test-with-clock ()
+     (drgnx-test-with-clock (:auto t)
        (let ((sent nil) (drgnx-notice-desktop t) (drgnx-notice-desktop--backend 'dbus)
              (drgnx-notice-desktop--seen (make-hash-table :test #'equal)) (drgnx-notice-desktop--queue nil))
          (cl-letf (((symbol-function 'drgnx-notice-desktop-send)

@@ -149,7 +149,7 @@
 
 (ert-deftest drgnx-markdown/saves-in-a-row-render-once-after-a-pause ()
   (drgnx-markdown-test--with
-    (drgnx-test-with-clock ()
+    (drgnx-test-with-clock (:auto t)
       (let ((rendered nil) (a (generate-new-buffer " md-a")) (drgnx-markdown--pending nil))
         (unwind-protect
             (cl-letf (((symbol-function 'drgnx-markdown--render) (lambda (src prev) (push (cons src prev) rendered))))
@@ -169,7 +169,7 @@
 
 (ert-deftest drgnx-markdown/a-diagram-job-is-watched-until-it-ends-or-ten-minutes ()
   (drgnx-markdown-test--with
-    (drgnx-test-with-clock ()
+    (drgnx-test-with-clock (:auto t)
       (let ((job (list :status 'running)) (drawn nil))
         (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) job))
                   ((symbol-function 'drgnx-markdown--drawn) (lambda (hash exit) (push (list hash exit) drawn))))

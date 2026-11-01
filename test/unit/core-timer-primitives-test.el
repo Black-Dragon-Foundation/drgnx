@@ -62,7 +62,7 @@
           (drgnx-timer-prim-test--pending nil) (drgnx-timer-prim-test--work 0)
           (drgnx-timer-prim-test--on-step nil) (drgnx-timer-prim-test--t0 nil))
      (unwind-protect
-         (drgnx-test-with-clock ()
+         (drgnx-test-with-clock (:auto t)
            (setq drgnx-timer-prim-test--t0 (drgnx-test-clock-now))
            ,@body)
        (delete-directory state t))))

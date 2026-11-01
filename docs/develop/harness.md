@@ -1080,7 +1080,8 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   stops at each timer to look at its PRED and fails at once when nothing can run, with the clock's state under `:clock`;
   `drgnx-test-pause` is virtual seconds. The advice layer ignores `:auto`, so a test that uses it also has to pass on
   manual waits, or `skip-unless` `drgnx-test--core-p`. Manual stays the default: about 350 `drgnx-test-advance` calls
-  rely on time standing still in a wait for a process.
+  rely on time standing still in a wait for a process. The `core-timer*`, `core-gc*`, `core-notice*` and `core-surfaces-run`
+  tests, `gc-census` and `uitest-input`, and one file of each other area, run on `:auto t` already.
 - **The macro.** The body runs with `timer-list` and `timer-idle-list` bound to nil, so every timer it starts, whoever
   starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
   argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and

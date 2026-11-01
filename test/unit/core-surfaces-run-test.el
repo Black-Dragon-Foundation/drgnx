@@ -90,7 +90,7 @@
      (should drgnx-surfaces--usage-dirty))))
 
 (ert-deftest drgnx-surfaces/usage-is-written-once-per-pause ()
-  (drgnx-test-with-clock ()
+  (drgnx-test-with-clock (:auto t)
     (drgnx-test--with-usage
      (let ((file (drgnx-shortcuts-usage-file)))
        (dotimes (_ 3) (drgnx-surfaces-run 'run-cmd))

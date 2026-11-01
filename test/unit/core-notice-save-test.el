@@ -16,7 +16,7 @@
           (drgnx-notice--save-pruned nil))
      (unwind-protect
          (drgnx-notice-test-with-model
-           (drgnx-test-with-clock ()
+           (drgnx-test-with-clock (:auto t)
              (unwind-protect (progn (drgnx-notice-save-mode 1) (drgnx-test-idle 3) ,@body)
                (drgnx-notice-save-mode -1))))
        (delete-directory dir t))))

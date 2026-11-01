@@ -242,7 +242,7 @@
 
 (ert-deftest drgnx-notice/an-unchanged-set-does-not-tick ()
   (drgnx-notice-test-with-model
-    (drgnx-test-with-clock ()
+    (drgnx-test-with-clock (:auto t)
       (drgnx-notice-set 'agents '((:id a :text "A") (:id b :text "B")))
       (let ((tick (drgnx-notice-tick)) (at (plist-get (gethash 'a drgnx-notice--union) :at)))
         (drgnx-test-advance 5)
@@ -254,7 +254,7 @@
 
 (ert-deftest drgnx-notice/an-id-in-two-sources-counts-once ()
   (drgnx-notice-test-with-model
-    (drgnx-test-with-clock ()
+    (drgnx-test-with-clock (:auto t)
       (drgnx-notice-define-source 'jobs :title "Jobs")
       (drgnx-notice-define-source 'questions :title "Questions")
       (drgnx-notice-set 'jobs '((:id (card . 7) :text "from jobs") (:id (card . 8) :text "eight")))
@@ -317,7 +317,7 @@
 
 (ert-deftest drgnx-notice/stale-is-opt-in ()
   (drgnx-notice-test-with-model
-    (drgnx-test-with-clock ()
+    (drgnx-test-with-clock (:auto t)
       (drgnx-notice-define-source 'quiet :title "Quiet")
       (drgnx-notice-define-source 'watched :title "Watched" :stale 600)
       (drgnx-notice-define-source 'other :title "Other")

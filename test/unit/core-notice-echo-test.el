@@ -36,7 +36,7 @@ the bodies sent are in `sent', oldest first."
 key (C-c n) and a titled command `x-fix' (key F9).  `lines' is the list of lines echoed, oldest first."
   (declare (indent 0) (debug t))
   `(drgnx-notice-test-with-model
-     (drgnx-test-with-clock ()
+     (drgnx-test-with-clock (:auto t)
        (let ((drgnx-notice-echo-test--shown nil) (drgnx-notice-echo-test--minibuffer nil)
              (drgnx-notice-echo-test--take nil) (after-init-time (current-time)) (this-command nil)
              (drgnx-notice-echo-interval 2))

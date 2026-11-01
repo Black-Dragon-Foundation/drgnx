@@ -88,7 +88,7 @@
   ;; runs once in the next pause; the next burst arms it again.
   (let ((n 0))
     (cl-letf (((symbol-function 'drgnx-signal--flush) (lambda () (cl-incf n))))
-      (drgnx-test-with-clock ()
+      (drgnx-test-with-clock (:auto t)
         (dotimes (_ 3) (drgnx-signal--schedule))
         (should (equal (assq 'signal-flush (drgnx-timer-pending)) '(signal-flush :core soon)))
         (drgnx-test-idle (* 2 drgnx-signal-delay))
@@ -278,7 +278,7 @@ and only when it differs from the last one it got."
   (drgnx-signal-test--with-store
     (let ((was-on drgnx-signal-mode))
       (unwind-protect
-          (drgnx-test-with-clock ()
+          (drgnx-test-with-clock (:auto t)
             (drgnx-state-mode 1)
             (drgnx-signal-mode 1)
             (drgnx-state-subscribe 'windows-changed #'drgnx-signal-test--on-store)

@@ -39,7 +39,7 @@
      (let* ((state (make-temp-file "drgnx-nc-state" t))
             (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
             (drgnx-timer-errors nil))
-       (unwind-protect (drgnx-test-with-clock () ,@body)
+       (unwind-protect (drgnx-test-with-clock (:auto t) ,@body)
          (delete-directory state t)))))
 
 (ert-deftest drgnx-notice-core/a-stopped-timer-is-a-warn-condition ()
