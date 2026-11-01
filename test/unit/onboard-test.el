@@ -647,6 +647,26 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
     (should (equal (with-temp-buffer (insert-file-contents (concat to "48x48/apps/drgnx.png")) (buffer-string)) "logo"))
     (should (eq (drgnx-pkg-desktop-refresh entry to from) 'current))))
 
+(ert-deftest drgnx-pkg/desktop-refresh-puts-the-icons-where-the-desktop-looks ()
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (let* ((data (concat root "data/"))
+           (process-environment (cons (concat "XDG_DATA_HOME=" data) process-environment)))
+      (make-directory (concat data "applications") t)
+      (write-region "Icon=emacs\nType=Application\n" nil (drgnx-pkg-desktop-file) nil 'silent)
+      (should (eq (drgnx-pkg-desktop-refresh nil nil from) 'rewritten))
+      (should (file-exists-p (concat data "icons/hicolor/48x48/apps/drgnx.png"))))))
+
+(ert-deftest drgnx-pkg/desktop-refresh-outdates-a-stale-icon-cache ()
+  ;; the theme's cache hides a new icon until the theme folder is newer than it
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (write-region "Icon=emacs\nType=Application\n" nil entry nil 'silent)
+    (make-directory (concat to "48x48/apps") t)
+    (set-file-times to '(1000 0))
+    (drgnx-pkg-desktop-refresh entry to from)
+    (should (time-less-p '(1000 0) (file-attribute-modification-time (file-attributes to))))))
+
 (ert-deftest drgnx-pkg/desktop-refresh-keeps-an-icon-of-your-own ()
   (require 'drgnx-pkg)
   (drgnx-onboard-test--with-icons (entry from to)

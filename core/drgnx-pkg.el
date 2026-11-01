@@ -1276,7 +1276,7 @@ when there is an icon to name, and a `StartupWMClass=' line is added when it has
   (let* ((case-fold-search nil)
          (default-directory "/")
          (file (or file (drgnx-pkg-desktop-file)))
-         (icons (or icons (expand-file-name "../../icons/hicolor/" (file-name-directory file))))
+         (icons (or icons (expand-file-name "../icons/hicolor/" (file-name-directory file))))
          (from (or from (expand-file-name "../../../icons/hicolor/" data-directory)))
          (text (drgnx-file-read-bounded file))
          (installed nil)
@@ -1292,6 +1292,7 @@ when there is an icon to name, and a `StartupWMClass=' line is added when it has
             (copy-file source target t)
             (setq copied t))
           (when (file-exists-p target) (setq installed t))))
+      (when copied (set-file-times icons))     ; a theme's icon cache counts only while it is newer than the folder
       (let ((new (if installed (replace-regexp-in-string "^Icon=emacs$" "Icon=drgnx" text t t) text)))
         (unless (string-match-p "^StartupWMClass=" new)
           (setq new (replace-regexp-in-string "^Type=Application$" "StartupWMClass=nidhogg\nType=Application" new t t)))
