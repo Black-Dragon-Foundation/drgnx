@@ -459,7 +459,9 @@ the committed text is \"é\"."
 
 (ert-deftest drgnx-ui-chrome/shadow-beside-scroll-bars-and-tool-bar ()
   "A popup flush under the tool bar and 4 px left of the scroll bar: its shadow reaches the scroll bar and ends under it
-\(the bar's pixels are stock's), the tool bar stays outside the root's picture, and nothing else changes."
+\(the bar's pixels are stock's), the tool bar stays outside the root's picture, and nothing else changes.
+Both bars are GTK's: the native shell has no scroll bars and draws its tool bar in the frame."
+  (skip-unless (not (featurep 'nidhogg-wayland)))
   (drgnx-test-chrome--with-scratch
     (let ((name " *extra-bars*"))
       (unwind-protect

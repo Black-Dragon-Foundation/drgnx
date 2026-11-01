@@ -1056,10 +1056,11 @@ scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the asser
 
 (ert-deftest drgnx-ui-chrome/company-box-delete-while-visible ()
   "company-box's frames deleted while shown: no crash, nothing left behind.
-Skipped: Nidhogg crashes (with Glitnir off too) when company-box then kills its buffer of a deleted frame
+Skipped on pgtk: Nidhogg crashes (with Glitnir off too) when company-box then kills its buffer of a deleted frame
 \(`replace-buffer-in-windows' → `delete_frame' → `pgtk_clear_frame_selections', pgtkselect.c:793); NH-PGTK-DELETE-KILL-1.
 The generic `posframe-delete-frame-mid-show' covers the delete itself."
-  (ert-skip "NH-PGTK-DELETE-KILL-1: killing the buffer of a deleted child frame crashes pgtk (pgtkselect.c:793)")
+  (unless (featurep 'nidhogg-wayland)
+    (ert-skip "NH-PGTK-DELETE-KILL-1: killing the buffer of a deleted child frame crashes pgtk (pgtkselect.c:793)"))
   (drgnx-test-chrome--with-company-box
     (let* ((popups (drgnx-test-chrome--children root))
            (rects (drgnx-test-chrome--rects popups root)))

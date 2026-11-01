@@ -197,8 +197,8 @@ The fixture is 60 lines of Lisp (so it scrolls) with the cursor on the last line
 (ert-deftest drgnx-ui-glitnir/off-equals-export-at-scale-1 ()
   "(c): Glitnir off, a bare frame with a corfu popup and quick help: the snapshot is `x-export-frames', RGB.
 The export draws the root frame alone, not its child frames, so the popups' rectangles are left out of the
-comparison (and must differ there: the snapshot shows the popups)."
-  (skip-unless (= (frame-scale-factor (drgnx-uitest-root-frame)) 1))
+comparison (and must differ there: the snapshot shows the popups).  The native shell has no export."
+  (skip-unless (and (= (frame-scale-factor (drgnx-uitest-root-frame)) 1) (fboundp 'x-export-frames)))
   (drgnx-test-glitnir--with-fixture
     (drgnx-test-glitnir--show-popups)
     (should (frame-visible-p corfu--frame))
@@ -239,11 +239,15 @@ comparison (and must differ there: the snapshot shows the popups)."
       (goto-char (point-max))
       (drgnx-test-glitnir--show-popups)
       (should (= calls (glitnir--calls)))
-      ;; the stock path still records its paints (`:count'), but composes nothing
-      (should (equal (plist-get (glitnir-stats root) :compose-ms) '(:p50 0.0 :p95 0.0 :max 0.0))))))
+      ;; the stock path still records its paints (`:count'), but composes nothing; the native shell has no stock path,
+      ;; its presenter composes every frame
+      (unless (featurep 'nidhogg-wayland)
+        (should (equal (plist-get (glitnir-stats root) :compose-ms) '(:p50 0.0 :p95 0.0 :max 0.0)))))))
 
 (ert-deftest drgnx-ui-glitnir/panic-equals-off ()
-  "After `(glitnir--debug-panic 'draw)' the picture is the one the stock path draws."
+  "After `(glitnir--debug-panic 'draw)' the picture is the one the stock path draws.
+The native shell has no stock path to fall back on."
+  (skip-unless (not (featurep 'nidhogg-wayland)))
   (drgnx-test-glitnir--with-fixture
     (drgnx-test-glitnir--scene root)
     (goto-char (point-max))
