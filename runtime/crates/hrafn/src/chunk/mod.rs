@@ -7,6 +7,9 @@
 mod definers;
 mod elisp;
 mod merge;
+mod outline;
+mod text;
+mod ts;
 
 use crate::files::Lang;
 
@@ -63,10 +66,29 @@ pub fn chunk_file(
     text: &str,
     budget: usize,
 ) -> (Vec<Chunk>, Vec<Symbol>) {
+    let tree_sitter = |kind| ts::chunk(kind, path, generated, text, budget);
     match lang {
-        Lang::Elisp => elisp::chunk(path, generated, text, budget),
-        _ => (Vec::new(), Vec::new()),
+        Lang::Elisp => Some(elisp::chunk(path, generated, text, budget)),
+        Lang::Rust => tree_sitter(ts::Kind::Rust),
+        Lang::C => tree_sitter(ts::Kind::C),
+        Lang::Shell => tree_sitter(ts::Kind::Shell),
+        Lang::Org => Some(outline::chunk(
+            outline::Flavor::Org,
+            path,
+            generated,
+            text,
+            budget,
+        )),
+        Lang::Markdown => Some(outline::chunk(
+            outline::Flavor::Markdown,
+            path,
+            generated,
+            text,
+            budget,
+        )),
+        Lang::Text => None,
     }
+    .unwrap_or_else(|| text::chunk(path, generated, text, budget))
 }
 
 /// Prefix counts of non-whitespace characters by byte offset.

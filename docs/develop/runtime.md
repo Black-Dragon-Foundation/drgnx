@@ -874,6 +874,19 @@ predicate, accessors), `define-minor-mode` and `define-derived-mode` (mode, `-ho
 `drgnx-defsetting`, `drgnx-memo-define`, `drgnx-module-define`, `drgnx-doctor-define`, `drgnx-config-define` and
 `drgnx-command-define`. Project code is read, never evaluated.
 
+Rust, C and shell (`tree-sitter-rust` 0.24, `tree-sitter-c` 0.24, `tree-sitter-bash` 0.25, all ABI 15) use the same
+pipeline over their top-level items. Definitions are `function_item`, `impl_item`, `struct_item`, `enum_item`,
+`trait_item`, `mod_item` and `macro_definition` (and type, const, static and union items) in Rust, with the
+methods of an `impl`, trait or module as symbols of their own; `function_definition`, the struct, union and enum
+specifiers, typedefs and `#define`s in C; `function_definition` in shell. The comment lines directly above an item
+(`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body.
+
+Org and Markdown chunk by the heading tree (`chunk/outline.rs`): a chunk's header is its outline path (`A > B`), a
+heading with nothing under it joins the next one, source blocks and fences stay whole under the budget, property
+drawers and logbooks are left out of `embed_text` (the FTS body keeps them), and a table over the budget splits by
+rows with its header rows repeated in `embed_text`. Plain text is line windows under the budget, with no symbols
+(`chunk/text.rs`); a line over the budget is cut inside.
+
 The test fixtures' form spans come from the Emacs reader: `tests/fixtures/elisp/gen.el` writes `NAME.forms.json` for
 each `NAME.el` next to it (run it once in a Nidhogg 31 container, `emacs --batch -Q -l …/gen.el`), and the test holds
 the grammar's top-level spans to them.

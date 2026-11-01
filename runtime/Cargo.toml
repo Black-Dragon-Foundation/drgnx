@@ -31,6 +31,9 @@ rusqlite = { version = "0.40", default-features = false, features = ["bundled"] 
 # hrafn's structural chunker; the grammars arrive with the languages that use them
 tree-sitter = "0.25"   # 0.26 and 0.27 need Rust 1.90; the workspace MSRV is 1.88
 tree-sitter-elisp = "1.7"
+tree-sitter-rust = "0.24"
+tree-sitter-c = "0.24"
+tree-sitter-bash = "0.25"
 notify = "8"
 rustix = { version = "1.1", features = ["fs", "process", "net", "thread"] }
 libc = "0.2"

@@ -19,6 +19,9 @@ rusqlite.workspace = true
 sha2.workspace = true
 tree-sitter.workspace = true
 tree-sitter-elisp.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-bash.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

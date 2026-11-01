@@ -207,12 +207,18 @@ fn symbol_of(s: &str) -> Option<String> {
 pub(crate) struct Def {
     pub name: String,
     pub kind: &'static str,
+    /// Its own span, when it is not the whole form's (a method in an `impl`).
+    pub span: Option<(usize, usize)>,
+    /// Its own first docstring line, when it is not the form's.
+    pub doc1: Option<String>,
 }
 
 fn def(name: impl Into<String>, kind: &'static str) -> Def {
     Def {
         name: name.into(),
         kind,
+        span: None,
+        doc1: None,
     }
 }
 
