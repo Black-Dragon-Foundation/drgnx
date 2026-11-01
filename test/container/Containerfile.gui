@@ -13,12 +13,12 @@ RUN dnf -y --setopt=tsflags= install info diffutils findutils git mutter python3
 RUN setcap -r /usr/bin/sway
 COPY nidhogg.sh /tmp/nidhogg.sh
 RUN bash /tmp/nidhogg.sh fedora-45 && rm /tmp/nidhogg.sh
-# The pinned child-frame packages (posframe, corfu, …) the chrome, parity and extra rows load, checked against the
-# sha256 pins of childframe-packages.eld at build time: the tests never reach the archives.  The image's tag is the
-# hash of this file, so the pins file's own sha256 is written below: a bump edits both, and the tag changes (an
-# edit of the pins alone fails the build and test/unit/ci-workflows-test.el).  The GUI tier reads the packages with
-# DRGNX_CHILDFRAME_ELPA=/opt/childframe-elpa.
+# The pinned child-frame packages (posframe, corfu, …) the chrome, parity and extra rows load, each checked out of its
+# upstream git repository at the commit childframe-packages.eld names, whose git tree must match: a commit never moves,
+# so a rebuild cannot fail by itself, and no ELPA archive is involved.  The image's tag is the hash of this file, so the
+# pins file's own sha256 is written below: a bump edits both, and the tag changes (an edit of the pins alone fails the
+# build and test/unit/ci-workflows-test.el).  The GUI tier reads the packages with DRGNX_CHILDFRAME_ELPA=/opt/childframe-elpa.
 COPY childframe-packages.eld childframe-elpa.sh /tmp/childframe/
-RUN echo "39938c2b80bc3be310ce153fb4d4cbd99240fcac761264489e496f73e6fca1ba  /tmp/childframe/childframe-packages.eld" | sha256sum -c - \
+RUN echo "dc2200b525282f1543664979adec716bb922d82eec3087b89f199f89d3580be0  /tmp/childframe/childframe-packages.eld" | sha256sum -c - \
     && sh /tmp/childframe/childframe-elpa.sh /opt/childframe-elpa && rm -r /tmp/childframe
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.4/bin/nidhogg

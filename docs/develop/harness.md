@@ -1126,11 +1126,13 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
 
 Tests of child frames against real packages (the compositor's popups, the popup perf workloads) use posframe, corfu,
 eldoc-box, company-box, which-key-posframe, transient-posframe, vertico-posframe and mini-frame, pinned in
-`test/container/childframe-packages.eld`: `(NAME VERSION :archive ARCHIVE :sha256 HASH)`, the hash of the archive file.
-`bin/drgnx childframe-elpa DIR` installs exactly those versions into the new directory `DIR` the way `drgnx sync`
-does, in a private data directory (never your configuration or `elpa`): the hash is checked before the file enters
-the cache, the signature where the archive signs (GNU ELPA), and a hash that differs is refused and leaves `DIR`
-absent. What the packages need beyond the pinned ones comes along at the archives' newest.
+`test/container/childframe-packages.eld`, with what they need (company, dash, vertico, frame-local): `(NAME VERSION
+:repo URL :commit COMMIT :tree TREE)`, the upstream git repository, the commit the ELPA build named, and the git tree
+hash of that commit. `bin/drgnx childframe-elpa DIR` (`test/container/childframe-elpa.sh`) fetches each commit into the
+new directory `DIR/NAME-VERSION`; a fetched commit whose tree differs from its pin is refused and leaves `DIR` absent.
+A commit never moves and no archive's bytes are involved, so nothing here goes stale. The checkouts are the
+repositories' files, with `extensions/*.el` (corfu, vertico) copied beside the rest as the ELPA tarballs have them, and
+without generated `-autoloads.el` or `-pkg.el`: the tests `require` the libraries.
 
 ```sh
 bin/drgnx childframe-elpa .claude/tmp/childframe-elpa
@@ -1140,19 +1142,16 @@ DRGNX_CHILDFRAME_ELPA="$PWD/.claude/tmp/childframe-elpa" bin/drgnx test ...
 `(drgnx-uitest-childframe-packages)` puts the pinned packages from `DRGNX_CHILDFRAME_ELPA` on `load-path` and returns
 their names, or nil when the variable is unset or the directory lacks one, so tests `skip-unless` it, as the modal
 tests do with `DRGNX_MODAL_ELPA`. A session inherits the variable (`drgnx-ui-keep-env`). The tests of the command
-point `DRGNX_CHILDFRAME_PINS` and `DRGNX_CHILDFRAME_ARCHIVES` (`NAME=DIR,…`) at a local archive.
+point `DRGNX_CHILDFRAME_PINS` at a pins file naming local repositories.
 
 In a container the GUI tier has them in its image: `Containerfile.gui` runs `test/container/childframe-elpa.sh`, which
-downloads the pinned tarballs (the eight packages and what they need: company, dash, vertico, frame-local, all pinned),
-checks each sha256 and unpacks them to `/opt/childframe-elpa`. `bin/drgnx test --container --ui` points
+checks the twelve commits out to `/opt/childframe-elpa`. `bin/drgnx test --container --ui` points
 `DRGNX_CHILDFRAME_ELPA` there (a host directory in the variable is mounted read-only instead) and sets
 `DRGNX_CHILDFRAME_REQUIRED=1`, so a chrome, parity or extra row that finds the packages missing fails
-(`drgnx-uitest-require-childframe-packages`) instead of skipping, narrowed run or not. CI and local runs reach no
-archive for them. The archives keep only their newest build, so a pin is bumped on purpose: edit
-`test/container/childframe-packages.eld` (version and hash) and the pins' sha256 written in `Containerfile.gui`
-(`drgnx-ci/the-gui-image-bakes-the-pinned-child-frame-packages` fails otherwise); the Containerfile's hash is the image's
-tag, so `Test images` builds a new image, and the old tag keeps working until then. The other packages in the
-install (`drgnx childframe-elpa`) are now pinned the same way.
+(`drgnx-uitest-require-childframe-packages`) instead of skipping, narrowed run or not. A pin is bumped on purpose:
+edit its line in `test/container/childframe-packages.eld` (commit and tree) and the pins' sha256 written in
+`Containerfile.gui` (`drgnx-ci/the-gui-image-bakes-the-pinned-child-frame-packages` fails otherwise); the Containerfile's
+hash is the image's tag, so `Test images` builds a new image.
 
 `test/ui/childframe-chrome-test.el` holds the compositor's four popup scenarios (`drgnx-ui-chrome/…`: corfu with
 popupinfo, posframe shown and hidden 100 times, eldoc-box beside corfu, a popup at the right and bottom edge). Each
