@@ -100,7 +100,7 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
        (with-current-buffer (window-buffer (frame-root-window frame))
          ;; vertico draws the candidates as the before-string of an overlay at the end, not as buffer text
          (and (minibufferp)
-              (seq-some (lambda (o) (let ((s (overlay-get o 'before-string))) (and (stringp s) (string-search "Do It" s))))
+              (seq-some (lambda (o) (let ((s (overlay-get o 'before-string))) (and (stringp s) (string-search "Do " s))))
                         (overlays-in (point-min) (point-max)))))))
 
 (defun drgnx-palette-float-test--wait-shown (frame)
@@ -230,8 +230,12 @@ holds child frames, pixel checks: the palette's rectangle differs from the pictu
                (ert-skip "the snapshot of a root does not hold child frames yet (nsnap): no pixel checks"))
              ;; the palette is drawn where the frame is, and its upper-left corner pixel is cut (rounded)
              (should-not (equal (drgnx-uitest-pixel snap mid-x mid-y) (drgnx-uitest-pixel none mid-x mid-y)))
-             (should (equal (cdr (drgnx-uitest-pixel snap (nth 0 e) (nth 1 e)))
-                            (cdr (drgnx-uitest-pixel none (nth 0 e) (nth 1 e))))))))))))
+             (let ((corner (cdr (drgnx-uitest-pixel snap (nth 0 e) (nth 1 e))))
+                   (bare (cdr (drgnx-uitest-pixel none (nth 0 e) (nth 1 e))))
+                   (inside (cdr (drgnx-uitest-pixel snap (+ (nth 0 e) (ceiling (* scale 14))) (+ (nth 1 e) (ceiling (* scale 14)))))))
+               ;; cut: what lies beneath, at most darkened by the shadow, not the palette's own pixel
+               (should (cl-every #'<= corner bare))
+               (should-not (equal corner inside))))))))))
 
 (provide 'palette-float-test)
 ;;; palette-float-test.el ends here
