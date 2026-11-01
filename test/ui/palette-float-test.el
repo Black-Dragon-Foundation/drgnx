@@ -115,7 +115,10 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
                                           (mapcar (lambda (o) (list (overlay-start o) (overlay-end o)
                                                                     (overlay-get o 'window) (overlay-get o 'after-string)))
                                                   (overlays-in (point-min) (point-max)))
-                                          vertico-count))))))))
+                                          vertico-count (bound-and-true-p vertico--input) (bound-and-true-p vertico--total)
+                                          (bound-and-true-p vertico--candidates) (bound-and-true-p vertico-multiform--stack)
+                                          (local-variable-p 'post-command-hook) post-command-hook
+                                          completion-styles minibuffer-completion-table))))))))
 
 (ert-deftest palette-float-shows-child-frame-with-look ()
   (drgnx-palette-float-test--with-palette
