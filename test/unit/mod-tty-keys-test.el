@@ -1,4 +1,5 @@
 ;;; mod-tty-keys-test.el --- batch tests: terminal keys — modifyOtherKeys (ui/terminal), kkp (ui/terminal-keys), C-g -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has no terminal: terminals, their parameters and tmux are stubbed; the tty tier
 ;; (test/tty/keys-test.el) sends the real bytes.  kkp is a fake here unless a test says otherwise.
 (require 'ert)
@@ -239,6 +240,7 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
       (drgnx-tty-keys-test--unload-kkp))))
 
 (ert-deftest drgnx-tty-keys/the-pinned-kkp-has-the-subprocess-option ()
+  :tags '(:cond)
   ;; the real kkp: its option advises `call-process' (`process-file' runs it for local files), and the advice
   ;; switches a terminal to legacy keys only where kkp is active
   (drgnx-tty-keys-test--need-kkp)

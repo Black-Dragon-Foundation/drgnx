@@ -1,4 +1,5 @@
 ;;; session-test.el --- batch tests: closing the last window, quitting, the keep-running choice -*- lexical-binding: t -*-
+;; test-class: det
 ;; Frames, `kill-emacs', `delete-frame' and `save-some-buffers' are stubs; session.eld lives in a temp config dir.
 (require 'ert)
 (require 'drgnx-paths)
@@ -103,6 +104,7 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 
 ;; M12a-28: the programs a quit would stop are asked about, once.
 (ert-deftest drgnx-session/quit-asks-once-for-running-processes ()
+  :tags '(:cond)
   (let ((p (make-process :name "drgnx-session-test-sleep" :command '("sleep" "30") :noquery nil))
         (q (make-process :name "drgnx-session-test-quiet" :command '("sleep" "30") :noquery t))
         (r (make-process :name "drgnx-session-test-second" :command '("sleep" "30") :noquery nil)))
@@ -257,6 +259,7 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
     dir))
 
 (ert-deftest drgnx-session/opening-a-folder-makes-it-the-project ()
+  :tags '(:cond)
   ;; The real Explorer in a one-editor layout.  After `drgnx DIR' quick open and project search (which follow the
   ;; selected window's buffer) work in DIR's project — also when a file of another project was in front.
   (drgnx-test-with-state
@@ -337,6 +340,7 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 
 
 (ert-deftest drgnx-session/running-programs-refreshes-terminal-query-flags-first ()
+  :tags '(:cond)
   ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question asks the module
   ;; to bring the flags up to date first — when the module is there.
   (let ((p (make-process :name "drgnx-session-test-term" :command '("sleep" "30") :noquery t)))
@@ -349,6 +353,7 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
       (delete-process p))))
 
 (ert-deftest drgnx-session/a-failing-terminal-refresh-does-not-stop-the-quit-question ()
+  :tags '(:cond)
   (let ((p (make-process :name "drgnx-session-test-term2" :command '("sleep" "30") :noquery nil)))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags) (lambda () (error "eat is gone"))))

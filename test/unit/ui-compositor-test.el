@@ -1,4 +1,5 @@
 ;;; ui-compositor-test.el --- batch tests: harness sessions under mutter, sway, Xvfb and i3 -*- lexical-binding: t -*-
+;; test-class: cond
 ;; No compositor is started: the WM tools are fake scripts on a temp `exec-path', state and runtime
 ;; directories are temporary, the caller's WM variables point at paths that do not exist.
 (require 'ert)

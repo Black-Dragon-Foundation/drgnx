@@ -1,4 +1,5 @@
 ;;; tty-onboard-test.el --- batch tests: the onboarding daemon step names good terminals and recommends one -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Nothing touches the machine: config, state and data are temp dirs, PATH is empty (no capable terminal installed),
 ;; the system is a fixture os-release, and every program run is recorded.  A terminal frame is the batch frame with
 ;; the terminal parameter `drgnx-tty-caps' that drgnx sets when a terminal opens (never asked here).

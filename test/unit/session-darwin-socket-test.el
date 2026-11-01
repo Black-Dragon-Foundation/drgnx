@@ -1,4 +1,5 @@
 ;;; session-darwin-socket-test.el --- batch tests: on macOS the server socket ignores XDG_RUNTIME_DIR -*- lexical-binding: t -*-
+;; test-class: det
 ;; M12a-31.  The platform is a stub (`system-type'); nothing here needs a Mac.
 (require 'ert)
 (require 'server)

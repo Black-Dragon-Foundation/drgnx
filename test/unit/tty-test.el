@@ -1,4 +1,5 @@
 ;;; tty-test.el --- batch tests: what a terminal is and can do -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-tty)
