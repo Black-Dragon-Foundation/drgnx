@@ -1,4 +1,5 @@
 ;;; platform-kwin-test.el --- batch tests: the KWin adapter (scripting over D-Bus, stubbed) -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
