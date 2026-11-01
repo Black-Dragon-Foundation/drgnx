@@ -164,10 +164,13 @@ time exceeds the ratio times the calibration or over half the samples fail (reru
 `bin/drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]` hunts ordering bugs: the `det` files twice
 in two shuffle orders with the runtime audit failing (`DRGNX_TEST_AUDIT_FAIL=1`: a `det` test that really sleeps, waits
 on a process or starts one is red; any red, or a difference between the runs, is red), the `cond` files at 1 CPU, 2 CPUs and half a
-core (`DRGNX_TEST_PODMAN_ARGS=--cpus=…`) N times each, and the process and hub-client tests on a chaos Nidhogg image
-(`DRGNX_TEST_CHAOS_IMAGE`, or built from the tarball by `$DRGNX_DET_IMAGE`; without one P3 is skipped). The
-files are chosen by class tag, so exempt and unclassified files are never run. `REPORT.stamp` (`COMMIT PASSES DATE`) is
-written only when every step ran and passed; a failed, skipped-P3 or killed run leaves none.
+core (`DRGNX_TEST_PODMAN_ARGS=--cpus=…`) N times each, and the `cond` tests of the process, socket and ordering files
+(`hub-client`, `test-proc`, `remote`, `shell-env`, `shell-completion`, `session`; `DRGNX_PREFLIGHT_P3_SELECTOR`
+overrides) on a chaos Nidhogg image: `DRGNX_TEST_CHAOS_IMAGE`, or the image `$DRGNX_DET_IMAGE TARBALL preflight` prints
+as its last `DRGNX_TEST_IMAGE=` line (`DRGNX_DET_IMAGE` is the org folder's `tooling/det-image.sh`); without an image P3 is
+skipped. The files are chosen by class tag, so exempt and unclassified files are never run, and a step that ran no test
+is red (a vacuous pass proves nothing). `REPORT.stamp` (`COMMIT PASSES DATE`) is written only when every step ran, ran
+tests and passed; a failed, skipped-P3, zero-test or killed run leaves none.
 
 ## Parallel files
 

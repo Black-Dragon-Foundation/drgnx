@@ -494,6 +494,9 @@ test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the orde
     env "$@" DRGNX_TEST_SELECTOR="$sel" "${DRGNX_PREFLIGHT_RUNNER:-$here/bin/drgnx}" test --container </dev/null >"$log" 2>&1 || rc=$?
     grep -E '^ +FAILED ' "$log" | sort >"$work/$label.red" || true
     if [ "$rc" -ne 0 ] && [ ! -s "$work/$label.red" ]; then echo "run ended with exit $rc and no failed test (see the run's output)" >"$work/$label.red"; fi
+    # a pass that ran no test proves nothing (no class line yet, a selector that matches nothing): red
+    local ran; ran="$(sed -nE 's/^drgnx: [0-9]+ test files.*: ([0-9]+) tests,.*/\1/p' "$log" | tail -n 1)"
+    if [ "${ran:-0}" -eq 0 ] && [ ! -s "$work/$label.red" ]; then echo "ran 0 tests: a pass that runs nothing is not green" >"$work/$label.red"; fi
     cp "$log" "$out.$label.log"
     return "$rc"
   }
@@ -516,12 +519,18 @@ test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the orde
     done
   done
   # P3
-  if [ -z "$chaos" ] && [ -n "$tarball" ] && [ -n "${DRGNX_DET_IMAGE:-}" ]; then chaos="$("$DRGNX_DET_IMAGE" "$tarball")"; fi
+  # DRGNX_DET_IMAGE: the script that installs a tarball into a test image (tooling/det-image.sh TARBALL NAME): its last
+  # line is DRGNX_TEST_IMAGE=IMAGE
+  if [ -z "$chaos" ] && [ -n "$tarball" ] && [ -n "${DRGNX_DET_IMAGE:-}" ]; then
+    chaos="$("$DRGNX_DET_IMAGE" "$tarball" preflight | sed -nE 's/^DRGNX_TEST_IMAGE=(.+)$/\1/p' | tail -n 1)" || chaos=""
+  fi
   if [ -n "$chaos" ]; then
-    local p3sel='"^drgnx-\\(process\\|hub-client\\)"'
+    # the real-process, I/O and ordering files that stay (not the ones a plan deletes): the hub client's sockets and
+    # challenges, scripted child processes, TRAMP, the shell environment and completion, sessions
+    local p3sel='(and (tag :cond) "^drgnx-\\(hub-client\\|test-proc\\|remote\\|shell-env\\|shell-completion\\|session\\)/")'
     run_p P3 "${DRGNX_PREFLIGHT_P3_SELECTOR:-$p3sel}" DRGNX_TEST_IMAGE="$chaos" || true; judge P3
   else
-    skipped=$((skipped + 1)); say "SKIP P3 (no chaos image: set DRGNX_TEST_CHAOS_IMAGE, or --nidhogg-tarball with DRGNX_DET_IMAGE)"
+    skipped=$((skipped + 1)); say "SKIP P3 (no chaos image: set DRGNX_TEST_CHAOS_IMAGE, or --nidhogg-tarball with DRGNX_DET_IMAGE=tooling/det-image.sh)"
   fi
   say "SKIP P5 (rr is not run by this command)"
   rm -rf "$work"
