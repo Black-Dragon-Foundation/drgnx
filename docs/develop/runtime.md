@@ -852,6 +852,32 @@ from a `#!` line when it has none. A file is marked `generated` (listed, not dro
 
 `coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
 
+### Chunks and symbols
+
+`chunk::chunk_file(path, lang, generated, text, budget)` returns the file's chunks and symbols. A file's chunks put
+together give back the file, byte for byte (offsets are bytes). The budget is 1,800 non-whitespace characters
+(`BUDGET`); `CHUNKER_VERSION` is part of every vector's content key.
+
+For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later need Rust 1.90, above the
+workspace's 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
+them. Adjacent units merge greedily up to the budget and never across a section heading (a `;;;` line with text, at
+column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
+docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
+which is over the budget is one chunk that embeds only its first line and docstring (the FTS body keeps all of it).
+The header (path, title line, section, defined symbols and kinds) is in `embed_text` and the FTS `path` and `symbols`
+columns, never in `body`; a generated file gets `embed = false`.
+
+The definer table (`chunk/definers.rs`) is closed: it names `defun`, `defvar`, `defcustom`, `defmacro`, `cl-defun`,
+`defconst`, `defvar-local`, `defface`, `defgroup`, `defsubst`, `cl-defmacro`, `defvar-keymap`, `defalias`,
+`define-obsolete-function-alias`, `define-error`, `cl-defgeneric`, `cl-defmethod`, `cl-defstruct` (type, constructors,
+predicate, accessors), `define-minor-mode` and `define-derived-mode` (mode, `-hook`, `-map`), and drgnx's
+`drgnx-defsetting`, `drgnx-memo-define`, `drgnx-module-define`, `drgnx-doctor-define`, `drgnx-config-define` and
+`drgnx-command-define`. Project code is read, never evaluated.
+
+The test fixtures' form spans come from the Emacs reader: `tests/fixtures/elisp/gen.el` writes `NAME.forms.json` for
+each `NAME.el` next to it (run it once in a Nidhogg 31 container, `emacs --batch -Q -l …/gen.el`), and the test holds
+the grammar's top-level spans to them.
+
 ## Building and installing Ratatoskr
 
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
