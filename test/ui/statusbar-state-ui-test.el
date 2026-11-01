@@ -30,7 +30,14 @@ moved the bar), and the status bar mode on; the session's modes and variables co
      (drgnx-statusbar-define-segment 'cprobe :fn (lambda () (puthash (drgnx-statusbar-source-window) 'compact ,drawn) "C"))
      (unwind-protect (progn ,@body)
        (drgnx-statusbar-mode (if statusbar-was 1 -1))
-       (drgnx-state-mode (if state-was 1 -1)))))
+       (drgnx-state-mode (if state-was 1 -1))
+       ;; turning the mode off applies the chrome to the real frames: a tab line and a header line stay on the
+       ;; windows as parameters, and a later row that expects a bare root window (the popup chrome rows) would draw
+       ;; them under its popup's shadow
+       (dolist (f (frame-list))
+         (unless (frame-parent f)
+           (dolist (w (window-list f 'nomini))
+             (dolist (p '(tab-line-format header-line-format mode-line-format)) (set-window-parameter w p nil))))))))
 
 (ert-deftest drgnx-statusbar-ui/c-x-o-in-one-buffer-moves-the-bar-on-the-first-redraw ()
   ;; Two windows on one buffer: no buffer changes, only the window.  The first redisplay after `C-x o' draws the
