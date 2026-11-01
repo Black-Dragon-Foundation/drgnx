@@ -1,4 +1,5 @@
 ;;; mod-remote-test.el --- batch tests: Open Remote…, the remote segment, Reconnect, language servers on the remote side -*- lexical-binding: t -*-
+;; test-class: cond
 ;; No real host is reached: the TRAMP method `drgnx-mock' (test/fixtures/tramp-mock.el) logs in with a local sh, and
 ;; the "hosts" and "containers" are a temp HOME's ssh config and a fake `podman' script on a temp PATH.
 (require 'ert)
@@ -607,7 +608,7 @@ choice of two nobody has."
                 (let ((p (make-process :name "drgnx-test-sentinel" :command '("sh" "-c" "true") :noquery t
                                        :sentinel (lambda (p _e) (unwind-protect (funcall try) (process-put p :done t))))))
                   (drgnx-test-wait (lambda () (process-get p :done)) :what "the sentinel's process"))
-                (drgnx-test-pause 0.4)
+                (drgnx-test-wait (lambda () (= (length results) 4)) :what "the two timers' guards")
                 (should (equal results '(refused refused refused refused)))
                 (should (= connects 0))
                 (setq results nil)
@@ -640,7 +641,7 @@ choice of two nobody has."
 (defun drgnx-remote-test--wait-for-server (buffer)
   "Wait until a server has answered for BUFFER's project, then let the attaching finish."
   (drgnx-test-wait (lambda () (with-current-buffer buffer (eglot-current-server))) :what "a server answering for the buffer's project")
-  (drgnx-test-pause 0.5))
+  (drgnx-test-wait (lambda () (buffer-local-value 'eglot--managed-mode buffer)) :what "the buffer attached to the server"))
 
 (ert-deftest drgnx-remote/the-starting-buffer-and-the-project-are-managed ()
   "Eglot attaches buffers to a new server in a process filter; the guard skips remote buffers there, so the lang

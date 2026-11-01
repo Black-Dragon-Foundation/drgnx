@@ -1,4 +1,5 @@
 ;;; remote-automatic-test.el --- batch tests: nothing automatic touches a remote -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The binding rule (M2-6): TRAMP stays on for what the user starts, but no timer, hook, background check, file
 ;; watch, VC / diff-hl, Flymake, the Explorer, link or compile output touches a remote name.  The TRAMP method
 ;; `drgnx-mock' (test/fixtures/tramp-mock.el) logs in with a local sh and counts what would leave the machine.
@@ -17,6 +18,7 @@
 (require 'autorevert)
 (require 'flymake)
 (load (expand-file-name "test/fixtures/tramp-mock" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/lang/drgnx-lang" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-remote" drgnx-dir) nil t)
 (load (expand-file-name "modules/extra/drgnx-blame" drgnx-dir) nil t)
@@ -197,7 +199,7 @@
       (redisplay t)
       (drgnx-remote-auto--none 'mode-line)
       ;; 7. the idle time passes: the timers the work above armed run too
-      (accept-process-output nil 0.3)
+      (drgnx-test-pause 0.3)                       ; a window in which nothing may reach the remote
       (dolist (timer (append (copy-sequence timer-list) (copy-sequence timer-idle-list)))
         (condition-case nil (timer-event-handler timer) (error nil)))
       (drgnx-remote-auto--none 'idle-time))))
