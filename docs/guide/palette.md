@@ -11,7 +11,8 @@ type and the candidates all show in one box, top-centre in the editor frame, 640
 frame). It is rounded, shadowed and blurs what lies behind it, and it fades and pops in and out.
 
 Everywhere else (a terminal, another Emacs, `extra/completion` off) the palette stays in the minibuffer, as before.
-The keys, Return, `C-g` and `#` search work the same either way.
+The keys, Return, `C-g` and `#` search work the same either way. A question that opens on top of the palette leaves it
+open: when you have answered, the palette is there as you left it.
 
 - **Keyboard focus never moves.** The box is a child frame that cannot take focus; the minibuffer window stays in the
   editor frame, so input methods and the keys you type go where they always went.

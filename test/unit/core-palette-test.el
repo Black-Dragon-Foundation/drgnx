@@ -119,6 +119,26 @@
     (should (equal (drgnx-test--palette-placed 3000) '(640 240)))
     (should (= 8 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
 
+(ert-deftest core-palette-float-stays-for-a-minibuffer-on-top ()
+  ;; a question on top of the open palette ends: the palette's own minibuffer still reads, so its box stays
+  (let ((root (frame-root-window)) (drgnx-palette-frame--frame (selected-frame)) hidden)
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-buffer
+            (set-window-buffer root (current-buffer))
+            (cl-letf (((symbol-function 'frame-visible-p) (lambda (_) t))
+                      ((symbol-function 'make-frame-invisible) (lambda (_) (setq hidden t)))
+                      ((symbol-function 'active-minibuffer-window) (lambda () (minibuffer-window))))
+              (drgnx-palette-frame-hide)
+              (should-not hidden)
+              (should (eq (window-buffer root) (current-buffer)))
+              ;; the palette's own minibuffer ends
+              (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () root)))
+                (drgnx-palette-frame-hide))
+              (should hidden)
+              (should (equal (buffer-name (window-buffer root)) drgnx-palette-frame--buffer)))))
+      (when-let* ((b (get-buffer drgnx-palette-frame--buffer))) (kill-buffer b)))))
+
 
 (ert-deftest core-palette-float-off-without-glitnir ()
   (let (modes)

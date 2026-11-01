@@ -83,18 +83,19 @@ The window is `vertico-count' + 2 lines high: `vertico-buffer' takes the mode li
     (frame-root-window frame)))
 
 (defun drgnx-palette-frame-hide ()
-  "Hide the palette's frame and give its window a plain buffer again.
+  "Hide the palette's frame and give its window a plain buffer again, when the minibuffer that ends is the palette's.
+Any other (a question on top of the open palette, or a prompt with the palette closed) changes nothing.
 `vertico-buffer' restores nothing here (the window is not in the selected frame's list, and a sole window is
 not deleted), so the dedication and the window parameters it set are cleared here."
   (when (frame-live-p drgnx-palette-frame--frame)
     (let ((win (frame-root-window drgnx-palette-frame--frame)))
-      (when (window-live-p win)
+      (when (eq (window-buffer win) (window-buffer (active-minibuffer-window)))
         (set-window-parameter win 'no-other-window nil)
         (set-window-parameter win 'no-delete-other-windows nil)
         (set-window-dedicated-p win nil)
-        (set-window-buffer win (get-buffer-create drgnx-palette-frame--buffer))))
-    (when (frame-visible-p drgnx-palette-frame--frame)
-      (make-frame-invisible drgnx-palette-frame--frame))))
+        (set-window-buffer win (get-buffer-create drgnx-palette-frame--buffer))
+        (when (frame-visible-p drgnx-palette-frame--frame)
+          (make-frame-invisible drgnx-palette-frame--frame))))))
 
 (defun drgnx-palette-frame-delete ()
   "Delete the palette's frame and its buffer (the module's teardown)."
