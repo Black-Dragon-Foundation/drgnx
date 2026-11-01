@@ -620,6 +620,76 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   ;; M1: emacsclient -a "" would start a daemon with the default init (not drgnx's) on drgnx's socket.
   (should-not (string-match-p " -a " drgnx-onboard-desktop-entry)))
 
+(ert-deftest drgnx-onboard/the-desktop-entry-claims-nidhoggs-windows ()
+  ;; the native shell's app id: without this line the switcher shows the bare id and no icon
+  (should (string-match-p "^StartupWMClass=nidhogg$" drgnx-onboard-desktop-entry))
+  (should (string-match-p "^Icon=drgnx$" drgnx-onboard-desktop-entry)))
+
+(defmacro drgnx-onboard-test--with-icons (vars &rest body)
+  "BODY with VARS (ENTRY FROM TO): a desktop entry's path, Nidhogg's hicolor tree with a 48 px icon, an empty tree."
+  (declare (indent 1))
+  (pcase-let ((`(,entry ,from ,to) vars))
+    `(let* ((root (file-name-as-directory (make-temp-file "drgnx-desktop" t)))
+            (,entry (concat root "drgnx.desktop"))
+            (,from (concat root "nidhogg/"))
+            (,to (concat root "icons/")))
+       (make-directory (concat ,from "48x48/apps") t)
+       (write-region "logo" nil (concat ,from "48x48/apps/emacs.png") nil 'silent)
+       (unwind-protect (progn ,@body) (delete-directory root t)))))
+
+(ert-deftest drgnx-pkg/desktop-refresh-gives-an-old-entry-the-icon-and-the-windows ()
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (write-region "[Desktop Entry]\nName=drgnx\nExec=mine -c %F\nIcon=emacs\nType=Application\n" nil entry nil 'silent)
+    (should (eq (drgnx-pkg-desktop-refresh entry to from) 'rewritten))
+    (should (equal (with-temp-buffer (insert-file-contents entry) (buffer-string))
+                   "[Desktop Entry]\nName=drgnx\nExec=mine -c %F\nIcon=drgnx\nStartupWMClass=nidhogg\nType=Application\n"))
+    (should (equal (with-temp-buffer (insert-file-contents (concat to "48x48/apps/drgnx.png")) (buffer-string)) "logo"))
+    (should (eq (drgnx-pkg-desktop-refresh entry to from) 'current))))
+
+(ert-deftest drgnx-pkg/desktop-refresh-puts-the-icons-where-the-desktop-looks ()
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (let* ((data (concat root "data/"))
+           (process-environment (cons (concat "XDG_DATA_HOME=" data) process-environment)))
+      (make-directory (concat data "applications") t)
+      (write-region "Icon=emacs\nType=Application\n" nil (drgnx-pkg-desktop-file) nil 'silent)
+      (should (eq (drgnx-pkg-desktop-refresh nil nil from) 'rewritten))
+      (should (file-exists-p (concat data "icons/hicolor/48x48/apps/drgnx.png"))))))
+
+(ert-deftest drgnx-pkg/desktop-refresh-outdates-a-stale-icon-cache ()
+  ;; the theme's cache hides a new icon until the theme folder is newer than it
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (write-region "Icon=emacs\nType=Application\n" nil entry nil 'silent)
+    (make-directory (concat to "48x48/apps") t)
+    (set-file-times to '(1000 0))
+    (drgnx-pkg-desktop-refresh entry to from)
+    (should (time-less-p '(1000 0) (file-attribute-modification-time (file-attributes to))))))
+
+(ert-deftest drgnx-pkg/desktop-refresh-keeps-an-icon-of-your-own ()
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (write-region "Icon=/mine.png\nType=Application\n" nil entry nil 'silent)
+    (drgnx-pkg-desktop-refresh entry to from)
+    (should (string-search "Icon=/mine.png\n" (with-temp-buffer (insert-file-contents entry) (buffer-string))))))
+
+(ert-deftest drgnx-pkg/desktop-refresh-leaves-the-icon-line-without-icons-to-copy ()
+  ;; a build with no hicolor tree: Icon=drgnx would name nothing
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (write-region "Icon=emacs\nType=Application\n" nil entry nil 'silent)
+    (delete-directory from t)
+    (drgnx-pkg-desktop-refresh entry to from)
+    (should (string-search "Icon=emacs\n" (with-temp-buffer (insert-file-contents entry) (buffer-string))))))
+
+(ert-deftest drgnx-pkg/desktop-refresh-installs-nothing-without-an-entry ()
+  (require 'drgnx-pkg)
+  (drgnx-onboard-test--with-icons (entry from to)
+    (should (eq (drgnx-pkg-desktop-refresh entry to from) 'none))
+    (should-not (file-exists-p to))
+    (should-not (file-exists-p entry))))
+
 (defun drgnx-onboard-test--pick (root answers)
   "Run the projects step on ROOT's ws/, the user answering ANSWERS (what they type, split as crm splits it).
 Returns (RESULT PROMPTS)."

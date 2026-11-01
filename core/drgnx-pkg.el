@@ -1256,6 +1256,49 @@ ExecStart= line after the check and before anything is written.  Never restarts 
         (`(,line . ,_) (list :status 'foreign :file file :line line))
         (_ (list :status 'foreign :file file :line "(no ExecStart= line)"))))))
 
+;; Nidhogg's native shell names its windows `nidhogg': a desktop entry that does not claim that name leaves the app
+;; switcher with the bare name and no icon.  Nidhogg installs the logo under its own prefix as `emacs', where the
+;; desktop does not look (it finds the system's Emacs icon), so the entry's icon is a copy named `drgnx'.
+
+(defconst drgnx-pkg-desktop-icon-sizes '(16 24 32 48 64 128 256 512)
+  "The sizes of Nidhogg's hicolor icons.")
+
+(defun drgnx-pkg-desktop-file ()
+  "The user's desktop entry: $XDG_DATA_HOME/applications/drgnx.desktop, else ~/.local/share/applications/."
+  (let ((default-directory "/") (file-name-handler-alist nil))
+    (expand-file-name "applications/drgnx.desktop" (or (drgnx-paths-env-dir "XDG_DATA_HOME") "~/.local/share"))))
+
+(defun drgnx-pkg-desktop-refresh (&optional file icons from)
+  "Give the desktop entry FILE (default `drgnx-pkg-desktop-file') drgnx's icon and the name of Nidhogg's windows.
+Returns `none' (no file: nothing is installed), `current' or `rewritten'.  The hicolor icons under FROM (default the
+running Emacs's) are copied into ICONS (default the user's) as `drgnx'.  Of FILE, only an `Icon=emacs' line changes,
+when there is an icon to name, and a `StartupWMClass=' line is added when it has none.  Never asks."
+  (let* ((case-fold-search nil)
+         (default-directory "/")
+         (file (or file (drgnx-pkg-desktop-file)))
+         (icons (or icons (expand-file-name "../icons/hicolor/" (file-name-directory file))))
+         (from (or from (expand-file-name "../../../icons/hicolor/" data-directory)))
+         (text (drgnx-file-read-bounded file))
+         (installed nil)
+         (copied nil))
+    (if (null text)
+        'none
+      (dolist (n drgnx-pkg-desktop-icon-sizes)
+        (let* ((dir (format "%dx%d/apps/" n n))
+               (source (expand-file-name (concat dir "emacs.png") from))
+               (target (expand-file-name (concat dir "drgnx.png") icons)))
+          (when (file-newer-than-file-p source target)
+            (make-directory (file-name-directory target) t)
+            (copy-file source target t)
+            (setq copied t))
+          (when (file-exists-p target) (setq installed t))))
+      (when copied (set-file-times icons))     ; a theme's icon cache counts only while it is newer than the folder
+      (let ((new (if installed (replace-regexp-in-string "^Icon=emacs$" "Icon=drgnx" text t t) text)))
+        (unless (string-match-p "^StartupWMClass=" new)
+          (setq new (replace-regexp-in-string "^Type=Application$" "StartupWMClass=nidhogg\nType=Application" new t t)))
+        (unless (equal new text) (drgnx-file-write-text file new))
+        (if (or copied (not (equal new text))) 'rewritten 'current)))))
+
 ;;;; Status (for the doctor)
 
 (defun drgnx-pkg-status (&optional modules-dir)
@@ -1377,6 +1420,8 @@ ExecStart= line after the check and before anything is written.  Never restarts 
                                            (plist-get r :old) (plist-get r :new)
                                            (if (eq (plist-get r :reload) 'ok) "systemd reloaded" "run: systemctl --user daemon-reload")))
              ('foreign (drgnx-pkg--print "drgnx.service's ExecStart is not drgnx's daemon line, left as it is: %s" (plist-get r :line))))
+           (when (eq (drgnx-pkg-desktop-refresh) 'rewritten)
+             (drgnx-pkg--print "drgnx.desktop has drgnx's icon and Nidhogg's windows: %s" (drgnx-pkg-desktop-file)))
            0))
         (`("service-unit" . ,dir)
          (let ((unit (drgnx-pkg-service-unit (car dir))))
