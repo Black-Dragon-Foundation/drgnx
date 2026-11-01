@@ -1,4 +1,5 @@
 ;;; agent-config-test.el --- batch tests: the agent settings model (homes, JSON files, secrets, skills) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-file)
 (require 'cl-lib)
@@ -44,6 +45,7 @@
     (should-error (drgnx-agent-config-read 'nobody nil))))
 
 (ert-deftest drgnx-agent-config/fixture-has-fake-clis ()
+  :tags '(:cond)                        ; runs the fake CLI
   (drgnx-agent-config-test-env
     (should (equal (executable-find "claude") (expand-file-name "claude" (expand-file-name "bin" drgnx-agent-config-test--dir))))
     (should (null (drgnx-agent-config-test-argv)))
