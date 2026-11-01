@@ -81,6 +81,33 @@
       (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-ui-quickhelp/a-card-above-the-line-touches-it ()
+  ;; Point on the window's last rows leaves no room below: the card goes above, its bottom edge on the line's top
+  ;; (the size it was placed with is its real outer size, not two border widths more).
+  (let* ((root (drgnx-uitest-root-frame)) (buf (generate-new-buffer "quickhelp-above.el")))
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (switch-to-buffer buf)
+          (dotimes (i 60) (insert (format "(defun fixture-%d (x) \"A function.\" (car (cdr x)))\n" i)))
+          (emacs-lisp-mode)
+          (goto-char (point-min))
+          (forward-line 30)
+          (search-forward "(car ")
+          (backward-char 4)
+          (recenter -2)                           ; the second row from the bottom
+          (redisplay t)
+          (let ((editor (selected-window)) (line (line-number-at-pos)))
+            (call-interactively #'drgnx-quickhelp-show)
+            (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
+            (drgnx-test-wait-presented)
+            (let* ((e (frame-edges drgnx-quickhelp--frame 'outer-edges)) (x (+ (nth 0 e) 4))
+                   (below (drgnx-quickhelp-ui-test--line-at x (1+ (nth 3 e)) root)))
+              (should (equal below (cons editor line))))))
+      (drgnx-quickhelp-hide)
+      (drgnx-quickhelp--unmap)
+      (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf)))))
+
 (ert-deftest drgnx-ui-quickhelp/a-wrapped-line-stays-clear-and-the-close-mark-closes ()
   (let* ((root (drgnx-uitest-root-frame)) (buf (generate-new-buffer "quickhelp-wrapped.el")))
     (unwind-protect
