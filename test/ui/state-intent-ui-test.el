@@ -21,7 +21,13 @@
 
 (defun drgnx-ui-intent-test--wait (pred &optional secs)
   "Wait until PRED, up to SECS (default 3) seconds; return its value, nil at the deadline (the caller says what is off)."
-  (ignore-error ert-test-failed (drgnx-test-wait pred :secs (or secs 3))))
+  ;; The store's idle calls and the bus's flush are idle timers: they run while the command loop waits for input, not
+  ;; while a test polls inside a timer.  So the wait is made in the command loop, a settled step at a time.
+  (let ((deadline (+ (drgnx-test-wait-now) (* (or secs 3) (drgnx-uitest-settle-scale)))) (value (funcall pred)))
+    (while (and (not value) (< (drgnx-test-wait-now) deadline))
+      (drgnx-uitest-run nil)
+      (setq value (funcall pred)))
+    value))
 
 (ert-deftest drgnx-state-intent-ui/a-dragged-dock-keeps-its-width-when-the-frame-resizes ()
   ;; The left dock dragged wider on its divider, then the frame made narrower the way a window manager does it:
