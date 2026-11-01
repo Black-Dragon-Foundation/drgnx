@@ -1353,6 +1353,7 @@ started and asked ACP initialize.  Without interaction nothing is installed: the
 ;;;; Step 7: daemon and desktop
 
 (declare-function drgnx-pkg-service-unit "drgnx-pkg")
+(declare-function drgnx-pkg-desktop-refresh "drgnx-pkg")
 
 (defconst drgnx-onboard-desktop-entry
   "[Desktop Entry]\nName=drgnx\nGenericName=Text Editor\nComment=Edit text (drgnx, an Emacs workbench)\nExec=emacsclient -s drgnx -c %F\nIcon=drgnx\nStartupWMClass=nidhogg\nType=Application\nTerminal=false\nCategories=Development;TextEditor;\nMimeType=text/plain;\n")
