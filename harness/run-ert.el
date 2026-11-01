@@ -308,7 +308,10 @@ is a failure.  Prints the flakes."
     (when flaky
       (message "\nFlaky (%d): failed first, passed on the rerun" (length flaky))
       (dolist (x flaky)
-        (let* ((name (plist-get x :name)) (reason (drgnx-run-ert--flaky-listed name)))
+        (let* ((name (plist-get x :name))
+               ;; a deterministic test has no flake: flaky.eld never excuses it
+               (det (eq (drgnx-run-ert--test-class (plist-get x :file) name) :det))
+               (reason (and (not det) (drgnx-run-ert--flaky-listed name))))
           (if reason
               (message "   %s  flaky (listed: %s)" name reason)
             (message "   %s  flaky: %s" name (plist-get x :condition))
@@ -319,9 +322,138 @@ is a failure.  Prints the flakes."
                                           :total (if whole (1+ (plist-get summary :total)) (plist-get summary :total)))
                                :failures (vconcat (plist-get summary :failures)
                                                   (list (list :name name :condition
-                                                              (format "flaky: failed first (%s), passed on rerun; fix it, or list it in test/flaky.eld with a cause and a stress run"
+                                                              (format (if det
+                                                                          "flaky: a deterministic test failed first (%s) and passed on rerun; fix it (test/flaky.eld does not apply to class det)"
+                                                                        "flaky: failed first (%s), passed on rerun; fix it, or list it in test/flaky.eld with a cause and a stress run")
                                                                       (plist-get x :condition)))))))))))))
   summary)
+
+;;;; The audit: what a deterministic test really runs
+;; DRGNX_TEST_AUDIT=1 (or a report file) records, for each test tagged :det, the real-time primitives that actually
+;; execute while it runs, as `drgnx-audit: TEST PRIMITIVE' lines in the run's output (and in the file, when the value is
+;; a path); DRGNX_TEST_AUDIT_ALL=1 audits every test, not only :det ones.  What `drgnx-test-with-clock' runs is virtual and does not count.  DRGNX_TEST_AUDIT_FAIL=1 (with the audit
+;; on) makes such a test fail the run.  Off by default.
+
+(defvar drgnx-run-ert--audit-current nil "The name of the :det test that runs now (a string), while the audit is on.")
+(defvar drgnx-run-ert--audit-seen nil "The (TEST . PRIMITIVE) pairs recorded this run, newest first.")
+(defvar drgnx-run-ert--audit-file nil "A file the rows are appended to, or nil.")
+(defvar drgnx-test--active)
+
+(defun drgnx-run-ert--audit-record (prim)
+  "Record PRIM as used by the :det test that runs now, once per test and primitive; not under the clock fixture."
+  (when (and drgnx-run-ert--audit-current
+             (not (and (boundp 'drgnx-test--active) drgnx-test--active)))
+    (let ((key (cons drgnx-run-ert--audit-current prim)))
+      (unless (member key drgnx-run-ert--audit-seen)
+        (push key drgnx-run-ert--audit-seen)
+        (let ((row (format "%s %s" (car key) (cdr key))))
+          (message "drgnx-audit: %s" row)
+          (when drgnx-run-ert--audit-file
+            (ignore-errors (write-region (concat row "\n") nil drgnx-run-ert--audit-file t 'silent))))))))
+
+(defun drgnx-run-ert--audit-wait-p (prim args)
+  "Whether the call of PRIM with ARGS really waits or starts real work."
+  (pcase prim
+    ('sleep-for (let ((s (car args))) (or (not (numberp s)) (> s 0))))
+    ('sit-for (let ((s (car args))) (or (not (numberp s)) (> s 0))))
+    ('accept-process-output
+     (let ((p (car args)) (s (nth 1 args)) (ms (nth 2 args)))
+       (or (and (numberp s) (> s 0)) (and (numberp ms) (> ms 0)) (and (processp p) (process-live-p p)))))
+    (_ t)))
+
+(defconst drgnx-run-ert--audit-primitives
+  '(sleep-for sit-for accept-process-output make-process start-process make-network-process open-network-stream
+              make-pipe-process make-serial-process)
+  "The primitives the audit watches.")
+
+(defun drgnx-run-ert--audit-around (prim fn &rest args)
+  (when (drgnx-run-ert--audit-wait-p prim args) (drgnx-run-ert--audit-record prim))
+  (apply fn args))
+
+(defun drgnx-run-ert--audit-test (fn test &rest args)
+  "Around `ert-run-test': the audit's current test is TEST while it runs, if it is tagged :det."
+  (let ((drgnx-run-ert--audit-current
+         ;; DRGNX_TEST_AUDIT_ALL=1: every test, for a run before the files carry their class (the rows name the file)
+         (and (or (memq :det (ert-test-tags test)) (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_ALL") "1"))
+              (symbol-name (ert-test-name test)))))
+    (apply fn test args)))
+
+(defun drgnx-run-ert--audit-install (&optional file)
+  "Turn the audit on; rows are also appended to FILE when given."
+  (setq drgnx-run-ert--audit-file file)
+  (dolist (p drgnx-run-ert--audit-primitives)
+    (advice-add p :around (apply-partially #'drgnx-run-ert--audit-around p) `((name . drgnx-run-ert-audit))))
+  (advice-add 'ert-run-test :around #'drgnx-run-ert--audit-test '((name . drgnx-run-ert-audit))))
+
+(defun drgnx-run-ert--audit-uninstall ()
+  "Turn the audit off."
+  (dolist (p drgnx-run-ert--audit-primitives) (advice-remove p 'drgnx-run-ert-audit))
+  (advice-remove 'ert-run-test 'drgnx-run-ert-audit))
+
+(defun drgnx-run-ert--audit-failures ()
+  "With DRGNX_TEST_AUDIT_FAIL=1, one failure (:name :condition) per :det test the audit saw use real time."
+  (when (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_FAIL") "1")
+    (let (by-test out)
+      (dolist (k (reverse drgnx-run-ert--audit-seen))
+        (push (cdr k) (alist-get (car k) by-test nil nil #'equal)))
+      (dolist (e (nreverse by-test))
+        (push (list :name (car e)
+                    :condition (format "deterministic test ran real time: %s"
+                                       (mapconcat #'symbol-name (reverse (cdr e)) ", ")))
+              out))
+      (nreverse out))))
+
+;;;; Test classes: a file's `;; test-class: det|cond|timing' line becomes a tag on its tests
+
+(defun drgnx-run-ert--file-class (file)
+  "The class keyword (:det, :cond or :timing) of the test FILE: its `;; test-class: CLASS' line, an exact line within the
+first 15 lines; nil when it has none (or is unreadable)."
+  (ignore-errors
+    (with-temp-buffer
+      (insert-file-contents file nil 0 2000)
+      (goto-char (point-min))
+      (let ((n 0) class)
+        (while (and (not class) (< n 15) (not (eobp)))
+          (when (looking-at "^;; test-class: \\(det\\|cond\\|timing\\)$")
+            (setq class (intern (concat ":" (match-string 1)))))
+          (forward-line 1)
+          (setq n (1+ n)))
+        class))))
+
+(defun drgnx-run-ert--test-class (file name)
+  "The class of the test NAME (a string) of FILE: its own `:det', `:cond' or `:timing' tag (a plain quoted `:tags' list
+in its top-level `ert-deftest'), else the file's class (`drgnx-run-ert--file-class'); nil when neither, or FILE is nil."
+  (when (stringp file)
+    (or (when-let* ((own (let ((obarray (obarray-make)) own)
+                           (ignore-errors
+                             (with-temp-buffer
+                               (insert-file-contents file)
+                               (condition-case nil
+                                   (while (not own)
+                                     (let ((form (read (current-buffer))))
+                                       (when (and (consp form) (symbolp (car form)) (equal (symbol-name (car form)) "ert-deftest")
+                                                  (symbolp (cadr form)) (equal (symbol-name (cadr form)) name))
+                                         (let ((tags (cadr (seq-drop-while (lambda (x) (not (equal (and (symbolp x) (symbol-name x)) ":tags")))
+                                                                           (nthcdr 3 form)))))
+                                           (when (and (consp tags) (equal (symbol-name (car tags)) "quote") (listp (cadr tags)))
+                                             (setq own (seq-some (lambda (x) (and (symbolp x) (car (member (symbol-name x) '(":det" ":cond" ":timing")))))
+                                                                 (cadr tags))))
+                                           (setq own (or own 'none))))))
+                                 (end-of-file nil))))
+                           (and (stringp own) own))))
+          (intern own))
+        (drgnx-run-ert--file-class file))))
+
+(defun drgnx-run-ert--tag-classes (file)
+  "Give each test loaded from FILE its file's class as an ERT tag, unless it has a class tag of its own, so that
+`(tag :det)' selects it."
+  (when-let* ((class (drgnx-run-ert--file-class file)))
+    (let ((base (file-name-sans-extension (file-truename file))))
+      (dolist (test (ert-select-tests t t))
+        (when-let* ((f (ignore-errors (ert-test-file-name test))))
+          (when (and (equal (file-name-sans-extension (file-truename f)) base)
+                     (not (seq-some (lambda (c) (memq c (ert-test-tags test))) '(:det :cond :timing))))
+            (setf (ert-test-tags test) (cons class (ert-test-tags test)))))))))
 
 (defun drgnx-run-ert--say-skipped (skipped)
   "Print the SKIPPED entries (:name :reason), if any."
@@ -363,6 +495,8 @@ names the run would run, in that order, to FILE and runs none."
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
   (drgnx-run-ert--trampolines-see-real-primitives)
+  (when-let* ((a (drgnx-run-ert--env "DRGNX_TEST_AUDIT")))
+    (drgnx-run-ert--audit-install (and (not (equal a "1")) a)))
   (let* ((census (and (drgnx-run-ert--leaks-on-p) (progn (drgnx-run-ert--census-start) t)))
          ;; the RAW selector, for the file filter: `drgnx-run-ert--selector' needs the files loaded, and with a
          ;; shuffle it is a `(member …)', not a string (which would load every file)
@@ -373,7 +507,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
           (cl-loop for file in (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f selector))
                                                  (drgnx-run-ert--files dir))
                    ;; a file that does not read or load costs its tests: the run fails and says which file
-                   for err = (condition-case err (progn (load file nil t) nil) (error err) (quit err))
+                   for err = (condition-case err (progn (load file nil t) (drgnx-run-ert--tag-classes file) nil) (error err) (quit err))
                    when err collect (progn (message "drgnx: test file %s did not load: %S" file err)
                                            (list :name (concat "load " (file-name-nondirectory file))
                                                  :condition (format "%S" err)))))
@@ -435,8 +569,11 @@ summary to RESULTS-FILE.  Return t if every test passed."
       (setq load-failures (append load-failures (drgnx-run-ert--no-skip-failures skipped))))
     (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector) (drgnx-run-ert--gate-skipped selector)))
     (unless drgnx-run-ert--file-child (drgnx-run-ert--say-skipped skipped))
-    (setq failures (append load-failures (nreverse failures)))
+    (setq failures (append load-failures (nreverse failures) (drgnx-run-ert--audit-failures)))
     (when (and seed failures (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)) ; again, where the failures are
+    (when-let* ((cs (and failures (not drgnx-run-ert--leaks-quiet) (not drgnx-run-ert--file-child)
+                         (drgnx-run-ert--env "NIDHOGG_TEST_SEED"))))
+      (message "drgnx: clock seed %s (the same schedule again: NIDHOGG_TEST_SEED=%s)" cs cs))
     ;; the per-file Emacsen of a run say nothing: the run that started them prints one report from their summaries
     (when (and leaks (not drgnx-run-ert--leaks-quiet))
       (message "\n%s" (drgnx-run-ert-leaks-report leaks)))
@@ -678,7 +815,8 @@ hold any test."
 quoted `:tags' list; anything else may hold any tag, so it keeps the file: a file's own `…--deftest' macro (it may
 add tags), an `ert-deftest' inside another form (a loop making tests), a computed `:tags', a file that does not read."
   ;; read into an obarray of its own, as `drgnx-run-ert--index' does: symbols are compared by name
-  (let ((found nil) (obarray (obarray-make)) (name (symbol-name tag)))
+  (let ((found (and (memq tag '(:det :cond :timing)) (eq (drgnx-run-ert--file-class file) tag)))
+        (obarray (obarray-make)) (name (symbol-name tag)))
     (cl-labels ((named (x s) (and (symbolp x) (equal (symbol-name x) s)))
                 (deftest-p (x) (and (symbolp x) (string-suffix-p "deftest" (symbol-name x))))
                 (inside-p (form) (and (consp form)
@@ -838,6 +976,8 @@ file passed."
       (cl-loop for f across (plist-get summary :failures) do (message "   FAILED  %s" (plist-get f :name)))
       (drgnx-run-ert--say-skipped (append (plist-get summary :skipped) nil))
       (when (and seed (> (plist-get summary :failed) 0)) (drgnx-run-ert--say-seed seed))
+      (when-let* ((cs (and (> (plist-get summary :failed) 0) (drgnx-run-ert--env "NIDHOGG_TEST_SEED"))))
+        (message "drgnx: clock seed %s (the same schedule again: NIDHOGG_TEST_SEED=%s)" cs cs))
       (when (and (plist-get summary :leaks) (> (length (plist-get summary :leaks)) 0))
         (message "\n%s" (drgnx-run-ert-leaks-report (plist-get summary :leaks))))
       (when results-file
