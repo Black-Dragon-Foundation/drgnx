@@ -45,7 +45,7 @@
   "Skip the test unless Glitnir is active and the pinned packages are on `load-path'.
 A macro: `skip-unless' exists only inside the body of `ert-deftest'."
   '(progn (skip-unless (drgnx-uitest-glitnir-p))
-          (skip-unless (drgnx-uitest-childframe-packages))))
+          (drgnx-uitest-require-childframe-packages)))
 
 (defun drgnx-test-glitnir--settle ()
   "Wait for the picture, and clear the echo area (a message would be in one picture and not the other)."

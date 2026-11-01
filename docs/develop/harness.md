@@ -1143,6 +1143,15 @@ their names, or nil when the variable is unset or the directory lacks one, so te
 tests do with `DRGNX_MODAL_ELPA`. A session inherits the variable (`drgnx-ui-keep-env`). The tests of the command
 point `DRGNX_CHILDFRAME_PINS` and `DRGNX_CHILDFRAME_ARCHIVES` (`NAME=DIR,…`) at a local archive.
 
+In a container the GUI tier needs them: `test/container/childframe-elpa.sh DIR` installs them inside the GUI image
+(so the byte code matches its Emacs; it writes `DIR/elpa` only), and `bin/drgnx test --container --ui` takes
+`DRGNX_CHILDFRAME_ELPA=DIR/elpa`, mounts it read-only and sets `DRGNX_CHILDFRAME_REQUIRED=1`. A whole tier (no
+`DRGNX_TEST_SELECTOR`) without the variable is refused; with it set, a chrome, parity or extra row that finds the packages
+missing fails (`drgnx-uitest-require-childframe-packages`) instead of skipping. A narrowed run without the variable
+skips those rows as before. CI's `ui` job installs them through `actions/cache` keyed on the pins, the GUI
+Containerfile and `nidhogg.sh` (a run on its own Nidhogg build installs afresh). GNU ELPA and MELPA serve only the newest
+build of a package, so when one moves on the install fails until its pin in `childframe-packages.eld` is bumped.
+
 `test/ui/childframe-chrome-test.el` holds the compositor's four popup scenarios (`drgnx-ui-chrome/…`: corfu with
 popupinfo, posframe shown and hidden 100 times, eldoc-box beside corfu, a popup at the right and bottom edge). Each
 skips unless Glitnir (the compositor) is active and the packages are present, so on a stock Nidhogg a run reports them

@@ -442,6 +442,21 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     [ "$rt" = podman ] && [ "${1:-}" != --ui ] && elpa="$elpa,z"
     args+=(-v "$elpa" -e DRGNX_MODAL_ELPA=/modal-elpa)
   fi
+  # the pinned child-frame packages (posframe, corfu, …; test/container/childframe-elpa.sh makes the directory) for the
+  # chrome, parity and extra rows. A whole GUI tier (no selector) must have them: it is refused without, and the session is
+  # told to fail a row that finds them missing (DRGNX_CHILDFRAME_REQUIRED), never to skip it. A narrowed run without
+  # them skips those rows as before.
+  if [ "$tier" = ui ] && [ -z "${DRGNX_TEST_SELECTOR:-}" ] && [ -z "${DRGNX_CHILDFRAME_ELPA:-}" ]; then
+    echo "drgnx: the GUI tier needs the pinned child-frame packages: test/container/childframe-elpa.sh DIR, then DRGNX_CHILDFRAME_ELPA=DIR/elpa (docs/develop/harness.md)" >&2
+    return 2
+  fi
+  if [ -n "${DRGNX_CHILDFRAME_ELPA:-}" ]; then
+    [ -d "$DRGNX_CHILDFRAME_ELPA" ] || { echo "drgnx: DRGNX_CHILDFRAME_ELPA is not a directory: $DRGNX_CHILDFRAME_ELPA" >&2; return 2; }
+    local cfe; cfe="$(cd "$DRGNX_CHILDFRAME_ELPA" && pwd -P)"
+    case "$cfe" in *:*) echo "drgnx: DRGNX_CHILDFRAME_ELPA must not contain ':' (it is mounted with -v): $cfe" >&2; return 2 ;; esac
+    args+=(-v "$cfe:/childframe-elpa:ro" -e DRGNX_CHILDFRAME_ELPA=/childframe-elpa)
+    [ "$tier" = ui ] && args+=(-e DRGNX_CHILDFRAME_REQUIRED=1)
+  fi
   # a git worktree's `.git' is a file naming an absolute host path (the common git dir's worktrees/NAME): mount that
   # dir read-only at the same path, or git in the container exits 128. Read-only is enough: the tests only read the
   # repository (a test that commits does so in a repository of its own under a temporary directory)

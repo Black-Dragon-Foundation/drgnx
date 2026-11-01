@@ -74,6 +74,10 @@
     (drgnx-ci-test--has tiers "bin/drgnx test --container --ui" "bin/drgnx test --container --scenario"
                         "bin/drgnx test --container --perf" "DRGNX_PERF_CPU_FACTOR: \"2\""
                         "DRGNX_PERF_RESULTS: perf-results.json" "if: always()" "name: perf-results")
+    ;; the ui job installs the pinned child-frame packages (cached) and hands them to the tier
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "ui")
+                        "test/container/childframe-elpa.sh" "hashFiles('drgnx/test/fixtures/childframe-packages.eld'"
+                        "DRGNX_CHILDFRAME_ELPA: ${{ runner.temp }}/childframe/elpa")
     ;; the ui job leaves the :timing tests out too (no CI job runs one)
     (should (string-match-p (concat "DRGNX_TEST_NO_TIMING: \"1\"\n\\(?:          [A-Z_]+: .*\n\\)*"
                                     "        run: bin/drgnx test --container --ui")

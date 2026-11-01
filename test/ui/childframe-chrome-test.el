@@ -89,7 +89,7 @@
   "Skip the test unless Glitnir is active and the pinned packages are on `load-path'.
 A macro: `skip-unless' exists only inside the body of `ert-deftest'."
   '(progn (skip-unless (drgnx-uitest-glitnir-p))
-          (skip-unless (drgnx-uitest-childframe-packages))))
+          (drgnx-uitest-require-childframe-packages)))
 
 (defmacro drgnx-test-chrome--with-chrome (&rest body)
   "Run BODY on a bare root frame with the default chrome and the damage verifier on."

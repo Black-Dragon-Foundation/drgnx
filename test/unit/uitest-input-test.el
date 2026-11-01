@@ -258,3 +258,11 @@
           (should (< 14.9 (- deadline t0) 15.5))               ; 5 s * 3
           (drgnx-uitest-run nil 2)
           (should (< 1.9 (- deadline t0) 2.5)))))))            ; an explicit timeout is not scaled
+
+(ert-deftest drgnx-uitest/require-childframe-packages-skips-or-fails ()
+  ;; Without the packages a row skips; when the tier requires them (DRGNX_CHILDFRAME_REQUIRED) it fails instead.
+  (let ((process-environment (append (list "DRGNX_CHILDFRAME_ELPA=/nonexistent-elpa") process-environment)))
+    (setenv "DRGNX_CHILDFRAME_REQUIRED" nil)
+    (should-error (drgnx-uitest-require-childframe-packages) :type 'ert-test-skipped)
+    (setenv "DRGNX_CHILDFRAME_REQUIRED" "1")
+    (should-error (drgnx-uitest-require-childframe-packages) :type 'ert-test-failed)))

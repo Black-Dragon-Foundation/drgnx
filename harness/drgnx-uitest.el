@@ -1033,5 +1033,15 @@ unset or lacks one (tests then `skip-unless', as with $DRGNX_MODAL_ELPA).  The d
           (add-to-list 'load-path d))
         (mapcar #'car (drgnx-uitest--childframe-pins))))))
 
+(defun drgnx-uitest-require-childframe-packages ()
+  "For a test body: the pinned child-frame packages are on `load-path', else the test skips; with
+$DRGNX_CHILDFRAME_REQUIRED=1 (the container GUI tier sets it) it fails instead, so a green tier means the row ran.
+(`skip-unless' would swallow an error, so this is not a `skip-unless'.)"
+  (or (drgnx-uitest-childframe-packages)
+      (if (equal (getenv "DRGNX_CHILDFRAME_REQUIRED") "1")
+          (ert-fail (format "DRGNX_CHILDFRAME_REQUIRED is set but the pinned child-frame packages are missing from %S"
+                            (getenv "DRGNX_CHILDFRAME_ELPA")))
+        (ert-skip "the pinned child-frame packages are not available (DRGNX_CHILDFRAME_ELPA)"))))
+
 (provide 'drgnx-uitest)
 ;;; drgnx-uitest.el ends here

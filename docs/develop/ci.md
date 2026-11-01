@@ -255,6 +255,7 @@ so the tests that need those packages skip; the nightly terminal tier alone fetc
 
 | What | Key | Saves | Bust it |
 |---|---|---|---|
+| the pinned child-frame packages (`actions/cache`, the `ui` job) | pins file + `Containerfile.gui` + `nidhogg.sh` (+ run id on a run's own Nidhogg) | installing the eight packages from GNU ELPA and MELPA in the GUI image: about 1–2 min; the GUI tier fails without them | bump a pin in `test/fixtures/childframe-packages.eld` (an archive that moved on makes the install fail) |
 | the three test images (`Test images`, GHCR) | tag = first 16 hex of `sha256sum test/container/Containerfile{,.gui,.tty}` (and `f45`) | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min (the tty tier now pulls instead of building every night) | edit the Containerfile, or run `Test images` by hand (the weekly run refreshes the tag with Fedora's updates) |
 
 An image is addressed by the hash of the file it is built from, and a job whose hash has no image builds it itself, so

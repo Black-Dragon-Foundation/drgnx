@@ -1027,6 +1027,33 @@ macOS (no /proc there)."
             (should-not (member "/out" (mapcar (lambda (a) (car (last (split-string a ":")))) args)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/the-container-gui-tier-needs-the-child-frame-packages ()
+  ;; A whole GUI tier is refused without DRGNX_CHILDFRAME_ELPA; with it the directory is mounted read-only and the
+  ;; session is told to fail, not skip, a row that lacks the packages.  A narrowed run and the other tiers are not bound.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (let* ((elpa (progn (make-directory (expand-file-name "elpa" dir)) (file-truename (expand-file-name "elpa" dir))))
+               (evid (concat "DRGNX_UI_EVIDENCE_DIR=" dir "/evidence"))
+               (base (list (concat "HOME=" dir) "DRGNX_CONTAINER=true" "DRGNX_TEST_GUI_IMAGE=gui-image" evid
+                           "DRGNX_CHILDFRAME_ELPA" "DRGNX_TEST_SELECTOR")))
+          (let ((r (let ((drgnx-bin-test--cwd dir))
+                     (drgnx-bin-test--call drgnx-bin-test--bin base "test" "--container" "--ui"))))
+            (should-not (eql 0 (car r)))
+            (should (string-search "DRGNX_CHILDFRAME_ELPA" (cdr r))))
+          (let ((args (drgnx-bin-test--container-argv
+                       dir (list "DRGNX_TEST_GUI_IMAGE=gui-image" evid (concat "DRGNX_CHILDFRAME_ELPA=" elpa)) "--ui")))
+            (should (member (concat elpa ":/childframe-elpa:ro") args))
+            (should (member "DRGNX_CHILDFRAME_ELPA=/childframe-elpa" args))
+            (should (member "DRGNX_CHILDFRAME_REQUIRED=1" args)))
+          (let ((args (drgnx-bin-test--container-argv
+                       dir (list "DRGNX_TEST_GUI_IMAGE=gui-image" evid "DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_CHILDFRAME_ELPA") "--ui")))
+            (should-not (seq-find (lambda (a) (string-search "CHILDFRAME" a)) args)))
+          (let ((args (drgnx-bin-test--container-argv
+                       dir (list "DRGNX_TEST_GUI_IMAGE=gui-image" (concat "DRGNX_CHILDFRAME_ELPA=" elpa)) "--perf")))
+            (should (member "DRGNX_CHILDFRAME_ELPA=/childframe-elpa" args))
+            (should-not (member "DRGNX_CHILDFRAME_REQUIRED=1" args))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-from-a-worktree-mounts-the-git-dir ()
   ;; In a git worktree `.git' is a file naming an absolute host path; the container mounts only the checkout, so git
   ;; there exited 128.  The common git dir goes in read-only at the same absolute path; a plain checkout gets no extra mount.
