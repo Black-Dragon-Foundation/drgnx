@@ -1,4 +1,5 @@
 ;;; mod-diff-test.el --- batch tests: the diff view — split or unified, folding, jumping, git in the background -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)

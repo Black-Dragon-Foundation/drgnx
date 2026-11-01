@@ -1,4 +1,5 @@
 ;;; mod-markdown-test.el --- batch tests: Markdown — GFM for READMEs, a preview, Mermaid through mmdc as a job -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)

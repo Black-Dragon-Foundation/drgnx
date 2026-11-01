@@ -1,4 +1,5 @@
 ;;; mod-replace-engine-test.el --- batch tests: the replace engine — text through rg/git grep/grep, symbols through the server, one-step undo -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
@@ -310,7 +311,7 @@
         (let ((h nil) (done nil))
           (setq h (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (when (eq x :done) (setq done t)))))
           (should (equal (car (process-command h)) "git"))
-          (while (not done) (accept-process-output nil 0.05)))
+          (drgnx-test-wait (lambda () done) :secs 10 :what "the git grep search to finish"))
         (let ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo" :word t :include '("src/**") :exclude '("*.md"))))))
           (should (equal (drgnx-replace-test--files ms repo) '("src/a.el")))
           (should (equal (mapcar (lambda (m) (plist-get m :col)) ms) '(4))))
@@ -324,7 +325,7 @@
             (should (equal (car (process-command h)) "grep"))
             (should (member "--null" (process-command h))) ; -Z is --decompress in BSD/macOS grep
             (should-not (member "-Z" (process-command h)))
-            (while (not done) (accept-process-output nil 0.05)))
+            (drgnx-test-wait (lambda () done) :secs 10 :what "the grep search to finish"))
           (let ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q dir "foo" :exclude "*.md")))))
             (should (equal (drgnx-replace-test--files ms dir) '("p.txt")))
             (should (equal (mapcar (lambda (m) (plist-get m :col)) ms) '(2 8)))

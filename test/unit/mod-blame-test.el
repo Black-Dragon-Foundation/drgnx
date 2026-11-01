@@ -1,4 +1,5 @@
 ;;; mod-blame-test.el --- batch tests: inline blame — the current line's author, age and subject -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
