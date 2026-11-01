@@ -1,4 +1,5 @@
 ;;; onboard-portability-test.el --- batch tests: onboarding step 8, Portability -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs in a temp HOME with its own config, data and state dirs: never ~, ~/.config or the keyring.
 ;; git is real (in the temp config dir); chezmoi is a fake script that records its argv; questions are stubbed.
 ;; Test keys are built at run time, never written literally (the pre-commit hook rejects them).
@@ -55,6 +56,7 @@ Returns (RESULT QUESTIONS)."
     (set-file-modes f #o755)))
 
 (ert-deftest drgnx-onboard-portability/none-makes-a-repo-when-asked ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (let* ((config (concat root "config"))
            (r (drgnx-onboard-portability-test--run t '(("git repository" . t)))))
@@ -84,6 +86,7 @@ Returns (RESULT QUESTIONS)."
       (should (null (cadr r))))))
 
 (ert-deftest drgnx-onboard-portability/machine-local-files-leave-first ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (write-region "/usr/bin/emacs\n" nil (concat root "config/emacs") nil 'silent)
     (let* ((config (concat root "config"))
@@ -104,6 +107,7 @@ Returns (RESULT QUESTIONS)."
       (should (string-match-p "emacs stays" (cadr (car r)))))))
 
 (ert-deftest drgnx-onboard-portability/a-repo-is-reported-with-the-next-command ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (let ((config (concat root "config")))
       (drgnx-onboard-portability-test--git config "init" "-q")
@@ -232,6 +236,7 @@ Returns (RESULT QUESTIONS)."
       (should (string-match-p "git init did not finish within 0.5 s" (cadr (car r)))))))
 
 (ert-deftest drgnx-onboard-portability/inside-another-repository-no-init ()
+  :tags '(:cond)
   (drgnx-onboard-portability-test--with root
     (drgnx-onboard-portability-test--git root "init" "-q")   ; the temp root holds config/: an enclosing work tree
     (should (eq (car (drgnx-onboard--config-source)) 'inside))
@@ -242,6 +247,7 @@ Returns (RESULT QUESTIONS)."
                               (cadr (car r)))))))
 
 (ert-deftest drgnx-onboard-portability/credentials-in-a-remote-never-show ()
+  :tags '(:cond)
   (dolist (c '(("http://u:tok@h.example/x.git" . "http://h.example/x.git")
                ("ssh://u:pw@h.example/x.git" . "ssh://h.example/x.git")
                ("https://u:tok@h.example/x.git?private_token=abc#frag" . "https://h.example/x.git")
@@ -281,10 +287,11 @@ Returns (RESULT QUESTIONS)."
   (should (eq (plist-get (alist-get 'portability drgnx-onboard--steps) :run) #'drgnx-onboard--portability-step)))
 
 (ert-deftest drgnx-onboard-portability/a-program-that-exits-at-once ()
+  :tags '(:cond)
   ;; its stdin is closed after it has gone: never an error (a lost race failed the step now and then)
   (let ((orig (symbol-function 'make-process)))
     (cl-letf (((symbol-function 'make-process)
-               (lambda (&rest args) (let ((p (apply orig args))) (sleep-for 0.3) p))))
+               (lambda (&rest args) (let ((p (apply orig args))) (while (process-live-p p) (accept-process-output p 0.05)) p))))
       (should (equal (drgnx-onboard--call "true") '(0 . "")))
       (should (equal (drgnx-onboard--call "sh" "-c" "echo out; exit 4") '(4 . "out"))))))
 
@@ -297,6 +304,7 @@ Returns (RESULT QUESTIONS)."
       (write-region "x\n" nil file nil 'silent))))
 
 (ert-deftest drgnx-onboard-portability/leftovers-never-travel ()
+  :tags '(:cond)
   ;; backups, locks, temp files and the keys undo file never reach the first commit
   (drgnx-onboard-portability-test--with root
     (let ((config (concat root "config")))
