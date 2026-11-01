@@ -1,4 +1,5 @@
 ;;; kitty-test.el --- tty tier, the exit test: emacsclient -t in a real kitty -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs).  One drgnx daemon under headless mutter and a kitty on
 ;; that display running `emacsclient -t' (`drgnx-tty-session-kitty-start').  Keys go in through kitty's own encoder
 ;; (`kitten @ send-key'), mouse reports as raw bytes (`send-text'); the screen comes from `get-text', the clipboard
@@ -99,7 +100,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
     (drgnx-tty-keys-test--ran s 'kx-f6 "<f6>")
     ;; no hint: none was recorded for kitty, none was said — after the moment it would have come (0.5 s), so the
     ;; check cannot pass early
-    (sleep-for 1)
+    (drgnx-test-pause 1)
     (let ((hint (drgnx-tty-session-eval s '(drgnx-tty-fallback-hint-text))))
       (should-not (memq 'kitty (plist-get (drgnx-tty-session-eval s '(drgnx-tty--read-report)) :hinted)))
       (should-not (drgnx-tty-session-eval s `(with-current-buffer "*Messages*" (string-search ,hint (buffer-string)))))
@@ -138,6 +139,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
 
 (ert-deftest drgnx-kitty/c-g-interrupts-a-blocking-call ()
   ;; under kkp C-g is an escape sequence; around a program Emacs waits for, kitty sends the plain byte again
+  :tags '(:timing)
   (drgnx-tty-kitty-test--with (s :kkp t)
     (drgnx-tty-kitty-test--kkp-on s)
     (let ((started (expand-file-name "block-started" (plist-get s :run))))
@@ -155,7 +157,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
       (drgnx-tty-session-kitty-key s "f12")
       (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
       ;; kkp gives kitty its plain keys back as the program starts
-      (sleep-for 0.5)
+      (drgnx-test-pause 0.5)            ; Emacs is blocked in the program: nothing to ask it
       (let ((sent (float-time)))
         (drgnx-tty-session-kitty-key s "ctrl+g")
         (should (< (- (drgnx-tty-session-wait s 'kx-returned 10) sent) 2)))

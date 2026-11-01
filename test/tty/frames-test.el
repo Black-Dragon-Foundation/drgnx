@@ -1,6 +1,8 @@
 ;;; frames-test.el --- tty tier: a terminal window is a workbench; EDITOR frames; what a terminal can do, asked once -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 (defconst drgnx-tty-frames-test--clients
@@ -126,7 +128,7 @@ once TEXT is on its screen."
                                                                               (current-buffer)))
                                                   (drgnx-groups-move-to-next)
                                                   t))
-      (sleep-for 0.5)
+      (drgnx-test-pause 0.5)
       (should (drgnx-tty-session-eval s '(let ((b (get-buffer "COMMIT_EDITMSG")))
                                            (and b (buffer-local-value 'server-buffer-clients b) t))))
       (should-not (drgnx-tty-session-find c "emacsclient exited"))
@@ -208,6 +210,7 @@ once TEXT is on its screen."
     (should (drgnx-tty-session-eval s 'kx-queries))))
 
 (ert-deftest drgnx-tty-frames/a-silent-terminal-does-not-freeze-the-daemon ()
+  :tags '(:timing)
   (drgnx-tty-session-with (s :daemon t)
     ;; Emacs's own xterm.el waits `xterm-query-timeout' for each query it sends a new terminal: two (DA2, then DA1
     ;; for OSC 52).  drgnx may add less than a second to that.
@@ -259,7 +262,7 @@ once TEXT is on its screen."
                                               (buffer-substring-no-properties (min ,messages (point-max)) (point-max))))))
         (should-not (string-match-p "[Ee]rror" new)))
       ;; and keeps answering a while later (nothing errors in a loop)
-      (sleep-for 1)
+      (drgnx-test-pause 1)
       (should (eq (drgnx-tty-session-eval s t) t))
       (should (equal (drgnx-tty-session-eval s 'drgnx-hooks-problems) problems)))))
 
@@ -270,7 +273,7 @@ once TEXT is on its screen."
       (let ((problems (drgnx-tty-session-eval s 'drgnx-hooks-problems))
             (messages (drgnx-tty-session-eval s '(with-current-buffer "*Messages*" (point-max))))
             (pty (drgnx-tty-session-pty-start :daemon-sess s)))
-        (sleep-for delay)
+        (drgnx-test-pause delay)
         (delete-process pty)
         (drgnx-tty-session-wait s '(not (seq-find (lambda (f) (equal (tty-type (frame-terminal f)) "xterm-256color"))
                                                   (frame-list)))

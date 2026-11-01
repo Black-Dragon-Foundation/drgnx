@@ -1,4 +1,5 @@
 ;;; keys-test.el --- tty tier: C-S- chords through kkp or modifyOtherKeys; C-g still interrupts -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The keys are
 ;; the bytes a terminal sends (`drgnx-tty-session-key'), fed to the pane unchanged.  tmux does not speak the kitty
 ;; keyboard protocol: the test answers kkp's question ("yes") and names the terminal (its XTVERSION answer, which
