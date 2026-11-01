@@ -783,6 +783,14 @@ right-click menus (contexts via `drgnx-surfaces-define-context`), which-key labe
 the **key sheet** ("Keyboard Shortcuts", `*drgnx keys*`), a markdown cheat sheet (`drgnx-surfaces-export-markdown`), "next time:
 KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p` in every profile): every available
 command as "Category: Title" with its key and description beside it, through the normal completion UI.
+With `extra/completion` on and Glitnir active it floats: the category `drgnx-command` is in
+`vertico-multiform-categories`, which turns on `vertico-buffer` with `drgnx-palette-frame--display`
+(`core/drgnx-palette-frame.el`) as its display action. The action returns the root window of drgnx's own reused child
+frame; vertico shows the minibuffer buffer itself there, so the prompt, the text and the candidates float while the
+minibuffer window and focus stay in the editor frame. `vertico-buffer` restores nothing in that window on exit, so
+`minibuffer-exit-hook` runs `drgnx-palette-frame-hide` (hide the frame, clear the dedication and window parameters, show
+a plain buffer); the module's teardown deletes the frame. `vertico-count` follows the window's height. See
+`docs/guide/palette.md`.
 
 **One key label.** `(drgnx-surfaces-key-label CMD-OR-ID &key context any short)` is the only function that turns a
 command's key into text: the key sheet, the menus, the palette, the tips, the start page, the top line and the

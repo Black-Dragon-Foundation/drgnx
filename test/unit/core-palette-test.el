@@ -90,3 +90,22 @@
         (should (string-match-p "No command: \\?" (cadr err)))))
     ;; the legend's own empty case: nothing typed, nothing happens, no error
     (should-not (nth 2 (drgnx-test--palette-with-search "" styles)))))
+
+;; The floating palette (core/drgnx-palette-frame.el): Glitnir decides, nothing else does.
+(require 'drgnx-palette-frame)
+
+(ert-deftest core-palette-float-off-without-glitnir ()
+  (let (modes)
+    (cl-letf (((symbol-function 'vertico-buffer-mode) (lambda (arg) (push arg modes))))
+      ;; no Glitnir (or no graphical frame): the palette stays in the minibuffer, as before
+      (should-not (drgnx-palette-frame-wanted-p))
+      (drgnx-palette-frame-buffer 1)
+      (should-not modes)
+      ;; Glitnir on a graphical frame: `vertico-buffer-mode' on; off is always passed on
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                ((symbol-function 'glitnir-active-p) (lambda () t)))
+        (should (drgnx-palette-frame-wanted-p))
+        (drgnx-palette-frame-buffer 1))
+      (should (equal modes '(1)))
+      (drgnx-palette-frame-buffer -1)
+      (should (equal modes '(-1 1))))))

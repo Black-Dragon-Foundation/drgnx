@@ -17,9 +17,16 @@
 ;;;; Chrome (Glitnir, the compositor)
 
 (defcustom drgnx-look-chrome
-  '((corner-radius . 8) (shadow . (:blur 16 :offset (0 . 6) :spread 0 :opacity 0.35)))
+  '((corner-radius . 8) (shadow . (:blur 16 :offset (0 . 6) :spread 0 :opacity 0.35)) (transition . pop))
   "The chrome of popups (child frames) under Glitnir, in logical pixels: `child-frame-chrome' while ui/look is on.
 No colours: the shadow takes the `child-frame-shadow' face, the border what the toolkit drew."
+  :type 'sexp :group 'drgnx-face)
+
+(defcustom drgnx-look-palette
+  '((corner-radius . 12) (shadow . (:blur 60 :offset (0 . 24) :spread 0 :opacity 0.6))
+    (alpha-background . 0.82) (backdrop-blur . 10) (transition . pop))
+  "The floating command palette's child frame parameters under Glitnir, in logical pixels.
+The 0.82 is a placeholder the look session tunes.  No colours: the shadow takes the `child-frame-shadow' face."
   :type 'sexp :group 'drgnx-face)
 
 (defvar child-frame-chrome)
