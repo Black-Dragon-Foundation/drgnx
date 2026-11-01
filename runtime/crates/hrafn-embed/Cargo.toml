@@ -1,0 +1,19 @@
+[package]
+name = "hrafn-embed"
+description = "Hrafn's model table, model cache checks and built-in embedder; pure Rust, no C"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bytemuck.workspace = true
+half.workspace = true
+safetensors.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokenizers.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

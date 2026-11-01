@@ -41,6 +41,7 @@ runtime/
 | `norn` | `work.db`'s coordination writer, its readers and the 16 coordination tools on `mimir` ([coordination.md](coordination.md)); drgnx's policy over `urdr::graph` (closed kinds and links, the personal-notes deny-list, scopes, grants, trust marking, projects), the schema 6 → 7 migration, the tracker and its tools ([store.md](store.md)); pure Rust but for urdr's bundled SQLite, so off the Android cross-check |
 | `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
+| `hrafn-embed` | Hrafn's embedding side: the pinned model table, the model cache's checks and the built-in embedder; pure Rust, no C, builds for Android ("Hrafn" below) |
 | `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
 | `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
 | `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
@@ -804,6 +805,28 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
 - **Not rows:** `no-proxy-is-respected` keeps a plain-HTTP provider (the connector tunnels through `HTTP_PROXY` for any
   scheme, so it proves the `NO_PROXY` rule without TLS). A kill -9 between a registration's row write and its answer is
   declined (phase 6's `op` rows are the target).
+
+## Hrafn
+
+Hrafn is the code search behind `search/*` and the MCP `search` tool. `hrafn-embed` holds its embedding side, in pure Rust
+with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-android`.
+
+- **The model table (`models.rs`).** `MODELS` lists gte-modernbert-base (the default until the eval rules), Granite small
+  r2 and CodeRankEmbed, each at a pinned revision. A row names exactly four files with their sizes and sums:
+  `model.safetensors`, `tokenizer.json`, `config.json` and `1_Pooling/config.json`. There is no ONNX file and no GGUF.
+  `ModelConfig::read` takes the network's shape from the model's own `config.json`, so a model of the same family needs
+  a table row and nothing else. All three pool on CLS.
+- **The cache (`cache.rs`).** A model lives in `<root>/<id>-<revision[..12]>/`. `<file>.part` is a transfer in progress; a file
+  under its real name has passed its sum. `state` is `Missing`, `Partial`, `Ready` or `Corrupt`, and `Ready` means every byte was
+  hashed (about a second). `import` copies a model from a directory, for an air-gapped machine.
+- **Weights and tokens.** `Weights` reads F16, BF16 and F32 tensors, drops the `model.` prefix, and gives a tensor as f32 or as
+  f16 bytes, transposed on request. `Tokens` truncates at `max_tokens` (1,024), never pads, and applies the model's prefixes.
+
+Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
+`tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
+and 1,024 tokens (the edges of the 129-token local span and of the 1,024 cap), and for 4 chunks and 2 queries. Those come
+from a direct forward pass in Transformers, f32, batch 1, CLS, L2-normalised. `data/<model>.selfcheck.json` is one fixed
+text of 167 tokens, longer than the local span so both attention paths run, with its vector.
 
 ## Building and installing Ratatoskr
 

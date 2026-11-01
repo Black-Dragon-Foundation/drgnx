@@ -1,0 +1,15 @@
+//! The embedding side of Hrafn: the pinned model table, the model cache's checks, and the built-in embedder.
+//!
+//! This crate is pure Rust, with no SQLite, no tree-sitter and no C, so it builds for `aarch64-linux-android`. The
+//! contract: a model is a row of [`models::MODELS`], the only files it reads are that row's, at their pinned sums, and
+//! the shape of the network comes from the model's own `config.json` ([`models::ModelConfig`]).
+//! See `docs/develop/runtime.md`, "Hrafn".
+
+pub mod cache;
+pub mod models;
+pub mod tokens;
+pub mod weights;
+
+pub use models::{
+    Arch, LoadError, MODELS, ModelConfig, ModelFile, ModelSpec, default_model, download_bytes,
+};

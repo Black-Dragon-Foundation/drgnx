@@ -52,8 +52,21 @@ insta = { version = "1.49", features = ["json"] }
 proptest = "1.12"
 tempfile = "3"
 rmcp = { version = "3.6", default-features = false }   # dev only (mimir's interop test); a member names its features
+# hrafn-embed, pure Rust: a tokeniser with no C regex engine (default-features alone does not compile), and the model file
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+safetensors = "0.8"
+half = "2"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 
 [profile.release]
 strip = true
 lto = "thin"
 panic = "unwind"
+
+# `cargo test` is a debug build, and a real-model test would crawl in one
+[profile.dev.package.hrafn-embed]
+opt-level = 3
+[profile.dev.package.tokenizers]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
