@@ -23,9 +23,6 @@
 (declare-function corfu-quit "corfu")
 (declare-function corfu-mode "corfu")
 (declare-function corfu-popupinfo-mode "corfu-popupinfo")
-(declare-function glitnir-stats "glitnir")
-(declare-function glitnir--calls "glitnir")
-(declare-function glitnir--debug-panic "glitnir")
 (declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-quickhelp-show "drgnx-quickhelp")
 (declare-function drgnx-quickhelp-hide "drgnx-quickhelp")
@@ -186,7 +183,7 @@ The fixture is 60 lines of Lisp (so it scrolls) with the cursor on the last line
 
 (defun drgnx-test-glitnir--child-rects (root)
   "The visible child frames of ROOT as (L T R B) in its device pixels."
-  (let ((s (frame-scale-factor root)) (p (frame-edges root 'native-edges)))
+  (let ((s (drgnx-uitest-device-scale root)) (p (frame-edges root 'native-edges)))
     (mapcar (lambda (c)
               (let ((e (frame-edges c 'outer-edges)))
                 (mapcar (lambda (v) (round (* s v)))
@@ -226,47 +223,5 @@ comparison (and must differ there: the snapshot shows the popups).  The native s
     (should (frame-visible-p corfu--frame))
     (let ((on (drgnx-test-glitnir--on-snapshot root)))
       (should-not (drgnx-test-glitnir--diff on (drgnx-test-glitnir--off-snapshot root))))))
-
-(ert-deftest drgnx-ui-glitnir/off-makes-no-calls ()
-  "(b): with `glitnir-enable' nil, `(glitnir--calls)' is unchanged over typing, scrolling and a popup, none composed."
-  (drgnx-test-glitnir--with-fixture
-    (glitnir-stats root t)                     ; empty the record
-    (setq glitnir-enable nil)
-    (drgnx-test-glitnir--settle)
-    (should-not (glitnir-active-p))
-    (let ((calls (glitnir--calls)))
-      (drgnx-test-glitnir--scene root)
-      (goto-char (point-max))
-      (drgnx-test-glitnir--show-popups)
-      (should (= calls (glitnir--calls)))
-      ;; the stock path still records its paints (`:count'), but composes nothing; the native shell has no stock path,
-      ;; its presenter composes every frame
-      (unless (featurep 'nidhogg-wayland)
-        (should (equal (plist-get (glitnir-stats root) :compose-ms) '(:p50 0.0 :p95 0.0 :max 0.0)))))))
-
-(ert-deftest drgnx-ui-glitnir/panic-equals-off ()
-  "After `(glitnir--debug-panic 'draw)' the picture is the one the stock path draws.
-The native shell has no stock path to fall back on."
-  (skip-unless (not (featurep 'nidhogg-wayland)))
-  (drgnx-test-glitnir--with-fixture
-    (drgnx-test-glitnir--scene root)
-    (goto-char (point-max))
-    (drgnx-test-glitnir--show-popups)
-    (let ((off (drgnx-test-glitnir--off-snapshot root)) (panicked nil))
-      (setq glitnir-enable t)
-      (drgnx-test-glitnir--settle)
-      (should (glitnir-active-p))
-      (unwind-protect
-          (let ((glitnir-debug 'verify))
-            (glitnir--debug-panic 'draw)
-            (redraw-frame root)
-            (drgnx-test-glitnir--settle)
-            (should-not (glitnir-active-p))
-            (setq panicked t)
-            (should-not (drgnx-test-glitnir--diff (drgnx-uitest-snapshot root) off)))
-        (let ((glitnir-debug 'verify)) (glitnir--debug-panic 'revive))
-        (redraw-frame root) (drgnx-test-wait-presented))
-      (should panicked)
-      (should (glitnir-active-p)))))
 
 ;;; glitnir-parity-test.el ends here

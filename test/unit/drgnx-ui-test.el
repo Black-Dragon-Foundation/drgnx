@@ -1058,4 +1058,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (should (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 2 '(0 0 4608 2880)))
   (should-not (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1 '(0 0 2880 1800)))
   (should-not (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 2 '(0 0 2880 1800)))
-  (should (drgnx-uitest-scale-ready-p 1.5 "1920x1080" 2 '(0 0 2560 1440))))
+  (should (drgnx-uitest-scale-ready-p 1.5 "1920x1080" 2 '(0 0 2560 1440)))
+  ;; the native shell: the exact scale, and the monitor's mode
+  (should (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1.25 '(0 0 2880 1800)))
+  (should-not (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1.25 '(0 0 2304 1440))))

@@ -31,13 +31,15 @@
   "Non-nil when a root frame on a monitor of SIZE (\"WxH\", device pixels) at SCALE shows FACTOR (its
 `frame-scale-factor') and GEOMETRY (the monitor's (X Y W H)).  GTK 3 knows only integer scales: a fractional
 SCALE reaches Emacs as (ceiling SCALE), and the geometry is (W / SCALE) * (ceiling SCALE) (2880x1800 at 1.25:
-4608x2880), within one logical pixel."
+4608x2880), within one logical pixel.  Nidhogg's native shell has the exact scale: FACTOR is SCALE, and the
+geometry's size is the monitor's mode, SIZE."
   (let ((c (ceiling scale)))
-    (and (= factor c)
-         (or (= scale c)
-             (let ((px (mapcar #'string-to-number (split-string size "x"))))
-               (and (<= (abs (- (nth 2 geometry) (* c (round (/ (float (nth 0 px)) scale))))) c)
-                    (<= (abs (- (nth 3 geometry) (* c (round (/ (float (nth 1 px)) scale))))) c)))))))
+    (or (= factor c scale)
+        (let ((px (mapcar #'string-to-number (split-string size "x"))))
+          (if (= factor c)
+              (and (<= (abs (- (nth 2 geometry) (* c (round (/ (float (nth 0 px)) scale))))) c)
+                   (<= (abs (- (nth 3 geometry) (* c (round (/ (float (nth 1 px)) scale))))) c))
+            (and (= factor scale) (equal (nthcdr 2 geometry) px)))))))
 
 (defun drgnx-uitest-root-frame ()
   "The session's root frame: the first visible graphical frame that is not a child frame.
@@ -635,14 +637,13 @@ Never signals."
 ;; machine's byte order (little-endian: B G R A), the layout of `glitnir-snapshot' with FORMAT `raw'.
 
 (defun drgnx-uitest-glitnir-p ()
-  "Non-nil when Glitnir (the compositor) draws this session's frames."
+  "Non-nil when Glitnir (the compositor) draws this session's frames, so its snapshot is the whole picture."
   (and (fboundp 'glitnir-active-p) (fboundp 'glitnir-snapshot) (glitnir-active-p)))
 
-(defun drgnx-uitest-snapshot-holds-children-p ()
-  "Non-nil when the root frame's snapshot shows its child frames.
-Under Glitnir on pgtk it does.  On the native shell a child frame is a subsurface of its parent, which the Wayland
-compositor puts together: each frame's snapshot is that frame alone."
-  (and (drgnx-uitest-glitnir-p) (not (featurep 'nidhogg-wayland))))
+(defun drgnx-uitest-device-scale (frame)
+  "Device pixels per unit of FRAME's Lisp coordinates, as a snapshot counts them: `frame-scale-factor' under GTK,
+which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale."
+  (if (featurep 'nidhogg-wayland) 1 (frame-scale-factor frame)))
 
 (defun drgnx-uitest--png-raw (png)
   "Decode PNG (a unibyte string: 8-bit RGB or RGBA, not interlaced, as cairo writes) into a snapshot."
@@ -754,17 +755,14 @@ Every channel may differ by TOLERANCE; IGNORE-ALPHA leaves the alpha channel out
   "Export the root frame and its visible child frames as PNGs into DIR.
 `x-export-frames' cannot put several frames in one PNG, so each child comes with its
 offset (parent-relative native edges) for compositing.  When Glitnir draws the frames
-(`drgnx-uitest-glitnir-p') root.png is its snapshot (device pixels), which already holds
-the children on pgtk (`drgnx-uitest-snapshot-holds-children-p'): none comes apart.  The
-native shell has no `x-export-frames': each child is its own snapshot, its offset in
-device pixels."
+(`drgnx-uitest-glitnir-p') its snapshot already holds the children: root.png is that
+snapshot (device pixels) and there are no children."
   (unless (display-graphic-p (drgnx-uitest-root-frame))
     (error "drgnx-uitest: no graphical frame to capture (a daemon session without a client frame? open one with ui_frame)"))
   (redisplay t)
   (make-directory dir t)
   (let* ((f (drgnx-uitest-root-frame))
          (root (expand-file-name "root.png" dir))
-         (s (if (fboundp 'x-export-frames) 1 (frame-scale-factor f)))
          (i -1))
     (if (drgnx-uitest-glitnir-p)
         (let ((coding-system-for-write 'binary))
@@ -774,12 +772,12 @@ device pixels."
             (write-region nil nil root nil 'silent)))
       (drgnx-uitest--export f root))
     (list :root root :width (frame-pixel-width f) :height (frame-pixel-height f)
-          :children (vconcat (and (not (drgnx-uitest-snapshot-holds-children-p))
+          :children (vconcat (and (not (drgnx-uitest-glitnir-p))
                                   (mapcar (lambda (c)
                                             (let ((file (expand-file-name (format "child-%d.png" (cl-incf i)) dir))
                                                   (e (frame-edges c 'native-edges)))
                                               (drgnx-uitest--export c file)
-                                              (list :path file :x (round (* s (nth 0 e))) :y (round (* s (nth 1 e))))))
+                                              (list :path file :x (nth 0 e) :y (nth 1 e))))
                                           (drgnx-uitest-child-frames f)))))))
 
 ;;;; JSON API (for emacsclient; see harness/drgnx-ui.el)
