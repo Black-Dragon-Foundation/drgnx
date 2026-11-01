@@ -202,9 +202,9 @@ fn exec_remote_machine_refused() {
 }
 
 /// The row `exec/runs-in-the-starters-sandbox`: needs the real sandbox's bwrap tier, which the build container lacks
-/// (run it on the desktop or in GitHub CI: `cargo test -p drgnx-ratatoskr exec::tests -- --ignored`).
+/// (run it on a host with bwrap or in GitHub CI: `cargo test -p drgnx-ratatoskr exec::tests -- --ignored`).
 #[tokio::test]
-#[ignore = "needs bwrap (the real sandbox): desktop or GitHub CI lane"]
+#[ignore = "needs bwrap (the real sandbox): a host with bwrap or the GitHub CI lane"]
 async fn exec_runs_in_the_starters_sandbox() {
     // The sandbox's helper is the process's own binary, here the test harness: the hub binary the same build made
     // (`<target>/<profile>/ratatoskr`, beside `deps/`) takes its place.

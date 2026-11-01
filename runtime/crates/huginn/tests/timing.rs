@@ -1,5 +1,5 @@
 //! Reading 64 KiB of settings-shaped data takes at most 1 ms (design §16, "Ratatoskr"). A timing test, so it is
-//! `#[ignore]`: run it once, alone and optimized, on the perf island:
+//! `#[ignore]`: run it once, alone and optimized, on a pinned host:
 //! `DRGNX_PERF_CPUS=2 perf-exclusive.sh … cargo test --release -p huginn --test timing -- --ignored --nocapture`.
 //! Prints the median and the slowest of 200 reads.
 

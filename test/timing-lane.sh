@@ -5,10 +5,10 @@
 # Every CI tier sets DRGNX_TEST_NO_TIMING=1, so the tests tagged :timing (wall-clock assertions) run nowhere else; this
 # lane is their one place.  Each row of timing-rows.txt (`NAME BUDGET-RATIO`) is a set of them: NAME `all` is every
 # :timing test of the live files (exempt files carry no class, so no tag), any other NAME the :timing tests whose name
-# starts with it (a shard, if the whole set exceeds 45 min: 20 samples on the desktop).  A row takes N (20) samples, each
-# one `bin/drgnx test --container` run with DRGNX_TEST_TIME_FACTOR = calibration / island calibration (at least 1), and
-# is judged on the MEDIAN of the samples' times divided by the calibration: the time a fixed ~1 s workload takes on this
-# runner, measured before and after the row.  Rules (Nidhogg's):
+# starts with it (a shard, if the whole set exceeds 45 min: 20 samples on a pinned host).  A row takes N (20) samples,
+# each one `bin/drgnx test --container` run with DRGNX_TEST_TIME_FACTOR = calibration / reference calibration (at
+# least 1), and is judged on the MEDIAN of the samples' times divided by the calibration: the time a fixed ~1 s workload
+# takes on this runner, measured before and after the row.  Rules (Nidhogg's):
 #   - the two calibrations differ by over 25 %: the attempt is void and retried once; void twice prints `void`, never red;
 #   - a median over BUDGET-RATIO, or over half the samples failing, is a red;
 #   - a red reruns once with fresh calibrations; a pass on the rerun is `flaky`, two reds are `red`.
@@ -31,8 +31,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# the calibration of the desktop's pinned CPU island, which the budgets were set on: a runner slower than it gets
-# proportionally longer wall-clock budgets in the tests (DRGNX_TEST_TIME_FACTOR)
+# the reference calibration (`# island-calibration` in the rows: a pinned host's, which the budgets were set on): a
+# runner slower than it gets proportionally longer wall-clock budgets in the tests (DRGNX_TEST_TIME_FACTOR)
 island=$(sed -nE 's/^# island-calibration ([0-9.]+).*/\1/p' "$rows" 2>/dev/null | head -n 1); island=${island:-1}
 factor=1
 

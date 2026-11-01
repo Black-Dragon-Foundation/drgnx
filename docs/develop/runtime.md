@@ -767,7 +767,7 @@ Criterion 2 is the laundering rows (`exec/`, `locks/`, `grants/`, `matrix/`), 10
 `perf/agents-*` are the hub half of "20 agents streaming": hub CPU and resident set from `/proc` with budgets in the row
 (run with `--perf`), and ping round trips while they stream. The editor half (the mirror redraws at most once per frame;
 keystroke p95 under 16 ms) needs a GUI session with a live hub and 20 mock agents; the hub already coalesces a session's
-events to one `agent` and `agent-entries` pair per 50 ms. It runs on the desktop timing lane.
+events to one `agent` and `agent-entries` pair per 50 ms. It runs on a pinned host's timing lane.
 
 ### The gateway rows
 

@@ -11,7 +11,7 @@
 ;;   the environment says so.
 ;; - `drgnx-tty-terminals': what each terminal can do — the kitty keyboard protocol (kkp), modifyOtherKeys
 ;;   (mok), OSC 52 copy, true colour, the mouse — the chords it keeps for itself, and the line that fixes what
-;;   is missing.  Rows are "reported" from each terminal's documentation until the builder has run them.
+;;   is missing.  Rows are "reported" from each terminal's documentation until a test tier has run them.
 ;; - `drgnx-tty-key-sendable-p': which keys a terminal can send at all: plain (legacy) terminals cannot send
 ;;   C-S- chords, C-. and the like; modifyOtherKeys can, except super and hyper; kkp sends everything.
 ;; - `drgnx-tty-facts': the above for the terminal this Emacs runs in, for the doctor and onboarding.
@@ -242,7 +242,7 @@ server inherited from its first client (stale when another terminal attached sin
          :verified "tmux 3, a private server per test: extended-keys, set-clipboard and passthrough copy, focus events, true colour with RGB (test/tty/tmux-test.el)"
          :source "https://man.openbsd.org/tmux"))
   "What each terminal can do with its default settings, as its documentation reports it (`:verified' nil
-until the builder ran it, then what ran; `:source' the page).  :kkp the kitty keyboard protocol, :mok modifyOtherKeys,
+until a test tier ran it, then what ran; `:source' the page).  :kkp the kitty keyboard protocol, :mok modifyOtherKeys,
 :osc52 copy to the local clipboard, :truecolor 24-bit colour, :mouse mouse reporting; :takes the chords the
 terminal keeps for itself (Emacs notation); :fixes, per missing capability, the line that fixes it, or
 \"none: \" and why.  :unconfirmed names the cells no official page drgnx read backs (secondary sources or

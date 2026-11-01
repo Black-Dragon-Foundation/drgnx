@@ -1142,8 +1142,8 @@ repositories' files, with `extensions/*.el` (corfu, vertico) copied beside the r
 without generated `-autoloads.el` or `-pkg.el`: the tests `require` the libraries.
 
 ```sh
-bin/drgnx childframe-elpa .claude/tmp/childframe-elpa
-DRGNX_CHILDFRAME_ELPA="$PWD/.claude/tmp/childframe-elpa" bin/drgnx test ...
+bin/drgnx childframe-elpa /tmp/childframe-elpa
+DRGNX_CHILDFRAME_ELPA=/tmp/childframe-elpa bin/drgnx test ...
 ```
 
 `(drgnx-uitest-childframe-packages)` puts the pinned packages from `DRGNX_CHILDFRAME_ELPA` on `load-path` and returns
@@ -1235,12 +1235,12 @@ and unpacks them into DIR. Pass DIR as both `DRGNX_MODAL_ELPA` and `DRGNX_USER_E
 latter). Or build the directory yourself, once, in temporary directories (never your own configuration):
 
 ```sh
-S=.claude/tmp/modal-sync; mkdir -p $S/config $S/data $S/state $S/cache
+S=$(mktemp -d); mkdir -p $S/config $S/data $S/state $S/cache
 echo '(:packages (evil evil-collection))' > $S/config/packages.eld
 DRGNX_CONFIG_DIR=$S/config DRGNX_DATA_DIR=$S/data XDG_STATE_HOME=$S/state XDG_CACHE_HOME=$S/cache \
   systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 bin/drgnx sync
-ln -sfn "$PWD/$S/data/elpa" .claude/tmp/modal-elpa
-DRGNX_MODAL_ELPA="$PWD/.claude/tmp/modal-elpa" bin/drgnx test
+ln -sfn "$S/data/elpa" "$S/modal-elpa"
+DRGNX_MODAL_ELPA="$S/modal-elpa" bin/drgnx test
 ```
 
 The first sync installs the known-good lock (every locked package), so it takes a few minutes and about 1 GB of
