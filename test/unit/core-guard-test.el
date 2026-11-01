@@ -69,6 +69,7 @@
 (defun drgnx-guard-test--named () nil)
 
 (ert-deftest drgnx-guard/a-layer-timer-is-named-by-its-function ()
+  :tags '(:cond)                        ; arms a real (never due) timer to name it
   (drgnx-test--with-guard
    (let ((raw (run-with-timer 3600 nil #'drgnx-guard-test--named)))
      (unwind-protect

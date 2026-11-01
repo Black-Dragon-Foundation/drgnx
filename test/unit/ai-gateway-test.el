@@ -42,10 +42,11 @@
               (with-temp-file file (insert (json-serialize (vconcat script))))
               (make-process :name "ratatoskr-mock" :noquery t :buffer nil :connection-type 'pipe
                             :filter (lambda (_p s) (setq out (concat out s)))
+                            :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
                             :command (list bin "llm" "--script" file "--log" (concat root "mock.jsonl")
                                            "--parent" (number-to-string (emacs-pid)))))))
     (ignore-errors
-      (drgnx-test-wait (lambda () (or (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out) (not (process-live-p p))))
+      (drgnx-test-wait (lambda () (or (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out) (process-get p :done)))
                        :secs 10 :what "the mock's port"))
     (unless (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out) (error "ratatoskr-mock did not start: %s" out))
     (process-put p :port (string-to-number (match-string 1 out)))

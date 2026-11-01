@@ -28,6 +28,7 @@
   `(let ((drgnx-clock-test--runs nil)) (drgnx-test-with-clock () ,@body (mapc #'cancel-timer (append timer-list timer-idle-list)))))
 
 (ert-deftest drgnx-test-clock/float-time-and-current-time-read-virtual-time ()
+  :tags '(:timing)                      ; bounds the virtual start against the real clock
   (drgnx-test-with-clock ()
     (let ((t0 (float-time)) (compiled (byte-compile (lambda () (list (float-time) (current-time))))))
       (should (< (abs (- t0 (drgnx-test-real-time))) 1))   ; T0 is the real time at entry: timestamps stay plausible
@@ -81,6 +82,7 @@
    (should (= 3 (length drgnx-clock-test--runs)))))        ; the one-shot and the repeater at 0.05 and 0.1
 
 (ert-deftest drgnx-test-clock/sleep-for-advances-by-its-argument ()
+  :tags '(:timing)                      ; asserts the real time spent stayed under a bound
   (drgnx-clock-test--with
    (let ((t0 (float-time)) (began (drgnx-test-real-time)))
      (run-at-time 1 nil #'drgnx-clock-test--note)
@@ -117,6 +119,7 @@
      (should (= 1 (length drgnx-clock-test--runs))))))      ; the 0.1 s timer came due in it
 
 (ert-deftest drgnx-test-clock/a-polling-loop-with-a-float-time-deadline-ends ()
+  :tags '(:timing)                      ; asserts the real time spent stayed under a bound
   (drgnx-clock-test--with
    (let ((began (drgnx-test-real-time)) (deadline (+ (float-time) 30)) (steps 0))
      (while (< (float-time) deadline)
@@ -279,6 +282,7 @@
     (should-not ran)))
 
 (ert-deftest drgnx-test-clock/a-body-error-restores-everything ()
+  :tags '(:timing)                      ; bounds the restored clock against the real one
   (let ((before timer-list) (reset nil))
     (cl-letf (((symbol-function 'drgnx-timer-reset) (lambda () (setq reset t))))
       (should-error (drgnx-test-with-clock ()

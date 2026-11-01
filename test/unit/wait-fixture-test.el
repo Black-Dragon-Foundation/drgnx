@@ -33,6 +33,7 @@
       (delete-process proc))))
 
 (ert-deftest drgnx-test-wait/the-deadline-scales-with-the-settle-factor ()
+  :tags '(:timing)                      ; asserts the real time a deadline took
   (let ((process-environment (cons "DRGNX_UITEST_SETTLE_SCALE=2" process-environment))
         (t0 (float-time)))
     (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait (lambda () nil) :secs 0.05)))))
@@ -73,6 +74,7 @@
   (run-at-time 0 nil #'drgnx-wait-test--rearm))
 
 (ert-deftest drgnx-test-wait/the-deadline-holds-while-a-timer-stays-due ()
+  :tags '(:timing)                      ; asserts the real time a deadline took
   ;; The wait gives up at its deadline (it signals, it does not return) though a timer is due at every poll.  The
   ;; scale is pinned: a load-based one read again below could differ (macOS CI: 0.337 against 0.369).
   (let ((process-environment (cons "DRGNX_UITEST_SETTLE_SCALE=2" process-environment))

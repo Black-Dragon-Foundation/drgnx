@@ -426,6 +426,7 @@
 ;;;; The contract with the clock fixture (spec §8)
 
 (ert-deftest drgnx-timer/the-clock-fixture-drives-the-seams ()
+  :tags '(:timing)                      ; bounds the layer's clock against the real one
   ;; point 1, against the layer's real seams (the fixture's own test fakes them)
   (drgnx-timer-test--with
    (dolist (seam '(drgnx-timer--now drgnx-timer--idle-time drgnx-timer--input-pending-p))

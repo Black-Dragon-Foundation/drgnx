@@ -60,12 +60,26 @@ waits; the `drgnx-timer-*' layer only fills timer lists.")
     (when (eq (car-safe tags) 'quote)
       (seq-some (lambda (x) (car (memq x '(:det :cond :timing)))) (cadr tags)))))
 
+(defvar drgnx-lint-classes--clock-macros nil
+  "Names of the file-local macros whose body mentions `drgnx-test-with-clock', set by the last parse: they wrap the
+clock fixture, so what they wrap is on virtual time like the fixture's own body.")
+
+(defun drgnx-lint-classes--clock-form-p (f)
+  "F is `drgnx-test-with-clock', or a file-local macro that wraps it."
+  (and (consp f) (or (eq (car f) 'drgnx-test-with-clock) (memq (car f) drgnx-lint-classes--clock-macros))))
+
 (defun drgnx-lint-classes--parse (forms)
   "FORMS (a file's top-level forms) as (HELPERS . TESTS): HELPERS an alist of file-local function name to its form,
 TESTS the `ert-deftest' forms."
   (let (helpers tests)
+    (setq drgnx-lint-classes--clock-macros nil)
     (dolist (f forms)
       (when (consp f)
+        (when (and (memq (car f) '(defmacro cl-defmacro))
+                   (let (hit)
+                     (drgnx-lint-classes--walk f (lambda (x) (when (eq x 'drgnx-test-with-clock) (setq hit t)) hit))
+                     hit))
+          (push (cadr f) drgnx-lint-classes--clock-macros))
         (cond ((memq (car f) '(defun cl-defun defsubst cl-defsubst defmacro cl-defmacro))
                (push (cons (cadr f) f) helpers))
               ((eq (car f) 'ert-deftest) (push f tests)))))
@@ -88,8 +102,8 @@ fixture moves time there."
     (drgnx-lint-classes--walk
      form
      (lambda (f)
-       (cond ((eq (car-safe f) 'drgnx-test-with-clock) t)
-             ((eq (car-safe f) 'quote) t)     ; a quoted symbol is data (stubs, lists), not a call
+       (cond ((drgnx-lint-classes--clock-form-p f) t)
+             ((eq (car-safe f) 'quote) t)    ; a quoted symbol is data (stubs, lists), not a call
              ((and (consp f) (symbolp (car f)))
               (push (car f) out)
               (pcase (car f)
@@ -118,22 +132,43 @@ fixture moves time there."
       (visit form nil))
     (nreverse out)))
 
+(defconst drgnx-lint-classes--time-arithmetic
+  (append '(+ - * / min max abs floor ceiling round truncate float time-subtract time-add time-since float-time
+              time-convert time-to-seconds)
+          drgnx-lint-classes--comparisons)
+  "Calls through which a value stays a clock reading; any other call (a function of a seed, say) ends the taint.")
+
+(defun drgnx-lint-classes--clock-read-p (f)
+  (and (consp f) (or (memq (car f) '(current-time time-since drgnx-test-real-time))
+                     (and (eq (car f) 'float-time) (null (cdr f))))))
+
+(defun drgnx-lint-classes--virtual (f &optional in)
+  "F with the clock reads inside `drgnx-test-with-clock' (and its wrappers) replaced by 0: the fixture makes them
+virtual, so they are no wall-clock reads.  `drgnx-test-real-time' stays: it reads the true clock."
+  (cond ((atom f) f)
+        ((eq (car f) 'quote) f)
+        ((and in (drgnx-lint-classes--clock-read-p f) (not (eq (car f) 'drgnx-test-real-time))) 0)
+        (t (let ((in (or in (drgnx-lint-classes--clock-form-p f))) out)
+             (while (consp f)
+               (push (drgnx-lint-classes--virtual (car f) in) out)
+               (setq f (cdr f)))
+             (nconc (nreverse out) f)))))
+
 (defun drgnx-lint-classes--clock-asserts (form)
-  "The `should' forms of FORM that compare a wall-clock read, or a variable bound from one, as strings."
-  (let ((tainted nil) (out nil) (bindings nil))
+  "The `should' forms of FORM that compare a wall-clock read, or a variable bound from one, as strings.  A read inside
+the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a reading only through time arithmetic."
+  (let ((form (drgnx-lint-classes--virtual form)) (tainted nil) (out nil) (bindings nil))
     (cl-labels ((reads-clock (f)
-                  (let ((hit (seq-some (lambda (k) (memq k drgnx-lint-classes--clock-reads))
-                                       (drgnx-lint-classes--calls f))))
-                    (drgnx-lint-classes--walk
-                     f (lambda (x)
-                         (cond ((eq (car-safe x) 'drgnx-test-with-clock) t)
-                               ((and (symbolp x) (memq x tainted)) (setq hit t) nil))))
-                    hit)))
+                  (cond ((symbolp f) (memq f tainted))
+                        ((atom f) nil)
+                        ((eq (car f) 'quote) nil)
+                        ((drgnx-lint-classes--clock-read-p f) t)
+                        ((memq (car f) drgnx-lint-classes--time-arithmetic) (seq-some #'reads-clock (cdr f))))))
       (drgnx-lint-classes--walk
        form (lambda (x)
-              (cond ((eq (car-safe x) 'drgnx-test-with-clock) t)
-                    ((and (memq (car-safe x) '(let let*)) (listp (cadr x)))
-                     (dolist (b (cadr x)) (when (consp b) (push (cons (car b) (cadr b)) bindings))) nil))))
+              (when (and (memq (car-safe x) '(let let*)) (listp (cadr x)))
+                (dolist (b (cadr x)) (when (consp b) (push (cons (car b) (cadr b)) bindings))))
+              nil))
       (let ((changed t))
         (while changed
           (setq changed nil)
@@ -142,13 +177,12 @@ fixture moves time there."
               (push (car b) tainted) (setq changed t)))))
       (drgnx-lint-classes--walk
        form (lambda (x)
-              (cond ((eq (car-safe x) 'drgnx-test-with-clock) t)
-                    ((memq (car-safe x) '(should should-not))
-                     (drgnx-lint-classes--walk
-                      (cadr x) (lambda (y)
-                                 (when (and (memq (car-safe y) drgnx-lint-classes--comparisons) (reads-clock y))
-                                   (push (format "%S" y) out) t)))
-                     t)))))
+              (when (memq (car-safe x) '(should should-not))
+                (drgnx-lint-classes--walk
+                 (cadr x) (lambda (y)
+                            (when (and (memq (car-safe y) drgnx-lint-classes--comparisons) (reads-clock y))
+                              (push (format "%S" y) out) t)))
+                t))))
     (nreverse out)))
 
 ;;;; The rules, over one `ert-deftest' form
@@ -221,8 +255,19 @@ fixture moves time there."
                 "(ert-deftest a/b () (accept-process-output p))" "(ert-deftest a/b () (sit-for 0))"
                 "(ert-deftest a/b () (drgnx-test-with-clock () (sleep-for 1) (float-time)))"
                 "(ert-deftest a/b () (call-process \"git\" nil nil nil \"status\") (float-time (current-time)))"
-                "(ert-deftest a/b () (drgnx-timer-debounce 'k 1 #'ignore))"))
+                "(ert-deftest a/b () (drgnx-timer-debounce 'k 1 #'ignore))"
+                ;; a file-local macro that wraps the clock fixture is the fixture
+                "(defmacro w (&rest b) `(drgnx-test-with-clock () ,@b)) (ert-deftest a/b () (w (sleep-for 1) (run-at-time 1 nil #'ignore)))"))
     (should-not (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det ok)))
+  (should (drgnx-lint-classes--check :det #'drgnx-lint-classes--rule-det
+                                     "(defmacro w (&rest b) `(progn ,@b)) (ert-deftest a/b () (w (sleep-for 1)))"))
+  ;; a real-time bound inside the fixture is still a timing assertion; a seed taken from the clock is not a reading
+  (should (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
+                                     "(ert-deftest a/b () (drgnx-test-with-clock () (let ((began (drgnx-test-real-time))) (should (< (- (drgnx-test-real-time) began) 1)))))"))
+  (should-not (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
+                                         "(ert-deftest a/b () (let* ((seed (floor (float-time))) (rows (gen seed))) (should (= (length rows) 2))))"))
+  (should-not (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
+                                         "(defmacro w (&rest b) `(drgnx-test-with-clock () ,@b)) (ert-deftest a/b () (w (should (< (float-time) 5))))"))
   (should (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond "(ert-deftest a/b () (sleep-for 0.1))"))
   (should (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond "(ert-deftest a/b () (sit-for 1))"))
   (should-not (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond
