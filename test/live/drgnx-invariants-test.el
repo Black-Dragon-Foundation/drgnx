@@ -193,6 +193,7 @@ settled within 250 ms."
          first)
     (unwind-protect
         (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+          (drgnx-ui-wait-start-page sess)
           (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
           (drgnx-ui-call sess (format "(let ((window-resize-pixelwise t))
                                          (setq drgnx-persist-file %S)
@@ -207,6 +208,7 @@ settled within 250 ms."
           (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
             (unwind-protect
                 (progn
+                  (drgnx-ui-wait-start-page sess2)
                   (drgnx-ui-call sess2 (format "(progn (setq drgnx-persist-file %S) (drgnx-persist-restore) (drgnx-uitest--json (list :ok t)))" file))
                   (drgnx-ui-measure sess2 nil)
                   (should (equal (drgnx-ui-call sess2 q) first)))
@@ -223,6 +225,7 @@ settled within 250 ms."
     (unwind-protect
         (progn
           (should (= 2 (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :n (length (display-monitor-attributes-list))))") :n)))
+          (drgnx-ui-wait-start-page sess)                   ; the first picture of each frame is taken after it
           (drgnx-ui-call sess "(progn (defvar kx-frames (list (selected-frame) (make-frame))) (drgnx-uitest--json (list :ok t)))")
           (drgnx-ui-measure sess nil)
           (dotimes (i 2)

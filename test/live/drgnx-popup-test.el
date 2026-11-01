@@ -23,61 +23,61 @@
                                         (transient-define-prefix drgnx-live-tr () [(\"a\" \"Do A\" ignore)])
                                         (keymap-global-set \"<f19>\" #'drgnx-live-tr)
                                         (drgnx-uitest--json (list :ok t)))")
-           ;; the start page comes from a 1 s idle timer, after the session is ready: a picture of the windows taken
-           ;; before it has *scratch* where the picture after has the page
-           (drgnx-test-wait
-            (lambda ()
-              (eq t (plist-get (drgnx-ui-call ,sess "(drgnx-uitest--json (list :shown (if (get-buffer-window drgnx-start-buffer-name) t :false)))")
-                               :shown)))
-            :what "the start page")
+           (drgnx-ui-wait-start-page ,sess)
            ,@body)
        (drgnx-ui-stop (plist-get s :name))
        (delete-directory root t))))
+
+(defun drgnx-live-popup--measure (session actions)
+  "`drgnx-ui-measure' of ACTIONS in SESSION; the test fails when the session did not settle (the report's :settled)."
+  (let ((report (drgnx-ui-measure session actions)))
+    (should (eq (plist-get report :settled) t))
+    report))
 
 (defun drgnx-live-popup--no-trace (sess open close &optional borrowed)
   "OPEN then CLOSE (key strings): every window's edges and buffer identical before and after.
 BORROWED: while open, no window moved either (the popup is in the panel's window)."
   (let* ((r (drgnx-ui-call sess drgnx-live-popup--edges)) (before (plist-get r :edges)))
-    (drgnx-ui-measure sess (list (list :keys open)))
+    (drgnx-live-popup--measure sess(list (list :keys open)))
     (let ((open-r (drgnx-ui-call sess drgnx-live-popup--edges)))
       (should-not (equal before (plist-get open-r :edges)))                 ; it showed
       (when borrowed (should (equal (plist-get r :geometry) (plist-get open-r :geometry)))))
-    (drgnx-ui-measure sess (list (list :keys close)))
+    (drgnx-live-popup--measure sess(list (list :keys close)))
     (should (equal before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges)))))
 
 (ert-deftest drgnx-live/transient-leaves-no-trace-with-and-without-the-panel ()
   (drgnx-live-popup--with sess
     (drgnx-live-popup--no-trace sess "<f19>" "C-g")
-    (drgnx-ui-measure sess (list (list :keys "C-`")))           ; the panel open: borrowed and given back
+    (drgnx-live-popup--measure sess(list (list :keys "C-`")))           ; the panel open: borrowed and given back
     (drgnx-live-popup--no-trace sess "<f19>" "C-g" t)))
 
 (ert-deftest drgnx-live/completions-leave-no-trace ()
   (drgnx-live-popup--with sess
     (let ((before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges)))
-      (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-") (list :keys "TAB")))
-      (drgnx-ui-measure sess (list (list :keys "C-g")))
+      (drgnx-live-popup--measure sess(list (list :keys "M-x") (list :type "describe-") (list :keys "TAB")))
+      (drgnx-live-popup--measure sess(list (list :keys "C-g")))
       (should (equal before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges))))))
 
 (ert-deftest drgnx-live/help-from-the-minibuffer-keeps-it-focused ()
   (drgnx-live-popup--with sess
-    (drgnx-ui-measure sess (list (list :keys "M-x") (list :keys "<help> f") (list :type "car") (list :keys "RET")))
+    (drgnx-live-popup--measure sess(list (list :keys "M-x") (list :keys "<help> f") (list :type "car") (list :keys "RET")))
     (let ((r (drgnx-ui-call sess drgnx-live-popup--edges)))
       (should (equal (plist-get r :panel) "*Help*"))
       (should (eq (plist-get r :minibuffer) t)))
-    (drgnx-ui-measure sess (list (list :keys "C-g")))))
+    (drgnx-live-popup--measure sess(list (list :keys "C-g")))))
 
 (ert-deftest drgnx-live/completions-in-the-panel-are-filled-and-given-back ()
   ;; The panel open: *Completions* borrows it, has candidates (its body-function ran), and leaving
   ;; the minibuffer (which restores the window configuration) gives the panel back with its tab row.
   (drgnx-live-popup--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-`")))
+    (drgnx-live-popup--measure sess(list (list :keys "C-`")))
     (let ((before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges))
           (q "(drgnx-uitest--json (list :size (if (get-buffer \"*Completions*\") (buffer-size (get-buffer \"*Completions*\")) 0)
                                          :active (if (drgnx-popup-active-p) t :false)
                                          :tabs (if (window-parameter (drgnx-wb-area-window 'panel) 'header-line-format) t :false)))"))
-      (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-") (list :keys "TAB")))
+      (drgnx-live-popup--measure sess(list (list :keys "M-x") (list :type "describe-") (list :keys "TAB")))
       (should (> (plist-get (drgnx-ui-call sess q) :size) 0))
-      (drgnx-ui-measure sess (list (list :keys "C-g")))
+      (drgnx-live-popup--measure sess(list (list :keys "C-g")))
       (let ((r (drgnx-ui-call sess q)))
         (should (eq (plist-get r :active) :false))
         (should (eq (plist-get r :tabs) t)))

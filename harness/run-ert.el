@@ -236,6 +236,18 @@ the run's tests.")
   "The value of the environment variable VAR, or nil when it is unset or empty."
   (let ((s (getenv var))) (and s (not (string-empty-p s)) s)))
 
+(defun drgnx-run-ert--printable (string)
+  "STRING as text: a control character (but newline and tab) or a raw byte becomes \\xNN.  A failure that prints
+bytes (a picture, a socket's reply) would make `grep' call the whole log a binary file."
+  (replace-regexp-in-string
+   (concat "[\0-\10\13-\37\177]\\|[" (string #x3fff80) "-" (string #x3fffff) "]")
+   (lambda (m) (let ((c (aref m 0))) (format "\\x%02X" (if (>= c #x3fff00) (- c #x3fff00) c))))
+   string t t))
+
+(defun drgnx-run-ert--condition-text (condition)
+  "CONDITION printed with `%S', as text (`drgnx-run-ert--printable')."
+  (drgnx-run-ert--printable (let ((print-escape-nonascii t) (print-escape-control-characters t)) (format "%S" condition))))
+
 (defun drgnx-run-ert--no-timing-p ()
   "Whether DRGNX_TEST_NO_TIMING=1: the run leaves out the tests tagged `:timing' (wall-clock assertions) and lists them
 as skipped (CI's shared runners)."
@@ -536,7 +548,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
          ;; which tests, in which order: DRGNX_TEST_SELECTOR, DRGNX_TEST_SHUFFLE (see `drgnx-run-ert--selector')
          (seed (drgnx-run-ert--shuffle-seed))
          (_ (when (and seed (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)))
-         (stats (ert-run-tests-batch (drgnx-run-ert--selector)))
+         ;; ERT's own report prints the conditions: unibyte bytes and control characters as escapes, never raw
+         (stats (let ((print-escape-nonascii t) (print-escape-control-characters t))
+                  (ert-run-tests-batch (drgnx-run-ert--selector))))
          ;; a test the prefilter could not see (a full run), a name selector that picked nothing (not in a file's own
          ;; Emacs: its parent counts)
          (load-failures
@@ -568,7 +582,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
        (push (list :name name :reason (if (cdr-safe condition) (format "%s" (cadr condition)) "skipped")) skipped))
      (cond
       ((not expected)
-       (push (list :name name :condition (if condition (format "%S" condition) "unexpected result")) failures))
+       (push (list :name name :condition (if condition (drgnx-run-ert--condition-text condition) "unexpected result")) failures))
       ((ert-test-failed-p result)
        ;; An expected failure (a known red) counts only if it failed an assertion; an error
        ;; (missing fixture, broken driver, timeout) is never acceptable.
@@ -581,9 +595,10 @@ summary to RESULTS-FILE.  Return t if every test passed."
                                :trace (or (ignore-errors (plist-get data :trace)) []))
                          known-red))
           (data (push (list :name name :condition
-                            (format "known red, but it failed outside drgnx-scenario-check: %S" condition))
+                            (format "known red, but it failed outside drgnx-scenario-check: %s"
+                                    (drgnx-run-ert--condition-text condition)))
                       failures))
-          (t (push (list :name name :condition (format "known red, but it errored: %S" condition))
+          (t (push (list :name name :condition (format "known red, but it errored: %s" (drgnx-run-ert--condition-text condition)))
                    failures)))))))
     (setq skipped (nreverse skipped))
     ;; a test the must-run list names that skipped: a full run only (a per-file Emacs leaves it to its parent)

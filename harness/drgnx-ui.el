@@ -147,6 +147,7 @@ EXIT is the symbol `timeout' when the process had to be killed."
 
 (declare-function drgnx-paths-recorded-emacs "drgnx-paths")
 (declare-function drgnx-emacs-program "drgnx-paths")
+(declare-function drgnx-run-ert--printable "run-ert")
 
 (defun drgnx-ui-emacs-bin ()
   "The Emacs sessions run: $DRGNX_EMACS, else the one install.sh recorded, else Nidhogg, a pgtk Emacs, else the Emacs that is running (`drgnx-emacs-program'; never a bare \"emacs\")."
@@ -1454,6 +1455,18 @@ never a drag from 0,0."
         (sleep-for 0.05)))
     settled))
 
+(defun drgnx-ui-wait-start-page (sess &optional timeout-s)
+  "Poll SESS until the start page is in a window (t); an error after TIMEOUT-S (default 30).
+The page comes from a 1 s idle timer after the session is ready, so a picture of the windows taken before it has
+*scratch* where the picture after has the page: a test that compares such pictures waits for it first."
+  (let ((deadline (+ (float-time) (or timeout-s 30))) shown)
+    (while (and (not shown) (< (float-time) deadline))
+      (if (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :shown (if (get-buffer-window drgnx-start-buffer-name) t :false)))")
+                           :shown))
+          (setq shown t)
+        (sleep-for 0.05)))
+    (or shown (drgnx-ui--fail "the start page never showed in %s" (plist-get sess :name)))))
+
 (defun drgnx-ui--wait-delivered (sess &optional timeout-s)
   "Poll SESS until its queued input has been delivered and read (at most TIMEOUT-S, default 10)."
   (let ((deadline (+ (float-time) (or timeout-s 10))))
@@ -1818,7 +1831,7 @@ runs the live suite in shards).  Return an exit code."
           (princ (format "ui ERT: %s/%s passed%s\n" (plist-get results :passed) (plist-get results :total)
                          (if selector (format " (selector %s)" selector) "")))
           (seq-doseq (f (plist-get results :failures))
-            (princ (format "  FAIL %s: %s\n" (plist-get f :name) (plist-get f :condition))))
+            (princ (format "  FAIL %s: %s\n" (plist-get f :name) (drgnx-run-ert--printable (plist-get f :condition)))))
           (seq-doseq (s (plist-get results :skipped))
             (princ (format "  SKIP %s\n" (plist-get s :name)))))
       (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run))

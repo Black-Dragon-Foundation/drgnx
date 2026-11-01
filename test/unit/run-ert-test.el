@@ -1223,6 +1223,16 @@ this test are not passed on."
     (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) t)))
       (should (eq 'asked (drgnx-run-ert--idle-prompt-guard (lambda (&rest _) 'asked) "Sure? "))))))
 
+(ert-deftest drgnx-run-ert/a-failure-with-bytes-prints-as-text ()
+  ;; Raw bytes in a failure's condition made `grep' call the whole log a binary file.
+  (dolist (data (list (concat "a" (string 0 1 27) "b") (unibyte-string 137 80 78 71 0 255)
+                      (string-to-multibyte (unibyte-string 200 0))))
+    (let ((text (drgnx-run-ert--condition-text (list 'ert-test-failed (list :png data)))))
+      (should-not (string-match-p "[\0-\10\13-\37\177]" text))
+      (should-not (string-match-p (concat "[" (string #x3fff80) "-" (string #x3fffff) "]") text))
+      (should (string-match-p "ert-test-failed" text))))
+  (should (equal (drgnx-run-ert--printable (concat "x\ny\tz" (string 0))) "x\ny\tz\\x00")))
+
 (ert-deftest drgnx-run-ert/the-session-guard-advises-the-prompt-functions-it-names ()
   (unwind-protect
       (progn (drgnx-run-ert-refuse-idle-prompts)

@@ -1251,3 +1251,9 @@ test prints a line summing its jank reports. Screenshots (`modal-normal.png`, `m
 `modal-explorer.png`, `modal-explorer-leader.png`) go to `$DRGNX_TEST_SHOTS` when set — the UI evidence of a run —
 else to the run's temp directory. To run only these: `DRGNX_TEST_SELECTOR='"^drgnx-\\(ui\\|live\\)-modal/"'` with
 `bin/drgnx test --ui` (the GUI half still runs all of `test/ui`).
+
+A live test that compares pictures of the windows waits first for the start page (`drgnx-ui-wait-start-page`): it comes
+from a 1 s idle timer after the session is ready, so an earlier picture has `*scratch*` where a later one has the page.
+`test/live/drgnx-popup-test.el` also fails when a measured step did not settle (the report's `:settled`).
+A failure's condition is printed as text, never as raw bytes (`drgnx-run-ert--printable`: control characters and bytes
+as `\xNN`), so `grep` never calls a log binary.
