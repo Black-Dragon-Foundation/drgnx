@@ -453,16 +453,17 @@ When Glitnir (the compositor) draws the frames (`glitnir-active-p`), the child f
 frame's picture, so capture writes Glitnir's snapshot as `root.png` (device pixels: at scale 2 twice `width` ×
 `height`) and reports no children; `ui shot` then has nothing to composite.
 
-Nidhogg's native Wayland shell has no `x-export-frames`, and its child frames are subsurfaces that the Wayland
-compositor puts together, so a frame's snapshot is that frame alone (`drgnx-uitest-snapshot-holds-children-p` is nil).
-Capture writes one snapshot per frame in device pixels, each child with its offset, and `ui shot` composites them as
-above. A pixel row that looks for a child frame in the root's snapshot does not see it there.
+On Nidhogg's native Wayland shell a child frame is a subsurface that the Wayland compositor puts together, so the shell
+composites the same picture for the snapshot: the root and its visible child and popup trees, at their places and in
+their stacking, with their chrome, shadows and alpha, from what the tree published. That shell has no `x-export-frames`.
 
 ### Snapshots and pixel probes
 
 For tests that compare pixels. A snapshot is `(W H BYTES)`: `BYTES` holds W×H ARGB32 pixels, rows tightly packed,
 each a 32-bit word in the machine's byte order (little-endian: B G R A). Rectangles are `(L T R B)` in device pixels
-(`frame-edges` × `frame-scale-factor`), right and bottom exclusive.
+(`frame-edges` × `(drgnx-uitest-device-scale FRAME)`), right and bottom exclusive. That function is `frame-scale-factor`
+under GTK, which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale;
+sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-factor`.
 
 | Function | Returns |
 |---|---|
@@ -653,7 +654,8 @@ monitor's scale, else stops the session and fails with `scale S not applied`.
 
 The wait condition: GTK 3 knows only integer scales. At an integer S the root's `(frame-scale-factor)` is S; at a
 fractional S it is `(ceiling S)` and the monitor's `geometry` in `display-monitor-attributes-list` is (W / S) ·
-`(ceiling S)` (R12: 2880×1800 at 1.25 gives 4608×2880), within one logical pixel. The session's tests see
+`(ceiling S)` (R12: 2880×1800 at 1.25 gives 4608×2880), within one logical pixel. Nidhogg's native shell has the exact
+scale: the factor is S and the `geometry`'s size is the monitor's mode, W × H. The session's tests see
 `DRGNX_UI_SESSION_SIZE` and `DRGNX_UI_SESSION_SCALES` (the latter empty at scale 1). The 125 % matrix is 1920×1080,
 2560×1440, 2560×1600, 2880×1800 and 3840×2160 at `DRGNX_UI_SCALE=1.25`.
 

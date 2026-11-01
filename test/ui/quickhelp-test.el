@@ -170,7 +170,7 @@
           (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
           (drgnx-test-wait-presented)
           (should (drgnx-quickhelp-shown-p))
-          (let* ((card drgnx-quickhelp--frame) (s (frame-scale-factor root))
+          (let* ((card drgnx-quickhelp--frame) (s (drgnx-uitest-device-scale root))
                  (e (frame-edges card 'outer-edges)) (p (frame-edges root 'native-edges))
                  (l (round (* s (- (nth 0 e) (nth 0 p))))) (tp (round (* s (- (nth 1 e) (nth 1 p)))))
                  (r (round (* s (- (nth 2 e) (nth 0 p))))) (b (round (* s (- (nth 3 e) (nth 1 p)))))
@@ -179,7 +179,7 @@
             ;; rounded: the corner pixel is what lies beneath (the picture without the card, at most darkened by the
             ;; shadow's faint edge), not the card's border; a few pixels in along the diagonal the border is drawn
             (let ((c (nth 2 (drgnx-uitest-pixel snap l tp))) (n (nth 2 (drgnx-uitest-pixel none l tp)))
-                  (in (cl-loop for i from 0 to (* 8 (ceiling s))
+                  (in (cl-loop for i from 0 to (* 8 (ceiling (frame-scale-factor root)))
                                minimize (nth 2 (drgnx-uitest-pixel snap (+ l i) (+ tp i))))))
               (should (<= (- n 24) c n))
               (should (> c (+ in 40))))

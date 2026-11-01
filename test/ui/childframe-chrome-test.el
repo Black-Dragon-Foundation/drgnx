@@ -116,7 +116,7 @@ A macro: `skip-unless' exists only inside the body of `ert-deftest'."
   "CHILD's outer rectangle in ROOT's device pixels, (L T R B) with R and B exclusive.
 A child frame's edges are relative to its parent's native area (not to the display: ROOT's own place on the display
 moves when it is resized or made fullscreen)."
-  (let ((s (drgnx-test-chrome--scale root))
+  (let ((s (drgnx-uitest-device-scale root))
         (e (frame-edges child 'outer-edges)))
     (mapcar (lambda (v) (round (* s v))) e)))
 

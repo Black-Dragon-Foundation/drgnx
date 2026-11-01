@@ -21,9 +21,9 @@
           (drgnx-test-wait-presented)
           (let ((c (drgnx-uitest-capture dir)))
             (should (file-exists-p (plist-get c :root)))
-            (if (drgnx-uitest-snapshot-holds-children-p)
+            (if (drgnx-uitest-glitnir-p)
                 ;; Glitnir's snapshot is the whole picture (device pixels): the child is in root.png and none comes apart
-                (let* ((s (frame-scale-factor root))
+                (let* ((s (drgnx-uitest-device-scale root))
                        (snap (with-temp-buffer
                                (set-buffer-multibyte nil)
                                (insert-file-contents-literally (plist-get c :root))
@@ -37,15 +37,13 @@
                   (should (equal (cdr (drgnx-uitest-pixel snap (nth 0 mid) (nth 1 mid)))
                                  (mapcar (lambda (v) (/ v 256))
                                          (color-values (frame-parameter child 'background-color))))))
-              ;; an export is logical pixels; the native shell's snapshots are device pixels
-              (let ((s (if (fboundp 'x-export-frames) 1 (frame-scale-factor root))))
-                (should (equal (drgnx-test--png-size (plist-get c :root))
-                               (cons (round (* s (frame-pixel-width root))) (round (* s (frame-pixel-height root))))))
-                (should (= (length (plist-get c :children)) 1))
-                (let ((k (aref (plist-get c :children) 0)))
-                  (should (equal (list (plist-get k :x) (plist-get k :y))
-                                 (mapcar (lambda (v) (round (* s v))) (seq-take (frame-edges child 'native-edges) 2))))
-                  (should (file-exists-p (plist-get k :path))))))))
+              (should (equal (drgnx-test--png-size (plist-get c :root))
+                             (cons (frame-pixel-width root) (frame-pixel-height root))))
+              (should (= (length (plist-get c :children)) 1))
+              (let ((k (aref (plist-get c :children) 0)))
+                (should (equal (list (plist-get k :x) (plist-get k :y))
+                               (seq-take (frame-edges child 'native-edges) 2)))
+                (should (file-exists-p (plist-get k :path)))))))
       (delete-frame child)
       (kill-buffer empty)
       (delete-directory dir t))))
@@ -61,7 +59,7 @@
 
 (defun drgnx-test--device-rect (frame)
   "FRAME's whole drawing area as (L T R B) in logical pixels times its scale factor."
-  (let ((s (frame-scale-factor frame)))
+  (let ((s (drgnx-uitest-device-scale frame)))
     (mapcar (lambda (v) (round (* v s))) (list 0 0 (frame-pixel-width frame) (frame-pixel-height frame)))))
 
 (ert-deftest drgnx-ui-capture/snapshot-equals-export-at-scale-1 ()
@@ -79,8 +77,8 @@
     (skip-unless (and (= (frame-scale-factor f) 2) (fboundp 'glitnir-snapshot)))
     (drgnx-test-wait-presented)
     (let ((snap (drgnx-uitest-snapshot f)))
-      (should (= (nth 0 snap) (* 2 (frame-pixel-width f))))
-      (should (= (nth 1 snap) (* 2 (frame-pixel-height f))))
+      (should (= (nth 0 snap) (* (drgnx-uitest-device-scale f) (frame-pixel-width f))))
+      (should (= (nth 1 snap) (* (drgnx-uitest-device-scale f) (frame-pixel-height f))))
       (should (= (length (nth 2 snap)) (* 4 (nth 0 snap) (nth 1 snap)))))))
 
 (ert-deftest drgnx-ui-capture/pixel-at-a-known-face ()
@@ -94,7 +92,7 @@
             (switch-to-buffer (current-buffer))
             (drgnx-test-wait-presented)
             (let* ((e (window-body-pixel-edges (selected-window)))
-                   (s (frame-scale-factor f))
+                   (s (drgnx-uitest-device-scale f))
                    (x (round (* s (/ (+ (nth 0 e) (nth 2 e)) 2))))
                    (y (round (* s (/ (+ (nth 1 e) (nth 3 e)) 2))))
                    (snap (drgnx-uitest-snapshot f)))
