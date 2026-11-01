@@ -1,4 +1,5 @@
 ;;; wb-git-test.el --- batch tests: git decorations -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)

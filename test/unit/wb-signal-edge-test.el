@@ -1,4 +1,5 @@
 ;;; wb-signal-edge-test.el --- batch tests: the change bus, edge cases -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-signal)
 (require 'drgnx-paths)

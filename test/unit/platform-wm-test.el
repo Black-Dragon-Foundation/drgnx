@@ -1,4 +1,5 @@
 ;;; platform-wm-test.el --- batch tests: the sway and i3 adapters on recorded replies -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The fake tool (test/fixtures/wm/fake-wm.sh) replays test/fixtures/wm/{sway,i3}/; nothing here talks to a real
 ;; window manager.  The helpers (isolation, fake tool, frame) come from platform-test.el.
 (require 'ert)
@@ -206,6 +207,7 @@
                                       (should-not (cl-some (lambda (c) (string-match-p "focus" c)) cmds)))))))
 
 (drgnx-platform-test--deftest drgnx-platform-wm/sway-place-gives-up-at-the-deadline ()
+                              :tags '(:timing)
                               ;; the tree never holds a window with our pid and the placing title: the error comes at the (scaled) deadline
                               (drgnx-platform-wm-test--with-replies (("get_tree.json" . (drgnx-platform-wm-test--text "sway/get_tree.json")))
                                 (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")

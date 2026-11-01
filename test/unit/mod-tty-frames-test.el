@@ -1,4 +1,5 @@
 ;;; mod-tty-frames-test.el --- batch tests: ui/terminal — what a terminal frame can do, the terminal report -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has no terminal to ask: terminals, their parameters and the query are stubbed; the tty tier
 ;; (test/tty/frames-test.el) runs the real thing.
 (require 'ert)
@@ -485,6 +486,7 @@ types `infocmp' was asked about."
   (should-not (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
 
 (ert-deftest drgnx-tty-frames/a-daemon-loading-server-after-init-gets-the-advice ()
+  :tags '(:cond)
   ;; a daemon loads server.el after init: the module's setup runs before there is a function to advise
   (let* ((emacs (expand-file-name invocation-name invocation-directory))
          (advised (lambda ()

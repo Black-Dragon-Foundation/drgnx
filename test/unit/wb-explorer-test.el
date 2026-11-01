@@ -1,4 +1,5 @@
 ;;; wb-explorer-test.el --- batch tests: the Explorer -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-paths)
@@ -324,6 +325,7 @@
       (should-not (gethash src drgnx-explorer--watches)))))
 
 (ert-deftest drgnx-explorer/a-real-file-event-updates-the-tree ()
+  :tags '(:cond)
   (skip-unless (and (featurep 'filenotify) file-notify--library))
   (drgnx-explorer-test--with root
     (write-region "" nil (expand-file-name "watched.txt" root) nil 'silent)
@@ -496,6 +498,7 @@
         (should-not (member '(1 "README.md") (drgnx-explorer-test--rows)))))))
 
 (ert-deftest drgnx-explorer/the-gio-trash-ends-by-refreshing-the-explorer-from-any-buffer ()
+  :tags '(:cond)
   ;; A-40: the sentinel runs in whatever buffer is current; the rows it refreshes are the Explorer's buffer-local ones.
   (drgnx-explorer-test--with root
     (let* ((bin (make-temp-file "drgnx-gio" t)) (script (expand-file-name "gio" bin))
@@ -601,6 +604,7 @@
 ;;;; Review fixes (M3b)
 
 (ert-deftest drgnx-explorer/find-with-a-root-inside-a-project-terminates ()
+  :tags '(:cond)
   (skip-unless (executable-find "git"))
   (drgnx-test-with-state
     (let* ((proj (file-name-as-directory (make-temp-file "drgnx-proj" t)))
@@ -684,6 +688,7 @@
     (when-let* ((b (get-file-buffer (expand-file-name "src/app/main2.py" root)))) (kill-buffer b))))
 
 (ert-deftest drgnx-explorer/a-recreated-folder-is-watched-again ()
+  :tags '(:cond)
   (skip-unless (and (featurep 'filenotify) file-notify--library))
   (drgnx-explorer-test--with root
     (let ((docs (expand-file-name "docs" root)))
@@ -736,6 +741,7 @@
     (drgnx-explorer--clear-selection)))
 
 (ert-deftest drgnx-explorer/collapsing-a-folder-re-lists-nothing ()
+  :tags '(:cond)
   ;; Removing our own watch sends `stopped'; that is not the folder going away.
   (skip-unless (and (featurep 'filenotify) file-notify--library))
   (drgnx-explorer-test--with root
@@ -747,6 +753,7 @@
       (should (= drgnx-explorer--renders 0)))))
 
 (ert-deftest drgnx-explorer/the-follower-moves-only-its-own-window ()
+  :tags '(:cond)
   ;; I9: the follower runs from the bus's timer and moves the Explorer's window — its own — only.
   (require 'drgnx-jank-guard)
   (drgnx-explorer-test--with root

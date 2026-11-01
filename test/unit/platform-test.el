@@ -1,4 +1,5 @@
 ;;; platform-test.el --- batch tests: window-manager adapters, detection, monitors, the async runner -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)
@@ -176,7 +177,7 @@ does not require to happen."
                                                (should (= n 1))
                                                (should (eq 'sway (frame-parameter frame 'drgnx-platform-wm))))
                                       (advice-remove 'drgnx-platform-detect 'platform-test-count))
-                                    (sleep-for 0.1)
+                                    (drgnx-test-pause 0.1)             ; no call in the window
                                     (should-not (drgnx-platform-test--log-lines))))))
 
 (drgnx-platform-test--deftest drgnx-platform/adapters-are-registered-in-order-and-extended-by-name ()
@@ -259,12 +260,12 @@ does not require to happen."
                                        (drgnx-platform-monitors frame (lambda (r) (push r calls)))
                                        (should (drgnx-platform-test--await (lambda () calls) 2))
                                        (should (< (- (float-time) start) 1.0))
-                                       (sleep-for 0.3)
+                                       (drgnx-test-pause 0.3)           ; no second answer in the window
                                        (should (equal calls '((:error "timed out"))))
                                        (setq calls nil)
                                        (drgnx-platform-move-frame frame (drgnx-platform-test--mon "x" 0 0 1 1) (lambda (r) (push r calls)))
                                        (should (drgnx-platform-test--await (lambda () calls) 2))
-                                       (sleep-for 0.3)
+                                       (drgnx-test-pause 0.3)           ; no second answer in the window
                                        (should (equal calls '((:error "timed out"))))
                                        (setq fm 'unset)
                                        (drgnx-platform-frame-monitor frame (lambda (m) (setq fm m)))
@@ -377,7 +378,7 @@ does not require to happen."
                                   (should (equal (car calls) '(timeout "")))
                                   (should-not (process-live-p proc))
                                   (should (drgnx-platform-test--await (lambda () (not (file-exists-p (format "/proc/%d" pid)))) 1))
-                                  (sleep-for 0.3)                   ; a line arriving later calls nothing
+                                  (drgnx-test-pause 0.3)            ; a line arriving later calls nothing
                                   (should (= 1 (length calls))))))
 
 (drgnx-platform-test--deftest drgnx-platform/a-missing-tool-calls-back-an-error-never-signals ()
@@ -398,7 +399,7 @@ does not require to happen."
                                             ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text msgs) nil)))   ; a notice, Task 20
                                     (drgnx-platform-call '("swaymsg") :callback (lambda (_s _o) (cl-incf n) (error "boom")))
                                     (should (drgnx-platform-test--await (lambda () msgs)))
-                                    (sleep-for 0.1))
+                                    (drgnx-test-pause 0.1))         ; the callback is not called twice
                                   (should (= n 1))
                                   (should (string-match-p "boom" (car msgs))))))
 

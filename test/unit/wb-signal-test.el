@@ -1,4 +1,5 @@
 ;;; wb-signal-test.el --- batch tests: the change bus -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (require 'drgnx-signal)

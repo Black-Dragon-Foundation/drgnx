@@ -1,4 +1,5 @@
 ;;; mod-tty-clipboard-test.el --- batch tests: ui/terminal — copy to the local clipboard through OSC 52 -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has no terminal: the terminal, its parameters and its identity are stubbed (as in
 ;; mod-tty-frames-test.el); the too-long copy runs the real xterm.el method on the batch terminal.  The tty tier
 ;; (test/tty/clipboard-test.el) runs the real thing in tmux.

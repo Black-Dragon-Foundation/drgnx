@@ -1,4 +1,5 @@
 ;;; mod-face-test.el --- batch tests: the ui/face module — the frame and the buffers -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)

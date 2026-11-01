@@ -1,4 +1,5 @@
 ;;; wb-chrome-test.el --- batch tests: chrome by role, tabs, breadcrumbs (I3) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx-paths)

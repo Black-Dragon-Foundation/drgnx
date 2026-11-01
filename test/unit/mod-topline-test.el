@@ -1,4 +1,5 @@
 ;;; mod-topline-test.el --- batch tests: the top line — project, branch, the keys that open everything (M12f A6) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

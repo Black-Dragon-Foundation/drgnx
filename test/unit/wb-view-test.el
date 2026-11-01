@@ -1,4 +1,5 @@
 ;;; wb-view-test.el --- batch tests: views — types, marks, the draw pass (wb/drgnx-view.el) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)

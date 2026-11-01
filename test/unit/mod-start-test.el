@@ -1,4 +1,5 @@
 ;;; mod-start-test.el --- batch tests: the start page in an empty editor (M12f A9) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'server)

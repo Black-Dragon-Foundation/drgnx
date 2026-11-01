@@ -1,4 +1,5 @@
 ;;; tty-recommend-test.el --- batch tests: recommend a capable terminal -*- lexical-binding: t -*-
+;; test-class: det
 ;; Nothing here touches the machine: PATH is a temp dir holding fake executables that log their calls, the
 ;; system and the os-release file are stubbed, display and SSH variables are set per test.
 (require 'ert)
@@ -169,6 +170,7 @@ too) unless BODY binds `system-type'."
                               (drgnx-tty-install-command 'wezterm drgnx-tty-rec-test--macos))))
 
 (ert-deftest drgnx-tty-recommend/never-runs-anything ()
+  :tags '(:cond)
   (drgnx-tty-rec-test--with-path '("sudo" "dnf" "apt" "pacman" "brew" "kitty" "foot" "wezterm" "ghostty" "xterm")
     ;; the fakes do log: running one is seen, then the log is cleared
     (call-process "kitty" nil nil nil "--probe")

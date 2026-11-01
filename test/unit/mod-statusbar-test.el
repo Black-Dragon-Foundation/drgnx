@@ -1,4 +1,5 @@
 ;;; mod-statusbar-test.el --- batch tests: the status bar — segments as data (M12f A3) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
@@ -1492,6 +1493,7 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
 
 (ert-deftest drgnx-statusbar/rendering-is-cheap ()
   "About 1000 renders of the default segments cost well under 100 ms in all (a redisplay runs one)."
+  :tags '(:timing)
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
     (with-temp-buffer

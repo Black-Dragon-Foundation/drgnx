@@ -1,4 +1,5 @@
 ;;; platform-hypr-niri-test.el --- batch tests: the Hyprland and niri adapters on fake CLIs -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The fake `hyprctl' and `niri' replay test/fixtures/wm/{hyprland,niri}/ (Hyprland's are invented values in the
 ;; source's JSON shape, niri's are recorded; see SOURCES).  Nothing talks to a real compositor.
 (require 'ert)

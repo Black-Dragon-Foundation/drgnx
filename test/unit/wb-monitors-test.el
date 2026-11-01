@@ -1,4 +1,5 @@
 ;;; wb-monitors-test.el --- batch tests: Move to Monitor…, Next and Previous -*- lexical-binding: t -*-
+;; test-class: cond
 ;; A fake adapter stands in for the window manager; the real compositor, D-Bus and display are never reached
 ;; (the isolation macro of platform-test.el wraps every test).  The frame is batch Emacs' only frame, a terminal
 ;; one, so `display-graphic-p' is stubbed where a graphical frame is needed.
@@ -162,7 +163,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                               (drgnx-monitors-test--with-fake ()
                                 (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (signal 'quit nil))))
                                   (drgnx-monitors-move-to))
-                                (accept-process-output nil 0.1)
+                                (drgnx-test-pause 0.1)                ; nothing happens
                                 (should-not drgnx-monitors-test--moves)))
 
 (drgnx-platform-test--deftest drgnx-monitors/gnome-says-why-and-names-the-key-and-moves-nothing ()
@@ -176,7 +177,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                     (dolist (cmd '(drgnx-monitors-move-to drgnx-monitors-move-next drgnx-monitors-move-previous))
                                       (setq messages nil)
                                       (funcall cmd)
-                                      (accept-process-output nil 0.05)
+                                      (drgnx-test-wait (lambda () messages) :what "the GNOME message")
                                       (should (= 1 (length messages)))
                                       (should (string-match-p "\\`GNOME does not let apps move their windows: press Super\\+Shift\\+→ or Super\\+Shift\\+←"
                                                               (car messages))))
@@ -235,14 +236,12 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
 
 (drgnx-platform-test--deftest drgnx-monitors/refresh-is-debounced-and-never-blocks ()
                               (drgnx-monitors-test--with-fake (:delay 0.2)
-                                (let ((start (float-time)))
-                                  (dotimes (_ 10) (drgnx-monitors--focus-changed))
-                                  (should (< (- (float-time) start) 0.1)))
+                                (dotimes (_ 10) (drgnx-monitors--focus-changed))
+                                (should-not drgnx-monitors-test--calls)                           ; nothing ran in the hook itself
                                 (should (drgnx-timer-active-p 'monitors-refresh))                 ; one key: the ten calls made one timer
-                                (let ((start (float-time)))
-                                  (drgnx-monitors--run-pending)
-                                  (should (< (- (float-time) start) 0.1))      ; the adapter answers 0.2 s later: nothing waited for it
-                                  (should-not (frame-parameter frame 'drgnx-monitor)))
+                                (drgnx-monitors--run-pending)
+                                ;; the adapter answers 0.2 s later: nothing waited for it
+                                (should-not (frame-parameter frame 'drgnx-monitor))
                                 (should (drgnx-platform-test--await (lambda () (frame-parameter frame 'drgnx-monitor))))
                                 (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :name) "DP-1"))
                                 (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
@@ -252,7 +251,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                 ;; more focus changes within 10 s: no further call now, but a trailing refresh is armed
                                 (dotimes (_ 10) (drgnx-monitors--focus-changed))
                                 (drgnx-monitors--run-pending)
-                                (accept-process-output nil 0.4)
+                                (drgnx-test-pause 0.4)                ; no further call in the window
                                 (should (= 1 (plist-get drgnx-monitors-test--calls :frame-monitor)))
                                 (should (drgnx-timer-active-p 'monitors-refresh))
                                 (should (memq frame drgnx-monitors--pending))
@@ -268,7 +267,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                   (drgnx-monitors-refresh frame)
                                   (drgnx-monitors--focus-changed)
                                   (drgnx-monitors--run-pending)
-                                  (accept-process-output nil 0.1)
+                                  (drgnx-test-pause 0.1)              ; no call in the window
                                   (should-not drgnx-monitors-test--calls))))
 
 (drgnx-platform-test--deftest drgnx-monitors/hot-plug-only-refreshes ()
@@ -277,7 +276,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                 (unwind-protect
                                     (progn
                                       (should (memq #'drgnx-monitors--monitors-changed display-monitors-changed-functions))
-                                      (accept-process-output nil 0.1)
+                                      (drgnx-test-pause 0.1)          ; the first refresh settles
                                       (setq drgnx-monitors-test--calls nil drgnx-monitors--count nil)
                                       (run-hook-with-args 'display-monitors-changed-functions nil)
                                       (drgnx-monitors--run-pending)
@@ -331,7 +330,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                 ;; an answer that already names its monitor is kept as it is: no extra listing
                                 (let ((calls (plist-get drgnx-monitors-test--calls :monitors)))
                                   (drgnx-monitors--fetch-monitor frame)
-                                  (accept-process-output nil 0.2)
+                                  (drgnx-test-pause 0.2)          ; no extra listing in the window
                                   (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :serial) "BBB"))
                                   (should (eql calls (plist-get drgnx-monitors-test--calls :monitors))))))
 
@@ -341,12 +340,12 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                               (drgnx-monitors-test--with-fake (:monitors drgnx-monitors-test--twins :emacs-answer t
                                                                          :frame-sequence '((0 . 0) (0 . 0) (0 . 0)))
                                 (should (eq 'ok (drgnx-monitors-test--move frame 2)))
-                                (accept-process-output nil 0.3)
+                                (drgnx-test-pause 0.3)                ; the stale answers land in the window
                                 (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :serial) "BBB"))
                                 ;; the focus and move events the move causes wait for the refresh interval
                                 (drgnx-monitors--focus-changed)
                                 (drgnx-monitors--run-pending)
-                                (accept-process-output nil 0.3)
+                                (drgnx-test-pause 0.3)                ; the stale answers land in the window
                                 (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :serial) "BBB"))))
 
 (drgnx-platform-test--deftest drgnx-monitors/an-older-count-reply-arriving-last-does-not-overwrite-the-newer
@@ -357,7 +356,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
     (drgnx-monitors--fetch-count frame)      ; the second (2 monitors) comes first
     (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
     (should (= drgnx-monitors--count 2))
-    (accept-process-output nil 0.5)
+    (drgnx-test-pause 0.5)                   ; the slow first answer lands in the window
     (should (= drgnx-monitors--count 2))))
 
 (drgnx-platform-test--deftest drgnx-monitors/an-older-monitor-reply-arriving-last-does-not-overwrite-the-newer ()
@@ -365,7 +364,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                 (drgnx-monitors--fetch-monitor frame)    ; DP-1, but it comes last
                                 (drgnx-monitors--fetch-monitor frame)    ; DP-2, first
                                 (should (drgnx-platform-test--await (lambda () (frame-parameter frame 'drgnx-monitor))))
-                                (accept-process-output nil 0.5)
+                                (drgnx-test-pause 0.5)                ; the slow first answer lands in the window
                                 (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :name) "DP-2"))))
 
 (drgnx-platform-test--deftest drgnx-monitors/a-hot-plug-storm-is-one-refresh-that-ignores-the-interval ()
@@ -376,7 +375,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                 (should-not drgnx-monitors-test--calls)                      ; nothing ran in the hook itself
                                 (drgnx-monitors--run-pending)
                                 (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
-                                (accept-process-output nil 0.2)
+                                (drgnx-test-pause 0.2)                ; no second refresh in the window
                                 (should (= 1 (plist-get drgnx-monitors-test--calls :monitors)))
                                 (should (= 1 (plist-get drgnx-monitors-test--calls :frame-monitor)))
                                 (should-not drgnx-monitors-test--moves)))
@@ -392,7 +391,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                     (cl-letf (((symbol-function 'drgnx-platform-frame-monitor) (lambda (_f cb) (funcall cb nil)))
                                               ((symbol-function 'set-frame-parameter) #'ignore))
                                       (drgnx-monitors--run-pending))
-                                    (accept-process-output nil 0.1)
+                                    (drgnx-test-pause 0.1)            ; one listing for both frames
                                     (should (= 1 (plist-get drgnx-monitors-test--calls :monitors)))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/the-hot-plug-hook-survives-a-signalling-adapter ()

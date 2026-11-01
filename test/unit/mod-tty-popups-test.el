@@ -1,4 +1,5 @@
 ;;; mod-tty-popups-test.el --- batch tests: ui/terminal-popups — borders, ASCII terminals -*- lexical-binding: t -*-
+;; test-class: det
 ;; Batch Emacs has no terminal: the terminal's coding system and the frame kind are stubbed; the tty tier
 ;; (test/tty/popups-test.el) runs the real thing.
 (require 'ert)

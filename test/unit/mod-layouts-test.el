@@ -1,4 +1,5 @@
 ;;; mod-layouts-test.el --- batch tests: layouts (Agent, Editor, Zen, Browser and your own) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
@@ -159,6 +160,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should-not (window-live-p w)))))
 
 (ert-deftest drgnx-layouts/switching-loses-nothing ()
+  :tags '(:cond)
   (drgnx-layouts-test--with
     (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
     (let* ((a (get-buffer-create "*drgnx-layouts-a*")) (b (get-buffer-create "*drgnx-layouts-b*"))
