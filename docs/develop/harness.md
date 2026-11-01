@@ -1005,6 +1005,34 @@ reads from a terminal, a macOS terminal takes 1024 bytes per line (MAX_CANON), a
 Emacs starts, because dbus.el reads that one: the dead bus and the desktop variables unset. `bin/drgnx` repeats those
 lines in bash for the unit tier, and a test (`drgnx-test-env/bin-drgnx-matches-it`) fails if they drift.
 
+## Test classes
+
+A test file's class is the comment line `;; test-class: det` (or `cond`, `timing`), an exact line within its first 15
+lines; a test's own `:det`, `:cond` or `:timing` tag wins over its file's class. `run-ert.el` turns the file's class
+into an ERT tag after loading the file, so `(tag :det)` selects the class. Files that no class applies to (their Lisp is
+deleted or replaced by a plan) are listed in `test/class-exempt.eld` as `(FILE :why STRING)`.
+
+- **det**: no real time. No `sleep-for`, `sit-for`, async process, raw timer, `drgnx-test-pause`,
+  `drgnx-test-proc-await-exit`, `accept-process-output` with a time, or `float-time` deadline outside
+  `drgnx-test-with-clock`, directly or through a function of the same file. A synchronous `call-process` is allowed.
+  A det test failing and passing on the rerun fails the run, whatever `test/flaky.eld` lists.
+- **cond**: waits on conditions; no fixed pause (`sleep-for`, `sit-for` above 0). `drgnx-test-pause` stays allowed.
+- **timing**: may assert elapsed time; no other class may `should` over a wall-clock comparison.
+
+`test/unit/lint-test-classes-test.el` has a lint for each rule, and reports the files without a class until
+`drgnx-lint-classes--all-classified` is set; a row for a file that is gone fails always.
+
+`NIDHOGG_TEST_CLOCK` and `NIDHOGG_TEST_SEED` pass into the container; a failed run prints the seed.
+
+### The audit: what a deterministic test really runs
+
+A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
+primitives that execute while it runs (`sleep-for` and `sit-for` above 0, `accept-process-output` with a wait or a live
+process, `make-process`, `start-process`, network, pipe and serial processes) as `drgnx-audit: TEST PRIMITIVE` lines in
+the output; a value other than `1` is a file the rows are also appended to. What runs under `drgnx-test-with-clock` is
+virtual and does not count. `DRGNX_TEST_AUDIT_ALL=1` audits every test (for a run before files carry a class).
+`DRGNX_TEST_AUDIT_FAIL=1` makes each such `:det` test fail the run. All three are off by default.
+
 ## Virtual time
 
 `test/fixtures/clock-fixture.el` runs Emacs's own timer lists on a clock the test moves, so no test waits in real time
