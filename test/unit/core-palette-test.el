@@ -93,6 +93,32 @@
 
 ;; The floating palette (core/drgnx-palette-frame.el): Glitnir decides, nothing else does.
 (require 'drgnx-palette-frame)
+(defvar vertico-count)
+
+(defun drgnx-test--palette-placed (parent-width)
+  "The (WIDTH HEIGHT) `drgnx-palette-frame--place' gives a parent PARENT-WIDTH frame pixels wide."
+  (let ((vertico-count 10) (drgnx-palette-frame-width 640) sized)
+    (cl-letf (((symbol-function 'frame-char-height) (lambda (&rest _) 20))
+              ((symbol-function 'frame-pixel-width) (lambda (f) (if (eq f 'parent) parent-width (car sized))))
+              ((symbol-function 'frame-pixel-height) (lambda (_) 2000))
+              ((symbol-function 'frame-scale-factor) (lambda (_) 2.0))
+              ((symbol-function 'set-frame-size) (lambda (_f w h _pixelwise) (setq sized (list w h))))
+              ((symbol-function 'set-frame-position) #'ignore))
+      (drgnx-palette-frame--place 'child 'parent))
+    sized))
+
+(ert-deftest core-palette-float-sizes-are-logical-pixels ()
+  ;; a frame of Nidhogg's Wayland shell counts device pixels: 640 logical at scale 2 are 1280 of them
+  (let ((features (cons 'nidhogg-wayland features)))
+    (should (equal (drgnx-test--palette-placed 3000) '(1280 240)))
+    (should (equal (drgnx-test--palette-placed 1000) '(936 240)))
+    (cl-letf (((symbol-function 'frame-scale-factor) (lambda (_) 2.0)))
+      (should (= 16 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
+  ;; elsewhere a frame counts logical pixels already
+  (let ((features (remq 'nidhogg-wayland features)))
+    (should (equal (drgnx-test--palette-placed 3000) '(640 240)))
+    (should (= 8 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
+
 
 (ert-deftest core-palette-float-off-without-glitnir ()
   (let (modes)

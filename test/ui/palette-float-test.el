@@ -136,7 +136,7 @@ signalled (a failed `should') is signalled again.  Conditions, not delays."
              (should (equal (frame-parameter f k) (alist-get k drgnx-look-palette))))
            ;; top-centre, inside the editor frame, at most 640 logical px wide
            (let ((e (frame-edges f 'outer-edges)) (w (frame-pixel-width root)))
-             (should (<= (frame-pixel-width f) 640))
+             (should (<= (frame-pixel-width f) (drgnx-palette-frame--px root 640)))
              (should (>= (nth 0 e) 0)) (should (<= (nth 2 e) w))
              (should (< (abs (- (/ (+ (nth 0 e) (nth 2 e)) 2.0) (/ w 2.0))) 2))
              (should (< (nth 1 e) (/ (frame-pixel-height root) 3))))
@@ -223,7 +223,8 @@ holds child frames, pixel checks: the palette's rectangle differs from the pictu
            (drgnx-test-wait-presented)
            (let* ((shot (drgnx-uitest-capture (expand-file-name (format "scale-%s" scale) dir)))
                   (snap (drgnx-uitest-snapshot root))
-                  (e (mapcar (lambda (v) (round (* scale v))) (frame-edges f 'outer-edges)))
+                  ;; the snapshot is in device pixels, which is what a frame of Nidhogg's Wayland shell counts
+                  (e (mapcar (lambda (v) (round (* (if (featurep 'nidhogg-wayland) 1 scale) v))) (frame-edges f 'outer-edges)))
                   (mid-x (/ (+ (nth 0 e) (nth 2 e)) 2)) (mid-y (/ (+ (nth 1 e) (nth 3 e)) 2)))
              (should (file-exists-p (plist-get shot :root)))
              (when (equal (drgnx-uitest-pixel snap mid-x mid-y) (drgnx-uitest-pixel none mid-x mid-y))

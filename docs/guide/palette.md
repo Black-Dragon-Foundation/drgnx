@@ -31,5 +31,5 @@ The keys, Return, `C-g` and `#` search work the same either way.
 | `backdrop-blur` | 10 | logical pixels of blur radius behind the box |
 | `transition` | `pop` | fade and pop in and out |
 
-`drgnx-palette-frame-width` (640) and `drgnx-palette-frame-top` (0.12, the fraction of the frame's height above the box)
-place it. No colours are set here: the theme's faces colour everything.
+`drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction
+of the frame's height above the box) place it. No colours are set here: the theme's faces colour everything.

@@ -38,12 +38,16 @@
   "Non-nil when the palette floats: Glitnir is active on a graphical frame."
   (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p) t))
 
+(defun drgnx-palette-frame--px (frame logical)
+  "LOGICAL pixels in FRAME's own pixels: a frame of Nidhogg's Wayland shell counts device pixels."
+  (if (featurep 'nidhogg-wayland) (round (* logical (frame-scale-factor frame))) logical))
+
 (defun drgnx-palette-frame--params (parent)
   "The frame parameters of the palette's child frame under PARENT."
   `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-palette") (drgnx-palette . t)
     (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t)
     (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
-    (internal-border-width . 8) (border-width . 0) (child-frame-border-width . 0)
+    (internal-border-width . ,(drgnx-palette-frame--px parent 8)) (border-width . 0) (child-frame-border-width . 0)
     (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (tab-bar-lines-keep-state . t)
     (left-fringe . 0) (right-fringe . 0) (vertical-scroll-bars) (horizontal-scroll-bars)
     (visibility . nil)
@@ -61,7 +65,9 @@
   "Size FRAME for the candidates and put it top-centre in PARENT.
 The window is `vertico-count' + 2 lines high: `vertico-buffer' takes the mode line and the input line off."
   (let* ((lh (frame-char-height parent))
-         (width (min drgnx-palette-frame-width (max 100 (- (frame-pixel-width parent) 32))))
+         (width (min (drgnx-palette-frame--px parent drgnx-palette-frame-width)
+                     (max (drgnx-palette-frame--px parent 100)
+                          (- (frame-pixel-width parent) (drgnx-palette-frame--px parent 32)))))
          (count (default-value 'vertico-count)))
     (set-frame-size frame width (* lh (+ count 2)) t)
     (set-frame-position frame (max 0 (/ (- (frame-pixel-width parent) (frame-pixel-width frame)) 2))
