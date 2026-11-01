@@ -505,14 +505,35 @@ A failed test after TIMEOUT (default 5) seconds."
 (defun drgnx-test-chrome--reading (reader typed probe)
   "Call READER (it opens the minibuffer) while TYPED arrives as keys; PROBE runs when it shows them, then Return ends it.
 Return PROBE's value; an error PROBE signalled (a failed `should') is signalled again here."
-  (let ((result nil) (drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil)
-        (drgnx-uitest--queue (list 'typed-from-the-timers-below))) ; the session's idle-prompt guard: the answer is coming
-    (run-at-time 0.5 nil (lambda () (setq unread-command-events
-                                          (append (listify-key-sequence typed) unread-command-events))))
-    (run-at-time 3.0 nil (lambda ()
-                           (setq result (condition-case err (list :ok (funcall probe)) (error (list :error err))))
-                           (setq unread-command-events (list 'return))))
-    (funcall reader)
+  (let* ((result nil) (stage 'open) (timer nil) (watchdog nil)
+         (drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil)
+         (drgnx-uitest--queue (list 'typed-from-the-timers-below)) ; the session's idle-prompt guard: the answer is coming
+         (finish (lambda () (cancel-timer timer) (cancel-timer watchdog))))
+    ;; Conditions, not delays: TYPED goes in once the minibuffer is open, PROBE runs once the minibuffer shows it all.
+    (setq timer (run-with-timer
+                 0.02 0.02
+                 (lambda ()
+                   (pcase stage
+                     ('open (when (active-minibuffer-window)
+                              (setq stage 'typed)
+                              (setq unread-command-events
+                                    (append (listify-key-sequence typed) unread-command-events))))
+                     ('typed (when (and (null unread-command-events)
+                                        (equal (with-current-buffer (window-buffer (active-minibuffer-window))
+                                                 (minibuffer-contents-no-properties))
+                                               typed))
+                               (setq stage 'probed)
+                               (funcall finish)
+                               (setq result (condition-case err (list :ok (funcall probe)) (error (list :error err))))
+                               (setq unread-command-events (list 'return)))))))
+          ;; a read that never gets there ends with an error instead of hanging the session (not a wait: a failure path)
+          watchdog (run-at-time 60 nil (lambda ()
+                                         (unless (eq stage 'probed)
+                                           (funcall finish)
+                                           (setq result (list :error (list 'error (format "the read never reached its probe (stage %s)" stage))))
+                                           (setq unread-command-events (list 'return))))))
+    (unwind-protect (funcall reader)
+      (funcall finish))
     (pcase result
       (`(:ok ,v) v)
       (`(:error ,err) (signal (car err) (cdr err)))
