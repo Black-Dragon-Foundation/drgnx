@@ -20,10 +20,8 @@
         drgnx-ui-intent-test--seen))
 
 (defun drgnx-ui-intent-test--wait (pred &optional secs)
-  "Wait until PRED, up to SECS (default 3) seconds; return its value."
-  (let ((deadline (+ (float-time) (or secs 3))) (v nil))
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (drgnx-test-pause 0.05))
-    v))
+  "Wait until PRED, up to SECS (default 3) seconds; return its value, nil at the deadline (the caller says what is off)."
+  (ignore-error ert-test-failed (drgnx-test-wait pred :secs (or secs 3))))
 
 (ert-deftest drgnx-state-intent-ui/a-dragged-dock-keeps-its-width-when-the-frame-resizes ()
   ;; The left dock dragged wider on its divider, then the frame made narrower the way a window manager does it:

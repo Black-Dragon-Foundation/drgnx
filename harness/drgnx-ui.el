@@ -1818,7 +1818,9 @@ runs the live suite in shards).  Return an exit code."
           (princ (format "ui ERT: %s/%s passed%s\n" (plist-get results :passed) (plist-get results :total)
                          (if selector (format " (selector %s)" selector) "")))
           (seq-doseq (f (plist-get results :failures))
-            (princ (format "  FAIL %s: %s\n" (plist-get f :name) (plist-get f :condition)))))
+            (princ (format "  FAIL %s: %s\n" (plist-get f :name) (plist-get f :condition))))
+          (seq-doseq (s (plist-get results :skipped))
+            (princ (format "  SKIP %s\n" (plist-get s :name)))))
       (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run))
       ;; what the harness wrote to the session's log (a scale gdctl could not set): in a container, the log goes with it
       (dolist (l (drgnx-ui--harness-lines (expand-file-name "session.log" run))) (princ (concat "  " l "\n"))))

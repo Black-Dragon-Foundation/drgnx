@@ -37,7 +37,7 @@
           (let ((editor (selected-window)) (line (line-number-at-pos)))
             (call-interactively #'drgnx-quickhelp-show)
             (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
-            (redisplay t) (drgnx-test-pause 0.3)
+            (drgnx-test-wait-presented)
             (should (drgnx-quickhelp-shown-p))
             (should (eq (selected-window) editor))              ; the card never takes the focus
             (should (= (point) (save-excursion (goto-char (point-min)) (forward-line 20) (search-forward "(car ") (- (point) 4))))
@@ -49,8 +49,12 @@
               (cl-loop for y from (nth 1 e) below (nth 3 e)
                        do (should-not (equal (drgnx-quickhelp-ui-test--line-at x y root) (cons editor line))))
               ;; beside it: the row just above the card (or just below) is point's line
-              (should (or (equal (drgnx-quickhelp-ui-test--line-at x (1- (nth 1 e)) root) (cons editor line))
-                          (equal (drgnx-quickhelp-ui-test--line-at x (1+ (nth 3 e)) root) (cons editor line))))
+              (let ((above (drgnx-quickhelp-ui-test--line-at x (1- (nth 1 e)) root))
+                    (below (drgnx-quickhelp-ui-test--line-at x (1+ (nth 3 e)) root)))
+                (unless (or (equal above (cons editor line)) (equal below (cons editor line)))
+                  (ert-fail (list "the card is not beside point's line" :card e :line line :editor editor
+                                  :above above :below below :point-at (pos-visible-in-window-p nil editor t)
+                                  :window (window-pixel-edges editor) :windows (window-list root 'nomini)))))
               ;; inside the window
               (pcase-let ((`(,l ,top ,r ,b) (window-inside-pixel-edges editor)))
                 (should (>= (nth 0 e) l)) (should (<= (nth 2 e) (+ r 2)))
@@ -98,7 +102,7 @@
             (should (> (count-screen-lines (line-beginning-position) (line-end-position)) 1))
             (call-interactively #'drgnx-quickhelp-show)
             (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
-            (redisplay t) (drgnx-test-pause 0.3)
+            (drgnx-test-wait-presented)
             (should (drgnx-quickhelp-shown-p))
             (let* ((card drgnx-quickhelp--frame) (e (frame-edges card 'outer-edges)) (x (+ (nth 0 e) 4)))
               ;; no row of the card is on any screen row of point's (wrapped) line
@@ -132,13 +136,13 @@
           (emacs-lisp-mode)
           (goto-char (point-min)) (forward-line 20) (search-forward "(car ") (backward-char 4)
           (recenter 10)
-          (redisplay t) (drgnx-test-pause 0.3)
+          (drgnx-test-wait-presented)
           (setq none (drgnx-uitest-snapshot root))
           (when (frame-live-p drgnx-quickhelp--frame)  ; an earlier test's card was made without the chrome
             (delete-frame drgnx-quickhelp--frame) (setq drgnx-quickhelp--frame nil drgnx-quickhelp--card-up nil))
           (call-interactively #'drgnx-quickhelp-show)
           (drgnx-test-wait #'drgnx-quickhelp-shown-p :secs 3 :what "the quick help card")
-          (redisplay t) (drgnx-test-pause 0.3)
+          (drgnx-test-wait-presented)
           (should (drgnx-quickhelp-shown-p))
           (let* ((card drgnx-quickhelp--frame) (s (frame-scale-factor root))
                  (e (frame-edges card 'outer-edges)) (p (frame-edges root 'native-edges))

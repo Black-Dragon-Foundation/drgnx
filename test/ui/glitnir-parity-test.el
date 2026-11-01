@@ -48,18 +48,14 @@ A macro: `skip-unless' exists only inside the body of `ert-deftest'."
           (skip-unless (drgnx-uitest-childframe-packages))))
 
 (defun drgnx-test-glitnir--settle ()
-  "Redisplay, wait, and clear the echo area (a message would be in one picture and not the other)."
-  (redisplay t)
-  (drgnx-test-pause 0.3)
+  "Wait for the picture, and clear the echo area (a message would be in one picture and not the other)."
+  (drgnx-test-wait-presented)
   (message nil)
   (redisplay t))
 
 (defun drgnx-test-glitnir--wait-for (pred &optional timeout)
-  "Redisplay until PRED is non-nil or TIMEOUT (default 3) seconds pass; PRED's value."
-  (let ((end (+ (float-time) (or timeout 3))) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) end))
-      (redisplay t) (drgnx-test-pause 0.05))
-    v))
+  "Redisplay until PRED is non-nil, PRED's value; a failed test after TIMEOUT (default 3) seconds."
+  (drgnx-test-wait (lambda () (redisplay t) (funcall pred)) :secs (or timeout 3) :what pred))
 
 (defun drgnx-test-glitnir--rect (snap)
   "SNAP's whole picture as (L T R B)."
@@ -265,7 +261,7 @@ comparison (and must differ there: the snapshot shows the popups)."
             (setq panicked t)
             (should-not (drgnx-test-glitnir--diff (drgnx-uitest-snapshot root) off)))
         (let ((glitnir-debug 'verify)) (glitnir--debug-panic 'revive))
-        (redraw-frame root) (redisplay t) (drgnx-test-pause 0.2))
+        (redraw-frame root) (drgnx-test-wait-presented))
       (should panicked)
       (should (glitnir-active-p)))))
 

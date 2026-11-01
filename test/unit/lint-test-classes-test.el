@@ -24,7 +24,8 @@ synchronous `call-process' (git and the like) is allowed; `drgnx-test-pause' and
 waits; the `drgnx-timer-*' layer only fills timer lists.")
 
 (defconst drgnx-lint-classes--cond-banned '(sleep-for sit-for-positive)
-  "What a conditional test never calls: a fixed pause.  `drgnx-test-pause' stays allowed (the \"did not happen\" window).")
+  "What a conditional test never calls: a fixed pause.  `drgnx-test-pause' stays allowed (the \"did not happen\" window);
+in test/ui it says what may not happen (`drgnx-lint-classes--gui-pauses').")
 
 (defconst drgnx-lint-classes--clock-reads '(float-time-bare current-time time-since drgnx-test-real-time)
   "Calls that read the wall clock; `float-time' of an argument only converts a time.")
@@ -97,8 +98,8 @@ TESTS the `ert-deftest' forms."
 
 (defun drgnx-lint-classes--calls (form)
   "The calls in FORM, as symbols; the keys `sit-for-positive', `accept-process-output-timed' and `float-time-bare'
-stand for the forms that wait on a time or read the wall clock.  What `drgnx-test-with-clock' wraps is not walked: the
-fixture moves time there."
+stand for the forms that wait on a time or read the wall clock, and `pause-without-a-reason' for a `drgnx-test-pause'
+with no reason string.  What `drgnx-test-with-clock' wraps is not walked: the fixture moves time there."
   (let (out)
     (drgnx-lint-classes--walk
      form
@@ -114,6 +115,7 @@ fixture moves time there."
                                  (drgnx-lint-classes--calls (if (eq (car f) 'while) (cadr f) (cdr f))))
                    (push 'clock-loop out)))
                 ('sit-for (unless (eql (cadr f) 0) (push 'sit-for-positive out)))
+                ('drgnx-test-pause (unless (stringp (nth 2 f)) (push 'pause-without-a-reason out)))
                 ('accept-process-output (when (and (nth 2 f) (not (eql (nth 2 f) 0)))
                                           (push 'accept-process-output-timed out)))
                 ('float-time (unless (cdr f) (push 'float-time-bare out))))
@@ -212,6 +214,16 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
                     (push (format "%s: %s: %s" rel (cadr test) m) out)))))))))
     (nreverse out)))
 
+(defun drgnx-lint-classes--gui-pauses ()
+  "The live test/ui files with a `drgnx-test-pause' that gives no reason.  Every top-level form counts, not only what
+a test reaches by a call: a command a test binds to a key is named by `function'.  A settle is a wait for a frame
+(`drgnx-test-wait-presented'), and a window of the GUI tier says what may not happen in it."
+  (seq-filter (lambda (rel)
+                (and (string-prefix-p "test/ui/" rel)
+                     (seq-some (lambda (form) (memq 'pause-without-a-reason (drgnx-lint-classes--calls form)))
+                               (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir)))))
+              (drgnx-lint-classes--files)))
+
 (defun drgnx-lint-classes--read-test (string)
   "STRING, a file's forms, as (HELPERS . TESTS)."
   (drgnx-lint-classes--parse (car (read-from-string (concat "(" string ")")))))
@@ -228,7 +240,8 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
   (should-not (drgnx-lint-classes--violations :det #'drgnx-lint-classes--rule-det)))
 
 (ert-deftest drgnx-lint/cond-tests-have-no-fixed-pause ()
-  (should-not (drgnx-lint-classes--violations :cond #'drgnx-lint-classes--rule-cond)))
+  (should-not (drgnx-lint-classes--violations :cond #'drgnx-lint-classes--rule-cond))
+  (should-not (drgnx-lint-classes--gui-pauses)))
 
 (ert-deftest drgnx-lint/only-timing-asserts-the-clock ()
   (should-not (drgnx-lint-classes--violations nil #'drgnx-lint-classes--rule-asserts)))
@@ -273,6 +286,9 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
   (should (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond "(ert-deftest a/b () (sit-for 1))"))
   (should-not (drgnx-lint-classes--check :cond #'drgnx-lint-classes--rule-cond
                                          "(ert-deftest a/b () (sit-for 0) (drgnx-test-pause 0.2) (run-at-time 1 nil #'ignore))"))
+  ;; a window in the GUI tier says what may not happen; the rest of the suite's windows are the plain call
+  (should (memq 'pause-without-a-reason (drgnx-lint-classes--calls '(progn (drgnx-test-pause 0.3)))))
+  (should-not (memq 'pause-without-a-reason (drgnx-lint-classes--calls '(drgnx-test-pause 0.3 "no second answer"))))
   (should (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
                                      "(ert-deftest a/b () (should (< (- (float-time) 1) 2)))"))
   (should (drgnx-lint-classes--check nil #'drgnx-lint-classes--rule-asserts
