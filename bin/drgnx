@@ -396,7 +396,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED DRGNX_TEST_SHUFFLE DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_UITEST_SETTLE_SCALE
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
   for v in "${pass[@]}"; do
@@ -461,7 +461,86 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf | --tty [--fed
     args+=(-v "$emount" -e DRGNX_UI_EVIDENCE=/evidence)
     echo "ui evidence (screenshots): $evid" >&2
   fi
-  "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
+  # DRGNX_TEST_PODMAN_ARGS: more options for the run (the pre-flight's CPU limits: --cpus=1), split on spaces
+  local extra=(); if [ -n "${DRGNX_TEST_PODMAN_ARGS:-}" ]; then read -r -a extra <<<"$DRGNX_TEST_PODMAN_ARGS"; fi
+  "$rt" run --rm ${args[@]+"${args[@]}"} ${extra[@]+"${extra[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
+}
+
+test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the ordering-bug pre-flight (docs/develop/ci.md)
+  # P1: the det files twice, in two shuffle orders: any red, or a difference between the two runs, is red.
+  # P2: the cond files at 1 CPU, 2 CPUs and half a core, 3 runs each.  P3: the process and hub-client files on the
+  # chaos image (DRGNX_TEST_CHAOS_IMAGE, or built from --nidhogg-tarball by $DRGNX_DET_IMAGE).  P5 (rr) is not run here.
+  # Files without a class and the exempt files are never selected (the selectors are class tags).
+  local out="" seeds=3 tarball="" chaos="${DRGNX_TEST_CHAOS_IMAGE:-}"
+  while (($#)); do
+    case "$1" in
+      --out) out="${2:-}"; shift ;;
+      --seeds) seeds="${2:-}"; shift ;;
+      --nidhogg-tarball) tarball="${2:-}"; shift ;;
+      *) echo "usage: drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]" >&2; return 2 ;;
+    esac
+    shift
+  done
+  [ -n "$out" ] || { echo "usage: drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]" >&2; return 2; }
+  [[ "$seeds" =~ ^[0-9]+$ ]] && [ "$seeds" -ge 1 ] || { echo "drgnx: --seeds takes a number of at least 1" >&2; return 2; }
+  rm -f "$out" "$out.stamp"
+  local work reds=0 passes=0 skipped=0
+  work="$(mktemp -d)"
+  say() { printf '%s\n' "$*" | tee -a "$out" >&2; }
+  # run LABEL SELECTOR [ENV=VALUE…] — one container run; its output in $work/LABEL; the failed tests' lines are the result
+  run_p() {
+    local label="$1" sel="$2"; shift 2
+    local log="$work/$label.log" rc=0
+    env "$@" DRGNX_TEST_SELECTOR="$sel" "${DRGNX_PREFLIGHT_RUNNER:-$here/bin/drgnx}" test --container </dev/null >"$log" 2>&1 || rc=$?
+    grep -E '^ +FAILED ' "$log" | sort >"$work/$label.red" || true
+    if [ "$rc" -ne 0 ] && [ ! -s "$work/$label.red" ]; then echo "run ended with exit $rc and no failed test (see the run's output)" >"$work/$label.red"; fi
+    # a pass that ran no test proves nothing (no class line yet, a selector that matches nothing): red
+    local ran; ran="$(sed -nE 's/^drgnx: [0-9]+ test files.*: ([0-9]+) tests,.*/\1/p' "$log" | tail -n 1)"
+    if [ "${ran:-0}" -eq 0 ] && [ ! -s "$work/$label.red" ]; then echo "ran 0 tests: a pass that runs nothing is not green" >"$work/$label.red"; fi
+    cp "$log" "$out.$label.log"
+    return "$rc"
+  }
+  judge() { # LABEL — red when the run failed
+    if [ -s "$work/$1.red" ]; then reds=$((reds + 1)); say "RED  $1"; sed 's/^/     /' "$work/$1.red" | tee -a "$out" >&2
+    else passes=$((passes + 1)); say "PASS $1"; fi
+  }
+  local i a b
+  # P1
+  # a det test that really uses real time (the runtime audit, harness/run-ert.el) fails here: the audit is on and fails
+  local audit=(DRGNX_TEST_AUDIT=1 DRGNX_TEST_AUDIT_FAIL=1)
+  run_p P1-a '(tag :det)' DRGNX_TEST_SHUFFLE=preflight-a "${audit[@]}" || true; judge P1-a
+  run_p P1-b '(tag :det)' DRGNX_TEST_SHUFFLE=preflight-b "${audit[@]}" || true; judge P1-b
+  if ! diff -q "$work/P1-a.red" "$work/P1-b.red" >/dev/null; then reds=$((reds + 1)); say "RED  P1 the two runs differ"; fi
+  # P2
+  local lim
+  for lim in 1 2 0.5; do
+    for ((i = 1; i <= seeds; i++)); do
+      run_p "P2-cpus$lim-$i" '(tag :cond)' DRGNX_TEST_PODMAN_ARGS="--cpus=$lim" || true; judge "P2-cpus$lim-$i"
+    done
+  done
+  # P3
+  # DRGNX_DET_IMAGE: the script that installs a tarball into a test image (tooling/det-image.sh TARBALL NAME): its last
+  # line is DRGNX_TEST_IMAGE=IMAGE
+  if [ -z "$chaos" ] && [ -n "$tarball" ] && [ -n "${DRGNX_DET_IMAGE:-}" ]; then
+    chaos="$("$DRGNX_DET_IMAGE" "$tarball" preflight | sed -nE 's/^DRGNX_TEST_IMAGE=(.+)$/\1/p' | tail -n 1)" || chaos=""
+  fi
+  if [ -n "$chaos" ]; then
+    # the real-process, I/O and ordering files that stay (not the ones a plan deletes): the hub client's sockets and
+    # challenges, scripted child processes, TRAMP, the shell environment and completion, sessions
+    local p3sel='(and (tag :cond) "^drgnx-\\(hub-client\\|test-proc\\|remote\\|shell-env\\|shell-completion\\|session\\)/")'
+    run_p P3 "${DRGNX_PREFLIGHT_P3_SELECTOR:-$p3sel}" DRGNX_TEST_IMAGE="$chaos" || true; judge P3
+  else
+    skipped=$((skipped + 1)); say "SKIP P3 (no chaos image: set DRGNX_TEST_CHAOS_IMAGE, or --nidhogg-tarball with DRGNX_DET_IMAGE=tooling/det-image.sh)"
+  fi
+  say "SKIP P5 (rr is not run by this command)"
+  rm -rf "$work"
+  if [ "$reds" -eq 0 ] && [ "$skipped" -eq 0 ]; then
+    printf '%s %s %s\n' "$(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)" "$passes" "$(date -u +%Y-%m-%d)" >"$out.stamp"
+    say "pre-flight green: $passes runs; stamp $out.stamp"
+    return 0
+  fi
+  say "pre-flight: $reds red, $skipped skipped: no stamp"
+  return 1
 }
 
 INSTALL_IMAGES=( # name=image; source builds first (slow), then distribution packages
@@ -694,6 +773,7 @@ cmd_test() {
         test_batch
       fi ;;
     --stress) shift; test_stress "$@" ;;
+    --preflight) shift; test_preflight "$@" ;;
     --install) shift; test_install "$@" ;;
     --tty) test_tty ;;
     --ui) if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || exit 2; export DRGNX_UI_COMPOSITOR="$3"; fi
@@ -811,7 +891,7 @@ lease_self() { # CLASS ARGS… — take the lease for this command: re-exec as `
 
 lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (the GUI, tty and container tiers), exclusive (A/B perf)
   case "${1:-}" in
-    --ui|--tty|--scenario|--bench|--soak|--container|--podman|--install|--bootstrap|--stress) echo heavy ;;
+    --ui|--tty|--scenario|--bench|--soak|--container|--podman|--install|--bootstrap|--stress|--preflight) echo heavy ;;
     --perf) case " $* " in *" --ab "*|*" --ab-env "*) echo exclusive ;; *) echo heavy ;; esac ;;
     *) echo light ;;
   esac
@@ -1682,6 +1762,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                --shuffle: each file's tests in a random order, the seed printed and kept)
        drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…]
                                which test before TEST makes it fail? (halves them, in one Emacs per run)
+       drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]
+                               the det files twice, the cond files at 1, 2 and half a CPU; REPORT.stamp only on success
        drgnx test --stress N [--load K] [--ui|--tty|--scenario]
                                the tests DRGNX_TEST_SELECTOR picks, N times in fresh Emacsen, while K busy loops
                                run; prints the runs that failed and how often each test did (heavy lease)

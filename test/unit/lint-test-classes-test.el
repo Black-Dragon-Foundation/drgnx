@@ -365,7 +365,7 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
   (let ((drgnx-run-ert--audit-seen nil) (drgnx-run-ert--audit-file nil) (inhibit-message t))
     (unwind-protect
         (progn
-          (drgnx-run-ert--audit-install)
+          (drgnx-run-ert--audit-advise)
           (let ((drgnx-run-ert--audit-current "x/det"))
             (sleep-for 0.01)
             (should (equal drgnx-run-ert--audit-seen '(("x/det" . sleep-for))))
@@ -373,6 +373,23 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
             (sleep-for 0)                ; no wait: not a use of real time
             (drgnx-test-with-clock () (sleep-for 5) (sit-for 1))
             (should-not drgnx-run-ert--audit-seen)))
+      (drgnx-run-ert--audit-unadvise))))
+
+(ert-deftest drgnx-run-ert/the-audit-leaves-the-environment-and-the-primitives-alone ()
+  (skip-unless (not (advice-member-p 'drgnx-run-ert-audit 'ert-run-test))) ; not inside an audited run
+  (let ((process-environment (append '("DRGNX_TEST_AUDIT=1" "DRGNX_TEST_AUDIT_ALL=1" "DRGNX_TEST_AUDIT_FAIL=1")
+                                     process-environment))
+        (drgnx-run-ert--audit-all nil) (drgnx-run-ert--audit-fail nil))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert--audit-install)
+          ;; read once, then gone: a test about the environment never sees the runner's switches
+          (should drgnx-run-ert--audit-all)
+          (should drgnx-run-ert--audit-fail)
+          (dolist (v '("DRGNX_TEST_AUDIT" "DRGNX_TEST_AUDIT_ALL" "DRGNX_TEST_AUDIT_FAIL")) (should-not (getenv v)))
+          ;; the primitives carry no advice outside an audited test
+          (dolist (p drgnx-run-ert--audit-primitives)
+            (should-not (advice-member-p 'drgnx-run-ert-audit p))))
       (drgnx-run-ert--audit-uninstall))))
 
 ;;; lint-test-classes-test.el ends here
