@@ -1,6 +1,7 @@
 ;;; large-files-test.el --- batch tests: large files — the config, its project file, the decision, the answers -*- lexical-binding: t -*-
 ;; Every test that reads the config runs under `drgnx-test-with-config' and sets the module up and tears it down
 ;; (`drgnx-test-with-modules' :strict t).  No large file is ever written: thresholds are fractions of a MiB.
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)

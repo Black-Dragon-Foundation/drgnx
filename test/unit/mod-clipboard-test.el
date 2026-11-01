@@ -2,6 +2,7 @@
 ;; Everything runs in a temp HOME with fake config files; the process list is stubbed, and `gsettings' is a script
 ;; in a temp directory that is the only directory on `exec-path' (the real one is never run).  The cut function is
 ;; a recorder, never the system clipboard.
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "modules/editor/drgnx-editing" drgnx-dir) nil t)

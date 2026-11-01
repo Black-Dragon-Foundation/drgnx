@@ -1,4 +1,5 @@
 ;;; mod-live-test.el --- batch tests: the Live view of the agents' browser, against a mock CDP server -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The mock (test/fixtures/mock-cdp.el) needs the `websocket' package: it is read from the user's ELPA
 ;; (DRGNX_USER_ELPA, read-only, as the runner allows); without it these tests are skipped.  No real Chrome
 ;; runs: the browser's job is stubbed, its profile directory is under a temp state dir.
@@ -208,7 +209,7 @@ no agents, and everything closed afterwards."
           (should-not (string-search "DRIVING" (substring-no-properties (drgnx-live--header))))
           (should-not (eq (key-binding "a") #'drgnx-live-key))
           (drgnx-live-mouse (drgnx-live-test--event 'down-mouse-1 10 10 640 400)))
-        (accept-process-output nil 0.1)
+        (drgnx-test-pause 0.1)                    ; a window in which no further input may arrive
         (should (= 3 (length (drgnx-mock-cdp-received "Input.dispatchMouseEvent"))))
         (should (= 2 (length steered)))))))
 
@@ -530,7 +531,7 @@ are pushed to STEERED as (NAME TEXT)."
            (widths (lambda () (mapcar (lambda (m) (plist-get (plist-get m :params) :maxWidth))
                                       (drgnx-mock-cdp-received "Page.startScreencast")))))
       (drgnx-state-sync) (drgnx-state--deliver-idle)
-      (accept-process-output nil 0.1)
+      (drgnx-test-pause 0.1)                      ; a window in which no second screencast may start
       (should (equal (funcall widths) (list before)))
       (unwind-protect
           (progn

@@ -1,4 +1,5 @@
 ;;; mod-prs-test.el --- batch tests: the Pull Requests tab — forge's PRs, stacks, Changes in the diff view -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)

@@ -1,6 +1,7 @@
 ;;; shell-files-test.el --- batch tests: etc/shell/drgnx.{zsh,bash,fish} -*- lexical-binding: t -*-
 ;; Each shell runs with a temp HOME and ZDOTDIR and no rc files of its own (zsh -f, bash --norc --noprofile,
 ;; fish -N): never the user's rc files, ~/.config or live Emacs.  fish is not on every machine: its parts skip.
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (require 'seq)

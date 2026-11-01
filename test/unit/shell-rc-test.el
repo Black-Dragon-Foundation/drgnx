@@ -1,6 +1,7 @@
 ;;; shell-rc-test.el --- batch tests: the rc line, `drgnx shell install', onboarding step 7 -*- lexical-binding: t -*-
 ;; Every test runs with a temp HOME (and ZDOTDIR, XDG_CONFIG_HOME): never the user's rc files.  The zsh test runs
 ;; `zsh -f' with that HOME; it skips when zsh is not installed.
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)

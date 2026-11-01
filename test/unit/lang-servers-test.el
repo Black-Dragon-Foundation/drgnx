@@ -1,4 +1,5 @@
 ;;; lang-servers-test.el --- batch tests: when language servers start and stop -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
@@ -71,6 +72,7 @@
       (kill-buffer b))))
 
 (ert-deftest drgnx-lang/turned-off-the-servers-stop ()
+  :tags '(:timing)                                              ; asserts how long the teardown took
   (require 'eglot)
   (require 'python)
   (let* ((dir (file-name-as-directory (make-temp-file "drgnx-lang" t)))

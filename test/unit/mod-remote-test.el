@@ -1,4 +1,5 @@
 ;;; mod-remote-test.el --- batch tests: Open Remote…, the remote segment, Reconnect, language servers on the remote side -*- lexical-binding: t -*-
+;; test-class: cond
 ;; No real host is reached: the TRAMP method `drgnx-mock' (test/fixtures/tramp-mock.el) logs in with a local sh, and
 ;; the "hosts" and "containers" are a temp HOME's ssh config and a fake `podman' script on a temp PATH.
 (require 'ert)

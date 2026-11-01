@@ -1,4 +1,5 @@
 ;;; mod-replace-view-test.el --- batch tests: the Search view in the sidebar and the find bar -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)

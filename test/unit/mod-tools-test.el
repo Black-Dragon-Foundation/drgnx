@@ -1,4 +1,5 @@
 ;;; mod-tools-test.el --- batch tests: lang, vc, terminal, search, org modules -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
