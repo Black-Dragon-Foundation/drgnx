@@ -1,4 +1,5 @@
 ;;; tty-bin-test.el --- bin/drgnx: `drgnx -t' (the workbench in this terminal) and the tty test tiers -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Fake emacs, emacsclient, infocmp and kitty scripts on a temp PATH record their argv; bin/drgnx runs in a temp
 ;; HOME, never the user's.  The environment each test sets is complete for what the decision reads (DISPLAY, SSH_*,
 ;; VTE_VERSION, TERM…), so the host's own does not matter.
@@ -252,7 +253,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     (dolist (env '((("VTE_VERSION") ("TERM_PROGRAM" . "Apple_Terminal")) (("VTE_VERSION") ("TERM" . "linux"))))
       (delete-file (expand-file-name "kitty.log" dir))
       (call '("-t") env)
-      (sleep-for 0.5)
+      (drgnx-test-wait (lambda () (tty-bin-test--calls dir "kitty.log")) :what "kitty started")
       (should (tty-bin-test--calls dir "kitty.log")))))
 
 (ert-deftest drgnx-bin/open-t-over-ssh-or-without-a-display-stays-here-when-opted-in ()
@@ -269,7 +270,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (should (eql 0 (car (call '("-t") env))))
       (should (member "-t" (car (last (tty-bin-test--calls dir)))))
       (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-      (sleep-for 0.3)
+      (drgnx-test-pause 0.3)                ; kitty is not started in the window
       (should-not (file-exists-p (expand-file-name "kitty.log" dir))))))
 
 (ert-deftest drgnx-bin/open-t-stays-here-by-default ()
@@ -278,14 +279,14 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     ;; the daemon has no capable terminal to offer (the option is off): this terminal, kitty not started
     (should (eql 0 (car (call '("-t") '(("VTE_VERSION" . "7600"))))))
     (should (member "-t" (car (last (tty-bin-test--calls dir)))))
-    (sleep-for 0.3)
+    (drgnx-test-pause 0.3)                  ; kitty is not started in the window
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))
     ;; a terminal that sends every key is not asked about at all
     (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
     (delete-file (expand-file-name "client.log" dir))
     (should (eql 0 (car (call '("-t") '(("TERM" . "xterm-kitty"))))))
     (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-    (sleep-for 0.3)
+    (drgnx-test-pause 0.3)                  ; kitty is not started in the window
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))))
 
 (ert-deftest drgnx-bin/test-tty-tiers-are-listed ()
