@@ -1,6 +1,7 @@
 ;;; capture-test.el --- GUI tests: screenshots with child frames -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
 (defun drgnx-test--png-size (file)
@@ -17,7 +18,7 @@
     (set-window-buffer (frame-root-window child) empty)
     (unwind-protect
         (progn
-          (redisplay t) (sit-for 0.3)
+          (redisplay t) (drgnx-test-pause 0.3)
           (let ((c (drgnx-uitest-capture dir)))
             (should (file-exists-p (plist-get c :root)))
             (if (drgnx-uitest-glitnir-p)
@@ -65,7 +66,7 @@
   (let ((f (drgnx-uitest-root-frame)))
     (skip-unless (= (frame-scale-factor f) 1))
     (drgnx-uitest-bare-frame)
-    (redisplay t) (sit-for 0.3)
+    (redisplay t) (drgnx-test-pause 0.3)
     (let ((snap (drgnx-uitest-snapshot f)) (exp (drgnx-uitest-export f)))
       (should (equal (seq-take snap 2) (seq-take exp 2)))
       (should (drgnx-uitest-region-equal-p snap exp (drgnx-test--device-rect f)
@@ -74,7 +75,7 @@
 (ert-deftest drgnx-ui-capture/snapshot-size-at-scale-2 ()
   (let ((f (drgnx-uitest-root-frame)))
     (skip-unless (and (= (frame-scale-factor f) 2) (fboundp 'glitnir-snapshot)))
-    (redisplay t) (sit-for 0.3)
+    (redisplay t) (drgnx-test-pause 0.3)
     (let ((snap (drgnx-uitest-snapshot f)))
       (should (= (nth 0 snap) (* 2 (frame-pixel-width f))))
       (should (= (nth 1 snap) (* 2 (frame-pixel-height f))))
@@ -89,7 +90,7 @@
           (set-face-background 'default "#336699" f)
           (with-temp-buffer
             (switch-to-buffer (current-buffer))
-            (redisplay t) (sit-for 0.3)
+            (redisplay t) (drgnx-test-pause 0.3)
             (let* ((e (window-body-pixel-edges (selected-window)))
                    (s (frame-scale-factor f))
                    (x (round (* s (/ (+ (nth 0 e) (nth 2 e)) 2))))
@@ -97,7 +98,7 @@
                    (snap (drgnx-uitest-snapshot f)))
               (should (equal (drgnx-uitest-pixel snap x y) '(255 #x33 #x66 #x99)))
               (set-face-background 'default "#ffffff" f)
-              (redisplay t) (sit-for 0.3)
+              (redisplay t) (drgnx-test-pause 0.3)
               (let ((white (drgnx-uitest-snapshot f)))
                 (should (drgnx-uitest-darker-p snap white x y))
                 (should-not (drgnx-uitest-darker-p white snap x y))))))

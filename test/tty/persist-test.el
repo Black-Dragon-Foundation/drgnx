@@ -2,6 +2,7 @@
 ;; test-class: cond
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 (ert-deftest drgnx-tty-persist/a-terminal-session-never-writes-the-layout ()
@@ -36,7 +37,7 @@
           (while (and (drgnx-tty-session--pane-alive-p s) (< (float-time) deadline))
             (when (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")        ; whatever Emacs asks before it exits
               (drgnx-tty-session-send s "yes\r"))
-            (sleep-for 0.1)))
+            (drgnx-test-pause 0.1)))
         (should-not (drgnx-tty-session--pane-alive-p s))
         (should (equal (with-temp-buffer (insert-file-contents-literally file) (buffer-string)) bytes))
         (should (equal (file-attribute-modification-time (file-attributes file)) mtime))))))

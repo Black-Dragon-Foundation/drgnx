@@ -4,6 +4,7 @@
 ;; load it once (`featurep'), so no test is defined twice.
 (require 'ert)
 (require 'drgnx-tty-session)
+(require 'drgnx-wait-fixture)           ; both test files load the fixture first
 
 (defun drgnx-tty-keys-test--pinned ()
   "The kkp entry of the shipped lock (etc/drgnx.lock.eld): (VERSION . SHA256)."
@@ -103,7 +104,7 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
       (setq tries (1+ tries))
       (let ((deadline (+ (float-time) 1)))
         (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< (float-time) deadline))
-          (sleep-for 0.05))))
+          (drgnx-test-pause 0.05))))
     (should-not (drgnx-tty-session-eval s '(active-minibuffer-window)))))
 
 (provide 'tty-keys-helpers)

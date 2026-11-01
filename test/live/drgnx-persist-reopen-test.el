@@ -2,6 +2,7 @@
 ;; test-class: cond
 ;; The keep-running case: the last window closes, the daemon stays, `emacsclient -c' brings the layout back.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 
 (defun drgnx-persist-reopen--eval (sess form)
@@ -52,7 +53,7 @@
             (let ((deadline (+ (float-time) 15)) after)
               (while (and (< (float-time) deadline)
                           (not (equal (butlast (setq after (drgnx-persist-reopen--eval sess drgnx-persist-reopen--layout))) (butlast before))))
-                (sleep-for 0.2))
+                (drgnx-test-pause 0.2))
               (should (equal (butlast after) (butlast before)))
               ;; The two halves of the split come back to the pixel (M12a-14: window-state-put alone swapped 230/234).
               (should (= (length (car (last after))) (length (car (last before)))))

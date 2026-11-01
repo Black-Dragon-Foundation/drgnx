@@ -21,7 +21,7 @@
   "Call THUNK every 0.2 s until it returns non-nil (that value) or SECONDS (default 8) pass (nil)."
   (let ((deadline (+ (float-time) (or seconds 8))) r)
     (while (and (not (setq r (funcall thunk))) (< (float-time) deadline))
-      (sleep-for 0.2))
+      (drgnx-test-pause 0.2))
     r))
 
 (defmacro drgnx-wm-move--in-root (root &rest body)

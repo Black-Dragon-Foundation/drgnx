@@ -1,6 +1,7 @@
 ;;; attribution-test.el --- GUI tests: every change is attributed to its cause -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
 (defun drgnx-attr--two-windows ()
@@ -42,7 +43,7 @@
 
 (defun drgnx-attr--slow-command ()
   (interactive)
-  (sit-for 0.4))
+  (drgnx-test-pause 0.4))
 
 (ert-deftest drgnx-ui-attribution/timer-during-a-command ()
   (let ((other (drgnx-attr--two-windows)))
@@ -60,7 +61,7 @@
 (defun drgnx-attr--move-then-wait ()
   (interactive)
   (forward-line 3)
-  (sit-for 0.3))
+  (drgnx-test-pause 0.3))
 
 (ert-deftest drgnx-ui-attribution/command-change-before-its-sit-for ()
   ;; The poll and other timers run inside the command's sit-for; the command's own change
@@ -82,7 +83,7 @@
     (defun drgnx-attr--outer-timer ()
       (with-selected-window sel (goto-char 400))
       (run-with-timer 0.05 nil #'drgnx-attr--inner-timer)
-      (sit-for 0.2))
+      (drgnx-test-pause 0.2))
     (run-with-timer 0.05 nil #'drgnx-attr--outer-timer)
     (let* ((r (drgnx-uitest-run nil))
            (cause-of (lambda (win) (plist-get (seq-find (lambda (s) (equal (plist-get s :window) (drgnx-uitest-window-id win)))

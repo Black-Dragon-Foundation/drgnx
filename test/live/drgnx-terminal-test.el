@@ -4,6 +4,7 @@
 ;; the checkout's bin/ first on PATH (never an installed drgnx), and git's identity from the environment; HOME is the
 ;; runner's temp home.  eat is loaded read-only from the user's packages (DRGNX_USER_ELPA).
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'seq)
 (require 'drgnx-ui)
 
@@ -24,7 +25,7 @@
   "FORM's value in SESS once it is non-nil, polled for up to SECONDS; nil if it never is."
   (let ((deadline (+ (float-time) seconds)) v)
     (while (and (not (setq v (drgnx-live-term--q sess form))) (< (float-time) deadline))
-      (sleep-for 0.1))
+      (drgnx-test-pause 0.1))
     v))
 
 (defun drgnx-live-term--setup-form (zdotdir)
@@ -158,7 +159,7 @@
       (drgnx-live-term--q sess "(with-current-buffer \"COMMIT_EDITMSG\" (goto-char (point-min)) (insert \"first\") (save-buffer) (server-edit) t)")
       (let ((deadline (+ (float-time) 10)) subject)
         (while (and (not (equal (setq subject (funcall git "log" "-1" "--format=%s")) "first")) (< (float-time) deadline))
-          (sleep-for 0.2))
+          (drgnx-test-pause 0.2))
         (should (equal subject "first"))))))
 
 (ert-deftest drgnx-live/terminal-keys-split ()

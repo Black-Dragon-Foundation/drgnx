@@ -2,6 +2,7 @@
 ;; test-class: cond
 ;; Run by `drgnx test --ui' in batch Emacs; each test starts real headless sessions.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 
 (defmacro drgnx-live--with-state (&rest body)
@@ -98,6 +99,7 @@
         (should (> (aref (plist-get win :edges) 0) 700))))))
 
 (ert-deftest drgnx-live/prompt-during-init-returns-and-can-be-answered ()
+  :tags '(:timing)
   (drgnx-live--with-state
     (let ((cfg (expand-file-name "prompting" root)) (t0 (float-time)))
       (make-directory cfg)
@@ -112,7 +114,7 @@
         (let ((deadline (+ (float-time) 10)))
           (while (and (not (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
                       (< (float-time) deadline))
-            (sleep-for 0.1)))
+            (drgnx-test-pause 0.1)))
         (should (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
         (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :a drgnx-test-answer))") :a)
                        "drgnx"))))))

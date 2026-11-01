@@ -3,6 +3,7 @@
 ;; Redisplay work of 30 ms (a pre-redisplay function) must show in input latency: the probe measures key →
 ;; screen, not only the command.
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 
 (ert-deftest drgnx-live/latency-includes-redisplay-work ()
@@ -26,7 +27,7 @@
                                                                                                   t :false))))"
                                                              (concat root "f.txt") (concat root "f.txt")))
                                  :ok)))
-              (unless shown (sleep-for 0.2)))
+              (unless shown (drgnx-test-pause 0.2)))
             (should shown))
           (drgnx-ui-measure sess nil)
           (drgnx-ui-call sess "(progn (drgnx-perf-begin) (drgnx-uitest--json (list :ok t)))")

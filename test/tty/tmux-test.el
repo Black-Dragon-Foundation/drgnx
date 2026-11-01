@@ -59,6 +59,7 @@
 (ert-deftest drgnx-tty-tmux/nested-keys-arrive ()
   ;; extended-keys on, modifyOtherKeys level 1 (the default): C-. arrives, C-g stays one byte and stops busy Lisp,
   ;; and the chords tmux folds (C-S-p arrives as C-p) are reported as not sendable
+  :tags '(:timing)
   (drgnx-tty-session-with (s :keys "vscode" :nested '("set -s extended-keys on"))
     (drgnx-tty-tmux-test--ready s)
     (let ((caps (drgnx-tty-tmux-test--caps s)))
@@ -88,7 +89,6 @@
 
 (ert-deftest drgnx-tty-tmux/nested-keys-arrive-at-level-2 ()
   ;; `drgnx-tty-tmux-mok-level' 2: C-S-p arrives and is sendable, C-g waits (caps say so)
-  :tags '(:timing)
   (drgnx-tty-session-with (s :keys "vscode" :nested '("set -s extended-keys on"))
     (drgnx-tty-tmux-test--ready s)
     (drgnx-tty-session-eval s '(progn (setq drgnx-tty-tmux-mok-level 2) (drgnx-tty-frames--tmux-setup (selected-frame)) t))

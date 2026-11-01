@@ -226,7 +226,7 @@ once TEXT is on its screen."
                        s '(seq-find (lambda (f) (equal (tty-type (frame-terminal f)) "xterm-256color")) (frame-list))
                        (+ limit 5)))
           (setq slowest (max slowest (- (float-time) t0))))
-        (unless frame (sleep-for 0.05)))
+        (unless frame (drgnx-test-pause 0.05)))
       (should frame)
       (should (< slowest limit))
       ;; it got its capabilities, without an answer

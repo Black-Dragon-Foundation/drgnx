@@ -56,7 +56,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
       (setq tries (1+ tries))
       (let ((deadline (+ (float-time) 1)))
         (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< (float-time) deadline))
-          (sleep-for 0.05))))
+          (drgnx-test-pause 0.05))))
     (should-not (drgnx-tty-session-eval s '(active-minibuffer-window)))))
 
 ;;;; Keys

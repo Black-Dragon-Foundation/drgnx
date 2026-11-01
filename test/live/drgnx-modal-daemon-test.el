@@ -17,7 +17,7 @@
 (defun drgnx-modal-daemon-test--windows-become (sess n)
   "Wait (10 s at most) until SESS has N graphical windows; non-nil when it has."
   (let ((deadline (+ (float-time) 10)))
-    (while (and (/= (drgnx-modal-daemon-test--windows sess) n) (< (float-time) deadline)) (sleep-for 0.1))
+    (while (and (/= (drgnx-modal-daemon-test--windows sess) n) (< (float-time) deadline)) (drgnx-test-pause 0.1))
     (= (drgnx-modal-daemon-test--windows sess) n)))
 
 (defun drgnx-modal-daemon-test--answers-p (sess)
