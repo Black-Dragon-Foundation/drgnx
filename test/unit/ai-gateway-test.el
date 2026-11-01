@@ -220,6 +220,7 @@ no provider key; the mock got the hub's key and never the editor's token."
                                            (seq-filter #'file-directory-p (directory-files elpa t "\\`[^.]"))))))
     (skip-unless (locate-library "gptel"))
     (require 'gptel)
+    (require 'gptel-openai)             ; gptel-make-openai: autoloaded only after package-initialize, not by a load-path
     (drgnx-ai-gateway-test--with
         (list (list :path "/v1/chat/completions" :content_type "text/event-stream"
                     :chunks (vector (vector 0 "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n")
