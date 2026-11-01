@@ -1088,6 +1088,27 @@ why it cannot."
               (drgnx-hub-connect))))
         drgnx-hub--editor)))
 
+;;;; Asking for the hub when a daemon has started (the nightly graph backup runs inside the hub)
+
+(defun drgnx-hub--daemon-start-answered (err)
+  "The hub asked for at daemon start answered: nothing is handed over (no keys, no settings: the hub holds none until
+AI is used), and only a failed start is said, as a notice."
+  (when err (drgnx-notify 'hub 'warn err :id 'start)))
+
+(defun drgnx-hub--ask-for-hub ()
+  "Ask for the hub without waiting (`drgnx-hub--ensure-running'); no error: the off-switch (DRGNX_NO_HUB_START) and a
+Ratatoskr that is not built are quiet.  It does not connect, so no key or provider is touched."
+  (ignore-errors (drgnx-hub--ensure-running #'drgnx-hub--daemon-start-answered))
+  nil)
+
+(defun drgnx-hub-ask-at-daemon-start ()
+  "`emacs-startup-hook' (added by core/drgnx.el, never turned off): in a drgnx daemon, ask for the hub a moment
+after startup, so the nightly backup (it runs in the hub) has a hub to run in.  Not in a batch run, a plain Emacs or
+where starting a hub is off (DRGNX_NO_HUB_START).  A timer, so startup does not wait and nothing prompts."
+  (when (and (daemonp) (not noninteractive) (not (getenv "DRGNX_NO_HUB_START")))
+    (drgnx-timer-start 'hub-daemon-start 2 #'drgnx-hub--ask-for-hub :owner :core)
+    nil))
+
 (defun drgnx-hub-give-key (id key)
   "Hand the hub provider ID's KEY over the socket and wait for it (a command the user ran: a key found in a store that
 asks); the hub's list of held keys then includes ID.  The key is kept nowhere here: once the hub took it this Emacs

@@ -913,9 +913,17 @@ section's `pins_note' (the reduced tier cannot pin your settings files in a job'
   "The `store' check of the fact F (`drgnx-doctor--ratatoskr'): a failed migration fails, any warning warns."
   (let* ((store (plist-get (plist-get (plist-get f :ratatoskr) :report) :store))
          (failed (plist-get store :failed))
-         (warnings (append (plist-get store :warnings) nil))
-         (denied (append (plist-get store :denied_in) nil))
-         (age (plist-get store :backup_age_s)))
+         (age (plist-get store :backup_age_s))
+         ;; the nightly backup runs inside the hub: an old backup with no hub running is because of that
+         (report (plist-get (plist-get f :ratatoskr) :report))
+         (hub-down (and report (null (plist-get report :running))))
+         (warnings (mapcar (lambda (w)
+                             (if (and hub-down age (string-prefix-p "the last backup is " w))
+                                 (format "the last backup is %d hours old; the drgnx hub is not running, so the nightly backup cannot run: `drgnx hub start' (a drgnx daemon starts it itself), then `drgnx graph backup'"
+                                         (/ age 3600))
+                               w))
+                           (append (plist-get store :warnings) nil)))
+         (denied (append (plist-get store :denied_in) nil)))
     (cond
      ((null store) (list 'ok "no work.db yet, or no answer from the hub" nil))
      (failed
