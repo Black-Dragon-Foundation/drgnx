@@ -1,7 +1,10 @@
 ;;; perf-ab-test.el --- batch tests: the paired A/B perf run (bootstrap, verdict, rounds, the REF archive) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-perf-run)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 
 (cl-defun drgnx-perf-ab-test--samples (base n &optional (spread 0.4))
   "N samples around BASE ms, a fixed pattern (no randomness in a test)."
@@ -171,6 +174,7 @@ B's is round 1 (+/-4 ms)."
         (remove-hook 'post-gc-hook #'drgnx-perf--gc)))))
 
 (ert-deftest drgnx-perf/present-is-the-first-after-paint-after-the-key ()
+  :tags '(:cond)
   ;; stand-ins for Glitnir's clock and last paint: the command's paint reaches the compositor 4 ms after its start
   (let ((now 1000000000) (present 999000000))
     (cl-letf (((symbol-function 'glitnir--now-ns) (lambda () now))
@@ -180,7 +184,7 @@ B's is round 1 (+/-4 ms)."
           (progn (run-hooks 'pre-command-hook)
                  (run-at-time 0.01 nil (lambda () (setq present (+ now 4000000))))
                  (run-hooks 'post-command-hook)
-                 (sit-for 0.2))
+                 (drgnx-test-wait (lambda () (= present (+ now 4000000))) :what "the stand-in paint"))
         (let ((r (drgnx-perf-end)))
           (should (equal (plist-get (plist-get r :present) :n) 1))
           (should (equal (plist-get (plist-get r :present) :p50) 4.0)))))))
@@ -390,6 +394,7 @@ and fails when ROW was not measured in the run."
         (should (equal seen '("99" "99")))))))
 
 (ert-deftest drgnx-perf/ab-env-needs-two-values ()
+  :tags '(:cond)
   (dolist (bad '("DRGNX_PERF_GLITNIR=on" "DRGNX_PERF_GLITNIR=on," "=on,off" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_GLITNIR=on,off,x"))
     (should-error (drgnx-perf-ab-env-parse bad)))
   (should (equal (drgnx-perf-ab-env-parse "DRGNX_PERF_GLITNIR=on,off") '("DRGNX_PERF_GLITNIR" "on" "off")))

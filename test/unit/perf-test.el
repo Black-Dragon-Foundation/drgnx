@@ -1,4 +1,5 @@
 ;;; perf-test.el --- batch tests: the perf probes (statistics, recording, the hook audit, budgets, history) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-perf)
 (require 'cl-lib)
@@ -53,6 +54,7 @@
   (drgnx-perf-end))
 
 (ert-deftest drgnx-perf/per-command-alloc-cpu-and-wall ()
+  :tags '(:cond)
   ;; three commands that cons nothing, 1000 and 5000 conses; the CPU clock is stubbed to advance 1 ms per reading
   (let ((ticks 0))
     (cl-letf (((symbol-function 'current-cpu-time) (lambda () (cons (setq ticks (+ ticks 1000000)) 1000000000))))
@@ -67,6 +69,7 @@
         (should (numberp (plist-get (plist-get r :input) :max)))))))
 
 (ert-deftest drgnx-perf/alloc-is-the-same-in-two-runs ()
+  :tags '(:cond)
   ;; what a command allocates does not depend on the machine or on the run
   (let* ((works (list (lambda () nil) (lambda () (make-list 300 nil)) (lambda () (make-string 100 ?x))))
          (one (drgnx-perf-test--session works))
@@ -116,6 +119,7 @@
     (should-not (advice-member-p #'drgnx-perf--timers-ad 'timer-event-handler))))
 
 (ert-deftest drgnx-perf/a-command-is-timed-to-the-next-idle-point ()
+  :tags '(:timing)
   ;; pre-command → post-command → a 0 s timer (after the redisplay that follows)
   (drgnx-perf-begin)
   (unwind-protect
@@ -141,6 +145,7 @@
       (should (> (drgnx-perf-rss-kb) 0)))))
 
 (ert-deftest drgnx-perf/the-hook-audit-names-what-costs-and-restores-the-hooks ()
+  :tags '(:timing)
   (let ((drgnx-perf-test-hook nil) (slow (lambda () (sleep-for 0.02))))
     (defvar drgnx-perf-test-hook)
     (add-hook 'drgnx-perf-test-hook #'ignore)
@@ -263,6 +268,7 @@
 ;;;; Review fixes (M8 final review)
 
 (ert-deftest drgnx-perf/latency-includes-the-redisplay ()
+  :tags '(:timing)
   ;; C1: timers can run before read_char's redisplay; the probe redisplays before reading the clock.
   (cl-letf (((symbol-function 'redisplay) (lambda (&optional _) (sleep-for 0.03))))
     (drgnx-perf-begin)

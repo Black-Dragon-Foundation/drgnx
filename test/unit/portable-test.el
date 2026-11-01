@@ -1,4 +1,5 @@
 ;;; portable-test.el --- batch tests: what travels to a second machine and what stays -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs in a temp HOME with its own config, data and state dirs: never ~, ~/.config or the keyring.
 ;; Test keys are built at run time, never written literally (the pre-commit hook rejects them).
 (require 'ert)
@@ -71,6 +72,7 @@
 ;;;; projects.eld
 
 (ert-deftest drgnx-portable/projects-written-tilde-read-absolute ()
+  :tags '(:cond)
   (drgnx-portable-test--with root
     (let ((alpha (concat root "home/ws/alpha")))
       (make-directory alpha t)
@@ -175,6 +177,7 @@
       (should-not (plist-get (drgnx-portable-config-problems) :machine-local)))))
 
 (ert-deftest drgnx-acp/a-tilde-command-starts ()
+  :tags '(:cond)
   (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-portable-test--with root
     (let ((fake (concat root "home/bin/fake-acp")))
@@ -226,6 +229,7 @@
         (set-file-modes (expand-file-name "locked.el" config) #o644)))))
 
 (ert-deftest drgnx-portable/a-root-under-a-linked-home-is-remembered-once ()
+  :tags '(:cond)
   ;; gryphn's projects.tsv may spell a root through a link to home (/home/u when HOME is /var/home/u)
   (drgnx-portable-test--with root
     (let* ((real (concat root "home")) (link (concat root "linked-home")) (alpha (concat real "/ws/alpha")))
@@ -257,6 +261,7 @@
                      (cl-loop for i from 1 to (length drgnx-portable-test--keys) collect (format "k%d.el" i)))))))
 
 (ert-deftest drgnx-portable/the-pre-commit-hook-knows-the-new-formats ()
+  :tags '(:cond)
   ;; The hook (the CI leak scan, --all) refuses each of today's formats too.
   (skip-unless (executable-find "git"))
   (let ((repo (make-temp-file "drgnx-hook" t)) (hook (expand-file-name ".githooks/pre-commit" drgnx-dir)))

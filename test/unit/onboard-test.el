@@ -1,4 +1,5 @@
 ;;; onboard-test.el --- batch tests: onboarding steps, projects onto the board -*- lexical-binding: t -*-
+;; test-class: det
 ;; Fixture git repos, boards and configs live in temp dirs: never ~/workspace, ~/org or ~/.config.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -125,6 +126,7 @@ unset around its use, or it wins."
       (should (plist-get (alist-get 'fd env) :fix)))))
 
 (ert-deftest drgnx-onboard/macos-fixes-say-brew ()
+  :tags '(:cond)
   ;; Nothing is installed: every tool and the Command Line Tools are missing, and each fix is a Homebrew
   ;; or xcode-select command (the GPU row is ok on a Mac: Apple silicon shares its memory).
   (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
@@ -181,6 +183,7 @@ unset around its use, or it wins."
 ;;;; Task 3: projects onto the board
 
 (ert-deftest drgnx-projects/the-scan-finds-repos-and-stays-bounded ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let ((ws (concat root "ws/")))
       (drgnx-onboard-test--repo (concat ws "alpha"))
@@ -193,6 +196,7 @@ unset around its use, or it wins."
                      '("alpha" "beta"))))))
 
 (ert-deftest drgnx-projects/import-puts-projects-and-todos-on-the-board-once ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let* ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")
                                             '("TODO.md" . "# Todo\n- [ ] write the parser\n- [x] done already\n")
@@ -216,6 +220,7 @@ unset around its use, or it wins."
       (should (equal (mapcar (lambda (p) (plist-get p :name)) (plist-get (drgnx-projects-read) :projects)) '("alpha" "beta"))))))
 
 (ert-deftest drgnx-projects/an-existing-board-only-gets-additions ()
+  :tags '(:cond)
   ;; gryphn's board, with its own projects and tasks, stays as it is around what is added.
   (drgnx-onboard-test--with root
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] new task\n")))
@@ -243,6 +248,7 @@ unset around its use, or it wins."
     (should (equal (drgnx-projects-gryphn-roots) (list (concat root "ws/one"))))))
 
 (ert-deftest drgnx-projects/an-unsaved-board-is-never-overwritten ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha"))))
       (make-directory (file-name-directory (drgnx-projects-board-file)) t)
@@ -279,6 +285,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (list (car (drgnx-onboard-run :only '(daemon))) (nreverse prompts) programs installed))))
 
 (ert-deftest drgnx-onboard/step-7-on-macos-asks-once-and-installs-the-app ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let ((drgnx-macos-app-dir (concat root "Applications/")) (drgnx-keep-running t))
       (pcase-let ((`(,r ,prompts ,programs ,installed) (drgnx-onboard-test--step-7 'macos nil t)))
@@ -325,6 +332,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (drgnx-onboard-test--keep-running-is nil))))))
 
 (ert-deftest drgnx-onboard/step-7-on-linux-is-unchanged-plus-the-question ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let ((drgnx-keep-running t))
       (pcase-let ((`(,r ,prompts ,programs ,installed) (drgnx-onboard-test--step-7 'linux t nil)))
@@ -371,6 +379,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
           (should (= opened 1)))))))
 
 (ert-deftest drgnx-onboard/the-whole-flow-twice ()
+  :tags '(:cond)
   ;; The M6 exit, in batch: a fresh config onboarded non-interactively with fixture repos; the board
   ;; is not touched (it only reports); the doctor has no failure; the second run changes nothing.
   (drgnx-onboard-test--with root
@@ -399,6 +408,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
 (defun drgnx-onboard-test--step-message (r) (nth 1 r))
 
 (ert-deftest drgnx-onboard/projects-non-interactive-never-writes-the-board ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let* ((ws (concat root "ws/")) (board (drgnx-projects-board-file))
            (existing "#+TITLE: mine\n* my own heading\n"))
@@ -423,6 +433,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (should-not (file-exists-p (drgnx-projects-board-file))))))
 
 (ert-deftest drgnx-onboard/projects-interactive-asks-before-writing-the-board ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let* ((ws (concat root "ws/")) (board (drgnx-projects-board-file)) (asked nil) (answer nil)
            (existing "* mine\n"))
@@ -490,6 +501,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
 ;;;; Review fixes (M6 final review)
 
 (ert-deftest drgnx-projects/the-same-todo-text-in-two-projects-and-twice-in-a-plan ()
+  :tags '(:cond)
   ;; I1: ids are per project, and a repeated line in one file is a TODO each time.
   (drgnx-onboard-test--with root
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] write the README\n")))
@@ -510,6 +522,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (should (equal (drgnx-modules-read-state) mods)))))
 
 (ert-deftest drgnx-projects/imported-projects-stay-in-the-sessions-project-list ()
+  :tags '(:cond)
   ;; I4: the session's own project.el list (already pointing at drgnx's file) learns them too.
   (drgnx-onboard-test--with root
     (let* ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")))
@@ -519,6 +532,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (should (member (abbreviate-file-name alpha) (project-known-project-roots))))))
 
 (ert-deftest drgnx-projects/the-board-keeps-its-modes-link-and-line-endings ()
+  :tags '(:cond)
   ;; I5
   (drgnx-onboard-test--with root
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")))
@@ -536,6 +550,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should-not (string-match-p "[^\r]\n" bytes))))))
 
 (ert-deftest drgnx-projects/a-board-another-emacs-is-editing-is-left-alone ()
+  :tags '(:cond)
   ;; I6: its lock file names another Emacs.
   (drgnx-onboard-test--with root
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha"))))
@@ -546,6 +561,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (should (equal (drgnx-onboard-test--board) "* x\n")))))
 
 (ert-deftest drgnx-onboard/a-scan-that-runs-out-of-time-says-so ()
+  :tags '(:cond)
   ;; I7
   (drgnx-onboard-test--with root
     (drgnx-onboard-test--repo (concat root "ws/alpha"))
@@ -555,6 +571,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (string-match-p "stopped" (nth 2 r)))))))
 
 (ert-deftest drgnx-onboard/todos-are-imported-only-when-asked ()
+  :tags '(:cond)
   ;; I8
   (drgnx-onboard-test--with root
     (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] a thing\n"))
@@ -570,6 +587,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (= (length asked) 2))))))
 
 (ert-deftest drgnx-projects/a-todo-removed-from-the-board-stays-removed ()
+  :tags '(:cond)
   ;; I9: archived or deleted, it is not imported again.
   (drgnx-onboard-test--with root
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] once\n"))))
@@ -581,6 +599,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (should (eql (plist-get (drgnx-projects-import (list alpha)) :todos) 0)))))
 
 (ert-deftest drgnx-projects/projects-nested-or-through-a-link-are-found ()
+  :tags '(:cond)
   ;; M3
   (drgnx-onboard-test--with root
     (let* ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")))
@@ -591,6 +610,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (should-not (plist-get (drgnx-projects-import (list alpha) :todos nil) :added)))))
 
 (ert-deftest drgnx-projects/todo-text-never-becomes-org-syntax ()
+  :tags '(:cond)
   ;; M5
   (drgnx-onboard-test--with root
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] fix this :urgent:\n- [ ] :PROPERTIES:\n- [ ] COMMENT out\n"))))
@@ -703,6 +723,7 @@ Returns (RESULT PROMPTS)."
       (list (car (drgnx-onboard-run :only '(projects) :options `(:roots (,(concat root "ws/"))))) (nreverse prompts)))))
 
 (ert-deftest drgnx-onboard/the-project-picker-can-pick-none-and-paths-with-commas ()
+  :tags '(:cond)
   (drgnx-onboard-test--with root
     (let ((odd (directory-file-name (drgnx-onboard-test--repo (concat root "ws/al,pha")))))
       (drgnx-onboard-test--repo (concat root "ws/beta"))
@@ -879,6 +900,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (equal (drgnx-onboard-test--slurp calls) "")))))
 
 (ert-deftest drgnx-onboard/claude-on-linux-uses-its-installer-and-your-terminal-for-sudo ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'linux
     (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
            (drgnx-onboard-app-wait 10)
@@ -946,6 +968,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
          (should (string-match-p "claude profile" (cadr r))))))))    ; and the agent was still checked
 
 (ert-deftest drgnx-onboard/the-claude-profile-is-checked ()
+  :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
@@ -1258,6 +1281,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 ;; A drgnx running as a systemd service dies with its whole cgroup (KillMode=control-group): a `setsid' waiter
 ;; started from it is killed with it and never reopens drgnx.  There the waiter runs as its own transient unit.
 (ert-deftest drgnx-onboard/restart-waiter-outlives-a-systemd-service ()
+  :tags '(:cond)
   (let ((detached nil) (calls nil) (rc 0))
     (cl-letf (((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line detached)))
               ((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "systemd-run") "/usr/bin/systemd-run")))
@@ -1604,6 +1628,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
     (should (equal (mapcar #'car (drgnx-config-reread 'onboarding)) '(a)))))
 
 (ert-deftest drgnx-onboard/two-processes-record-different-steps-both-kept ()
+  :tags '(:cond)
   (drgnx-test-with-config
     (drgnx-onboard--record 'seed 'ok "seed")
     (drgnx-onboard-test--children

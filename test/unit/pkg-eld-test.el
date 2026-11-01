@@ -1,4 +1,5 @@
 ;;; pkg-eld-test.el --- batch tests: packages.eld, drgnx.lock.eld, generation.eld, current and packages-wanted.eld on the config layer -*- lexical-binding: t -*-
+;; test-class: det
 ;; Offline and in temp dirs, like pkg-test.el (its fixture): archives are local directories, nothing is installed
 ;; from a network.  The wanted-file test starts two child `emacs --batch -Q' processes, waited for under a 30 s bound.
 (require 'ert)
@@ -224,6 +225,7 @@
         (should (equal (drgnx-pkg-eld-test--text (car bak)) "(old-one other\n"))))))
 
 (ert-deftest drgnx-pkg-eld/wanted-is-merged-across-processes ()
+  :tags '(:cond)
   (drgnx-pkg-test--with root
     (let* ((file (drgnx-pkg-wanted-file))
            (core (file-name-directory (locate-library "drgnx-pkg-activate")))

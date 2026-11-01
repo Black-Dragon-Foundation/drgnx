@@ -1,4 +1,5 @@
 ;;; settings-file-test.el --- batch tests: settings files read as data, written one span at a time -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every file lives in a fresh temp folder; the config-layer tests run under `drgnx-test-with-config' (config and
 ;; state folders under a temp root).  The concurrency test starts two batch Emacsen with this Emacs's environment and
 ;; waits for them under a 90 s bound.
@@ -506,6 +507,7 @@
 ;;;; Two writers
 
 (ert-deftest drgnx-settings-file/two-emacsen-add-100-each ()
+  :tags '(:cond)
   (drgnx-settings-file-test--with-dir dir
     (let* ((f (expand-file-name "settings.el" dir))
            (core (file-name-directory (locate-library "drgnx-settings-file")))

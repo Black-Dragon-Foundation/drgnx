@@ -1,4 +1,5 @@
 ;;; pkg-test.el --- batch tests: drgnx-pkg — manifest, lock, sync, generations, upgrade -*- lexical-binding: t -*-
+;; test-class: det
 ;; Everything runs offline against package archives that are local directories, in temp dirs:
 ;; never the network, the user's ELPA, ~/.local/share/drgnx or ~/.config/drgnx.
 (require 'ert)
@@ -621,6 +622,7 @@
           (should (string-match-p "^WARNING .*fbad\\.el" (with-output-to-string (drgnx-pkg--report r)))))))))
 
 (ert-deftest drgnx-pkg/every-package-compiles-when-bytecomp-was-not-loaded ()
+  :tags '(:cond)
   ;; macOS install: in an Emacs that had not loaded bytecomp, the first package compiled and every later one failed
   ;; ("symbolp, (autoload \"bytecomp\" …)"): the byte-compile-file wrapper put back the autoload it had found.  A fresh
   ;; Emacs, then: bytecomp unloaded where something loads it (package.el), two packages synced.
@@ -854,6 +856,7 @@ Returns the server process; its port is (process-contact SERVER :service)."
                  (process-send-string proc body))))))
 
 (ert-deftest drgnx-pkg/http-downloads-keep-only-a-200 ()
+  :tags '(:cond)
   ;; M5-15: the status branch of drgnx-pkg--http-get against a real (loopback) server.
   (url-do-setup)
   (drgnx-pkg-test--with root

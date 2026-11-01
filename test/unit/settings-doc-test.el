@@ -1,4 +1,5 @@
 ;;; settings-doc-test.el --- batch tests: the generated reference of drgnx's settings -*- lexical-binding: t -*-
+;; test-class: det
 ;; The reference is generated in a child `emacs --batch -Q' by the command docs/develop/core.md gives, so this
 ;; process's own declarations never reach it.
 (require 'ert)
@@ -23,6 +24,7 @@
     (buffer-string)))
 
 (ert-deftest drgnx-settings-doc/the-reference-is-current ()
+  :tags '(:cond)
   (let* ((tmp (make-temp-file "drgnx-settings-doc" nil ".md"))
          (home (make-temp-file "drgnx-settings-doc-home" t))
          (documented (drgnx-settings-doc-test--command))

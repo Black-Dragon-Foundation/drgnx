@@ -1,4 +1,5 @@
 ;;; core-modules-test.el --- batch tests: the module system -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/areas-fixture" drgnx-dir) nil t)
@@ -86,6 +87,7 @@
    (dolist (m '(test/needs-pkg test/needs-mod test/off test/never-defined)) (should-not (drgnx-module-running-p m)))))
 
 (ert-deftest drgnx-modules/the-new-stages-run-on-their-hooks ()
+  :tags '(:cond)
   (drgnx-modules-test--with-config
    (let (ran (drgnx-first-gui-frame-hook nil) (drgnx-first-file-hook nil) (drgnx-first-input-hook nil))
      (dolist (stage '(first-frame first-file first-input))
@@ -256,6 +258,7 @@
   (seq-filter (lambda (e) (eq (car-safe (car e)) 'modules-idle-step)) (drgnx-timer-pending)))
 
 (ert-deftest drgnx-modules/each-idle-module-has-its-own-idle-tick ()
+  :tags '(:cond)
   ;; M4-1: idle modules run one per idle timer, staggered, so input between them is handled; the
   ;; external modules load first, the last re-applies keys and writes the report.
   (drgnx-modules-test--with-config

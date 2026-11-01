@@ -1,4 +1,5 @@
 ;;; search-setup-test.el --- batch tests: Set Up Semantic Search, the doctor's search facts, onboarding step 5 -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-onboard)
@@ -222,6 +223,7 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
        (delete-directory bin t))))
 
 (ert-deftest drgnx-search-setup/doctor-facts-return-within-the-budget-with-a-slow-git ()
+  :tags '(:timing)
   (skip-unless (executable-find "sleep"))
   (drgnx-search-setup-test--with
     (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)

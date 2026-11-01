@@ -1,4 +1,5 @@
 ;;; lint-guard-test.el --- lint: drgnx's process callbacks run inside the guard -*- lexical-binding: t -*-
+;; test-class: det
 ;; A process filter or sentinel is called from C: nothing tells it apart from a command, so a prompt there would
 ;; wait for an answer nobody gives, and an error there is shown as Emacs's own "error in process filter".  Every
 ;; callback drgnx hands to a process is `(drgnx-guard-wrap FN LABEL)' (docs/develop/core.md "No prompts in
@@ -146,6 +147,7 @@ order.  FILE is relative to ROOT, KIND the call's symbol, NEAR the name of the d
   (should (equal (drgnx-lint-guard--stale (drgnx-lint-guard--sites drgnx-dir) (drgnx-lint-guard--allowed)) nil)))
 
 (ert-deftest drgnx-lint/the-guard-lint-sees-each-form ()
+  :tags '(:cond)
   (let ((root (make-temp-file "drgnx-lint-guard" t)))
     (unwind-protect
         (let ((file (expand-file-name "modules/x/drgnx-scratch.el" root)))

@@ -1,4 +1,5 @@
 ;;; ci-workflows-test.el --- the workflows read as text: what gates a push to main -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 
@@ -244,6 +245,7 @@
                         "expected one Nidhogg tarball" "echo \"$VAR=localhost/$NAME-nidhogg:run\"")))
 
 (ert-deftest drgnx-ci/nidhogg-sh-installs-a-local-tarball-without-a-download ()
+  :tags '(:cond)
   ;; the macOS branch, run for real on a made-up tarball: brew is a stub, curl is not reachable (a download fails)
   (skip-unless (and (executable-find "tar") (executable-find "xz")))
   (let* ((tmp (make-temp-file "drgnx-nh-local" t))

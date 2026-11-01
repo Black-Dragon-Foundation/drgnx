@@ -1,4 +1,5 @@
 ;;; lint-teardown-test.el --- every module turns off cleanly: the dynamic check and its lints -*- lexical-binding: t -*-
+;; test-class: det
 ;; The rule (docs/develop/core.md, "Writing a module that can be turned off"): a module's setup changes global
 ;; state only through recorded doors, and its :teardown undoes the rest (or it is `:teardown 'restart').
 ;; - `drgnx-teardown/every-module-leaves-nothing' sets each shipped module up alone with `drgnx-test-with-modules'
@@ -260,6 +261,7 @@ at load\" for each ALLOWED entry of FILES that is gone."
   (should (equal (drgnx-teardown--load-violations (drgnx-teardown--files) drgnx-teardown--load-registrations) nil)))
 
 (ert-deftest drgnx-lint/the-load-check-reads-only-what-loads ()
+  :tags '(:cond)
   (ert-with-temp-directory dir
                            (let ((f (drgnx-teardown-test--fake dir "fake-load" "(defun a () (add-hook 'x #'a))
 (advice-add 'b :before #'a)

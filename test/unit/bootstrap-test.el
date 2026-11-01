@@ -1,4 +1,5 @@
 ;;; bootstrap-test.el --- batch tests: drgnx bootstrap, a second machine from your configuration -*- lexical-binding: t -*-
+;; test-class: cond
 ;; Every test runs in a temp root of its own: HOME, config, data and state dirs, a bin/ first on the path with fake
 ;; age, chezmoi, sudo and dnf (each records its argv, never stdin), and a bare repository made from a fixture
 ;; config with real git.  The package sync, onboarding, the doctor and the key import are stubbed where a test says
@@ -553,7 +554,7 @@ age is not on the path.  Returns the identity file."
   ;; the race made certain: the program has exited (and Emacs knows) before its stdin is closed
   (let ((orig (symbol-function 'make-process)))
     (cl-letf (((symbol-function 'make-process)
-               (lambda (&rest args) (let ((p (apply orig args))) (sleep-for 0.3) p))))
+               (lambda (&rest args) (let ((p (apply orig args))) (while (process-live-p p) (accept-process-output p 0.05)) p))))
       (should (equal (drgnx-bootstrap--call "true" nil) '(0 . "")))
       (should (equal (drgnx-bootstrap--call "sh" '("-c" "echo out; exit 4")) '(4 . "out"))))))
 

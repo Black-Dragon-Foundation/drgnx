@@ -1,4 +1,5 @@
 ;;; config-test.el --- batch tests: config files — definitions, the fallback, versions, the surgical writer -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every test runs under `drgnx-test-with-config': drgnx's config and state folders under a fresh temp root.
 ;; The hub test compiles the hub's four files into a temp folder and loads them in a child `emacs --batch -Q',
 ;; waited for under a 30 s bound.
@@ -606,6 +607,7 @@ A file's mistake is a notice (`drgnx-config--notify'): `drgnx-modules', required
 ;;;; The hub
 
 (ert-deftest drgnx-config/loads-with-only-cl-lib-subr-x-and-paths ()
+  :tags '(:cond)
   ;; Compiled, as an installed drgnx runs it: loading the source would expand macros and load cl-macs.
   (let ((dir (file-name-as-directory (make-temp-file "drgnx-config-hub" t)))
         (core (file-name-directory (locate-library "drgnx-config.el")))

@@ -1,4 +1,5 @@
 ;;; modules-record-test.el --- batch tests: the safety net records what a setup reaches -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-modules)
@@ -166,6 +167,7 @@ test hook, list and modes as they were after."
    (should (equal drgnx-modules-record-test-list '(q y)))))
 
 (ert-deftest drgnx-modules-record/a-drgnx-timer-is-cancelled ()
+  :tags '(:cond)
   (drgnx-modules-record-test--with
    (let ((before (run-with-timer 3600 nil #'ignore)) repeating pending)
      (unwind-protect
@@ -251,6 +253,7 @@ test hook, list and modes as they were after."
        (delete-directory dir t)))))
 
 (ert-deftest drgnx-modules-record/a-lambda-is-left-and-reported ()
+  :tags '(:cond)
   (drgnx-modules-record-test--with
    (let (tm)
      (unwind-protect
@@ -307,6 +310,7 @@ test hook, list and modes as they were after."
        (setq features (delq 'drgnx-modules-record-test-feature features))))))
 
 (ert-deftest drgnx-modules-record/after-load-forms-belong-to-nobody ()
+  :tags '(:cond)
   ;; Another library's `eval-after-load' forms that a setup's `require' triggers run once: recorded, they would be
   ;; undone and never come back when the module is turned on again.  So they record nothing.
   (drgnx-modules-record-test--with
@@ -333,6 +337,7 @@ test hook, list and modes as they were after."
                features (delq 'drgnx-modules-record-test-late features)))))))
 
 (ert-deftest drgnx-modules-record/a-nested-setup-keeps-its-own ()
+  :tags '(:cond)
   ;; A module whose setup runs inside another's: what it reaches is its own, not the outer module's too.
   (drgnx-modules-record-test--with
    (let (timer)
@@ -350,6 +355,7 @@ test hook, list and modes as they were after."
        (when timer (cancel-timer timer))))))
 
 (ert-deftest drgnx-modules-record/with-owner-records-deferred-work ()
+  :tags '(:cond)
   (drgnx-modules-record-test--with
    (drgnx-modules-record-test--with-file lib "(provide 'drgnx-modules-record-test-later)\n"
      (let (later timer)
@@ -433,6 +439,7 @@ test hook, list and modes as they were after."
   "The functions the safety net advises while a setup runs.")
 
 (ert-deftest drgnx-modules-record/the-advice-is-gone-after-setup ()
+  :tags '(:cond)
   (drgnx-modules-record-test--with
    (let ((before (mapcar #'symbol-function drgnx-modules-record-test--net)) during timer)
      (unwind-protect
@@ -481,6 +488,7 @@ Returns (STATUSES COMMANDS STACKS), STACKS the number of modules with a cleanup 
       (read (current-buffer)))))
 
 (ert-deftest drgnx-modules-record/startup-is-unchanged ()
+  :tags '(:cond)
   ;; The shipped modules' startup stage gives the same statuses and commands with the recorder as without it.
   (let ((with (drgnx-modules-record-test--startup t)) (without (drgnx-modules-record-test--startup nil)))
     (should (> (length (car with)) 5))

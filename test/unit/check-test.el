@@ -1,4 +1,5 @@
 ;;; check-test.el --- batch tests: bin/drgnx check, the parallel run of every tier -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-check)
 
@@ -111,6 +112,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (should-not (assoc "u1" (drgnx-check-test--times dir))))))
 
 (ert-deftest drgnx-check/a-hanging-job-is-ended-at-its-timeout-children-and-all ()
+  :tags '(:timing)
   (drgnx-check-test--with dir
     (let* ((secs (+ 30000 (random 30000)))                    ; a sleep no other process has
            (t0 (float-time))
@@ -216,6 +218,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (should (file-exists-p (concat dir "cleaned"))))))
 
 (ert-deftest drgnx-check/a-job-never-waits-on-the-terminal ()
+  :tags '(:timing)
   (drgnx-check-test--with dir
     (let* ((t0 (float-time))
            (r (drgnx-check-run (list (list :name "reads" :phase 2 :timeout 5 :command (list "sh" "-c" "read x; echo done")))
@@ -241,6 +244,7 @@ for that file to exist (up to 20 s) instead of sleeping."
       (should (string-match-p "perf +FAILED (exit 3)" (drgnx-check-summary r))))))
 
 (ert-deftest drgnx-check/a-group-of-zombies-has-ended ()
+  :tags '(:cond)
   ;; In a container whose PID 1 never reaps (GitHub's job containers), an ended job's processes stay as zombies:
   ;; signal 0 to the group still succeeds, yet nothing runs — waiting for them took the whole grace.
   (let ((procs '((101 (pgrp . 100) (state . "Z")) (102 (pgrp . 100) (state . "Z")) (201 (pgrp . 200) (state . "S")))))
