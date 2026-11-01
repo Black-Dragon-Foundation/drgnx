@@ -1,4 +1,5 @@
 ;;; core-surfaces-run-test.el --- batch tests: the run hook and the palette counter -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-surfaces)
 (require 'drgnx-timer)

@@ -1,4 +1,5 @@
 ;;; uitest-api-test.el --- batch tests: JSON API shapes -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-uitest)
 

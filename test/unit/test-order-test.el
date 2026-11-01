@@ -1,4 +1,5 @@
 ;;; test-order-test.el --- --shuffle and --find-polluter -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The runner's test order (harness/run-ert.el, bin/drgnx test).  Every run here is on a tiny fixture suite of a few
 ;; files with a planted polluter; the real suite is never run.
 (require 'ert)

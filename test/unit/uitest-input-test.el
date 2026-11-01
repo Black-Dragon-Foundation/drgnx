@@ -1,6 +1,9 @@
 ;;; uitest-input-test.el --- batch tests: event construction -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-uitest)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (ert-deftest drgnx-uitest/key-events ()
   (should (equal (drgnx-uitest-key-events "C-x b") '(24 98)))
@@ -215,12 +218,13 @@
 
 (ert-deftest drgnx-uitest/settled-waits-from-the-start-of-a-measurement ()
   ;; A measurement with no input must still give followers (timers) the quiet period.
-  (let ((drgnx-uitest--queue nil) (unread-command-events nil)
-        (drgnx-uitest--last-delivery 0.0)
-        (drgnx-uitest-record--last-change 0.0)
-        (drgnx-uitest-record--t0 (float-time)))
-    (should-not (drgnx-uitest-settled-p 0.3))
-    (let ((drgnx-uitest-record--t0 (- (float-time) 1)))
+  (drgnx-test-with-clock ()
+    (let ((drgnx-uitest--queue nil) (unread-command-events nil)
+          (drgnx-uitest--last-delivery 0.0)
+          (drgnx-uitest-record--last-change 0.0)
+          (drgnx-uitest-record--t0 (float-time)))
+      (should-not (drgnx-uitest-settled-p 0.3))
+      (drgnx-test-advance 1)
       (should (drgnx-uitest-settled-p 0.3)))))
 
 (ert-deftest drgnx-uitest/settle-scale-follows-the-load-per-core ()
@@ -248,8 +252,9 @@
               ((symbol-function 'drgnx-uitest-enqueue) #'ignore)
               ((symbol-function 'recursive-edit) (lambda () (setq deadline drgnx-uitest--run-deadline)))
               ((symbol-function 'drgnx-uitest-measure-end) (lambda () nil)))
-      (let ((t0 (float-time)))
-        (drgnx-uitest-run nil)
-        (should (< 14.9 (- deadline t0) 15.5))                 ; 5 s * 3
-        (drgnx-uitest-run nil 2)
-        (should (< 1.9 (- deadline t0) 2.5))))))                ; an explicit timeout is not scaled
+      (drgnx-test-with-clock ()
+        (let ((t0 (float-time)))
+          (drgnx-uitest-run nil)
+          (should (< 14.9 (- deadline t0) 15.5))               ; 5 s * 3
+          (drgnx-uitest-run nil 2)
+          (should (< 1.9 (- deadline t0) 2.5)))))))            ; an explicit timeout is not scaled

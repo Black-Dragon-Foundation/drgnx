@@ -1,4 +1,5 @@
 ;;; core-notice-core-test.el --- batch tests: core producers (hooks, commands, timers, terminal) post notices -*- lexical-binding: t -*-
+;; test-class: det
 ;; The keys producer's tests are in core-keys-test.el (they need its registry fixture); all have the prefix
 ;; `drgnx-notice-core/'.
 (require 'ert)

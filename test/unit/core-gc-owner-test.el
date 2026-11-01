@@ -1,4 +1,5 @@
 ;;; core-gc-owner-test.el --- batch tests: the one GC owner (idle rule, gcmh watcher, gap, batch setup) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-gc)

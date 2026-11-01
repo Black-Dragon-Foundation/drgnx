@@ -1,4 +1,5 @@
 ;;; core-guard-test.el --- batch tests: no prompts in automatic paths -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-guard)
 (require 'drgnx-timer)
@@ -104,6 +105,7 @@
       (should-not (drgnx-notices :source 'guard)))))
 
 (ert-deftest drgnx-guard/a-prompt-in-a-wrapped-sentinel-is-refused-and-recorded ()
+  :tags '(:cond)                                        ; a real process ends and its sentinel runs
   (drgnx-notice-test-with-model
     (drgnx-guard-test--with-mode
      (let* ((done nil) (answered nil)

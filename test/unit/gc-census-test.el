@@ -1,4 +1,5 @@
 ;;; gc-census-test.el --- batch tests: the GC census (W0 of the stall watchdog) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)

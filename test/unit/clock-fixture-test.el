@@ -1,4 +1,5 @@
 ;;; clock-fixture-test.el --- batch tests: the virtual clock fixture (Emacs's own timer lists on a clock the test moves) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
