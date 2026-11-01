@@ -192,12 +192,27 @@
     (skip-unless yml)
     ;; each actions/cache step: its key line hashes files (hashFiles) and a restore-keys line, when there is one,
     ;; stops short of the hash only by a trailing part (never a bare OS prefix)
-    (dolist (step (cdr (split-string yml "uses: actions/cache@")))
+    (dolist (step (cdr (split-string yml "uses: actions/cache\\(?:/restore\\|/save\\)?@")))
       (let ((head (car (split-string step "\n *- " t))))
         (should (string-match "^ *key: \\(.*\\)$" head))
         (should (string-search "hashFiles(" (match-string 1 head)))
         (when (string-match "^ *restore-keys: \\(.*\\)$" head)
           (should (string-search "hashFiles(" (match-string 1 head))))))))
+
+(ert-deftest drgnx-ci/test-binaries-cache-is-saved-only-on-a-default-branch ()
+  ;; drgnx-tiers.yml runs from Nidhogg too, where github.ref is Nidhogg's: the same key saved per ref fills the cache
+  (let ((bins (drgnx-ci-test--action "build-test-bins")))
+    (skip-unless bins)
+    (should-not (string-search "uses: actions/cache@" bins))
+    (should (= 1 (length (drgnx-ci-test--matches "uses: \\(actions/cache/restore@\\)" bins))))
+    (should (string-match "if: \\(.*\\)\n *uses: actions/cache/save@" bins))
+    (let ((cond (match-string 1 bins)))
+      (should (string-search "github.ref == 'refs/heads/main'" cond))
+      (should (string-search "github.ref == 'refs/heads/nidhogg-31'" cond)))
+    ;; the save and restore steps use one key
+    (let ((keys (drgnx-ci-test--matches "^ *key: \\(cargo-.*\\)$" bins)))
+      (should (= 2 (length keys)))
+      (should (equal (car keys) (cadr keys))))))
 
 (ert-deftest drgnx-ci/prebuilt-images-are-addressed-by-their-containerfile-hash ()
   (let ((images (drgnx-ci-test--yml "images.yml")) (tty (drgnx-ci-test--yml "tty.yml"))

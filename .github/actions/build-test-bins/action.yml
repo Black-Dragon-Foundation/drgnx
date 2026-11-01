@@ -12,7 +12,11 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    # Restored on every ref, saved only on a default branch (`main` here, `nidhogg-31` when Nidhogg's run calls
+    # drgnx-tiers.yml: `github.ref` in a called workflow is the caller's): the same key saved again per ref would count
+    # against the repository's cache limit once per ref.
+    - id: bins-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/registry
@@ -29,3 +33,10 @@ runs:
         t="$(cd "$DIR/runtime/target/debug" && pwd)"
         echo "DRGNX_RATATOSKR_BIN=$t/ratatoskr" >> "$GITHUB_ENV"
         echo "DRGNX_HUGINN_DUMP=$t/examples/dump" >> "$GITHUB_ENV"
+    - if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/nidhogg-31') && steps.bins-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ${{ inputs.dir }}/runtime/target
+        key: cargo-${{ runner.os }}-drgnx-test-bins-${{ hashFiles(format('{0}/runtime/Cargo.lock', inputs.dir)) }}

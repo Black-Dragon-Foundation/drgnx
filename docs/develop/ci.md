@@ -119,7 +119,11 @@ Every job checks drgnx out into `drgnx/` (in Nidhogg's run the workspace is Nidh
 actions from there (`uses: ./drgnx/.github/actions/…`), so they come from the drgnx commit under test:
 
 - `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump`, cached by `Cargo.lock`
-  (`cargo-OS-drgnx-test-bins-HASH`). `bins-linux` runs it once and uploads the binaries (`drgnx-test-bins-linux`, kept a
+  (`cargo-OS-drgnx-test-bins-HASH`). The cache is restored on every ref but saved only on a default branch (`main`, or
+  `nidhogg-31` when Nidhogg's run calls `drgnx-tiers.yml`; `github.ref` in a called workflow is the caller's), because
+  the same key saved again per ref counts against the repository's cache limit once per ref. A `ci/*` branch whose
+  `Cargo.lock` differs from the default branch's therefore builds the binaries from scratch on every run (a lock
+  that matches restores the default branch's entry). `bins-linux` runs it once and uploads the binaries (`drgnx-test-bins-linux`, kept a
   day); `macos` runs it itself (one macOS job, so no second macOS runner for it: GitHub's free plan runs 5 at once).
 - `fetch-test-bins`: puts them back under the checkout's `runtime/target/debug` (so `bin/drgnx test --container` sees
   them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
