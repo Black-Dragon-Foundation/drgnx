@@ -1,4 +1,5 @@
 ;;; file-test.el --- batch tests: the bounded reader, the atomic writer and the locked update -*- lexical-binding: t -*-
+;; test-class: det
 ;; Every file lives in a fresh temp folder.  The lock's clock and sleep go through the seams `drgnx-file--now' and
 ;; `drgnx-file--sleep'; nothing here sleeps.  The concurrency test starts two batch Emacsen with this Emacs's
 ;; environment and waits for them under a 30 s bound.
@@ -44,6 +45,7 @@
 ;;;; Reads
 
 (ert-deftest drgnx-file/a-fifo-is-refused-without-blocking ()
+  :tags '(:cond)
   (skip-unless (executable-find "mkfifo"))
   (drgnx-file-test--with-dir dir
     (let ((fifo (expand-file-name "pipe.eld" dir)))
@@ -301,6 +303,7 @@
 ;;;; Update and the lock
 
 (ert-deftest drgnx-file/two-emacsen-each-add-100-and-all-200-survive ()
+  :tags '(:cond)
   (drgnx-file-test--with-dir dir
     (let* ((f (expand-file-name "shared.eld" dir))
            (core (file-name-directory (locate-library "drgnx-file")))
@@ -359,6 +362,7 @@
       (should-not (drgnx-file-test--leftovers dir)))))
 
 (ert-deftest drgnx-file/a-held-lock-gives-busy-never-a-prompt ()
+  :tags '(:timing)
   (drgnx-file-test--with-dir dir
     (let* ((f (expand-file-name "h.eld" dir)) (owner (drgnx-file-test--live-owner)) (now (float-time)) (sleeps 0))
       (drgnx-file-test--put f "(:items (a))\n")

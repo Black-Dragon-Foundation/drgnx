@@ -1,4 +1,5 @@
 ;;; user-lisp-test.el --- your Lisp files: on/off, early files, :emacs-dir, findings, bisect -*- lexical-binding: t -*-
+;; test-class: det
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -196,6 +197,7 @@
     (should (equal (car r) '("bad.el" "config.el" t)))))
 
 (ert-deftest drgnx-user-lisp/bisect-finds-a-file-end-to-end ()
+  :tags '(:cond)
   ;; drgnx bisect's way: each round an Emacs starts on the copy (DRGNX_CONFIG_DIR) and runs the start's loaders
   ;; (custom.el and config.el through drgnx--load-user-config, then your Lisp files), so the copy's settings.el turns
   ;; the files off for real; the file that sets the bad value is named.

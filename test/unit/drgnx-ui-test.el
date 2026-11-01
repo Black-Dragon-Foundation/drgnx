@@ -1,4 +1,5 @@
 ;;; drgnx-ui-test.el --- batch tests: harness session controller -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
@@ -345,6 +346,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-error (drgnx-ui-own-session name) :type 'drgnx-ui-refused))))
 
 (ert-deftest drgnx-ui/own-session-needs-its-socket ()
+  :tags '(:cond)
   (drgnx-ui-test--with-state
     (let ((s (drgnx-ui-prepare-run "drgnx-ui-3-00000a" nil "1600x900")))
       (should-error (drgnx-ui-own-session "drgnx-ui-3-00000a") :type 'drgnx-ui-refused)
@@ -459,6 +461,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                                            (drgnx-ui-launch-argv sess))))))
 
 (ert-deftest drgnx-ui/detached-launch-is-capped ()
+  :tags '(:cond)
   ;; DEFERRED M1-6: the systemd launcher has RuntimeMaxSec and MemoryMax; the detached one needs the same caps
   (let ((sess (list :name "drgnx-ui-9-00000a" :run (make-temp-file "dux" t) :size "800x600" :socket "/tmp/s"))
         (calls nil))
@@ -696,6 +699,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-not (seq-find (lambda (f) (string-search "\"c\"" f)) calls)))))
 
 (ert-deftest drgnx-ui/cli-arguments-are-utf-8-without-a-locale ()
+  :tags '(:cond)
   ;; DEFERRED M1-2: without a UTF-8 locale Emacs hands the arguments over as raw bytes, before
   ;; `drgnx-ui-batch-setup' can say UTF-8; `drgnx ui' decodes them itself
   (drgnx-ui-test--with-state
@@ -721,6 +725,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   "What the second Emacs of the claim test runs: 250 claims in each of the two roots.")
 
 (ert-deftest drgnx-ui/a-thousand-claims-across-two-roots-never-collide ()
+  :tags '(:cond)
   ;; ids stay unique while two Emacs claim in the same two roots at once: uniqueness is the hex and the claim
   ;; (prepare-run makes the run directory and signals when it exists), not the shared counter
   (drgnx-ui-test--with-state
@@ -827,6 +832,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                                    :reason)))))
 
 (ert-deftest drgnx-ui/a-session-json-with-another-id-is-refused ()
+  :tags '(:cond)
   (drgnx-ui-test--with-state
     (let* ((s (drgnx-ui-prepare-run "drgnx-ui-3-00000a" nil "1600x900"))
            (server (make-network-process :name "drgnx-ui-test-sock" :family 'local :server t
@@ -974,6 +980,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-not (member "sh" argv)))))
 
 (ert-deftest drgnx-ui/scale-gdctl-failure-is-loud ()
+  :tags '(:cond)
   ;; UI-SCALE-1: the image lacked gdctl's python3-gobject; every `gdctl set' failed, the loop gave up silently and
   ;; Emacs started at scale 1.  Now the last error is printed and the session's command never runs.
   (drgnx-ui-test--with-state

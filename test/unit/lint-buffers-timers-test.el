@@ -1,4 +1,5 @@
 ;;; lint-buffers-timers-test.el --- lints: internal buffers skip buffer hooks; no timers in follow paths -*- lexical-binding: t -*-
+;; test-class: det
 ;; The jank guard (invariant I9) catches a timer that moves windows at run time; these lints keep the
 ;; two habits behind it in the code: an internal " *…*" buffer is made with `inhibit-buffer-hooks'
 ;; (no `buffer-list-update-hook', so the bus and every follower never hear of it), and the workbench

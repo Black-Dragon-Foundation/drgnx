@@ -1,4 +1,5 @@
 ;;; drgnx-ui-mcp-test.el --- batch tests: the drgnx-ui MCP server -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-ui-mcp)
 
@@ -128,6 +129,7 @@
              :adopted))
 
 (ert-deftest drgnx-ui-mcp/another-clients-session-is-refused-unless-adopted ()
+  :tags '(:cond)
   (drgnx-ui-mcp-test--with-state
     (let ((server (drgnx-ui-mcp-test--session "drgnx-ui-1-00000a" "aaaaaaaaaaaaaaaa"))
           (drgnx-ui-mcp--token "bbbbbbbbbbbbbbbb"))
@@ -145,6 +147,7 @@
         (delete-process server)))))
 
 (ert-deftest drgnx-ui-mcp/adopting-is-recorded ()
+  :tags '(:cond)
   (drgnx-ui-mcp-test--with-state
     (let ((server (drgnx-ui-mcp-test--session "drgnx-ui-1-00000a" "aaaaaaaaaaaaaaaa"))
           (drgnx-ui-mcp--token "bbbbbbbbbbbbbbbb"))
@@ -160,6 +163,7 @@
         (delete-process server)))))
 
 (ert-deftest drgnx-ui-mcp/ui-list-marks-yours ()
+  :tags '(:cond)
   (drgnx-ui-mcp-test--with-state
     (let ((a (drgnx-ui-mcp-test--session "drgnx-ui-1-00000a" "aaaaaaaaaaaaaaaa"))
           (b (drgnx-ui-mcp-test--session "drgnx-ui-2-00000a" "bbbbbbbbbbbbbbbb"))

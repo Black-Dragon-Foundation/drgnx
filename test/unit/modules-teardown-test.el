@@ -1,4 +1,5 @@
 ;;; modules-teardown-test.el --- batch tests: the cleanup stack, :teardown, rollback -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-modules)
 
@@ -246,6 +247,7 @@
   (seq-count (lambda (tm) (eq (timer--function tm) #'drgnx-modules-teardown-test--tick)) timer-list))
 
 (ert-deftest drgnx-modules-teardown/off-on-three-times-is-identity ()
+  :tags '(:cond)
   (drgnx-modules-teardown-test--with
    (let ((drgnx-modules-teardown-test-hook nil))
      (drgnx-module-define

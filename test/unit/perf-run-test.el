@@ -1,4 +1,5 @@
 ;;; perf-run-test.el --- batch tests: the perf runner (repeats, teardown, the daemon probe) -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'drgnx-perf-run)
 
@@ -35,6 +36,7 @@
       (should (seq-find (lambda (f) (string-search "drgnx-perf-audit-end" f)) calls)))))   ; the probes are undone too
 
 (ert-deftest drgnx-perf-run/a-daemon-that-never-serves-is-an-error ()
+  :tags '(:cond)
   ;; I1: a daemon that dies (or never answers) is not a fast start.
   (let ((init (make-temp-file "drgnx-perf-init" t)))
     (unwind-protect

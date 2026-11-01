@@ -1,4 +1,5 @@
 ;;; install-config-test.el --- batch tests: install.sh and the config dir that travels -*- lexical-binding: t -*-
+;; test-class: cond
 ;; install.sh's functions run alone in bash with a temp HOME: never the user's ~/.config or ~/.local.
 (require 'ert)
 

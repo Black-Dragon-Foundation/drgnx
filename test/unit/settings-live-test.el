@@ -1,4 +1,5 @@
 ;;; settings-live-test.el --- batch tests: hand edits and other writers apply at once; :apply; the end-of-init pass -*- lexical-binding: t -*-
+;; test-class: det
 ;; The fixture setting `drgnx-slt--n' is declared with `drgnx-defsetting' and an `:apply' that counts.  settings.el
 ;; lives under `drgnx-test-with-config'; the file-notify callback is called directly (no real inotify), time is the
 ;; virtual clock.

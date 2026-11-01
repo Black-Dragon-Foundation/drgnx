@@ -1,4 +1,5 @@
 ;;; modules-fingerprint-test.el --- batch tests: the global-state fingerprint and its diff -*- lexical-binding: t -*-
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-modules-fingerprint)
@@ -70,6 +71,7 @@
         (should-not (plist-get (car diff) :source))))))
 
 (ert-deftest drgnx-fingerprint/a-timer-shows-with-its-repeat ()
+  :tags '(:cond)
   (let ((before (drgnx-modules-fingerprint)) (repeating nil) (once nil) (idle nil))
     (unwind-protect
         (progn
@@ -162,6 +164,7 @@
         (should (= 3 (length whats)))))))
 
 (ert-deftest drgnx-fingerprint/a-buffer-and-a-process-show ()
+  :tags '(:cond)
   (let ((before (drgnx-modules-fingerprint)) buf proc)
     (unwind-protect
         (progn
@@ -276,6 +279,7 @@
           (should (<= (* 30 cheap) full)))))))
 
 (ert-deftest drgnx-fingerprint/the-full-scan-runs-compiled ()
+  :tags '(:cond)
   ;; Interpreted the scan costs ~10× more.  In an Emacs that has not loaded bytecomp (Emacs 31's ERT no longer loads
   ;; it), compiling the scan is its first load: a `byte-compile-warnings' bound before it would be lexical, and the
   ;; load fails.  A fresh Emacs, so what this one loaded hides nothing.
