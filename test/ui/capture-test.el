@@ -1,4 +1,5 @@
 ;;; capture-test.el --- GUI tests: screenshots with child frames -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

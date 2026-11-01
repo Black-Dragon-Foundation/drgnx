@@ -1,4 +1,5 @@
 ;;; childframe-extra-test.el --- GUI tests: Glitnir's §10.3 additions -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; The compositor design's added scenarios (§10.3) on top of the §3.4 matrix (childframe-chrome-test.el, whose helpers
 ;; these use): the core rows (the four §3.3 criterion-1 scenarios) at 1.5 and at the user's five 125 % setups, the core

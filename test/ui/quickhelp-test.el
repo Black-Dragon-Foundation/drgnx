@@ -1,4 +1,5 @@
 ;;; quickhelp-test.el --- GUI tests: quick help — a card beside the symbol, never over its line (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))

@@ -1,4 +1,5 @@
 ;;; glitnir-parity-test.el --- GUI tests: Glitnir's picture equals the stock picture (PD-9) -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; Parity of Glitnir (the compositor) with the stock path, in the parts the plan (PD-9) can prove at run time:
 ;; (c) with `glitnir-enable' nil the snapshot equals `x-export-frames' (scale 1 only: the export is a 1x picture);

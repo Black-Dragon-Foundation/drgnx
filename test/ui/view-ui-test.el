@@ -1,4 +1,5 @@
 ;;; view-ui-test.el --- GUI tests: views drawing live on a graphical frame (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 ;; The Search view lists 10k matches; a replacement typed into its Replace field patches the rows in place, in
 ;; slices, the visible ones first, and the jank guard sees no window move it did not own.  The git repository is a
 ;; temp dir.

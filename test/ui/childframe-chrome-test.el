@@ -1,4 +1,5 @@
 ;;; childframe-chrome-test.el --- GUI tests: popup chrome (Glitnir, §3.4 subset) -*- lexical-binding: t -*-
+;; test-class: cond
 
 ;; The four criterion-1 scenarios of the compositor design (§3.3, §3.4): real packages (corfu, corfu-popupinfo,
 ;; posframe, eldoc-box from `DRGNX_CHILDFRAME_ELPA') showing real child frames, probed in device pixels.  Each skips

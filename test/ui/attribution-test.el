@@ -1,4 +1,5 @@
 ;;; attribution-test.el --- GUI tests: every change is attributed to its cause -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 

@@ -1,4 +1,5 @@
 ;;; code-editing-test.el --- GUI tests: sticky scroll, indent guides, smooth scrolling on a graphical frame (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
 
