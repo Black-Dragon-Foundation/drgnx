@@ -1,4 +1,5 @@
 ;;; ai-ghost-test.el --- batch tests: ghost-text completion and the Tab arbiter -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'auth-source)
 (require 'drgnx)

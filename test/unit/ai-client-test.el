@@ -1,4 +1,5 @@
 ;;; ai-client-test.el --- batch tests: requests to providers, fallback, cancel, probes, the doctor's ai check -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ai-client)
@@ -41,8 +42,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
   (let ((drgnx-ai-client-test--roles (list (cons 'test chain))) result)
     (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_r) chain)))
       (drgnx-ai-request 'test kind payload (lambda (text info) (setq result (cons text info))) :timeout (or timeout 5)))
-    (let ((deadline (+ (float-time) 15)))
-      (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+    (ignore-errors (drgnx-test-wait (lambda () result) :secs 15 :what "the request's answer"))
     result))
 
 (defvar drgnx-ai-client-test--roles nil)
@@ -88,7 +88,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
                                 :key "sk-test-123" :body '(:messages []) :timeout 5)))
       (should (processp proc))
       (should-not (seq-find (lambda (a) (string-search "sk-test-123" a)) (process-command proc)))
-      (let ((deadline (+ (float-time) 10))) (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+      (drgnx-test-wait-ended proc :secs 10 :what "curl's end")
       (should (string-search "Authorization: Bearer sk-test-123" (drgnx-ai-client-test--log log))))))
 
 (ert-deftest drgnx-ai-client/a-hanging-or-failing-provider-falls-back-to-the-next ()
@@ -124,7 +124,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
       (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_r) '((a . "m")))))
         (setq h (drgnx-ai-request 'test 'chat '(:messages [(:role "user" :content "x")]) (lambda (&rest _) (setq called t)))))
       (drgnx-ai-cancel h)
-      (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+      (drgnx-test-pause 2)                                       ; no answer may come
       (should-not called)
       (should-not (process-live-p (drgnx-ai-request-process h))))))
 
@@ -138,7 +138,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
     (let ((done nil))
       (drgnx-ai-probe (lambda () (setq done t)) '(o t1 gone))
       (should-not done)                                                         ; returns at once: the answers come later
-      (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+      (drgnx-test-wait (lambda () done) :secs 10 :what "the probe's end")
       (should done)
       (should (equal (plist-get (alist-get 'o drgnx-ai-detected) :models) '("qwen2.5-coder:1.5b")))
       (should (plist-get (alist-get 't1 drgnx-ai-detected) :up))
@@ -148,7 +148,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
     (setq drgnx-ai-providers `((t1 :name "TEI" :kind tei :url ,(format "http://127.0.0.1:%d" port) :caps (embed))))
     (let (done)
       (drgnx-ai-probe (lambda () (setq done t)) '(t1))
-      (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+      (drgnx-test-wait (lambda () done) :secs 10 :what "the probe's end")
       (should-not (plist-get (alist-get 't1 drgnx-ai-detected) :up))
       (should (string-match-p "not TEI" (plist-get (alist-get 't1 drgnx-ai-detected) :note))))))
 
@@ -158,7 +158,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
     (setq drgnx-ai-detected '((other :up t :models ("m")) (o :up nil)))
     (let (done)
       (drgnx-ai-probe (lambda () (setq done t)) '(o))
-      (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+      (drgnx-test-wait (lambda () done) :secs 10 :what "the probe's end")
       (should (plist-get (alist-get 'o drgnx-ai-detected) :up))
       (should (equal (alist-get 'other drgnx-ai-detected) '(:up t :models ("m"))))
       (should (= (length drgnx-ai-detected) 2)))))
@@ -170,7 +170,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
         (:path "/v1/completions" :body "{\"choices\":[{\"text\":\"\"}]}"))
     (let ((ask (lambda (provider model)
                  (let (r) (drgnx-ai-probe-fim provider model (lambda (yes) (setq r (list yes))))
-                      (let ((deadline (+ (float-time) 10))) (while (and (not r) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+                      (drgnx-test-wait (lambda () r) :secs 10 :what "the capability probe")
                       (car r)))))
       (should (funcall ask 'o "qwen2.5-coder:1.5b"))
       (should-not (funcall ask 'o "llama3"))

@@ -3,6 +3,7 @@
 ;; of them — not in `drgnx-ai--keys', not in auth-source's cache, not in a gptel backend, not in anything it sends but
 ;; the one `gateway/keys'.  Keys in the environment are the user's and stay.  `ratatoskr-mock llm' is the provider.
 ;; Without the binary (or the mock beside it) these skip; test/no-skip.eld lists them.
+;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
 (require 'auth-source)

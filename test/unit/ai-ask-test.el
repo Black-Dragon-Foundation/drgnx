@@ -1,7 +1,9 @@
 ;;; ai-ask-test.el --- batch tests: Ask the Codebase, Choose Provider/Model, gptel from the registry -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-hub-client)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
@@ -43,11 +45,11 @@ provider `o' served by a mock answering ANSWER, its LOG."
        (delete-directory root t))))
 
 (defun drgnx-ai-ask-test--answer (&optional secs)
-  (let ((deadline (+ (float-time) (or secs 8))))
-    (while (and (not (and (get-buffer "*AI answer*")
-                          (with-current-buffer "*AI answer*" (string-search "Sources" (buffer-string)))))
-                (< (float-time) deadline))
-      (accept-process-output nil 0.05)))
+  (ignore-errors
+    (drgnx-test-wait (lambda ()
+                       (and (get-buffer "*AI answer*")
+                            (with-current-buffer "*AI answer*" (string-search "Sources" (buffer-string)))))
+                     :secs (or secs 8) :what "the answer's sources"))
   (get-buffer "*AI answer*"))
 
 (ert-deftest drgnx-ai-ask/the-answer-comes-from-the-files-the-question-names-and-cites-them ()
@@ -78,14 +80,13 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
           (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
           ;; the search runs first, then the model is asked
-          (let ((deadline (+ (float-time) 5)))
-            (while (and (not (drgnx-ai-ask-test--curls)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+          (drgnx-test-wait #'drgnx-ai-ask-test--curls :secs 5 :what "the model's request")
           (should (= 1 (length (drgnx-ai-ask-test--curls))))
           (should (= 1 (length drgnx-ai--active)))
           (drgnx-ai-stop)
           (should-not drgnx-ai--active)
           (should-not (drgnx-ai-ask-test--curls))                         ; the process is gone
-          (accept-process-output nil 2.0)                                 ; past the mock's answer
+          (drgnx-test-pause 2.0)                                          ; past the mock's answer (nothing may come)
           (should-not (get-buffer "*AI answer*"))                         ; the callback never ran
           (should (seq-find (lambda (m) (string-match-p "stopped" m)) said)))))))
 
@@ -95,7 +96,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
         (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
         (drgnx-ai-stop)                                                   ; the grep has not answered yet
-        (accept-process-output nil 1.0)
+        (drgnx-test-pause 1.0)                                            ; nothing may be asked
         (should-not (drgnx-ai-ask-test--curls))
         (should-not (get-buffer "*AI answer*"))
         (should-not drgnx-ai--active)))))
@@ -155,10 +156,10 @@ provider `o' served by a mock answering ANSWER, its LOG."
 
 (ert-deftest drgnx-ai-ask/a-search-that-never-ends-is-cut-off-and-ask-answers-without-context ()
   (drgnx-ai-ask-test--with "ok"
-    (let ((drgnx-ai-search-timeout 0.5) (t0 (float-time)))
+    (let ((drgnx-ai-search-timeout 0.5))
       (drgnx-ai-ask-test--ask-without-rg root "exec sleep 8")
+      ;; answered inside the wait, long before the search's 8 s
       (should (drgnx-ai-ask-test--answer 4))
-      (should (< (- (float-time) t0) 4))
       (should-not (drgnx-ai-ask-test--sent-p log "(twist widget)"))
       (should-not (seq-find (lambda (p) (equal (process-name p) "drgnx-ai-grep")) (process-list)))
       (should-not drgnx-ai--active))))
@@ -183,7 +184,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (should (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
     (drgnx-ai-stop)
     (should-not (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
-    (accept-process-output nil 0.3)
+    (drgnx-test-pause 0.3)                                                ; no answer may come
     (should-not (get-buffer "*AI answer*"))))
 
 (ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()
@@ -228,9 +229,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
                 ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
         (drgnx-ai-choose)
-        (let ((deadline (+ (float-time) 5)))
-          (while (and (not (equal (car (drgnx-ai-role 'complete)) '(o . "big"))) (< (float-time) deadline))
-            (accept-process-output nil 0.05))))
+        (drgnx-test-wait (lambda () (equal (car (drgnx-ai-role 'complete)) '(o . "big"))) :secs 5 :what "the chosen model"))
       (should (equal (car (drgnx-ai-role 'complete)) '(o . "big")))
       (should (seq-find (lambda (m) (string-match-p "answered" m)) said)))))
 
@@ -243,9 +242,8 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
                   ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
           (drgnx-ai-choose)
-          (let ((deadline (+ (float-time) 5)))
-            (while (and (not (seq-find (lambda (m) (string-match-p "did not answer" m)) said)) (< (float-time) deadline))
-              (accept-process-output nil 0.05))))
+          (drgnx-test-wait (lambda () (seq-find (lambda (m) (string-match-p "did not answer" m)) said))
+                           :secs 5 :what "the message that the model did not answer"))
         (should (seq-find (lambda (m) (string-match-p "did not answer" m)) said))
         (should (equal (drgnx-ai-role 'chat) '((o . "m"))))))))                    ; unchanged
 
@@ -310,8 +308,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
                   ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
           (drgnx-ai-choose)
-          (let ((deadline (+ (float-time) 5)))
-            (while (and (not (seq-find (lambda (m) (string-match-p "answered" m)) said)) (< (float-time) deadline))
-              (accept-process-output nil 0.05)))))
+          (drgnx-test-wait (lambda () (seq-find (lambda (m) (string-match-p "answered" m)) said))
+                           :secs 5 :what "the message that the model answered")))
       (let ((roles (default-value 'drgnx-ai-roles)))
         (should (equal (alist-get 'chat roles) '((o . "big"))))))))

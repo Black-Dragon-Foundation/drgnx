@@ -1,6 +1,8 @@
 ;;; ai-edit-test.el --- batch tests: inline edit reviewed hunk by hunk -*- lexical-binding: t -*-
+;; test-class: cond
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (require 'drgnx-ai-probe)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
@@ -34,11 +36,9 @@
 
 (defun drgnx-ai-edit-test--review (&optional secs)
   "The review buffer, once the answer came."
-  (let ((deadline (+ (float-time) (or secs 5))) b)
-    (while (and (not (setq b (seq-find (lambda (x) (string-prefix-p "*AI edit" (buffer-name x))) (buffer-list))))
-                (< (float-time) deadline))
-      (accept-process-output nil 0.02))
-    b))
+  (ignore-errors
+    (drgnx-test-wait (lambda () (seq-find (lambda (x) (string-prefix-p "*AI edit" (buffer-name x))) (buffer-list)))
+                     :secs (or secs 5) :what "the review buffer")))
 
 ;; the two changes far enough apart (more than diff's 3 lines of context each side) to be two hunks
 (defconst drgnx-ai-edit-test--gap ";; 1\n;; 2\n;; 3\n;; 4\n;; 5\n;; 6\n;; 7\n;; 8\n")
@@ -114,9 +114,8 @@
         (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
           (drgnx-ai-edit "times ten" (point-min) (point-max))
           (goto-char 3) (insert "X")                                          ; inside the region
-          (let ((deadline (+ (float-time) 5)))
-            (while (and (not (seq-find (lambda (m) (string-match-p "changed while" m)) said)) (< (float-time) deadline))
-              (accept-process-output nil 0.05))))
+          (drgnx-test-wait (lambda () (seq-find (lambda (m) (string-match-p "changed while" m)) said))
+                           :secs 5 :what "the message that the buffer changed"))
         (should (seq-find (lambda (m) (string-match-p "changed while" m)) said))
         (should-not (drgnx-ai-edit-test--review 0.2))
         (should (equal (buffer-string) "(dXefun a ()\n  1)\n"))))))
@@ -234,7 +233,7 @@
         (insert "x\n")
         (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
           (drgnx-ai-edit "y" (point-min) (point-max))
-          (let ((deadline (+ (float-time) 3))) (while (and (not said) (< (float-time) deadline)) (accept-process-output nil 0.05))))
+          (drgnx-test-wait (lambda () said) :secs 3 :what "the message that nothing answered"))
         (should (seq-find (lambda (m) (string-match-p "AI edit: no answer" m)) said))
         (should-not (drgnx-ai-edit-test--review 0.2))
         (should (equal (buffer-string) "x\n"))))))
@@ -255,7 +254,7 @@
           (drgnx-ai-stop)
           (should-not drgnx-ai--active)
           (should-not (drgnx-ai-edit-test--curls))                       ; the process is gone
-          (accept-process-output nil 2.0)                                ; past the mock's answer
+          (drgnx-test-pause 2.0)                                         ; past the mock's answer (nothing may come)
           (should-not (drgnx-ai-edit-test--review 0.1))                  ; the callback never ran
           (should-not (seq-find (lambda (m) (string-match-p "no answer" m)) said))
           (should (seq-find (lambda (m) (string-match-p "stopped" m)) said))
