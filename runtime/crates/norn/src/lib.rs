@@ -10,6 +10,7 @@
 //!   [`options`] (settings history: kind `option`, its ids, the settings deny-list, the `options` grant's rule).
 
 pub mod deny;
+pub mod forecast;
 pub mod grants;
 pub mod kinds;
 pub mod matrix;

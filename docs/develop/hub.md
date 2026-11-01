@@ -2459,3 +2459,38 @@ dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as
 sends a paused child target, on `Fake.crash` it dies by SIGKILL, and on `Fake.stubborn` it ignores SIGTERM and the
 pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
 VM) starts the host under a real bwrap launch with the stand-in.
+
+## Forecasts
+
+A forecast comes from the history of similar finished tasks, never from a model's own guess. `norn::forecast` is pure:
+no store and no clock, so the same history and the same seed give the same numbers.
+
+**The reference class** (`model::reference_class`). A task is compared with finished tasks at each level in turn, and
+the first level with at least 5 observations (`MIN_CLASS`) wins:
+
+| Level | Same | |
+|---|---|---|
+| `Project` | role, profile, model and project | a task with no project skips this level |
+| `Profile` | role, profile and model | |
+| `Role` | role | `other_model` says when some ran on another model: their tokens are carried and priced at the task's rates |
+| `Any` | nothing | |
+| `Prior` | | `n` is 0, and the answer says it has no history |
+
+`other_model` compares models: another profile on the same model is the same model. A profile with no model set is
+the CLI's choice, so across profiles it counts as another model.
+
+Within a class an observation weighs `exp(-(ln b - ln b0)² / (2 · 0.7²))`, where `b` and `b0` are the two briefs'
+bytes, floored at 1 KiB: a brief twice the size weighs 0.61, four times 0.14. The prior is unweighted.
+
+**The prior** (`model::prior`) is one base task at ×⅓, ×½, ×1, ×2 and ×3: 19M cache reads, 600k cache writes, 60k input,
+90k output, 40 minutes active, 60 minutes of wall time. The cache reads and the output's share (under 0.5 %) are
+measured on this project's agents; the other figures are judgement. Its 2 wakes (1 cold) and 300k context are not
+scaled: the first is an assumed count, the second a level a task reaches.
+
+**Rates** (`model::usd`) are USD per million tokens, per token class. A cache write pays the 5 minute rate at a TTL of
+300 s or less, else the 1 hour rate. Every token class counts towards a forecast's tokens (`Usage::total`).
+
+**A wake** (`model::wake_usd`) costs the session's context × the cache read rate if the job ended within the TTL,
+and × the write rate after it, because the whole context is written again. At Opus 5.5's rates, 300k of context costs
+$0.06 within the TTL, $1.50 after a 5 minute TTL and $2.40 after an hour's. History already contains its wakes, so a
+forecast shows the wake as a part of the total, never added to it.
