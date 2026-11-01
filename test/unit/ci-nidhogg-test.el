@@ -58,4 +58,34 @@
         (when (string-search "uses: ./.github/workflows/drgnx-tiers.yml" s)
           (setq callers (1+ callers))
           (should (string-match-p "packages: read\n *uses: \\./\\.github/workflows/drgnx-tiers\\.yml" s)))))
-    (should (>= callers 3))))
+    (should (>= callers 4))))
+
+(ert-deftest drgnx-ci/tiers-jobs-ask-no-more-than-read ()
+  ;; every permission any tiers job asks for must be one the callers grant (contents and packages, read)
+  (let ((s (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/drgnx-tiers.yml")))
+        (pos 0))
+    (while (string-match "^    permissions:\n\\(\\(?:      [a-z-]+: [a-z]+\n\\)+\\)" s pos)
+      (setq pos (match-end 0))
+      (dolist (line (split-string (match-string 1 s) "\n" t " +"))
+        (should (member line '("contents: read" "packages: read")))))
+    (should (> pos 0))))
+
+(ert-deftest drgnx-ci/tiers-callers-name-real-tiers ()
+  ;; each name in a caller's `tiers:' is a job of drgnx-tiers.yml, and tty.yml is one of the callers
+  (let ((tiers (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/drgnx-tiers.yml"))))
+    (dolist (f (directory-files (drgnx-ci-test--path ".github/workflows") t "\\.yml\\'"))
+      (let ((s (drgnx-ci-test--slurp f)))
+        (when (string-search "uses: ./.github/workflows/drgnx-tiers.yml" s)
+          (should (string-match "^      tiers: \\(.+\\)$" s))
+          (dolist (tier (split-string (match-string 1 s)))
+            (should (string-match-p (concat "^  " (regexp-quote tier) ":\n") tiers))))))
+    (should (string-search "uses: ./.github/workflows/drgnx-tiers.yml"
+                           (drgnx-ci-test--slurp (drgnx-ci-test--path ".github/workflows/tty.yml"))))))
+
+(ert-deftest drgnx-ci/joint-branches-skip-the-tiers-callers-the-same-way ()
+  ;; a joint round's branch (ci/joint/*) runs the tiers in Nidhogg's run: a caller triggered by push either excludes it in
+  ;; `on.push.branches' or guards the tiers job; ci.yml guards (its gate allows the skip), gui.yml and macos.yml exclude
+  (dolist (f '("ci.yml" "gui.yml" "macos.yml"))
+    (let ((s (drgnx-ci-test--slurp (drgnx-ci-test--path (concat ".github/workflows/" f)))))
+      (should (or (string-search "\"!ci/joint/**\"" s)
+                  (string-search "!startsWith(github.ref, 'refs/heads/ci/joint/')" s))))))

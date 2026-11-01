@@ -1,4 +1,4 @@
-# drgnx's Emacs-side tiers on one Nidhogg: the one definition of them. drgnx's ci.yml, gui.yml and macos.yml call it on
+# drgnx's Emacs-side tiers on one Nidhogg: the one definition of them. drgnx's ci.yml, gui.yml, tty.yml and macos.yml call it on
 # the pinned release (`nidhogg: release`); Nidhogg's CI calls it at a pinned commit on the tarballs its run just built
 # (`nidhogg: artifact`, the run's tarball-fedora-45 and tarball-macos), so a joint round of both repositories tests
 # each pair once. `tiers` picks the jobs; the others are skipped. Every job checks drgnx out into drgnx/ (in Nidhogg's
@@ -17,7 +17,7 @@ on:
         type: string
         default: release
       tiers:
-        description: "Space-separated jobs to run: unit no-lisp-writes ui scenario perf macos"
+        description: "Space-separated jobs to run: unit no-lisp-writes ui scenario perf tty macos"
         type: string
         required: true
     outputs:
@@ -229,6 +229,46 @@ jobs:
           name: perf-results
           path: drgnx/perf-results.json
           if-no-files-found: warn
+
+  # The terminal tier: Emacs in tmux sessions, in test/container/Containerfile.tty (Fedora 45). Needs no test binaries
+  tty:
+    name: Terminal tests (Fedora 45, tmux)
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' tty ') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref }}
+          path: drgnx
+          persist-credentials: false
+      - uses: ./drgnx/.github/actions/test-image
+        with:
+          containerfile: Containerfile.tty
+          image: drgnx-test-tty
+          variable: DRGNX_TEST_TTY_IMAGE
+          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      - name: The pinned kkp, for the kitty and keys tests (they skip without it)
+        working-directory: drgnx
+        run: |
+          block=$(grep -A3 '^[[:space:]]*(kkp :version' etc/drgnx.lock.eld)
+          version=$(printf '%s' "$block" | grep -o ':version "[^"]*"' | head -1 | cut -d'"' -f2)
+          sha=$(printf '%s' "$block" | grep -o '"[0-9a-f]\{64\}"' | head -1 | tr -d '"')
+          [ -n "$version" ] && [ -n "$sha" ] || { echo "kkp is not pinned in etc/drgnx.lock.eld"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/user-elpa"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/kkp.tar" "https://melpa.org/packages/kkp-$version.tar"
+          echo "$sha  $RUNNER_TEMP/kkp.tar" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/kkp.tar" -C "$RUNNER_TEMP/user-elpa"
+          echo "DRGNX_USER_ELPA=$RUNNER_TEMP/user-elpa" >> "$GITHUB_ENV"
+      - name: Terminal tier in test/container/Containerfile.tty
+        working-directory: drgnx
+        env:
+          DRGNX_CONTAINER: podman
+        run: bin/drgnx test --container --tty --fedora 45
 
   # macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27): the unit suite and the install plan,
   # with macOS's own bash 3.2. The test binaries are built here (one macOS job: no second macOS runner for them)

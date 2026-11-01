@@ -34,7 +34,7 @@
 ;; The tiers: one definition (drgnx-tiers.yml) of drgnx's Emacs-side jobs, called by drgnx's push workflows on the
 ;; pinned release and by Nidhogg's CI on the tarballs it built (docs/develop/ci.md, "The tiers workflow").
 (ert-deftest drgnx-ci/the-push-workflows-call-the-tiers-workflow ()
-  (dolist (spec '(("ci.yml" "unit no-lisp-writes") ("gui.yml" "ui scenario perf") ("macos.yml" "macos")))
+  (dolist (spec '(("ci.yml" "unit no-lisp-writes") ("gui.yml" "ui scenario perf") ("macos.yml" "macos") ("tty.yml" "tty")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
       (skip-unless yml)
       (drgnx-ci-test--has yml "uses: ./.github/workflows/drgnx-tiers.yml" "nidhogg: release"
@@ -46,14 +46,14 @@
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
     (drgnx-ci-test--has tiers "workflow_call:" "drgnx_ref:" "nidhogg:" "tiers:" "drgnx_commit:")
-    (dolist (job '("unit" "no-lisp-writes" "ui" "scenario" "perf" "macos"))
+    (dolist (job '("unit" "no-lisp-writes" "ui" "scenario" "perf" "tty" "macos"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" job)
                              (drgnx-ci-test--job tiers job))))
     ;; every job checks drgnx out into drgnx/ (in Nidhogg's run the caller's checkout is Nidhogg), at the asked ref
     (let ((count (lambda (needle) (length (drgnx-ci-test--matches (concat "\\(" (regexp-quote needle) "\\)") tiers)))))
-      (should (= 7 (funcall count "runs-on:")))
-      (should (= 7 (funcall count "          path: drgnx\n")))
-      (should (= 7 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
+      (should (= 8 (funcall count "runs-on:")))
+      (should (= 8 (funcall count "          path: drgnx\n")))
+      (should (= 8 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
     (dolist (job '("unit" "no-lisp-writes" "ui"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: bins-linux" "uses: ./drgnx/.github/actions/fetch-test-bins"))
@@ -207,15 +207,16 @@
     (drgnx-ci-test--has action "image=\"ghcr.io/black-dragon-foundation/$NAME:$(sha256sum \"test/container/$FILE\" | cut -c1-16)\""
                         "podman pull -q \"$image\"" "echo \"$VAR=$base\"")
     (let ((pairs (drgnx-ci-test--matches "containerfile: \\([A-Za-z.]+\n *image: [a-z-]+\n *variable: [A-Z_]+\\)" tiers)))
-      (should (= 5 (length pairs)))
+      (should (= 6 (length pairs)))
       (dolist (p pairs)
         (should (string-match "\\`\\([A-Za-z.]+\\)\n *image: \\([a-z-]+\\)\n *variable: \\([A-Z_]+\\)\\'" p))
         (let ((file (match-string 1 p)) (name (match-string 2 p)) (var (match-string 3 p)))
           (should (string-match-p (format "- name: %s\n *file: %s\n" (regexp-quote name) (regexp-quote file)) images))
-          (should (equal var (if (equal file "Containerfile") "DRGNX_TEST_IMAGE" "DRGNX_TEST_GUI_IMAGE"))))))
-    ;; the terminal tier pulls its own the same way
-    (drgnx-ci-test--has tty "image=\"ghcr.io/black-dragon-foundation/drgnx-test-tty:$(sha256sum test/container/Containerfile.tty | cut -c1-16)\""
-                        "DRGNX_TEST_TTY_IMAGE=$image" "podman pull -q \"$image\"")
+          (should (equal var (pcase file ("Containerfile" "DRGNX_TEST_IMAGE") ("Containerfile.tty" "DRGNX_TEST_TTY_IMAGE")
+                                    (_ "DRGNX_TEST_GUI_IMAGE")))))))
+    ;; the terminal tier pulls its own through the same action
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "tty") "containerfile: Containerfile.tty" "image: drgnx-test-tty"
+                        "variable: DRGNX_TEST_TTY_IMAGE")
     (drgnx-ci-test--has images "tag=\"$(sha256sum \"test/container/$FILE\" | cut -c1-16)\"" "podman push \"$image:$tag\"")))
 
 ;; The overlay (`nidhogg-artifact'): the run's own Nidhogg goes into the test image the same way the pinned release
