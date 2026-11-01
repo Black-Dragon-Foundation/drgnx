@@ -162,7 +162,8 @@ time exceeds the ratio times the calibration or over half the samples fail (reru
 `test/timing-lane.sh --self-test` checks the verdicts.
 
 `bin/drgnx test --preflight --out REPORT [--seeds N] [--nidhogg-tarball FILE]` hunts ordering bugs: the `det` files twice
-in two shuffle orders (any red, or a difference between the runs, is red), the `cond` files at 1 CPU, 2 CPUs and half a
+in two shuffle orders with the runtime audit failing (`DRGNX_TEST_AUDIT_FAIL=1`: a `det` test that really sleeps, waits
+on a process or starts one is red; any red, or a difference between the runs, is red), the `cond` files at 1 CPU, 2 CPUs and half a
 core (`DRGNX_TEST_PODMAN_ARGS=--cpus=…`) N times each, and the process and hub-client tests on a chaos Nidhogg image
 (`DRGNX_TEST_CHAOS_IMAGE`, or built from the tarball by `$DRGNX_DET_IMAGE`; without one P3 is skipped). The
 files are chosen by class tag, so exempt and unclassified files are never run. `REPORT.stamp` (`COMMIT PASSES DATE`) is

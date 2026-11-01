@@ -370,29 +370,51 @@ is a failure.  Prints the flakes."
   (when (drgnx-run-ert--audit-wait-p prim args) (drgnx-run-ert--audit-record prim))
   (apply fn args))
 
+(defvar drgnx-run-ert--audit-all nil "Non-nil: audit every test, not only :det ones (DRGNX_TEST_AUDIT_ALL=1).")
+(defvar drgnx-run-ert--audit-fail nil "Non-nil: a :det test the audit saw use real time fails (DRGNX_TEST_AUDIT_FAIL=1).")
+
+(defconst drgnx-run-ert--audit-skip-files '("clock-fixture-test.el" "wait-fixture-test.el")
+  "Test files the audit leaves alone: they test the clock and wait fixtures, whose advice state they inspect.")
+
+(defun drgnx-run-ert--audit-advise ()
+  "Advise the watched primitives."
+  (dolist (p drgnx-run-ert--audit-primitives)
+    (advice-add p :around (apply-partially #'drgnx-run-ert--audit-around p) `((name . drgnx-run-ert-audit)))))
+
+(defun drgnx-run-ert--audit-unadvise ()
+  "Remove the primitives' advice."
+  (dolist (p drgnx-run-ert--audit-primitives) (advice-remove p 'drgnx-run-ert-audit)))
+
 (defun drgnx-run-ert--audit-test (fn test &rest args)
-  "Around `ert-run-test': the audit's current test is TEST while it runs, if it is tagged :det."
-  (let ((drgnx-run-ert--audit-current
-         ;; DRGNX_TEST_AUDIT_ALL=1: every test, for a run before the files carry their class (the rows name the file)
-         (and (or (memq :det (ert-test-tags test)) (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_ALL") "1"))
-              (symbol-name (ert-test-name test)))))
-    (apply fn test args)))
+  "Around `ert-run-test': a :det test (every test with DRGNX_TEST_AUDIT_ALL=1) runs with the primitives advised, and only
+while it runs, so no other test sees the advice; the fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
+  (let* ((file (ignore-errors (ert-test-file-name test)))
+         (audited (and (or (memq :det (ert-test-tags test)) drgnx-run-ert--audit-all)
+                       (not (and file (member (file-name-nondirectory file) drgnx-run-ert--audit-skip-files)))))
+         (drgnx-run-ert--audit-current (and audited (symbol-name (ert-test-name test)))))
+    (if (not audited)
+        (apply fn test args)
+      (drgnx-run-ert--audit-advise)
+      (unwind-protect (apply fn test args)
+        (drgnx-run-ert--audit-unadvise)))))
 
 (defun drgnx-run-ert--audit-install (&optional file)
-  "Turn the audit on; rows are also appended to FILE when given."
-  (setq drgnx-run-ert--audit-file file)
-  (dolist (p drgnx-run-ert--audit-primitives)
-    (advice-add p :around (apply-partially #'drgnx-run-ert--audit-around p) `((name . drgnx-run-ert-audit))))
+  "Turn the audit on; rows are also appended to FILE when given.  The audit's three variables are read once and removed
+from the environment, so a test about the environment (or a child it starts) never sees the runner's own switches."
+  (setq drgnx-run-ert--audit-file file
+        drgnx-run-ert--audit-all (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_ALL") "1")
+        drgnx-run-ert--audit-fail (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_FAIL") "1"))
+  (dolist (v '("DRGNX_TEST_AUDIT" "DRGNX_TEST_AUDIT_ALL" "DRGNX_TEST_AUDIT_FAIL")) (setenv v nil))
   (advice-add 'ert-run-test :around #'drgnx-run-ert--audit-test '((name . drgnx-run-ert-audit))))
 
 (defun drgnx-run-ert--audit-uninstall ()
   "Turn the audit off."
-  (dolist (p drgnx-run-ert--audit-primitives) (advice-remove p 'drgnx-run-ert-audit))
+  (drgnx-run-ert--audit-unadvise)
   (advice-remove 'ert-run-test 'drgnx-run-ert-audit))
 
 (defun drgnx-run-ert--audit-failures ()
-  "With DRGNX_TEST_AUDIT_FAIL=1, one failure (:name :condition) per :det test the audit saw use real time."
-  (when (equal (drgnx-run-ert--env "DRGNX_TEST_AUDIT_FAIL") "1")
+  "With the fail switch, one failure (:name :condition) per :det test the audit saw use real time."
+  (when drgnx-run-ert--audit-fail
     (let (by-test out)
       (dolist (k (reverse drgnx-run-ert--audit-seen))
         (push (cdr k) (alist-get (car k) by-test nil nil #'equal)))

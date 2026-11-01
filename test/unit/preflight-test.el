@@ -1,6 +1,7 @@
 ;;; preflight-test.el --- bin/drgnx test --preflight -*- lexical-binding: t -*-
 ;; The runner of each pre-flight step is a stub script (DRGNX_PREFLIGHT_RUNNER), so no container starts.
 (require 'ert)
+(require 'seq)
 (require 'drgnx-paths)
 
 (defun drgnx-preflight-test--run (stub-body)
@@ -32,6 +33,20 @@
             "case \"$DRGNX_TEST_PODMAN_ARGS\" in *--cpus=2*) kill -KILL $PPID; sleep 1;; esac; exit 0")))
     (should-not (eql 0 (car r)))
     (should-not (cdr r))))
+
+(ert-deftest drgnx-preflight/p1-runs-the-det-files-with-the-audit-failing-and-p2-does-not ()
+  (let* ((log (make-temp-file "drgnx-pf-log"))
+         (process-environment (cons (concat "PF_LOG=" log) process-environment)))
+    (unwind-protect
+        (progn
+          (drgnx-preflight-test--run
+           "echo \"$DRGNX_TEST_SELECTOR|$DRGNX_TEST_AUDIT|$DRGNX_TEST_AUDIT_FAIL|$DRGNX_TEST_PODMAN_ARGS\" >> \"$PF_LOG\"")
+          (let ((lines (with-temp-buffer (insert-file-contents log) (split-string (buffer-string) "\n" t))))
+            (should (equal (seq-filter (lambda (l) (string-prefix-p "(tag :det)|" l)) lines)
+                           '("(tag :det)|1|1|" "(tag :det)|1|1|")))
+            (dolist (l (seq-remove (lambda (l) (string-prefix-p "(tag :det)|" l)) lines))
+              (should-not (string-match-p "|1|1|" l)))))
+      (delete-file log))))
 
 (ert-deftest drgnx-preflight/a-full-success-writes-the-stamp ()
   (let ((r (drgnx-preflight-test--run "exit 0")))

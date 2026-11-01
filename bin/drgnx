@@ -503,8 +503,10 @@ test_preflight() { # --out REPORT [--seeds N] [--nidhogg-tarball F] — the orde
   }
   local i a b
   # P1
-  run_p P1-a '(tag :det)' DRGNX_TEST_SHUFFLE=preflight-a || true; judge P1-a
-  run_p P1-b '(tag :det)' DRGNX_TEST_SHUFFLE=preflight-b || true; judge P1-b
+  # a det test that really uses real time (the runtime audit, harness/run-ert.el) fails here: the audit is on and fails
+  local audit=(DRGNX_TEST_AUDIT=1 DRGNX_TEST_AUDIT_FAIL=1)
+  run_p P1-a '(tag :det)' DRGNX_TEST_SHUFFLE=preflight-a "${audit[@]}" || true; judge P1-a
+  run_p P1-b '(tag :det)' DRGNX_TEST_SHUFFLE=preflight-b "${audit[@]}" || true; judge P1-b
   if ! diff -q "$work/P1-a.red" "$work/P1-b.red" >/dev/null; then reds=$((reds + 1)); say "RED  P1 the two runs differ"; fi
   # P2
   local lim
