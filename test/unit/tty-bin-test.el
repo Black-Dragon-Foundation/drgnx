@@ -361,17 +361,20 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
         (should (eql 2 (car (call '("test" "--container" "--tty") `(,rt ("DRGNX_TEST_TTY_IMAGE") ("DRGNX_USER_ELPA" . ,colon))))))
         (should-not (file-exists-p log))))))
 
-(ert-deftest drgnx-bin/the-tty-workflow-runs-the-fedora-matrix-like-the-gui-one ()
+(ert-deftest drgnx-bin/the-tty-workflow-calls-the-terminal-tier-like-the-gui-one ()
   (let ((yml (tty-bin-test--slurp (expand-file-name ".github/workflows/tty.yml" tty-bin-test--root)))
+        (tiers (tty-bin-test--slurp (expand-file-name ".github/workflows/drgnx-tiers.yml" tty-bin-test--root)))
         (gui (tty-bin-test--slurp (expand-file-name ".github/workflows/gui.yml" tty-bin-test--root))))
     (skip-unless (not (string-empty-p yml)))
-    (dolist (s '("schedule:" "workflow_dispatch:" "fedora: [45]" "bin/drgnx test --container --tty --fedora ${{ matrix.fedora }}"
-                 "permissions:\n  contents: read" "persist-credentials: false"))
+    (dolist (s '("schedule:" "workflow_dispatch:" "permissions:\n  contents: read"
+                 "uses: ./.github/workflows/drgnx-tiers.yml" "tiers: tty"))
       (should (string-search s yml)))
+    (dolist (s '("bin/drgnx test --container --tty --fedora 45" "persist-credentials: false"))
+      (should (string-search s tiers)))
     ;; the checkout action is the one gui.yml pins, by hash
     (let ((pin (and (string-match "uses: \\(actions/checkout@[0-9a-f]\\{40\\}\\)" gui) (match-string 1 gui))))
       (should pin)
-      (should (string-search pin yml)))))
+      (should (string-search pin tiers)))))
 
 (provide 'tty-bin-test)
 ;;; tty-bin-test.el ends here
