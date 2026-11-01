@@ -486,17 +486,18 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/a-crashing-file-is-named ()
-  ;; A file whose Emacs dies (a test calls `kill-emacs') or hangs past DRGNX_TEST_FILE_TIMEOUT is a failure that
-  ;; names the file; the other files still run and count.
+  ;; A file whose Emacs dies (a test calls `kill-emacs') is a failure that names the file; the other files still
+  ;; run and count.  The default file timeout: no real deadline decides this row (a fine file whose Emacs is still
+  ;; alive past a short budget on a loaded machine would be marked timed out and add a failure).
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
          (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)) (out nil) (code nil))
     (unwind-protect
         (progn
           (drgnx-run-ert-test--suite suite '(("crash-test.el" . "(ert-deftest iso-crash/dies () (kill-emacs 7))")
-                                             ("fine-test.el" . "(ert-deftest iso-fine/ok () (should t))")
-                                             ("hang-test.el" . "(ert-deftest iso-hang/waits () (sleep-for 60))")))
-          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_FILE_TIMEOUT=3"
-                                                   "DRGNX_TEST_SELECTOR")
+                                             ("fine-test.el" . "(ert-deftest iso-fine/ok () (should t))")))
+          ;; not the outer run's: one file at a time, no rerun, the default budget
+          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_FILE_TIMEOUT"
+                                                   "DRGNX_TEST_JOBS" "DRGNX_TEST_RERUN" "DRGNX_TEST_SELECTOR")
                                              process-environment)))
             (setq out (with-temp-buffer
                         (setq code (call-process (expand-file-name invocation-name invocation-directory) nil t nil
@@ -506,17 +507,58 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (eql 1 code))
           (let* ((r (drgnx-run-ert-test--json results))
                  (names (mapcar (lambda (f) (plist-get f :name)) (plist-get r :failures))))
-            (should (equal (plist-get r :passed) 1))
-            (should (equal (plist-get r :failed) 3))           ; the crash, the hang, and the hang's test (quit by SIGUSR2)
-            (should (seq-find (lambda (n) (string-match-p "crash-test\\.el" n)) names))
-            (should (seq-find (lambda (n) (string-match-p "hang-test\\.el" n)) names))
-            (should (string-match-p "timed out" (plist-get (seq-find (lambda (f) (string-match-p "hang-test" (plist-get f :name)))
-                                                                     (plist-get r :failures))
-                                                           :condition))))
-          (should (string-match-p "crash-test\\.el" out))
-          ;; a file that timed out says where it hangs (CI-REMOTE-MAC-1): its Lisp backtrace, asked for with SIGUSR2
-          (should (string-search "Debugger entered" out))
-          (should (string-search "sleep-for(60)" out)))
+            (should (equal (plist-get r :passed) 1))           ; the fine file's test still counts
+            (should (equal (plist-get r :failed) 1))           ; the crashed file
+            (should (seq-find (lambda (n) (string-match-p "crash-test\\.el" n)) names)))
+          (should (string-match-p "crash-test\\.el" out)))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-hanging-file-says-where-it-hangs ()
+  ;; A file that is ended for running too long says where it hangs: its Lisp backtrace, asked for with SIGUSR2 (the
+  ;; file's Emacs starts with `debug-on-event' set to it, `drgnx-run-ert--start-file').  Here the file's Emacs is
+  ;; started and asked directly, once its test is known to be in the wait: no budget decides the result.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (marker (expand-file-name "in-the-wait" tmp))
+         (file (expand-file-name "hang-test.el" suite)) (buffer (generate-new-buffer " *hang-out*")) (p nil))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite `(("hang-test.el" . ,(format "(ert-deftest iso-hang/waits () (write-region \"\" nil %S nil 'silent) (sleep-for 60))"
+                                              marker))))
+          ;; not the outer run's selector (it would skip the hang test), census or audit
+          (let ((process-environment (append '("DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_AUDIT" "DRGNX_TEST_AUDIT_FAIL"
+                                               "DRGNX_TEST_RERUN" "DRGNX_TEST_SHUFFLE")
+                                             process-environment)))
+            (setq p (drgnx-run-ert--start-file file tmp (expand-file-name "h.json" tmp) buffer)))
+          (drgnx-test-wait (lambda () (file-exists-p marker)) :what "the hang file's test started")
+          (drgnx-run-ert--backtrace-process p 10)
+          (let ((out (with-current-buffer buffer (buffer-string))))
+            (should (string-search "Debugger entered" out))
+            (should (string-search "sleep-for(60)" out))))
+      (when (process-live-p p) (delete-process p))
+      (kill-buffer buffer)
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-file-past-its-budget-is-ended ()
+  :tags '(:timing)                      ; a real budget (3 s of awake time) decides it: the :timing group runs alone
+  ;; A file whose Emacs runs past DRGNX_TEST_FILE_TIMEOUT is ended and named, with "timed out" as the reason.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)) (code nil))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite '(("hang-test.el" . "(ert-deftest iso-hang/waits () (sleep-for 60))")))
+          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_FILE_TIMEOUT=3"
+                                                   "DRGNX_TEST_JOBS" "DRGNX_TEST_RERUN" "DRGNX_TEST_SELECTOR")
+                                             process-environment)))
+            (with-temp-buffer
+              (setq code (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                       "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                       "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))))
+          (should (eql 1 code))
+          (let ((hang (seq-find (lambda (f) (string-match-p "hang-test\\.el" (plist-get f :name)))
+                                (plist-get (drgnx-run-ert-test--json results) :failures))))
+            (should hang)
+            (should (string-match-p "timed out" (plist-get hang :condition)))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/summaries-are-merged ()
