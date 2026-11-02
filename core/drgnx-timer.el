@@ -399,8 +399,11 @@ See docs/develop/core.md, \"Timers\"."
 (defun drgnx-timer--fire-debounce (entry)
   "ENTRY's timer is due: a wall debounce called since waits the remainder (a new timer, from a delay); else FN runs."
   (let* ((last (drgnx-timer--entry-last entry))
-         (left (and last (min (drgnx-timer--entry-secs entry)       ; a clock that stepped back never stretches the wait
-                              (- (drgnx-timer--entry-secs entry) (- (drgnx-timer--now) last))))))
+         ;; the clock's floats are ~0.2 us apart at today's epoch seconds: the remainder is rounded to the
+         ;; microsecond, or a wait of 0.3 s comes out as 0.3000002 and its timer fires a hair after the 0.3 s it owes
+         (left (and last (/ (fround (* 1e6 (min (drgnx-timer--entry-secs entry) ; a clock that stepped back never stretches the wait
+                                                (- (drgnx-timer--entry-secs entry) (- (drgnx-timer--now) last)))))
+                            1e6))))
     (if (and left (> left drgnx-timer--slack))
         (setf (drgnx-timer--entry-timer entry) (run-at-time left nil #'drgnx-timer--fire entry))
       (remhash (drgnx-timer--entry-key entry) drgnx-timer--table)
