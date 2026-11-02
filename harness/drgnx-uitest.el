@@ -704,12 +704,32 @@ It is the logical-pixel (1x) picture of FRAME and its child frames, whatever the
     (redisplay t)
     (drgnx-uitest--png-raw (x-export-frames f 'png))))
 
+(declare-function nhwl--title-bar "nhwlfns.c")
+
+(defun drgnx-uitest--native-area (snap frame)
+  "SNAP cut to FRAME's native area when the native shell's picture holds its title bar and margins too.
+A floating frame's surface there has the shell's client-side title bar and shadow margins around the native area
+\(`nhwl--title-bar' says where); a snapshot's rectangles count from the native area, as `frame-edges' does."
+  (let* ((bar (and (fboundp 'nhwl--title-bar) (nhwl--title-bar frame)))
+         (x (and bar (nth 0 (plist-get bar :margins))))
+         (strip (plist-get bar :strip))
+         (y (and strip (+ (nth 1 strip) (nth 3 strip))))
+         (w (frame-pixel-width frame)) (h (frame-pixel-height frame)))
+    (if (or (null x) (and (= x 0) (= y 0) (= w (nth 0 snap))) (> (+ x w) (nth 0 snap)) (> (+ y h) (nth 1 snap)))
+        snap
+      (let ((stride (* 4 (nth 0 snap))) (bytes (nth 2 snap)) (rows nil))
+        (dotimes (i h)
+          (let ((s (+ (* (+ y i) stride) (* 4 x))))
+            (push (substring bytes s (+ s (* 4 w))) rows)))
+        (list w h (apply #'concat (nreverse rows)))))))
+
 (defun drgnx-uitest-snapshot (&optional frame)
   "FRAME's (default: the root frame's) picture as a snapshot (W H BYTES), in device pixels.
-Glitnir's raw snapshot (the buffer GTK last committed) when `glitnir-snapshot' exists, else `drgnx-uitest-export'."
+Glitnir's raw snapshot (the buffer GTK last committed) when `glitnir-snapshot' exists, else `drgnx-uitest-export'.
+On the native shell it is the native area of the root's picture (`drgnx-uitest--native-area')."
   (let ((f (or frame (drgnx-uitest-root-frame))))
     (if (fboundp 'glitnir-snapshot)
-        (progn (redisplay t) (glitnir-snapshot f 'raw))
+        (progn (redisplay t) (drgnx-uitest--native-area (glitnir-snapshot f 'raw) f))
       (drgnx-uitest-export f))))
 
 (defun drgnx-uitest-pixel (snap x y)

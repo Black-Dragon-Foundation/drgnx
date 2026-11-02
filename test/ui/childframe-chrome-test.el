@@ -1336,12 +1336,23 @@ Return (NONE . FRAME): the picture without the popup and the reused frame."
       (should (drgnx-test-chrome--rows-equal-p on off nil)))
     (drgnx-test-chrome--no-violations)))
 
-(ert-deftest drgnx-ui-chrome/generic-alpha-child-is-off-pixels ()
-  "A child frame with an `alpha' gets no chrome: the picture is exactly Glitnir off's."
+(ert-deftest drgnx-ui-chrome/generic-alpha-child ()
+  "A child frame with an `alpha'.  Under GTK it gets no chrome (Glitnir draws an opacity group stock): the picture is
+exactly Glitnir off's.  The native shell applies the alpha itself, so the child keeps its chrome as any undecorated
+child does, and the picture beside it is stock's."
   (drgnx-test-chrome--with-plain-child '((undecorated . t) (alpha . 80))
     (should (drgnx-test-chrome--children root))
-    (let* ((on (drgnx-uitest-snapshot root)) (off (drgnx-test-chrome--off-snapshot root)))
-      (should (drgnx-test-chrome--rows-equal-p on off nil)))
+    (if (not (featurep 'nidhogg-wayland))
+        (let* ((on (drgnx-uitest-snapshot root)) (off (drgnx-test-chrome--off-snapshot root)))
+          (should (drgnx-test-chrome--rows-equal-p on off nil)))
+      (let ((none (progn (make-frame-invisible child) (drgnx-test-chrome--settle) (drgnx-uitest-snapshot root))))
+        (make-frame-visible child)
+        (drgnx-test-chrome--settle)
+        (let ((rect (car (drgnx-test-chrome--shown root (list child) none))))
+          ;; the alpha applies: the middle is the child's colour over the root's, not the colour itself
+          (should-not (equal (cdr (drgnx-uitest-pixel (drgnx-uitest-snapshot root) (/ (+ (nth 0 rect) (nth 2 rect)) 2)
+                                                      (/ (+ (nth 1 rect) (nth 3 rect)) 2)))
+                             '(#x20 #x40 #x60))))))
     (drgnx-test-chrome--no-violations)))
 
 ;;; childframe-chrome-test.el ends here

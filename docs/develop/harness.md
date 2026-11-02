@@ -456,6 +456,10 @@ frame's picture, so capture writes Glitnir's snapshot as `root.png` (device pixe
 On Nidhogg's native Wayland shell a child frame is a subsurface that the Wayland compositor puts together, so the shell
 composites the same picture for the snapshot: the root and its visible child and popup trees, at their places and in
 their stacking, with their chrome, shadows and alpha, from what the tree published. That shell has no `x-export-frames`.
+A floating root's surface there also holds the shell's client-side title bar and shadow margins; `drgnx-uitest-snapshot`
+cuts the picture to the root's native area (`nhwl--title-bar` says where it sits), so a snapshot always starts at the
+native area, as `frame-edges` counts, fullscreen or not. A child frame with an `alpha` keeps its chrome on the native
+shell (the shell applies the alpha itself); under GTK, Glitnir draws such a child stock, without chrome.
 
 ### Snapshots and pixel probes
 
