@@ -38,12 +38,15 @@ with REPLY, if any."
                                    :coding 'binary
                                    :filter (lambda (p s) (process-put p :in (concat (process-get p :in) s)))))))
     (process-put c :in "")
-    (process-send-string c text)
+    ;; a proxy past its cap answers 403 and closes at once, before any head: the write may find the peer gone
+    ;; (Emacs then closes the client and drops what it had not read), which is an answer too: `:refused'
+    (condition-case nil (process-send-string c text) (error (process-put c :refused t)))
     c))
 
 (defun drgnx-sandbox-proxy-test--status (client)
-  "The status code of the answer CLIENT got (an integer), or nil after 20 s."
-  (when (drgnx-sandbox-proxy-test--wait (lambda () (string-search "\r\n\r\n" (process-get client :in))))
+  "The status code of the answer CLIENT got (an integer), or nil after 20 s or when its write found the proxy gone."
+  (when (drgnx-sandbox-proxy-test--wait (lambda () (or (process-get client :refused)
+                                                       (string-search "\r\n\r\n" (process-get client :in)))))
     (let ((in (process-get client :in)))
       (and (string-match "\\`HTTP/1\\.1 \\([0-9]\\{3\\}\\) " in) (string-to-number (match-string 1 in))))))
 
@@ -217,7 +220,10 @@ form that may use `port') and `denied' (the reports, oldest first).  PINS are na
                         (drgnx-sandbox-proxy-test--connect sock "CONNECT ")
                         (drgnx-sandbox-proxy-test--connect sock "CONNECT "))))
         (accept-process-output nil 0.3)
-        (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "up.test:%d" port))))
+        ;; the refusal needs no head: send none, so there is no write for it to race
+        (let ((c (drgnx-sandbox-proxy-test--connect sock "")))
+          (should (eql 403 (drgnx-sandbox-proxy-test--status c)))
+          (delete-process c))
         (should (cl-every (lambda (c) (equal (process-get c :in) "")) held))
         (delete-process (car held))
         (should (drgnx-sandbox-proxy-test--wait (lambda () (eql 200 (drgnx-sandbox-proxy-test--try sock (format "up.test:%d" port))))))
