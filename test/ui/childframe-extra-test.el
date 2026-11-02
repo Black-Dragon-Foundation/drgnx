@@ -384,8 +384,10 @@ function that cancels the step still pending."
 (ert-deftest drgnx-ui-chrome/ime-preedit-in-child ()
   "IME preedit in mini-frame's child frame: GTK's input method composes \"é\" (Control+Shift+U e 9 Space).  The
 preedit is drawn inside the chromed child (its pixels change, its corners stay cut, nothing outside it changes), and
-the committed text is \"é\"."
-  (skip-unless (and (featurep 'dbusbind) (drgnx-test-extra--mutter-p)
+the committed text is \"é\".
+The input method is GTK's own, in the client: the native shell has none (it takes preedit from the compositor's
+text-input, and the test session runs no input method)."
+  (skip-unless (and (not (featurep 'nidhogg-wayland)) (featurep 'dbusbind) (drgnx-test-extra--mutter-p)
                     (equal (getenv "GTK_IM_MODULE") "gtk-im-context-simple")
                     (member drgnx-test-extra--rd (ignore-errors (dbus-list-names :session)))))
   (drgnx-test-chrome--with-chrome
