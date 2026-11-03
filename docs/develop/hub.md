@@ -465,8 +465,9 @@ JSON `Moved` `{at, moved, left}` (names relative to `<state>`); once it exists l
 nothing left) writes nothing.
 
 `doctor --json` has `legacy: {moved, left, at, lisp_processes: [{pid, what}]}`: `moved` and `at` from `done`, `left`
-read afresh (a job may have ended since), and the user's processes whose command line has `drgnx-hub-main` or
-`drgnx-coord-mcp-main` (from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
+read afresh (a job may have ended since), and the user's Emacs processes started with `drgnx-hub-main` or
+`drgnx-coord-mcp-main` as an `-f`/`--funcall`, `-l`/`--load` or `--eval` argument (a command that only names them, such
+as `rg drgnx-hub-main`, does not count; from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
 Rows: `lifecycle/{an-old-backend-is-reaped-at-start,lisp-state-is-moved-once,a-second-start-moves-nothing,a-running-lisp-job-is-left-in-place}`.
 
 ## The client

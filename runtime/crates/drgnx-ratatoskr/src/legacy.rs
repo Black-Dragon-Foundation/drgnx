@@ -17,7 +17,7 @@
 //! was.  The old backend's process is reaped before this runs, like any recorded group (`server::reap_recorded`).
 //!
 //! [`section`] is the doctor's `legacy` section: what was moved, what is left, and the user's processes that are still
-//! the Lisp runtime's (`drgnx-hub-main`, `drgnx-coord-mcp-main`).
+//! the Lisp runtime's (an Emacs started with `drgnx-hub-main` or `drgnx-coord-mcp-main` as `-f`/`-l` argument).
 
 use runstav::paths::{self, Env};
 use serde::{Deserialize, Serialize};
@@ -286,8 +286,32 @@ pub struct LispProcess {
     pub what: String,
 }
 
-fn marker_in(cmdline: &str) -> Option<&'static str> {
-    MARKERS.into_iter().find(|m| cmdline.contains(m))
+/// The Lisp runtime's entry point that ARGV starts, when it is an Emacs (or Nidhogg) run with `-f`/`--funcall` or
+/// `-l`/`--load` of a marker (a bare name, or the file `<marker>.el[c]`), or `--eval (marker)`; never a process that only
+/// has the name somewhere on its command line (`rg drgnx-hub-main`).
+fn marker_in(argv: &[&str]) -> Option<&'static str> {
+    let program = argv.first()?.rsplit('/').next()?.to_ascii_lowercase();
+    if !program.contains("emacs") && !program.contains("nidhogg") {
+        return None;
+    }
+    let names = |arg: &str, m: &str| {
+        let file = arg.rsplit('/').next().unwrap_or(arg);
+        file == m || file.strip_suffix(".el").or(file.strip_suffix(".elc")) == Some(m)
+    };
+    let is_marker = |prev: &str, arg: &str, m: &str| match prev {
+        "-f" | "--funcall" | "-l" | "--load" => names(arg, m),
+        "--eval" | "--execute" | "-eval" | "-execute" => arg == format!("({m})"),
+        _ => {
+            arg.strip_prefix("--funcall=")
+                .or_else(|| arg.strip_prefix("--load="))
+                .is_some_and(|v| names(v, m))
+                || arg.strip_prefix("--eval=").is_some_and(|v| v == format!("({m})"))
+        }
+    };
+    MARKERS.into_iter().find(|m| {
+        argv.windows(2).any(|w| is_marker(w[0], w[1], m))
+            || argv.iter().any(|a| is_marker("", a, m))
+    })
 }
 
 /// The doctor's `legacy` section: `{moved, left, at, lisp_processes}`.  `left` is read afresh (a job may have ended
@@ -312,7 +336,8 @@ pub fn section(env: &Env) -> Value {
     })
 }
 
-/// The user's processes whose command line has `drgnx-hub-main` or `drgnx-coord-mcp-main`.
+/// The user's Emacs processes started with `drgnx-hub-main` or `drgnx-coord-mcp-main` as their entry point
+/// ([`marker_in`]).
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn lisp_processes(uid: u32) -> Vec<LispProcess> {
     scan_proc(Path::new("/proc"), uid)
@@ -330,7 +355,9 @@ fn scan_proc(root: &Path, uid: u32) -> Vec<LispProcess> {
                 return None;
             }
             let raw = std::fs::read(dir.join("cmdline")).ok()?;
-            let what = marker_in(&String::from_utf8_lossy(&raw).replace('\0', " "))?;
+            let text = String::from_utf8_lossy(&raw);
+            let argv: Vec<&str> = text.split('\0').filter(|a| !a.is_empty()).collect();
+            let what = marker_in(&argv)?;
             Some(LispProcess {
                 pid,
                 what: what.to_string(),
@@ -361,7 +388,8 @@ pub fn lisp_processes(uid: u32) -> Vec<LispProcess> {
             let (pid, command) = l.trim_start().split_once(' ')?;
             Some(LispProcess {
                 pid: pid.parse().ok()?,
-                what: marker_in(command)?.to_string(),
+                // ps joins the arguments with spaces: a path with a space in it splits, which only costs a miss
+                what: marker_in(&command.split_whitespace().collect::<Vec<_>>())?.to_string(),
             })
         })
         .collect();
@@ -638,7 +666,35 @@ mod tests {
         );
         // another user's processes are not ours to report
         assert!(scan_proc(t.path(), uid + 1).is_empty());
-        assert_eq!(marker_in("sleep 1"), None);
+        assert_eq!(marker_in(&["sleep", "1"]), None);
+    }
+
+    #[test]
+    fn only_a_real_lisp_hub_command_line_counts() {
+        let t = tempfile::tempdir().unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        for (pid, cmdline) in [
+            // a hub or coordination server as the old launchers started them
+            (
+                201,
+                "emacs\0--batch\0-l\0/x/core/drgnx-hub.el\0-f\0drgnx-hub-main\0",
+            ),
+            (202, "emacs\0-Q\0--batch\0-l\0drgnx-hub-main\0"),
+            (203, "emacs\0--funcall\0drgnx-coord-mcp-main\0"),
+            (204, "emacs\0--funcall=drgnx-hub-main\0"),
+            (205, "emacs\0--load\0/x/core/drgnx-hub-main.el\0"),
+            // what only mentions the name
+            (301, "rg\0drgnx-hub-main\0"),
+            (302, "grep\0-r\0drgnx-coord-mcp-main\0core\0"),
+            (303, "emacs\0--eval\0(message \"drgnx-hub-main\")\0"),
+            (304, "tail\0-f\0drgnx-hub-main.log\0"),
+            (305, "vim\0-f\0drgnx-hub-main\0"),
+            (306, "emacs\0notes-on-drgnx-hub-main.org\0"),
+        ] {
+            put(&t.path().join(format!("{pid}/cmdline")), cmdline);
+        }
+        let found: Vec<u32> = scan_proc(t.path(), uid).iter().map(|p| p.pid).collect();
+        assert_eq!(found, [201, 202, 203, 204, 205]);
     }
 
     #[test]
