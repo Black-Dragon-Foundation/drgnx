@@ -368,7 +368,7 @@ caches (the re-index timer calls this); a command the user runs asks `drgnx-sear
                         :callback (lambda (id why)
                                     (unless id
                                       (remhash root drgnx-search-index--asked)
-                                      (message "drgnx: %s" why))))
+                                      (drgnx-notify 'hub 'warn why))))
       t)))
 
 (provide 'drgnx-search-index)

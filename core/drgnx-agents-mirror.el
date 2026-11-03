@@ -17,6 +17,8 @@
 (require 'drgnx-records)
 (require 'drgnx-hub-client)
 
+(declare-function drgnx-shell-env-refused-p "drgnx-shell-env" (name))
+
 (defvar drgnx-agents-mirror--fetching (make-hash-table :test #'equal)
   "Hub id → events that came while its transcript was being fetched (newest first).")
 (defvar drgnx-agents-mirror--seq (make-hash-table :test #'equal) "Hub id → the last change number applied.")

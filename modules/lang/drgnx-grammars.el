@@ -117,7 +117,7 @@ buffers of those languages switch to their tree-sitter modes when it is done."
   (make-directory (drgnx-grammars-dir) t)
   (drgnx-exec-start "grammars" (drgnx-grammars--job-command langs)
                     :callback (lambda (id why)
-                                (if id (drgnx-grammars--watch id langs) (message "drgnx: %s" why))))
+                                (if id (drgnx-grammars--watch id langs) (drgnx-notify 'hub 'warn why))))
   (message "Installing language support for %s in the background (Show Job Log: grammars)" (mapconcat #'symbol-name langs ", "))
   nil)
 

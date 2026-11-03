@@ -214,7 +214,7 @@ timer: the start is asynchronous (the hub answers later), never asks."
              (make-directory (drgnx-state-dir) t)
              (drgnx-exec-start (format "%s server" name) command :cwd (drgnx-state-dir)
                                :no-timebox t ; a server that stays up for days; a look at it starts it again if it died
-                               :callback (lambda (_id why) (when why (message "drgnx: %s" why))))))))
+                               :callback (lambda (_id why) (when why (drgnx-notify 'hub 'warn why))))))))
 
 (defun drgnx-ai--refused (id)
   "`drgnx-ai-refused-functions': nothing listened at ID — the runner drgnx keeps running is started again."

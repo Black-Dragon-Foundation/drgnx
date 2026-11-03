@@ -30,6 +30,7 @@
 (declare-function drgnx-groups--split "drgnx-groups")
 (declare-function drgnx-exec-stop "drgnx-exec")
 (declare-function drgnx-exec-start "drgnx-exec")
+(declare-function drgnx-notify "drgnx-notice")
 (declare-function drgnx-exec-get "drgnx-exec")
 (declare-function drgnx-exec-list "drgnx-exec")
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -288,7 +289,7 @@ without one; either ends the wait.  An answer that comes after the wait ended is
                (drgnx-exec-start "playwright" command :cwd root :memory-max (and (eq system-type 'gnu/linux) "1G")
                                  :no-timebox t
                                  :callback (lambda (id why)
-                                             (if id (funcall serve id) (message "drgnx: %s" why))))))))))
+                                             (if id (funcall serve id) (drgnx-notify 'hub 'warn why))))))))))
 
 ;;;; Agent's Page
 
