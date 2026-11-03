@@ -4,6 +4,7 @@
 ;; from a network.  The wanted-file test starts two child `emacs --batch -Q' processes, waited for under a 30 s bound.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-gate-fixture (expand-file-name "../fixtures/gate-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-pkg)
@@ -229,29 +230,31 @@
   (drgnx-pkg-test--with root
     (let* ((file (drgnx-pkg-wanted-file))
            (core (file-name-directory (locate-library "drgnx-pkg-activate")))
-           (at (+ (float-time) 2)) (outs nil)
+           (outs nil)
            (start (lambda (tag)
                     (let ((b (generate-new-buffer " *drgnx-wanted-child*" t)))
                       (push b outs)
                       (make-process
-                       :name tag :buffer b :noquery t
+                       :name tag :buffer b :noquery t :connection-type 'pipe
                        :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                       "--eval" "(setq load-prefer-newer t)" "-L" core "-l" "drgnx-pkg-activate"
                                       "--eval"
                                       ;; a startup that finds the file busy skips the want; the next startup records it
-                                      (format "(progn (sleep-for (max 0 (- %f (float-time))))
+                                      (format "(progn %s
                                                       (dotimes (i 20)
                                                         (let ((name (intern (format \"%s-x%%d\" i))) (tries 0))
                                                           (while (and (not (memq name (plist-get (drgnx-file-read %S) :data)))
                                                                       (< (setq tries (1+ tries)) 5000))
                                                             (drgnx-pkg--record-want name))))
                                                       (princ \"DONE\\n\"))"
-                                              at tag file))))))
+                                              drgnx-test-gate-form tag file))))))
            (procs (list (funcall start "a") (funcall start "b"))))
       (drgnx-pkg-test--write file '(old-one))
+      (drgnx-test-gate-open procs)
       (drgnx-test-wait-ended procs :secs 30 :what "the writer processes to end")
       (unwind-protect
           (progn
+            ;; safe: the wait above returns once every sentinel has run
             (should (cl-every (lambda (p) (and (not (process-live-p p)) (= (process-exit-status p) 0))) procs))
             (dolist (b outs) (should (string-match-p "DONE" (with-current-buffer b (buffer-string)))))
             (let ((names (drgnx-pkg--read-file file)))

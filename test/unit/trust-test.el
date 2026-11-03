@@ -4,6 +4,7 @@
 ;; stub backends that record their calls, compile output is parsed with TRAMP's handler stubbed.
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-gate-fixture (expand-file-name "../fixtures/gate-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-trust)
@@ -340,21 +341,23 @@ nobody trusted.  Buffers BODY opens are killed after it."
 (defun drgnx-trust-test--children (forms)
   "Run each of FORMS (strings) in a child `emacs --batch' with this run's environment and load path, started
 together; wait for all under a 30 s bound.  Fails the test unless every child exits 0."
-  (let* ((at (+ (float-time) 2)) (bufs nil)
+  (let* ((bufs nil)
          (procs (mapcar
                  (lambda (form)
                    (let ((b (generate-new-buffer " *trust-child*" t)))
                      (push b bufs)
                      (make-process
-                      :name "trust-child" :buffer b :noquery t
+                      :name "trust-child" :buffer b :noquery t :connection-type 'pipe
                       :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                      "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
                                      "--eval" "(require 'drgnx-trust)"
-                                     "--eval" (format "(progn (sleep-for (max 0 (- %f (float-time)))) %s)" at form)))))
+                                     "--eval" (format "(progn %s %s)" drgnx-test-gate-form form)))))
                  forms)))
     (unwind-protect
         (progn
+          (drgnx-test-gate-open procs)
           (drgnx-test-wait-ended procs :secs 30 :what "the writer processes to end")
+          ;; safe: the wait above returns once every sentinel has run
           (dolist (p procs) (should (not (process-live-p p))))
           (cl-loop for p in procs for b in (reverse bufs)
                    do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))

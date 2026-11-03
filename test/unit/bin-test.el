@@ -35,9 +35,9 @@ stderr included.  DRGNX_EMACS is unset unless ENV sets it; HOME is the caller's 
          (default-directory (file-name-as-directory (or drgnx-bin-test--cwd temporary-file-directory)))
          (buf (generate-new-buffer " bin-test-pty"))
          (p (make-process :name "bin-test-pty" :buffer buf :command (cons bin args) :connection-type 'pty
-                          :noquery t :sentinel #'ignore)))
-    (while (process-live-p p) (accept-process-output p 0.05))
-    (accept-process-output p 0.1)
+                          :noquery t :sentinel (lambda (p _e) (process-put p :done t)))))
+    ;; the sentinel runs after the run's last output has been read
+    (drgnx-test-wait (lambda () (process-get p :done)) :what "bin/drgnx's exit on a terminal")
     (prog1 (cons (process-exit-status p) (with-current-buffer buf (buffer-string)))
       (kill-buffer buf))))
 
@@ -615,6 +615,10 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 (defun drgnx-bin-test--lock (dir)
   (expand-file-name (format "state/drgnx/open-%s.lock" drgnx-bin-test--server) dir))
 
+(defun drgnx-bin-test--daemon-started-p (dir)
+  "Non-nil once the fake daemon in DIR was started: the `drgnx open' that did it holds its lock."
+  (string-search "--bg-daemon=" (or (ignore-errors (drgnx-bin-test--slurp (expand-file-name "emacs.log" dir))) "")))
+
 (ert-deftest drgnx-bin/open-waits-count-seconds-not-polls ()
   :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   ;; Each poll costs its sleep and a client call (0.3 s here): 20 polls would be 8 s, not the 2 s asked for.
@@ -642,20 +646,26 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
 
 (ert-deftest drgnx-bin/the-still-starting-notice-comes-while-waiting ()
   (drgnx-bin-test--with-open
-    (write-region "3" nil (expand-file-name "delay" dir))
-    (let* ((out "") (done nil)
+    ;; the daemon answers only when the test says so, after the notice
+    (write-region "never" nil (expand-file-name "delay" dir))
+    (let* ((out "") (done nil) (events nil)
            ;; DRGNX_EMACS unset, as `drgnx-bin-test--call' does: a run's own (CI sets it) would pick the real
            ;; emacsclient beside it over the fake on PATH
            (process-environment (append (cons "DRGNX_OPEN_WAIT=6" env) (list "DRGNX_EMACS") process-environment))
+           ;; the filter runs for all of a run's output before its sentinel does: EVENTS is the order they happened in
            (proc (make-process :name "drgnx-open" :command (list drgnx-bin-test--bin "open") :connection-type 'pipe
-                               :noquery t :filter (lambda (_p s) (setq out (concat out s)))
-                               :sentinel (lambda (_p _e) (setq done t)))))
+                               :noquery t
+                               :filter (lambda (_p s)
+                                         (setq out (concat out s))
+                                         (when (and (string-search "still starting" out) (not (memq 'notice events)))
+                                           (push 'notice events)))
+                               :sentinel (lambda (_p _e) (push 'exit events) (setq done t)))))
       (unwind-protect
-          (progn                                   ; the notice is due after 2 s, the daemon answers after 3 s
-            (drgnx-test-wait (lambda () (string-search "still starting" out)) :what "the still-starting notice")
-            (should (string-search "still starting" out))
-            (should (process-live-p proc))
+          (progn                                   ; the notice is due after 2 s of the 6
+            (drgnx-test-wait (lambda () (memq 'notice events)) :what "the still-starting notice")
+            (write-region "" nil (expand-file-name "running" dir))
             (drgnx-test-wait (lambda () done) :what "bin/drgnx open's exit")
+            (should (equal (reverse events) '(notice exit)))
             (should (eql 0 (process-exit-status proc))))
         (when (process-live-p proc) (delete-process proc))))))
 
@@ -667,11 +677,16 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
       (should (eql 1 (car (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=1" env) "open"))))
       (should-not (file-exists-p lock))
       ;; stopped while it waits: TERM and a closed terminal (HUP); a background job cannot be sent INT
-      (dolist (sig '("TERM" "HUP"))
-        (drgnx-bin-test--call "bash" (append (list (concat "DRGNX_BIN=" drgnx-bin-test--bin) (concat "SIG=" sig)
-                                                   "DRGNX_OPEN_WAIT=20")
-                                             env)
-                              "-c" "\"$DRGNX_BIN\" open & pid=$!; sleep 1; kill -s \"$SIG\" \"$pid\"; wait \"$pid\"")
+      (dolist (sig '(TERM HUP))
+        (delete-file (expand-file-name "emacs.log" dir))
+        (let ((proc (drgnx-bin-test--spawn (append (list "DRGNX_OPEN_WAIT=20") env (list "DRGNX_EMACS")) "open")))
+          (unwind-protect
+              (progn
+                ;; the open has started the daemon, so it holds the lock and waits for the daemon's answer
+                (drgnx-bin-test--wait-for (lambda () (drgnx-bin-test--daemon-started-p dir)) 30)
+                (signal-process proc sig)
+                (drgnx-bin-test--wait-exit proc 30))
+            (when (process-live-p proc) (delete-process proc))))
         (should-not (file-exists-p lock))
         (delete-file (expand-file-name "running" dir))))))
 
@@ -679,11 +694,16 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   ;; The lock was taken over while this open waited for its daemon: when it finishes, the lock is not its own.
   (drgnx-bin-test--with-open
     (let ((lock (drgnx-bin-test--lock dir)))
-      (write-region "2" nil (expand-file-name "delay" dir))
-      (drgnx-bin-test--call "bash" (append (list (concat "DRGNX_BIN=" drgnx-bin-test--bin) (concat "LOCK=" lock)
-                                                 "DRGNX_OPEN_WAIT=6")
-                                           env)
-                            "-c" "\"$DRGNX_BIN\" open & sleep 1; echo someone-else > \"$LOCK/owner\"; wait")
+      (write-region "never" nil (expand-file-name "delay" dir))   ; the daemon answers when the test says so
+      (let ((proc (drgnx-bin-test--spawn (append (list "DRGNX_OPEN_WAIT=30") env (list "DRGNX_EMACS")) "open")))
+        (unwind-protect
+            (progn
+              ;; the open has started the daemon, so it holds the lock and waits for the daemon's answer
+              (drgnx-bin-test--wait-for (lambda () (drgnx-bin-test--daemon-started-p dir)) 30)
+              (write-region "someone-else\n" nil (expand-file-name "owner" lock))
+              (write-region "" nil (expand-file-name "running" dir))
+              (drgnx-bin-test--wait-exit proc 30))
+          (when (process-live-p proc) (delete-process proc))))
       (should (equal (drgnx-bin-test--slurp (expand-file-name "owner" lock)) "someone-else\n")))))
 
 (ert-deftest drgnx-bin/a-lock-without-a-stamp-is-taken-over-after-a-few-seconds ()
@@ -1186,6 +1206,7 @@ macOS (no /proc there)."
           (let ((pid (drgnx-bin-test--slurp-number ours)))
             (should (> pid 0))
             (should-not (drgnx-bin-test--pid-alive-p pid)))
+          ;; a `sleep 300' this test owns: only the run under test could have ended it, and that is the assertion
           (should (process-live-p users)))
       (when (process-live-p users) (delete-process users))
       (delete-directory dir t))))

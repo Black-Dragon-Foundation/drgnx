@@ -107,7 +107,7 @@ temporary directory is private to the test."
   (let ((results nil))
     (funcall fn (lambda (r) (push r results)))
     (should (drgnx-platform-test--await (lambda () results) 5))
-    (accept-process-output nil 0.2)
+    (drgnx-test-pause 0.2 "a second call of the callback")
     (should (= 1 (length results)))
     (car results)))
 
@@ -322,7 +322,7 @@ temporary directory is private to the test."
                                 (should-not (file-exists-p drgnx-platform-kwin-test--script-file))
                                 (should-not (directory-files temporary-file-directory nil directory-files-no-dot-files-regexp))
                                 ;; a reply arriving after the deadline changes nothing (and does not signal)
-                                (accept-process-output nil 0.1)))
+                                (drgnx-test-pause 0.1 "a call or an error after the deadline")))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/a-reply-cleans-up-too ()
                               (drgnx-platform-kwin-test--with-kwin (lambda (_s) "[]")
@@ -402,7 +402,7 @@ temporary directory is private to the test."
                                   (should (eq :error (car r))))
                                 (should (functionp drgnx-platform-kwin-test--held-load))
                                 (funcall drgnx-platform-kwin-test--held-load 7)  ; the late reply
-                                (accept-process-output nil 0.1)
+                                (drgnx-test-pause 0.1 "a `run' after the late reply")
                                 ;; no `run' was sent for a script the call has given up on
                                 (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "unloadScript")))))
 

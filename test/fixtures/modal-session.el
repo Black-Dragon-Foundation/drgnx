@@ -8,6 +8,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-ui)
+(require 'drgnx-wait-fixture (expand-file-name "wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-modal-session-skip "evil not installed: see docs/develop/harness.md \"Modal tests\""
   "Why a modal session test skips.")
@@ -53,11 +54,8 @@ The jank report is kept for `drgnx-modal-session-jank'."
     r))
 
 (defun drgnx-modal-session-until (sess form &optional secs)
-  "Poll SESS until FORM is non-nil there (at most SECS, default 10); its last value."
-  (let ((deadline (+ (float-time) (or secs 10))) v)
-    (while (and (not (setq v (drgnx-modal-session-eval sess form))) (< (float-time) deadline))
-      (sleep-for 0.1))
-    v))
+  "Poll SESS until FORM is non-nil there (at most SECS, default 10); its value.  A timeout fails the test."
+  (drgnx-test-wait (lambda () (drgnx-modal-session-eval sess form)) :secs (or secs 10) :what (list "FORM in the session" form)))
 
 (defun drgnx-modal-session-prompt (sess)
   "The active minibuffer prompt in SESS, or nil."

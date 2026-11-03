@@ -625,6 +625,7 @@ A file's mistake is a notice (`drgnx-config--notify'): `drgnx-modules', required
                                                   (let ((new nil)) (dolist (f features) (unless (memq f before) (push f new)))
                                                     (prin1 new)))"))))
             (drgnx-test-wait-ended proc :secs 30 :what "the Emacs to end")
+            ;; safe: the wait above returns once the sentinel has run
             (should (eq (process-status proc) 'exit))
             (should (eql (process-exit-status proc) 0))
             (let ((new (car (read-from-string (with-current-buffer buf (buffer-string))))))
