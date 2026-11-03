@@ -762,17 +762,19 @@ fn spawn_spec(
 }
 
 /// The variables an editor module asked to add to a new session's environment (`agents/start`'s `env`).  A name must be
-/// on `drgnx-agents-start-env-names` and must not look like a credential, whatever that setting lists.
+/// on `drgnx-agents-start-env-names` and must not look like a credential or be a provider's key variable, whatever
+/// that setting lists.
 fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, String)>, Error> {
     let Some(env) = env.filter(|e| !e.is_empty()) else {
         return Ok(Vec::new());
     };
     let current = front.settings.current();
     let allowed = &current.loaded.values.agents_start_env_names;
+    let key_envs = front.provider_key_envs();
     let mut out = Vec::with_capacity(env.len());
     for (i, var) in env.iter().enumerate() {
         let name = var.name.as_str();
-        if refused_env_name(name) {
+        if refused_env_name(name) || key_envs.iter().any(|k| k == name) {
             return Err(invalid(
                 &format!("env[{i}].name"),
                 format!("{name} looks like a credential and is never passed on"),

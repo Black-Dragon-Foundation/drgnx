@@ -771,10 +771,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
+| `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no |
-| `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
+| `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
@@ -801,7 +802,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum}` | `{from: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], cwd?: AbsPath, image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, network?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, timebox_s?: natnum}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
@@ -1020,7 +1021,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
 - **Module env.** `agents/start` takes `env` (at most 8 `{name, value}`): what the editor's modules add through
   `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
   setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
-  PASSPHRASE or CREDENTIAL in it), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
+  PASSPHRASE or CREDENTIAL in it) nor a provider's `key_env` (as `env/set`), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
   environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub
   restarts or resumes does not get them again. The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
   drops, with one notice, the names the hub would refuse. The mirror also runs `drgnx-agents-task-functions` for hub
@@ -1394,7 +1395,8 @@ The editor's own jobs are the user's `exec/start` with four more fields (`StartP
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
 (`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check
 (`check_start`) refuses a malformed size, a `nice` outside 0 to 19 and a key-like variable name
-(`runstav::methods::exec::key_like_env_name`). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
+(`runstav::methods::hub::refused_env_name`, `env/set`'s check), and `exec::start` a provider's `key_env`. The job's base
+environment is `env/set`'s overlay (`plain_spec` builds it from `ShellEnv`). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
 `pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
 `nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
 and without a unit. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see

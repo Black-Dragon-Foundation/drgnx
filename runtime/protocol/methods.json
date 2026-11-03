@@ -2524,7 +2524,6 @@
         "user"
       ],
       "doc": "whether a profile's agent starts and answers initialize (it is started in its sandbox, asked, and ended; no session is made)",
-      "home": "front",
       "name": "agents/probe",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

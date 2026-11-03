@@ -295,8 +295,9 @@ impl Front {
         }
     }
 
-    /// The variables that hold a provider's key, for the providers in effect: `env/set` never takes them.
-    fn provider_key_envs(&self) -> Vec<String> {
+    /// The variables that hold a provider's key, for the providers in effect: `env/set`, a user's job and
+    /// `agents/start`'s `env` never take them.
+    pub(crate) fn provider_key_envs(&self) -> Vec<String> {
         let current = self.settings.current();
         crate::settings::providers::effective(
             &crate::settings::defaults().presets,
@@ -545,6 +546,7 @@ impl Front {
             | Params::AgentsMove(_)
             | Params::AgentsRole(_)
             | Params::AgentsSlice(_)
+            | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
             | Params::ExecGet(_)

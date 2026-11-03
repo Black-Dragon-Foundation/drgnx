@@ -248,7 +248,7 @@ fn agent_cannot_set_memory_max() {
 
 #[test]
 fn env_names_refused() {
-    use runstav::methods::exec::key_like_env_name;
+    use runstav::methods::hub::refused_env_name;
     for bad in [
         "OPENAI_API_KEY",
         "gh_token",
@@ -256,10 +256,10 @@ fn env_names_refused() {
         "MY_SECRET",
         "AWS_CREDENTIALS",
     ] {
-        assert!(key_like_env_name(bad), "{bad}");
+        assert!(refused_env_name(bad), "{bad}");
     }
     for ok in ["PATH", "PLAYWRIGHT_MCP_CDP_ENDPOINT", "LANG", "HF_HOME"] {
-        assert!(!key_like_env_name(ok), "{ok}");
+        assert!(!refused_env_name(ok), "{ok}");
     }
     // the same check runs when a request is decoded and checked
     let m = runstav::registry::find("exec/start").expect("exec/start");

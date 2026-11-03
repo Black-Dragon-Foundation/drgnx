@@ -1464,7 +1464,6 @@ mod price_tests {
 #[cfg(test)]
 mod resume_tests {
     use super::*;
-    use crate::dispatch::NoBackend;
     use crate::store::WorkDb;
     use runstav::proof::Cap;
 
@@ -1476,7 +1475,6 @@ mod resume_tests {
             dir.join("hub-x.sock"),
             WorkDb::spawn(dir.join("work.db")).unwrap(),
             norn::store::CoordDb::spawn(dir.join("work.db")),
-            Arc::new(NoBackend),
         )
     }
 

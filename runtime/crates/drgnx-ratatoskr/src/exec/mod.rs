@@ -1243,6 +1243,17 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         ExecKind::Container => CheckKind::Container,
     };
     let user = user_job(&c.sid, kind, &p)?;
+    // a provider's key variable is refused as a key-like name is (the registry's check knows only the names)
+    let key_envs = f.provider_key_envs();
+    if let Some(i) = user.env.iter().position(|(n, _)| key_envs.contains(n)) {
+        return Err(crate::agents::session::invalid(
+            &format!("env[{i}].name"),
+            format!(
+                "{} is a provider's key variable and is not passed to a job",
+                user.env[i].0
+            ),
+        ));
+    }
     let action = if kind == CheckKind::Container {
         norn::matrix::Action::JobContainer
     } else {

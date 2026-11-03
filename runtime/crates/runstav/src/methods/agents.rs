@@ -418,7 +418,7 @@ pub(crate) fn methods() -> Vec<Method> {
         ),
         method!(
             "agents/probe", AgentsProbe(ProbeParams) -> ProbeResult,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "whether a profile's agent starts and answers initialize (it is started in its sandbox, asked, and ended; no session is made)",
             check: check_probe,
         ),

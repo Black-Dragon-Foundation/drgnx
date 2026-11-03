@@ -75,7 +75,7 @@ async fn run(
     cwd: &std::path::Path,
     wait: Duration,
 ) -> Result<ProbeResult, Error> {
-    let prep = prepare(front, profile, Role::Chat, sid, cwd, None).await?;
+    let prep = prepare(front, profile, Role::Chat, sid, cwd, None, &[]).await?;
     let command = profile.command.join(" ");
     let opts = ConnOpts {
         deadline: wait,

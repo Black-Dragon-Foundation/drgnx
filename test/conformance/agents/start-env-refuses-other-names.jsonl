@@ -1,13 +1,17 @@
-{"scenario": "agents/start-env-refuses-other-names", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "agents/start env takes only the names on drgnx-agents-start-env-names, and never a name that looks like a credential, even one the setting lists: invalid-params at env[i].name, and no session starts."}
+{"scenario": "agents/start-env-refuses-other-names", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "agents/start env takes only the names on drgnx-agents-start-env-names, and never a name that looks like a credential or a provider's key_env, even one the setting lists: invalid-params at env[i].name, and no session starts."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
-{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-start-env-names (\"PLAYWRIGHT_MCP_CDP_ENDPOINT\" \"WORK_API_KEY\")) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-start-env-names (\"PLAYWRIGHT_MCP_CDP_ENDPOINT\" \"WORK_API_KEY\" \"WORK_ACCESS\")) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "env": [{"name": "SOMETHING_ELSE", "value": "x"}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "env[0].name"}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "env": [{"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "http://127.0.0.1:9222"}, {"name": "WORK_API_KEY", "value": "x"}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "env[1].name"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"acme": {"kind": "openai", "url": "https://api.acme.invalid/v1", "caps": ["chat"], "key_env": "WORK_ACCESS"}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "env": [{"name": "WORK_ACCESS", "value": "x"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "path": "env[0].name"}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": []}}, "within_ms": 5000}

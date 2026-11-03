@@ -146,22 +146,6 @@ impl StartParams {
     }
 }
 
-/// Whether NAME looks like it carries a key, whatever its value: the names the shell environment never passes to the
-/// hub (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `CREDENTIAL` anywhere in it, in any case).
-pub fn key_like_env_name(name: &str) -> bool {
-    let up = name.to_ascii_uppercase();
-    [
-        "KEY",
-        "TOKEN",
-        "SECRET",
-        "PASSWORD",
-        "PASSPHRASE",
-        "CREDENTIAL",
-    ]
-    .iter()
-    .any(|w| up.contains(w))
-}
-
 /// `exec/start`'s answer (and `job_start`'s): the job's id and what the agent does now.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -252,7 +236,7 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     }
     if let Some(vars) = &p.env {
         for (i, v) in vars.iter().enumerate() {
-            if key_like_env_name(v.name.as_str()) {
+            if super::hub::refused_env_name(v.name.as_str()) {
                 return Err(invalid(
                     &format!("env[{i}].name"),
                     "a name that looks like a key is not passed to a job",
