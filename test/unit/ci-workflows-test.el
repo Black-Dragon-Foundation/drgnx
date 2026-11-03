@@ -59,8 +59,12 @@
       (should (= 9 (funcall count "          path: drgnx\n")))
       (should (= 9 (funcall count "          ref: ${{ inputs.drgnx_ref }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
-    (dolist (job '("unit" "no-lisp-writes" "ui"))
+    (dolist (job '("unit" "no-lisp-writes" "ui" "perf"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: bins-linux" "uses: ./drgnx/.github/actions/fetch-test-bins"))
+    ;; and bins-linux runs for each of them
+    (dolist (tier '("unit" "no-lisp-writes" "ui" "perf"))
+      (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" tier)
+                             (drgnx-ci-test--job tiers "bins-linux"))))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux")
                         "uses: ./drgnx/.github/actions/build-test-bins" "name: drgnx-test-bins-linux" "retention-days: 1")
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "uses: ./drgnx/.github/actions/build-test-bins"
