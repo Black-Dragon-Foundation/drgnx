@@ -550,8 +550,9 @@ mod tests {
         // The shell is the relay's parent and stays alive while we hold its stdin.
         let mut sh = Command::new("sh")
             .arg("-c")
+            // fd 3 is the shell's stdout for the relay: it says `ready` there once its port is bound
             .arg(
-                r#"GLEIPNIR_RELAY_CHILD="$1 --parent-pid $$" "$0" --exact net::relay::tests::child_entry --nocapture --test-threads=1 </dev/null >/dev/null 2>&1 &
+                r#"GLEIPNIR_RELAY_CHILD="$1 --parent-pid $$ --ready-fd 3" "$0" --exact net::relay::tests::child_entry --nocapture --test-threads=1 </dev/null 3>&1 >/dev/null 2>&1 &
 echo $!; read x"#,
             )
             .arg(&exe)
@@ -561,47 +562,54 @@ echo $!; read x"#,
             .spawn()
             .unwrap();
         // GLEIPNIR_RELAY_CHILD: the pair, then the shell's own pid as the expected parent.
-        let mut out = String::new();
-        {
-            let mut line = Vec::new();
-            let so = sh.stdout.as_mut().unwrap();
-            let mut b = [0u8; 1];
-            while so.read(&mut b).unwrap() == 1 && b[0] != b'\n' {
-                line.push(b[0]);
+        // The shell says its relay's pid (`echo $!`); the relay says `ready` on the same pipe once its port is bound.
+        // Both lines are read, in whichever order they came.
+        let (mut pid, mut ready) = (None, false);
+        let mut lines = std::io::BufReader::new(sh.stdout.take().unwrap());
+        while pid.is_none() || !ready {
+            let mut line = String::new();
+            assert!(
+                std::io::BufRead::read_line(&mut lines, &mut line).unwrap() > 0,
+                "the shell or the relay ended before it was ready (pid {pid:?})"
+            );
+            match line.trim() {
+                "ready" => ready = true,
+                n => pid = Some(n.parse::<u32>().unwrap()),
             }
-            out.push_str(&String::from_utf8(line).unwrap());
         }
-        let pid: u32 = out.trim().parse().unwrap();
-        let up = |p: u16| std::net::TcpStream::connect(("127.0.0.1", p)).is_ok();
-        let mut listening = false;
-        for _ in 0..100 {
-            if up(port) {
-                listening = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let pid = pid.unwrap();
+        // A handle on the relay's exit, taken while it is certainly there (its parent lives).
+        // SAFETY: pidfd_open(2) with plain integers; the result is a new descriptor of ours.
+        let pidfd = unsafe {
+            let fd = libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0);
+            assert!(fd >= 0, "pidfd_open: {}", std::io::Error::last_os_error());
+            std::os::fd::OwnedFd::from_raw_fd(fd as i32)
+        };
         let alive = |pid: u32| matches!(state_of(pid), Some(c) if c != 'Z' && c != 'X');
-        assert!(listening && alive(pid), "relay up while the parent lives");
-        std::thread::sleep(Duration::from_millis(1500));
+        assert!(alive(pid), "relay up while the parent lives");
+        // The one wait that is a window, not an event: nothing must happen. The relay looks at its parent once a
+        // second (`parent_gone`), so a window of a poll and a half covers a check that would wrongly end it.
+        const A_POLL_AND_A_HALF: Duration = Duration::from_millis(1500);
+        std::thread::sleep(A_POLL_AND_A_HALF);
         assert!(alive(pid), "still up after a poll while the parent lives");
         // The parent goes.
         drop(sh.stdin.take().unwrap().write_all(b"\n"));
         let _ = sh.wait();
-        let mut gone = false;
-        for _ in 0..60 {
-            if !alive(pid) {
-                gone = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        // The relay's exit is what the descriptor reports; 30 s only bounds a failure.
+        let mut p = libc::pollfd {
+            fd: std::os::fd::AsRawFd::as_raw_fd(&pidfd),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll(2) on one valid pollfd.
+        let gone = unsafe { libc::poll(&mut p, 1, 30_000) } == 1;
         if !gone {
             let _ = rustix::process::kill_process(
                 rustix::process::Pid::from_raw(pid as i32).unwrap(),
                 rustix::process::Signal::KILL,
             );
         }
-        assert!(gone, "the relay exits within seconds of its parent");
+        assert!(gone, "the relay exits when its parent does");
+        assert!(!alive(pid));
     }
 }
