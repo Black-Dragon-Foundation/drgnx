@@ -60,13 +60,12 @@ How drgnx is built, tested and measured.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
 - [The runtime workspace](develop/runtime.md): `runtime/`, the Cargo workspace (MSRV, deny policy, locked builds), the crate names, and the conformance harness: scenario files run against a hub binary, one socket-path fixture for Lisp and Rust.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
-- [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
+- [The hub and the gateway](develop/hub.md): Ratatoskr, the one durable process behind agents (Ratatoskr phase 7 is done: no Lisp runtime, no backend, one writer), its socket protocol, the traffic gateway.
 - [The store (Urdr)](develop/store.md): `work.db` schema 8 — one knowledge graph with history, written by Ratatoskr only.
 - [Records (saga)](develop/records.md): reading and writing a project's plan, ledger, deferred-list and board files without changing a byte.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests; what needs you and the decisions: the job window's parts, the job filter, its saved state.
-- [The job sandbox](develop/sandbox.md): what a job agent can see — the spec, what it refuses, the bubblewrap argv
-  and why each flag, the MCP bridge into the sandbox, the Seatbelt profile on macOS, phase 2's network relay, proxy and gateway socket.
-- [Gleipnir](develop/gleipnir.md): the Rust sandbox in `runtime/` — its spec and what it refuses, bwrap, the inner helper, Landlock, seccomp, Seatbelt, the relay and the proxy, the check, and the escape rows that prove it. Not used by drgnx yet.
+- [The job sandbox](develop/sandbox.md): where the job sandbox's documentation is, and the VC guard (no git of yours runs in a task's folder).
+- [Gleipnir](develop/gleipnir.md): the Rust sandbox in `runtime/` that every agent session runs in — its spec and what it refuses, bwrap, the inner helper, Landlock, seccomp, Seatbelt, the relay and the proxy, the check, and the escape rows that prove it.
 
 Docs are updated in the same commit as the code they describe.

@@ -87,22 +87,14 @@ keeps the old report. They are read with `drgnx-file-read`: `drgnx-tty--read-rep
 `ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its
 next run, so a report with a mistake is not kept aside.
 
-**drgnx-exec.el.** The editor's client for the hub's jobs (`exec/*`; `docs/guide/jobs.md`, "The editor's jobs"), the
-replacement for `drgnx-jobs.el`'s units. `drgnx-exec-get` and `drgnx-exec-list` read `drgnx-exec--jobs`, a cache that
+**drgnx-exec.el.** The editor's client for the hub's jobs (`exec/*`; `docs/guide/jobs.md`, "The editor's jobs").
+`drgnx-exec-get` and `drgnx-exec-list` read `drgnx-exec--jobs`, a cache that
 `drgnx-exec-sync` fills from `exec/list` and the `exec-done` events (bounded by `drgnx-exec--keep`; a closed hub
 connection marks it stale, and the next event refreshes it): they never call the hub, so a timer or redisplay may use
 them. The editor calls `drgnx-exec-sync` each time its subscription to the hub is answered (`drgnx-hub--subscribed`)
 and `drgnx-exec-unsync` in `drgnx-hub-disconnect`; a batch Emacs that waits on a job (the onboarding CLI) calls it
 after its start is answered. `drgnx-exec-start` and `-stop` are asynchronous; `drgnx-exec-log` is a synchronous call for commands (it refuses
 under `inhibit-interaction`). `drgnx-exec-unsync` removes the hooks and clears the cache.
-
-**job.eld.** A durable job's `jobs/ID/job.eld` is a plist of plain data in one form: `drgnx-jobs-start` writes it with
-`drgnx-file-write` (text properties on the name and command are dropped first), `drgnx-jobs--read` reads it with
-`drgnx-file-read` (nil for a missing or unreadable file), and the stamp (`drgnx-jobs--stamp`: `:boot` and `:start`) is
-`drgnx-file-update` with `:timeout 0` from the poll, `1.0` from `kill-emacs-hook`, `inhibit-interaction` bound; a `:start`
-already stamped within 0.5 s of the process's is kept (Emacs's reading of it jitters by a clock tick). A busy lock
-skips the stamp; an unreadable job.eld is left alone and the error becomes one `message`; the stamp never creates a
-missing job.eld or its directory. Files written by older versions (one `prin1` form) read unchanged.
 
 **Reading.** `(drgnx-file-read-bounded FILE &key max-bytes)` gives the file's text decoded as UTF-8, or nil when it
 does not exist. It refuses, in this order:
@@ -232,9 +224,6 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
 - `(drgnx-file-inside-p FILE DIR)` says whether FILE is DIR or inside it by those true names. A name for which
   `drgnx-file-truename` gives nil is not inside.
 - Code that does more with such a path binds `file-name-handler-alist` to nil around it:
-  - the job policy (`drgnx-job--inside-p`, `drgnx-job--agent-config-p`) and the job write
-    (`drgnx-job--write-inside` and the `make-directory` before it);
-  - the agents' `fs/read_text_file` (`core/drgnx-agents.el`);
   - the Work cockpit's file checks (`drgnx-cockpit--file-ok`, `drgnx-cockpit--true-dir`,
     `drgnx-cockpit-edits--inside-p`);
   - the cockpit's file watches and edit-event paths (`drgnx-cockpit-edits--update-watches`,
@@ -256,10 +245,8 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
 
   An agent's content is plain text, and agents' names are written with no handler. Written into such a file, it
   would leave the secret unencrypted on disk (or the archive uncompressed). With handlers on it would reach EasyPG
-  (gpg, pinentry) or jka-compr. So:
-  - an agent's `fs/write_text_file` gets an ACP error that says why, in a job (`drgnx-job--request`) and in a
-    session (`core/drgnx-agents.el`);
-  - the job policy asks the user (a permission card) for an edit tool call on such a name;
+  (gpg, pinentry) or jka-compr. The hub writes an agent's files itself, never through Emacs's handlers, so only the
+  editor's side needs the rule:
   - the edit review rejects the edit (the agent is told), and Done refuses if the file became one since.
 - A local agent session's edit review (`drgnx-agents-ui--path-ok-p`) refuses a path that resolves to nil (above).
   - The review copies the file, and Done writes it, by the true name, with no handler (`drgnx-agents-ui--target`).
@@ -270,8 +257,8 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
   - a name in a `load-path` directory is Emacs looking for or loading a library (Emacs's own are `.el.gz` on
     Homebrew, Debian/Ubuntu and Fedora; a visit can autoload `image.el`): it keeps the real handlers, unrecorded;
   - `drgnx-test-visit` opens a name the way each command above does;
-  - two tests check end to end in a fresh `emacs -Q`: `drgnx-job/planted-links-never-load-tramp-jka-compr-or-epa`
-    (the policy) and `drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits).
+  - a test checks end to end in a fresh `emacs -Q`:
+    `drgnx-cockpit-edits/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits).
 
 ## Schema (`drgnx-schema.el`)
 
@@ -1373,32 +1360,6 @@ Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `
 
 All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
 `test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
-
-### The ACP watchdog and the hub's timers
-
-The agent connection and the hub are the layer's first core users; their keys are by process or name, never by the
-connection struct.
-
-- **ACP.** `drgnx-acp-start` starts the key `(acp-watchdog . PROCESS)`, repeating every 0.5 s, whose function
-  `drgnx-acp--watchdog` (CONN PROC) reports an agent that died without its sentinel being called. `drgnx-acp--exited`
-  and `drgnx-acp-stop` cancel the key; two connections have two keys. A watchdog that fails stops after
-  `drgnx-timer-failure-limit` failures and is named in `drgnx-timer-errors`, instead of failing every half second. The
-  0.05 s tick that reads the last of a dead agent's stderr is the key `(acp-exit . PROCESS)`
-  (`drgnx-acp--report-exit`, one-shot, :core): the wait for the pipe is in `with-local-quit`, and a failing on-exit
-  handler is recorded in `drgnx-timer-errors` while the stderr process and input buffer are still cleaned up.
-- **Agent sessions.** Stop's two deadlines are the keys `(agents-stop . SESSION-ID)` (0.9 s: an agent that did not
-  answer the cancel has its turn ended anyway) and `(agents-drain . SESSION-ID)` (10 s more: the held messages go
-  if the late answer never came), functions `drgnx-agents--stop-deadline` and `drgnx-agents--drain-deadline`, both
-  :core. A second Stop replaces the pending deadline instead of stacking another. A session with no live agent
-  connection when the deadline ends its turn becomes `exited` (the old raw timer signalled
-  `wrong-type-argument drgnx-acp-conn nil`).
-- **Hub.** `hub-tick` (every 2 s, repeating) keeps its own `with-demoted-errors`: its steps' transient errors (a busy
-  `work.db`) never reach the failure limit. `hub-deliver` is `drgnx-timer-soon` 0.1 s: a burst of session changes
-  delivers once. `(hub-flush . SESSION-ID)` is `drgnx-timer-soon` 0.05 s: one `agent` flush per session per burst.
-  `hub-events` is `drgnx-timer-soon` `drgnx-hub-events-interval`: `events` go at most that often. `hub-exit` is the
-  `shutdown` request's exit 0.1 s later (`drgnx-hub--exit-now` with the exit function that was set when it came); a
-  hub stopped meanwhile cancels it. `drgnx-hub-stop` cancels all of them. The hub's `coord/notify` deferrals
-  (`run-at-time 0`) stay raw.
 
 ### The clock seams
 

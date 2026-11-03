@@ -7,24 +7,19 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 - **The client** (`core/drgnx-hub-client.el`, feature `drgnx-hub-client`): everything an editor, the CLI or the
   sandbox needs to talk to a hub, and nothing of the hub's runtime — the socket path and its trust check, the line
   protocol, `drgnx-hub-call` / `-call-sync`, the event subscription, `drgnx-hub-ensure` (which starts Ratatoskr),
-  `drgnx-hub-restart-now` and the write queue (`drgnx hub start|stop|status` is `bin/drgnx` calling the binary: no Emacs). It requires only `cl-lib`, `subr-x`, `drgnx-paths`, `drgnx-jobs`
-  and `drgnx-guard` (the AI provider list comes from `drgnx-ai`, which the caller has loaded). Editor files require
-  this and never `drgnx-hub`; `drgnx-agents.el` calls the server's `drgnx-hub-serving-p` and `drgnx-hub-register` only
-  when `(featurep 'drgnx-hub)`. The message prompt both the cockpit preview and the hub's delivery use is
-  `drgnx-coord-message-prompt` (`core/drgnx-coord.el`). A `declare-function` of a client function names
-  `"drgnx-hub-client"`.
-- **The hub** (`core/drgnx-hub.el`, the server half; it requires the client): a batch Emacs started as a durable job (`drgnx-jobs-start "drgnx-hub" …`), one
-  per drgnx data directory. Without a systemd user manager (always on macOS) the job is detached by
-  `drgnx-jobs--detach`: `setsid -f`, or where there is no `setsid` (macOS) perl, which forks and calls setsid(2)
-  itself — Emacs's child already leads its own process group, and setsid(2) refuses a group leader. Either way the
-  hub leads its own session and process group and outlives the Emacs that started it. A job's pid is checked
-  against the boot it was started in: Linux's `boot_id`, macOS's `sysctl -n kern.bootsessionuuid` (not
-  `kern.boottime`, which moves when the clock is set). It gets the starting Emacs's drgnx and XDG directories as its
-  environment (under systemd only named variables pass, `--setenv=NAME`, so no value is in a command line) and never
-  a provider key: a systemd unit keeps its environment where `systemctl --user show` prints it, and the detached
-  launcher passes the starting Emacs's environment on, so `drgnx-hub-ensure` unsets every provider's `:key-env` for
-  it. Keys come over the socket instead (`gateway/keys`, below). Its `PATH` is the starting Emacs's, until an Emacs
-  that read the user's login shell (`core/drgnx-shell-env.el`, at start and Shell: Reload Environment) finds `PATH`
+  `drgnx-hub-restart-now` and the write queue (`drgnx hub start|stop|status` is `bin/drgnx` calling the binary: no Emacs).
+  It requires `cl-lib`, `subr-x`, `seq`, `drgnx-paths`, `drgnx-guard`, `drgnx-timer`, `drgnx-file`, `drgnx-notice`,
+  `drgnx-agents-matrix` and `drgnx-work-db` (the AI provider list comes from `drgnx-ai`, which the caller has loaded).
+  There is no server half in Emacs: the hub is the Rust binary. The message prompt the cockpit preview uses is
+  `drgnx-coord-message-prompt` (`core/drgnx-coord-read.el`). A `declare-function` of a client function names
+  `"drgnx-hub-client"`. The editor's jobs go through `core/drgnx-exec.el`, a cache fed by `exec/list` and the hub's
+  `exec-done` events ([Jobs](#jobs-exec)).
+- **The hub's environment.** One hub runs per drgnx data directory, started as
+  [below](#starting-stopping-and-restarting-ratatoskr) (a user unit, a launchd job or a self-detached process), and
+  it outlives the Emacs that started it. It gets the starting Emacs's drgnx and XDG directories as its environment
+  and never a provider key (`drgnx-hub-ensure` unsets every provider's `:key-env` for the start). Keys come over the
+  socket instead (`gateway/keys`, below). Its `PATH` is the starting Emacs's, until an Emacs that read the user's
+  login shell (`core/drgnx-shell-env.el`, at start and Shell: Reload Environment) finds `PATH`
   changed and sends `env/set`. The front serves `env/set` itself (`drgnx-ratatoskr/src/shell_env.rs`): the variables
   are an overlay in the hub's memory (`ShellEnv`), and every process the hub starts next (agent sessions, jobs, podman,
   git for plan runs) takes its environment from the process's with the overlay applied, so `PATH` is the login
@@ -33,15 +28,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   provider's key variable is left out of the answer's `applied` list; it is not an error. The overlay is in memory only,
   so the editor sends it again at every connect (`drgnx-hub-connected-functions`, run once the subscription has
   proved itself), also to a hub that restarted. The hub is never restarted for that: a restart would end its durable
-  sessions.
-  Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
-  sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
-  editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
-  never the hub's end. The ACP agents it runs and their MCP servers (coordination, search) start the same way —
-  `drgnx-command-ignoring-sigpipe`, `sh -c "trap '' PIPE; exec …"`, off Windows — because libuv resets SIGPIPE in an
-  agent's children, and a write to a pipe whose reader left would otherwise end the server.
-- **Ratatoskr** (`runtime/crates/drgnx-ratatoskr`, binary `ratatoskr`; [runtime.md](runtime.md)), the Rust hub that
-  replaces the Lisp server half. `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
+  sessions. Rust ignores SIGPIPE in its own processes, so a write to a connection an agent closed is an error and never
+  the hub's end.
+- **Ratatoskr** (`runtime/crates/drgnx-ratatoskr`, binary `ratatoskr`; [runtime.md](runtime.md)), the hub: the only
+  server, the only writer of `work.db` and the owner of every agent session and job.
+  `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
   `ensure`, `stop`, `status`, `doctor --json`, `restart` ([below](#starting-stopping-and-restarting-ratatoskr)) and
   `ratatoskr version [--json]`
   (`{version, commit, proto: 1, records: 2, sqlite, test_hooks}`; the commit is `DRGNX_BUILD_COMMIT` at build time,
@@ -60,8 +51,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      [Sessions and their sockets](#sessions-and-their-sockets)). A newer schema (after `update --back`) is moved aside
      with its `-wal` and `-shm` as `runtime.db.newer-N-UNIXTIME` and a new file is made: the sessions it kept are lost
      (their bridges fail and their editors open them again), which is accepted because installs are disposable.
-  6. The process groups `runtime.db` recorded are reaped ([The reaper](#the-reaper): a crashed run's, or the Lisp
-     backend an older hub ran).
+  6. The process groups `runtime.db` recorded are reaped ([The reaper](#the-reaper): a crashed run's, or the Emacs
+     child an older hub ran).
   7. What the Lisp hub left in `<state>` is moved aside, once (`legacy::migrate`, [below](#what-the-lisp-runtime-left)),
      then the session sockets whose owners still run are bound again. No child Emacs is
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
@@ -74,19 +65,14 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
   method, `--idle-tick-ms N` (the restart-when-idle tick), and `--agent-socket SID[:JOB]`, which is refused without
-  `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent (the Lisp hub's name
-  for it), so a hub a test starts through `ensure` ends with the test.
-- **The gateway** (`core/drgnx-gateway.el`) runs inside the hub: never in the editing Emacs, so streaming cannot
-  touch the keystroke budget.
-  Besides the 127.0.0.1 port it can listen on **per-session Unix sockets** (`drgnx-gateway-listen-socket PATH`, for
-  agents in a sandbox without the host's loopback; the caller picks PATH, `gateway.sock` in the session's private
-  directory beside `mcp.sock` and `hub.sock`). Same filter, path allowlist and token check as the port; the socket
-  is mode 0600 and a stale file at PATH is replaced. `drgnx-gateway-close-socket PATH` (and `drgnx-gateway-stop`)
-  cuts the connections on it, with their upstream requests, and removes the file.
-- **curl**, one per forwarded request, reads its config on stdin (`-K -`): the URL, the provider's key header and the
-  request body never appear in its argv.
-  The config has `suppress-connect-headers`: behind an HTTPS proxy curl's `include` would otherwise print the
-  proxy's CONNECT head first, and the gateway would take it for the provider's answer.
+  `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
+- **The gateway** (`drgnx-ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
+  editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
+  Unix sockets** (`gateway.sock` in the session's private directory beside `mcp.sock` and `hub.sock`, for agents in a
+  sandbox without the host's loopback). Same path allowlist and token check as the port; the socket is mode 0600 and a
+  stale file at its path is replaced. Closing a session's socket cuts the connections on it, with their upstream
+  requests, and removes the file. Upstream requests are made by the hub's own HTTP client over rustls, so the provider's
+  key and the request body are in no process's argv ([Forwarding](#forwarding)).
 
 ### Starting, stopping and restarting Ratatoskr
 
@@ -133,10 +119,11 @@ really held:
   following a link, only when they are the user's. Else `stop`, `ensure` and `status` print the refusal (`… belongs to
   another user`, `… is open to other users (mode 755; it must be 700)`) and exit 1, having read and signalled
   nothing. A directory that is not there is no hub.
-- **A Lisp hub's lock** (a directory): a v0 `shutdown` goes to the socket (a Lisp hub serves it without a hello) and
-  `stop` waits for the directory to go (`stopped the Lisp hub (pid N)`). If it stays, `lock/pid` gets SIGTERM only
-  when it is alive and its command line names `drgnx-hub-main`; else it prints `the lock names pid N, which is not a
-  drgnx hub: remove LOCKDIR` and exits 1.
+- **A lock directory left by the Lisp runtime** (a hub started before it was removed and still running after an
+  update): a v0 `shutdown` goes to the socket (that hub serves it without a hello) and `stop` waits for the directory
+  to go (`stopped the Lisp hub (pid N)`). If it stays, `lock/pid` gets SIGTERM only when it is alive and its command
+  line has the Lisp hub's entry function (`lock.rs`); else it prints `the lock names pid N, which is not a drgnx hub:
+  remove LOCKDIR` and exits 1. Nothing starts such a hub any more.
 
 **The hub is not dumpable** (`server::harden`, before it binds or reads a key): `PR_SET_DUMPABLE 0` on Linux and
 Android, `PT_DENY_ATTACH` on macOS. Keys live in its memory (next sections), and this keeps another process of the
@@ -184,13 +171,13 @@ not count), so a busy hub is never restarted.
   an allowed prefix) from the runtime's environment, then applies `set`. The child starts from an empty environment
   plus that list, so a provider key the runtime holds never reaches it unless a caller names it.
 - **Spawning:** every child leads its own process group, gets SIGPIPE back to ignored before `exec` (std resets it
-  to the default; a write to a pipe whose reader left must be an error, as for the Lisp hub's children), has stdin
+  to the default; a write to a pipe whose reader left must be an error), has stdin
   `/dev/null` unless the caller wants a pipe, and stdout and stderr piped. The last 8000 characters of stderr are
   kept (`Child::stderr_tail`). `Child::wait` reports the exit status once; later calls return nothing. There is no
   `PR_SET_PDEATHSIG`: it fires when the forking *thread* exits, and tokio's threads come and go.
 - **Start times:** `start_time(pid)` is field 22 of `/proc/PID/stat` on Linux (clock ticks since boot, read after
   the last `)` of the command name) and `proc_pidinfo`'s start in microseconds on macOS. `boot_id()` is Linux's
-  `/proc/sys/kernel/random/boot_id` and macOS's `kern.bootsessionuuid`, as for the Lisp hub's jobs.
+  `/proc/sys/kernel/random/boot_id` and macOS's `kern.bootsessionuuid` (the pid of a job is checked against the boot it started in).
 - **The orphan reaper:** at start Ratatoskr reaps the process rows (pid, start time, pgid, boot id) a crashed run
   left in `runtime.db`. For each row, in this order:
   1. any of the four is NULL → skipped, nothing signalled (a crash between a row's insert and its update leaves
@@ -229,7 +216,7 @@ and never hands over keys — on the `/tmp` fallback another local user could ha
 coordination server's `coord/notify` checks the same, and so does every path of Ratatoskr's command-line client
 (`runstav::paths::trusted_dir`: `ping`, the v0 calls, user connections and the lock's holder, so `ensure`, `stop`,
 `status`, `doctor` and `restart`); it opens the directory without following a link and reads the cap and the lock
-through it. Unlike the Lisp client it takes a missing directory as no hub (`ensure` then starts one, which makes the
+through it. Unlike the editor's client it takes a missing directory as no hub (`ensure` then starts one, which makes the
 directory private itself). One JSON object per line: requests `{"id", "method",
 "params"}`, answers and events. Every method, its classes, its params and its result are in [The
 registry](#the-registry-protocol-v1), generated from the Rust definitions.
@@ -285,11 +272,12 @@ lines and limits, with these differences:
   held makes `serve` exit 3 ("another hub serves here"). Dropping the lock, and a probe that took it, unlock with
   `LOCK_UN` before the close: a child another thread forked shares the open file until its exec, and a close alone
   would leave the lock held through that copy.
-- **A Lisp hub's lock directory** (`SOCKET.lock/` with `pid`, from before Ratatoskr) is judged from its `pid`, never
-  from a ping. Ratatoskr exits 3 ("a Lisp hub from before Ratatoskr serves here: drgnx hub stop") and touches nothing
-  in two cases:
-  - the pid is alive (`kill(pid, 0)` succeeds or fails with EPERM) and its command line has `drgnx-hub-main` (Linux
-    `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`), whether the hub answers a ping or not;
+- **A lock directory from the Lisp runtime** (`SOCKET.lock/` with `pid`, left by a hub that outlived the update) is
+  judged from its `pid`, never from a ping. Ratatoskr exits 3 ("a Lisp hub from before Ratatoskr serves here: drgnx
+  hub stop") and touches nothing in two cases:
+  - the pid is alive (`kill(pid, 0)` succeeds or fails with EPERM) and its command line has the Lisp hub's entry
+    function (the marker is in `lock.rs`; Linux `/proc/PID/cmdline`, macOS `sysctl KERN_PROCARGS2`), whether the hub
+    answers a ping or not;
   - `pid` does not read and the directory is younger than 10 s (a Lisp hub between its `mkdir` and its pid write).
 
   In every other case the directory is removed and the takeover is logged with the pid: the pid is gone, it names
@@ -325,8 +313,7 @@ worth nothing on another connection, because each connection's challenge differs
    - no proof leaves the class as it is (`service` on the main socket).
 4. The reply is `{proto: 1, proto_min: 1, drgnx_version, schema, records: 2, class, methods, runtime: {version,
    commit}, proof?}`. `drgnx_version` is the build commit, `schema` is work.db's `meta.schema` (Ratatoskr makes
-   or migrates the file before it serves, so 7 unless the file is newer, or older and its migration failed; the Lisp hub says 0
-   when there is no work.db yet), and `methods` names every method of the registry. `proof` is the hub's own, `HMAC-SHA256(cap,
+   or migrates the file before it serves, so 7 unless the file is newer, or older and its migration failed), and `methods` names every method of the registry. `proof` is the hub's own, `HMAC-SHA256(cap,
    "drgnx-hub hub " + nonce + " " + HUB_NONCE)`. It is sent only after a valid client proof.
 
 A connection answers one `hello`: a second one is `proto` "hello was already answered on this connection", whatever
@@ -386,8 +373,8 @@ only those: never the params or the message, since a decode error's message can 
 **Served by the front:** `hello`, `ping` `{pid}`, `status`, `subscribe` (the connection gets the broadcast events
 from now on), `shutdown` (answers `true`, then the hub stops as on SIGTERM), `restart`, `events/since`,
 `coord/notify` and the front's writes (next section). `status` is `{pid, socket, started, proto, proto_min, records,
-drgnx_version, schema, read_only?, store, runtime, refusals, job_agents: "unsandboxed (as on main; the sandbox comes
-with phase 6)"}`. `events/since` reads work.db's `event` table: `{since,
+drgnx_version, schema, read_only?, store, runtime, refusals, job_agents: "every session runs in the job sandbox; where
+it cannot, none starts"}`. `events/since` reads work.db's `event` table: `{since,
 last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since` (0), at most `limit` (200, at most
 1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
 says `gateway: {port?, registrations, requests,
@@ -399,7 +386,7 @@ gateway's methods, `gateway/{register,unregister,keys,set-budget}` and `spend`, 
 
 ## Every method is the hub's
 
-Ratatoskr serves every method of the registry itself; there is no Lisp backend behind it any more, so nothing is
+Ratatoskr serves every method of the registry itself: there is no second process behind it, so nothing is
 forwarded and no child Emacs is started. `Front::line` (`runtime/crates/drgnx-ratatoskr/src/front.rs`) routes the
 decoded params with one `match` over `Params` that has no catch-all arm: the front's own methods (above), then the
 agent core's, the store's and the coordination writes, each listed by name. A method added to the registry without a
@@ -440,10 +427,10 @@ its connection's, and the hub is work.db's one writer (coordination.md, "Who wri
 ### The reaper
 
 `runtime.db`'s `proc` table records process groups by pid, start time, group and boot id. The hubs before phase 7
-wrote a row (purpose `backend`) for the Lisp backend they ran as a child; this hub writes none. At start, before
+wrote a row (purpose `backend`) for the Emacs child they ran; this hub writes none. At start, before
 anything is served, Ratatoskr reaps every recorded row with `draugr`'s rules (above: a row with a NULL pid, group,
 start time or boot id is skipped and never signalled; a pid whose start time or boot differs is left alone) and then
-deletes them all, so the backend an older or crashed hub left is killed with its group when the new binary starts.
+deletes them all, so the Emacs child an older or crashed hub left is killed with its group when the new binary starts.
 The window left open is the reused leader ("The window left open", above): the recorded group died and its leader's
 pid went to another process's group before the next start.
 
@@ -453,7 +440,7 @@ pid went to another process's group before the next start.
 only when present, into `<state>/hub/migrated-p7/` (0700, original names): from `<state>/hub/` the files
 `registrations.eld`, `sessions.eld`, `port` and `hub-timers-report.eld`, the folder `bodies/` and every `hub-*.d/` that
 holds only `backend.sock`; then `<state>/sandbox/`; and each `<state>/jobs/<id>/` of the editor's old command jobs
-(`core/drgnx-jobs.el`) that has ended (an `exit` file, or a `pid` file naming a process that is gone; a job with neither
+(the Lisp runtime's, before the hub ran them as `exec/*`) that has ended (an `exit` file, or a `pid` file naming a process that is gone; a job with neither
 counts as ended once its folder has been quiet for a minute). A live job's folder stays and is listed in `left`.
 
 A move is a `rename`; across filesystems (`EXDEV`) it copies into a temporary name beside the target, syncs every file
@@ -464,14 +451,13 @@ JSON `Moved` `{at, moved, left}` (names relative to `<state>`); once it exists l
 nothing left) writes nothing.
 
 `doctor --json` has `legacy: {moved, left, at, lisp_processes: [{pid, what}]}`: `moved` and `at` from `done`, `left`
-read afresh (a job may have ended since), and the user's processes whose command line has `drgnx-hub-main` or
-`drgnx-coord-mcp-main` (from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
+read afresh (a job may have ended since), and the user's processes whose command line has the Lisp hub's or the Lisp coordination server's entry function (`MARKERS` in `legacy.rs`; from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
 Rows: `lifecycle/{an-old-backend-is-reaped-at-start,lisp-state-is-moved-once,a-second-start-moves-nothing,a-running-lisp-job-is-left-in-place}`.
 
 ## The client
 
-`core/drgnx-hub-client.el` is what editors, the CLI and the coordination servers load to talk to the hub; it speaks
-protocol v1 to Ratatoskr ([hello and versions](#hello-and-versions)) and protocol 0 to a Lisp hub of before it.
+`core/drgnx-hub-client.el` is what the editor and the CLI load to talk to the hub; it speaks protocol v1 to Ratatoskr
+([hello and versions](#hello-and-versions)) and protocol 0 to a Lisp hub that outlived an update (`legacy`).
 
 **`(drgnx-hub-call METHOD PARAMS CALLBACK &key DEADLINE FULL)`** returns the call's id. CALLBACK gets `(RESULT
 ERROR)` **exactly once**: the answer, or `(nil "…")` when DEADLINE passes (`drgnx-hub-call-deadline`, 30 s; a layer
@@ -480,20 +466,18 @@ timer `(hub-call . ID)`) or the connection goes first. ERROR is the hub's messag
 back again. `drgnx-hub-call-sync` (commands and the CLI only) waits for the same callback, its TIMEOUT the deadline.
 
 **A new connection** proves itself before any call goes:
-1. **This Emacs serves the socket** (`drgnx-hub--server` is live on the same path: the Lisp hub's own tests, where
-   keys never leave the process): the connection is proven at once. Nothing is sent first and nothing is waited for.
-2. Otherwise it **waits for the hub's challenge**, at most 2 s (a layer timer `(hub-challenge . CONNECTION)`), and
+1. It **waits for the hub's challenge**, at most 2 s (a layer timer `(hub-challenge . CONNECTION)`), and
    sends a `ping` at once. Ratatoskr's challenge is always its first line, so a ping answered first means a hub of
    before protocol 1: that one is `legacy` at once, without the 2 s wait. Only that makes a hub `legacy`. When the
    2 s pass, what already arrived is read first (an Emacs busy past the wait runs the timer before it reads a
    challenge waiting in the socket); still no line, and the connection is closed and its calls fail (the next call
    connects again). A challenge that comes on a connection taken for `legacy` closes it the same way.
-3. On the challenge it sends **`hello`**: `proto` 1, a fresh `nonce`, `drgnx_version` (the commit of the binary on
+2. On the challenge it sends **`hello`**: `proto` 1, a fresh `nonce`, `drgnx_version` (the commit of the binary on
    disk, `drgnx-hub-client-binary-version`, when it is known), `schema` (`drgnx-work-db-schema-version`), `records` 2,
    `client` (`"cli"` in a batch Emacs, else `"editor"`) and `proof`: `HMAC-SHA256(cap, "drgnx-hub client " +
    HUB_NONCE + " " + nonce)`, the cap read from `hub-HASH.cap` beside the socket with `drgnx-file-read-bounded` (256
    bytes). Calls made meanwhile wait in the connection's queue, in order.
-4. **The answer:** the hub's `proof` must be `HMAC-SHA256(cap, "drgnx-hub hub " + nonce + " " + HUB_NONCE)`
+3. **The answer:** the hub's `proof` must be `HMAC-SHA256(cap, "drgnx-hub hub " + nonce + " " + HUB_NONCE)`
    (compared as SHA-256 digests). Then the connection is **proven** and the queued calls go out. A missing or wrong
    proof closes the connection, fails the queued calls once with "the hub at SOCKET did not prove it read CAP-FILE",
    and tells the user (a `fail` notice of source `hub`, id `unproven`). A refused hello, or a cap this Emacs cannot
@@ -509,14 +493,13 @@ any other. After `drgnx-hub-resubscribe-give-up` (600 s) from the first loss it 
 Asked ends do not redial: `drgnx-hub-disconnect` and a `shutdown` call this editor sent set
 `drgnx-hub--asked-disconnect` (cleared by the next `drgnx-hub-connect`) and cancel the timer.
 
-**Keys go only to a hub that proved itself** (or this Emacs's own): on any other connection, a `legacy` one or a
+**Keys go only to a hub that proved itself**: on any other connection, a `legacy` one or a
 service one, `gateway/keys` is never written (its callback gets "keys go only to a hub that proved itself") and
 `gateway/register` goes without its `keys`. A legacy hub otherwise gets every call as before.
 
 **`drgnx-hub-client-proves`** (default t): nil sends the hello without a proof and never reads the cap, so the
-connection stays `service`. `drgnx-coord-mcp-main` binds it to nil: a coordination server an agent started must never
-become `user` class by reading the cap file. Its other hub client, `drgnx-coord-mcp--notify-hub`, writes a raw
-`coord/notify` notification and reads nothing; a service connection may send it.
+connection stays `service`: a client that must never become `user` class by reading the cap file binds it to nil.
+The coordination tools no longer run in Emacs, so nothing in drgnx does.
 
 **Skew.** `drgnx-hub--last-hello` keeps the last answer (a plist, or `:legacy`); `(drgnx-hub-has-method-p NAME)`
 reads its `methods`. `(drgnx-hub-skew REPLY)` is:
@@ -565,13 +548,12 @@ current (`ok`) clears it. A `legacy` hub (the Lisp hub of an install updated whi
 its own text, from the hello, in an editor only. **`hub-restart-now`** ("Hub: Restart Now", category Agents, no key in
 any profile; `drgnx-hub-restart-now`) asks no one: on Ratatoskr it calls `restart` (its supervisor, or its own
 re-execution, brings it back); on a legacy hub it calls `shutdown` (protocol 0 has no `restart`), waits up to 5 s for
-`<socket>.lock` to go, and runs `ratatoskr ensure`; with no hub it just starts one. Agent sessions end. The Lisp hub's
-own tests start a Lisp hub with `test/fixtures/lisp-hub-fixture.el`, since `drgnx-hub-ensure` no longer does.
+`<socket>.lock` to go, and runs `ratatoskr ensure`; with no hub it just starts one. Agent sessions end.
 
 **Probes.** `drgnx-hub--ping-socket` (`drgnx-hub-running-p`) sends a raw `ping` and reads lines until one is not an
 event, so Ratatoskr's challenge is skipped. It sends no hello: a probe is `service` class, which `ping` allows.
 
-**The line reader** (`drgnx-hub--lines`, client and Lisp hub alike) searches only the chunk that came for a newline.
+**The line reader** (`drgnx-hub--lines`) searches only the chunk that came for a newline.
 The start of a line still open waits in a list of pieces, joined once its newline comes, so a 16 MiB snapshot in 8 KB
 chunks costs its length, not its length times its chunks (HUB-LINES-1, PERF-M3).
 
@@ -584,43 +566,26 @@ store, and fails on any `invalid-params` or `internal`.
 
 ## Events
 
-The hub's own timers are layer timers keyed `hub-tick`, `hub-deliver`, `(hub-flush . ID)`, `hub-events` and `hub-exit` ([core.md](core.md#the-acp-watchdog-and-the-hubs-timers)): a burst of session changes delivers once, and `events` go at most every `drgnx-hub-events-interval`.
+The hub turns what happens into rows of the store's event log ([coordination.md](coordination.md), `event`), written
+in the same transaction as the change they record:
 
-The hub turns what happens into events in the store's event log ([coordination.md](coordination.md), `event`):
-
-- **Native sessions** (`drgnx-hub--session-events`, on each change of a session):
-  - **its life:** `start` when the hub first sees it (data `:head`, the commit its folder is at, read from the
-    repository's files by `drgnx-job-git-head`, never a git process), `stop` when it exits;
-  - **its turns:** `start` and `stop` with data `(:turn t …)` — `:turn` first, so readers tell them from a life's
-    with a prefix test; the cockpit's life, `:stopped` and timeline leave them out;
-  - **edits:** an edit tool call it completed (`edit`: kind edit, delete or move, with the paths of its diffs, at most
-    100 then `:more N`), once per call, before the turn's `stop`. A write request is the edit when there is one — the
-    user accepts it (`agents/do` `review`; a rejected one is none) or a job's policy writes it — and the tool call an
-    adapter reports for the same write (claude-agent-acp's Write and Edit do) leaves out the paths this turn recorded
-    already: one `edit` per write. The scan starts at the first tool call that may still change, so a streamed turn
-    is not walked again on each chunk;
-  - **permissions:** a permission it asks (`question`, `:permission ID`) and its answer (`answer`, `:question EVENT-ID
-    :permission ID :by BY :option OPTION`): by `user` (the `agents/permission` request, a job's card:
-    `drgnx-hub-note-permission-answer`; the event's agent is then `user`), else by `drgnx` with no option — cancelled
-    (Stop) or dropped when the agent ended.
-- **Jobs** (`core/drgnx-job.el`): a reviewer's verdict (`review`, `:verdict pass` or `fail`, the reasons in the
-  summary; no data without a verdict); a merge into the job's branch (`status`, `:status "merged" :into job/ID`); a
-  write a job agent's policy allows (`edit`). A task's agent is registered (`drgnx-coord-agent-register`, kind `job`)
-  with its worktree, branch and `base`, the commit the worktree is at when it starts: the cockpit diffs its edits
-  against it (an agent that retries a task after a failed review starts from the earlier attempt's commits, so its
-  diff is the retry's own), and shows it as its job's agent only while the job is shown.
-- **Retention:** the hub's housekeeping (every 30 ticks, a minute) calls `drgnx-coord-events-prune-daily`: by age once
-  a day, and on every call the row cap (`drgnx-coord-event-max-rows`).
+- **Sessions** (`agents/session.rs`): `start` when the hub starts one (`started NAME`, in the `agents/start`
+  transaction); the agent's own reports through the coordination tools (`start`, `edit` with its paths, `test` with
+  counts: `norn::tools::report`); a permission it asks (`question`) and its answer (`answer`, by `user` or, when the
+  turn was cancelled or the agent ended, by `drgnx`).
+- **Jobs** (the plan runner, `runner/review.rs`): a reviewer's verdict (`review`, `pass` or `fail`, the reasons in the
+  summary) and a merge into the job's branch (`status`).
+- **Cards, decisions and tasks** (`norn::write::{cards,decisions}`, `norn::tracker`): `card`, `question`, `answer`,
+  `decision` and `task` rows.
+- **Retention:** the hub's housekeeping runs the daily prune (`coord/prune`, `norn::write::prune`): by age once a
+  day, and on every call the row cap.
 
 Subscribers get them as `events` (`:since ID :last ID :events [{id, at, agent, job, task, kind, summary, data}…]`,
-`data` a JSON object parsed from the store's column, absent when there is none), at
-most one every `drgnx-hub-events-interval` (0.25 s) and 200 a time. The hub's session events and `coord/notify`
-schedule a broadcast at once; its tick (2 s) catches what other processes wrote and the job events above, which go out
-within those 2 s. Event ids are never reused (`autoincrement`), so a pruned log never sends an id twice. A new hub
-starts after the last event there is; a client catching up asks `events/since`. Under Ratatoskr the front sends
-`events` (`coord.rs`, `broadcast_events`): from the newest row at its start, woken by each transaction its writer
-commits, by `coord/notify` and by its 2 s
-schema tick; at most 200 rows an event and one event each 0.25 s, as above. In an editor, the `test` events with
+`data` a JSON object parsed from the store's column, absent when there is none). Event ids are never reused
+(`autoincrement`), so a pruned log never sends an id twice. A new hub starts after the last event there is; a client
+catching up asks `events/since`. The front sends `events` (`coord.rs`, `broadcast_events`): from the newest row at
+its start, woken by each transaction its writer commits, by `coord/notify` and by its 2 s schema tick; at most 200
+rows an event and one event each 0.25 s. In an editor, the `test` events with
 counts reach the status bar (`drgnx-statusbar-note-tests`) through `drgnx-statusbar--hub-tests`, which
 `drgnx-statusbar-mode` adds to `drgnx-hub-event-functions` and removes when it is off; the hub client knows nothing of
 the status bar.
@@ -638,16 +603,12 @@ refuses at once, an ask waits for the user; a session's `exec/start` is checked 
 
 ## Sessions across a restart
 
-On each change to a session the hub keeps `<state>/hub/sessions.eld` (mode 0600, written like registrations.eld,
-only when it differs): `(:id :name :profile :cwd :acp-id :task)` of each live session the agent made, oldest first —
-not a job's (a job frees the task of an agent the hub took with it and starts it again). A hub that starts, once it
-serves, resumes each with `drgnx-agents-take-over` (ACP `session/load`) under its own id and name (messages and
-spend follow them); a file that cannot be read, or is not a list of sessions, is copied aside
-(`sessions.eld.bak-…`, `drgnx-file-backup`), logged in one line and resumes none (the next save replaces it, the
-backup keeps the bytes): the agent replays the
-history into the transcript and the session is idle; an editor that reconnects fetches it again (`agents/get`). A
-session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
-What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
+The hub keeps each live session as a row of `runtime.db`'s `asession` table ([Sessions](#sessions)). A hub that
+starts, once it serves, resumes each (`Hub::resume_all`: ACP `session/resume`, else `session/load`) under its own id
+and name (messages and spend follow them): the agent replays the history into the transcript and the session is idle;
+an editor that reconnects fetches it again (`agents/get`). A session whose agent cannot resume or load it is restarted
+as described below, or ends and says why. What was in flight is gone: a turn that was running, a pending permission or
+edit.
 
 **Everything kept across a restart (Task 24).** The hub starts in this order: the jobs a hub before this one left running
 are watched again (`exec::ensure_open`; a session's wake would otherwise wait for its first `exec/*` call), the plan
@@ -903,7 +864,7 @@ method from every class).
 
 | Class | Who | What proves it |
 |---|---|---|
-| `user` | the editor, the CLI, the Lisp backend hub during migration | a `hello` whose `proof` is HMAC-SHA256 with the cap of `"drgnx-hub client " + hub nonce + " " + nonce`: it read the cap file beside the socket |
+| `user` | the editor, the CLI | a `hello` whose `proof` is HMAC-SHA256 with the cap of `"drgnx-hub client " + hub nonce + " " + nonce`: it read the cap file beside the socket |
 | `agent` | a sandboxed job agent and the servers the hub starts for it | the socket it came in on (the session's own): its session is bound to the connection |
 | `service` | outside agents' coordination bridges, probes, anything without a proof | nothing (the default) |
 
@@ -983,52 +944,18 @@ result is (`event(NAME).check`):
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
 
-The hub sends every event; `card` and `lease-released` were the Lisp backend's, and nothing sends them now. The first
-nine are what the Lisp hub broadcast on main; a test reads `core/*.el` for its `(drgnx-hub--broadcast
-'NAME`, `(drgnx-job--broadcast 'NAME` and `drgnx-gateway--emit 'NAME` calls and fails when the two lists differ.
+The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
+and nothing sends them now (`runstav/src/events.rs`).
 
 ## Per-session sockets
 
-A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own, served by the hub
-(`core/drgnx-sandbox-mcp.el`). The agent's side, the bridge, is in [sandbox.md](sandbox.md#mcp-through-a-socket).
-For `mcp.sock` the hub's server per connection is `ratatoskr mcp-bridge --socket` to the session's own Rust socket (the
-`mcp/session` the agent start made, `:mcp-socket`), so the tools are the Rust ones; a session without one refuses the
-connection. `search.sock` is unchanged.
-
-- **Where.** `(drgnx-sandbox-mcp-dir SID)` is `s/SID` beside the hub's socket: `$XDG_RUNTIME_DIR/drgnx/s/SID`, or
-  `s/SID` beside the hub socket's fallback place. These are the dirs of `drgnx-sandbox-sessions-dirs`, so the sandbox
-  may bind it as its `:run` (`/run/drgnx` inside on Linux, its own path on macOS). Each level is made by
-  `drgnx-hub--private-dir`: mode 0700, this user's, never a link. SID is a name (letters, digits, `-`, `_`), never a
-  path. A socket's path there must fit 103 bytes, or there is no dir.
-- **Sockets.** `(drgnx-sandbox-mcp-open S &optional SEARCH)` listens on `mcp.sock` (coordination) and, when SEARCH
-  is given, on `search.sock`. SEARCH is the job's project root, given by name and spelled as its index is: a value
-  that is not a string, a root that is S's folder or lies inside it, or a folder the VC guard lists
-  (`drgnx-sandbox-vc-guarded-p`, or inside one), is an error, because the search server runs
-  git in its root and nothing outside the sandbox runs git in a task folder. The search server is **pinned** to that
-  root (`DRGNX_SEARCH_PINNED=1`): a `path` argument outside it is refused, and one inside it searches the root, so
-  no git runs where the agent points and no other project's index is read (`drgnx-search-mcp--pinned-root`). It sets
-  S's `mcp-dir` and returns the dir. `hub.sock` is kept in the same dir for the hub protocol's agent class, which is
-  not served yet.
-- **One server per connection, outside the sandbox.** The hub starts the server of `drgnx-coord-mcp-server-spec`
-  (or `drgnx-search-mcp-server-spec`) as a child of its own. Its environment is the hub's, with `DRGNX_AGENT` = S's
-  id, `DRGNX_JOB` and `DRGNX_TASK` = S's, and the data-dir variables set from the spec. The hub's own
-  `DRGNX_AGENT`, `DRGNX_AGENT_KIND`, `DRGNX_JOB` and `DRGNX_TASK` are unset. The server works in the session's dir,
-  never in the task folder: the coordination server runs git where it starts. Its stdio is spliced to the
-  connection. **The socket a connection comes in on is the identity.**
-- **Every byte from the socket is hostile.** Lines are split linearly (`drgnx-mcp-bridge--feed`). A line over
-  `drgnx-mcp-bridge-max-line` (16 MiB), or one that is not a JSON object, closes the connection and ends its server,
-  unforwarded. Writes either way go through the hub clients' queue (`drgnx-hub--enqueue`): a side that stops reading
-  for `drgnx-hub-client-stuck-after` seconds, or past `drgnx-hub-client-max-queued` bytes, is dropped. A socket
-  serves at most `drgnx-sandbox-mcp-max-connections` (4) connections at once; more are closed as they come.
-- **Ends.** A connection that closes ends its server; a server that ends closes its connection. The session's end
-  (its agent exits, or `drgnx-agents-kill`) calls `(drgnx-sandbox-mcp-close S)`: every server and connection, the
-  listeners and the dir go.
-- **What the agent gets.** `(drgnx-sandbox-mcp-server-specs S INSIDE-DIR)` gives the `mcpServers` entries `drgnx`
-  and, when `search.sock` listens, `drgnx-search`. Each runs `drgnx-mcp-bridge-command` on its socket in INSIDE-DIR,
-  with an empty `env`. `drgnx-agents--mcp-servers` gives them instead of the stdio servers when S's `mcp-dir` is set.
-  Every other session, interactive agents included, keeps the stdio servers.
-
-Tests: `test/unit/sandbox-mcp-test.el` (`drgnx-sandbox-mcp/`).
+A sandboxed session's agent reaches drgnx's MCP tools through a directory of its own, `s/SID` beside the hub's socket
+(`$XDG_RUNTIME_DIR/drgnx/s/SID`, or the fallback place beside it), which the sandbox may bind as its `:run`
+(`/run/drgnx` inside on Linux, its own path on macOS). The hub serves it: `hub.sock` (the hub protocol's agent class),
+`mcp.sock` (the coordination tools, hosted in the hub: [Sessions and their sockets](#sessions-and-their-sockets)) and
+`gateway.sock` ([Registrations](#registrations)). Each level is private (mode 0700, this user's, never a link), and a
+socket's path there must fit 103 bytes. The agent's side, the bridge, is in
+[coordination.md](coordination.md#how-an-agent-reaches-the-tools).
 
 ## Sessions
 
@@ -1164,8 +1091,8 @@ stdio server that died (anthropics/claude-code#82746), so the bridge outlives th
   the bridge starts (exit 1 otherwise); after that the bridge connects with no challenge and the first byte is MCP.
   The socket is the identity: nothing in the bridge's environment (`DRGNX_AGENT` included) is read.
 - **Outside: `mcp-bridge --outside --kind KIND [--cwd DIR]`.** For an agent drgnx did not start. The bridge finds the
-  main socket as every client does (its environment's data dir), checks the socket's directory first (the Lisp
-  client's rule: the user's, 0700; otherwise it ends with exit 1 and the reason on stderr, never connecting), reads
+  main socket as every client does (its environment's data dir), checks the socket's directory first (the client's
+  rule: the user's, 0700; otherwise it ends with exit 1 and the reason on stderr, never connecting), reads
   the challenge, says `hello {proto: 1, nonce, client: "mcp-bridge", cwd}` with no proof (the connection stays
   `service`) and `mcp/attach {kind}`; the next byte is MCP. `cwd` is `--cwd`, else the bridge's working directory.
   A refused `hello` or `mcp/attach` ends the bridge with exit 1; a hub that is not there yet is dialled again.
@@ -1193,7 +1120,7 @@ Test hooks: `--bridge-backoff-ms N` and `--bridge-give-up-ms N` shorten the timi
 The gateway runs in Ratatoskr (`runtime/crates/drgnx-ratatoskr/src/gateway.rs`, forwarding by
 [`bifrost`](runtime.md#bifrost-the-gateway)): the front serves `gateway/register`, `gateway/unregister`,
 `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held` and `spend`
-itself, and none of them reaches the Lisp backend.
+itself; nothing is forwarded.
 
 `gateway/register {chain, job?, task?, agent?, budget?, openrouter?, keys?, owner?, sid?}` returns `{token, url?,
 socket?, openrouter?}`: a token of 64 hex digits (32 random bytes) and, without `sid`, the loopback URL
@@ -1251,17 +1178,15 @@ spent, budget}` to its subscribers. `spend {job?, task?, agent?}` sums the rows 
 Provider keys reach the hub from a user connection only: `gateway/keys {keys: {PROVIDER: KEY}}` (an editor hands its
 keys over once each subscription is answered, `drgnx-hub-ensure` and so `drgnx hub start` too) and a registration's
 `keys`. They are held in Ratatoskr's
-memory only (`bifrost::keys::Keys`): never in `runtime.db`, a file, a log, an environment, a command line or the Lisp
-backend; the last key handed over for a provider wins. An empty key is no key: it is skipped, so it never replaces a
+memory only (`bifrost::keys::Keys`): never in `runtime.db`, a file, a log, an environment, or a command line; the last key handed over for a provider wins. An empty key is no key: it is skipped, so it never replaces a
 held one or marks its provider held (the editor never sends one either). `status` and the doctor name the providers whose key is held
 (`keys_held`), never a key. A restarted hub holds no key until an editor connects again; meanwhile a request that
 needs one fails over or answers "no key", and the `gateway/need-keys {providers}` event (also sent to each new
 subscriber for the providers kept registrations need) tells the editor to hand them over. The hub is not dumpable
 ([Stopping a hub](#stopping-a-hub)), so another process of the user's cannot read them from its memory.
 
-The Lisp hub (v0, before Ratatoskr) still has its own gateway, `core/drgnx-gateway.el`: registrations in
-`<state>/hub/registrations.eld` (hashes only), the port in `<state>/hub/port`, keys in its memory, curl per request.
-Ratatoskr runs no Lisp backend, so none of it runs behind Ratatoskr.
+The registrations, the port and the keys of the Lisp runtime's gateway (`registrations.eld`, `port`) are among what
+[`legacy::migrate`](#what-the-lisp-runtime-left) moves aside; nothing reads them.
 
 **The editor's side** (`core/drgnx-hub-client.el`):
 - **The runtime settings** (`core/drgnx-settings-runtime.el`). Once a subscription is answered (`drgnx-hub--subscribed`),
@@ -1296,8 +1221,7 @@ Ratatoskr runs no Lisp backend, so none of it runs behind Ratatoskr.
   editor forgets them: `drgnx-hub--drop-keys` → `drgnx-ai-forget-keys` removes each from `drgnx-ai--keys` (unless a
   newer key for the provider replaced it meanwhile) and calls `auth-source-forget-all-cached`. `drgnx-hub--transmit` sends
   `gateway/keys` only on a proven connection, so a key goes only to a hub that proved itself. The environment is
-  left as it is (`drgnx doctor`'s `ai-env-keys` names the variables set). An Emacs that serves the standalone Lisp hub
-  skips the drop: there `drgnx-ai--keys` is the hub's own table. Only AI: Load Keys keeps a key it reads
+  left as it is (`drgnx doctor`'s `ai-env-keys` names the variables set). Only AI: Load Keys keeps a key it reads
   (`drgnx-ai-key`'s KEEP) until the hand-over takes it; every other read, and above all a usability check
   (`drgnx-ai-key-held-p`, `drgnx-ai-usable-p`: AI: Choose, onboarding), keeps nothing — not in `drgnx-ai--keys`, and
   auth-source's netrc file cache is bound for that read alone. AI: Load Keys (`drgnx-ai-load-keys`) reads the keys

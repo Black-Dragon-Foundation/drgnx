@@ -446,8 +446,8 @@ Phase 7 removes the Lisp runtime: the editor no longer starts a Lisp hub or back
 coordination code that ran in it is the Rust hub's. An update over a running install needs nothing from you beyond
 restarting drgnx, and nothing you had is lost. At its first start the new hub:
 
-1. **Ends the old backend.** If the hub you were running had a Lisp backend (the Emacs child it started), the new hub
-   stops it and its processes before it answers anyone, so nothing waits on it. The editor reconnects by itself.
+1. **Ends the old backend.** If the hub you were running came from before the move to Rust, it had an Emacs child (its
+   backend); the new hub stops it and its processes before it answers anyone, so nothing waits on it. The editor reconnects by itself.
 2. **Moves what the old runtime wrote aside, never deleting it,** into `~/.local/state/drgnx/hub/migrated-p7/` (mode
    0700, the original names kept): the old hub's `registrations.eld`, `sessions.eld`, `port` and
    `hub-timers-report.eld`, its `bodies/` folder, a `hub-*.d/` folder that holds only the backend's socket, the

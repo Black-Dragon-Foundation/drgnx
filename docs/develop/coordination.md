@@ -7,13 +7,18 @@ Several agents on one project share what they decide, not only what they edit. T
 **stale beliefs**: one agent changes the picture (a decision, a moved file, a feature dropped) and the others keep
 working from the old one. So the shared state is explicit, versioned, and **enforced**.
 
-## The store (`core/drgnx-coord.el`, `work.db` schema 6)
+## The store (`work.db`)
+
+The tables below are those of schema 6, the shape the compat views keep for the readers ([The writer](#the-writer-runtimecratesnorn-runtimecratesurdr)
+has the schema 7 mapping). Only the hub writes them. The operations are named after the Lisp functions the hub's
+writers (`norn::write`) were ported from (`drgnx-coord-claim`, `-heartbeat`, `-release-stale`, `-decisions-since`, …):
+those functions are gone, and each name below is the rule, which `norn::write::{tasks,decisions,messages,cards,agents,
+review,event,prune}` implements.
 
 What the editor reads of it lives in `core/drgnx-coord-read.el`, on `drgnx-work-db-read` (the read-only handle):
 `drgnx-coord-version`, `-events`, `-open-questions`, `-agent`, `-agents`, `-review-marks`, `-job`, `-message`,
 `-message-answers` and `-message-prompt` (with `drgnx-coord--event-cols`/`-event-plist` for the cockpit's own
-queries). The cockpit requires `drgnx-coord-read`, never `drgnx-coord`; the Lisp writers stay in `drgnx-coord.el`
-until the Lisp runtime is deleted, and `drgnx-coord.el` requires the readers.
+queries). The cockpit requires `drgnx-coord-read`.
 
 Schema 6 (Ratatoskr): every `data` column (`node`, `job`, `jtask`, `card`, `event`) is JSON text, checked by the
 database (`check (data is null or json_valid(data))`), written and read through the record schemas of
@@ -69,13 +74,13 @@ file ("a newer schema"). **To go back by hand:** stop the hub, then `mv work.db.
 
 ### Reading work.db
 
-Every function that only reads (outside a `drgnx-coord--tx` lambda) reads through `(drgnx-work-db-read)`: a
+Every function of the editor that reads the store reads through `(drgnx-work-db-read)`: a
 read-only handle (`sqlite-open` with the read-only flag, `busy_timeout` 5000), cached per file, that never migrates
 and never writes. Closing it never checkpoints, so a reader that outlives the writer leaves the WAL as it is.
 `drgnx-work-db-close-all` closes the readers first, then the writers.
 
 - A missing file, or a schema below `drgnx-work-db-schema-version`, reads as an empty database: the hub makes and
-  migrates work.db, and only the `local` writer mode opens it read-write ("Who opens work.db" below).
+  migrates work.db, and no Lisp opens it read-write ("Who opens work.db" below).
 - A newer schema is read when its `meta` `compat-read` is at most `drgnx-work-db-compat-read`; otherwise
   `drgnx-work-db-too-new` is signalled ("work.db is schema N, which this drgnx cannot read: update drgnx").
 - A select inside a transaction keeps the transaction's handle. A function that reads and then writes may read on the
@@ -117,21 +122,23 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
   every call it also holds the log to `drgnx-coord-event-max-rows` (100,000), the oldest going first (questions,
   answers and decisions apart), so a busy day is bounded before the next prune. Event ids are `autoincrement`: an id is
   never given twice, even after the newest rows were pruned.
-- **Busy database:** `work.db` opens with a 5-second busy timeout, so a writer waits for another Emacs's write lock for up
-  to 5 seconds. After that SQLite reports the database locked. Claims, cards, messages, decisions and
-  `drgnx-coord-event-add` then signal (the change did not happen: say so). Telemetry — `drgnx-coord-agent-seen` and
-  `drgnx-coord-event-add-best-effort`, for the edit and test writers — returns nil instead: losing a heartbeat or an
-  edit note must not fail the work it describes. A bad kind or bad `data` still signals.
-- **Registry:** `drgnx-coord-agent-register` (an id is required; what is not given is kept, and when the agent started;
-  `:clear` lists fields to set to NULL), `drgnx-coord-agent`, `drgnx-coord-agents`, `drgnx-coord-agent-seen` (stamps an
-  agent alive now and returns the stamp).
-- **Review marks:** `drgnx-coord-review-mark AGENT PATH STATE HASH` and `drgnx-coord-review-marks AGENT` (alist
-  path → `(:state :hash :at)`). Accepting or reverting is a review layer only: nothing in the files changes.
+- **Busy database:** the hub's writer is `work.db`'s only writer; a busy one (another process holds the file's write
+  lock) is an error to the caller (`internal` "work.db is busy; retry"): claims, cards, messages, decisions and events
+  then did not happen, and say so. Telemetry (an agent's `seen`, the edit and test events) answers `{}` or
+  `{"ok": false, "busy": …}` instead: losing a heartbeat or an edit note must not fail the work it describes. A bad kind
+  or bad `data` still fails.
+- **Registry:** the `agent` table (`write::agents`): an id is required; what is not given is kept, and when the agent
+  started; `clear` lists fields to set to NULL; `seen` stamps an agent alive now and returns the stamp. The editor
+  reads it with `drgnx-coord-agent` and `drgnx-coord-agents`.
+- **Review marks:** `review/mark` writes one (agent, path, state, hash); the editor reads them with
+  `drgnx-coord-review-marks AGENT` (alist path → `(:state :hash :at)`). Accepting or reverting is a review layer only:
+  nothing in the files changes.
 
 ## The writer (`runtime/crates/norn`, `runtime/crates/urdr`)
 
-Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 12); the Lisp in
-`core/drgnx-coord.el` stays the oracle until it is deleted. Rules:
+Ratatoskr writes the coordination tables through `norn`, on schema 7, and is their only writer (the Lisp writers
+were deleted with the Lisp runtime; `runtime/crates/norn/tests/parity.rs` keeps their frozen results as the
+conformance data). Rules:
 
 - **One writer, the graph writer.** `norn::store::CoordDb` is a thin wrapper over `urdr::graph::WriterHandle`: every
   `CoordDb::write(meta, f)` is one request of the graph writer (group commit, a savepoint of its own, answered after
@@ -158,7 +165,7 @@ Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 
   of its own, outside any transaction.
 - **Hub keys are `kv`.** `write::meta` (`log-version`, `seen:AGENT`, `held:AGENT`, `rate-told:AGENT`,
   `event-pruned`) reads and writes the `kv` table, through the class guard (`setting:` keys are the user's); `meta`
-  is the read-only view the Lisp readers see.
+  is the read-only view the editor's readers see.
 - **Decisions are entities.** `decide` writes an entity of kind `decision` (`id decision:N`, `title` the subject,
   `status`, `body` the reason, `data {n, kind, task?, paths?, author, at, ver, job?}`), `N` one past the highest
   number so far, a `supersedes` link to the decision it `replaces` (when that number exists; else the number stays in
@@ -186,14 +193,13 @@ Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 
   (`event.task`); a `message`'s text by `message.tx` (a coalesced notice is found by whichever tx last updated it) or
   `message.entity`; a `card`'s title and data by `card.tx`, `card.entity` or `data.task`. The marker is the excise's
   `[excised TX]`, the data `{"excised": TX}`.
-- **Events and meta.** `write::event` is `drgnx-coord--event`: the summary is one line of at most 200 characters
+- **Events and meta.** `write::event`: the summary is one line of at most 200 characters
   (`runstav::text::one_line`), data over 4096 characters is stored as `{"truncated": true, "size": N}`, `turn` is 1
-  for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 18 of `drgnx-coord-event-kinds` (a test
-  reads the Lisp list). `task` is the tracker's own (one per operation, written by `tracker::run`, never through
+  for a `start`/`stop` whose data has `turn: true`, and the kind is one of the 18 of `EventKind`. `task` is the tracker's own (one per operation, written by `tracker::run`, never through
   `events/add`); every `event` row goes through `write::event::event` (`urdr/tests/one_write_path.rs` checks it).
   `write::meta` keeps `log-version`, `seen:AGENT` and `held:AGENT`.
 - **Messages, cards, review marks and agents.** `write::messages` (`send`, `mark`, `message_prompt`, `notice`),
-  `write::cards`, `write::review` and `write::agents` are the Lisp writers of the same names, rule for rule: `send`
+  `write::cards`, `write::review` and `write::agents` implement the rules of the old Lisp writers of the same names: `send`
   is held by the log version (an answer with the versions, never a write; a version from the future is an error),
   holds a message for a full queue (20, never for `user`) or a chatty pair (6 a minute), closes what the other side
   sent, and writes its `question` or `message` event in the same transaction; `mark` goes forward only and never from
@@ -206,17 +212,17 @@ Ratatoskr writes the coordination tables through `norn`, on schema 7 (Urdr Task 
   `running` claims go stale, so `needs-input` and `in-review` keep theirs), `write::decisions` (`held_check`,
   `decide`: the version check, 6 decisions a minute per agent, `current` versus `proposed`, `replaces`, the author's
   own `seen`) and `write::prune` (30 days and 100,000 rows; questions, answers and decisions are kept; the
-  `event-pruned` meta key) port the Lisp of the same names. Each takes the time as an argument. The readers are
+  `event-pruned` meta key) keep the old Lisp rules. Each takes the time as an argument. The readers are
   `read::{jobs,tasks,decisions}`.
 - **Parity.** `test/fixtures/coord-parity/CASE.input.json` (`setup`, `clock`, `calls`, optionally `tables`, the tables
-  to compare besides `event` and `meta`) is run by `gen.el` against the real Lisp functions, which writes
-  `CASE.expect.json` (results and tables); `norn/tests/parity.rs` replays each input against the Rust writers with the
-  same clock, on a schema-7 database: a schema-6 file made from `test/fixtures/work-db-6.sql` and the case's `setup`,
-  opened by the graph writer's opening rule, every call one write of it, the tables compared **through the compat views
-  and the kept tables** (the new `tx` and `entity` columns and the migration's `meta` keys left out;
-  `every_write_has_one_tx_row` looks at the first). A call with `"now": T` sees T at every `float-time`; a refused call
-  is `{"signal": MESSAGE}`. `test/fixtures/work-db-6.sql` is the schema every Rust test starts from. Run `gen.el` by
-  hand in the build container (its header has the commands); the fixtures stay when the Lisp is deleted.
+  to compare besides `event` and `meta`) and `CASE.expect.json` (results and tables) are frozen: the Lisp writers
+  that produced them are deleted, and the files are edited by hand only when a rule changes on purpose.
+  `norn/tests/parity.rs` replays each input against the Rust writers with the same clock, on a schema-7 database: a
+  schema-6 file made from `test/fixtures/work-db-6.sql` and the case's `setup`, opened by the graph writer's opening
+  rule, every call one write of it, the tables compared **through the compat views and the kept tables** (the new `tx`
+  and `entity` columns and the migration's `meta` keys left out; `every_write_has_one_tx_row` looks at the first). A
+  call with `"now": T` sees T at every clock read; a refused call is `{"signal": MESSAGE}`.
+  `test/fixtures/work-db-6.sql` is the schema every Rust test starts from.
 
 ### Who writes what
 
@@ -243,26 +249,18 @@ delivery.
 ### Who opens work.db
 
 The hub (Ratatoskr) makes work.db at schema 7, or migrates a schema-6 file, before it serves; from then on its writer
-thread is the file's one writer. No Lisp opens it read-write outside the `local` mode:
+thread is the file's one writer. No Lisp opens it read-write:
 
 - `(drgnx-work-db)`, the read-write, migrating handle, signals `drgnx-work-db-not-the-writer` ("work.db is written by
   the drgnx hub") unless `drgnx-work-db-gate-hub-standin` is bound, which only a test's seeding does
   (`drgnx-work-fixture-as-hub`, `test/fixtures/work-fixture.el`): it stands in for the hub, work.db's one writer.
-  The editor, the CLI and the test runner get the error, so a write that slipped past the writers' `pcase` fails
-  instead of taking the write lock (and, on schema 7, instead of migrating a newer file). There is no `local` mode of
-  the editor any more: `harness/run-ert.el` no longer sets `drgnx-coord-writer`.
-- Everything the Lisp backend reads goes through `(drgnx-work-db-read)`, which reads schema 7 through the compat
-  views: the event log's last id at start and in the tick (`drgnx-hub-serve`, `drgnx-hub--events-check`), the
-  events a client catches up on (`drgnx-hub--event-rows`), a task's job (`drgnx-job--job-of`), and a coordination
-  server's last "reports held" card (`drgnx-coord-mcp--tell-held`).
-- The writes left on `(drgnx-work-db)` are the `local` branches of the writers in `core/drgnx-coord.el`
-  (`drgnx-coord--tx`, `review-mark`, `heartbeat`, `renew`, `set-seen`, `note-held`, the daily prune), the
-  coordination server's "told" stamp, and the gateway's `spend` row (`drgnx-work-db-add-spend`). Behind the front
-  the last two are refused, the stamp silently and the spend row as a logged "spend not recorded", until the Rust
-  gateway writes `spend`.
-- `drgnx-work-db/the-writer-refuses-outside-local-mode` is the guard's test, and
-  `store/the-lisp-backend-starts-on-schema-7` the row: a schema-6 file with a job, migrated by the hub, then the
-  Lisp backend lists the job, and the jobs list adds nothing to `status.store.writes`.
+  The editor, the CLI and the test runner get the error, so a write that slipped in fails instead of taking the write
+  lock (and, on schema 7, instead of migrating a newer file).
+- Everything the editor reads goes through `(drgnx-work-db-read)`, which reads schema 7 through the compat views
+  (`core/drgnx-coord-read.el`).
+- No Lisp write to `work.db` is left: the Lisp coordination writers, the coordination server's and the gateway's
+  direct writes were deleted with the Lisp runtime.
+- `drgnx-work-db/the-writer-refuses-outside-local-mode` is the guard's test.
 
 ### The editor writes through the hub
 
@@ -346,28 +344,22 @@ While a notice is queued, the next one about the same task merges into it (field
 `changes` counted). Notes appear by id only, so excising a note leaves no copy. `tracker::notices::notices_unread`
 counts them for an actor; the tool calls the hub's `notify()` after `COMMIT`.
 
-## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
+## The tools (`runtime/crates/norn/src/tools`)
 
-`drgnx-mcp-serve NAME TOOLS` is a small MCP server (stdio, protocol 2025-06-18: initialize, ping, tools/list,
-tools/call). A tool is `(NAME :description :schema :call FN)`; FN gets the arguments as a plist and returns a
-string or a value (sent as JSON); its errors are `isError` results. `drgnx-mcp-schema` builds the input schema.
+The coordination tools are an MCP server (stdio through the bridge, protocol 2025-06-18: initialize, ping,
+tools/list, tools/call) that runs inside the hub on `mimir`; there is no server process per agent and none in Emacs.
+A tool's errors are `isError` results.
 
 ### How an agent reaches the tools
 
-Every agent session gets the coordination tools in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
-`drgnx-coord-mcp-server-spec`) as Ratatoskr's bridge: `<data>/bin/ratatoskr mcp-bridge --socket PATH`, with an empty
-environment. PATH is the `mcp.sock` of a session the hub minted for it (`mcp/session`, called by
-`drgnx-hub-mcp-session` from `drgnx-agents--with-mcp` just before `session/new` or `session/load`): the socket is the
-identity, and it names the session's **id** (`s-…` — a name like "claude · drgnx" repeats across hubs and editors),
-its job and task. The owner is the Emacs that made it (`(emacs-pid)`): when it dies the hub closes the session, and a
-session's end calls `mcp/session-close` (`drgnx-hub-mcp-session-close`). In the backend the call goes to the front
-(`drgnx-hub-call-front`); in an editor a command waits at most 2 s; a timer or startup path asks without waiting and
-the session start continues from the answer. When the session cannot be made (no binary, no hub) the agent starts
-without the coordination tools and says why in its transcript. An agent outside drgnx runs `ratatoskr mcp-bridge
---outside --kind KIND` (or the old `bin/drgnx coord mcp --kind KIND`, which execs it) and gets an identity of its own
-(below). Messages are addressed to a session's id (or its name). The Lisp server (`drgnx-coord-mcp-main`) stays on
-disk, launched by nothing, until phase 7: a sandboxed session's hub-run coordination server is the same bridge
-(`drgnx-sandbox-mcp.el`).
+Every agent session the hub starts gets the coordination tools in ACP's `mcpServers` as Ratatoskr's bridge:
+`<data>/bin/ratatoskr mcp-bridge --socket PATH`, with an empty environment. PATH is the `mcp.sock` of a session the
+hub minted for it (`mcp/session`, called by the hub's own session start just before `session/new` or `session/load`):
+the socket is the identity, and it names the session's **id** (`s-…` — a name like "claude · drgnx" repeats across hubs
+and editors), its job and task. A session's end closes the socket (`mcp/session-close`). When the
+session cannot be made the agent starts without the coordination tools and says why in its transcript. An agent
+outside drgnx runs `ratatoskr mcp-bridge --outside --kind KIND` (`drgnx coord mcp --kind KIND` execs it) and gets an
+identity of its own (below). Messages are addressed to a session's id (or its name).
 
 | Tool | Does |
 |---|---|
@@ -379,11 +371,11 @@ disk, launched by nothing, until phase 7: a sandboxed session's hub-run coordina
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
-| `work_status` | the work tracker's plans, as `drgnx work status --json` gives them (UTF-8 JSON; counts as `[done, all]`) |
+| `work_status` | the work tracker's plans, read from the graph (UTF-8 JSON; counts as `[done, all]`) |
 | `escalate {subject, text, seen_version}` | a message to `user`, queued (the Work cockpit's What needs you shows it) |
 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
-the changes as JSON. After a write the server tells the hub (`coord/notify`, never waiting) so delivery is prompt.
+the changes as JSON. After a write the hub wakes delivery at once.
 
 ### Reports, and agents outside drgnx
 
@@ -392,39 +384,32 @@ reports what it does with four more tools. Their events feed the Work cockpit:
 
 | Tool | Does |
 |---|---|
-| `hello {name?, cwd?, branch?, plan?, task?}` | registers the agent (`drgnx-coord-agent-register`): kind, name, cwd, worktree (`git rev-parse --show-toplevel` of the cwd), branch (given, else the cwd's), plan, task, pid. `base` is `git rev-parse HEAD` of the cwd at its first hello, kept by later ones (taken again only when the agent shows up in another worktree). A first hello writes a `start` event. Answers `{agent, version, cwd, worktree, base}` (the identity and the decision log's version), and a `note` when the identity is a fallback |
-| `report_edit {paths, summary?}` | an `edit` event, data `(:root ROOT :paths (RELATIVE…) [:more N])`. `paths` is best an array of strings. A string takes one path per line; only a string with no newline is split on commas (so a name with a comma needs the array or lines). At most 1,000 paths; more are refused before any is looked at. Each must lie inside the agent's worktree (else its cwd), or the whole report is refused and nothing is written |
-| `report_test {command, passed?, failed?, summary?}` | a `test` event, data `(:command :passed :failed)`. The counts must be whole numbers, 0 or more. With no summary, the summary is `N passed, M failed: COMMAND` |
-| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, sent with `:question t`, so its event is a `question` and `drgnx-coord-open-questions` lists it. Options are an array of strings (best; `items` declared) or one per line, at most 20; an option holding a `\|` (the separator drgnx writes them with) is refused. Any line of the question starting `Options:` is dropped: that line is drgnx's to write. For one of drgnx's agents, a task it holds (`task`, else `DRGNX_TASK`) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
+| `hello {name?, cwd?, branch?, plan?, task?}` | registers the agent (an `agent` row): kind, name, cwd, worktree (`git rev-parse --show-toplevel` of the cwd), branch (given, else the cwd's), plan, task, pid. `base` is `git rev-parse HEAD` of the cwd at its first hello, kept by later ones (taken again only when the agent shows up in another worktree). A first hello writes a `start` event. Answers `{agent, version, cwd, worktree, base}` (the identity and the decision log's version), and a `note` when the identity is a fallback |
+| `report_edit {paths, summary?}` | an `edit` event, data `{root, paths: [RELATIVE…], more?: N}`. `paths` is best an array of strings. A string takes one path per line; only a string with no newline is split on commas (so a name with a comma needs the array or lines). At most 1,000 paths; more are refused before any is looked at. Each must lie inside the agent's worktree (else its cwd), or the whole report is refused and nothing is written |
+| `report_test {command, passed?, failed?, summary?}` | a `test` event, data `{command, passed?, failed?}`. The counts must be whole numbers, 0 or more. With no summary, the summary is `N passed, M failed: COMMAND` |
+| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, sent as a question, so its event is a `question` and `drgnx-coord-open-questions` lists it. Options are an array of strings (best; `items` declared) or one per line, at most 20; an option holding a `\|` (the separator drgnx writes them with) is refused. Any line of the question starting `Options:` is dropped: that line is drgnx's to write. For one of drgnx's agents, a task it holds (`task`, else its session's) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
 
 **Identity.**
-- **drgnx's own agents:** `DRGNX_AGENT`, trusted as before. drgnx sets it in the environment of the server it gives
-  each session (the session's id, `s-XXXXXXXX`), and nothing checks who it is — only what it is. It is never
-  `user` (in any case, spaces around it ignored): the hub gives `user`'s messages to agents as the user's, so a server
-  with that identity refuses every tool (`"user" is the user`). And it is a plain ASCII id — letters, digits and
-  `. _ : -`, not starting with one of those four, at most 64 characters (`drgnx-coord-mcp--id-regexp`) — else every
-  tool is refused (`not a plain id`): a newline or `]` would break out of the hub's header, and a lookalike of `user`
-  (a no-break or zero-width space, a Cyrillic `ѕ`) would read as the user. Binding it to a token, as the gateway binds an agent's key, is deferred.
-- **Sandboxed job agents:** their identity comes from their socket. The agent's `drgnx` entry is a bridge to its
-  session's own `mcp.sock`, with no environment. The hub starts the server outside the sandbox, sets `DRGNX_AGENT`,
-  `DRGNX_JOB` and `DRGNX_TASK` from the session, and splices it to the connection ([hub.md](hub.md#per-session-sockets)).
-  Nothing inside the sandbox names the agent, and a `DRGNX_AGENT` set there reaches no server, so no agent can claim
-  to be another. Agents outside the sandbox keep the path above.
-- **A job agent's row is the hub's.** `drgnx-job--launch-task` registers it (kind `job`: cwd and worktree the task
-  folder, branch, base). For an agent with `DRGNX_JOB` and such a row, `hello` changes nothing of it, runs no git and
-  answers the hub's cwd, worktree and base; `report_edit` resolves paths against that row
-  (`drgnx-coord-mcp--job-row`). A sandboxed agent's server works in the session's dir, never in the task folder, so
-  its own view would be wrong; the cockpit keeps showing the task folder's edits.
-- **Agents outside drgnx:** when `DRGNX_AGENT` is empty and `DRGNX_AGENT_KIND` is set (a short lower-case name:
-  `claude`, `codex`, `zed`…), the server speaks for an agent outside drgnx, as `ext:KIND:PID-HASH`. PID is the
-  agent's process: the server's parent (`(alist-get 'ppid (process-attributes (emacs-pid)))`). HASH is 6 hex digits
-  of a SHA-1 of that process's start time, to the second (`process-attributes`' `start`; the boot time it is
-  computed from jitters), so a pid used again by another process later is another agent. Both are read once, when
-  the server starts (`drgnx-coord-mcp-main`), while its parent is surely the agent.
+The identity comes from the connection ([The tools in Ratatoskr](#the-tools-in-ratatoskr-runtimecratesnornsrctools)),
+never from an argument or an environment variable:
+- **drgnx's own agents** (sandboxed or not) are the session whose `mcp.sock` they connected to: its id (`s-XXXXXXXX`),
+  job and task. Nothing inside the sandbox names the agent, so no agent can claim to be another. The id is never `user`
+  (in any case, spaces around it ignored): the hub gives `user`'s messages to agents as the user's, so that identity
+  refuses every tool (`"user" is the user`). And it is a plain ASCII id — letters, digits and `. _ : -`, not starting
+  with one of those four, at most 64 characters — else every tool is refused (`not a plain id`): a newline or `]`
+  would break out of the hub's header, and a lookalike of `user` (a no-break or zero-width space, a Cyrillic `ѕ`) would
+  read as the user.
+- **A job agent's row is the hub's.** The runner registers it (kind `job`: cwd and worktree the task folder, branch,
+  base). For an agent with such a row, `hello` changes nothing of it, runs no git and answers the hub's cwd, worktree
+  and base; `report_edit` resolves paths against that row; the cockpit keeps showing the task folder's edits.
+- **Agents outside drgnx** connect through `ratatoskr mcp-bridge --outside --kind KIND` (KIND a short lower-case name:
+  `claude`, `codex`, `zed`…) and speak as `ext:KIND:PID-HASH`. PID is the agent's process: the bridge's parent. HASH is
+  6 hex digits of a SHA-1 of that process's start time, to the second, so a pid used again by another process later is
+  another agent. Both are read when the bridge attaches (`mcp/attach`).
 - **Fallbacks**, each said in `hello`'s `note`:
   - no start time: `ext:KIND:PID`;
-  - no parent (no `ppid`, or `1`): `ext:KIND:<the server's own pid>`.
-- The identity lives only as long as the server process.
+  - no parent (none, or `1`): the bridge is refused.
+- The identity lives only as long as the connection.
 - **No tool takes an identity:** every tool refuses an `agent`, `from`, `sender`, `as` or `identity` argument.
   `hello`'s `name` is a label the user sees, never who the agent is.
 
@@ -440,13 +425,13 @@ reports what it does with four more tools. Their events feed the Work cockpit:
 **Text.**
 - Questions and message texts (`ask_user`, `send_message`, `escalate`'s subject and text) are trimmed and cut to
   2,000 characters; the answer of `ask_user` and `send_message` then has `cut`: how many characters were left out.
-- `drgnx-coord-control-chars` (C0 controls, DEL, the C1 controls U+0080–U+009F and the BiDi controls U+061C, U+200E–U+200F,
+- Control characters (C0 controls, DEL, the C1 controls U+0080–U+009F and the BiDi controls U+061C, U+200E–U+200F,
   U+202A–U+202E, U+2066–U+2069) become spaces, except newline and tab.
 - Event summaries, names, branches and plans lose newlines and tabs too: one line, at most 200 characters (a name
-  at 80). C1's `drgnx-coord--one-line` strips the same set.
+  at 80).
 
-**Paths.** The root comes from the server's process, never from an argument: the git worktree of the folder the
-agent started the server in, else that folder (`drgnx-coord-mcp--home`, found once per server). A git toplevel that is
+**Paths.** The root comes from the connection, never from an argument: the git worktree of the folder the session
+started in (an outside bridge's `--cwd`), else that folder. A git toplevel that is
 the home folder itself (a repository of dotfiles) counts as no worktree: the folder is taken, so projects under `~`
 work. `hello`'s `cwd` must lie inside it; a later hello without a `cwd` keeps the registered one.
 
@@ -455,34 +440,34 @@ it. That is a server started in the wrong place, and the answer says to start it
 still registers.
 
 A reported path is refused when it:
-- is blank or has one of `drgnx-coord-control-chars`;
+- is blank or has a control character (above);
 - has a `..` component;
 - is a remote (TRAMP) name such as `/ssh:host:…` or `/sudo::…`, or any absolute name whose first component holds
   a `:` (refused before any file handler runs, so nothing connects);
-- has a `file-truename` (symlinks resolved, with `file-name-handler-alist` off) outside the root.
+- has a real path (symlinks resolved) outside the root.
 
 The two sides are compared as truenames, ignoring case on macOS and Windows. An event keeps the first paths whose
-data, as JSON as `drgnx-coord--data-print` stores it, fits its 4,096 characters (and at most 100 paths); the rest are counted as `:more`, so an edit event is never `:truncated`.
+data, as the JSON the store keeps, fits its 4,096 characters (and at most 100 paths); the rest are counted as `more`, so an edit event is never `:truncated`.
 
 **Limits.**
-- `drgnx-coord-report-rate` (20): the reports (`hello`, `report_edit`, `report_test`, `ask_user`, and an outside
+- `guard::REPORT_RATE` (20): the reports (`hello`, `report_edit`, `report_test`, `ask_user`, and an outside
   agent's `send_message`) one agent may make in a minute.
-  - They are counted in the server's memory against `drgnx-coord-mcp--now`, which tests stub.
+  - They are counted in the hub's memory.
   - Over the limit a report is **held**: nothing is written, not even the `seen` stamp.
   - The answer starts `HELD: more than 20 reports a minute`.
-- The first held report tells the user with a `rate` card (`Dismiss`; data `(:agent :rate)`), at most once an hour
+- The first held report tells the user with a `rate` card (`Dismiss`; data `{agent, rate}`), at most once an hour
   per agent.
-  - The server remembers this, and so does the store (`rate-told:AGENT` in `meta`), for a server started again.
+  - The store remembers this (`rate-told:AGENT` in `meta`), for a hub started again.
   - Best effort: a busy store tells nobody, and the answer still says HELD.
-- Edit and test events are telemetry (`drgnx-coord-event-add-best-effort`): a busy store answers
+- Edit and test events are telemetry (best effort): a busy store answers
   `{"ok": false, "busy": …}` and the agent goes on.
 
-**Never prompts, never blocks.** git runs as a process of its own (`make-process`). It gets `GIT_TERMINAL_PROMPT=0`,
-its stdin is closed at once, and it has no terminal. It is killed after `drgnx-coord-mcp--git-timeout` (3) seconds,
-and its answer is then nil. No tool asks anything.
+**Never prompts, never blocks.** git runs as a process of its own. It gets `GIT_TERMINAL_PROMPT=0`, its stdin is
+closed at once, and it has no terminal. It is killed after 3 seconds, and its answer is then nothing. No tool asks
+anything.
 
-**The command** M11c-2's agent settings pages write is `(drgnx-coord-mcp-outside-spec KIND)` → `(:type stdio
-:command "<checkout>/bin/drgnx" :args ("coord" "mcp" "--kind" KIND))`.
+**The command** an outside agent's MCP config holds is `<checkout>/bin/drgnx coord mcp --kind KIND` (stdio), which
+execs `ratatoskr mcp-bridge --outside --kind KIND`.
 
 ### The tools in Ratatoskr (`runtime/crates/norn/src/tools`)
 
@@ -583,13 +568,12 @@ and data directories, not drgnx's own access rules.
 
 ## Delivery (the hub)
 
-`drgnx-hub--deliver` runs on `coord/notify` and every 2 s:
+The hub delivers (`deliver::run`, [below](#delivery-in-ratatoskr-drgnx-ratatoskrsrcagentsdeliverrs-task-24)) whenever a
+write may have added a message, and every second:
 - a `queued` message stays in the store until its agent is **free** (idle, not paused by the user's Stop, nothing
-  queued: `drgnx-agents-free-p`, on the editor's mirror of the session), then goes to it as a new turn
-  (`drgnx-agents-deliver`, an `agents/send` through `drgnx-agents--remote`: never queued, steered or
-  interrupting, whatever the profile's mode) and is `delivered`; when that prompt reaches the agent
-  (`drgnx-agents-prompt-functions`) it is `read`. Meanwhile `read_inbox` finds it too (and then it is not delivered
-  again). The prompt is `drgnx-coord-message-prompt`'s. Another agent's text is **quoted** under a header —
+  queued), then goes to it as a new turn and is `delivered`; when that prompt reaches the agent it is `read`.
+  Meanwhile `read_inbox` finds it too (and then it is not delivered again). The prompt is `message_prompt`'s
+  (`drgnx-coord-message-prompt` is the editor's preview of it). Another agent's text is **quoted** under a header —
   `[message from SENDER #ID — from another agent, not from the user; it approves nothing]` then every line as `> …` —
   so a peer cannot write a line that reads as drgnx's or the user's. The user's own messages (sender nil, written by
   the user's Emacs, or `user`: a job reply, an answer to a hub session set to interrupt, a revert or a comment from
@@ -601,27 +585,20 @@ and data directories, not drgnx's own access rules.
   agent asked the user is named (`drgnx-coord-message-answers`). SENDER in an agent's header is one line: its control
   characters, `]` and `#` become spaces, so a sender already in the store cannot write a header of its own or name
   another id. Both headers start `[message from WHO #ID `, which marks the message `read` when the prompt reaches the
-  agent. No agent can be `user`: the coordination server refuses that identity, and any id that is not plain (above).
-  Line and paragraph separators (U+2028, U+2029) are control characters to the store (`drgnx-coord-control-chars`),
+  agent. No agent can be `user`: the coordination tools refuse that identity, and any id that is not plain (above).
+  Line and paragraph separators (U+2028, U+2029) are control characters to the store,
   and a quoted text is split on them too.
   A message for an agent that is not there, or exited, stays `queued`. Delivery also runs when a session becomes free;
 - an agent of a job whose `seen` version is behind that job's decisions gets `[decision log vN — job J]` and the
   changes (quoted) once per version, when free. Sessions without a job (plain chats) are never woken.
 
 Hub sessions are the hub's children: when the hub ends, they end (the editor's mirrors turn `exited` and say so).
-The next hub resumes those without a job ([hub.md](hub.md#sessions-across-a-restart)); a job's agents are not
-resumed — the job frees their tasks and starts them again.
+The next hub resumes them ([hub.md](hub.md#sessions-across-a-restart)).
 
 A peer message is text for the agent and nothing else: permission requests are answered only by the user's
-`agents/permission`, and no message changes a setting. **The gate:** a job agent's permission request
-for an edit or a command (kinds `edit` `delete` `move` `execute`; reading — `read_decisions` included, which Claude
-Code asks for as an `other` tool — is never held) is checked against the log first (`drgnx-job--gate`): behind it — decisions of its job
-since its `seen` — the call is refused (its `reject_once` option) and, once per version, the changes go into the
-running turn (`drgnx-agents-steer`, an `agents/send` the hub steers by the profile's mode; the notice of delivery: `drgnx-coord-notice`) with "Your last tool call was
-refused because you had not read these." Its next request after `read_decisions` goes by the policy again. An agent
-that can be steered is held this way (its snapshot says `:enforced t`); one that cannot gets the coordination-tool
-hold and turn-end delivery only (`:enforced nil`, which the job window shows). Reviewers are never gated (they read).
-A task's prompt asks for `read_decisions` first.
+`agents/permission`, and no message changes a setting. **The gate** (below) holds a job agent's edits and commands
+while its decision log is behind; reviewers are never gated (they read). A task's prompt asks for `read_decisions`
+first.
 
 ### Delivery in Ratatoskr (`drgnx-ratatoskr/src/agents/deliver.rs`, Task 24)
 
@@ -642,57 +619,49 @@ inject into a running turn, so it is read at the next turn). Reading is never he
 
 ## Jobs
 
-`core/drgnx-job.el` runs in the hub (user docs: [jobs.md](../guide/jobs.md)). `drgnx-job-propose` reads the plan
-(snapshot and SHA-1 in the job's data) and makes the job and its tasks (a plan that numbers a task twice is refused;
-with `drgnx-job-auto-start` the job is approved first and the proposal card is made only if it is still proposed — the
-hub's `--auto` path still makes and settles the card); `drgnx-job-approve` adds the job's worktree
-and runs `drgnx-job-step`, which the hub's tick repeats for every running job: tasks whose agent is not live are
-released, `in-review` tasks get a reviewer once their agent's turn is over (idle, free or held by a Stop) or the agent
-is gone — the agent is then ended; a task with no commits on its branch (`git rev-list --count job/ID..HEAD` is 0)
-gets a `review` card, "finished with no commits", instead — ready tasks get agents (`drgnx-job--start-task`: a worktree, made by a git process of its own
-(`drgnx-job--git-async`, a sentinel continues: the task shows `starting` meanwhile, counts against
-`drgnx-job-max-agents`, and a worktree that cannot be made is an `agent` card), then a session
-with `DRGNX_JOB` and `DRGNX_TASK`, the task prompt given once the session is free), and a job whose tasks are all
-done is done, and every session of it still running ends (a clash reviewer too, even one the user is discussing with:
-the clash is moot by then). Prompts of sessions that ended before they were free are dropped. The hub wires it to sessions with hooks:
+The plan runner runs in the hub (user docs: [jobs.md](../guide/jobs.md); the rules, below). It reads a plan (snapshot
+and SHA-1 in the job's data) and makes the job and its tasks (a plan that numbers a task twice is refused); approving
+adds the job's worktree, and the hub's tick repeats the runner's step for every running job: tasks whose agent is not
+live are released, `in-review` tasks get a reviewer once their agent's turn is over (idle, free or held by a Stop) or
+the agent is gone — the agent is then ended; a task with no commits on its branch gets a `review` card, "finished with
+no commits", instead — ready tasks get agents (a worktree made by a git process of its own: the task shows `starting`
+meanwhile, counts against the job's agent limit, and a worktree that cannot be made is an `agent` card; then a session
+with the job and task, the task prompt given once the session is free), and a job whose tasks are all done is done, and
+every session of it still running ends (a clash reviewer too, even one the user is discussing with: the clash is moot
+by then). Prompts of sessions that ended before they were free are dropped.
 
-| Hook | drgnx-job |
-|---|---|
-| `drgnx-agents-changed-functions` | `drgnx-job--session-changed`: prompts out, a reviewer's verdict in (the last non-empty line of its last answer, starting `VERDICT:`, Markdown emphasis round it ignored), a step after a session ends or a finished task's agent's turn is over |
-| `drgnx-agents-request-functions` | `drgnx-job--request`: permissions by `drgnx-job-policy` (allowed but with no `allow_once` option: a card), writes inside the worktree (missing directories are made; `drgnx-job--write-inside` resolves the path itself — refused when a link leads it out — and renames a temp file over the target — its modes kept, a new file 0666 less the umask, a file that is not writable refused — then checks again; a remote path is never resolved: a card), else a card |
-| `drgnx-agents-error-functions` | `drgnx-job--agent-error`: a provider at its limit → `drgnx-job--fall-back` to the next profile; a task's reviewer → `drgnx-job--review-fall-back`: the review starts again on the next profile of the `review` route (a `review` card when none is left); a clash reviewer is left alone |
-| `drgnx-gateway-event-functions` | `drgnx-job--gateway-event`: `budget` → the job pauses, its agents stop |
+A session's events drive it: a reviewer's verdict is the last non-empty line of its last answer, starting `VERDICT:`
+(Markdown emphasis round it ignored); a permission request of a job agent goes by the job's policy (allowed but with no
+`allow_once` option: a card); a provider at its limit makes the task fall back to the next profile of its route, and a
+reviewer's review starts again on the next profile of the `review` route (a `review` card when none is left; a clash
+reviewer is left alone); a reached budget pauses the job and makes its `budget` card (`runner/fallback.rs`).
 
-`complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`, and `update_task`
-there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`: the merge is a git process of its own, the task shows `merging` meanwhile
-(`drgnx-job--busy`, in the hub's memory only: a restart finds the store's `in-review` and the "merged before" check);
-one merge at a time in a job's worktree — two at once fail on its HEAD (`cannot lock ref`), so a task whose review passes
-while another merges waits, `queued` (`drgnx-job--merge-queue`; stopping the job empties it); a merge that fails with
-no unmerged files is no conflict: it goes once more after what merges then, and fails again into a `merge-failed` card
-titled `merge failed: <git output>` (Merge again, Drop, Open — no agent is sent to resolve a conflict);
-`drgnx-job--git`, the short synchronous reads, returns stderr after stdout when git fails; the job's own worktree at
-approval is still made synchronously, for the command that asked). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
-kind (`drgnx-job-card-actions`), acted on once through `job/card` (`drgnx-job-card-act`: settled first, so a second
-action is refused; reopened if the action fails) — plus a message from `drgnx` to `user` with the job and task (one line, `acted` once settled), the task `needs-input`, and a `card` event (job, task, kind, title); a
-card for an agent's pending request records it in the job's data (`:waiting`: the session, and the status to go back
-to — `in-review` for a reviewer's, and for an agent of a task already in review whose turn went on), so an answer, or
-the agent's end, puts the task back; the job's data also keeps, per task, how often its agent ended (`:exits`) and was
-nudged (`:nudged`; cleared on review and on retry) and when a task in review began to wait for its agent's turn to end
-(`:in-review-since`; after `drgnx-job-review-turn-limit` seconds, 600, a `stalled` card), so a hub restart does not
-reset them; `fallback` events carry job,
-task, agent, from, to, why, and the successor's handover names the decision log's version. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,
-`job/resume` ([hub.md](hub.md)) answer `drgnx-job-summary` (a task's `:profile` is its current agent's, else the route's first); `job/resume`
-refuses a job with no job worktree (a rejected proposal); `bin/drgnx job` (`ratatoskr job`, `job_cli.rs`: one call each, text from `format_job`
-or the answer with `--json`) and the Plan Job commands use them (`--budget` must be a number, else exit 2). A proposal with a
-budget lists in its data (`:unpriced-budget`) the profiles of its routes whose gateway chain has a provider without a
-`:price`, and warns (the proposal card, `:warnings` in the summary): the gateway cannot count what they spend.
+`complete_task` from an agent of a job puts the task `in-review`, not `done`, and `update_task` there takes only
+`running`, `needs-input` and `in-review`; the reviewer's verdict decides. The merge is a git process of its own and the
+task shows `merging` meanwhile; one merge at a time in a job's worktree (two at once fail on its HEAD, `cannot lock
+ref`), so a task whose review passes while another merges waits, `queued` (stopping the job empties the queue); a merge
+that fails with no unmerged files is no conflict: it goes once more after what merges then, and fails again into a
+`merge-failed` card titled `merge failed: <git output>` (Merge again, Drop, Open — no agent is sent to resolve a
+conflict). A card is a `card` row — one open per task and kind, acted on once through `job/card` (settled first, so a
+second action is refused; reopened if the action fails) — plus a message from `drgnx` to `user` with the job and task
+(one line, `acted` once settled), the task `needs-input`, and a `card` event (job, task, kind, title); a card for an
+agent's pending request records it in the job's data (the session, and the status to go back to — `in-review` for a
+reviewer's, and for an agent of a task already in review whose turn went on), so an answer, or the agent's end, puts
+the task back; the job's data also keeps, per task, how often its agent ended and was nudged (cleared on review and on
+retry) and when a task in review began to wait for its agent's turn to end (after 600 seconds, a `stalled` card), so a
+hub restart does not reset them; `fallback` events carry job, task, agent, from, to, why, and the successor's handover
+names the decision log's version. `bin/drgnx job` (`ratatoskr job`, `job_cli.rs`: one call each, text from `format_job`
+or the answer with `--json`) and the Plan Job commands use the hub's `job/*` methods (`--budget` must be a number, else
+exit 2). A proposal with a budget lists in its data the profiles of its routes whose gateway chain has a provider
+without a `price`, and warns (the proposal card, `warnings` in the summary): the gateway cannot count what they spend.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
 
 ### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
 
 The hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
-`drgnx-job-summary` shapes, so the cockpit and `bin/drgnx job` read them unchanged, and `job/{card,reply,
-dismiss,reassign,resume}` and the review hand-off below. The Lisp runner (`core/drgnx-job*.el`) is frozen and is the oracle for each rule.
+the job summary shapes the cockpit and `bin/drgnx job` read, and `job/{card,reply,
+dismiss,reassign,resume}` and the review hand-off below. `job/resume` refuses a job with no job worktree (a rejected
+proposal).
 
 - **State:** a job is a `job` row, its tasks `jtask` rows, plus the JSON in `job.data`: `plan`, `hash`, `repo`, `tasks`
   (the plan's text per task), `routes`, `estimate`, `budget`, `gate`, and by task id `blocked`, `profiles`, `bases`,
@@ -817,7 +786,7 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   old side) overlap the lines the decision's commits wrote; line numbers are not followed through the commits in
   between, and the result says `computed`. It needs the tree (or the repository) to still exist.
 
-## Clashes (`core/drgnx-job-clash.el`)
+## Clashes (`runner/clash.rs`)
 
 Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment only inside the reviewer:
 
@@ -825,19 +794,19 @@ Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment
 |---|---|---|
 | `contradiction` | a `build` and a `wont-build` of one subject (lower case, spaces collapsed) among a job's current or proposed decisions | the user's side, if one is, wins at once (one user `replaces` of the other, however many of the user's decisions it contradicts — no card); agents' → a `clash` card |
 | `proposed` | an agent's decision outside its own task (one in a contradiction has that card only) | a `clash` card: record it, or leave it out |
-| `against-decision` | a task in review whose branch (`git diff job/ID...job/ID-N`) changes what a current won't-build's `paths` cover (a directory, a file, a `*` glob) | a `clash` card about the task; its review waits (`drgnx-job-before-review-functions`) |
+| `against-decision` | a task in review whose branch (`git diff job/ID...job/ID-N`) changes what a current won't-build's `paths` cover (a directory, a file, a `*` glob) | a `clash` card about the task; its review waits |
 | `stale` | an agent whose last two coordination writes were held (`held:AGENT` in `meta`, kept by the MCP server) | a `stalled` card |
 | `overlap` | a task in review that changes files another open task changes | an `overlap` card, advisory (dismiss): the review goes on |
 
-Each clash is carded once (its key in the job's data, `:clashes`); a card's data has the rule, the sides (label,
+Each clash is carded once (its key in the job's data, `clashes`); a card's data has the rule, the sides (label,
 text, decision, agent, task), the subject and a size: `long` for work against a decision, a diff over
-`drgnx-job-clash-long-lines` (200) lines, or a subject that clashed before, else `short`.
+`LONG_LINES` (200) lines, or a subject that clashed before, else `short`.
 
 A clash card gets a **reviewer** (role `review`, or `review-long` for a long clash when it has a route) in the job's
 worktree under the review policy: `[drgnx clash CARD]`, both sides with their reasons (a long review also the last
 4000 characters each side's agent said), answered with a last line `RECOMMEND: A`, `B` or `neither: why`
-(`drgnx-job-clash--recommendation`, onto the card's data as `(:side :why)`; an answer with no `RECOMMEND:` line sets
-`:no-recommendation`, and the card's data names its reviewer's session as `:reviewer`, for its transcript). The card
+(onto the card's data as `{side, why}`; an answer with no `RECOMMEND:` line sets `no-recommendation`, and the card's
+data names its reviewer's session as `reviewer`, for its transcript). The card
 offers **Accept** only when the recommendation has a side. It stays for **Discuss** (the user's
 text, quoted, goes to it; a gone one is started again with it) and ends when the card is settled, or when the job is
 done (even mid-discussion). A clash without a
@@ -845,7 +814,6 @@ recommendation whose reviewer is gone gets one more (at most two per hub run). T
 the user's — a `replaces` of the other side for a contradiction; the proposal recorded (or replaced) for a proposed
 decision; for work against a decision, the task back to an agent told which files to revert (A), or the decision
 replaced and the review going on (B) — and the log's delivery tells every agent of the job.
-`drgnx-job-clash-auto-accept` (nil): a short clash's recommendation accepted without the user.
 
 In the hub the rules are `runner::clash` (`runtime/crates/drgnx-ratatoskr/src/runner/clash.rs`), pure functions over
 the run's state: `scan(&RunState, &[Decision], &DiffIndex) -> Vec<Clash>` returns the clashes whose key is not in
@@ -855,7 +823,7 @@ user's decision replaces at once (no card). `DiffIndex` is task id → path → 
 The runner's hooks: `before_review(run, decisions, diffs, task) -> ReviewGate { clashes, wait }` (the review waits
 for a new against-decision clash or an open clash card about the task) and `ReviewerHook::start(clash, long)` via
 `start_reviewers` (not for `stale` and `overlap`). A stale card's key includes the held count, so the runner
-clears the count after carding, as the Lisp does.
+clears the count after carding.
 
 ## The permissions matrix
 
@@ -938,16 +906,14 @@ Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
 
 ## Tests
 
-`test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio; outside
-agents' identity from the parent, hello and its base, paths inside only, tests, questions, no job tasks, no forging
-or flooding — `drgnx-coord-mcp/outside-agents-cannot-forge-or-flood`),
-`hub-agents-test.el` (sessions in the hub; a mock agent calling a tool through its `mcpServers`),
-`agents-mirror-test.el` (mirrors, reattaching), `coord-delivery-test.el` (idle, busy, exited, peer messages,
-decisions, leases); the job tests are listed in [jobs.md](../guide/jobs.md#tests). The mock agent's `coord TOOL JSON` prompt
-calls a tool of the server it was given; `[drgnx task ID]` does a task, `[drgnx review ID]` reviews one
-(`MOCK_ACP_VERDICT=fail`), `MOCK_ACP_RATE_LIMIT` answers every prompt with a 429.
+The store, the tools, delivery and the runner are tested in Rust and by the conformance rows against a real hub
+(`test/conformance/{coord,mcp,messages,delivery,agents,…}`, [runtime.md](runtime.md)); the editor's side by
+`test/unit/coord-read-test.el` (the readers), `agents-mirror-test.el` and `agents-mirror-permission-test.el` (mirrors,
+reattaching), and `job-ui-test.el`. The mock agent's `coord TOOL JSON` prompt calls a tool of the server it was given;
+`[drgnx task ID]` does a task, `[drgnx review ID]` reviews one (`MOCK_ACP_VERDICT=fail`), `MOCK_ACP_RATE_LIMIT` answers
+every prompt with a 429.
 
 The Rust tools: `runtime/crates/norn/tests/tools.rs` (identity names refused on every tool, `user` never an
 identity, no identity reads only, outside agents kept off the job tools, the report limit and its card, path rules,
-`hello`'s cwd, a planted git hook and fsmonitor that never run, and the Lisp tools' cases replayed) and the unit tests
-of `norn::tools::{identity, guard, report}`.
+`hello`'s cwd, a planted git hook and fsmonitor that never run, and the frozen cases of the old Lisp tools replayed)
+and the unit tests of `norn::tools::{identity, guard, report}`.
