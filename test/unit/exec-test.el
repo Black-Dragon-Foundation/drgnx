@@ -97,3 +97,25 @@
 
 (provide 'exec-test)
 ;;; exec-test.el ends here
+
+;;;; the time box, as the request says it (the hub stubbed: only what drgnx-exec-start sends)
+
+(load (expand-file-name "test/fixtures/exec-calls-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-exec/time-box-params ()
+  (drgnx-test-with-exec-calls calls
+    (drgnx-exec-start "default" '("true") :cwd "/")
+    (drgnx-exec-start "boxed" '("true") :cwd "/" :timebox 90.5)
+    (drgnx-exec-start "server" '("true") :cwd "/" :no-timebox t)
+    (drgnx-exec-start "both" '("true") :cwd "/" :timebox 90 :no-timebox t)
+    (pcase-let ((`(,both ,server ,boxed ,default) calls))
+      ;; nothing asked: the hub's own default applies
+      (should-not (plist-member default :timebox_s))
+      (should-not (plist-member default :no_timebox))
+      (should (eql (plist-get boxed :timebox_s) 91))
+      (should-not (plist-member boxed :no_timebox))
+      (should (eq (plist-get server :no_timebox) t))
+      (should-not (plist-member server :timebox_s))
+      ;; no time box wins over a time box: the hub refuses both together
+      (should (eq (plist-get both :no_timebox) t))
+      (should-not (plist-member both :timebox_s)))))

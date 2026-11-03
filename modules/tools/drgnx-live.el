@@ -113,9 +113,9 @@ bounded time."
 (defun drgnx-live--exec-start (argv dir deadline)
   "Start ARGV as the hub's job \"live-browser\" in DIR and wait for the hub to take it, until DEADLINE (`float-time'):
 the job's id.  Signals a `user-error' (and deletes DIR) when it did not start.  A command's wait, never a timer's.  A
-server: the hub's longest time box; no memory cap on macOS (the hub refuses one there)."
+server: no time box; no memory cap on macOS (the hub refuses one there)."
   (let (id why done)
-    (drgnx-exec-start "live-browser" argv :cwd dir :memory-max (and (eq system-type 'gnu/linux) "1G") :timebox 86400
+    (drgnx-exec-start "live-browser" argv :cwd dir :memory-max (and (eq system-type 'gnu/linux) "1G") :no-timebox t
                       :callback (lambda (i w) (setq id i why w done t)))
     (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05))
     (unless id

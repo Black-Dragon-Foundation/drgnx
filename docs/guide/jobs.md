@@ -27,8 +27,11 @@ it does not depend on the agent that started it or on the editor, and it survive
   The hub keeps the folders of the newest 200 finished jobs and none older than 14 days (a job that ended in the last
   hour is always kept); older ones are removed, so `exec/get` and `exec/log` answer "no job" for them, while the
   job's row in the graph stays.
-- **Time box.** 1 to 86400 seconds (default 3600). At the end the job's process group gets SIGTERM, then SIGKILL, and
-  its status is `timed-out`. `exec/stop` ends it by hand (`stopped`).
+- **Time box.** 1 to 86400 seconds (default 3600; a missing `timebox_s` means the default). At the end the job's process
+  group gets SIGTERM, then SIGKILL, and its status is `timed-out`. `exec/stop` ends it by hand (`stopped`). The user's
+  job (not an agent's) may send `no_timebox: true` instead: it has no deadline, its row has no `timebox_s`, and only
+  `exec/stop` or the hub's stop ends it (with `timebox_s` it is refused). An agent that sends `no_timebox` is refused
+  with `invalid-params`, like the four fields below.
 - **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
@@ -56,8 +59,11 @@ reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache th
 and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read a job's log
 (waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
 or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
-hours): the servers the editor starts (the local AI runner, the Playwright server of Test Report, the browser for
-agents, the search indexer) ask for the longest. Onboarding runs its installs and downloads as jobs too and waits for
+hours) or `:no-timebox`. The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
+Report, the browser for agents) run without a time box, so a daemon that stays up for days never loses them: they end
+when you stop them, when the editor's teardown does, or when the hub stops. The search indexer is a batch job (it exits
+when the index is built) and has the longest time box, 24 hours; tree-sitter grammar builds and mermaid drawings keep the
+hour. Onboarding runs its installs and downloads as jobs too and waits for
 each in its command (the progress line is the end of the job's log, asked once a second); `drgnx onboard` in a terminal
 does the same, and C-g, or Ctrl-C there, stops the job.
 

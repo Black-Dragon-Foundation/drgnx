@@ -213,7 +213,7 @@ timer: the start is asynchronous (the hub answers later), never asks."
            (with-demoted-errors "drgnx: the local AI server did not start: %S"
              (make-directory (drgnx-state-dir) t)
              (drgnx-exec-start (format "%s server" name) command :cwd (drgnx-state-dir)
-                               :timebox 86400 ; a server: the hub's longest time box; a look at it starts it again
+                               :no-timebox t ; a server that stays up for days; a look at it starts it again if it died
                                :callback (lambda (_id why) (when why (message "drgnx: %s" why))))))))
 
 (defun drgnx-ai--refused (id)

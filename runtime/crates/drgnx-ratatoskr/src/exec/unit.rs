@@ -21,9 +21,10 @@ pub struct Meta {
     pub argv: Vec<String>,
     pub cwd: String,
     pub started: f64,
-    pub timebox_s: u64,
-    /// When the time box ends (seconds since the epoch).
-    pub deadline: f64,
+    /// The time box in seconds; none: the job has no time box (a user's server).
+    pub timebox_s: Option<u64>,
+    /// When the time box ends (seconds since the epoch); none: never.
+    pub deadline: Option<f64>,
     pub unit: Option<String>,
     pub pid: Option<i32>,
     pub start_time: Option<u64>,

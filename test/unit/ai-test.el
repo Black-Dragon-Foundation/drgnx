@@ -854,3 +854,16 @@ here, and a variable let-bound before it loads would turn special for good."
       (drgnx-ai-set-managed 'ollama '("ollama" "serve") "Ollama")
       (should (equal (drgnx-ai-managed) '(ollama :start ("ollama" "serve") :name "Ollama")))
       (should (= 1 (length (directory-files (file-name-directory file) nil "\\`ai-local\\.eld\\.bak-")))))))
+
+(load (expand-file-name "test/fixtures/exec-calls-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-ai/the-local-runner-starts-without-a-time-box ()
+  ;; the runner stays up for days: the hub is asked for no time box, not for a day
+  (drgnx-ai-test--with root
+    (drgnx-test-with-exec-calls calls
+      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () nil)))
+        (drgnx-ai--start-local 'ollama (list "/bin/sh" "-c" "true") "Ollama"))
+      (should (= 1 (length calls)))
+      (should (equal (plist-get (car calls) :name) "Ollama server"))
+      (should (eq (plist-get (car calls) :no_timebox) t))
+      (should-not (plist-member (car calls) :timebox_s)))))

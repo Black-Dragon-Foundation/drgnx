@@ -5688,9 +5688,13 @@
             ]
           },
           "timebox_s": {
+            "description": "Seconds before the hub ends it; absent: the job has no time box (`no_timebox`).",
             "format": "uint64",
             "minimum": 0,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "unit": {
             "description": "The transient unit's name (Linux), or none.",
@@ -5705,8 +5709,7 @@
           "kind",
           "cwd",
           "status",
-          "started",
-          "timebox_s"
+          "started"
         ],
         "title": "ExecRow",
         "type": "object"
@@ -5839,9 +5842,13 @@
                 ]
               },
               "timebox_s": {
+                "description": "Seconds before the hub ends it; absent: the job has no time box (`no_timebox`).",
                 "format": "uint64",
                 "minimum": 0,
-                "type": "integer"
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "unit": {
                 "description": "The transient unit's name (Linux), or none.",
@@ -5856,8 +5863,7 @@
               "kind",
               "cwd",
               "status",
-              "started",
-              "timebox_s"
+              "started"
             ],
             "type": "object"
           },
@@ -6191,6 +6197,13 @@
               "null"
             ]
           },
+          "no_timebox": {
+            "description": "The job has no time box: the hub never ends it for time (the user's jobs only; the editor's servers run for days).\n`exec/stop` and the hub's stop still end it.  With `timebox_s` it is refused.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "timebox_s": {
             "description": "Seconds before it is ended: 1 to 86400 (default 3600).",
             "format": "uint64",
@@ -6415,9 +6428,13 @@
             ]
           },
           "timebox_s": {
+            "description": "Seconds before the hub ends it; absent: the job has no time box (`no_timebox`).",
             "format": "uint64",
             "minimum": 0,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "unit": {
             "description": "The transient unit's name (Linux), or none.",
@@ -6432,8 +6449,7 @@
           "kind",
           "cwd",
           "status",
-          "started",
-          "timebox_s"
+          "started"
         ],
         "title": "ExecRow",
         "type": "object"

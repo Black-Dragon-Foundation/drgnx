@@ -184,8 +184,8 @@ fn a_job_whose_process_is_gone_is_lost() {
         argv: vec!["true".into()],
         cwd: "/".into(),
         started: now(),
-        timebox_s: 60,
-        deadline: now() + 60.0,
+        timebox_s: Some(60),
+        deadline: Some(now() + 60.0),
         unit: None,
         pid: Some(i32::MAX - 1),
         start_time: Some(1),
@@ -234,6 +234,7 @@ fn agent_cannot_set_memory_max() {
         json!({"nice": 5}),
         json!({"name": "mine"}),
         json!({"env": [{"name": "A", "value": "1"}]}),
+        json!({"no_timebox": true}),
     ] {
         let p = params(extra);
         let e = user_job(&Some("s1".into()), CheckKind::Other, &p).unwrap_err();
@@ -244,6 +245,105 @@ fn agent_cannot_set_memory_max() {
     // an agent that sends none of them is untouched
     let none = user_job(&Some("s1".into()), CheckKind::Other, &params(json!({}))).unwrap();
     assert!(none.name.is_none() && none.env.is_empty() && none.nice.is_none());
+}
+
+#[test]
+fn an_agent_cannot_ask_for_no_time_box_and_names_the_field() {
+    let p = params(json!({"no_timebox": true}));
+    let e = user_job(&Some("s1".into()), CheckKind::Other, &p).unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidParams);
+    assert!(e.message.starts_with("no_timebox:"), "{}", e.message);
+    // the user may; `false` is what an absent field means, for anyone
+    assert!(user_job(&None, CheckKind::Other, &p).unwrap().no_timebox);
+    let off = params(json!({"no_timebox": false}));
+    assert!(
+        !user_job(&Some("s1".into()), CheckKind::Other, &off)
+            .unwrap()
+            .no_timebox
+    );
+}
+
+#[test]
+fn no_time_box_and_a_time_box_together_are_refused() {
+    let m = runstav::registry::find("exec/start").expect("exec/start");
+    let both = json!({"argv": ["true"], "cwd": "/", "no_timebox": true, "timebox_s": 60});
+    let e = (m.decode)(&both).err().expect("refused");
+    assert_eq!(e.code, ErrorCode::InvalidParams);
+    assert_eq!(e.path.as_deref(), Some("no_timebox"));
+    let alone = json!({"argv": ["true"], "cwd": "/", "no_timebox": true});
+    assert!((m.decode)(&alone).is_ok());
+}
+
+#[test]
+fn a_missing_time_box_is_an_hour() {
+    assert_eq!(
+        requested_timebox(&params(json!({}))),
+        Duration::from_secs(3600)
+    );
+    assert_eq!(
+        requested_timebox(&params(json!({"timebox_s": 90}))),
+        Duration::from_secs(90)
+    );
+}
+
+#[test]
+fn a_job_without_a_time_box_has_no_deadline() {
+    let mut s = spec(
+        Starter::User,
+        Path::new("/"),
+        "true",
+        Duration::from_secs(5),
+    );
+    assert_eq!(s.time_box(), Some(Duration::from_secs(5)));
+    s.user.no_timebox = true;
+    assert_eq!(s.time_box(), None);
+    let mut meta = Meta {
+        id: "x".into(),
+        session: None,
+        kind: "other".into(),
+        argv: vec![],
+        cwd: "/".into(),
+        started: now(),
+        timebox_s: None,
+        deadline: None,
+        unit: None,
+        pid: None,
+        start_time: None,
+        entity: None,
+        image: None,
+        name: None,
+        queued: false,
+    };
+    // the timer path has nothing to wait for
+    assert_eq!(meta.time_left(), None);
+    meta.deadline = Some(now() - 10.0);
+    assert_eq!(meta.time_left(), Some(Duration::ZERO));
+    // an old meta.json (numbers) still reads
+    let old = r#"{"id":"x","session":null,"kind":"other","argv":[],"cwd":"/","started":1.0,"timebox_s":60,"deadline":61.0,"unit":null,"pid":null,"start_time":null,"entity":null}"#;
+    let m: Meta = serde_json::from_str(old).unwrap();
+    assert_eq!((m.timebox_s, m.deadline), (Some(60), Some(61.0)));
+}
+
+#[tokio::test]
+async fn a_user_job_without_a_time_box_is_recorded_without_one_and_stop_ends_it() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let gate = d.path().join("gate");
+    fifo(&gate);
+    // a one millisecond box that must not apply: with the timer armed the job would end `TimedOut` at once
+    let mut s = spec(
+        Starter::User,
+        d.path(),
+        &format!("read x < {}", gate.display()),
+        Duration::from_millis(1),
+    );
+    s.user.no_timebox = true;
+    let id = r.start(s).await.unwrap();
+    let row = r.get(&id).unwrap();
+    assert_eq!(row.timebox_s, None);
+    assert_eq!(r.inner.get().unwrap().meta(&id).unwrap().deadline, None);
+    assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
+    assert_eq!(ended(&r, &id).await.status, ExecStatus::Stopped);
 }
 
 #[test]
@@ -311,6 +411,7 @@ async fn a_user_job_gets_its_name_env_and_nice() {
         env: vec![("JOB_VAR".into(), "from-the-request".into())],
         memory_max: None,
         nice: Some(7),
+        no_timebox: false,
     };
     let id = r.start(s).await.unwrap();
     let row = ended(&r, &id).await;
@@ -691,8 +792,8 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
         argv: vec!["echo".into(), "late".into()],
         cwd: d.path().display().to_string(),
         started: now,
-        timebox_s: 30,
-        deadline: now + 30.0,
+        timebox_s: Some(30),
+        deadline: Some(now + 30.0),
         unit: None,
         pid: None,
         start_time: None,

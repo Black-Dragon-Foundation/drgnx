@@ -713,3 +713,14 @@ the CDP calls it makes are collected in `drgnx-live-test--sent' (METHOD names, n
     (drgnx-live-mode)
     (should-not (memq #'drgnx-live--shown-again window-buffer-change-functions))
     (should-not (memq #'drgnx-live--resized window-size-change-functions))))
+
+(load (expand-file-name "test/fixtures/exec-calls-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-live/the-browser-runs-without-a-time-box ()
+  ;; the browser for agents stays up for days: the hub is asked for no time box, not for a day
+  (drgnx-test-with-exec-calls calls
+    (should (equal (drgnx-live--exec-start '("true") "/tmp" (+ (float-time) 5)) "job-1"))
+    (should (= 1 (length calls)))
+    (should (equal (plist-get (car calls) :name) "live-browser"))
+    (should (eq (plist-get (car calls) :no_timebox) t))
+    (should-not (plist-member (car calls) :timebox_s))))

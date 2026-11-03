@@ -284,9 +284,9 @@ without one; either ends the wait.  An answer that comes after the wait ended is
              (message "Test Report: serving %s…" (abbreviate-file-name (plist-get found :path)))
              (if running
                  (funcall serve (plist-get running :id))
-               ;; the hub answers later; no memory cap on macOS (the hub refuses one there); a server: the longest time box
+               ;; the hub answers later; no memory cap on macOS (the hub refuses one there); a server: no time box
                (drgnx-exec-start "playwright" command :cwd root :memory-max (and (eq system-type 'gnu/linux) "1G")
-                                 :timebox 86400
+                                 :no-timebox t
                                  :callback (lambda (id why)
                                              (if id (funcall serve id) (message "drgnx: %s" why))))))))))
 

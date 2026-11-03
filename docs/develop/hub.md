@@ -900,7 +900,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no | front |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no | front |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum}` | `{from: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no | front |
-| `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, timebox_s?: natnum}` | `{id: string, text: string}` | yes | front |
+| `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes | front |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes | front |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no | front |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | front |
@@ -1493,7 +1493,15 @@ The editor's own jobs are the user's `exec/start` with four more fields (`StartP
 (`runstav::methods::exec::key_like_env_name`). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
 `pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
 `nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
-and without a unit. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see
+and without a unit.
+
+A fifth user-only field, `no_timebox: true`, runs the job with no time box (the editor's servers stay up for days, and
+`timebox_s` stops at 86400): `user_only_field` names it for a session (refused like the others), `check_start` refuses it
+together with `timebox_s` (`invalid-params`, path `no_timebox`), and a missing `timebox_s` still means 3600. The flag is
+`UserJob.no_timebox`; `ExecSpec::time_box` is then none, `meta.json` has no `timebox_s` and no `deadline` (both
+optional; an older file with numbers reads as before), the `ExecRow` has no `timebox_s`, and `watch` has no timer arm
+(`Meta::time_left` is none), so only the process's end, `exec/stop` or the hub's stop ends the job. The graph row records
+a time box of 0. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see
 `docs/guide/jobs.md`, "The editor's jobs").
 
 ## The timeline

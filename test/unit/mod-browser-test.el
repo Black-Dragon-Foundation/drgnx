@@ -413,3 +413,20 @@ hub's log of every job is empty (`drgnx-hub-call' answers `exec/log' at once)."
 
 (provide 'mod-browser-test)
 ;;; mod-browser-test.el ends here
+
+(load (expand-file-name "test/fixtures/exec-calls-fixture" drgnx-dir) nil t)
+
+(ert-deftest drgnx-browser/the-report-server-runs-without-a-time-box ()
+  ;; a server the user leaves up: the hub is asked for no time box, not for the longest one
+  (drgnx-test-with-exec-calls calls
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/npx"))
+              ((symbol-function 'drgnx-browser--root) (lambda () "/tmp/proj/"))
+              ((symbol-function 'drgnx-browser-newest) (lambda (_root) (list :kind 'report :path "/tmp/proj/playwright-report/")))
+              ((symbol-function 'drgnx-exec-list) (lambda () nil))
+              ((symbol-function 'drgnx-browser--stop-others) #'ignore)
+              ((symbol-function 'drgnx-browser--watch-job) #'ignore))
+      (drgnx-browser-test-report)
+      (should (= 1 (length calls)))
+      (should (equal (plist-get (car calls) :name) "playwright"))
+      (should (eq (plist-get (car calls) :no_timebox) t))
+      (should-not (plist-member (car calls) :timebox_s)))))
