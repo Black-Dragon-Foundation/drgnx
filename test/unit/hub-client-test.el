@@ -1,6 +1,6 @@
 ;;; hub-client-test.el --- batch tests: the editor's v1 client (hello, proofs, deadlines, skew, the line reader) -*- lexical-binding: t -*-
 ;; Fake hubs (test/fixtures/fake-hub.el) lie about their proof or speak protocol 0; the tests marked "binary" run
-;; against Ratatoskr (DRGNX_RATATOSKR_BIN) with its Lisp backend, and skip without it (test/no-skip.eld lists them).
+;; against Ratatoskr (DRGNX_RATATOSKR_BIN), and skip without it (test/no-skip.eld lists them).
 ;; test-class: cond
 (require 'ert)
 (require 'cl-lib)
@@ -63,8 +63,7 @@
   "A function (ROOT) → (BINARY ARG…) that replaces the binary `with-ratatoskr' serves with, and adds arguments.")
 
 (defmacro drgnx-hub-client-test--with-ratatoskr (&rest body)
-  "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'), its Lisp backend this checkout's; skipped
-without the binary."
+  "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'); skipped without the binary."
   (declare (indent 0))
   `(drgnx-hub-client-test--with
      (skip-unless (drgnx-hub-client-test--bin))
@@ -88,12 +87,6 @@ without the binary."
          (when (process-live-p hub) (signal-process hub 'kill))
          (kill-buffer (process-buffer hub))))))
 
-(defun drgnx-hub-client-test--backend-up ()
-  "Wait for Ratatoskr's Lisp backend to run."
-  (drgnx-hub-client-test--wait
-   (lambda () (equal (plist-get (plist-get (drgnx-hub-call-sync "status" nil 10) :backend) :state) "running"))
-   "the Lisp backend runs"))
-
 (defun drgnx-hub-client-test--mock-profile (root)
   "The profile \"mock\" (test/fixtures/mock-acp.el) in ROOT's settings.el."
   (drgnx-test-write-settings
@@ -116,7 +109,6 @@ without the binary."
   ;; past it to the answer
   (drgnx-hub-client-test--with-ratatoskr
     (should (drgnx-hub--ping-socket (drgnx-hub-socket)))
-    (drgnx-hub-client-test--backend-up)
     (drgnx-hub-disconnect)
     (let ((drgnx-hub-client-proves nil))
       (should (listp (drgnx-coord-mcp--hub-agents))))))
@@ -152,10 +144,9 @@ without the binary."
       (should (eql (funcall refused) 1)))))
 
 (ert-deftest drgnx-hub-client/mirror-over-ratatoskr ()
-  ;; binary + the Lisp backend: a session the hub starts reaches this Emacs's mirror through Ratatoskr's relay
+  ;; binary: a session the hub starts reaches this Emacs's mirror
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
-    (drgnx-hub-client-test--backend-up)
     (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil))
       (unwind-protect
           (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd root) 30) :id)))
@@ -195,7 +186,6 @@ without the binary."
     (dolist (f '(drgnx-job drgnx-job-ui drgnx-cockpit-cards drgnx-cockpit-feed drgnx-agents-ui)) (require f)))
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
-    (drgnx-hub-client-test--backend-up)
     (let ((plan (concat root "plan.md")) (drgnx-hub-client-test--traffic nil)
           (drgnx-agents--sessions nil) (drgnx-agents-profiles nil) job card)
       (with-temp-file plan
@@ -682,7 +672,6 @@ without the binary."
     (drgnx-hub-client-test--with-ratatoskr
       (unwind-protect
           (progn
-            (drgnx-hub-client-test--backend-up)
             (drgnx-hub-connect)
             (drgnx-hub-client-test--wait (lambda () (process-live-p drgnx-hub--events)) "the subscription")
             (let ((other (drgnx-hub-client-test--stub root "echo '{\"commit\":\"another\"}'")))

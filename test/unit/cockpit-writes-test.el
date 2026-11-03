@@ -206,7 +206,6 @@ what the hub answers.  The pane's agent is AGENT of JOB, with no session; SRC is
 (ert-deftest drgnx-cockpit-feed/an-answer-reaches-the-store-through-ratatoskr ()
   ;; binary + Lisp backend: an ask card made with `coord/card-create'; the answer settles it in work.db
   (drgnx-hub-client-test--with-ratatoskr
-    (drgnx-hub-client-test--backend-up)
     (let ((id (plist-get (drgnx-hub-call-sync "coord/card-create" (list :job "j1" :kind "ask" :title "which?") 10) :id)))
       (should (natnump id))
       (cl-letf (((symbol-function 'drgnx-cockpit-feed--changed) #'ignore))

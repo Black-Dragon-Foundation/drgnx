@@ -220,7 +220,6 @@
   (declare (indent 0))
   `(drgnx-notice-test-with-model
      (drgnx-hub-client-test--with-ratatoskr
-       (drgnx-hub-client-test--backend-up)
        (drgnx-hub-connect)
        (drgnx-hub-client-test--wait (lambda () (and (processp drgnx-hub--events) (process-get drgnx-hub--events :drgnx-proven))) "the event connection proves itself")
        (let* ((org (file-name-as-directory (make-temp-file "drgnx-org" t)))

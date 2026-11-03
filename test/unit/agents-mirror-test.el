@@ -368,7 +368,6 @@
   ;; a real Ratatoskr (mock profile): the editor's start is the hub's agents/start, and the mirror follows the session
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
-    (drgnx-hub-client-test--backend-up)
     (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil) (drgnx-hub-event-functions nil))
       (unwind-protect
           (let* ((m (drgnx-agents-mirror-start "mock" root)) (id (drgnx-agent-session-remote m)))
