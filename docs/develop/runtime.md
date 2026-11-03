@@ -584,7 +584,8 @@ methods and the task that ports it; a row is never deleted for it.
   whose `match` occurs in the body answers; none: 404 `{}`. `chunks` streams (the head at once, no length, each text
   after its delay, then the close; `no_end`: the connection is dropped instead). The log is JSONL:
   `{"request": {method, path, headers (lower-case names), body}}` per request, then `{"closed": true}` when the client
-  hangs up before the answer ended. It ends when `--parent` is gone.
+  hangs up before the answer ended (with `--print-closed`, the mock also prints `MOCK-LLM-CLOSED` then, for a test to
+  wait on). It ends when `--parent` is gone.
 - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
 

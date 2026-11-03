@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bifrost::admit::{Registry, token_hash};
 use bifrost::budget::Price;
@@ -64,6 +64,8 @@ struct Mock {
     child: Child,
     port: u16,
     log: PathBuf,
+    /// The mock's stdout lines after the port line (`--print-closed`: `MOCK-LLM-CLOSED` per hang-up).
+    said: mpsc::UnboundedReceiver<String>,
     _dir: tempfile::TempDir,
 }
 
@@ -81,24 +83,44 @@ impl Mock {
             .arg(&log)
             .arg("--parent")
             .arg(std::process::id().to_string())
+            .arg("--print-closed")
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
+        let mut out = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
+        out.read_line(&mut line).unwrap();
         let port = line
             .trim()
             .strip_prefix("MOCK-LLM-PORT ")
             .and_then(|p| p.parse().ok())
             .unwrap_or_else(|| panic!("ratatoskr-mock said {line:?}"));
+        // the rest of its stdout, line by line, until it ends with the process
+        let (tx, said) = mpsc::unbounded_channel();
+        std::thread::spawn(move || {
+            for line in out.lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
         Self {
             child,
             port,
             log,
+            said,
             _dir: dir,
         }
+    }
+
+    /// Returns when the mock says a client hung up before it was answered to the end. The deadline only bounds a
+    /// failure: a stream that ran to its end (nobody hung up in time) never says it.
+    async fn hang_up(&mut self) {
+        let line = tokio::time::timeout(Duration::from_secs(30), self.said.recv())
+            .await
+            .expect("the mock saw a hang-up within 30 s")
+            .expect("the mock is running");
+        assert_eq!(line, "MOCK-LLM-CLOSED");
     }
 
     /// The mock's URL with path `prefix` (each provider of a test gets its own).
@@ -127,10 +149,6 @@ impl Mock {
             .iter()
             .map(|r| r["path"].as_str().unwrap().to_owned())
             .collect()
-    }
-
-    fn saw_a_hang_up(&self) -> bool {
-        self.log().iter().any(|v| v["closed"] == json!(true))
     }
 }
 
@@ -227,6 +245,7 @@ struct Gw {
     port: u16,
     book: Arc<Book>,
     events: mpsc::UnboundedReceiver<GatewayEvent>,
+    listener: JoinHandle<()>,
 }
 
 impl Gw {
@@ -265,19 +284,45 @@ impl Gw {
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(listen::serve_tcp(gw.clone(), listener, port));
+        let listener = tokio::spawn(listen::serve_tcp(gw.clone(), listener, port));
         Self {
             gw,
             port,
             book,
             events,
+            listener,
         }
     }
 
-    /// The first event `what` takes, within 5 s (the ones before it are dropped).
+    /// The events that came after the last `pending`, once the gateway has nothing more to do: the listener is
+    /// stopped, so every sender of the event channel (the gateway, its connections, the tasks recording spend rows)
+    /// is gone exactly when all work for the requests so far ended, and the channel then reports the end. The
+    /// connections of the test's clients must be closed by then (a kept one holds the channel open). The deadline
+    /// only bounds a failure.
+    async fn settled(self) -> Vec<GatewayEvent> {
+        let Self {
+            gw,
+            mut events,
+            listener,
+            ..
+        } = self;
+        listener.abort();
+        drop(gw);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut rest = Vec::new();
+            while let Some(e) = events.recv().await {
+                rest.push(e);
+            }
+            rest
+        })
+        .await
+        .expect("the gateway settled within 30 s (a connection is still open)")
+    }
+
+    /// The first event `what` takes (the ones before it are dropped); the deadline only bounds a failure.
     async fn until(&mut self, what: impl Fn(&GatewayEvent) -> bool) -> GatewayEvent {
         let events = &mut self.events;
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let e = events.recv().await.expect("the event channel is open");
                 if what(&e) {
@@ -286,7 +331,7 @@ impl Gw {
             }
         })
         .await
-        .expect("the event within 5 s")
+        .expect("the event within 30 s")
     }
 
     /// The events sent so far.
@@ -398,7 +443,6 @@ async fn a_stream_passes_through_and_the_first_chunk_goes_first() {
     )
     .await;
     let (mut sender, _conn) = open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
-    let sent = Instant::now();
     let response = sender
         .send_request(gw.request(AGENT, "/v1/messages", "{\"stream\":true}"))
         .await
@@ -406,12 +450,9 @@ async fn a_stream_passes_through_and_the_first_chunk_goes_first() {
     assert_eq!(response.status(), 200);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
     let mut body = response.into_body();
+    // streamed, not buffered: the first frame holds the first chunk alone (the mock sends the second 1.5 s later), so
+    // this does not depend on how fast the machine is
     let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(
-        sent.elapsed() < Duration::from_millis(1200),
-        "the first chunk came after {:?}, with the last",
-        sent.elapsed()
-    );
     assert!(
         text(&first).starts_with("event: message_start"),
         "{first:?}"
@@ -572,16 +613,10 @@ async fn when_every_provider_fails_the_agent_hears_why() {
             .collect::<Vec<_>>(),
         vec![("ghost", "nomsg"), ("nomsg", "nokey"), ("nokey", "dead")]
     );
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        gw.book.rows().is_empty(),
-        "no provider answered: no spend row"
-    );
-    assert!(
-        !gw.pending()
-            .iter()
-            .any(|e| matches!(e, GatewayEvent::Request(_)))
-    );
+    let book = gw.book.clone();
+    let late = gw.settled().await;
+    assert!(book.rows().is_empty(), "no provider answered: no spend row");
+    assert!(!late.iter().any(|e| matches!(e, GatewayEvent::Request(_))));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -643,17 +678,10 @@ async fn spend_is_recorded_once_per_request() {
         format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}")
     );
     let row = gw.row().await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        gw.book.rows(),
-        vec![row.clone()],
-        "one row for three chunks"
-    );
-    assert!(
-        !gw.pending()
-            .iter()
-            .any(|e| matches!(e, GatewayEvent::Request(_)))
-    );
+    let book = gw.book.clone();
+    let late = gw.settled().await;
+    assert_eq!(book.rows(), vec![row.clone()], "one row for three chunks");
+    assert!(!late.iter().any(|e| matches!(e, GatewayEvent::Request(_))));
     assert_eq!(row.job.as_deref(), Some("j1"));
     assert_eq!(row.task.as_deref(), Some("t1"));
     assert_eq!(row.agent.as_deref(), Some("a1"));
@@ -684,8 +712,9 @@ async fn a_skipped_step_records_nothing() {
     .await;
     assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 200);
     let row = gw.row().await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(gw.book.rows(), vec![row.clone()]);
+    let book = gw.book.clone();
+    gw.settled().await;
+    assert_eq!(book.rows(), vec![row.clone()]);
     assert_eq!((row.provider.as_str(), row.input, row.output), ("a", 4, 2));
     assert_eq!(mock.paths(), vec!["/a/v1/messages"]);
 }
@@ -750,7 +779,7 @@ async fn budget_event_after_the_crossing_request() {
 async fn a_hang_up_stops_the_upstream() {
     let mut chunks = vec![json!([0, MESSAGE_START])];
     chunks.extend((0..40).map(|_| json!([100, ": tick\n\n"])));
-    let mock = Mock::start(json!([{"path": "/a/", "chunks": chunks}]));
+    let mut mock = Mock::start(json!([{"path": "/a/", "chunks": chunks}]));
     let mut gw = Gw::start(
         vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
         vec![(AGENT, agent(&["a"], None))],
@@ -770,21 +799,16 @@ async fn a_hang_up_stops_the_upstream() {
     drop(body);
     drop(sender);
     conn.abort();
-    let gone = Instant::now();
-    while !mock.saw_a_hang_up() {
-        assert!(
-            gone.elapsed() < Duration::from_secs(1),
-            "the provider still streams 1 s after the agent hung up"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // the provider's side of the stream is hung up on, while it still has about 4 s of ticks to send
+    mock.hang_up().await;
     let row = gw.row().await;
     assert_eq!(
         (row.provider.as_str(), row.status, row.input),
         ("a", 200, 10)
     );
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(gw.book.rows().len(), 1);
+    let book = gw.book.clone();
+    gw.settled().await;
+    assert_eq!(book.rows().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -899,9 +923,9 @@ async fn a_refused_body_is_drained() {
     s.write_all(head.as_bytes()).await.unwrap();
     s.write_all(&vec![b'x'; n]).await.unwrap();
     let mut answer = Vec::new();
-    let read = tokio::time::timeout(Duration::from_secs(5), s.read_to_end(&mut answer))
+    let read = tokio::time::timeout(Duration::from_secs(30), s.read_to_end(&mut answer))
         .await
-        .expect("the gateway closes within 5 s");
+        .expect("the gateway closes within 30 s");
     // a close with the body unread would reset the connection under the client
     assert!(read.is_ok(), "{read:?}");
     let answer = String::from_utf8_lossy(&answer);
@@ -957,7 +981,8 @@ async fn the_sixty_fifth_connection_is_closed() {
     }
     let mut extra = TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap();
     let mut buf = [0u8; 64];
-    let ended = tokio::time::timeout(Duration::from_secs(2), extra.read(&mut buf)).await;
+    // the deadline only bounds a failure: the server closes the connection at once
+    let ended = tokio::time::timeout(Duration::from_secs(30), extra.read(&mut buf)).await;
     assert!(
         matches!(ended, Ok(Ok(0) | Err(_))),
         "the 65th connection was not closed: {ended:?}"
@@ -968,8 +993,17 @@ async fn the_sixty_fifth_connection_is_closed() {
         gw.port
     );
     held[0].write_all(head.as_bytes()).await.unwrap();
+    // read until the status line is in (not until the connection ends, which may be never)
     let mut answer = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(5), held[0].read_to_end(&mut answer)).await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !answer.windows(2).any(|w| w == b"\r\n") {
+            let n = held[0].read(&mut buf).await.unwrap();
+            assert!(n > 0, "the connection ended before a status line");
+            answer.extend_from_slice(&buf[..n]);
+        }
+    })
+    .await
+    .expect("the status line within 30 s");
     assert!(
         String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 401"),
         "{}",
@@ -1064,7 +1098,6 @@ async fn the_editor_route_streams_sse() {
     )
     .await;
     let (mut sender, _conn) = open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
-    let sent = Instant::now();
     let response = sender
         .send_request(gw.request(EDITOR, "/p/or/chat/completions", "{\"stream\":true}"))
         .await
@@ -1072,12 +1105,8 @@ async fn the_editor_route_streams_sse() {
     assert_eq!(response.status(), 200);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
     let mut body = response.into_body();
+    // streamed, not buffered: the first frame is the first chunk alone (the mock sends the second 1.5 s later)
     let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(
-        sent.elapsed() < Duration::from_millis(1200),
-        "{:?}",
-        sent.elapsed()
-    );
     assert_eq!(
         text(&first),
         keep_alive,
@@ -1117,8 +1146,9 @@ async fn the_editor_route_records_a_spend_row_with_no_job() {
             status: 200,
         }
     );
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(gw.book.rows(), vec![row]);
+    let book = gw.book.clone();
+    gw.settled().await;
+    assert_eq!(book.rows(), vec![row]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
