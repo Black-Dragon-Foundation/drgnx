@@ -97,11 +97,8 @@
               ;; the mock's commit takes what is in the checkout: something to commit
               (write-region "work\n" nil (concat repo "hub-work.txt") nil 'silent)
               (drgnx-agents-send m "commit hub work")
-              (ert-info ((lambda () (ignore-errors (format "git log: %s; session: %s"
-                                                           (drgnx-work-rec--git repo "log" "--format=%s")
-                                                           (drgnx-agent-session-status m)))))
-                (drgnx-hub-client-test--wait (lambda () (ignore-errors (member "hub work" (drgnx-work-rec--titles task))))
-                                             "the turn's commit is recorded for the task"))
+              (drgnx-hub-client-test--wait (lambda () (ignore-errors (member "hub work" (drgnx-work-rec--titles task))))
+                                           "the turn's commit is recorded for the task")
               (should (equal (drgnx-work-rec--titles task) '("hub work")))))
         (drgnx-agents-mirror-stop)
         (drgnx-work-db-close-all)))))

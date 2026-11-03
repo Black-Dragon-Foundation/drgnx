@@ -1125,9 +1125,12 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub
   restarts or resumes does not get them again. The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
   drops, with one notice, the names the hub would refuse. The mirror also runs `drgnx-agents-task-functions` for hub
-  sessions that have a task: `start` when a session is first seen, `turn-start` when its status becomes `busy` and
-  `turn-end` when it stops being busy, each once per change of status (a snapshot sent again runs nothing). The work
-  tracker records a task's commits from `turn-end`.
+  sessions that have a task: `start` when a session is first seen, `turn-start` when a turn begins and `turn-end` when
+  it ends. A turn begins when the status becomes `busy` and ends when it stops being busy or when its `stop` entry
+  arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
+  go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
+  entries sent again run nothing, and the turns already in a transcript fetched at attach run none. The work tracker
+  records a task's commits from `turn-end`.
 
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
   mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its

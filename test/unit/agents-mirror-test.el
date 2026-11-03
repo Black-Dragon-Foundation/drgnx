@@ -218,7 +218,8 @@
 (defmacro drgnx-agents-mirror-test--hooks (events &rest body)
   "BODY with `drgnx-agents-task-functions' pushing (EVENT . MIRROR-ID) onto EVENTS (a variable, newest first)."
   (declare (indent 1))
-  `(let ((drgnx-agents--sessions nil) (inhibit-message t)
+  `(let ((drgnx-agents--sessions nil) (inhibit-message t) (drgnx-agents-mirror--turns (make-hash-table :test #'equal))
+         (drgnx-agents-mirror--seq (make-hash-table :test #'equal))
          (drgnx-agents-task-functions
           (list (lambda (s event) (push (cons event (drgnx-agent-session-remote s)) ,events)))))
      (cl-letf (((symbol-function 'drgnx-notify) #'ignore))
@@ -251,6 +252,33 @@
         (dolist (status '("idle" "busy" "idle"))
           (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap status)))
         (should-not none)))))
+
+(ert-deftest drgnx-agents-mirror/a-turn-with-no-busy-snapshot-ends-at-its-stop-entry ()
+  ;; the hub sends a session's state at most every 50 ms: a short turn can be idle both before and after it
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "idle" "T#1"))
+      (let ((turn (lambda (seq i)
+                    (drgnx-agents-mirror--event
+                     "agent-entries" (list :id "h-t" :seq seq
+                                           :entries (list (list i '(:type "user" :text "go")) (list (1+ i) '(:type "stop" :stop "EndTurn"))))))))
+        (funcall turn 1 0)
+        (should (equal (mapcar #'car (reverse events)) '(start turn-start turn-end)))
+        ;; the same entries again (a resent event, a later number): nothing
+        (funcall turn 2 0)
+        (should (= 3 (length events)))
+        ;; the next turn's entries: one more turn
+        (funcall turn 3 2)
+        (should (= 2 (cl-count 'turn-end events :key #'car)))
+        (should (= 2 (cl-count 'turn-start events :key #'car)))))))
+
+(ert-deftest drgnx-agents-mirror/a-turn-the-status-ended-is-not-ended-again-by-its-stop-entry ()
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (dolist (status '("idle" "busy" "idle"))
+        (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap status "T#1")))
+      (drgnx-agents-mirror--event "agent-entries" (list :id "h-t" :seq 1 :entries (list (list 0 '(:type "stop" :stop "EndTurn")))))
+      (should (equal (mapcar #'car (reverse events)) '(start turn-start turn-end))))))
 
 (ert-deftest drgnx-agents-mirror/a-session-first-seen-busy-starts-its-turn ()
   (let (events)
