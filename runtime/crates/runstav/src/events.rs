@@ -277,36 +277,25 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::BTreeSet;
-    use std::path::Path;
-
-    /// The names after `pattern` + `'` in `text`: `(drgnx-hub--broadcast 'card` → `card`.
-    fn names_after(text: &str, pattern: &str, out: &mut BTreeSet<String>) {
-        for (i, _) in text.match_indices(pattern) {
-            let rest = &text[i + pattern.len()..];
-            let name: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
-                .collect();
-            if !name.is_empty() {
-                out.insert(name);
-            }
-        }
-    }
 
     #[test]
     fn event_types_are_the_broadcast_names() {
-        let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../core");
-        let mut found = BTreeSet::new();
-        for f in std::fs::read_dir(&core).unwrap() {
-            let p = f.unwrap().path();
-            if p.extension().is_some_and(|e| e == "el") {
-                let text = std::fs::read_to_string(&p).unwrap();
-                names_after(&text, "(drgnx-hub--broadcast '", &mut found);
-                names_after(&text, "(drgnx-job--broadcast '", &mut found);
-                // also `(apply #'drgnx-gateway--emit 'request row)`
-                names_after(&text, "drgnx-gateway--emit '", &mut found);
-            }
-        }
+        // what the Lisp backend broadcast (`drgnx-hub--broadcast`, `drgnx-job--broadcast`, `drgnx-gateway--emit`),
+        // frozen when the Lisp runtime was deleted
+        let found: BTreeSet<String> = [
+            "agent",
+            "agent-entries",
+            "budget",
+            "card",
+            "events",
+            "fallback",
+            "job",
+            "lease-released",
+            "request",
+        ]
+        .iter()
+        .map(|n| (*n).to_owned())
+        .collect();
         let ours: BTreeSet<String> = events()
             .iter()
             .map(|e| e.name.to_string())

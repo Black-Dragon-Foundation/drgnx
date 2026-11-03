@@ -537,8 +537,9 @@ fn every_old_select_runs_on_the_views() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
-    // The extraction found the readers it must (a sanity bound, and the fragment over two views).
-    assert!(checked.len() >= 30, "{}: {checked:#?}", checked.len());
+    // The extraction found the readers it must (a sanity bound: 27 once the Lisp writers' own reads were deleted, and
+    // the fragment over two views).
+    assert!(checked.len() >= 25, "{}: {checked:#?}", checked.len());
     assert!(
         checked
             .iter()

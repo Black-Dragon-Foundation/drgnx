@@ -164,8 +164,8 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
             (condition-case nil
                 (dolist (sf (drgnx-lint-runtime--forms file))
                   (walk rel (cdr sf)))
-              ;; a test file the Lisp reader cannot read whole (a printed object in it): its text instead
-              (invalid-read-syntax
+              ;; a test file the Lisp reader cannot read whole (a printed object, an escape it refuses): its text instead
+              (error
                (with-temp-buffer
                  (insert-file-contents file)
                  (dolist (f features)

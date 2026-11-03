@@ -5,32 +5,30 @@ use mimir::Tool;
 use norn::tools::{Ctx, ToolSets, tools, tools_for};
 use serde_json::{Value, json};
 
-/// The tool names `core/drgnx-coord-mcp.el` defines, in the order it lists them: a line that opens a tool is
-/// `("NAME" :description …` (the description may start on the next line), inside the two tool-list functions.
+/// The tool names the Lisp coordination server (`drgnx-coord-mcp.el`, deleted with the Lisp runtime) defined, in the
+/// order it listed them: frozen here, as the parity goldens are.
 fn lisp_names() -> Vec<String> {
-    let src = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../core/drgnx-coord-mcp.el"),
-    )
-    .unwrap();
-    let start = src.find("(defun drgnx-coord-mcp--report-tools").unwrap();
-    let end = src.find("(defun drgnx-coord-mcp-main").unwrap();
-    let mut names = Vec::new();
-    for line in src[start..end].lines() {
-        let line = line.trim_start().trim_start_matches("`(");
-        let line = line.strip_prefix('(').unwrap_or(line);
-        let Some(rest) = line.strip_prefix('"') else {
-            continue;
-        };
-        let (name, tail) = rest.split_once('"').unwrap();
-        let tail = tail.trim();
-        // a function's docstring opens a line too: a tool name is lower-case letters and underscores
-        let is_name = name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
-        if is_name && (tail.is_empty() || tail.starts_with(":description")) {
-            names.push(name.to_owned());
-        }
-    }
-    names
+    [
+        "hello",
+        "report_edit",
+        "report_test",
+        "ask_user",
+        "list_agents",
+        "send_message",
+        "read_inbox",
+        "ack",
+        "read_decisions",
+        "record_decision",
+        "claim_task",
+        "update_task",
+        "complete_task",
+        "task_status",
+        "work_status",
+        "escalate",
+    ]
+    .iter()
+    .map(|n| (*n).to_owned())
+    .collect()
 }
 
 #[test]
