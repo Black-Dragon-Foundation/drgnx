@@ -1044,6 +1044,15 @@ sleep, no timer. It is Nidhogg's `nidhogg-test-peer`; an image whose Nidhogg pin
 `test/fixtures/nidhogg-test-peer-compat.el`, a copy that goes when the pin moves. `scripted-process.el` (a `sh` on a
 FIFO) stays for tests that need a real child's exit.
 
+### Held children
+
+A test that asserts something about a real child while it runs holds it: `drgnx-test-with-held` (in
+`test/fixtures/held-fixture.el`) puts a stand-in for the program first on `exec-path` that waits for one line of its
+standard input before it runs the real program, and `drgnx-test-release` sends that line. Asking a real program to be
+slow is no hold: on a fast machine a `git status` of one file ends before the test looks. A test that asserts how a
+child ended waits for the sentinel (or the done flag it sets), never for `process-status` to read `exit`: Emacs can
+mark the child exited on SIGCHLD before its last output and its sentinel have run.
+
 ### The audit: what a deterministic test really runs
 
 A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
