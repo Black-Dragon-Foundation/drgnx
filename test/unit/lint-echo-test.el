@@ -18,7 +18,7 @@
     ("core/drgnx-modules.el" . 1)       ; say-problems after turning modules on or off
     ("core/drgnx-session.el" . 2)       ; the quit questions
     ("core/drgnx-shell-env.el" . 2)     ; Reload Shell Environment
-    ("core/drgnx-agents.el" . 2)        ; starting an agent: the old adapter, no hub (said once, at the command)
+    ("core/drgnx-agents.el" . 1)        ; the old adapter (said once, at the command)
     ("core/drgnx.el" . 1)               ; safe mode's banner, asked for on the command line
     ;; the recorder or the model could not record: nowhere else to say it
     ("core/drgnx-guard.el" . 1)

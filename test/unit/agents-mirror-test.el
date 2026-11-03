@@ -45,16 +45,43 @@ without the binary (`drgnx-hub-client-test--with-ratatoskr')."
         (drgnx-agents-send m "hello mirror")
         (should (drgnx-agents-mirror-test--wait (lambda () (string-search "You said: hello mirror" (drgnx-agents-mirror-test--text m)))))))))
 
+(defun drgnx-agents-mirror-test--asking (root)
+  "ROOT's settings.el: the profile \"mock\" (as `drgnx-hub-client-test--mock-profile'), the profile \"asks\"
+(`ratatoskr-mock acp', beside the hub's binary) and a matrix whose cell for a worker's edits asks the user, so the
+hub hands that permission request to the editor."
+  (drgnx-test-write-settings
+   (concat root "config/settings.el")
+   'drgnx-agents-profiles
+   (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir)
+                                     (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                     "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))
+         (list "asks" :provider 'claude
+               :command (list (expand-file-name "ratatoskr-mock" (file-name-directory (drgnx-hub-client-test--bin)))
+                              "acp" "--as" "claude")))
+   'drgnx-agents-matrix '(:cells ((:action code.edit :column (:role worker) :verdict ask)))))
+
+(defun drgnx-agents-mirror-test--start-asking ()
+  "Start a worker of the profile \"asks\" in the hub; its id once it is idle."
+  (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "asks" :cwd (getenv "HOME") :role "worker")) :id)))
+    (drgnx-agents-mirror-test--wait
+     (lambda () (equal (plist-get (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :session) :status) "idle")))
+    id))
+
 (ert-deftest drgnx-agents-mirror/actions-on-a-mirror-go-to-the-hub ()
   (drgnx-agents-mirror-test--with
-    (let ((id (drgnx-agents-mirror-test--start)))
+    (drgnx-agents-mirror-test--asking root)
+    (let ((id (drgnx-agents-mirror-test--start-asking)))
       (drgnx-agents-mirror-sync)
       (should (drgnx-agents-mirror-test--wait (lambda () (drgnx-agents-mirror-test--mirror id))))
       (let ((m (drgnx-agents-mirror-test--mirror id)))
-        (drgnx-agents-send m "permission please")
+        (drgnx-agents-send m "ask:permission edit")
         (should (drgnx-agents-mirror-test--wait (lambda () (drgnx-agent-session-permissions m))))
-        (drgnx-agents-answer-permission m (car (drgnx-agent-session-permissions m)) "allow")
-        (should (drgnx-agents-mirror-test--wait (lambda () (string-search "permission: allow" (drgnx-agents-mirror-test--text m)))))
+        (let* ((request (car (drgnx-agent-session-permissions m)))
+               (option (plist-get (car (plist-get request :options)) :optionId)))
+          (should (stringp option))
+          (drgnx-agents-answer-permission m request option)
+          (should (drgnx-agents-mirror-test--wait
+                   (lambda () (string-search (concat "permission: " option) (drgnx-agents-mirror-test--text m))))))
         (drgnx-agents-kill m)
         (should (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status m) 'exited))))))))
 

@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-records)
+(require 'drgnx-agents)                 ; the session struct the transcript round trips build
 (require 'drgnx-work-scan)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 

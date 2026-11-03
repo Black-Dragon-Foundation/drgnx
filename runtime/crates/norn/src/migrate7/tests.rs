@@ -455,7 +455,6 @@ fn tables_named(sql: &str) -> Vec<String> {
 const FORMAT_CONSTANTS: &[&str] = &[
     "drgnx-coord--agent-cols",
     "drgnx-coord--event-cols",
-    "drgnx-coord--decision-cols",
     "drgnx-work--select",
 ];
 
@@ -545,11 +544,6 @@ fn every_old_select_runs_on_the_views() {
             .iter()
             .any(|s| s.contains("not in (select e.src from edge e join node s")),
         "{checked:#?}"
-    );
-    assert!(
-        checked
-            .iter()
-            .any(|s| s.contains("from decision where ver > ?"))
     );
 }
 

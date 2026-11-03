@@ -9,6 +9,7 @@
 (require 'drgnx-notice)
 (require 'drgnx-hub-client)
 (require 'drgnx-shell-env)
+(require 'drgnx-registry)               ; the notice tests register a command
 (require 'drgnx-agents-mirror)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)   ; seeding as the hub's stand-in

@@ -160,8 +160,21 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
                     (while (consp form) (walk rel (pop form))))))
       (dolist (rel files)
         (unless (member rel drgnx-lint-runtime--doomed-files)
-          (dolist (sf (drgnx-lint-runtime--forms (expand-file-name rel drgnx-dir)))
-            (walk rel (cdr sf))))))
+          (let ((file (expand-file-name rel drgnx-dir)))
+            (condition-case nil
+                (dolist (sf (drgnx-lint-runtime--forms file))
+                  (walk rel (cdr sf)))
+              ;; a test file the Lisp reader cannot read whole (a printed object in it): its text instead
+              (invalid-read-syntax
+               (with-temp-buffer
+                 (insert-file-contents file)
+                 (dolist (f features)
+                   (goto-char (point-min))
+                   (when (re-search-forward
+                          (format "(\\(?:require '\\|declare-function [^ \n]+ \"\\|autoload '[^ \n]+ \"\\)%s[\")]"
+                                  (regexp-quote (symbol-name f)))
+                          nil t)
+                     (push (format "%s: %s" rel f) problems))))))))))
     problems))
 
 (defconst drgnx-lint-runtime--core-kept

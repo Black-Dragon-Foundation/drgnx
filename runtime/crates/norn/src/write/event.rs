@@ -274,27 +274,28 @@ mod tests {
         assert_eq!(by, tx.id());
     }
 
+    /// The kinds of the editor's records fixture (one row per kind, `("KIND" DATA…)`), which the editor's record
+    /// schema round-trips: the same set as `EventKind`.
     #[test]
-    fn kinds_are_the_lisp_list() {
+    fn kinds_are_the_records_fixtures() {
         let src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../core/drgnx-coord.el"
+            "/../../../test/fixtures/records/events.eld"
         ))
         .unwrap();
-        let at = src
-            .find("(defconst drgnx-coord-event-kinds")
-            .expect("defconst");
-        let rest = &src[at..];
-        let open = rest.find("'(").expect("quoted list") + 2;
-        let close = rest[open..].find(')').expect("end of list") + open;
-        let lisp: Vec<&str> = rest[open..close]
-            .split('"')
-            .enumerate()
-            .filter(|(i, _)| i % 2 == 1)
-            .map(|(_, s)| s)
+        let mut fixture: Vec<&str> = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with(';'))
+            .filter_map(|l| {
+                let row = l.trim_start_matches([' ', '(']);
+                let kind = row.strip_prefix('"')?;
+                kind.split('"').next()
+            })
             .collect();
-        let rust: Vec<&str> = EventKind::ALL.iter().map(|k| k.as_str()).collect();
-        assert_eq!(rust, lisp);
+        fixture.sort_unstable();
+        let mut rust: Vec<&str> = EventKind::ALL.iter().map(|k| k.as_str()).collect();
+        rust.sort_unstable();
+        assert_eq!(rust, fixture);
         assert_eq!(rust.len(), 18);
     }
 }

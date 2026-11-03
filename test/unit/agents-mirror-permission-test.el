@@ -14,7 +14,15 @@
 without the binary (`drgnx-hub-client-test--with-ratatoskr')."
   (declare (indent 0))
   `(drgnx-hub-client-test--with-ratatoskr
-     (drgnx-hub-client-test--mock-profile root)
+     ;; the profile "mock" is `ratatoskr-mock acp' (beside the hub's binary); a worker's edits ask the user, so the hub
+     ;; hands that permission request to the editor
+     (drgnx-test-write-settings
+      (concat root "config/settings.el")
+      'drgnx-agents-profiles
+      (list (list "mock" :provider 'claude
+                  :command (list (expand-file-name "ratatoskr-mock" (file-name-directory (drgnx-hub-client-test--bin)))
+                                 "acp" "--as" "claude")))
+      'drgnx-agents-matrix '(:cells ((:action code.edit :column (:role worker) :verdict ask))))
      (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil))
        (unwind-protect (progn ,@body)
          (drgnx-agents-mirror-stop)))))
@@ -28,7 +36,7 @@ without the binary (`drgnx-hub-client-test--with-ratatoskr')."
   (mapconcat (lambda (e) (format "%s" (or (plist-get e :text) ""))) (drgnx-agent-session-entries s) " "))
 
 (defun drgnx-agents-mirror-permission-test--start ()
-  (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd (getenv "HOME"))) :id)))   ; ROOT/home
+  (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd (getenv "HOME") :role "worker")) :id)))   ; ROOT/home
     (drgnx-agents-mirror-permission-test--wait
      (lambda () (equal (plist-get (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :session) :status) "idle")))
     id))
@@ -39,7 +47,7 @@ without the binary (`drgnx-hub-client-test--with-ratatoskr')."
     (let ((id (drgnx-agents-mirror-permission-test--start)))
       (drgnx-agents-mirror-sync)
       (should (drgnx-agents-mirror-permission-test--wait (lambda () (drgnx-agents-mirror-permission-test--mirror id))))
-      (drgnx-agents-send (drgnx-agents-mirror-permission-test--mirror id) "permission please")
+      (drgnx-agents-send (drgnx-agents-mirror-permission-test--mirror id) "ask:permission edit")
       (should (drgnx-agents-mirror-permission-test--wait
                (lambda () (drgnx-agent-session-permissions (drgnx-agents-mirror-permission-test--mirror id)))))
       ;; the editor goes away with the request unanswered
@@ -52,9 +60,9 @@ without the binary (`drgnx-hub-client-test--with-ratatoskr')."
       (let* ((m (drgnx-agents-mirror-permission-test--mirror id)) (request (car (drgnx-agent-session-permissions m))))
         (should (plist-get request :id))
         (should (plist-get request :options))
-        (drgnx-agents-answer-permission m request "allow")
+        (drgnx-agents-answer-permission m request "allow_once")
         (should (drgnx-agents-mirror-permission-test--wait
-                 (lambda () (string-search "permission: allow" (drgnx-agents-mirror-permission-test--text m)))))
+                 (lambda () (string-search "permission: allow_once" (drgnx-agents-mirror-permission-test--text m)))))
         (should (drgnx-agents-mirror-permission-test--wait (lambda () (null (drgnx-agent-session-permissions m)))))))))
 
 ;;; agents-mirror-permission-test.el ends here

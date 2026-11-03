@@ -1,6 +1,6 @@
-;; One event `data' per kind in `drgnx-coord-event-kinds', as the code that writes it builds it (drgnx-coord.el,
-;; drgnx-coord-mcp.el, drgnx-hub.el, drgnx-job.el, drgnx-cockpit-edits.el, drgnx-cockpit-feed.el).  (KIND DATA…): a kind
-;; may have several shapes.
+;; One event `data' per event kind (norn's `EventKind' checks the set), as the code that writes it built it (the Lisp
+;; writers before Ratatoskr, drgnx-cockpit-edits.el, drgnx-cockpit-feed.el).  (KIND DATA…): a kind may have several
+;; shapes.
 (("start" (:head "9f2c1ab") (:turn t) (:kind "claude" :cwd "/work/repo" :branch "job/j1" :base "9f2c1ab"))
  ("stop" (:turn t))
  ("claim")

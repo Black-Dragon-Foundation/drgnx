@@ -9,6 +9,7 @@
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(require 'drgnx-agents-mirror)
 (defvar drgnx-hub--events)
 (defvar drgnx-hub--client)
 (defvar drgnx-hub--subscribing)
@@ -67,40 +68,33 @@
         (kill-buffer)))))
 
 (ert-deftest drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk ()
-  ;; The agent (in the hub; this Emacs holds its mirror) proposes two changes (first line, a new last line); the user
-  ;; takes the first only.
-  (drgnx-hub-client-test--with-ratatoskr
-    (drgnx-hub-client-test--mock-profile root)
-    (let* ((dir (file-name-as-directory (expand-file-name "work" root)))
-           (file (expand-file-name "f.txt" dir))
-           (drgnx-agents-profiles nil)
-           (drgnx-agents--sessions nil)
-           (drgnx-agents-changed-functions nil))
-      (make-directory dir t)
-      (write-region (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 12) "\n") nil file nil 'silent)
-      (write-region "\n" nil file t 'silent)
-      (let ((s (drgnx-agents-mirror-start "mock" dir)))
-        (unwind-protect
-            (progn
-              (should (drgnx-agents-ui-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle))))
-              (drgnx-agents-send s (concat "write " file))
-              (should (drgnx-agents-ui-test--wait (lambda () (drgnx-agent-session-reviews s))))
-              (let ((b (drgnx-agents-ui-review s (car (drgnx-agent-session-reviews s)))))
-                (with-current-buffer b
-                  (goto-char (point-min))
-                  (diff-hunk-next)
-                  (let ((inhibit-interaction t)) (diff-apply-hunk))   ; the first hunk only
-                  (drgnx-agents-ui-review-done)))
-              (should (drgnx-agents-ui-test--wait
-                       (lambda () (member "write done" (mapcar (lambda (e) (plist-get e :text))
-                                                               (seq-filter (lambda (e) (eq (plist-get e :type) 'agent))
-                                                                           (drgnx-agent-session-entries s)))))))
-              (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
-                (should (string-prefix-p "CHANGED line 1\n" text))
-                (should-not (string-search "ADDED LINE" text))))
-          (drgnx-agents-kill s)
-          (drgnx-agents-mirror-stop)
-          (when-let* ((b (find-buffer-visiting file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))))))
+  ;; A mirror's write request proposes two changes (first line, a new last line); the user takes the first only, and
+  ;; Done tells the hub
+  (let* ((dir (make-temp-file "drgnx-review" t))
+         (file (expand-file-name "f.txt" dir))
+         (lines (mapcar (lambda (i) (format "line %d" i)) (number-sequence 1 12)))
+         (item (list :id 5 :path file
+                     :content (concat "CHANGED " (car lines) "\n" (string-join (cdr lines) "\n") "\nADDED LINE\n")))
+         (s (drgnx-agents--make :name "mirror" :cwd dir :remote "s-r" :status 'busy :reviews (list item)))
+         (drgnx-agents--sessions (list s))
+         (drgnx-agents-changed-functions nil)
+         (calls nil))
+    (write-region (concat (string-join lines "\n") "\n") nil file nil 'silent)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params &rest _) (push (cons method params) calls))))
+          (let ((b (drgnx-agents-ui-review s item)))
+            (with-current-buffer b
+              (goto-char (point-min))
+              (diff-hunk-next)
+              (let ((inhibit-interaction t)) (diff-apply-hunk))   ; the first hunk only
+              (drgnx-agents-ui-review-done)))
+          (should (equal (car calls) '("agents/do" :id "s-r" :op "review" :item 5 :reject nil)))
+          (should-not (drgnx-agent-session-reviews s))
+          (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+            (should (string-prefix-p "CHANGED line 1\n" text))
+            (should-not (string-search "ADDED LINE" text))))
+      (when-let* ((b (find-buffer-visiting file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+      (delete-directory dir t))))
 
 (ert-deftest drgnx-agents-ui/every-command-is-registered ()
   (drgnx-test-with-modules '(tools/agents) :strict t
@@ -503,12 +497,15 @@ three runs after two warm ones)."
         (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b)))))))
 
 (ert-deftest drgnx-agents-ui/an-edited-queued-message-is-redrawn ()
-  ;; `drgnx-agents-requeue' replaces the text in place: the queue is the same list
-  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil))) ; a UTF-8 frame
-    (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :queue (list "one" "two")
+  ;; `drgnx-agents-requeue' asks the hub; its snapshot replaces the text in place: the queue is the same list
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)) ; a UTF-8 frame
+            ((symbol-function 'drgnx-hub-call) #'ignore))
+    (drgnx-agents-ui-test--with-transcript (s b v :status 'busy :queue (list "one" "two") :remote "s-q"
                                               :entries (list (list :type 'agent :text "a")))
       (should (string-search "  two [−]" (drgnx-agents-ui-test--text b)))
       (drgnx-agents-requeue s 1 "TWO, edited")
+      (setf (nth 1 (drgnx-agent-session-queue s)) "TWO, edited")   ; as the hub's snapshot brings it
+      (drgnx-agents--changed s)
       (drgnx-agents-ui-test--draw)
       (should (string-search "  TWO, edited [−]" (drgnx-agents-ui-test--text b)))
       (should (equal (drgnx-agents-ui-test--fresh s) (drgnx-agents-ui-test--text b))))))
