@@ -398,7 +398,8 @@ fn silent_runs_until_cancelled() {
         json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
         "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "silent 30"}]}}),
     );
-    std::thread::sleep(Duration::from_millis(300));
+    // No wait before the cancel: the mock takes stdin in order, so the cancel is read after the prompt, by the `silent`
+    // turn it is in (it watches for it while it sleeps), whenever it arrives.
     a.write(json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}}));
     loop {
         let m =
