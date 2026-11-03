@@ -455,6 +455,90 @@ The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell conf
       (drgnx-perf--term-open)
       t)))
 
+(defun drgnx-perf-run--hub-form ()
+  "The agent workloads' setup, as a form string: the session functions that start Ratatoskr (a test-hooks build,
+$DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it the profile \"mock\" (`ratatoskr-mock acp'
+running a script whose n-th line is the n-th prompt's program) and follow a turn through its transcript.  A turn is over
+when its `stop' entry is in the mirror: the hub sends a session's state at most every 50 ms, so a turn can go by with no
+busy status in between and the status cannot tell it."
+  (concat
+   ;; the session's environment is the harness's allowlist: the binary's name goes in the form
+   "(progn (defvar drgnx-perf--hub-bin nil \"The Ratatoskr binary.\") (setq drgnx-perf--hub-bin "
+   (prin1-to-string (getenv "DRGNX_RATATOSKR_BIN")) ") "
+   (prin1-to-string
+    '(progn
+       (require 'drgnx-agents-mirror)
+       (require 'drgnx-hub-client)
+       (defvar drgnx-perf--hub nil "The hub process of the workload.")
+       (defvar drgnx-perf--hub-dir nil "Its folder: settings, the mock's script, the hub's data.")
+       (defvar drgnx-perf--sent nil "Alist: session → how many prompts the workload sent it.")
+       (defun drgnx-perf--slow ()
+         "The program of a turn that lasts three seconds: ten chunks, 0.3 s apart."
+         (mapconcat #'identity (cl-loop for i below 10 append (list (format "say chunk %d" i) "silent 0.3")) "\\n"))
+       (defun drgnx-perf--stream ()
+         "The program of a turn whose answer starts 400 kB long, then grows by 100-character chunks, 50 a second (five
+every tenth of a second) for thirty seconds: the typing of six strings takes longer than ten in the container."
+         (concat "say " (make-string 409599 ?a) "\\n"
+                 (mapconcat #'identity
+                            (cl-loop repeat 300 append (append (make-list 5 (concat "say " (make-string 99 ?a))) (list "silent 0.1")))
+                            "\\n")))
+       (defun drgnx-perf--wait (secs pred)
+         "Let the session run until PRED holds (at most SECS s); whether it does."
+         (let ((d (+ (float-time) secs)))
+           (while (and (not (funcall pred)) (< (float-time) d)) (accept-process-output nil 0.05))
+           (and (funcall pred) t)))
+       (defun drgnx-perf--hub-start (lines)
+         "Start Ratatoskr with the profile \"mock\" whose turns run LINES (the n-th prompt runs the n-th), and connect."
+         (let* ((bin drgnx-perf--hub-bin)
+                (mock (and bin (expand-file-name "ratatoskr-mock" (file-name-directory bin))))
+                (dir (make-temp-file "drgnx-perf-hub" t))
+                (script (expand-file-name "script.txt" dir)) (config (expand-file-name "config" dir)))
+           (unless (and mock (file-executable-p bin) (file-executable-p mock))
+             (error "The agent workloads need DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr) with ratatoskr-mock beside it"))
+           (setq drgnx-perf--hub-dir dir drgnx-perf--sent nil)
+           (with-temp-file script (dolist (l lines) (insert l "\n")))
+           (make-directory config t)
+           (with-temp-file (expand-file-name "settings.el" config)
+             (prin1 (list 'drgnx-settings :version 1
+                          (list 'drgnx-agents-profiles
+                                (list (list "mock" :command (list mock "acp" "--as" "claude" "--script" script)))))
+                    (current-buffer)))
+           (let ((process-environment (append (list (concat "DRGNX_CONFIG_DIR=" config) "RATATOSKR_SUPERVISOR=none"
+                                                    (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)))
+                                              process-environment)))
+             (setq drgnx-perf--hub
+                   (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
+                                 :buffer (generate-new-buffer " *ratatoskr*")
+                                 :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))))
+           (unless (drgnx-perf--wait 30 #'drgnx-hub-running-p) (error "Ratatoskr did not answer a ping"))
+           (drgnx-hub-connect)
+           (drgnx-hub-ensure)
+           t))
+       (defun drgnx-perf--hub-stop ()
+         "End the hub, drop its mirrors and its folder."
+         (ignore-errors (drgnx-agents-mirror-stop))
+         (ignore-errors (drgnx-hub-disconnect))
+         (when (process-live-p drgnx-perf--hub)
+           (signal-process drgnx-perf--hub 'term)
+           (unless (drgnx-perf--wait 10 (lambda () (not (process-live-p drgnx-perf--hub))))
+             (signal-process drgnx-perf--hub 'kill)))
+         (when (and drgnx-perf--hub (buffer-live-p (process-buffer drgnx-perf--hub))) (kill-buffer (process-buffer drgnx-perf--hub)))
+         (setq drgnx-perf--hub nil
+               drgnx-agents--sessions (seq-remove #'drgnx-agent-session-remote drgnx-agents--sessions))
+         (when drgnx-perf--hub-dir (ignore-errors (delete-directory drgnx-perf--hub-dir t)) (setq drgnx-perf--hub-dir nil))
+         t)
+       (defun drgnx-perf--send (s text)
+         "Send TEXT to mirror S, counting it."
+         (setf (alist-get s drgnx-perf--sent) (1+ (or (alist-get s drgnx-perf--sent) 0)))
+         (drgnx-agents-send s text))
+       (defun drgnx-perf--turns (s)
+         (seq-count (lambda (e) (eq (plist-get e :type) 'stop)) (drgnx-agent-session-entries s)))
+       (defun drgnx-perf--running-p (s)
+         "Whether a turn S was sent has not ended (its `stop' entry is not in the mirror yet)."
+         (< (drgnx-perf--turns s) (or (alist-get s drgnx-perf--sent) 0)))
+       t))
+   ")"))
+
 (defun drgnx-perf-run--workloads ()
   "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
@@ -475,36 +559,39 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                 :each "(progn (drgnx-explorer-focus) (goto-char (point-min)) (drgnx-wb-focus-editor) t)"
                 ;; the root shows ~12 rows: 10 downs, each one moves
                 :actions ,(append (list (list :keys "C-S-e")) (funcall keys "<down>" 10) (list (list :keys "<escape>"))))
-      (agent-typing :setup ,(format "(progn (setq drgnx-agents-profiles (list (list \"mock\" :command (list (expand-file-name invocation-name invocation-directory) \"--batch\" \"-Q\" \"-l\" %S))))
-                                          (setq drgnx-perf--agent (drgnx-agents-start \"mock\" temporary-file-directory))
-                                          (let ((d (+ (float-time) 10))) (while (and (not (eq (drgnx-agent-session-status drgnx-perf--agent) 'idle)) (< (float-time) d)) (accept-process-output nil 0.05)))
-                                          (drgnx-agents-ui-view) t)"
-                                    (expand-file-name "test/fixtures/mock-acp.el" drgnx-ui-repo-dir))
+      ;; the agent is a `ratatoskr-mock acp' in a Ratatoskr hub (the editor holds a mirror): its turn is three seconds
+      (agent-typing :setup ,(concat "(progn " (drgnx-perf-run--hub-form)
+                                    " (drgnx-perf--hub-start (make-list 6 (drgnx-perf--slow)))"
+                                    " (setq drgnx-perf--agent (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
+                                    " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--agent) 'idle)))"
+                                    " (drgnx-agents-ui-view) t)")
                     :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                                   " (let ((d (+ (float-time) 5))) (while (and (eq (drgnx-agent-session-status drgnx-perf--agent) 'busy) (< (float-time) d)) (accept-process-output nil 0.05)))"
-                                   " (drgnx-agents-send drgnx-perf--agent \"slow\") t)")
+                                   " (drgnx-perf--wait 15 (lambda () (not (drgnx-perf--running-p drgnx-perf--agent))))"
+                                   " (drgnx-perf--send drgnx-perf--agent \"slow\") t)")
                     :actions ,(make-list 2 (funcall type "(setq y 2) "))
-                    :check "(eq (drgnx-agent-session-status drgnx-perf--agent) 'busy)"   ; typed while it streamed
-                    :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) " kill-fixture ")"))
+                    :check "(drgnx-perf--running-p drgnx-perf--agent)"   ; typed while it streamed
+                    :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; typing while the editor's other window shows a transcript whose running answer is 400 kB long and grows by
       ;; 100-character chunks, 50 a second: a chunk costs the chunk (model) and only the new text is drawn (view)
-      (agent-stream :setup ,(format "(progn (setq drgnx-agents-profiles (list (list \"mock\" :command (list (expand-file-name invocation-name invocation-directory) \"--batch\" \"-Q\" \"-l\" %S))))
-                                          (setq drgnx-perf--stream (drgnx-agents-start \"mock\" temporary-file-directory))
-                                          (let ((d (+ (float-time) 10))) (while (and (not (eq (drgnx-agent-session-status drgnx-perf--stream) 'idle)) (< (float-time) d)) (accept-process-output nil 0.05)))
-                                          t)"
-                                    (expand-file-name "test/fixtures/mock-acp.el" drgnx-ui-repo-dir))
+      ;; (the mock's turn is that: a first chunk of 400 kB, then five chunks every tenth of a second, 300 times; the
+      ;; run waits for the 400 kB to be in the transcript before it types)
+      (agent-stream :setup ,(concat "(progn " (drgnx-perf-run--hub-form)
+                                    " (drgnx-perf--hub-start (make-list 5 (drgnx-perf--stream)))"
+                                    " (setq drgnx-perf--stream (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
+                                    " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--stream) 'idle)))"
+                                    " t)")
                     :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                                   " (let ((d (+ (float-time) 30))) (while (and (eq (drgnx-agent-session-status drgnx-perf--stream) 'busy) (< (float-time) d)) (accept-process-output nil 0.05)))"
+                                   " (drgnx-perf--wait 40 (lambda () (not (drgnx-perf--running-p drgnx-perf--stream))))"
                                    " (let ((editor (selected-window)) (b (drgnx-agents-ui-transcript-buffer drgnx-perf--stream)))"
                                    "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
                                    "   (select-window editor))"
-                                   " (drgnx-agents-send drgnx-perf--stream \"stream 500\")"
-                                   ;; the turn's answer starts 400 kB long (not done): the chunks are appended to it
-                                   " (drgnx-agents--append-text drgnx-perf--stream 'agent (make-string 409600 ?a))"
-                                   " (drgnx-agents--changed drgnx-perf--stream) t)")
+                                   " (drgnx-perf--send drgnx-perf--stream \"stream 1500\")"
+                                   " (drgnx-perf--wait 30 (lambda () (let ((e (car (last (drgnx-agent-session-entries drgnx-perf--stream)))))"
+                                   "   (and (eq (plist-get e :type) 'agent) (>= (drgnx-agents-entry-length e) 409600)))))"
+                                   " t)")
                     :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
-                    :check "(eq (drgnx-agent-session-status drgnx-perf--stream) 'busy)"   ; typed while it streamed
-                    :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--stream))"
+                    :check "(drgnx-perf--running-p drgnx-perf--stream)"   ; typed while it streamed
+                    :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--stream)) (drgnx-perf--hub-stop)"
                                        " (when-let* ((b (get-buffer (format \"*agent: %s*\" (drgnx-agent-session-name drgnx-perf--stream)))))"
                                        "   (when-let* ((w (get-buffer-window b))) (ignore-errors (delete-window w)))"
                                        "   (kill-buffer b)) "
@@ -512,40 +599,39 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; the Work cockpit filtered to a job (Show Job in Work: the graph, what needs you), following three agents that
       ;; stream (as it follows the hub's events)
       (cockpit-cards
-       :setup ,(format "(progn (setq drgnx-agents-profiles (list (list \"mock\" :command (list (expand-file-name invocation-name invocation-directory) \"--batch\" \"-Q\" \"-l\" %S))))
-                              (setq drgnx-perf--agents (mapcar (lambda (n) (drgnx-agents-start \"mock\" temporary-file-directory (format \"perf#%%d\" n) \"perf\")) '(1 2 3)))
-                              (let ((d (+ (float-time) 10))) (while (and (seq-some (lambda (s) (not (eq (drgnx-agent-session-status s) 'idle))) drgnx-perf--agents) (< (float-time) d)) (accept-process-output nil 0.05)))
-                              (defun drgnx-perf--job-follow (_s) (drgnx-cockpit-cards--hub-event \"agent\" nil))
+       :setup ,(format "(progn %s (drgnx-perf--hub-start (make-list 6 (drgnx-perf--slow)))
+                              (setq drgnx-perf--agents (mapcar (lambda (n) (drgnx-agents-mirror-start \"mock\" temporary-file-directory (format \"perf#%%d\" n) \"perf\")) '(1 2 3)))
+                              (drgnx-perf--wait 10 (lambda () (seq-every-p (lambda (s) (eq (drgnx-agent-session-status s) 'idle)) drgnx-perf--agents)))
                               (setq drgnx-perf--spent 0.0)
                               (defun drgnx-perf--job-summary ()   ; what the hub would answer: spend and agents change
-                                (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent drgnx-perf--spent
-                                      :tasks (mapcar (lambda (n) (list :n n :title (format \"task %%d\" n) :role \"implement\" :profile \"mock\" :status \"running\" :agent :null :deps :null)) '(1 2 3))
-                                      :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile \"mock\" :task (drgnx-agent-session-task s) :status (symbol-name (drgnx-agent-session-status s)) :review :false)) drgnx-perf--agents)
-                                      :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
-                                      :messages :null
-                                      :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
-                              (require 'drgnx-hub-client)         ; loaded first: the stub below stays
-                              (setq drgnx-perf--hub-call (symbol-function 'drgnx-hub-call))
-                              (fset 'drgnx-hub-call (lambda (method _params &optional cb)
-                                                      (when (and cb (equal method \"job/status\"))
-                                                        (setq drgnx-perf--spent (+ drgnx-perf--spent 0.01))
-                                                        (funcall cb (drgnx-perf--job-summary) nil))))
-                              (add-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)
-                              (setq drgnx-perf--dock (cons (and (drgnx-wb--dock-windows) t) (drgnx-wb-sidebar-view)))
-                              (let ((editor (selected-window)))
-                                (drgnx-cockpit-show-job \"perf\")
-                                (drgnx-cockpit-cards--draw \"perf\" (drgnx-perf--job-summary))
-                                (select-window editor))
-                              t)"
-                       (expand-file-name "test/fixtures/mock-acp.el" drgnx-ui-repo-dir))
+                         (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent drgnx-perf--spent
+                               :tasks (mapcar (lambda (n) (list :n n :title (format \"task %%d\" n) :role \"implement\" :profile \"mock\" :status \"running\" :agent :null :deps :null)) '(1 2 3))
+                               :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile \"mock\" :task (drgnx-agent-session-task s) :status (symbol-name (drgnx-agent-session-status s)) :review :false)) drgnx-perf--agents)
+                               :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
+                               :messages :null
+                               :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
+                       (require 'drgnx-hub-client)         ; loaded first: the stub below stays
+                       (setq drgnx-perf--hub-call (symbol-function 'drgnx-hub-call))
+                       (fset 'drgnx-hub-call (lambda (method &rest args)   ; the hub answers all but the job's summary
+                                               (if (not (equal method \"job/status\"))
+                                                   (apply drgnx-perf--hub-call method args)
+                                                 (setq drgnx-perf--spent (+ drgnx-perf--spent 0.01))
+                                                 (when (cadr args) (funcall (cadr args) (drgnx-perf--job-summary) nil)))))
+                       (setq drgnx-perf--dock (cons (and (drgnx-wb--dock-windows) t) (drgnx-wb-sidebar-view)))
+                       (let ((editor (selected-window)))
+                         (drgnx-cockpit-show-job \"perf\")
+                         (drgnx-cockpit-cards--draw \"perf\" (drgnx-perf--job-summary))
+                         (select-window editor))
+                       t)"
+                       (drgnx-perf-run--hub-form))
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                      " (let ((d (+ (float-time) 5))) (while (and (seq-some (lambda (s) (eq (drgnx-agent-session-status s) 'busy)) drgnx-perf--agents) (< (float-time) d)) (accept-process-output nil 0.05)))"
-                      " (dolist (s drgnx-perf--agents) (drgnx-agents-send s \"slow\")) t)")
+                      " (drgnx-perf--wait 15 (lambda () (not (seq-some #'drgnx-perf--running-p drgnx-perf--agents))))"
+                      " (dolist (s drgnx-perf--agents) (drgnx-perf--send s \"slow\")) t)")
        :actions ,(make-list 2 (funcall type "(setq y 2) "))
-       :check "(seq-some (lambda (s) (eq (drgnx-agent-session-status s) 'busy)) drgnx-perf--agents)"   ; typed while they streamed
-       :teardown ,(concat "(progn (remove-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)"
-                          " (fset 'drgnx-hub-call drgnx-perf--hub-call)"
+       :check "(seq-some #'drgnx-perf--running-p drgnx-perf--agents)"   ; typed while they streamed
+       :teardown ,(concat "(progn (fset 'drgnx-hub-call drgnx-perf--hub-call)"
                           " (dolist (s drgnx-perf--agents) (ignore-errors (drgnx-agents-kill s)))"
+                          " (drgnx-perf--hub-stop)"
                           " (ignore-errors (drgnx-pane-hide 'needs-you))"
                           " (if (car drgnx-perf--dock) (drgnx-wb-show-view (or (cdr drgnx-perf--dock) 'explorer)) (drgnx-wb-hide-sidebar))"
                           " (dolist (n '(\"*Needs You*\" \"*Decisions*\")) (when (get-buffer n) (kill-buffer n)))"
@@ -574,32 +660,32 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ;; next one cancels — the most work a keystroke can bring)
       (typing-with-ghost
        :setup ,(format "(progn (load %S nil t)
-                         (let* ((port (+ 20000 (random 20000))) (dir (make-temp-file \"drgnx-perf-llm\" t))
-                                (script (expand-file-name \"llm.eld\" dir)) (log (expand-file-name \"llm.log\" dir)))
-                           ;; /api/tags: the probe (drgnx runs one once idle) finds it running
-                           (with-temp-file script (prin1 '((:path \"/api/tags\" :body \"{\\\"models\\\":[{\\\"name\\\":\\\"coder\\\"}]}\")
-                                                           (:path \"/api/generate\" :body \"{\\\"response\\\":\\\"(message \\\\\\\"%%s\\\\\\\" x)\\\"}\"))
-                                                         (current-buffer)))
-                           ;; the provider and the role as settings (their default values: what callers read); the
-                           ;; session's own come back in the teardown
-                           (setq drgnx-perf--llm (list :proc (drgnx-ai-test-mock-llm port script log) :dir dir :log log :delay drgnx-ai-ghost-delay
-                                                       :providers (default-value 'drgnx-ai-providers) :roles (default-value 'drgnx-ai-roles))
-                                 drgnx-ai-ghost-delay 0.01)
-                           (setq-default drgnx-ai-providers (list (list 'perf-llm :name \"Perf\" :kind 'ollama :url (format \"http://127.0.0.1:%%d\" port) :caps '(fim)))
-                                         drgnx-ai-roles '((complete (perf-llm . \"coder\"))))
-                           (push '(perf-llm :up t) drgnx-ai-detected))
-                         t)"
+                       (let* ((port (+ 20000 (random 20000))) (dir (make-temp-file \"drgnx-perf-llm\" t))
+                              (script (expand-file-name \"llm.eld\" dir)) (log (expand-file-name \"llm.log\" dir)))
+                         ;; /api/tags: the probe (drgnx runs one once idle) finds it running
+                         (with-temp-file script (prin1 '((:path \"/api/tags\" :body \"{\\\"models\\\":[{\\\"name\\\":\\\"coder\\\"}]}\")
+                                                         (:path \"/api/generate\" :body \"{\\\"response\\\":\\\"(message \\\\\\\"%%s\\\\\\\" x)\\\"}\"))
+                                                       (current-buffer)))
+                         ;; the provider and the role as settings (their default values: what callers read); the
+                         ;; session's own come back in the teardown
+                         (setq drgnx-perf--llm (list :proc (drgnx-ai-test-mock-llm port script log) :dir dir :log log :delay drgnx-ai-ghost-delay
+                                                     :providers (default-value 'drgnx-ai-providers) :roles (default-value 'drgnx-ai-roles))
+                               drgnx-ai-ghost-delay 0.01)
+                         (setq-default drgnx-ai-providers (list (list 'perf-llm :name \"Perf\" :kind 'ollama :url (format \"http://127.0.0.1:%%d\" port) :caps '(fim)))
+                                       drgnx-ai-roles '((complete (perf-llm . \"coder\"))))
+                         (push '(perf-llm :up t) drgnx-ai-detected))
+                       t)"
                        (expand-file-name "test/fixtures/mock-llm.el" drgnx-ui-repo-dir))
        :each ,(drgnx-perf-run--visit-fixture-form)
        :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
        :check "(with-temp-buffer (insert-file-contents (plist-get drgnx-perf--llm :log)) (> (how-many \"POST /api/generate\") 0))"   ; it asked
        :teardown ,(concat "(progn (ignore-errors (delete-process (plist-get drgnx-perf--llm :proc)))
-                                  (ignore-errors (delete-directory (plist-get drgnx-perf--llm :dir) t))
-                                  (when drgnx-perf--llm
-                                    (setq-default drgnx-ai-providers (plist-get drgnx-perf--llm :providers)
-                                                  drgnx-ai-roles (plist-get drgnx-perf--llm :roles)))
-                                  (setq drgnx-ai-ghost-delay (plist-get drgnx-perf--llm :delay)
-                                        drgnx-ai-detected (assq-delete-all 'perf-llm drgnx-ai-detected)) "
+                       (ignore-errors (delete-directory (plist-get drgnx-perf--llm :dir) t))
+                       (when drgnx-perf--llm
+                         (setq-default drgnx-ai-providers (plist-get drgnx-perf--llm :providers)
+                                       drgnx-ai-roles (plist-get drgnx-perf--llm :roles)))
+                       (setq drgnx-ai-ghost-delay (plist-get drgnx-perf--llm :delay)
+                             drgnx-ai-detected (assq-delete-all 'perf-llm drgnx-ai-detected)) "
                           kill-fixture ")"))
       ;; typing while the Search view lists 10k matches (100 files): the search starts on the first key
       (replace-typing
@@ -653,7 +739,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :each ,(drgnx-perf-run--window-switch-each-form)
        :actions ,(make-list 50 '(:keys "C-x o"))
        :check "(and (= drgnx-perf--ws-count 50) (= (length (drgnx-groups-list)) 3) (drgnx-wb-sidebar-showing-p)
-                    (drgnx-wb-area-window 'panel) (drgnx-wb-area-window 'right) t)"
+                       (drgnx-wb-area-window 'panel) (drgnx-wb-area-window 'right) t)"
        :repeat 3
        :teardown ,(concat "(progn " drgnx-perf-run--window-switch-teardown-form " " kill-fixture ")"))
       ;; typing in an eat terminal (cat: the tty echoes every key, eat draws it)
@@ -1030,9 +1116,7 @@ version and the commit, as JSON in FILE."
 container.  Seed one (budgets.eld) and take it off this list.")
 
 (defconst drgnx-perf-run-container-skipped
-  '((agent-stream . "the mock agent's turn ends before the typing does (the run waits for the transcript to settle while it streams)")
-    (cockpit-cards . "the mock agents exit (9) in the container")
-    (live-view . "the container image has no websocket package")
+  '((live-view . "the container image has no websocket package")
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package"))
   "Workloads that error in the GUI container (seen 2026-10-20, CI perf lab), and why.  In a container the lab names
