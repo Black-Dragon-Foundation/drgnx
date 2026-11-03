@@ -34,8 +34,9 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use urdr::graph::OpenOutcome;
 
-/// What `status` and the doctor say of job agents in this phase.
-pub const JOB_AGENTS: &str = "unsandboxed (as on main; the sandbox comes with phase 6)";
+/// What `status` and the doctor say of agents: every session starts in the job sandbox (`agents::launch`), and a host
+/// that cannot give one refuses to start the session.
+pub const JOB_AGENTS: &str = "every session runs in the job sandbox; where it cannot, none starts";
 
 /// How long `shutdown` waits for its answer to be written before the hub stops.
 const SHUTDOWN_FLUSH: Duration = Duration::from_secs(1);

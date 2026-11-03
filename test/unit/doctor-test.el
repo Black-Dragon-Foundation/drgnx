@@ -949,7 +949,7 @@ what `ratatoskr doctor --json' said)."
          (report (list :binary (list :path "/data/bin/ratatoskr" :commit commit :test_hooks (plist-get over :hooks))
                        :running (if (plist-member over :running) (plist-get over :running) (list :commit commit :pid 42))
                        :socket_dir (or (plist-get over :socket) (list :path "/run/user/1000/drgnx-1" :mode "0700" :ok t))
-                       :sqlite "3.53.0" :job_agents "unsandboxed (as on main; the sandbox comes with phase 6)"))
+                       :sqlite "3.53.0" :job_agents "every session runs in the job sandbox; where it cannot, none starts"))
          (fact (list :binary "/data/bin/ratatoskr" :report report :head "abc1234" :emacs-sqlite "3.53.0")))
     (when (plist-get over :sandbox) (setq report (plist-put report :sandbox (plist-get over :sandbox))
                                           fact (plist-put fact :report report)))
@@ -1014,7 +1014,7 @@ what `ratatoskr doctor --json' said)."
 (ert-deftest drgnx-doctor/ratatoskr-shows-the-sandbox-line ()
   ;; the job sandbox's check, from `ratatoskr doctor --json' (stubbed): a detail line only, never a status
   (let ((check (lambda (&rest over) (drgnx-doctor-check 'ratatoskr (apply #'drgnx-doctor-test--rtsk over)))))
-    (let ((r (funcall check :sandbox '(:backend "bwrap" :version "0.12.0" :ok t :landlock_abi 10 :in_use nil))))
+    (let ((r (funcall check :sandbox '(:backend "bwrap" :version "0.12.0" :ok t :landlock_abi 10 :in_use t))))
       (should (eq (car r) 'ok))
       (should (string-search "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp)"
                              (nth 1 r)))
@@ -1049,10 +1049,10 @@ what `ratatoskr doctor --json' said)."
 (ert-deftest drgnx-doctor/ratatoskr-check-cases ()
   (should (equal (plist-get (alist-get 'ratatoskr drgnx-doctor--checks) :group) "Agents"))
   (let ((check (lambda (&rest over) (drgnx-doctor-check 'ratatoskr (apply #'drgnx-doctor-test--rtsk over)))))
-    ;; ok, with the job agents sentence and never the word "sandboxed" as a claim
+    ;; ok, with the job agents sentence
     (let ((r (funcall check)))
       (should (eq (car r) 'ok))
-      (should (string-search "job agents: unsandboxed (as on main; the sandbox comes with phase 6)" (nth 1 r)))
+      (should (string-search "job agents: every session runs in the job sandbox; where it cannot, none starts" (nth 1 r)))
       (should (string-search "abc1234" (nth 1 r))))
     (should (eq (car (funcall check :running nil)) 'ok))                       ; no hub running is fine
     (should (eq (car (funcall check :commit "abc1234-dirty")) 'ok))           ; a developer's build of this HEAD

@@ -14,7 +14,7 @@
 //! `gateway` is the running hub's (its `status`): `keys_held` names providers only,
 //! `warnings` are its clear-text providers (the settings' provider table), and `keys_refused` (only when there is one) says why
 //! the hub takes no key: it could not keep other processes out of its memory (on macOS, started under a debugger). `sandbox` is the job sandbox's check
-//! (`gleipnir::check`), `in_use` false until phase 6.
+//! (`gleipnir::check`), `in_use` true (every session starts in it).
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet
 //! (the hub makes it private at its first start); `mode` is then null.
 
@@ -65,7 +65,8 @@ fn socket_dir(socket: &Path, uid: u32) -> Value {
     }
 }
 
-/// The job sandbox section: what the check found. `in_use` is false until jobs run in it (phase 6).
+/// The job sandbox section: what the check found. `in_use` is true: every session starts in it
+/// (`agents::launch`), so where the check fails no session starts.
 fn sandbox_section(c: &Check) -> Value {
     json!({
         "backend": c.backend.name(),
@@ -74,7 +75,7 @@ fn sandbox_section(c: &Check) -> Value {
         "reason": c.reason,
         "fix": c.fix,
         "landlock_abi": c.landlock_abi,
-        "in_use": false,
+        "in_use": true,
         "pins_note": crate::sandbox_settings::pins_note(c.backend),
     })
 }
@@ -716,7 +717,7 @@ mod tests {
             v["sandbox"],
             json!({
                 "backend": "bwrap", "version": "0.12.0", "ok": true, "reason": null, "fix": null,
-                "landlock_abi": 10, "in_use": false, "pins_note": null,
+                "landlock_abi": 10, "in_use": true, "pins_note": null,
             })
         );
         let v = report_of(&broken());
@@ -729,7 +730,7 @@ mod tests {
                 .starts_with("AppArmor")
         );
         assert_eq!(v["sandbox"]["fix"], "load the profile");
-        assert_eq!(v["sandbox"]["in_use"], false);
+        assert_eq!(v["sandbox"]["in_use"], true);
         assert_eq!(
             sandbox_line(&working()),
             "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp)"
@@ -740,9 +741,10 @@ mod tests {
         );
     }
 
-    /// Nothing runs in the sandbox yet, so no state of the check says a job is sandboxed: not the line, not the section.
+    /// Every session starts in the sandbox, so the doctor says so in the job-agents line whatever the check found, and
+    /// the sandbox line itself says only what works here.
     #[test]
-    fn sandbox_line_never_says_sandboxed() {
+    fn sandbox_line_says_what_works_and_agents_line_says_they_run_in_it() {
         let seatbelt = Check {
             backend: gleipnir::BackendKind::Seatbelt,
             version: None,
@@ -756,15 +758,12 @@ mod tests {
             Check::failed("x".into(), None),
         ] {
             let line = sandbox_line(&c);
-            let section = report_of(&c)["sandbox"].to_string();
+            let section = report_of(&c)["sandbox"].clone();
             let text = text(&report_of(&c), &c);
-            for s in [&line, &section] {
-                assert!(!s.to_lowercase().contains("sandboxed"), "{s}");
-            }
-            // the text as a whole may say what job agents do today ("unsandboxed"), but never claims otherwise
+            assert!(line.starts_with("job sandbox backend: "), "{line}");
+            assert_eq!(section["in_use"], true, "{section}");
             assert!(
-                text.lines()
-                    .all(|l| !l.contains("sandboxed") || l.starts_with("job agents: unsandboxed")),
+                text.contains(&format!("job agents: {JOB_AGENTS}")),
                 "{text}"
             );
         }
@@ -828,6 +827,6 @@ mod tests {
         }));
         assert!(s.contains("pid 5, commit c1, socket /s"), "{s}");
         assert!(!s.contains("backend"), "{s}");
-        assert!(s.contains("unsandboxed (as on main"), "{s}");
+        assert!(s.contains("every session runs in the job sandbox"), "{s}");
     }
 }

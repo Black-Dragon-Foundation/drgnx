@@ -99,7 +99,7 @@ fn doctor_json_has_the_sandbox_section() {
     ] {
         assert!(s.get(key).is_some(), "{key} in {s}");
     }
-    assert_eq!(s["in_use"], false);
+    assert_eq!(s["in_use"], true);
     // full tier here: ok, or a reason (the container comes first); never both
     assert_eq!(s["reason"].is_null(), s["ok"] == true, "{s}");
     let text = String::from_utf8(run(&["doctor"]).stdout).unwrap();
