@@ -62,18 +62,19 @@ printed, and the temp root (a truename; deleted when this returns)."
           (drgnx-settings-test--write in (let ((print-length nil) (print-level nil)) (prin1-to-string forms)))
           (with-temp-buffer
             (let* ((p (make-process :name "drgnx-settings-child" :buffer (current-buffer) :noquery t
-                                    :connection-type 'pipe :sentinel #'ignore
+                                    :connection-type 'pipe
+                                    :sentinel (lambda (pr _e) (unless (process-live-p pr) (process-put pr :done t)))
                                     :command (list (expand-file-name invocation-name invocation-directory)
                                                    "--batch" "-Q" "--eval"
                                                    (format "(setq load-prefer-newer t load-path '%S)" load-path)
                                                    "-l" drgnx-settings-test--self
                                                    "--eval" (format "(drgnx-settings-test--child-main %S %S)" in out))))
                    (deadline (+ (float-time) drgnx-settings-test-child-timeout)))
-              (while (and (process-live-p p) (< (float-time) deadline))
+              ;; the sentinel runs after the child's last output is read: `process-live-p' turns nil before that
+              (while (and (not (process-get p :done)) (< (float-time) deadline))
                 (accept-process-output p 0.1))
-              (let ((timed-out (process-live-p p)))
+              (let ((timed-out (not (process-get p :done))))
                 (when timed-out (delete-process p))
-                (accept-process-output nil 0)
                 (let* ((r (and (file-exists-p out)
                                (with-temp-buffer (insert-file-contents out) (car (read-from-string (buffer-string))))))
                        (results (plist-get r :results)))
