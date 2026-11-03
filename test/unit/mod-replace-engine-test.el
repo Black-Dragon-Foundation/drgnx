@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/held-fixture" drgnx-dir) nil t)
 (require 'eglot)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
@@ -334,17 +335,21 @@
 (ert-deftest drgnx-replace/cancel-kills-the-process ()
   (drgnx-git-test-with-repo
     (drgnx-git-test-write repo "f.txt" "foo\n")
-    (let* ((got nil)
-           (h (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x got)))))
-      (should (process-live-p h))
+    (let* ((got nil) (backend (symbol-name (drgnx-replace--backend repo)))
+           ;; the search is held at its start: a search of one file ends before a test looks at it
+           (h (drgnx-test-with-held-gate backend
+                (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x got))))))
+      (should (process-live-p h))                         ; held: it cannot have ended
       (drgnx-replace-cancel h)
-      (should-not (process-live-p h))
-      (drgnx-test-pause 0.5)
+      (should-not (process-live-p h))                     ; deleted by the cancel itself
+      (drgnx-test-pause 0.5 "a cancelled search reports nothing")
       (should (null got))
       ;; a newer search replaces the one still running
-      (let* ((first-got nil) (second-got nil)
-             (h1 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x first-got))))
-             (h2 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x second-got)))))
+      (let* ((first-got nil) (second-got nil) h1 h2)
+        (drgnx-test-with-held-gate backend
+          (setq h1 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x first-got))))
+          (should (process-live-p h1))                    ; held: still running when the newer search comes
+          (setq h2 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x second-got)))))
         (should-not (process-live-p h1))
         (drgnx-test-wait (lambda () (memq :done second-got)) :secs 10 :what "the newer search to finish")
         (should (null first-got))
