@@ -239,6 +239,10 @@ pub struct Transcript {
 pub struct SendParams {
     pub id: Id,
     pub text: Prompt,
+    /// Only when the session is free (idle, not paused by a Stop, nothing queued): else nothing is queued, steered or
+    /// sent and the answer is `false` (busy).  For the editor's own deliveries, which never join a running turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_free: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -378,7 +382,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "agents/send", AgentsSend(SendParams) -> bool,
             classes: [User], writes: true,
-            doc: "a prompt to the session (queued or steering as its mode says)",
+            doc: "a prompt to the session (queued or steering as its mode says; with if_free, only when it is free, else false)",
         ),
         method!(
             "agents/stop", AgentsStop(ById) -> bool,

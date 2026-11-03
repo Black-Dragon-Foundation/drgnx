@@ -207,6 +207,12 @@ struct TurnUse {
 }
 
 impl State {
+    /// Can a new turn start now without joining anything: idle (not busy, not waiting on a job), not paused by a
+    /// Stop, nothing queued.
+    fn is_free(&self) -> bool {
+        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty()
+    }
+
     fn new() -> State {
         State {
             queue: Queue::default(),
@@ -2737,10 +2743,33 @@ impl Session {
         origin: Origin,
         key: Option<String>,
     ) -> Result<(), Error> {
+        self.prompt_with(text, origin, key, false).map(|_| ())
+    }
+
+    /// [`Session::prompt`] only when the session is free ([`State::is_free`]): `false`, and nothing queued, steered or
+    /// sent, when it is not.  Checked and taken under one lock, so a turn cannot start in between.
+    pub(crate) fn prompt_if_free(
+        self: &Arc<Self>,
+        text: String,
+        origin: Origin,
+    ) -> Result<bool, Error> {
+        self.prompt_with(text, origin, None, true)
+    }
+
+    fn prompt_with(
+        self: &Arc<Self>,
+        text: String,
+        origin: Origin,
+        key: Option<String>,
+        only_free: bool,
+    ) -> Result<bool, Error> {
         let idle = {
             let mut st = lock(&self.state);
             if st.status == SessionStatus::Exited {
                 return Err(invalid("id", "the session has exited"));
+            }
+            if only_free && !st.is_free() {
+                return Ok(false);
             }
             let idle = matches!(st.status, SessionStatus::Idle | SessionStatus::Waiting);
             let steer = !idle && self.mode == Some(Mode::Steer);
@@ -2755,7 +2784,7 @@ impl Session {
             self.next();
         }
         self.changed();
-        Ok(())
+        Ok(true)
     }
 
     /// Start the next queued prompt when the session is idle and the queue is not held.
@@ -3049,10 +3078,18 @@ pub async fn get(f: &Front, _: &Caller, p: ById) -> Result<Transcript, Error> {
     f.core.agents.get(p.id.as_str())
 }
 
-/// The user's prompt: a turn while idle, else queued (or steered); it never cancels.
+/// The user's prompt: a turn while idle, else queued (or steered); it never cancels.  With `if_free` it is a turn or
+/// nothing: a session that is busy, paused, holding a queue or closed on a job answers `false` and is left as it was.
 pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
     if c.class != Class::User {
         return Err(refuse("only the user sends a message here"));
+    }
+    if p.if_free == Some(true) {
+        return f
+            .core
+            .agents
+            .find(p.id.as_str())?
+            .prompt_if_free(p.text.as_str().to_string(), Origin::User);
     }
     // a session closed on a job is resumed first: the message must reach a running agent
     resume_closed(&f.core.agents, f, p.id.as_str()).await?;
@@ -3662,6 +3699,23 @@ mod tests {
             "status": "completed"}),
         ));
         assert!(st.cancel_wanted && st.paused && !st.hold);
+    }
+
+    #[test]
+    fn only_an_idle_unpaused_session_with_nothing_queued_is_free() {
+        let mut st = State::new();
+        st.status = SessionStatus::Idle;
+        assert!(st.is_free());
+        st.status = SessionStatus::Busy;
+        assert!(!st.is_free(), "a turn runs");
+        st.status = SessionStatus::Waiting;
+        assert!(!st.is_free(), "a job's result is awaited");
+        st.status = SessionStatus::Idle;
+        st.paused = true;
+        assert!(!st.is_free(), "a Stop holds it");
+        st.paused = false;
+        st.queue.push("waiting".into(), Origin::User, false);
+        assert!(!st.is_free(), "a message is queued");
     }
 
     #[test]

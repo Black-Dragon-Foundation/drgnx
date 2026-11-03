@@ -28,7 +28,7 @@
             (drgnx-review--current nil)
             (s (drgnx-agents--make :id "rev-1" :remote "rev-1" :name "reviewer" :status 'idle :cwd repo)))
        (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (_profile _cwd &rest _) s))
-                 ((symbol-function 'drgnx-agents-deliver) (lambda (_s text) (push text delivered) t))
+                 ((symbol-function 'drgnx-agents-deliver) (lambda (_s text &optional _declined) (push text delivered) t))
                  ((symbol-function 'drgnx-agents-kill) #'ignore))
          (unwind-protect (progn ,@body)
            (when (get-buffer "*drgnx review*") (kill-buffer "*drgnx review*")))))))
