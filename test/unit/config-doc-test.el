@@ -33,6 +33,7 @@
     (unwind-protect
         (progn
           (drgnx-test-wait-ended proc :secs 60 :what "the config doc command to end")
+          ;; safe: the wait above returns once the sentinel has run
           (should (eq (process-status proc) 'exit))
           (should (eql (process-exit-status proc) 0)))
       (delete-directory home t)
@@ -49,6 +50,7 @@
                                "-L" "core" "-L" "wb" "-L" "harness" "-L" "modules/tools" "-L" "modules/editor" "-l" "drgnx-config-doc"
                                "--eval" (prin1-to-string form)))))
     (drgnx-test-wait-ended proc :secs 30 :what "the config doc Emacs to end")
+    ;; safe: the wait above returns once the sentinel has run
     (should (eq (process-status proc) 'exit))
     (should (eql (process-exit-status proc) 0))
     (with-current-buffer buf (buffer-string))))

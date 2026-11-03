@@ -314,6 +314,7 @@ does not require to happen."
                                       (should-not calls)
                                       (drgnx-test-advance 0.02)
                                       (should (equal calls '((timeout ""))))
+                                      ;; safe: the cut deletes the process before it calls back
                                       (should-not (process-live-p proc))
                                       (should-not (drgnx-platform-test--keys 'platform-call)))))))
 
@@ -325,8 +326,7 @@ does not require to happen."
                                                          :callback (lambda (s o) (push (list s o) calls)))
                                     (should (= 1 (length (drgnx-platform-test--keys 'platform-call))))
                                     ;; the process runs in real time: wait on the real clock, not the virtual one
-                                    (let ((limit (+ (drgnx-test-real-time) 3)))
-                                      (while (and (not calls) (< (drgnx-test-real-time) limit)) (accept-process-output nil 0.02)))
+                                    (drgnx-test-wait (lambda () calls) :secs 3 :what "the tool's answer")
                                     (should (eq 'ok (car (car calls))))
                                     (should-not (drgnx-platform-test--keys 'platform-call))))))
 
@@ -376,6 +376,7 @@ does not require to happen."
                                   (should (drgnx-platform-test--await (lambda () calls) 2))
                                   (should (< (- (float-time) start) 1.0))
                                   (should (equal (car calls) '(timeout "")))
+                                  ;; safe: the cut deletes the process before it calls back
                                   (should-not (process-live-p proc))
                                   (should (drgnx-platform-test--await (lambda () (not (file-exists-p (format "/proc/%d" pid)))) 1))
                                   (drgnx-test-pause 0.3)            ; a line arriving later calls nothing

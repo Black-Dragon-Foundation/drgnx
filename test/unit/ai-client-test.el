@@ -124,8 +124,9 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
       (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_r) '((a . "m")))))
         (setq h (drgnx-ai-request 'test 'chat '(:messages [(:role "user" :content "x")]) (lambda (&rest _) (setq called t)))))
       (drgnx-ai-cancel h)
-      (drgnx-test-pause 2)                                       ; no answer may come
+      (drgnx-test-pause 2 "an answer from the cancelled request")   ; no answer may come: the server's delay is 1 s
       (should-not called)
+      ;; safe: `drgnx-ai-cancel' ran `delete-process', which sets the status at once
       (should-not (process-live-p (drgnx-ai-request-process h))))))
 
 (ert-deftest drgnx-ai-probe/finds-running-providers-and-tells-tei-from-localai ()

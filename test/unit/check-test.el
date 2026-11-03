@@ -1,6 +1,7 @@
 ;;; check-test.el --- batch tests: bin/drgnx check, the parallel run of every tier -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-check)
 
 (defmacro drgnx-check-test--with (dir &rest body)
@@ -124,9 +125,11 @@ for that file to exist (up to 20 s) instead of sleeping."
            (r (drgnx-check-run (list (drgnx-check-test--job dir "hang" 2 :sleep secs :timeout 1)) :dir dir :jobs 2 :gui-slots 1)))
       (should (< (- (float-time) t0) 10))
       (should (eq (plist-get (car (plist-get r :jobs)) :status) 'timeout))
-      (sleep-for 0.3)
-      (should-not (seq-find (lambda (p) (string-match-p (format "sleep %d" secs) (or (cdr (assq 'args (process-attributes p))) "")))
-                            (list-system-processes))))))
+      ;; the sleep ends when the OS has delivered the kill, a moment after the run returned: wait for that
+      (drgnx-test-wait (lambda ()
+                         (not (seq-find (lambda (p) (string-match-p (format "sleep %d" secs) (or (cdr (assq 'args (process-attributes p))) "")))
+                                        (list-system-processes))))
+                       :secs 10 :what "the hung job's sleep to be gone"))))
 
 (ert-deftest drgnx-check/shards-are-balanced-by-how-long-their-files-took ()
   (let ((shards (drgnx-check-shard '("a" "b" "c" "d" "e") 2 '(("a" . 10) ("b" . 9) ("c" . 4) ("d" . 3) ("e" . 2)))))
