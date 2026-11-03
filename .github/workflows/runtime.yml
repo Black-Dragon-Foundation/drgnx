@@ -138,25 +138,13 @@ jobs:
           name: escape-report-container
           path: ${{ runner.temp }}/escape/escape-container.json
           if-no-files-found: warn
-      - name: Nidhogg 31.1 (the Emacs drgnx ships on)
-        id: nidhogg
-        if: ${{ !cancelled() }}
+      # every row against Ratatoskr. --require-all: a skipped row fails the job, except a macOS-only row here and the
+      # perf rows (they run below)
+      - name: conformance
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         working-directory: ${{ github.workspace }}
         run: |
-          dnf -y install curl tar xz
-          bash test/container/nidhogg.sh fedora-45
-      - name: conformance-lisp (the v0 rows against the Lisp hub)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
-        working-directory: ${{ github.workspace }}
-        run: runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
-      # every row against Ratatoskr, the v0 rows through the front against the Lisp backend (design 8.4, "both ways").
-      # --require-all: a skipped row fails the job, except a macOS-only row here and the perf rows (they run below)
-      - name: conformance (Ratatoskr in front of the Lisp backend and the fake backend)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
-        working-directory: ${{ github.workspace }}
-        run: |
-          runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
-            --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
+          runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
             --scenarios test/conformance --require-all
       # the build install.sh makes: no test hooks in it, and it says so
       - name: release build says test_hooks false
@@ -172,9 +160,8 @@ jobs:
         if: ${{ !cancelled() && steps.release.outcome == 'success' }}
         working-directory: ${{ github.workspace }}
         run: |
-          runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
-            --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
-            --only 'perf/*' --perf perf-linux.json
+          runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr \
+            --scenarios test/conformance --only 'perf/*' --perf perf-linux.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && steps.perf.outcome == 'success' }}
         with:
@@ -378,9 +365,8 @@ jobs:
       - name: container and container-escape rows
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
-            --fake-backend runtime/target/debug/ratatoskr-fake-backend --scenarios test/conformance \
-            --only 'container*/*' --require-all
+          runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
+            --scenarios test/conformance --only 'container*/*' --require-all
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
@@ -587,30 +573,21 @@ jobs:
       - id: build
         if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
-      - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
-        id: nidhogg
-        if: ${{ !cancelled() }}
-        run: /bin/bash test/container/nidhogg.sh macos
-      - name: conformance-lisp (the v0 rows against the Lisp hub)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
-        run: runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
       # as the runner user; the `sudo` rows reach the socket as nobody through passwordless `sudo -n -u nobody`, so
       # security/another-uid-is-refused covers tokio's getpeereid path. --require-all fails it if it is skipped
-      - name: conformance (Ratatoskr in front of the Lisp backend and the fake backend)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.nidhogg.outcome == 'success' }}
+      - name: conformance
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           sudo -n true
-          runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
-            --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
+          runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
             --scenarios test/conformance --require-all
       - name: perf baseline (release build)
         id: perf
         if: ${{ !cancelled() }}
         run: |
           cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
-          runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
-            --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
-            --only 'perf/*' --perf perf-macos.json
+          runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr \
+            --scenarios test/conformance --only 'perf/*' --perf perf-macos.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && steps.perf.outcome == 'success' }}
         with:

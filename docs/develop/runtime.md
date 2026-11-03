@@ -456,42 +456,19 @@ binary, so build it first: `cargo build -p domr --bin ratatoskr-mock` (a workspa
 Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not `$TMPDIR`, so macOS socket paths stay
 short) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
-test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` and `DRGNX_EMACS` are inherited.
+test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` and `DBUS_SESSION_BUS_ADDRESS` are
+inherited.
 `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes the roots `DIR/PREFIXXXXXXX/` instead. Keep DIR short: the socket path
 must stay within 103 bytes.
 
 ```
-domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR
-                  [--lisp-hub PATH] [--fake-backend PATH]
-                  [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
+domr --hub-bin PATH --scenarios DIR
+     [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
 domr connect-as --socket PATH
 ```
 
-- `--target lisp` runs only the `v0` rows, against the Lisp hub (through `test/conformance/lisp-hub.sh`, which maps
-  `serve --foreground --parent-pid PID` to `emacs --batch -Q -L core -l drgnx-hub -f drgnx-hub-main` using
-  `$DRGNX_EMACS`). `--target ratatoskr` runs every row, the `v0` ones too: they must pass both ways.
-- `--lisp-hub` and `--fake-backend` are what a `lisp-backend` / `fake-backend` row hands Ratatoskr as
-  `DRGNX_RATATOSKR_BACKEND`; with `--target ratatoskr`, a `v0` row gets the Lisp hub as its backend too, so the v0 rows
-  run through the front (`--target ratatoskr --lisp-hub test/conformance/lisp-hub.sh --only-tag v0`). A row with
-  neither runs with the backend `missing` (the harness sets no `DRGNX_DIR`).
-- **The fake backend** (`runtime/target/debug/ratatoskr-fake-backend`, `conformance/src/bin/`) stands in for the
-  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, closes a connection whose first line is not `{"auth":
-  DRGNX_HUB_SERVE_SECRET}` (as the Lisp backend does; that line is not logged), appends every other line it gets to
-  `$STATE/fake-backend.log` and writes its environment as a JSON object to `$STATE/fake-backend.env`. It answers from
-  the JSON script in `DRGNX_FAKE_BACKEND_SCRIPT` (a row's `start` `env`): `{METHOD: ANSWER}`, ANSWER an object with
-  `result` or `error` (sent with the request's id), a string (the whole line, `$ID` the id), `null` (never
-  answered), `{"exit": CODE}` (it exits) or `{"from_file": PATH}` (the answer object is read from PATH at each call,
-  which a row rewrites meanwhile). Without a script: `ping`, `status` (`gateway_port` and `registrations`
-  0), `subscribe` and `coord/notify` answer, anything else is an error. When the script's `trigger` method
-  (`coord/notify`) is called, it sends its subscribers the events of the file `events` (a JSON array of `{event,
-  data}`), then `flood` `card` events with a title of `flood_size` bytes (65536). It ends with its parent
-  (`DRGNX_HUB_PARENT_PID`) unless the script says `"ignore_parent": true`. An entry `{METHOD: {"call_front":
-  {"method": M, "params": P}, "then": ANSWER}}` makes it call M on the front's main socket as a proven user (it reads
-  `hub-HASH.cap`, answers the challenge with the HMAC proof, and keeps that one connection for later calls), wait up to
-  10 s, log `front-answer {...}`, and answer METHOD with ANSWER (`"$front"`: the front's own answer). It logs
-  `notification {"method", "params"}` for every `coord/notify` and `budget` it receives, and answers no line without
-  an id (the front's coalesced `coord/notify` is a notification); its front connection never subscribes (the front
-  would refuse it: the seam rule).
+- One target, Ratatoskr: every row runs against the one hub binary. There is no Lisp hub and no stand-in backend; a
+  row that needs a second process (an agent, a provider, a proxy) starts one of `ratatoskr-mock`'s.
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
   `N passed, N skipped, N failed`. Exit 0 only with no FAIL. With `--require-all` a SKIP fails too, except `linux` /
@@ -506,29 +483,28 @@ domr connect-as --socket PATH
 A scenario is one file, `test/conformance/<group>/<name>.jsonl`. Line 1 is the header
 
 ```json
-{"scenario": "<group>/<name>", "requires": ["v0"], "doc": "what this row pins"}
+{"scenario": "<group>/<name>", "requires": ["v1"], "doc": "what this row pins"}
 ```
 
 Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in failure messages.
 
-**Tags** (`requires`): `v0` (any hub), `v1` (hello v1: Ratatoskr), `fake-backend`, `lisp-backend`, `sudo` (euid 0, or
-`sudo -n true` succeeds), `test-hooks` (the binary's `version --json` says `"test_hooks": true`), `linux`, `macos`,
-`perf`, `podman` (`podman` is on the PATH; an excused skip otherwise). A row whose requirement is missing is skipped (with `--target lisp`, rows without `v0` are not selected at all).
+**Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
+binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
+the PATH; an excused skip otherwise). A tag that is not in this list is a parse error naming it. A row whose
+requirement is missing is skipped.
 
-**Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): on Ratatoskr the
-row runs, and a failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a
-row that passes while marked fails the run, so the mark goes as soon as its task lands. With `--target lisp` the mark
-is ignored. It is for behaviour a plan moves out of the frozen Lisp backend into the hub, between the move of the
-methods and the task that ports it; a row is never deleted for it.
+**Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): the row runs, and a
+failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a row that passes
+while marked fails the run, so the mark goes as soon as its task lands. A row is never deleted for it.
 
 | VERB | Keys | Meaning |
 |---|---|---|
-| `start` | `hub` (a name, default `hub`), `bin` (`"under-test"`, `"lisp"` or an absolute path, `$ROOT` being the root: a copy `install_bin` made), `args`, `env`, `same_root_as`, `wait` | start `BIN serve --foreground --parent-pid <harness pid> ARGS` in a fresh root (the `root` step's, or another hub's root); with `wait` (default true) it waits up to 10 s until `ping` answers; `wait: false` is for a start expected to exit |
+| `start` | `hub` (a name, default `hub`), `bin` (`"under-test"` or an absolute path, `$ROOT` being the root: a copy `install_bin` made), `args`, `env`, `same_root_as`, `wait` | start `BIN serve --foreground --parent-pid <harness pid> ARGS` in a fresh root (the `root` step's, or another hub's root); with `wait` (default true) it waits up to 10 s until `ping` answers; `wait: false` is for a start expected to exit |
 | `root` | none | make a root with no hub in it (`$ROOT $SOCKET $LOCK …` name its paths). The `run`, `start` and file steps after it work in that root; what `ensure` started there, detached, is stopped when the scenario ends (the lock file's pid, while its start time is the recorded one) |
 | `run` | `capture`, `bin`, `args`, `env`, `hub`, `concurrent`, `retry_ms`, `drop_ptrace`, `expect_code`, `expect_stdout`, `expect_stderr` | run `BIN ARGS` to completion (30 s) in the hub's root (else the `root` step's): `ensure`, `stop`, `status`, `restart`. `DRGNX_HUB_PARENT_PID` is the harness's, so a hub it starts detached ends with the harness. `concurrent: N` runs N copies at once, each of which must satisfy the expectations; `retry_ms` repeats the run until they hold. The capture is `{stdout, code, json}`; `expect_stdout` is a string the output contains or a pattern for its JSON (`$capture:NAME` / `$NAME` work in both); `expect_stderr` is a string the error output contains. `drop_ptrace: true` runs it without `CAP_SYS_PTRACE` where the harness has it (bit 19 of `CapEff`: root on a CI host, `--cap-add`), under `setpriv --inh-caps=-sys_ptrace --bounding-set=-sys_ptrace`, since the capability sees through a non-dumpable hub; where `setpriv` is missing the row is skipped with that reason. Podman's default set lacks it, so rows run as they are there |
 | `rename`, `remove` | `from`, `to` / `path` | rename-replace a file, remove one (an update of a binary on disk) |
 | `install_bin` | `to` | copy the hub under test to `to` (0755), a binary a scenario can replace |
-| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"`, `"backend"`, the Lisp backend's own socket, `"agent:SID"` or `"path:STRING"`, a captured path with `$NAME` substituted), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` and `"raw"` connect and read nothing first (the `challenge`, if the socket sends one, stays buffered; the `mcp.sock` of a session sends none). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
+| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"`, `"agent:SID"` or `"path:STRING"`, a captured path with `$NAME` substituted), `as` | open a connection; lines are buffered per connection. `"user"` (default) performs the `hello` macro with a valid proof and consumes the `challenge`. `"service"` and `"raw"` connect and read nothing first (the `challenge`, if the socket sends one, stays buffered; the `mcp.sock` of a session sends none). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
 | `spawn` | `capture`, `argv`, `capture_stdout: {regex, name}` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends. `capture_stdout`: the first stdout line that matches within 5 s, its group captured as `name` (a number stays a number). The regex is a small form: literal text and at most one group, `(\d+)`, `([0-9]+)`, `(\w+)`, `(\S+)` or `(.+)`; `\x` in the literals is `x` |
 | `http` | `conn` (default `c`), `to` (`"tcp:HOST:PORT"` or `"unix:PATH"`; without it the open connection is used again), `method` (GET), `path`, `headers`, `body` or `body_bytes {fill, n}`, `read` (`"all"` (default), `"head"` or `{bytes: N}`), `close_after` (true: close the connection after the read), `within_ms` (5000) | one HTTP/1.1 request, a `Host` and a `Content-Length` added when missing. `read: "head"` leaves the body unread; `{bytes: N}` reads until N body bytes are in. A server that answers early and closes without reading all of a big body is not an error |
 | `expect_http` | `conn`, `status`, `headers` (pattern; names compare lower-case), `body_contains`, `body_json` (pattern; a chunked body is decoded), `within_ms` (5000) | the response read so far must match; more is read until `within_ms` |
@@ -552,7 +528,6 @@ methods and the task that ports it; a row is never deleted for it.
 | `sql_expect` | `path` (`$DATA/work.db`), `sql`, `rows` | run a read-only query and match its rows (`[[value…]…]`) against the pattern `rows` |
 | `db_digest` | `path` (`$DATA/work.db`), `capture` or `same_as`, `except` (tables, each with a reason in the row) | a digest of every table (row count and sha256 of its rows); `same_as` fails when any table appeared, went or changed since the capture |
 | `capture_file` | `path`, `capture`, `json_path`, `within_ms` (5000) | read a JSON file (waiting for it to exist) and capture the value at `json_path` (dot-separated keys and array indexes, `$` or absent: the whole file), for example a socket path a helper wrote |
-| `backend_log` | `hub`, `expect_line`, `expect_no_line`, `count` (`at_least`, `at_most`), `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON; `count`: after `for_ms`, how many lines match is within the bounds |
 | `pid` | `capture`, `alive` (true), `within_ms` (5000), `stays_for_ms` | a captured pid is (or is no longer) running; a reused pid does not count. With `stays_for_ms` a pid that is running must stay so that long (a signal sent a moment ago has landed by then) |
 | `class_matrix` | `table`, `args`, `env`, `agent`, `last`, `within_ms` | every method of `table` (`{method: [classes]}`, `class-matrix.json`) gets `{}` from `user` (a valid hello), `service` (no hello) and, with `agent: SID`, `agent` (that session's socket, which `args` such as `["--agent-socket", "s1:j1"]` makes the hub serve). A listed class must not get `not-allowed`; any other must. The step starts its own hubs with `args` and `env`: one for the table, and for each method of `last` (default `restart`, `shutdown`, which a user call runs) one per class |
 | `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello`, and a method whose classes leave out `user` (`mcp/attach`), go on a fresh connection (service class) each time |

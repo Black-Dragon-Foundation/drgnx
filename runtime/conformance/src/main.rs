@@ -1,7 +1,6 @@
 //! domr: runs scenario files (docs/develop/runtime.md) against a hub binary, each in fresh temporary roots.
 //!
-//! `domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR [--lisp-hub PATH] [--fake-backend PATH]
-//!  [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]`, and the helper
+//! `domr --hub-bin PATH --scenarios DIR [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]`, and the helper
 //! `domr connect-as --socket PATH` (the connection of another uid, relayed over stdio).
 
 mod container_escape;
@@ -18,16 +17,13 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR [--lisp-hub PATH]\n\
-    \x20      [--fake-backend PATH] [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]\n\
+const USAGE: &str = "usage: domr --hub-bin PATH --scenarios DIR [--only GLOB] [--only-tag TAG] [--require-all]\n\
+    \x20      [--perf OUT.json]\n\
     \x20      domr connect-as --socket PATH";
 
 struct Args {
-    lisp_target: bool,
     hub_bin: PathBuf,
     scenarios: PathBuf,
-    lisp_hub: Option<PathBuf>,
-    fake_backend: Option<PathBuf>,
     only: Option<String>,
     only_tag: Option<String>,
     require_all: bool,
@@ -35,16 +31,8 @@ struct Args {
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
-    let (
-        mut target,
-        mut hub_bin,
-        mut scenarios,
-        mut lisp_hub,
-        mut fake_backend,
-        mut only,
-        mut only_tag,
-        mut perf,
-    ) = (None, None, None, None, None, None, None, None);
+    let (mut hub_bin, mut scenarios, mut only, mut only_tag, mut perf) =
+        (None, None, None, None, None);
     let mut require_all = false;
     let mut it = argv.iter();
     while let Some(a) = it.next() {
@@ -54,11 +42,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .ok_or_else(|| format!("{name} needs a value"))
         };
         match a.as_str() {
-            "--target" => target = Some(value("--target")?),
             "--hub-bin" => hub_bin = Some(PathBuf::from(value("--hub-bin")?)),
             "--scenarios" => scenarios = Some(PathBuf::from(value("--scenarios")?)),
-            "--lisp-hub" => lisp_hub = Some(PathBuf::from(value("--lisp-hub")?)),
-            "--fake-backend" => fake_backend = Some(PathBuf::from(value("--fake-backend")?)),
             "--only" => only = Some(value("--only")?),
             "--only-tag" => only_tag = Some(value("--only-tag")?),
             "--perf" => perf = Some(PathBuf::from(value("--perf")?)),
@@ -66,19 +51,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
-    let lisp_target = match target.as_deref() {
-        Some("lisp") => true,
-        Some("ratatoskr") => false,
-        _ => return Err("--target is lisp or ratatoskr".into()),
-    };
     // hubs run with their root as the working directory: paths must not be relative to this one
     let absolute = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
     Ok(Args {
-        lisp_target,
         hub_bin: absolute(hub_bin.ok_or("--hub-bin is required")?),
         scenarios: scenarios.ok_or("--scenarios is required")?,
-        lisp_hub: lisp_hub.map(absolute),
-        fake_backend: fake_backend.map(absolute),
         only,
         only_tag,
         require_all,
@@ -150,12 +127,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let hooks_needed = !args.lisp_target
-        && scenarios
-            .iter()
-            .any(|s| s.requires.iter().any(|t| t == "test-hooks"));
+    let hooks_needed = scenarios
+        .iter()
+        .any(|s| s.requires.iter().any(|t| t == "test-hooks"));
     let host = Host {
-        lisp_target: args.lisp_target,
         sudo: scenarios
             .iter()
             .any(|s| s.requires.iter().any(|t| t == "sudo"))
@@ -163,17 +138,12 @@ fn main() -> ExitCode {
         linux: cfg!(target_os = "linux"),
         macos: cfg!(target_os = "macos"),
         test_hooks: hooks_needed && test_hooks(&args.hub_bin),
-        fake_backend: args.fake_backend.is_some(),
-        lisp_backend: args.lisp_hub.is_some(),
         perf: args.perf.is_some(),
         podman: scenario::podman_available(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
     };
     let cfg = exec::Config {
-        lisp_target: args.lisp_target,
         hub_bin: args.hub_bin.clone(),
-        lisp_hub: args.lisp_hub.clone(),
-        fake_backend: args.fake_backend.clone(),
         scenarios: std::fs::canonicalize(&args.scenarios)
             .unwrap_or_else(|_| args.scenarios.clone()),
     };
@@ -191,11 +161,10 @@ fn main() -> ExitCode {
             continue;
         }
         let outcome = match scenario::gate(s, &host) {
-            Gate::Exclude => continue,
             Gate::Skip { reason, excused } => Outcome::Skip { reason, excused },
             Gate::Run => {
                 let ran = exec::run_scenario(&cfg, s, &mut report.perf);
-                report::judge(ran, s.pending.as_deref().filter(|_| !args.lisp_target))
+                report::judge(ran, s.pending.as_deref())
             }
         };
         report.add(&s.name, &outcome);
