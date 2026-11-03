@@ -113,8 +113,10 @@ cache for this).
 
 - **No waiting.** While one of its own jobs runs, an agent's `job_result` and `job_log` of it, and shell loops that wait
   (`sleep`, `pgrep`, `watch`, `until`, `tail -f`), are refused with the text above. After `agents-wait-refusals`
-  refusals (default 3) in one turn the hub cancels the turn; the wake prompts the agent again. A finished job, and a
-  job of someone else, can be read at any time.
+  refusals (default 3) in one turn the hub cancels the turn; the wake prompts the agent again. A finished job of its own
+  can be read at any time. A job the agent did not start (another session's, or yours) is not its to read or stop:
+  `job_result`, `job_log` and `job_stop` refuse it ("not yours"), as do `exec/get`, `exec/log` and `exec/stop` for an
+  agent caller; you and services read every job.
 - **Idle on a job.** A session waiting longer than `agents-close-idle-after` seconds (default 1800; 0 never) is closed:
   the agent's process ends (`session/close` first, for the CLIs that have it). The job's end, or your next message,
   resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with

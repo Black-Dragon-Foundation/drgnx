@@ -1,0 +1,26 @@
+{"scenario": "exec/an-agent-cannot-read-another-callers-job", "requires": ["v1"], "doc": "An agent session's job_result, job_log and job_stop of a job it did not start (here the user's) are refused, so its argv, folder and log stay the starter's; the user still reads it with exec/get and exec/log."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo users-own-line"], "cwd": "$ROOT", "name": "mine"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "s-0000000a", "job": "j1", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "job_result", "arguments": {"id": "$job"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}, "within_ms": 10000}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "job_log", "arguments": {"id": "$job"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}, "within_ms": 10000}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "job_stop", "arguments": {"id": "$job"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/get", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$job", "name": "mine", "status": "done"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/log", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job", "lines": ["users-own-line"]}}, "within_ms": 10000}

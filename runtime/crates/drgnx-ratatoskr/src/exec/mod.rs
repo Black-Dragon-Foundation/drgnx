@@ -1504,10 +1504,23 @@ fn no_job(id: &str) -> Error {
     error(ErrorCode::InvalidParams, format!("no job {id}"))
 }
 
-pub async fn get(f: &Front, _: &Caller, p: ById) -> Result<ExecRow, Error> {
-    runner(f)?
-        .get(p.id.as_str())
-        .ok_or_else(|| no_job(p.id.as_str()))
+/// Job ID's row, when CALLER may see it: an agent only its own session's jobs (the user's hold the editor's argv, folders
+/// and logs, and ids are easy to guess); the user and services every job.
+fn visible(r: &Runner, c: &Caller, id: &str) -> Result<ExecRow, Error> {
+    let row = r.get(id).ok_or_else(|| no_job(id))?;
+    if matches!(c.class, runstav::registry::Class::Agent)
+        && (c.sid.is_none() || row.session != c.sid)
+    {
+        return Err(error(
+            ErrorCode::NotAllowed,
+            format!("job {id} is not yours"),
+        ));
+    }
+    Ok(row)
+}
+
+pub async fn get(f: &Front, c: &Caller, p: ById) -> Result<ExecRow, Error> {
+    visible(runner(f)?, c, p.id.as_str())
 }
 
 pub async fn list(f: &Front, _: &Caller, p: ListParams) -> Result<Jobs, Error> {
@@ -1519,16 +1532,17 @@ pub async fn list(f: &Front, _: &Caller, p: ListParams) -> Result<Jobs, Error> {
     })
 }
 
-pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<ExecRow, Error> {
-    runner(f)?
-        .stop(p.id.as_str())
+pub async fn stop(f: &Front, c: &Caller, p: ById) -> Result<ExecRow, Error> {
+    let r = runner(f)?;
+    visible(r, c, p.id.as_str())?;
+    r.stop(p.id.as_str())
         .await
         .ok_or_else(|| no_job(p.id.as_str()))
 }
 
-pub async fn log(f: &Front, _: &Caller, p: LogParams) -> Result<LogSlice, Error> {
+pub async fn log(f: &Front, c: &Caller, p: LogParams) -> Result<LogSlice, Error> {
     let r = runner(f)?;
-    let row = r.get(p.id.as_str()).ok_or_else(|| no_job(p.id.as_str()))?;
+    let row = visible(r, c, p.id.as_str())?;
     let from = p.from.unwrap_or(0);
     let n = p.n.unwrap_or(200) as usize;
     let mut lines = r.log_slice(p.id.as_str(), from as usize, n + 1);
