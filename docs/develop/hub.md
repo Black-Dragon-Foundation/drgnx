@@ -900,7 +900,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no | front |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no | front |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum}` | `{from: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no | front |
-| `exec/start` | user | `{argv: [string], cwd?: AbsPath, image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, network?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes | front |
+| `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, timebox_s?: natnum}` | `{id: string, text: string}` | yes | front |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes | front |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no | front |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no | front |
@@ -1485,6 +1485,16 @@ command stays the hub's child. `Runner::open` re-attaches every folder without a
 the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch spec run in a real sandbox): a
 container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
 tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
+
+The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
+`nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
+(`user_job`: `invalid-params`), `env` and `memory_max` from a container job, and `memory_max` on macOS; the decode check
+(`check_start`) refuses a malformed size, a `nice` outside 0 to 19 and a key-like variable name
+(`runstav::methods::exec::key_like_env_name`). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
+`pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
+`nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
+and without a unit. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see
+`docs/guide/jobs.md`, "The editor's jobs").
 
 ## The timeline
 

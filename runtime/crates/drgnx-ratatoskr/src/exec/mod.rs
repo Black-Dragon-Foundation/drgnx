@@ -87,6 +87,19 @@ pub struct ExecSpec {
     pub kind: CheckKind,
     /// A container job: `argv` is the command inside the image (kind [`CheckKind::Container`]).
     pub container: Option<ContainerJob>,
+    /// What only the user's jobs carry (an agent's is always the default).
+    pub user: UserJob,
+}
+
+/// A user's job's own name, environment and limits (`exec/start`'s `name`, `env`, `memory_max`, `nice`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UserJob {
+    pub name: Option<String>,
+    /// Added to the base environment, replacing a variable of the same name.
+    pub env: Vec<(String, String)>,
+    /// `MemoryMax` of the unit, instead of `agents-job-memory`.
+    pub memory_max: Option<String>,
+    pub nice: Option<i8>,
 }
 
 /// What makes a job a container job: the allow-list name, the caps from settings, the network the matrix granted.
@@ -203,6 +216,8 @@ struct Pending {
     timebox_s: f64,
     kind: String,
     container: Option<ContainerJob>,
+    #[serde(default)]
+    user: UserJob,
 }
 
 impl Pending {
@@ -218,6 +233,7 @@ impl Pending {
             timebox_s: spec.timebox.as_secs_f64(),
             kind: spec.kind.name().to_string(),
             container: spec.container.clone(),
+            user: spec.user.clone(),
         }
     }
 
@@ -230,6 +246,7 @@ impl Pending {
             timebox: Duration::from_secs_f64(self.timebox_s),
             kind: CheckKind::from_name(&self.kind),
             container: self.container,
+            user: self.user,
         }
     }
 }
@@ -429,6 +446,7 @@ impl Inner {
             argv: m.argv,
             cwd: m.cwd,
             image: m.image,
+            name: m.name,
             status: end.as_ref().map_or(
                 if m.queued {
                     ExecStatus::Queued
@@ -549,6 +567,7 @@ impl Inner {
             start_time: None,
             entity: None,
             image: spec.container.as_ref().map(|c| c.image.clone()),
+            name: spec.user.name.clone(),
             queued: true,
         })?;
         self.live.add(id, session);
@@ -717,10 +736,21 @@ impl Inner {
             }
             Starter::User => (plain_spec(&spec), None),
         };
+        let mut inner = inner;
+        for (k, v) in &spec.user.env {
+            inner.env.retain(|(n, _)| n != k.as_str());
+            inner.env.push((k.into(), v.into()));
+        }
+        let memory = spec
+            .user
+            .memory_max
+            .as_deref()
+            .unwrap_or(self.hooks.memory.as_str());
         let wrapped = unit::wrap(
             inner,
             dir,
-            name.as_deref().map(|n| (n, self.hooks.memory.as_str())),
+            name.as_deref().map(|n| (n, memory)),
+            spec.user.nice,
         );
         let child = draugr::spawn_pinned(wrapped)
             .await
@@ -766,6 +796,7 @@ impl Inner {
             start_time: draugr::start_time(pid).ok(),
             entity: None,
             image: spec.container.as_ref().map(|c| c.image.clone()),
+            name: spec.user.name.clone(),
             queued: false,
         };
         self.save_meta(&meta)?;
@@ -1195,6 +1226,7 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         ExecKind::Other => CheckKind::Other,
         ExecKind::Container => CheckKind::Container,
     };
+    let user = user_job(&c.sid, kind, &p)?;
     let action = if kind == CheckKind::Container {
         norn::matrix::Action::JobContainer
     } else {
@@ -1268,6 +1300,7 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         timebox: Duration::from_secs(p.timebox_s.unwrap_or(3600)),
         kind,
         container,
+        user,
     };
     let r = runner(f)?;
     let id = r
@@ -1282,6 +1315,43 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         format!("job {id} runs: end your turn; you will be woken with the result")
     };
     Ok(Started { text, id })
+}
+
+/// What the user's request adds to its job.  An agent's request that sets any of it is refused (its job's limits are
+/// the hub's); a container job takes no environment and no memory cap of its own (the image's caps apply); macOS has
+/// no memory cap for a job.
+fn user_job(sid: &Option<String>, kind: CheckKind, p: &StartParams) -> Result<UserJob, Error> {
+    if sid.is_some()
+        && let Some(field) = p.user_only_field()
+    {
+        return Err(error(
+            ErrorCode::InvalidParams,
+            format!("{field}: only the user sets this on a job"),
+        ));
+    }
+    if kind == CheckKind::Container && (p.env.is_some() || p.memory_max.is_some()) {
+        return Err(error(
+            ErrorCode::InvalidParams,
+            "a container job takes no env or memory_max: the image's caps apply",
+        ));
+    }
+    if cfg!(target_os = "macos") && p.memory_max.is_some() {
+        return Err(error(
+            ErrorCode::InvalidParams,
+            "memory_max: macOS has no memory cap for jobs",
+        ));
+    }
+    Ok(UserJob {
+        name: p.name.as_ref().map(|n| n.to_string()),
+        env: p
+            .env
+            .iter()
+            .flat_map(|v| v.iter())
+            .map(|v| (v.name.as_str().to_string(), v.value.to_string()))
+            .collect(),
+        memory_max: p.memory_max.as_ref().map(|m| m.to_string()),
+        nice: p.nice,
+    })
 }
 
 /// CWD (a true name) when it is WORKTREE or inside it, else a refusal that says so.

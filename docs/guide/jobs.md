@@ -36,6 +36,27 @@ it does not depend on the agent that started it or on the editor, and it survive
 - **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call); agents use
   the `job_*` tools.
 
+### The editor's jobs
+
+The editor's own background work (tree-sitter grammars, mermaid, the browser for agents, local AI servers, onboarding
+installs, the search indexer) is a job of the same list: you see it beside the agents' jobs, and it keeps running when
+Emacs closes. A job you start (through the editor or `exec/start`) may carry four things an agent's job never does; an
+agent that sends any of them is refused with `invalid-params`:
+
+- **`name`**: what the job is called in lists (`exec/get` and `exec/list` return it as `name`).
+- **`env`**: variables added to the job's environment (at most 16). A name that contains `KEY`, `TOKEN`, `SECRET`,
+  `PASSWORD`, `PASSPHRASE` or `CREDENTIAL` is refused, so a key never travels in a job. A queued job keeps its
+  variables in its `pending.json` until it starts. A container job takes none.
+- **`memory_max`**: the unit's memory cap, in systemd's syntax (`512M`, `2G`), instead of `agents-job-memory`. Without
+  a user systemd on Linux it changes nothing; macOS has no memory cap for jobs, and refuses it.
+- **`nice`**: 0 to 19, how much nicer than the hub the job runs (`nice -n`, so the same with and without a unit).
+
+In Lisp, `core/drgnx-exec.el` is the client. `drgnx-exec-start` is asynchronous (its callback gets the job's id, or the
+reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache that follows the hub's `exec-done` events
+and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read a job's log
+(waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
+or the time box), `stopped` or `gone` (lost).
+
 ### Container jobs
 
 A job of kind `container` runs a command inside an image you allowed, with `podman`. The agent names an image (a name
