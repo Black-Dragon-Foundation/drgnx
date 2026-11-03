@@ -1,4 +1,4 @@
-{"scenario": "supervisor/paused-within-threshold", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 23: a task session silent past agents-silent-after (1 s here) is paused with a supervisor event and card within a tick or two."}
+{"scenario": "supervisor/paused-within-threshold", "requires": ["v1", "test-hooks"], "doc": "Task 23: a task session silent past agents-silent-after (1 s here) is paused with a supervisor event and card within a tick or two."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

@@ -1,4 +1,4 @@
-{"scenario": "settings/config-providers-is-gone", "requires": ["v1", "fake-backend"], "doc": "config/providers is removed, with no alias (design §11.1): the method is unknown. config/changed (a stamp check now) answers true."}
+{"scenario": "settings/config-providers-is-gone", "requires": ["v1"], "doc": "config/providers is removed, with no alias (design §11.1): the method is unknown. config/changed (a stamp check now) answers true."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

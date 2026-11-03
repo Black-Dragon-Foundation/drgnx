@@ -1,4 +1,4 @@
-{"scenario": "messages/retract-until-read", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: messages/retract takes the user's message back only while it is queued. A message sent to a busy session waits; retracted it is never delivered (the answer is retracted: true, state retracted). A message delivered once the session is free is read; retracting it answers retracted: false with the state it has. An unknown id is an error."}
+{"scenario": "messages/retract-until-read", "requires": ["v1", "test-hooks"], "doc": "Task 24: messages/retract takes the user's message back only while it is queued. A message sent to a busy session waits; retracted it is never delivered (the answer is retracted: true, state retracted). A message delivered once the session is free is read; retracting it answers retracted: false with the state it has. An unknown id is an error."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

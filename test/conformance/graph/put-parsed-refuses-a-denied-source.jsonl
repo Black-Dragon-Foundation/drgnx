@@ -1,4 +1,4 @@
-{"scenario": "graph/put-parsed-refuses-a-denied-source", "requires": ["v1", "fake-backend"], "doc": "Door 1 (Urdr Task 15a; storage §5.6): a personal-notes fixture under the row's HOME, sent as a file source, as a spec source, and named by a plan's spec link (the plan's own path allowed), refuses each whole source with a text that names no path; an allowed source beside them is stored, and no row anywhere holds the canary or the notes' path."}
+{"scenario": "graph/put-parsed-refuses-a-denied-source", "requires": ["v1"], "doc": "Door 1 (Urdr Task 15a; storage §5.6): a personal-notes fixture under the row's HOME, sent as a file source, as a spec source, and named by a plan's spec link (the plan's own path allowed), refuses each whole source with a text that names no path; an allowed source beside them is stored, and no row anywhere holds the canary or the notes' path."}
 {"do": "root"}
 {"do": "write_file", "path": "$HOME/org/notes.org", "text": "* CANARY-15a-row private\n"}
 {"do": "write_file", "path": "$ROOT/work/docs/plans/p.md", "text": "# P\n### Task 1: one\n"}

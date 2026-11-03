@@ -1,4 +1,4 @@
-{"scenario": "wake/sleep-loop-refused-by-the-gate", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 15 (Calls made 9): while a session's job runs, a shell sleep/pgrep loop is refused by the permission gate at once: no permission request reaches the user, the agent's answer is reject, and the session's entries say why."}
+{"scenario": "wake/sleep-loop-refused-by-the-gate", "requires": ["v1", "test-hooks"], "doc": "Task 15 (Calls made 9): while a session's job runs, a shell sleep/pgrep loop is refused by the permission gate at once: no permission request reaches the user, the agent's answer is reject, and the session's entries say why."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}

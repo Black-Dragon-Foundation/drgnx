@@ -1,4 +1,4 @@
-{"scenario": "cli/graph-revert", "requires": ["v1", "fake-backend"], "doc": "ratatoskr graph revert (Urdr Task 17; storage §6.6): a title changed in one tx is put back by `graph revert --tx N` from the command line, as a new version the user's tx writes; --cascade only lists; a revert with no target or both is a usage error."}
+{"scenario": "cli/graph-revert", "requires": ["v1"], "doc": "ratatoskr graph revert (Urdr Task 17; storage §6.6): a title changed in one tx is put back by `graph revert --tx N` from the command line, as a new version the user's tx writes; --cascade only lists; a revert with no target or both is a usage error."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}

@@ -1,4 +1,4 @@
-{"scenario": "settings/a-project-override-beats-global", "requires": ["v1", "fake-backend"], "doc": "A project's set is its own: it is kept without touching the global table the gateway serves (precedence project over global over file over default is held by the unit tests), it holds only :scope project settings (a global one, such as the providers, is refused at its name), a bad value is refused with its path, an unknown name is refused, and nothing of a refused set is kept."}
+{"scenario": "settings/a-project-override-beats-global", "requires": ["v1"], "doc": "A project's set is its own: it is kept without touching the global table the gateway serves (precedence project over global over file over default is held by the unit tests), it holds only :scope project settings (a global one, such as the providers, is refused at its name), a bad value is refused with its path, an unknown name is refused, and nothing of a refused set is kept."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

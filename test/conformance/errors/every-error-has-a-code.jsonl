@@ -1,4 +1,4 @@
-{"scenario": "errors/every-error-has-a-code", "requires": ["v1", "fake-backend"], "doc": "Each refusal of the dispatcher, and a handler's failure (a backend answer that does not fit env/set's result), is {id, error: {code, message}} with one of the contract's codes; a refused notification gets no answer. (schema: readonly/a-newer-work-db-refuses-writes.)"}
+{"scenario": "errors/every-error-has-a-code", "requires": ["v1"], "doc": "Each refusal of the dispatcher, and a handler's failure (a backend answer that does not fit env/set's result), is {id, error: {code, message}} with one of the contract's codes; a refused notification gets no answer. (schema: readonly/a-newer-work-db-refuses-writes.)"}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"result\": {\"bogus\": 1}}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "s", "hub": "h", "as": "service"}

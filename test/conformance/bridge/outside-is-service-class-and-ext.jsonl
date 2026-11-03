@@ -1,4 +1,4 @@
-{"scenario": "bridge/outside-is-service-class-and-ext", "requires": ["v1", "fake-backend"], "doc": "ratatoskr mcp-bridge --outside --kind codex: the bridge finds the main socket from its environment, says hello without a proof (service class: only service may mcp/attach) and attaches; its identity is ext:codex:PID-HASH of its parent (the harness), the hub counts one outside bridge, and a job's tool is a tool error."}
+{"scenario": "bridge/outside-is-service-class-and-ext", "requires": ["v1"], "doc": "ratatoskr mcp-bridge --outside --kind codex: the bridge finds the main socket from its environment, says hello without a proof (service class: only service may mcp/attach) and attaches; its identity is ext:codex:PID-HASH of its parent (the harness), the hub counts one outside bridge, and a job's tool is a tool error."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

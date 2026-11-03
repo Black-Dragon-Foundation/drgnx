@@ -1,4 +1,4 @@
-{"scenario": "agents/update-waits-only-for-a-running-turn", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: a new build on disk waits for a session's running turn (the notice counts it), not for the session: when the turn ends the hub restarts (exit 75) although the idle chat is still there."}
+{"scenario": "agents/update-waits-only-for-a-running-turn", "requires": ["v1", "test-hooks"], "doc": "Task 8b: a new build on disk waits for a session's running turn (the notice counts it), not for the session: when the turn ends the hub restarts (exit 75) although the idle chat is still there."}
 {"do": "root"}
 {"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}

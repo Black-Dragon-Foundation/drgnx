@@ -1,4 +1,4 @@
-{"scenario": "gateway/streaming-first-chunk-first", "requires": ["v1", "fake-backend"], "doc": "Task 24, gate row: the provider streams `data: a` at once and `data: b` 1500 ms later. The agent reads the first chunk within 1 s of asking (the gateway relays each chunk as it comes, not the whole answer at its end), and the second arrives after it."}
+{"scenario": "gateway/streaming-first-chunk-first", "requires": ["v1"], "doc": "Task 24, gate row: the provider streams `data: a` at once and `data: b` 1500 ms later. The agent reads the first chunk within 1 s of asking (the gateway relays each chunk as it comes, not the whole answer at its end), and the second arrives after it."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "content_type": "text/event-stream", "chunks": [[0, "data: a\n\n"], [1500, "data: b\n\n"]]}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}

@@ -1,4 +1,4 @@
-{"scenario": "forward/backend-gone-calls-fail-once-and-it-restarts", "requires": ["v1", "fake-backend"], "doc": "The backend exits: the call in flight fails once (internal, the Lisp backend restarted), the backend starts again and the next call is answered; status says it runs. The vehicle is env/set, a method the backend still serves; its answer file says exit for the one call."}
+{"scenario": "forward/backend-gone-calls-fail-once-and-it-restarts", "requires": ["v1"], "doc": "The backend exits: the call in flight fails once (internal, the Lisp backend restarted), the backend starts again and the next call is answered; status says it runs. The vehicle is env/set, a method the backend still serves; its answer file says exit for the one call."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/answers/env.json", "json": {"result": {"applied": []}}}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"from_file\": \"$ROOT/answers/env.json\"}}"}}

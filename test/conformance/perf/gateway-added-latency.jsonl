@@ -1,4 +1,4 @@
-{"scenario": "perf/gateway-added-latency", "requires": ["v1", "fake-backend", "perf"], "doc": "The gateway's added latency for an agent's request: a Messages request to the mock provider's head (status line and headers read), 50 times direct to the mock and 50 times through the gateway with an agent token (--perf records every sample, no budget; the difference is the gateway's)."}
+{"scenario": "perf/gateway-added-latency", "requires": ["v1", "perf"], "doc": "The gateway's added latency for an agent's request: a Messages request to the mock provider's head (status line and headers read), 50 times direct to the mock and 50 times through the gateway with an agent token (--perf records every sample, no budget; the difference is the gateway's)."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg-1\", \"type\": \"message\", \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}}"}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}

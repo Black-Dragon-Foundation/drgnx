@@ -1,4 +1,4 @@
-{"scenario": "delivery/gate-holds-a-stale-agent", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: an agent of a job that has not read the job's decision log is told what changed (a decision-log notice, once per version) and its next edit, delete, move or run request is refused without the user being asked, with a note that it had not read the changes."}
+{"scenario": "delivery/gate-holds-a-stale-agent", "requires": ["v1", "test-hooks"], "doc": "Task 24: an agent of a job that has not read the job's decision log is told what changed (a decision-log notice, once per version) and its next edit, delete, move or run request is refused without the user being asked, with a note that it had not read the changes."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql", "sql": ["insert into meta values ('log-version', '1')", "insert into decision (n, kind, subject, author, status, at, ver, job) values (1, 'build', 'use the shared parser', 'a', 'current', 1.0, 1, 'j1')"]}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

@@ -1,4 +1,4 @@
-{"scenario": "delivery/peer-text-quoted", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: a message another agent queued for a free hub session is delivered as a new turn under a one-line header that says it is from another agent, not the user, and approves nothing; every line of its text is quoted, so it never reads as a line from drgnx. It is then marked read."}
+{"scenario": "delivery/peer-text-quoted", "requires": ["v1", "test-hooks"], "doc": "Task 24: a message another agent queued for a free hub session is delivered as a new turn under a one-line header that says it is from another agent, not the user, and approves nothing; every line of its text is quoted, so it never reads as a line from drgnx. It is then marked read."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

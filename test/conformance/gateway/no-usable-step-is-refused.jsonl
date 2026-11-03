@@ -1,4 +1,4 @@
-{"scenario": "gateway/no-usable-step-is-refused", "requires": ["v1", "fake-backend"], "doc": "A chain of an unknown provider and one the gateway cannot carry (messages false) is refused with invalid-params at chain, giving each step's reason; runtime.db has no row and status counts none."}
+{"scenario": "gateway/no-usable-step-is-refused", "requires": ["v1"], "doc": "A chain of an unknown provider and one the gateway cannot carry (messages false) is refused with invalid-params at chain, giving each step's reason; runtime.db has no row and status counts none."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"embedder":{"kind":"tei","url":"http://127.0.0.1:9","caps":["embed"],"messages":false}}}]}}}

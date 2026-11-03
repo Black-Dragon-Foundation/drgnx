@@ -1,4 +1,4 @@
-{"scenario": "coord/a-write-before-work-db-is-ready-says-so", "requires": ["v1", "fake-backend"], "doc": "A write before the store opened waits for it: with no work.db the hub makes a schema-7 one before it serves anything (Urdr Task 11; before it the Lisp side made the file and an early write was internal), so the first write goes through and status says the writer is ready."}
+{"scenario": "coord/a-write-before-work-db-is-ready-says-so", "requires": ["v1"], "doc": "A write before the store opened waits for it: with no work.db the hub makes a schema-7 one before it serves anything (Urdr Task 11; before it the Lisp side made the file and an early write was internal), so the first write goes through and status says the writer is ready."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "events/add", "params": {"kind": "comment", "summary": "early"}}}

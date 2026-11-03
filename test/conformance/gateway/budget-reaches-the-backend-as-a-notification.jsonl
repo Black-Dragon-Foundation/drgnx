@@ -1,4 +1,4 @@
-{"scenario": "gateway/budget-reaches-the-backend-as-a-notification", "requires": ["v1", "fake-backend"], "doc": "A registration with a tiny budget; one request through the gateway to the mock provider spends it: the spend row is in work.db, the backend gets a budget notification {job, spent, budget} (it stops the job's work), and the backend is never asked anything for it."}
+{"scenario": "gateway/budget-reaches-the-backend-as-a-notification", "requires": ["v1"], "doc": "A registration with a tiny budget; one request through the gateway to the mock provider spends it: the spend row is in work.db, the backend gets a budget notification {job, spent, budget} (it stops the job's work), and the backend is never asked anything for it."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg_1\", \"type\": \"message\", \"usage\": {\"input_tokens\": 10, \"output_tokens\": 2, \"cost\": 0.5}}"}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}

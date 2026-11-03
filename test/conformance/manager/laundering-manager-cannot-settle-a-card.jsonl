@@ -1,4 +1,4 @@
-{"scenario": "manager/laundering::manager-cannot-settle-a-card", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 25: a manager has no tool that settles a card (cards_settle is an unknown tool), and an agent-class connection is not-allowed on cards/settle and on agents/role; the card stays open."}
+{"scenario": "manager/laundering::manager-cannot-settle-a-card", "requires": ["v1", "test-hooks"], "doc": "Task 25: a manager has no tool that settles a card (cards_settle is an unknown tool), and an agent-class connection is not-allowed on cards/settle and on agents/role; the card stays open."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}

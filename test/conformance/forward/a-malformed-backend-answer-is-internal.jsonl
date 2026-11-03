@@ -1,4 +1,4 @@
-{"scenario": "forward/a-malformed-backend-answer-is-internal", "requires": ["v1", "fake-backend"], "doc": "A backend result that does not fit the method's result type is internal (logged with its path), never passed on; the backend's error is internal with its message; the hub keeps serving. The vehicle is env/set, a method the backend still serves (its answer file is rewritten between the calls); agents/list is the hub's own since agent system part 1."}
+{"scenario": "forward/a-malformed-backend-answer-is-internal", "requires": ["v1"], "doc": "A backend result that does not fit the method's result type is internal (logged with its path), never passed on; the backend's error is internal with its message; the hub keeps serving. The vehicle is env/set, a method the backend still serves (its answer file is rewritten between the calls); agents/list is the hub's own since agent system part 1."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/answers/env.json", "json": {"result": {"applied": "PATH", "bogus": 1}}}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"from_file\": \"$ROOT/answers/env.json\"}}"}}

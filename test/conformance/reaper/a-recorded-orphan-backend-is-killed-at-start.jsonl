@@ -1,4 +1,4 @@
-{"scenario": "reaper/a-recorded-orphan-backend-is-killed-at-start", "requires": ["v1", "fake-backend"], "doc": "A hub killed with SIGKILL leaves its backend running (one that ignores its parent); the next hub on the data dir reaps the recorded backend at start, before it starts its own. The forwarded call is env/set, a method the backend still serves."}
+{"scenario": "reaper/a-recorded-orphan-backend-is-killed-at-start", "requires": ["v1"], "doc": "A hub killed with SIGKILL leaves its backend running (one that ignores its parent); the next hub on the data dir reaps the recorded backend at start, before it starts its own. The forwarded call is env/set, a method the backend still serves."}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"ignore_parent\": true, \"env/set\": {\"result\": {\"applied\": []}}}"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": []}}}

@@ -1,4 +1,4 @@
-{"scenario": "settings-agents/no-editor-stays-proposed", "requires": ["v1", "fake-backend"], "doc": "Under a grant with no editor connected settings_change answers pending: the agent's tx stays proposed with the value in the store, and nothing is written to a file. A settings/confirm later (here a refusal) settles it."}
+{"scenario": "settings-agents/no-editor-stays-proposed", "requires": ["v1"], "doc": "Under a grant with no editor connected settings_change answers pending: the agent's tx stays proposed with the value in the store, and nothing is written to a file. A settings/confirm later (here a refusal) settles it."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}

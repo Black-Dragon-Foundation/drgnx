@@ -1,4 +1,4 @@
-{"scenario": "gateway/a-hang-up-stops-the-upstream", "requires": ["v1", "fake-backend"], "doc": "Task 24: an agent that hangs up in the middle of a stream drops the upstream connection with it: the provider's log says `closed` within 2 s (the answer had 5 s to go), and exactly one spend row and one request event are written for it."}
+{"scenario": "gateway/a-hang-up-stops-the-upstream", "requires": ["v1"], "doc": "Task 24: an agent that hangs up in the middle of a stream drops the upstream connection with it: the provider's log says `closed` within 2 s (the answer had 5 s to go), and exactly one spend row and one request event are written for it."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "content_type": "text/event-stream", "chunks": [[0, "data: a\n\n"], [8000, "data: b\n\n"]]}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}

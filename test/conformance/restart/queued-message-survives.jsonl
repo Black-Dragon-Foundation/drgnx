@@ -1,4 +1,4 @@
-{"scenario": "restart/queued-message-survives", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: a message queued for a session that is busy stays in the store when the hub restarts (TERM, then a start on the same root); once the session is resumed and free it is delivered as a new turn and marked read."}
+{"scenario": "restart/queued-message-survives", "requires": ["v1", "test-hooks"], "doc": "Task 24: a message queued for a session that is busy stays in the store when the hub restarts (TERM, then a start on the same root); once the session is resumed and free it is delivered as a new turn and marked read."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

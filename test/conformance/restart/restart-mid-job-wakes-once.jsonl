@@ -1,4 +1,4 @@
-{"scenario": "restart/restart-mid-job-wakes-once", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: a hub restart while a session waits on its job: the job is watched again, the session is resumed (waiting), and when the job ends it is woken exactly once, with no new session."}
+{"scenario": "restart/restart-mid-job-wakes-once", "requires": ["v1", "test-hooks"], "doc": "Task 24: a hub restart while a session waits on its job: the job is watched again, the session is resumed (waiting), and when the job ends it is woken exactly once, with no new session."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}

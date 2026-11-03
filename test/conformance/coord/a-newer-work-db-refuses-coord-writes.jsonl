@@ -1,4 +1,4 @@
-{"scenario": "coord/a-newer-work-db-refuses-coord-writes", "requires": ["v1", "fake-backend"], "doc": "work.db of schema 9 when the hub starts: the front's writes are schema, from the writer and from the dispatcher, before the tick and after it, and status says the writer is read-only (the hub never migrates it)."}
+{"scenario": "coord/a-newer-work-db-refuses-coord-writes", "requires": ["v1"], "doc": "work.db of schema 9 when the hub starts: the front's writes are schema, from the writer and from the dispatcher, before the tick and after it, and status says the writer is read-only (the hub never migrates it)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql": ["create table meta (key text primary key, value text)", "insert into meta values ('schema', '9')"]}
 {"do": "start", "hub": "h"}

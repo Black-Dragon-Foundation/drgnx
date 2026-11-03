@@ -1,4 +1,4 @@
-{"scenario": "forward/events-are-relayed-and-decoded", "requires": ["v1", "fake-backend"], "doc": "The backend's events reach the front's subscribers decoded against their registry type (a null key comes out absent); its events event is dropped, since the front broadcasts the event log (logged once per backend start)."}
+{"scenario": "forward/events-are-relayed-and-decoded", "requires": ["v1"], "doc": "The backend's events reach the front's subscribers decoded against their registry type (a null key comes out absent); its events event is dropped, since the front broadcasts the event log (logged once per backend start)."}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"events\": \"$ROOT/events.json\"}"}}
 {"do": "write_file", "path": "$ROOT/events.json", "text": "[{\"event\": \"events\", \"data\": {\"since\": 0, \"last\": 1, \"events\": [{\"id\": 1, \"at\": 1.5, \"agent\": null, \"job\": \"j1\", \"kind\": \"job\", \"summary\": \"job j1 stopped\", \"data\": {\"status\": \"stopped\"}}]}}, {\"event\": \"card\", \"data\": {\"id\": 7, \"job\": null, \"title\": \"t\"}}]"}
 {"do": "connect", "conn": "c", "hub": "h"}

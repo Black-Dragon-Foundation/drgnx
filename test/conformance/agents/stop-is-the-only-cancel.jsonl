@@ -1,4 +1,4 @@
-{"scenario": "agents/stop-is-the-only-cancel", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: only agents/stop cancels a turn. It ends the running turn as cancelled, holds the queued message (paused) and keeps the session; deliver-queue then sends the held message as the next turn."}
+{"scenario": "agents/stop-is-the-only-cancel", "requires": ["v1", "test-hooks"], "doc": "Task 8b: only agents/stop cancels a turn. It ends the running turn as cancelled, holds the queued message (paused) and keeps the session; deliver-queue then sends the held message as the next turn."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

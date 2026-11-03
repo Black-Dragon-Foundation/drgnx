@@ -1,4 +1,4 @@
-{"scenario": "coord/notify-is-coalesced", "requires": ["v1", "fake-backend"], "doc": "coord/notify is the front's (SB-T12-5): 100 within a few milliseconds reach the backend as at most 2 notifications (one each 0.25 s, no id, never answered), and at least 1."}
+{"scenario": "coord/notify-is-coalesced", "requires": ["v1"], "doc": "coord/notify is the front's (SB-T12-5): 100 within a few milliseconds reach the backend as at most 2 notifications (one each 0.25 s, no id, never answered), and at least 1."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/list"}}

@@ -1,4 +1,4 @@
-{"scenario": "gateway/every-step-failing-says-why", "requires": ["v1", "fake-backend"], "doc": "Task 24: no step of the chain can answer (the first provider's port refuses the connection, the second is not configured): the agent gets 502 api_error whose message names each provider and why (`no provider answered: dead: no answer (…); ghost: not configured`), and no spend row is written for a request nothing answered."}
+{"scenario": "gateway/every-step-failing-says-why", "requires": ["v1"], "doc": "Task 24: no step of the chain can answer (the first provider's port refuses the connection, the second is not configured): the agent gets 502 api_error whose message names each provider and why (`no provider answered: dead: no answer (…); ghost: not configured`), and no spend row is written for a request nothing answered."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

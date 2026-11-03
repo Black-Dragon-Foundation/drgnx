@@ -1,4 +1,4 @@
-{"scenario": "move/a-plan-run-worker-moves-without-a-duplicate", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 26: a plan run's worker is moved to another profile (agents/move). What is keyed by its session follows it: the task is claimed by the new session, the job shows the new session as the task's agent, and the runner starts no second worker (the Claude mock opened one session, the Gemini mock one)."}
+{"scenario": "move/a-plan-run-worker-moves-without-a-duplicate", "requires": ["v1", "test-hooks", "agent-locks"], "doc": "Task 26: a plan run's worker is moved to another profile (agents/move). What is keyed by its session follows it: the task is claimed by the new session, the job shows the new session as the task's agent, and the runner starts no second worker (the Claude mock opened one session, the Gemini mock one)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}

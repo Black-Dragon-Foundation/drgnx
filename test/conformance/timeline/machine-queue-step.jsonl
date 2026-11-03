@@ -1,4 +1,4 @@
-{"scenario": "timeline/machine-queue-step", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 15, gate-F S6: a job started on a full machine (one slot here) is recorded as queued and the start answers at once, so the turn ends with both jobs running (one queued); when the first ends the queued one starts and the session is woken."}
+{"scenario": "timeline/machine-queue-step", "requires": ["v1", "test-hooks"], "doc": "Task 15, gate-F S6: a job started on a full machine (one slot here) is recorded as queued and the start answers at once, so the turn ends with both jobs running (one queued); when the first ends the queued one starts and the session is woken."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}

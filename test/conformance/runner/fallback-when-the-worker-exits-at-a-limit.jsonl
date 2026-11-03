@@ -1,4 +1,4 @@
-{"scenario": "runner/fallback-when-the-worker-exits-at-a-limit", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 16b: a worker whose process dies with its provider's limit on stderr (429, rate limit) is not freed for a retry on the same profile: the step classifies the exit and the task goes to the next profile of its route with a handover; no agent card is made."}
+{"scenario": "runner/fallback-when-the-worker-exits-at-a-limit", "requires": ["v1", "test-hooks"], "doc": "Task 16b: a worker whose process dies with its provider's limit on stderr (429, rate limit) is not freed for a retry on the same profile: the step classifies the exit and the task goes to the next profile of its route with a handover; no agent card is made."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}

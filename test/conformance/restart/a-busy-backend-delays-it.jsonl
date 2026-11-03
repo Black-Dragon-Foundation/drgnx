@@ -1,4 +1,4 @@
-{"scenario": "restart/a-busy-backend-delays-it", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "A new build is on disk but the backend reports a busy session: the hub sends the notice and does not exit. When the backend reports the session idle, the hub exits 75 (the next tick)."}
+{"scenario": "restart/a-busy-backend-delays-it", "requires": ["v1", "test-hooks"], "doc": "A new build is on disk but the backend reports a busy session: the hub sends the notice and does not exit. When the backend reports the session idle, the hub exits 75 (the next tick)."}
 {"do": "root"}
 {"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
 {"do": "write_file", "path": "$ROOT/answers/agents.json", "text": "{\"result\": {\"sessions\": [{\"id\": \"s1\", \"status\": \"busy\"}]}}"}

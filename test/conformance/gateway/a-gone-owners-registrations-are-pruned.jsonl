@@ -1,4 +1,4 @@
-{"scenario": "gateway/a-gone-owners-registrations-are-pruned", "requires": ["v1", "fake-backend"], "doc": "A registration whose owner (a spawned sleep, with its start time) ends is pruned within a tick or two: status counts none and runtime.db has no row."}
+{"scenario": "gateway/a-gone-owners-registrations-are-pruned", "requires": ["v1"], "doc": "A registration whose owner (a spawned sleep, with its start time) ends is pruned within a tick or two: status counts none and runtime.db has no row."}
 {"do": "start", "hub": "h"}
 {"do": "spawn", "capture": "P", "argv": ["sleep", "60"]}
 {"do": "connect", "conn": "c", "hub": "h"}

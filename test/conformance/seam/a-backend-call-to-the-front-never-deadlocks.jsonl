@@ -1,4 +1,4 @@
-{"scenario": "seam/a-backend-call-to-the-front-never-deadlocks", "requires": ["v1", "fake-backend"], "doc": "Design 8.2's test: the fake backend's env/set (the method it still serves) calls the front's events/add (call_front) before it answers; a user's env/set through the front is answered within 2 s, the front's answer to the backend has the event's id, and the event is in work.db."}
+{"scenario": "seam/a-backend-call-to-the-front-never-deadlocks", "requires": ["v1"], "doc": "Design 8.2's test: the fake backend's env/set (the method it still serves) calls the front's events/add (call_front) before it answers; a user's env/set through the front is answered within 2 s, the front's answer to the backend has the event's id, and the event is in work.db."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"env/set\": {\"call_front\": {\"method\": \"events/add\", \"params\": {\"kind\": \"job\", \"job\": \"j1\", \"summary\": \"job j1 stopped\", \"data\": {\"status\": \"stopped\"}}}, \"then\": {\"result\": {\"applied\": []}}}}"}}

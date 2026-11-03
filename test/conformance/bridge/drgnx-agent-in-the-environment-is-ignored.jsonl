@@ -1,4 +1,4 @@
-{"scenario": "bridge/drgnx-agent-in-the-environment-is-ignored", "requires": ["v1", "fake-backend"], "doc": "DRGNX_AGENT in the bridge's environment names nobody: the socket is the identity, so a tool runs as the session's agent."}
+{"scenario": "bridge/drgnx-agent-in-the-environment-is-ignored", "requires": ["v1"], "doc": "DRGNX_AGENT in the bridge's environment names nobody: the socket is the identity, so a tool runs as the session's agent."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

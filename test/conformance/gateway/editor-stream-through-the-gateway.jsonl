@@ -1,4 +1,4 @@
-{"scenario": "gateway/editor-stream-through-the-gateway", "requires": ["v1", "fake-backend"], "doc": "Task 24, editor row: an SSE answer that opens with a `:` keep-alive comment and sends its data 1500 ms later reaches the editor chunk by chunk: the keep-alive is read within 1 s, the data after it."}
+{"scenario": "gateway/editor-stream-through-the-gateway", "requires": ["v1"], "doc": "Task 24, editor row: an SSE answer that opens with a `:` keep-alive comment and sends its data 1500 ms later reaches the editor chunk by chunk: the keep-alive is read within 1 s, the data after it."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/chat/completions", "content_type": "text/event-stream", "chunks": [[0, ": keep-alive\n\n"], [1500, "data: {\"id\": \"chat-s\"}\n\n"]]}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}

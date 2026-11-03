@@ -1,4 +1,4 @@
-{"scenario": "gateway/keys-only-on-a-user-connection", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "gateway/keys from a service or an agent connection is not-allowed and the key is held nowhere: not in the hub (status keys_held), the backend or any file under the root; a user connection's key is held (its provider named, never the key)."}
+{"scenario": "gateway/keys-only-on-a-user-connection", "requires": ["v1", "test-hooks"], "doc": "gateway/keys from a service or an agent connection is not-allowed and the key is held nowhere: not in the hub (status keys_held), the backend or any file under the root; a user connection's key is held (its provider named, never the key)."}
 {"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "s", "hub": "h", "as": "service"}

@@ -1,4 +1,4 @@
-{"scenario": "agents/permission-answered-by-the-user", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8a (A2-W: a worker under a matrix cell that asks): a permission request of the agent waits in the session's snapshot until the user answers it through agents/permission; only then does the agent go on (the mock says which option it got). An option the agent did not offer is refused."}
+{"scenario": "agents/permission-answered-by-the-user", "requires": ["v1", "test-hooks"], "doc": "Task 8a (A2-W: a worker under a matrix cell that asks): a permission request of the agent waits in the session's snapshot until the user answers it through agents/permission; only then does the agent go on (the mock says which option it got). An option the agent did not offer is refused."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

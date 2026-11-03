@@ -1,4 +1,4 @@
-{"scenario": "agents/resume-after-restart", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: a hub restart (TERM, then a start on the same root) keeps the session: it is listed again on the same profile and directory, resumed with session/resume, its transcript read back (earlier turns still there) and the prompt that was queued when the hub went down is delivered as the next turn."}
+{"scenario": "agents/resume-after-restart", "requires": ["v1", "test-hooks"], "doc": "Task 8b: a hub restart (TERM, then a start on the same root) keeps the session: it is listed again on the same profile and directory, resumed with session/resume, its transcript read back (earlier turns still there) and the prompt that was queued when the hub went down is delivered as the next turn."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

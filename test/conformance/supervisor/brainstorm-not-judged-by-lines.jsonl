@@ -1,4 +1,4 @@
-{"scenario": "supervisor/brainstorm-not-judged-by-lines", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 23: a chat is brainstorming: silent past the task limit (1 s) and over the no-progress token limit (1) it is not paused; its card table stays empty."}
+{"scenario": "supervisor/brainstorm-not-judged-by-lines", "requires": ["v1", "test-hooks"], "doc": "Task 23: a chat is brainstorming: silent past the task limit (1 s) and over the no-progress token limit (1) it is not paused; its card table stays empty."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

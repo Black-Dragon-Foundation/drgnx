@@ -1,4 +1,4 @@
-{"scenario": "agents/permission-answered-through-its-card", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "S2 (gate-F): a permission request the matrix asks about makes a matrix card, announced with a card event like every card, and waits under that card's id (one id); and settling that card in the cockpit (cards/settle) releases the agent with the user's yes, after the hub checked the matrix again."}
+{"scenario": "agents/permission-answered-through-its-card", "requires": ["v1", "test-hooks"], "doc": "S2 (gate-F): a permission request the matrix asks about makes a matrix card, announced with a card event like every card, and waits under that card's id (one id); and settling that card in the cockpit (cards/settle) releases the agent with the user's yes, after the hub checked the matrix again."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

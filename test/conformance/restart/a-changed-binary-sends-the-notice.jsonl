@@ -1,4 +1,4 @@
-{"scenario": "restart/a-changed-binary-sends-the-notice", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "The hub runs from a copy in $ROOT/bin. A different build is renamed over that path (a rename-replace, which a stat of /proc/self/exe would never see); at the next idle tick the hub runs `<path> version --json`, sees another commit and sends the `restart-when-idle` notice with the number of turns it waits for. The backend has a busy session, so the hub keeps serving."}
+{"scenario": "restart/a-changed-binary-sends-the-notice", "requires": ["v1", "test-hooks"], "doc": "The hub runs from a copy in $ROOT/bin. A different build is renamed over that path (a rename-replace, which a stat of /proc/self/exe would never see); at the next idle tick the hub runs `<path> version --json`, sees another commit and sends the `restart-when-idle` notice with the number of turns it waits for. The backend has a busy session, so the hub keeps serving."}
 {"do": "root"}
 {"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
 {"do": "write_file", "path": "$ROOT/answers/agents.json", "text": "{\"result\": {\"sessions\": [{\"id\": \"s1\", \"status\": \"busy\"}]}}"}

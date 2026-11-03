@@ -1,4 +1,4 @@
-{"scenario": "timeline/stalled-step", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19/23: a silent session the supervisor flags is a stalled step on the timeline."}
+{"scenario": "timeline/stalled-step", "requires": ["v1", "test-hooks"], "doc": "Task 19/23: a silent session the supervisor flags is a stalled step on the timeline."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

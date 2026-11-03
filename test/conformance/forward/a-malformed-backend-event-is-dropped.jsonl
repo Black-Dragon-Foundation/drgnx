@@ -1,4 +1,4 @@
-{"scenario": "forward/a-malformed-backend-event-is-dropped", "requires": ["v1", "fake-backend"], "doc": "A backend event of a name it does not send, or whose data does not decode, is dropped and logged; the good one after them is the first a subscriber gets."}
+{"scenario": "forward/a-malformed-backend-event-is-dropped", "requires": ["v1"], "doc": "A backend event of a name it does not send, or whose data does not decode, is dropped and logged; the good one after them is the first a subscriber gets."}
 {"do": "start", "hub": "h", "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"events\": \"$ROOT/events.json\"}"}}
 {"do": "write_file", "path": "$ROOT/events.json", "text": "[{\"event\": \"challenge\", \"data\": {\"nonce\": \"00112233445566778899aabbccddeeff\"}}, {\"event\": \"no-such\", \"data\": {}}, {\"event\": \"job\", \"data\": {\"id\": \"j1\", \"bogus\": true}}, {\"event\": \"card\", \"data\": {\"id\": \"not a number\"}}, {\"event\": \"job\"}, {\"event\": \"job\", \"data\": {\"id\": \"good\"}}]"}
 {"do": "connect", "conn": "c", "hub": "h"}

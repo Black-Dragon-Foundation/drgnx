@@ -1,4 +1,4 @@
-{"scenario": "history/an-agent-cannot-record", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "settings/record is the user's (unified-settings Task 24): an agent's connection is not-allowed and nothing is recorded; the user's own record of the same change is."}
+{"scenario": "history/an-agent-cannot-record", "requires": ["v1", "test-hooks"], "doc": "settings/record is the user's (unified-settings Task 24): an agent's connection is not-allowed and nothing is recorded; the user's own record of the same change is."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}

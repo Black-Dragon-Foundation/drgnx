@@ -1,4 +1,4 @@
-{"scenario": "restart/sessions-resume-or-load", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: after a hub restart each recorded session is brought back on the same agent session: session/resume where the agent has it (Claude), else session/load (Gemini loads only). Both are listed again on the same profile and directory and their earlier turns are still in the transcript."}
+{"scenario": "restart/sessions-resume-or-load", "requires": ["v1", "test-hooks"], "doc": "Task 24: after a hub restart each recorded session is brought back on the same agent session: session/resume where the agent has it (Claude), else session/load (Gemini loads only). Both are listed again on the same profile and directory and their earlier turns are still in the transcript."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

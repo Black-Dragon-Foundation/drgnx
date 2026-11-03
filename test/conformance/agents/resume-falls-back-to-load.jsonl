@@ -1,4 +1,4 @@
-{"scenario": "agents/resume-falls-back-to-load", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: an agent that cannot session/resume (gemini: loadSession only) is brought back with session/load after a restart, and the queued prompt is delivered."}
+{"scenario": "agents/resume-falls-back-to-load", "requires": ["v1", "test-hooks"], "doc": "Task 8b: an agent that cannot session/resume (gemini: loadSession only) is brought back with session/load after a restart, and the queued prompt is delivered."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

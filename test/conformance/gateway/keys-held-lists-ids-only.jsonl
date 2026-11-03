@@ -1,4 +1,4 @@
-{"scenario": "gateway/keys-held-lists-ids-only", "requires": ["v1", "fake-backend"], "doc": "gateway/keys-held answers the ids whose key the hub holds, and a user subscriber hears gateway/keys-changed with those ids whenever the set changes (gateway/keys, a registration's keys), not when a held key is replaced; no canary key in an answer, an event, the backend log or any file under the root."}
+{"scenario": "gateway/keys-held-lists-ids-only", "requires": ["v1"], "doc": "gateway/keys-held answers the ids whose key the hub holds, and a user subscriber hears gateway/keys-changed with those ids whenever the set changes (gateway/keys, a registration's keys), not when a held key is replaced; no canary key in an answer, an event, the backend log or any file under the root."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "w", "hub": "h"}

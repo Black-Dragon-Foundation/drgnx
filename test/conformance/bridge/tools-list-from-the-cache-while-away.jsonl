@@ -1,4 +1,4 @@
-{"scenario": "bridge/tools-list-from-the-cache-while-away", "requires": ["v1", "fake-backend"], "doc": "With no hub, tools/list is answered at once from the bridge's cache (the list the agent saw last) and ping with {}."}
+{"scenario": "bridge/tools-list-from-the-cache-while-away", "requires": ["v1"], "doc": "With no hub, tools/list is answered at once from the bridge's cache (the list the agent saw last) and ping with {}."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

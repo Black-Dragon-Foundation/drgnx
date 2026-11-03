@@ -1,4 +1,4 @@
-{"scenario": "mcp/tracker-tools-on-by-default", "requires": ["v1", "fake-backend"], "doc": "The user's answer 1: a session with no profile tool sets and no task setting is served the tracker tools: tools/list has 30 tools (with the two settings tools and the four job tools every agent has), task_read, task_write, note_add, graph_read and access_request among them; msession keeps no tools setting."}
+{"scenario": "mcp/tracker-tools-on-by-default", "requires": ["v1"], "doc": "The user's answer 1: a session with no profile tool sets and no task setting is served the tracker tools: tools/list has 30 tools (with the two settings tools and the four job tools every agent has), task_read, task_write, note_add, graph_read and access_request among them; msession keeps no tools setting."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

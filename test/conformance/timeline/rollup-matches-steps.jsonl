@@ -1,4 +1,4 @@
-{"scenario": "timeline/rollup-matches-steps", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19: the rollup of a session is the steps' time by class and the turn's tokens (10 in, 5 out for the mock's first turn)."}
+{"scenario": "timeline/rollup-matches-steps", "requires": ["v1", "test-hooks"], "doc": "Task 19: the rollup of a session is the steps' time by class and the turn's tokens (10 in, 5 out for the mock's first turn)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
