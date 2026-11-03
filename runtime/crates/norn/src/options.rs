@@ -208,6 +208,7 @@ pub mod deny {
         "drgnx-agents-profiles",
         "drgnx-agents-routes",
         "drgnx-agents-scrubbed-env",
+        "drgnx-agents-start-env-names",
         "drgnx-ai-providers",
         "drgnx-ai-roles",
         "drgnx-keys-bind",

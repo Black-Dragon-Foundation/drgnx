@@ -309,6 +309,22 @@ pub struct EnvSetParams {
 /// The variables whose value is a `:`-separated list of directories.
 pub const DIR_LISTS: [&str; 3] = ["PATH", "MANPATH", "INFOPATH"];
 
+/// Whether NAME looks like a credential: uppercased, it contains `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE` or
+/// `CREDENTIAL`.  Such a name never enters a session's environment from the editor.
+pub fn refused_env_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    [
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSPHRASE",
+        "CREDENTIAL",
+    ]
+    .iter()
+    .any(|w| upper.contains(w))
+}
+
 /// `PATH`, `MANPATH` and `INFOPATH` must be `:`-separated absolute directories (SB-T12-7): no empty, relative, `~`
 /// or remote entry.  Whether each exists is the backend's check.
 fn check_env(p: &EnvSetParams) -> Result<(), Error> {

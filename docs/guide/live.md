@@ -89,7 +89,8 @@ not sent anything.
 10 s, so call it only from commands (`drgnx-live-running` answers at once, nil when no browser runs). Agent
 environments are extended through `drgnx-agents-env-functions` (in `core/drgnx-agents.el`): each function gets the
 session and returns a list of extra `NAME=value` strings; one that fails, or anything returned that is not a string,
-is reported in a message and left out. The tests talk to a CDP stand-in, `test/fixtures/mock-cdp.el`, never to Chrome.
+is reported in a message and left out. Only names on `drgnx-agents-start-env-names` reach the agent
+([agents.md](agents.md#what-modules-add-to-a-session)). The tests talk to a CDP stand-in, `test/fixtures/mock-cdp.el`, never to Chrome.
 
 The GUI test `test/ui/editor-m11c1-test.el` shows the Live view on the mock browser (a screenshot). The perf workload
 `live-view` types in a file while the view draws frames from the mock, 30 a second ([perf.md](../develop/perf.md)).

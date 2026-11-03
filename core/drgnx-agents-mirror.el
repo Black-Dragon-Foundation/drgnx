@@ -56,11 +56,46 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
                                             (error-message-string err)))
            nil)))
 
+(defvar drgnx-agents-mirror--starting nil
+  "The session `drgnx-agents-mirror-start' gave to `drgnx-agents-env-functions', until the hub's snapshot of the session
+it started arrives (the hub's event comes before its reply): that snapshot's mirror is this very object, so what a
+hook function kept of it (the Live browser's list of agents it gave its endpoint) stays the mirror.")
+
+(defun drgnx-agents-mirror--adopt (snap)
+  "The session `drgnx-agents-mirror--starting' when SNAP (a hub snapshot) is the session it started, else nil."
+  (when-let* ((s drgnx-agents-mirror--starting)
+              ((null (drgnx-agent-session-remote s)))
+              ((equal (plist-get snap :profile) (drgnx-agent-session-profile s)))
+              ((equal (plist-get snap :task) (drgnx-agent-session-task s)))
+              ((equal (plist-get snap :job) (drgnx-agent-session-job s)))
+              ((or (null (plist-get snap :cwd))
+                   (equal (directory-file-name (plist-get snap :cwd))
+                          (directory-file-name (drgnx-agent-session-cwd s))))))
+    (setq drgnx-agents-mirror--starting nil)
+    s))
+
+(defun drgnx-agents-mirror--task-hook (m event)
+  "Run `drgnx-agents-task-functions' for mirror M and EVENT (`start', `turn-start', `turn-end'); a failing function is
+reported and skipped.  Never waits: the functions defer their own work to timers."
+  (with-demoted-errors "drgnx work: %S" (run-hook-with-args 'drgnx-agents-task-functions m event)))
+
+(defun drgnx-agents-mirror--transitions (m new prev)
+  "Run the task hooks for what a snapshot changed in mirror M, which was in status PREV before it (NEW-P: M was just
+made, NEW).  A session with a task runs `start' when first seen, `turn-start' when it becomes busy and `turn-end' when it
+stops being busy: each once per change of status, so a snapshot sent again changes nothing and runs nothing."
+  (when (drgnx-agent-session-task m)
+    (when new (drgnx-agents-mirror--task-hook m 'start))
+    (let ((was (eq prev 'busy)) (is (eq (drgnx-agent-session-status m) 'busy)))
+      (cond ((and is (not was)) (drgnx-agents-mirror--task-hook m 'turn-start))
+            ((and was (not is)) (drgnx-agents-mirror--task-hook m 'turn-end))))))
+
 (defun drgnx-agents-mirror--apply-snapshot (snap)
   "Make (or update) the mirror of SNAP (a hub snapshot); returns (MIRROR . NEW-P)."
-  (let* ((id (plist-get snap :id)) (m (drgnx-agents-mirror--find id)) (new (not m)))
+  (let* ((id (plist-get snap :id)) (m (drgnx-agents-mirror--find id)) (new (not m))
+         (prev (and m (drgnx-agent-session-status m))))
     (unless m
-      (setq m (drgnx-agents--make :remote id :id id))
+      (setq m (or (drgnx-agents-mirror--adopt snap) (drgnx-agents--make)))
+      (setf (drgnx-agent-session-remote m) id (drgnx-agent-session-id m) id)
       (push m drgnx-agents--sessions))
     (dolist (slot drgnx-agents-mirror--slots)
       (setf (cl-struct-slot-value 'drgnx-agent-session slot m) (plist-get snap (intern (concat ":" (symbol-name slot))))))
@@ -70,6 +105,7 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
       (when (and new (plist-get snap :enforced_why))
         (drgnx-notify 'agents 'warn (format "%s: %s" (plist-get snap :name) (format "not enforced: %s" (plist-get snap :enforced_why)))
                       :id (intern (concat "lock-" id)) :life 'event)))
+    (drgnx-agents-mirror--transitions m new prev)
     (cons m new)))
 
 (defun drgnx-agents-mirror-lock-label (m)
@@ -77,20 +113,57 @@ One damaged record from the hub is skipped (and said so), never allowed to stop 
   (when-let* ((why (gethash (drgnx-agent-session-remote m) drgnx-agents-mirror--lock)))
     (format "not enforced: %s" why)))
 
+(defun drgnx-agents-mirror--module-env (s)
+  "What the functions on `drgnx-agents-env-functions' add to the environment of the agent of session S, as the hub's
+`agents/start' takes it: a vector of (:name NAME :value VALUE), or nil.  Only the names on
+`drgnx-agents-start-env-names' go, and never one that looks like a credential: the others are dropped with one notice
+naming them.  A function that fails, or returns what is not a list of \"NAME=value\" strings, is reported and skipped."
+  (require 'drgnx-shell-env)
+  (let (vars dropped)
+    (run-hook-wrapped
+     'drgnx-agents-env-functions
+     (lambda (f)
+       (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
+         (if (not (proper-list-p r))
+             (drgnx-notify 'agents 'warn
+                           (format "an environment function returned %S, not a list of NAME=value strings; ignored" r))
+           (dolist (e r)
+             (if (not (and (stringp e) (string-match "\\`\\([A-Za-z_][A-Za-z0-9_]*\\)=\\(.*\\)\\'" e)))
+                 (drgnx-notify 'agents 'warn (format "an environment function returned %S, not a NAME=value string; ignored" e))
+               (let ((name (match-string 1 e)) (value (match-string 2 e)))
+                 (if (or (not (member name (default-value 'drgnx-agents-start-env-names)))
+                         (drgnx-shell-env-refused-p name))
+                     (cl-pushnew name dropped :test #'equal)
+                   (setq vars (cons (list :name name :value value) (seq-remove (lambda (v) (equal (plist-get v :name) name)) vars)))))))))
+       nil))
+    (when dropped
+      (drgnx-notify 'agents 'warn
+                    (format "not passed on to the agent: %s (only names on drgnx-agents-start-env-names, and none that look like a credential)"
+                            (mapconcat #'identity (nreverse dropped) ", "))))
+    (and vars (vconcat (seq-take (nreverse vars) 8)))))
+
 (defun drgnx-agents-mirror-start (profile cwd &optional task job)
   "Start a session of PROFILE in CWD in the hub and return its mirror here (for a command the user ran: it waits for
-the hub).  The agent runs in the hub, so it keeps working when this Emacs closes."
+the hub).  The agent runs in the hub, so it keeps working when this Emacs closes.  The functions on
+`drgnx-agents-env-functions' add to its environment (`drgnx-agents-mirror--module-env')."
   (unless (memq #'drgnx-agents-mirror--event drgnx-hub-event-functions) (drgnx-hub-ensure) (drgnx-agents-mirror-sync))
-  (let* ((r (drgnx-hub-call-sync "agents/start" (append (list :profile profile :cwd (expand-file-name cwd))
-                                                        (and task (list :task task)) (and job (list :job job)))
-                                 30))
-         (id (plist-get r :id)))
-    (or (drgnx-agents-mirror--find id)
-        (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session
-                                                       (plist-get (drgnx-hub-call-sync "agents/get" (list :id id) 10) :session))))
-          (let ((m (car (drgnx-agents-mirror--apply-snapshot (car snap)))))
-            (drgnx-agents-mirror--fetch m)
-            m)))))
+  (let* ((s (drgnx-agents--make :profile profile :cwd (expand-file-name cwd) :task task :job job))
+         (env (drgnx-agents-mirror--module-env s))
+         (drgnx-agents-mirror--starting s))
+    (unwind-protect
+        (let* ((r (drgnx-hub-call-sync "agents/start" (append (list :profile profile :cwd (expand-file-name cwd))
+                                                              (and task (list :task task)) (and job (list :job job))
+                                                              (and env (list :env env)))
+                                       30))
+               (id (plist-get r :id)))
+          (or (drgnx-agents-mirror--find id)
+              (when-let* ((snap (drgnx-agents-mirror--decode 'drgnx-records-session
+                                                             (plist-get (drgnx-hub-call-sync "agents/get" (list :id id) 10) :session))))
+                (let ((m (car (drgnx-agents-mirror--apply-snapshot (car snap)))))
+                  (drgnx-agents-mirror--fetch m)
+                  m))))
+      ;; a start that failed leaves nothing for a hook function's list to hold on to
+      (unless (drgnx-agent-session-remote s) (setf (drgnx-agent-session-status s) 'exited)))))
 
 (defun drgnx-agents-mirror--apply-entries (m entries)
   "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript."

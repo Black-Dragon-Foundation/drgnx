@@ -873,7 +873,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes | front |
 | `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | front |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no | front |
-| `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes | front |
+| `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes | front |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes | front |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no | front |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes | front |
@@ -1117,6 +1117,17 @@ session's ACP client (`hermod`): `agents/start` takes a profile (settings: `drgn
 agent, runs `initialize` (with `fs` read and write offered, never `terminal`) and `session/new`, and answers the id
 and name. The session is recorded in `runtime.db` (`asession`, migration 5) and in the graph as a `session` entity
 (`run_by` its agent, `works_on` its task; a brainstorm's topic note and design document are in its `data`).
+
+- **Module env.** `agents/start` takes `env` (at most 8 `{name, value}`): what the editor's modules add through
+  `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
+  setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
+  PASSPHRASE or CREDENTIAL in it), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
+  environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub
+  restarts or resumes does not get them again. The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
+  drops, with one notice, the names the hub would refuse. The mirror also runs `drgnx-agents-task-functions` for hub
+  sessions that have a task: `start` when a session is first seen, `turn-start` when its status becomes `busy` and
+  `turn-end` when it stops being busy, each once per change of status (a snapshot sent again runs nothing). The work
+  tracker records a task's commits from `turn-end`.
 
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
   mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its

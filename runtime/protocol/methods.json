@@ -3008,6 +3008,29 @@
             "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
             "type": "string"
           },
+          "EnvName": {
+            "description": "an environment variable's name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "EnvVar": {
+            "description": "One variable from the user's login shell.",
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/EnvName"
+              },
+              "value": {
+                "maxLength": 32768,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          },
           "Id": {
             "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
             "maxLength": 128,
@@ -3060,6 +3083,17 @@
               }
             ],
             "description": "A brainstorm's design document."
+          },
+          "env": {
+            "description": "Variables an editor module adds to the agent's environment, after the profile's and the lock's.  A name must be\non `drgnx-agents-start-env-names` and must not look like a credential, else `invalid-params` at `env[i].name`.",
+            "items": {
+              "$ref": "#/$defs/EnvVar"
+            },
+            "maxItems": 8,
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "job": {
             "anyOf": [

@@ -107,7 +107,8 @@
                    (cons :ignore (and (plist-get v :ignore) (drgnx-settings-runtime--strings (plist-get v :ignore))))
                    (cons :data_collection (drgnx-settings-runtime--str (plist-get v :data-collection)))
                    (cons :zdr (and (plist-member v :zdr) (drgnx-settings-runtime--bool (plist-get v :zdr)))))))))
-    (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool))
+    (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool)
+    (drgnx-agents-start-env-names . drgnx-settings-runtime--strings))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.")
 
 (defun drgnx-settings-runtime--vars ()

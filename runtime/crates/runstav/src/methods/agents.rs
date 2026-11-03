@@ -2,6 +2,7 @@
 //! `drgnx-records-entry`).
 
 use super::graph::ParsedId;
+use super::hub::EnvVar;
 use super::matrix::Role;
 use super::{Empty, invalid, method};
 use crate::registry::Method;
@@ -204,6 +205,10 @@ pub struct StartParams {
     /// A brainstorm's design document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document: Option<AbsPath>,
+    /// Variables an editor module adds to the agent's environment, after the profile's and the lock's.  A name must be
+    /// on `drgnx-agents-start-env-names` and must not look like a credential, else `invalid-params` at `env[i].name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Bounded<Vec<EnvVar>, 8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

@@ -520,6 +520,7 @@ pub async fn start(
                 role: Some(Role::Worker),
                 about: None,
                 document: None,
+                env: None,
             },
             &user(),
         )

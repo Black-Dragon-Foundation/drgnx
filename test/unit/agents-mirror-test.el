@@ -207,6 +207,98 @@
         (should (equal (drgnx-agents-mirror-lock-label m) "not enforced: no sandbox here"))
         (should-not (drgnx-agents-mirror-lock-label ok))))))
 
+;;;; The editor's agent hooks run for sessions the hub holds
+
+(defun drgnx-agents-mirror-test--snap (status &optional task)
+  "A hub snapshot of the session \"h-t\" in STATUS (a string), working on TASK."
+  (drgnx-records-from-json 'drgnx-records-session
+                           (append (list :id "h-t" :name "t" :profile "mock" :cwd "/w" :status status)
+                                   (and task (list :task task)))))
+
+(defmacro drgnx-agents-mirror-test--hooks (events &rest body)
+  "BODY with `drgnx-agents-task-functions' pushing (EVENT . MIRROR-ID) onto EVENTS (a variable, newest first)."
+  (declare (indent 1))
+  `(let ((drgnx-agents--sessions nil) (inhibit-message t)
+         (drgnx-agents-task-functions
+          (list (lambda (s event) (push (cons event (drgnx-agent-session-remote s)) ,events)))))
+     (cl-letf (((symbol-function 'drgnx-notify) #'ignore))
+       ,@body)))
+
+(ert-deftest drgnx-agents-mirror/task-turn-end-fires-once ()
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "idle" "T#1"))
+      (should (equal (reverse events) '((start . "h-t"))))                  ; first seen: start, nothing else
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "busy" "T#1"))
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "idle" "T#1"))
+      (should (equal (reverse events) '((start . "h-t") (turn-start . "h-t") (turn-end . "h-t"))))
+      ;; a second turn: once more each
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "busy" "T#1"))
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "idle" "T#1"))
+      (should (= 2 (cl-count 'turn-end events :key #'car)))
+      (should (= 2 (cl-count 'turn-start events :key #'car)))
+      (should (= 1 (cl-count 'start events :key #'car))))))
+
+(ert-deftest drgnx-agents-mirror/resent-snapshot-fires-nothing ()
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (dolist (status '("idle" "busy" "busy" "idle" "idle"))
+        (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap status "T#1")))
+      (should (equal (mapcar #'car (reverse events)) '(start turn-start turn-end))))
+    ;; a session with no task runs no task hook at all
+    (let (none)
+      (drgnx-agents-mirror-test--hooks none
+        (dolist (status '("idle" "busy" "idle"))
+          (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap status)))
+        (should-not none)))))
+
+(ert-deftest drgnx-agents-mirror/a-session-first-seen-busy-starts-its-turn ()
+  (let (events)
+    (drgnx-agents-mirror-test--hooks events
+      (drgnx-agents-mirror--apply-snapshot (drgnx-agents-mirror-test--snap "busy" "T#1"))
+      (should (equal (mapcar #'car (reverse events)) '(start turn-start))))))
+
+(ert-deftest drgnx-agents-mirror/env-functions-reach-start ()
+  ;; the functions' NAME=value strings go to agents/start as `env' when the name is on `drgnx-agents-start-env-names' and
+  ;; is no credential; the others are dropped, with one notice naming them; the session they saw is the mirror
+  (let* ((drgnx-agents--sessions nil) (inhibit-message t) (calls nil) (notices nil) (seen nil)
+         (drgnx-agents-env-functions
+          (list (lambda (s) (push s seen)
+                  (list "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9222" "OPENAI_API_KEY=sk-x" "OTHER=1"))
+                (lambda (_s) (error "Boom"))))
+         (drgnx-hub-event-functions (list #'drgnx-agents-mirror--event)))
+    (cl-letf (((symbol-function 'drgnx-notify) (lambda (_src _sev text &rest _) (push text notices)))
+              ((symbol-function 'drgnx-hub-call) #'ignore)
+              ((symbol-function 'drgnx-hub-call-sync)
+               (lambda (method params &optional _timeout)
+                 (push (cons method params) calls)
+                 ;; the hub's event comes before its reply
+                 (drgnx-agents-mirror--event "agent" (list :id "h-e" :seq 1
+                                                           :session (list :id "h-e" :name "e" :profile "mock" :cwd "/w" :status "idle")))
+                 (list :id "h-e" :name "e"))))
+      (let* ((m (unwind-protect (drgnx-agents-mirror-start "mock" "/w/") (drgnx-agents-mirror-stop)))
+             (start (cdr (assoc "agents/start" calls))))
+        (should (equal (plist-get start :env) [(:name "PLAYWRIGHT_MCP_CDP_ENDPOINT" :value "http://127.0.0.1:9222")]))
+        (should (equal (plist-get start :profile) "mock"))
+        (should (equal (drgnx-agent-session-remote m) "h-e"))
+        (should (eq m (car seen)))                         ; what the functions kept of the session is the mirror
+        (should (eq m (car drgnx-agents--sessions)))
+        (should (= 1 (length (seq-filter (lambda (n) (string-search "OPENAI_API_KEY" n)) notices))))
+        (should (cl-some (lambda (n) (and (string-search "OTHER" n) (string-search "OPENAI_API_KEY" n))) notices))))))
+
+(ert-deftest drgnx-agents-mirror/no-env-functions-no-env ()
+  (let ((drgnx-agents--sessions nil) (inhibit-message t) (calls nil) (drgnx-agents-env-functions nil)
+        (drgnx-hub-event-functions (list #'drgnx-agents-mirror--event)))
+    (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore)
+              ((symbol-function 'drgnx-hub-call-sync)
+               (lambda (method params &optional _timeout)
+                 (push (cons method params) calls)
+                 (if (equal method "agents/get")
+                     (list :session (list :id "h-n" :name "n" :status "idle"))
+                   (list :id "h-n" :name "n")))))
+      (unwind-protect (drgnx-agents-mirror-start "mock" "/w/") (drgnx-agents-mirror-stop))
+      (should-not (plist-member (cdr (assoc "agents/start" calls)) :env)))))
+
 (load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
 
 (ert-deftest drgnx-agents-mirror/start-goes-through-the-hub ()

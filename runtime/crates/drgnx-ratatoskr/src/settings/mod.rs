@@ -81,6 +81,11 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     ),
     setting("drgnx-agents-allow-unsandboxed", "bool", OnError::Strict),
     setting(
+        "drgnx-agents-start-env-names",
+        "Vec<String>",
+        OnError::Strict,
+    ),
+    setting(
         "drgnx-ai-providers",
         "Vec<ProviderConfig>",
         OnError::LastGood,
@@ -126,6 +131,8 @@ pub struct RuntimeValues {
     pub agents_routes: Vec<AgentRoute>,
     pub agents_openrouter: Option<OpenRouterRestrictions>,
     pub agents_allow_unsandboxed: bool,
+    /// The names an editor module may add to a session's environment (`agents/start`'s `env`).
+    pub agents_start_env_names: Vec<String>,
     /// The user's providers, each replacing the preset of its id.
     pub ai_providers: Vec<ProviderEntry>,
     /// The user's role chains (a role not named here has its shipped chain, [`Defaults::roles`]).
@@ -226,6 +233,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-routes" => values.agents_routes = profiles::routes(node)?,
         "drgnx-agents-openrouter" => values.agents_openrouter = profiles::openrouter(node)?,
         "drgnx-agents-allow-unsandboxed" => values.agents_allow_unsandboxed = de(node)?,
+        "drgnx-agents-start-env-names" => values.agents_start_env_names = de(node)?,
         "drgnx-ai-providers" => values.ai_providers = providers::entries(node)?,
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
         "drgnx-agents-matrix" => {

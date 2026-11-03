@@ -611,6 +611,7 @@ impl PlanHooks {
                     role: Some(Role::Worker),
                     about: None,
                     document: None,
+                    env: None,
                 },
                 &user(),
             )
@@ -1234,6 +1235,7 @@ async fn start_clash_reviewer(
                 role: Some(Role::Worker),
                 about: None,
                 document: None,
+                env: None,
             },
             &user(),
         )
