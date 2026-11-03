@@ -916,7 +916,7 @@ fn owner_of(owner: Option<u64>, peer_pid: Option<i32>) -> Result<Option<(u32, u6
     }
 }
 
-/// A new token: 64 hex from 32 random bytes (the Lisp's `drgnx-gateway--random-token`).
+/// A new token: 64 hex from 32 random bytes.
 fn token() -> std::io::Result<String> {
     Ok(format!(
         "{}{}",

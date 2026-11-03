@@ -1,6 +1,5 @@
-//! The message writers (Task 5): `drgnx-coord-send`, `drgnx-coord-mark`, `drgnx-coord-message-prompt` and
-//! `drgnx-coord-notice`, ported exactly (`core/drgnx-coord.el`, "Messages").  Times are the caller's `now`
-//! (`float-time`), one reading per call.
+//! The message writers (Task 5): `send`, `mark`, `message_prompt` and `notice`, with the rules of the old Lisp
+//! store.  Times are the caller's `now`, one reading per call.
 
 use super::event::{Event, EventKind, event};
 use crate::read::messages::Message;

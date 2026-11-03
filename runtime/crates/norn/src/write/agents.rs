@@ -1,5 +1,4 @@
-//! The agent registry writers (Task 5): `drgnx-coord-agent-register` and `drgnx-coord-agent-seen`
-//! (`core/drgnx-coord.el`).
+//! The agent registry writers (Task 5): register an agent and stamp it seen.
 
 use crate::store::{CoordDb, CoordError, WTx};
 use urdr::graph::TxMeta;

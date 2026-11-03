@@ -3,8 +3,8 @@
 //!
 //! - `coord/notify`: a coordination server wrote; the front's events go out and delivery runs (coalesced);
 //! - the editor's five writes: `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark`;
-//! - the seam (`coord/*`): the Lisp job runner's writes, each one writer of `core/drgnx-coord.el`, until the job
-//!   runner itself moves (phase 6).
+//! - the seam (`coord/*`): the job runner's writes and its housekeeping, each one transaction of the hub's
+//!   writer.
 //!
 //! Params mirror the Lisp writers' keywords; results are the Lisp answers, typed.
 

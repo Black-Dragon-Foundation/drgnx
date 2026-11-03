@@ -555,7 +555,7 @@ reads it back, and a Keychain item that does not match is deleted (`drgnx-ai--ke
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 
 (defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic claude-moonshot claude-deepseek)
-  "Agent profile kinds whose traffic the agent gateway may carry (drgnx-gateway.el).")
+  "Agent profile kinds whose traffic the agent gateway may carry (the hub's gateway).")
 
 (defun drgnx-ai-agent-gateway-chain (kind &optional model)
   "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order.  MODEL (the

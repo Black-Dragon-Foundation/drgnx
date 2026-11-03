@@ -1,5 +1,5 @@
-//! The meta helpers (Task 4, moved to `kv` by Urdr Task 12): `log-version`, `seen:AGENT` and `held:AGENT`
-//! (`core/drgnx-coord.el`).  Every value is decimal text, as the Lisp writes it.  The hub's keys live in the `kv`
+//! The meta helpers (Task 4, moved to `kv` by Urdr Task 12): `log-version`, `seen:AGENT` and `held:AGENT`.
+//! Every value is decimal text, as the old Lisp wrote it.  The hub's keys live in the `kv`
 //! table; `meta` is the read-only view the Lisp readers see.  A write goes through the class guard (`setting:` keys
 //! are the user's).
 

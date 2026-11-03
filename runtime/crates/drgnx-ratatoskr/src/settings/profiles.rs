@@ -92,7 +92,7 @@ pub struct AgentRoute {
 }
 
 /// Which providers OpenRouter may use for the agents' requests: `(:only SLUGS :ignore SLUGS :data-collection
-/// deny|allow :zdr t)`.  Any other key is refused, as `drgnx-gateway--restrictions-check` refuses it.
+/// deny|allow :zdr t)`.  Any other key is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpenRouterRestrictions {

@@ -1,5 +1,4 @@
-;; Card `data' as the code that raises each kind of card builds it (drgnx-job.el, drgnx-job-clash.el,
-;; drgnx-coord-mcp.el).
+;; Card `data' as the code that raises each kind of card builds it (the hub's runner and coordination tools).
 ((:agent "agent-3" :rate 30)
  (:sid "agent-2" :request 5)
  (:sid "agent-2" :request 6 :message 11)

@@ -1,6 +1,6 @@
 //! The AI runtime settings (ai.eld folded into settings.el): provider entries, role chains, and the provider table
-//! the gateway takes (design §11.1's table), as core/drgnx-ai.el and `drgnx-hub--provider-json`
-//! (core/drgnx-hub-client.el) have them.
+//! the gateway takes (design §11.1's table), as core/drgnx-ai.el and
+//! `drgnx-hub--provider-json` (core/drgnx-hub-client.el) have them.
 
 use huginn::value::{Datum, Node};
 use runstav::methods::gateway::{ProviderConfig, ProviderKind};

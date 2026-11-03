@@ -1,14 +1,13 @@
-;;; drgnx-hub-client.el --- The hub's socket client: what editors, the CLI and the sandbox load -*- lexical-binding: t -*-
+;;; drgnx-hub-client.el --- The hub's socket client: what the editor and the CLI load -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
 ;; The client of the hub (Ratatoskr serves): where the hub's socket is and whether it can be trusted, the
 ;; line protocol (one JSON object per line), protocol v1 (the hub's challenge, `hello' with the proofs both ways, the
-;; skew rules), requests with deadlines and their answers, the event subscription, starting the hub as a durable job,
-;; and `drgnx hub start|stop|status'.  It loads none of the hub's runtime (gateway, jobs, agents, coordination): an
-;; editor that only talks to the hub requires this file.  The write queue (`drgnx-hub--enqueue', `drgnx-hub--drain')
-;; is here too, because the sandbox's MCP server (drgnx-sandbox-mcp.el) writes the same way.
+;; skew rules), requests with deadlines and their answers, the event subscription, starting the hub (`ratatoskr ensure'),
+;; and `drgnx hub start|stop|status'.  The hub is the Rust binary: nothing of its runtime is in Emacs, and an editor
+;; that talks to the hub requires this file.  The write queue (`drgnx-hub--enqueue', `drgnx-hub--drain') is here too.
 ;; See docs/develop/hub.md, "The client".
 
 ;;; Code:

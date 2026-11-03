@@ -32,7 +32,7 @@
     (2 "create table if not exists spend (at real, job text, task text, agent text, provider text, model text,
         input integer, output integer, cost real, status integer)"
        "create index if not exists spend_job on spend(job)")
-    ;; M9b.2: agent coordination (core/drgnx-coord.el)
+    ;; M9b.2: agent coordination
     (3 "create table if not exists job (id text primary key, title text, plan text, repo text, status text, created real, data text)"
        "create table if not exists jtask (id text primary key, job text, n integer, title text, role text, status text,
         agent text, lease_until real, data text)"
@@ -43,11 +43,11 @@
        "create table if not exists message (id integer primary key, job text, sender text, recipient text, text text,
         state text, reason text, at real, delivered real, read real, acted real)"
        "create index if not exists message_to on message(recipient, state)")
-    ;; M9b.4: what needs the user, with its actions (core/drgnx-job.el)
+    ;; M9b.4: what needs the user, with its actions
     (4 "create table if not exists card (id integer primary key, job text, task text, kind text, title text, data text,
         state text, at real, settled_at real, choice text)"
        "create index if not exists card_job on card(job, state)")
-    ;; M12f: what happened (the event log), who is working (the agent registry), what the user reviewed (core/drgnx-coord.el)
+    ;; M12f: what happened (the event log), who is working (the agent registry), what the user reviewed
     (5 "create table if not exists event (id integer primary key autoincrement, at real, agent text, job text, task text, kind text,
         summary text, data text)"
        "create index if not exists event_at on event(at)"

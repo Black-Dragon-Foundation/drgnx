@@ -756,7 +756,7 @@ const ADVISORY: [&str; 3] = ["proposal", "overlap", "clash"];
 
 /// Something of JOB's TASK needs the user: a card (one open per task, kind and `key`: a second updates it) with
 /// DATA; the task waits (`needs-input`, unless KIND is advisory), the user gets a message and the subscribers a `card`
-/// event (`drgnx-job--card`).  The card's id.
+/// event.  The card's id.
 pub(crate) async fn raise_card(
     front: &Front,
     caller: &Caller,

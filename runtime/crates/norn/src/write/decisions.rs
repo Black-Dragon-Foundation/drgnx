@@ -1,4 +1,4 @@
-//! The decision log's writers (Task 6): `drgnx-coord--held` and `drgnx-coord-decide` (`core/drgnx-coord.el`).
+//! The decision log's writers (Task 6): the freshness check (`held_check`) and `decide`.
 
 use super::event::{Event, EventKind, event};
 use super::meta;

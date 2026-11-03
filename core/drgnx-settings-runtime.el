@@ -32,16 +32,15 @@
 
 (drgnx-defsetting drgnx-sandbox-memory-max "4G"
   "The memory cap of each sandboxed agent, the `:memory-max' of a spec that does not give one: a systemd size (4G,
-512M, 50%) or nil for none.  It applies where a systemd user manager answers (`drgnx-sandbox-memory-prefix').  An
+512M, 50%) or nil for none.  It applies where a systemd user manager answers.  An
 operational guard, so that one agent's build cannot run the session out of memory; not a security boundary."
   :type '(choice (const :tag "No cap" nil) string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (drgnx-defsetting drgnx-sandbox-secret-files
   '(".npmrc" "etc/npmrc" ".yarnrc" ".yarnrc.yml" ".pypirc" ".netrc" ".git-credentials" ".env" "credentials"
     "credentials.toml" "credentials.json" "auth.json")
-  "Where package managers keep tokens, relative to a toolchain root: each that exists inside a root of
-`drgnx-sandbox-toolchain-roots' is hidden in the sandbox (`drgnx-sandbox-toolchain-hide').  npm's global config is
-PREFIX/etc/npmrc."
+  "Where package managers keep tokens, relative to a toolchain root: each that exists inside a toolchain root is
+hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (drgnx-defsetting drgnx-sandbox-proxy-pinned-addresses nil

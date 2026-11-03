@@ -1,6 +1,5 @@
-//! Plan runs: the review hand-off, the merge flow, the stalled nudge and the cards the user answers (Task 16b; the
-//! Lisp `drgnx-job--start-review`, `--verdict`, `--reviewed`, `--merge`, `--nudge`, `drgnx-job-card-act` and the
-//! clash reviewers of `drgnx-job-clash.el` are the oracle).
+//! Plan runs: the review hand-off, the merge flow, the stalled nudge, the cards the user answers and the clash
+//! reviewers (Task 16b).
 //!
 //! [`PlanHooks`] is the runner's [`Hooks`]: after each step of a running job it looks, with no git on the tick (git
 //! runs in tasks of its own, with deadlines), at
@@ -227,7 +226,7 @@ pub enum Verdict {
     Fail(String),
 }
 
-/// The verdict in TEXT (`VERDICT: pass`, `VERDICT: fail: what to change`), or none (`drgnx-job--verdict`).
+/// The verdict in TEXT (`VERDICT: pass`, `VERDICT: fail: what to change`), or none.
 pub fn verdict(text: &str) -> Option<Verdict> {
     let line = text.lines().map(str::trim).rfind(|l| !l.is_empty())?;
     let line = line.trim_matches(|c: char| "*_`> \t".contains(c));

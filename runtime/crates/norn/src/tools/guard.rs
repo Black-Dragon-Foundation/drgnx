@@ -1,4 +1,4 @@
-//! The guard, the report rate limit and the text rules for what an agent sends (Task 7; `core/drgnx-coord-mcp.el`).
+//! The guard, the report rate limit and the text rules for what an agent sends (Task 7).
 //!
 //! - **The guard** (`drgnx-coord-mcp--guard`): every tool refuses an argument that names an identity
 //!   ([`IDENTITY_ARGS`]), and every call of a caller whose identity is the user ([`Identity::check`]).  The tools'

@@ -1,5 +1,5 @@
-//! The card writers (Task 5): `drgnx-coord-card-create`, `-card-settle` and `-card-set`, each with its event in the
-//! same transaction (`core/drgnx-coord.el`, "Cards").  The title is stored as given (the Lisp does not shorten it);
+//! The card writers (Task 5): create, settle and set, each with its event in the
+//! same transaction.  The title is stored as given (the old Lisp did not shorten it);
 //! the event summary is cut by the event writer.  Card `data` is checked by the tool layer against
 //! `drgnx-records-card-data`; here it is stored as the JSON it is.
 

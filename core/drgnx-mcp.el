@@ -6,8 +6,8 @@
 ;; The Model Context Protocol, server side, as much as drgnx's tools need: one JSON-RPC message per line on
 ;; stdin/stdout; initialize, ping, tools/list, tools/call.  A tool is (NAME :description S :schema PLIST :call FN):
 ;; FN gets the arguments as a plist and returns a string (sent as it is) or a value (sent as JSON); an error in it is
-;; the client's `isError' result, never the end of the server.  Used by the coordination tools
-;; (drgnx-coord-mcp.el); see docs/develop/coordination.md.
+;; the client's `isError' result, never the end of the server.  Used by the search server
+;; (drgnx-search-mcp.el); the coordination tools run in the hub (docs/develop/coordination.md).
 
 ;;; Code:
 (require 'cl-lib)

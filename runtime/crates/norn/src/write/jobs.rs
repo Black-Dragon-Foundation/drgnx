@@ -1,5 +1,4 @@
-//! Jobs (Task 6; entities since Urdr Task 12): `drgnx-coord-job-create` and `drgnx-coord-job-set`
-//! (`core/drgnx-coord.el`).  A job is a row of the kept `job` table; its tasks are entities `task:JOB#N` (call 5) with
+//! Jobs (Task 6; entities since Urdr Task 12): `job_create` and `job_set`.  A job is a row of the kept `job` table; its tasks are entities `task:JOB#N` (call 5) with
 //! `blocks` links from each dependency to the task that waits on it.
 
 use super::event::{Event, EventKind, event};

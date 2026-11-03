@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; One model of the work for the Work cockpit (the graph, live edits, "what happened", questions, the timeline), read
 ;; from the live store — the work tracker's nodes (specs, plans, tasks, board TODOs: drgnx-work-db.el), the
-;; coordination store's jobs, tasks, cards, events, agent registry (drgnx-coord.el) — and the hub's session snapshots,
+;; coordination store's jobs, tasks, cards, events, agent registry (drgnx-coord-read.el) — and the hub's session snapshots,
 ;; passed in.  Plan tasks are the skeleton; a job's task is joined to its plan task (`task:PLAN#N'); a plan task no job
 ;; runs is read-only.  Batch-safe: nothing here prompts, and nothing runs a process except git, always asynchronously
 ;; (`drgnx-cockpit-silent-worktrees', `drgnx-cockpit-changed-files', `drgnx-cockpit-file-diff'), never on a remote
