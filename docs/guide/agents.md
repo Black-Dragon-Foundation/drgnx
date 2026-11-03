@@ -335,6 +335,22 @@ Onboarding's Agents step asks for both and writes them without touching the rest
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
 
+### What modules add to a session
+
+A module can add variables to the environment of an agent you start from the editor (the Live browser adds
+`PLAYWRIGHT_MCP_CDP_ENDPOINT` while the browser for agents runs, [live.md](live.md)). The editor sends them with
+`agents/start`, and the hub starts the agent with them after the profile's own variables. Only the names in
+`drgnx-agents-start-env-names` go through, by default just the Playwright one:
+
+```elisp
+(drgnx-agents-start-env-names ("PLAYWRIGHT_MCP_CDP_ENDPOINT"))   ; only you can change it, never a repository or an agent
+```
+
+A name that is not on the list is dropped, with one notice naming it. A name that looks like a credential (it contains
+`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE` or `CREDENTIAL`) never goes through, whatever the list says: keys
+reach agents through the gateway, not the environment. Agents the hub starts on its own (a plan's workers, a manager's
+workers) get no module variables.
+
 ## Jobs and your Claude settings
 
 A [job](jobs.md)'s agent works unwatched, in a repository you may not have written, so nothing in a settings file may

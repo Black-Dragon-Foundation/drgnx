@@ -757,6 +757,43 @@ mod tests {
     }
 
     #[test]
+    fn credential_names_are_refused() {
+        use crate::methods::hub::refused_env_name;
+        for name in [
+            "OPENAI_API_KEY",
+            "gh_token",
+            "DB_Password",
+            "MY_SECRET",
+            "AWS_CREDENTIALS",
+        ] {
+            assert!(refused_env_name(name), "{name}");
+        }
+        for name in ["PLAYWRIGHT_MCP_CDP_ENDPOINT", "PATH", "LANG"] {
+            assert!(!refused_env_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn agents_start_takes_module_env() {
+        let m = find("agents/start").unwrap();
+        let (p, _) = (m.decode)(
+            &json!({"profile": "p", "env": [{"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "u"}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            p.to_value(),
+            json!({"profile": "p", "env": [{"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "u"}]})
+        );
+        let nine: Vec<Value> = (0..9)
+            .map(|i| json!({"name": format!("A{i}"), "value": "x"}))
+            .collect();
+        let e = (m.decode)(&json!({"profile": "p", "env": nine}))
+            .err()
+            .unwrap();
+        assert_eq!(e.path.as_deref(), Some("env"), "{e:?}");
+    }
+
+    #[test]
     fn params_reencode_without_absent_values() {
         let m = find("agents/start").unwrap();
         let (p, ignored) =

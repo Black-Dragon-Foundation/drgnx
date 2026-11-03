@@ -1017,6 +1017,20 @@ agent, runs `initialize` (with `fs` read and write offered, never `terminal`) an
 and name. The session is recorded in `runtime.db` (`asession`, migration 5) and in the graph as a `session` entity
 (`run_by` its agent, `works_on` its task; a brainstorm's topic note and design document are in its `data`).
 
+- **Module env.** `agents/start` takes `env` (at most 8 `{name, value}`): what the editor's modules add through
+  `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
+  setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
+  PASSPHRASE or CREDENTIAL in it), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
+  environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub
+  restarts or resumes does not get them again. The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
+  drops, with one notice, the names the hub would refuse. The mirror also runs `drgnx-agents-task-functions` for hub
+  sessions that have a task: `start` when a session is first seen, `turn-start` when a turn begins and `turn-end` when
+  it ends. A turn begins when the status becomes `busy` and ends when it stops being busy or when its `stop` entry
+  arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
+  go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
+  entries sent again run nothing, and the turns already in a transcript fetched at attach run none. The work tracker
+  records a task's commits from `turn-end`.
+
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
   mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
   updates are one `tool` entry; a plan is replaced, not repeated. `agent` and `agent-entries` events come at most

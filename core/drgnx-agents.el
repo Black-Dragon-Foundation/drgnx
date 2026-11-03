@@ -129,6 +129,13 @@ OpenRouter agents do not start until it is fixed."
   :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "bool" :schema 'boolean)
 
+(drgnx-defsetting drgnx-agents-start-env-names '("PLAYWRIGHT_MCP_CDP_ENDPOINT")
+  "The environment variables an editor module may add to an agent the hub starts (`drgnx-agents-env-functions'), by
+name.  The hub drops any other name, and any name that looks like a credential (it contains KEY, TOKEN, SECRET,
+PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, never a repository or an agent."
+  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of string))
+
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
@@ -726,7 +733,7 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
 (defvar drgnx-agents-env-functions nil
   "Called with a session as its agent starts; each returns extra \"NAME=value\" strings for the agent's environment
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
-returned that is not a string.")
+returned that is not a string.  Only names on `drgnx-agents-start-env-names' reach the agent.")
 
 (drgnx-defsetting drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
   "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.

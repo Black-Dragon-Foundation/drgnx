@@ -361,6 +361,25 @@ Seconds without an update after which the supervisor pauses a session, per kind 
 | `:agents` | `never` |
 | `:schema` | `(alist symbol natnum)` |
 
+## drgnx-agents-start-env-names
+
+The environment variables an editor module may add to an agent the hub starts (`drgnx-agents-env-functions'), by
+name.  The hub drops any other name, and any name that looks like a credential (it contains KEY, TOKEN, SECRET,
+PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, never a repository or an agent.
+
+| Key | Value |
+| --- | --- |
+| Default | `("PLAYWRIGHT_MCP_CDP_ENDPOINT")` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
 ## drgnx-agents-wait-refusals
 
 How many times an agent may try to wait on a job (sleep, tail -f, polling) before its turn is cancelled.

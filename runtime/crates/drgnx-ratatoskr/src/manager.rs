@@ -990,6 +990,7 @@ async fn agent_start(
                 role: Some(Role::Worker),
                 about: None,
                 document: None,
+                env: None,
             },
             sid,
             &wsid,

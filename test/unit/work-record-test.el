@@ -68,6 +68,41 @@
             (should (equal (drgnx-work-rec--titles "task:/p.md#2") '("agent work for task:/p.md#2"))))
         (drgnx-agents-kill s)))))
 
+(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(require 'drgnx-agents-mirror)
+
+(ert-deftest drgnx-work-record/hub-session-turn-records-commits ()
+  ;; binary: a session the hub holds works on a task (mock ACP agent, a turn that commits); the mirror's turn end records
+  ;; the commit for the task, as the in-process turn end did
+  (drgnx-hub-client-test--with-ratatoskr
+    (let* ((mock (expand-file-name "ratatoskr-mock" (file-name-directory (drgnx-hub-client-test--bin))))
+           (repo (concat root "repo/")) (task (concat "task:" repo "docs/plans/p.md#1"))
+           (drgnx-projects-board-file (concat root "none.org"))
+           (drgnx-agents--sessions nil) (drgnx-work--tasks nil) (drgnx-hub-event-functions nil) (drgnx-work-db--handles nil))
+      (skip-unless (file-executable-p mock))
+      (write-region "[user]\n\tname = t\n\temail = t@t.invalid\n" nil (concat root "home/.gitconfig") nil 'silent)
+      (make-directory (concat repo "docs/plans") t)
+      (write-region "# Plan P\n\n### Task 1: one\n\n- [ ] a\n" nil (concat repo "docs/plans/p.md") nil 'silent)
+      (drgnx-work-rec--git repo "init" "-q" "-b" "main")
+      (drgnx-work-rec--commit repo "base")
+      ;; the hub knows the task once the plan is scanned (it refuses commits for a task it does not have)
+      (with-output-to-string (should (eql (drgnx-work-cli-run (list "scan" repo)) 0)))
+      (drgnx-test-write-settings (concat root "config/settings.el") 'drgnx-agents-profiles
+                                 (list (list "rmock" :provider 'claude :command (list mock "acp" "--as" "claude"))))
+      (unwind-protect
+          (progn
+            (drgnx-agents-mirror-sync)
+            (let ((m (drgnx-agents-mirror-start "rmock" repo task)))
+              (drgnx-hub-client-test--wait (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the session is idle")
+              ;; the mock's commit takes what is in the checkout: something to commit
+              (write-region "work\n" nil (concat repo "hub-work.txt") nil 'silent)
+              (drgnx-agents-send m "commit hub work")
+              (drgnx-hub-client-test--wait (lambda () (ignore-errors (member "hub work" (drgnx-work-rec--titles task))))
+                                           "the turn's commit is recorded for the task")
+              (should (equal (drgnx-work-rec--titles task) '("hub work")))))
+        (drgnx-agents-mirror-stop)
+        (drgnx-work-db-close-all)))))
+
 (ert-deftest drgnx-work/a-job-task-gets-its-commits-when-it-ends ()
   (drgnx-work-rec--with repo
     (let ((id (drgnx-jobs-start "j" (list "sh" "-c" "echo x > j.txt && git add j.txt && git -c user.name=t -c user.email=t@t.invalid commit -q -m 'job work'")

@@ -26,6 +26,7 @@ use runstav::methods::agents::{
     AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
     RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript, Usage, Via,
 };
+use runstav::methods::hub::{EnvVar, refused_env_name};
 use runstav::methods::matrix::{Role, Unit};
 use runstav::methods::timeline::{AgentStep, Step, StepClass};
 use runstav::registry::Class;
@@ -760,6 +761,40 @@ fn spawn_spec(
     Ok((launched.spec, launched.status, None))
 }
 
+/// The variables an editor module asked to add to a new session's environment (`agents/start`'s `env`).  A name must be
+/// on `drgnx-agents-start-env-names` and must not look like a credential, whatever that setting lists.
+fn module_env(front: &Front, env: Option<&[EnvVar]>) -> Result<Vec<(String, String)>, Error> {
+    let Some(env) = env.filter(|e| !e.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let current = front.settings.current();
+    let allowed = &current.loaded.values.agents_start_env_names;
+    let mut out = Vec::with_capacity(env.len());
+    for (i, var) in env.iter().enumerate() {
+        let name = var.name.as_str();
+        if refused_env_name(name) {
+            return Err(invalid(
+                &format!("env[{i}].name"),
+                format!("{name} looks like a credential and is never passed on"),
+            ));
+        }
+        if !allowed.iter().any(|a| a == name) {
+            return Err(invalid(
+                &format!("env[{i}].name"),
+                format!("{name} is not on drgnx-agents-start-env-names"),
+            ));
+        }
+        if var.value.contains('\0') {
+            return Err(invalid(
+                &format!("env[{i}].value"),
+                "a value cannot hold a NUL",
+            ));
+        }
+        out.push((name.to_string(), var.value.as_str().to_string()));
+    }
+    Ok(out)
+}
+
 /// Everything before the process: the matrix's cells, the provider's lock plan, the refusal of a lock that is not
 /// enforced for a worker or a manager under any preset but the autonomous one, and the spawn spec.
 pub(super) async fn prepare(
@@ -769,6 +804,7 @@ pub(super) async fn prepare(
     sid: &str,
     cwd: &Path,
     job: Option<&str>,
+    module_env: &[(String, String)],
 ) -> Result<Prepared, Error> {
     // a gateway profile's agent reaches its provider only through the hub's gateway, with a token of its own
     let (profile, gateway) = match gateway_env(front, profile, role, sid, job).await? {
@@ -813,6 +849,8 @@ pub(super) async fn prepare(
             .collect();
         plan.env.extend(extra);
     }
+    // what an editor module added comes last, so it wins over the profile's and the lock's
+    plan.env.extend(module_env.iter().cloned());
     let why = match plan.enforced {
         plock::Enforced::Yes => None,
         plock::Enforced::No(why) => Some(why),
@@ -976,6 +1014,7 @@ pub(crate) async fn open_as(
             "a brainstorm needs both about (its topic note) and document (its design document)",
         ));
     }
+    let module_env = module_env(front, p.env.as_deref().map(Vec::as_slice))?;
     let sid = match sid {
         Some(s) => s,
         None => new_sid()?,
@@ -1008,6 +1047,7 @@ pub(crate) async fn open_as(
         (
             p.task.as_ref().map(|t| t.as_str()),
             p.job.as_ref().map(|j| j.as_str()),
+            &module_env,
         ),
     )
     .await?;
@@ -1101,9 +1141,9 @@ async fn launch(
     sid: &str,
     cwd: &Path,
     existing: Option<&str>,
-    (task, job): (Option<&str>, Option<&str>),
+    (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
-    let prep = prepare(front, profile, role, sid, cwd, job).await?;
+    let prep = prepare(front, profile, role, sid, cwd, job, module_env).await?;
     let mcp = bridge(front, profile, sid, cwd, task, job).await;
     let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
         .await
@@ -1464,7 +1504,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 &sid,
                 Path::new(&cwd),
                 existing.as_deref(),
-                (task.as_deref(), job.as_deref()),
+                (task.as_deref(), job.as_deref(), &[]),
             )
             .await
         }
