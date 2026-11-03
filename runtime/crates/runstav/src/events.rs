@@ -2,18 +2,12 @@
 //! `drgnx-job.el`, `drgnx-gateway.el`) and the front's own `challenge`, `notice`, `gateway/need-keys`,
 //! `gateway/keys-changed`, `settings/proposed` and `settings/explain` (the agents' settings tools, to the editor),
 //! and the agent core's `agent-step`, `exec-done`, `supervisor`, `view-written` and `view-proposal` (agent system
-//! part 1).  Each names
-//! the side that sends it ([`EventType::from`]): `events` is the front's since the front writes work.db (its writer's
-//! new rows), and the gateway's `request`, `budget` and `fallback` since the front serves the gateway (Task 22; a
-//! job's `fallback`, with its `job`, still comes from the backend's job runner); `agent`, `agent-entries` and `job`
-//! since the hub serves `agents/*` and `job/*` (agent system part 1); `card` and `lease-released` are the backend's.
-//! The front relays a backend event only when it decodes as its type (strict: an unknown key is an error with its
-//! path).
+//! part 1).  The hub sends them all; `card` and `lease-released` were the Lisp backend's, and no one sends them now.
 
 use crate::methods::agents::{Entry, Snapshot};
 use crate::methods::gateway::KeysHeld;
 use crate::methods::hub::EventsPage;
-use crate::registry::{Home, check_as, schema_of};
+use crate::registry::{check_as, schema_of};
 use crate::types::{Nonce, null_as_empty};
 use crate::wire::Error;
 use schemars::{JsonSchema, Schema};
@@ -24,8 +18,6 @@ use std::sync::LazyLock;
 /// One event: its name, a line of doc, the JSON Schema of its `data` and its check (decode, then re-encode).
 pub struct EventType {
     pub name: &'static str,
-    /// Who sends it: the front, or the Lisp backend (whose events the front relays).
-    pub from: Home,
     pub doc: &'static str,
     pub data: fn() -> Schema,
     pub check: fn(&Value) -> Result<Value, Error>,
@@ -166,10 +158,9 @@ pub struct Notice {
 }
 
 macro_rules! event {
-    ($name:literal, $ty:ty, $from:ident, $doc:literal) => {
+    ($name:literal, $ty:ty, $doc:literal) => {
         EventType {
             name: $name,
-            from: Home::$from,
             doc: $doc,
             data: schema_of::<$ty>,
             check: check_as::<$ty>,
@@ -182,111 +173,85 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "agent",
             AgentEvent,
-            Front,
             "a session's snapshot changed (at most one per session per 50 ms)"
         ),
         event!(
             "agent-entries",
             AgentEntries,
-            Front,
             "a session's entries new or changed since the last time"
         ),
         event!(
             "events",
             EventsPage,
-            Front,
             "the event log's new rows (at most 200 a time, every 0.25 s at most)"
         ),
-        event!(
-            "lease-released",
-            LeaseReleased,
-            Backend,
-            "a task's claim ran out"
-        ),
+        event!("lease-released", LeaseReleased, "a task's claim ran out"),
         event!(
             "fallback",
             Fallback,
-            Front,
             "a request or a task moved to the next provider or profile"
         ),
-        event!("card", Card, Backend, "a job's card needs the user"),
+        event!("card", Card, "a job's card needs the user"),
         event!(
             "job",
             JobChanged,
-            Front,
             "a job's status, tasks or open cards changed"
         ),
-        event!("budget", Budget, Front, "a job's spend reached its budget"),
+        event!("budget", Budget, "a job's spend reached its budget"),
         event!(
             "request",
             Request,
-            Front,
             "the gateway forwarded a request: its tokens and cost"
         ),
         event!(
             "gateway/need-keys",
             NeedKeys,
-            Front,
             "a registration needs keys the hub does not hold (to user connections)"
         ),
         event!(
             "gateway/keys-changed",
             KeysHeld,
-            Front,
             "the providers whose key the hub holds changed: their ids, never a key (to user connections)"
         ),
-        event!(
-            "challenge",
-            Challenge,
-            Front,
-            "the hub's nonce, sent on accept"
-        ),
+        event!("challenge", Challenge, "the hub's nonce, sent on accept"),
         event!(
             "notice",
             Notice,
-            Front,
             "a message for the user from the hub itself"
         ),
         event!(
             "settings/proposed",
             crate::methods::settings::Proposed,
-            Front,
             "an agent's granted settings change, as a proposed tx: the editor checks it, writes the file and answers settings/confirm"
         ),
         event!(
             "settings/explain",
             crate::methods::settings::Explain,
-            Front,
             "an agent's settings_get: the editor answers settings/explained with the same req"
         ),
         event!(
             "agent-step",
             crate::methods::timeline::AgentStep,
-            Front,
             "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)"
         ),
         event!(
             "exec-done",
             crate::methods::exec::ExecDone,
-            Front,
             "a job ended: its status, exit and summary"
         ),
         event!(
             "supervisor",
             crate::methods::timeline::SupervisorEvent,
-            Front,
             "the supervisor paused an agent by a rule, with its card"
         ),
         event!(
             "view-written",
             crate::methods::records::ViewWritten,
-            Front,
             "the hub wrote a record view file (never committed)"
         ),
         event!(
             "view-proposal",
             crate::methods::records::ViewProposal,
-            Front,
             "a hand edit to a view became a proposal (Records: Review Proposal)"
         ),
     ];
@@ -374,20 +339,16 @@ mod tests {
         sorted.sort();
         assert_eq!(names, sorted);
         assert_eq!(events().len(), 20);
-        assert_eq!(
-            event("settings/proposed").map(|e| e.from),
-            Some(Home::Front)
-        );
+        assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();
-        assert_eq!(changed.from, Home::Front);
         assert_eq!(
             (changed.check)(&json!({"providers": ["anthropic", "openrouter"]})).unwrap(),
             json!({"providers": ["anthropic", "openrouter"]})
         );
         assert!((changed.check)(&json!({"providers": ["sk or-v1 x"]})).is_err());
         assert!((changed.check)(&json!({"providers": [], "keys": {"a": "k"}})).is_err());
-        assert_eq!(event("request").map(|e| e.from), Some(Home::Front));
+        assert!(event("request").is_some());
         assert_eq!(
             (event("gateway/need-keys").unwrap().check)(&json!({"providers": ["openrouter"]}))
                 .unwrap(),

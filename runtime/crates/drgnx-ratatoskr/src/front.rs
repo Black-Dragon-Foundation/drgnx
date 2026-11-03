@@ -1,19 +1,17 @@
-//! The front: what every connection shares, and the methods it serves itself (`Home::Front`) — `hello`, `ping`,
-//! `status`, `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, the writes of [`crate::coord`] and
-//! the store's methods of [`crate::graph`] (`graph/*`, `tasks/*`), the
-//! MCP hosting of [`crate::sessions`] (`mcp/*`) and the gateway of [`crate::gateway`] (`gateway/*`,
-//! `spend`) and the settings' (`config/settings`, `config/changed`), and the agent core's of [`crate::agent_core`]
-//! (`agents/*`, `job/*`, `exec/*`, `matrix/*`, …).  Every other method goes to [`Forward`].
+//! The front: what every connection shares, and every method's handler — its own (`hello`, `ping`, `status`,
+//! `subscribe`, `shutdown`, `restart`, `events/since`, `coord/notify`, `env/set`), the writes of [`crate::coord`],
+//! the store's methods of [`crate::graph`] (`graph/*`, `tasks/*`), the MCP hosting of [`crate::sessions`] (`mcp/*`),
+//! the gateway of [`crate::gateway`] (`gateway/*`, `spend`), the settings' (`config/settings`, `config/changed`) and
+//! the agent core's of [`crate::agent_core`] (`agents/*`, `job/*`, `exec/*`, `matrix/*`, …).  One `match` over
+//! `Params` with no catch-all arm routes them, so a method without a handler does not compile.
 //!
-//! [`Front::line`] is one line of one connection: [`dispatch::prelude_as`] (the connection is the backend's when its
-//! peer pid is the backend's), the refusal noted, the handler, the answer queued.  [`Front::start_line`] is the same
-//! for the connection loop, except that a forwarded call runs on a task of its own (at most [`MAX_IN_FLIGHT`] per
-//! connection; past that the connection is not read until one ends).
+//! [`Front::line`] is one line of one connection: [`dispatch::prelude`], the refusal noted, the handler, the answer
+//! queued.
 
 use crate::Exit;
 use crate::conn::Outbox;
 use crate::coord::{self, Signals, ToolHub, Writer};
-use crate::dispatch::{self, Call, Caller, ErrorAnswerOrDrop, Forward, Refusals};
+use crate::dispatch::{self, Call, ErrorAnswerOrDrop, Refusals};
 use crate::gateway::Gate;
 use crate::hello::{self, Session};
 use crate::sessions::{self, Sessions};
@@ -34,7 +32,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::Notify;
-use tokio::sync::Semaphore;
 use urdr::graph::OpenOutcome;
 
 /// What `status` and the doctor say of job agents in this phase.
@@ -42,18 +39,6 @@ pub const JOB_AGENTS: &str = "unsandboxed (as on main; the sandbox comes with ph
 
 /// How long `shutdown` waits for its answer to be written before the hub stops.
 const SHUTDOWN_FLUSH: Duration = Duration::from_secs(1);
-
-/// Forwarded calls one connection may have in flight.
-pub const MAX_IN_FLIGHT: usize = 64;
-
-/// A call that passed the dispatcher and goes on to [`Forward`].
-pub struct Forwarded {
-    id: Option<Id>,
-    method: &'static Method,
-    params: Params,
-    ignored: Vec<String>,
-    caller: Caller,
-}
 
 /// What every connection shares.
 pub struct Front {
@@ -89,7 +74,6 @@ pub struct Front {
     pub shell_env: crate::shell_env::ShellEnv,
     /// The agent core's state ([`crate::agent_core`]): sessions, jobs, plan runs, the matrix, …
     pub core: crate::agent_core::Core,
-    forward: Arc<dyn Forward>,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
     schema: AtomicU32,
@@ -105,16 +89,15 @@ pub struct Front {
 }
 
 impl Front {
-    /// The front on the main SOCKET with the user's CAP, reading through WORK_DB and writing through COORD_DB, the
-    /// rest to FORWARD; no graph store (the tests' fronts on a schema-6 file).
+    /// The front on the main SOCKET with the user's CAP, reading through WORK_DB and writing through COORD_DB; no graph
+    /// store (the tests' fronts on a schema-6 file).
     pub fn new(
         cap: Cap,
         socket: PathBuf,
         work_db: WorkDb,
         coord_db: norn::store::CoordDb,
-        forward: Arc<dyn Forward>,
     ) -> Front {
-        Front::with_graph(cap, socket, work_db, coord_db, None, forward)
+        Front::with_graph(cap, socket, work_db, coord_db, None)
     }
 
     /// [`Front::new`] with the graph store GRAPH the coordination tools read and write through (the hub's, on the
@@ -125,13 +108,11 @@ impl Front {
         work_db: WorkDb,
         coord_db: norn::store::CoordDb,
         graph: Option<norn::tools::GraphStore>,
-        forward: Arc<dyn Forward>,
     ) -> Front {
         let signals = Arc::new(Signals::default());
         let settings = Arc::new(crate::settings::Settings::new());
         let editors = Arc::new(crate::settings::agents::Editors::default());
         let hub = Arc::new(ToolHub {
-            forward: forward.clone(),
             signals: signals.clone(),
             editors: editors.clone(),
             settings: settings.clone(),
@@ -176,7 +157,6 @@ impl Front {
             tools,
             tool_hub,
             tool_list,
-            forward,
             refusals: Mutex::new(Refusals::default()),
             schema: AtomicU32::new(0),
             read_only: AtomicU32::new(0),
@@ -189,11 +169,6 @@ impl Front {
 
     pub fn next_conn(&self) -> u64 {
         self.next_conn.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// Where the methods the front does not serve go.
-    pub fn forward(&self) -> &dyn Forward {
-        &*self.forward
     }
 
     /// work.db's schema is SCHEMA now (0: no file): read-only while it is newer than this hub's.  Logged when that
@@ -254,8 +229,7 @@ impl Front {
         }
     }
 
-    /// Ask the hub to end with exit 75 (`restart`, restart-when-idle).  In phase 1 the backend has no turns to
-    /// cancel: the stop that follows shuts it down first.
+    /// Ask the hub to end with exit 75 (`restart`, restart-when-idle).
     pub fn ask_restart(&self) {
         self.restart.store(true, Ordering::SeqCst);
         self.stop.notify_one();
@@ -302,7 +276,6 @@ impl Front {
             }),
             refusals: Some(self.refusals.lock().expect("refusals").status()),
             job_agents: Some(JOB_AGENTS.into()),
-            backend: None,
             gateway: Some(self.gate.status()),
             gateway_port: None,
             registrations: None,
@@ -414,13 +387,6 @@ impl Front {
         st
     }
 
-    /// `status`: the front's keys (the gateway's among them), and the backend's state.
-    pub async fn status_with_backend(&self) -> HubStatus {
-        let mut st = self.status();
-        st.backend = self.forward.status().await.backend;
-        st
-    }
-
     /// Count and log a refusal on connection CONN of CLASS.
     fn refused(&self, conn: u64, class: Class, method: Option<&str>, error: &Error) {
         self.refusals.lock().expect("refusals").note(
@@ -434,76 +400,20 @@ impl Front {
 
     /// One line of the connection S, whose answers go to OUT: the dispatcher's checks, then the handler (a failure
     /// is `internal`; a refusal of its own, such as a wrong proof, is counted like the dispatcher's).  A
-    /// notification is dispatched and never answered.  A forwarded call is waited for here.
+    /// notification is dispatched and never answered.
     pub async fn line(&self, s: &mut Session, out: &Arc<Outbox>, text: &str) {
-        if let Some(f) = self.begin(s, out, text).await {
-            self.finish(out, f).await;
-        }
-    }
-
-    /// [`Front::line`] for the connection loop: a forwarded call runs on a task of its own, holding one of SLOTS
-    /// (this connection's [`MAX_IN_FLIGHT`]); with none free, this waits, so the connection is not read meanwhile.
-    pub async fn start_line(
-        self: &Arc<Self>,
-        s: &mut Session,
-        out: &Arc<Outbox>,
-        text: &str,
-        slots: &Arc<Semaphore>,
-    ) {
-        let Some(f) = self.begin(s, out, text).await else {
-            return;
-        };
-        let Ok(slot) = slots.clone().acquire_owned().await else {
-            return;
-        };
-        let (front, out) = (self.clone(), out.clone());
-        tokio::spawn(async move {
-            front.finish(&out, f).await;
-            drop(slot);
-        });
-    }
-
-    /// The forwarded call F, answered on OUT.
-    async fn finish(&self, out: &Arc<Outbox>, f: Forwarded) {
-        let Forwarded {
-            id,
-            method,
-            params,
-            ignored,
-            caller,
-        } = f;
-        let (conn, class) = (caller.conn_id, caller.class);
-        let result = self.forward.call(caller, method, params).await;
-        // the Lisp backend wrote the rest of the event log meanwhile: its rows go out now
-        if method.writes && result.is_ok() {
-            self.writer.signals.events_soon();
-        }
-        if let Err(e) = &result
-            && e.code != ErrorCode::Internal
-        {
-            self.refused(conn, class, Some(method.name), e);
-        }
-        if let Some(id) = id {
-            out.push(answer_line(conn, id, result, ignored));
-        }
-    }
-
-    /// Everything of a line but a forwarded call, which it gives back.
-    async fn begin(&self, s: &mut Session, out: &Arc<Outbox>, text: &str) -> Option<Forwarded> {
-        // the backend's own connection (its peer pid; R-FIX-M9 must keep marking it): held to what the front serves
-        let backend = s.peer_pid.is_some() && s.peer_pid == self.forward.backend_pid();
-        let call = match dispatch::prelude_as(s.class, backend, s.proto, self.read_only(), text) {
+        let call = match dispatch::prelude(s.class, s.proto, self.read_only(), text) {
             Ok(c) => c,
             Err(ErrorAnswerOrDrop::Drop(why)) => {
                 tracing::info!(conn = s.conn, "dropped {why}");
-                return None;
+                return;
             }
             Err(ErrorAnswerOrDrop::Refused(r)) => {
                 self.refused(s.conn, s.class, r.method.as_deref(), &r.error);
                 if let Some(id) = r.id {
                     out.push(answer_line(s.conn, id, Err(r.error), vec![]));
                 }
-                return None;
+                return;
             }
         };
         let Call {
@@ -512,8 +422,7 @@ impl Front {
             params,
             ignored,
         } = call;
-        let mut caller = s.caller();
-        caller.backend = backend;
+        let caller = s.caller();
         let mut stop = false;
         let mut restart = false;
         // a new subscriber hears which keys kept registrations need, and the settings' problems, after its answer
@@ -530,9 +439,7 @@ impl Front {
                 hello::hello(s, &self.cap, &p, schema).map(|r| json!(r))
             }
             Params::Ping(_) => Ok(json!({"pid": self.pid})),
-            // the backend never waits on itself: its status is the front's
-            Params::Status(_) if backend => Ok(json!(self.status())),
-            Params::Status(_) => Ok(json!(self.status_with_backend().await)),
+            Params::Status(_) => Ok(json!(self.status())),
             Params::Subscribe(_) => {
                 self.editors.subscribe(s.conn, out.clone());
                 need_keys = self.gate.pending_need_keys();
@@ -555,9 +462,7 @@ impl Front {
                 .map_err(internal),
             Params::CoordNotify(_) => {
                 self.writer.signals.events_soon();
-                if !backend {
-                    self.writer.signals.notify_soon();
-                }
+                self.writer.signals.notify_soon();
                 Ok(json!(true))
             }
             // a session starts on the settings as the file says now
@@ -572,7 +477,7 @@ impl Front {
                 s.attach = Some(who);
                 json!(AttachAnswer { identity })
             }),
-            // the gateway's: keys and registrations never reach the backend
+            // the gateway's
             Params::Spend(p) => self.gate.spend(&caller, p).await.map(|r| json!(r)),
             Params::GatewayRegister(p) => {
                 let before = self.gate.keys_held();
@@ -619,12 +524,6 @@ impl Front {
                 }
                 r
             }
-            Params::SettingsExplained(_) if backend => Err(Error {
-                code: ErrorCode::NotAllowed,
-                message: "only the editor explains settings: the backend's connection never does"
-                    .into(),
-                path: None,
-            }),
             Params::SettingsExplained(p) => {
                 let rows = p
                     .settings
@@ -634,34 +533,101 @@ impl Front {
                     .collect();
                 Ok(json!(self.editors.explained(p.req, rows)))
             }
-            // the agent core's (`agents/*`, `job/*`, `exec/*`, …), the graph store's (`graph/*`, `tasks/*`), then the
-            // coordination writes
-            other => match crate::agent_core::serve(self, &caller, other).await {
-                Ok(result) => result,
-                Err(params) => match crate::graph::serve(
-                    &self.writer,
-                    &self.tools,
-                    self.dirs.get(),
-                    &caller,
-                    *params,
-                )
+            // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
+            p @ (Params::AgentsList(_)
+            | Params::AgentsStart(_)
+            | Params::AgentsGet(_)
+            | Params::AgentsSend(_)
+            | Params::AgentsStop(_)
+            | Params::AgentsKill(_)
+            | Params::AgentsPermission(_)
+            | Params::AgentsDo(_)
+            | Params::AgentsMove(_)
+            | Params::AgentsRole(_)
+            | Params::AgentsSlice(_)
+            | Params::MessagesRetract(_)
+            | Params::ExecStart(_)
+            | Params::ExecGet(_)
+            | Params::ExecList(_)
+            | Params::ExecStop(_)
+            | Params::ExecLog(_)
+            | Params::JobPropose(_)
+            | Params::JobStartTask(_)
+            | Params::JobApprove(_)
+            | Params::JobOrder(_)
+            | Params::JobBlock(_)
+            | Params::JobUnblock(_)
+            | Params::JobStop(_)
+            | Params::JobStatus(_)
+            | Params::JobCard(_)
+            | Params::JobReply(_)
+            | Params::JobDismiss(_)
+            | Params::JobReassign(_)
+            | Params::JobResume(_)
+            | Params::MatrixGet(_)
+            | Params::MatrixCheck(_)
+            | Params::PresenceSet(_)
+            | Params::PlansGet(_)
+            | Params::PlansWrite(_)
+            | Params::ReportsGet(_)
+            | Params::DecisionsEffects(_)
+            | Params::BriefBuild(_)
+            | Params::BriefSet(_)
+            | Params::TimelineGet(_)
+            | Params::BudgetGet(_)
+            | Params::BudgetSet(_)
+            | Params::PaceGet(_)
+            | Params::RecordsImport(_)
+            | Params::RecordsStatus(_)
+            | Params::RecordsProposals(_)
+            | Params::RecordsDecide(_)) => crate::agent_core::serve(self, &caller, p)
                 .await
-                {
-                    Ok(result) => result,
-                    Err(params) => match coord::serve(&self.writer, &caller, *params).await {
-                        Ok(result) => result,
-                        Err(params) => {
-                            return Some(Forwarded {
-                                id,
-                                method,
-                                params: *params,
-                                ignored,
-                                caller,
-                            });
-                        }
-                    },
-                },
-            },
+                .unwrap_or_else(|_| unserved(method)),
+            // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
+            p @ (Params::GraphPutParsed(_)
+            | Params::GraphRecord(_)
+            | Params::GraphEntity(_)
+            | Params::GraphNeighbors(_)
+            | Params::GraphPath(_)
+            | Params::GraphHistory(_)
+            | Params::GraphRevert(_)
+            | Params::GraphExcise(_)
+            | Params::GraphGrants(_)
+            | Params::GraphProposed(_)
+            | Params::GraphSql(_)
+            | Params::GraphExport(_)
+            | Params::GraphImport(_)
+            | Params::GraphBackup(_)
+            | Params::GraphCompact(_)
+            | Params::GraphScrub(_)
+            | Params::GraphSettings(_)
+            | Params::GraphPrivacy(_)
+            | Params::SettingsRecord(_)
+            | Params::CardsSettle(_)
+            | Params::TasksReady(_)
+            | Params::TasksFind(_)
+            | Params::TasksWrite(_)) => {
+                crate::graph::serve(&self.writer, &self.tools, self.dirs.get(), &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            }
+            // the coordination writes
+            p @ (Params::MessagesSend(_)
+            | Params::MessagesMark(_)
+            | Params::EventsAdd(_)
+            | Params::ReviewMark(_)
+            | Params::CoordJobCreate(_)
+            | Params::CoordJobSet(_)
+            | Params::CoordTaskStatus(_)
+            | Params::CoordLeases(_)
+            | Params::CoordDecide(_)
+            | Params::CoordAgent(_)
+            | Params::CoordCardCreate(_)
+            | Params::CoordCardSet(_)
+            | Params::CoordHeld(_)
+            | Params::CoordPrune(_)) => coord::serve(&self.writer, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
@@ -692,8 +658,14 @@ impl Front {
                 self.stop.notify_one();
             }
         }
-        None
     }
+}
+
+/// The answer for METHOD when the part it is routed to handed its params back: a routing mistake, never the
+/// caller's.
+fn unserved(method: &Method) -> Result<Value, Error> {
+    tracing::error!(method = method.name, "a method reached no handler");
+    Err(internal(format!("{} reached no handler", method.name)))
 }
 
 /// EVENT with DATA as the line a subscriber gets; none (logged) over 16 MiB.
@@ -764,7 +736,6 @@ fn answer_line(conn: u64, id: Id, result: Result<Value, Error>, ignored: Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::NoBackend;
     use crate::hello::Socket;
     use runstav::registry::Class;
 
@@ -774,7 +745,6 @@ mod tests {
             dir.join("hub-x.sock"),
             WorkDb::spawn(dir.join("work.db")).unwrap(),
             norn::store::CoordDb::spawn(dir.join("work.db")),
-            Arc::new(NoBackend),
         )
     }
 
@@ -862,8 +832,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "phase 7: Task 2 deletes forwarding"]
-    async fn the_front_serves_ping_events_and_shutdown_and_forwards_the_rest() {
+    async fn the_front_serves_ping_events_env_jobs_and_shutdown() {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         let mut s = Session::new(f.next_conn(), Socket::Main);
@@ -883,7 +852,6 @@ mod tests {
         )
         .await;
         f.line(&mut s, &out, r#"{"method":"ping"}"#).await;
-        // the agent core's methods are the front's: job/status is answered here, not forwarded (Task 16a)
         f.line(&mut s, &out, r#"{"id":5,"method":"job/status"}"#)
             .await;
         assert_eq!(
@@ -891,7 +859,7 @@ mod tests {
             vec![
                 json!({"id": 1, "result": {"pid": std::process::id()}}),
                 json!({"id": 2, "result": {"since": 3, "last": 3, "events": []}}),
-                json!({"id": 3, "error": {"code": "internal", "message": "backend not running"}}),
+                json!({"id": 3, "result": {"applied": []}}),
                 json!({"id": 5, "result": {"jobs": []}}),
             ]
         );
@@ -937,97 +905,43 @@ mod tests {
         );
     }
 
-    /// A backend whose calls each wait for a permit of its gate, and whose status says it runs.
-    struct Gated(Arc<Semaphore>);
-
-    impl Forward for Gated {
-        fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> dispatch::Answer<'a> {
-            Box::pin(async {
-                self.0.acquire().await.unwrap().forget();
-                Ok(json!(true))
-            })
-        }
-
-        fn status<'a>(
-            &'a self,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = dispatch::BackendInfo> + Send + 'a>>
-        {
-            Box::pin(async {
-                dispatch::BackendInfo {
-                    backend: Some(runstav::methods::hub::Backend {
-                        state: runstav::methods::hub::BackendState::Running,
-                        pid: Some(42),
-                    }),
-                }
-            })
-        }
-    }
-
-    fn gated(dir: &std::path::Path, gate: Arc<Semaphore>) -> Arc<Front> {
-        Arc::new(Front::new(
-            Cap::generate().unwrap(),
-            dir.join("hub-x.sock"),
-            WorkDb::spawn(dir.join("work.db")).unwrap(),
-            norn::store::CoordDb::spawn(dir.join("work.db")),
-            Arc::new(Gated(gate)),
-        ))
-    }
-
+    /// Every method that takes empty params reaches its handler: the routing `match` hands no part a method it does
+    /// not serve (a part hands such params back, and the answer would be "reached no handler").
     #[tokio::test]
-    #[ignore = "phase 7: Task 2 deletes forwarding"]
-    async fn a_connection_has_at_most_64_forwarded_calls_in_flight() {
+    async fn every_method_reaches_its_handler() {
         let dir = tempfile::tempdir().unwrap();
-        let gate = Arc::new(Semaphore::new(0));
-        let f = gated(dir.path(), gate.clone());
+        let f = front(dir.path());
         let mut s = Session::new(f.next_conn(), Socket::Main);
         s.class = Class::User;
         let out = Arc::new(Outbox::new(s.conn));
-        let slots = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
-        let call = |i: usize| format!(r#"{{"id":{i},"method":"env/set","params":{{"env":[]}}}}"#);
-        for i in 0..MAX_IN_FLIGHT {
-            tokio::time::timeout(
-                Duration::from_secs(5),
-                f.start_line(&mut s, &out, &call(i), &slots),
-            )
-            .await
-            .expect("a call within the limit is taken at once");
-        }
-        // the front-served methods still answer at once
-        f.start_line(&mut s, &out, r#"{"id":"p","method":"ping"}"#, &slots)
-            .await;
-        assert_eq!(answers(&out).len(), 1, "only ping is answered");
-        // the 65th waits for a slot: the connection is not read meanwhile
-        let next = call(MAX_IN_FLIGHT);
-        let fut = f.start_line(&mut s, &out, &next, &slots);
-        tokio::pin!(fut);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), &mut fut)
-                .await
-                .is_err(),
-            "a 65th call in flight"
-        );
-        gate.add_permits(1);
-        tokio::time::timeout(Duration::from_secs(5), &mut fut)
-            .await
-            .expect("taken once one call ended");
-        gate.add_permits(1000);
-        let mut got = 0;
-        for _ in 0..500 {
-            got += answers(&out).len();
-            if got == MAX_IN_FLIGHT + 1 {
-                break;
+        let mut tried = Vec::new();
+        for m in registry::registry() {
+            // the stops have a test of their own; a method that needs params is refused before any handler
+            if ["shutdown", "restart"].contains(&m.name) || (m.decode)(&json!({})).is_err() {
+                continue;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tried.push(m.name);
+            let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
+            tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
+                .await
+                .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
+            for a in answers(&out) {
+                let message = a["error"]["message"].as_str().unwrap_or_default();
+                assert!(!message.contains("reached no handler"), "{}: {a}", m.name);
+            }
         }
-        assert_eq!(got, MAX_IN_FLIGHT + 1, "every call answered");
+        // each part is reached: the front's own, the agent core's, the store's and the coordination writes
+        for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
+            assert!(tried.contains(&name), "{name} not tried: {tried:?}");
+        }
     }
 
-    #[tokio::test]
-    async fn status_has_the_backends_state_and_the_gateways_numbers() {
+    #[test]
+    fn status_has_the_gateways_numbers_and_no_backend() {
         let dir = tempfile::tempdir().unwrap();
-        let f = gated(dir.path(), Arc::new(Semaphore::new(0)));
-        let v = serde_json::to_value(f.status_with_backend().await).unwrap();
-        assert_eq!(v["backend"], json!({"state": "running", "pid": 42}));
+        let f = front(dir.path());
+        let v = serde_json::to_value(f.status()).unwrap();
+        assert!(v.get("backend").is_none(), "{v}");
         // the gateway's numbers are the front's own, counted since start; the Lisp hub's keys are gone; a front no
         // one hardened (`serve` does, review m2) refuses keys and says so
         assert_eq!(
@@ -1042,75 +956,6 @@ mod tests {
         );
         let m = registry::find("status").unwrap();
         assert_eq!((m.check_result)(&v).unwrap(), v);
-        // without a backend there is nothing to say of it
-        let f = front(dir.path());
-        let v = serde_json::to_value(f.status_with_backend().await).unwrap();
-        assert!(v.get("backend").is_none(), "{v}");
-    }
-
-    /// A backend whose pid is 4242, counting the calls forwarded to it.
-    struct Behind(std::sync::atomic::AtomicUsize);
-
-    impl Forward for Behind {
-        fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> dispatch::Answer<'a> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Ok(json!(true)) })
-        }
-
-        fn backend_pid(&self) -> Option<i32> {
-            Some(4242)
-        }
-    }
-
-    #[tokio::test]
-    #[ignore = "phase 7: Task 2 deletes forwarding"]
-    async fn the_backends_connection_is_held_to_what_the_front_serves() {
-        let dir = tempfile::tempdir().unwrap();
-        let behind = Arc::new(Behind(std::sync::atomic::AtomicUsize::new(0)));
-        let f = Front::new(
-            Cap::generate().unwrap(),
-            dir.path().join("hub-x.sock"),
-            WorkDb::spawn(dir.path().join("work.db")).unwrap(),
-            norn::store::CoordDb::spawn(dir.path().join("work.db")),
-            behind.clone(),
-        );
-        let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.class = Class::User;
-        s.peer_pid = Some(4242);
-        let out = Arc::new(Outbox::new(s.conn));
-        f.line(
-            &mut s,
-            &out,
-            r#"{"id":1,"method":"env/set","params":{"env":[]}}"#,
-        )
-        .await;
-        f.line(&mut s, &out, r#"{"id":2,"method":"subscribe"}"#)
-            .await;
-        f.line(&mut s, &out, r#"{"id":3,"method":"status"}"#).await;
-        let a = answers(&out);
-        assert_eq!(
-            a[0]["error"],
-            json!({"code": "not-allowed", "message": "the backend may call only what the front serves"})
-        );
-        assert_eq!(
-            a[1]["error"]["message"],
-            "the backend hears the front through notifications"
-        );
-        // its status never asks the backend
-        assert!(a[2]["result"].get("backend").is_none(), "{a:?}");
-        assert_eq!(behind.0.load(Ordering::SeqCst), 0);
-        // another pid's user connection is forwarded as before
-        let mut t = Session::new(f.next_conn(), Socket::Main);
-        t.class = Class::User;
-        t.peer_pid = Some(4243);
-        f.line(
-            &mut t,
-            &out,
-            r#"{"id":4,"method":"env/set","params":{"env":[]}}"#,
-        )
-        .await;
-        assert_eq!(answers(&out), vec![json!({"id": 4, "result": true})]);
-        assert_eq!(behind.0.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

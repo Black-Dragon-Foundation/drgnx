@@ -6,11 +6,9 @@
 //!   inode, which a rename-replace leaves alone, so it never changes.
 //! - A changed stamp makes `<path> version --json` run (5 s deadline).  Only an answer with another `commit` counts;
 //!   a missing, half-written or failing file is logged and looked at again at the next tick.
-//! - Then the `notice` event goes out, and the hub exits 75 as soon as it is idle: in phase 1 the backend's
-//!   `agents/list` has no `busy` session and `job/status` no `running` job.  An answer that does not come, or does
-//!   not fit, is not idle.  A hub is never restarted while anything is busy.
+//! - Then the `notice` event goes out, and the hub exits 75 as soon as it is idle: none of its sessions runs a turn.
+//!   A hub is never restarted while anything is busy.
 
-use crate::backend::Backend;
 use crate::front::Front;
 use serde_json::{Value, json};
 use std::os::unix::fs::MetadataExt;
@@ -122,29 +120,7 @@ pub enum Build {
     Unknown,
 }
 
-/// The turns running, from `agents/list`'s and `job/status`'s results: `busy` and `starting` sessions (one being
-/// started or resumed would be killed by a restart: review M4) plus `running` jobs.  None when either does not have the
-/// shape (an answer that does not fit is no answer: not idle).
-pub fn count_busy(agents: &Value, jobs: &Value) -> Option<u64> {
-    fn list<'a>(v: &'a Value, key: &str) -> Option<&'a [Value]> {
-        match v.get(key)? {
-            Value::Array(a) => Some(a),
-            Value::Null => Some(&[]),
-            _ => None,
-        }
-    }
-    let busy = list(agents, "sessions")?
-        .iter()
-        .filter(|s| s["status"] == "busy" || s["status"] == "starting")
-        .count();
-    let running = list(jobs, "jobs")?
-        .iter()
-        .filter(|j| j["status"] == "running")
-        .count();
-    Some((busy + running) as u64)
-}
-
-/// What the watch looks at besides the file: the build behind it and the backend's turns.  Used inside this crate
+/// What the watch looks at besides the file: the build behind it and the turns running.  Used inside this crate
 /// only (static dispatch, from a spawned task), so the futures' auto traits are known where they matter.
 #[allow(async_fn_in_trait)]
 pub trait Source {
@@ -159,7 +135,7 @@ pub trait Source {
 /// What a tick found.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Tick {
-    /// The `notice` to send: the turns the restart waits for (none inside: the backend did not say).
+    /// The `notice` to send: the turns the restart waits for (none inside: not known).
     pub notice: Option<Option<u64>>,
     /// Exit 75 now.
     pub restart: bool,
@@ -281,7 +257,7 @@ pub async fn build_at(path: &Path, commit: &str) -> Build {
     }
 }
 
-/// The notice for N turns still running (none: the backend did not say).
+/// The notice for N turns still running (none: not known).
 pub fn notice(n: Option<u64>) -> Value {
     let text = match n {
         Some(0) => "drgnx was updated; the hub restarts now".to_string(),
@@ -301,10 +277,9 @@ pub fn notice(n: Option<u64>) -> Value {
     })
 }
 
-/// The real source: the watch, this build's commit and the backend.
+/// The real source: the watch, this build's commit and the hub's sessions.
 struct Real {
     watch: ExeWatch,
-    backend: Arc<Backend>,
     /// The hub's own sessions: a running turn of theirs delays a restart, an idle chat does not.
     front: Arc<Front>,
 }
@@ -319,13 +294,12 @@ impl Source for Real {
     }
 
     async fn busy(&self) -> Option<u64> {
-        let mine = self.front.core.agents.busy_count();
-        self.backend.busy().await.map(|b| b + mine)
+        Some(self.front.core.agents.busy_count())
     }
 }
 
 /// The task: every TICK, look; send the notice; ask the front for a restart when idle.  Ends when it has.
-pub async fn run(front: Arc<Front>, backend: Arc<Backend>, tick: Duration) {
+pub async fn run(front: Arc<Front>, tick: Duration) {
     let Some(path) = start_exe() else {
         tracing::warn!("no resolved executable path: restart-when-idle is off");
         return;
@@ -343,7 +317,6 @@ pub async fn run(front: Arc<Front>, backend: Arc<Backend>, tick: Duration) {
     let mut state = Watcher::new(Some(watch.start()));
     let src = Real {
         watch,
-        backend,
         front: front.clone(),
     };
     let mut every = tokio::time::interval(tick);
@@ -418,32 +391,6 @@ mod tests {
 
     // `the_path_is_statted_not_proc_self_exe` runs a child process, which a fork inside this test binary would let
     // hold the lock tests' descriptors until its exec: it is in tests/server.rs.
-
-    #[test]
-    fn busy_means_a_busy_session_or_a_running_job() {
-        let idle_a =
-            json!({"sessions": [{"id": "a", "status": "idle"}, {"id": "b", "status": "exited"}]});
-        let none_j = json!({"jobs": []});
-        assert_eq!(count_busy(&idle_a, &none_j), Some(0));
-        let busy_a =
-            json!({"sessions": [{"id": "a", "status": "busy"}, {"id": "b", "status": "idle"}]});
-        assert_eq!(count_busy(&busy_a, &none_j), Some(1));
-        let run_j =
-            json!({"jobs": [{"id": "j", "status": "running"}, {"id": "k", "status": "done"}]});
-        assert_eq!(count_busy(&idle_a, &run_j), Some(1));
-        assert_eq!(count_busy(&busy_a, &run_j), Some(2));
-        // a session being started or resumed counts too
-        let starting = json!({"sessions": [{"id": "a", "status": "starting"}]});
-        assert_eq!(count_busy(&starting, &none_j), Some(1));
-        // null lists are empty; anything else is no answer
-        assert_eq!(
-            count_busy(&json!({"sessions": null}), &json!({"jobs": null})),
-            Some(0)
-        );
-        assert_eq!(count_busy(&json!({}), &none_j), None);
-        assert_eq!(count_busy(&idle_a, &json!({"jobs": "x"})), None);
-        assert_eq!(count_busy(&json!("x"), &none_j), None);
-    }
 
     #[test]
     fn a_hub_is_never_restarted_while_anything_is_busy_or_unknown() {

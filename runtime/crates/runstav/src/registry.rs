@@ -44,25 +44,6 @@ impl Class {
     }
 }
 
-/// Which side serves a method, or sends an event (docs/develop/hub.md, "Ratatoskr and the Lisp backend"): the front
-/// (Ratatoskr itself) or the Lisp backend behind it.  The backend may call only `Front` methods (the seam rule), so
-/// the front never waits on the backend while it serves the backend.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Home {
-    Front,
-    Backend,
-}
-
-impl Home {
-    pub fn name(self) -> &'static str {
-        match self {
-            Home::Front => "front",
-            Home::Backend => "backend",
-        }
-    }
-}
-
 /// A method's params, decoded, and the dotted paths of the keys it dropped (the answer's `ignored`).
 pub type Decoded = (Params, Vec<String>);
 
@@ -73,8 +54,8 @@ pub struct Method {
     pub classes: &'static [Class],
     /// It writes work.db, so a read-only hub refuses it (`schema`).
     pub writes: bool,
-    /// Who serves it.
-    pub home: Home,
+    /// The [`Params`] variant its params decode to (one per method: [`Params::VARIANTS`]).
+    pub variant: &'static str,
     pub doc: &'static str,
     pub params: fn() -> Schema,
     pub result: fn() -> Schema,
@@ -163,7 +144,6 @@ pub fn methods_json() -> Value {
                 "name": m.name,
                 "classes": m.classes.iter().map(|c| c.name()).collect::<Vec<_>>(),
                 "writes": m.writes,
-                "home": m.home.name(),
                 "doc": m.doc,
                 "params": (m.params)().to_value(),
                 "result": (m.result)().to_value(),
@@ -172,9 +152,7 @@ pub fn methods_json() -> Value {
         .collect();
     let events: Vec<Value> = events()
         .iter()
-        .map(|e| {
-            json!({"name": e.name, "from": e.from.name(), "doc": e.doc, "data": (e.data)().to_value()})
-        })
+        .map(|e| json!({"name": e.name, "doc": e.doc, "data": (e.data)().to_value()}))
         .collect();
     sorted(json!({
         "proto": PROTO, "proto_min": PROTO_MIN, "records": RECORDS, "schema": SCHEMA,
@@ -206,19 +184,17 @@ fn sorted(v: Value) -> Value {
 /// `<!-- hub-methods:end -->`.  The schemas' keys are sorted first (as `methods.json`'s are): a build where serde_json
 /// keeps insertion order (the ACP schema crate turns its `preserve_order` on in the hub's build) prints the same table.
 pub fn markdown_table() -> String {
-    let mut s = String::from(
-        "| Method | Class | Params | Result | Writes | Home |\n|---|---|---|---|---|---|\n",
-    );
+    let mut s =
+        String::from("| Method | Class | Params | Result | Writes |\n|---|---|---|---|---|\n");
     for m in registry() {
         let classes: Vec<&str> = m.classes.iter().map(|c| c.name()).collect();
         s.push_str(&format!(
-            "| `{}` | {} | `{}` | `{}` | {} | {} |\n",
+            "| `{}` | {} | `{}` | `{}` | {} |\n",
             m.name,
             classes.join(", "),
             cell(&schema_words(&sorted((m.params)().to_value()), true)),
             cell(&schema_words(&sorted((m.result)().to_value()), false)),
             if m.writes { "yes" } else { "no" },
-            m.home.name()
         ));
     }
     s
@@ -473,89 +449,42 @@ mod tests {
         "records/decide",
     ];
 
-    /// The agent core's methods that read only.
-    const CORE_READS: [&str; 15] = [
-        "agents/slice",
-        "exec/get",
-        "exec/list",
-        "exec/log",
-        "matrix/get",
-        "matrix/check",
-        "presence/set",
-        "plans/get",
-        "brief/build",
-        "reports/get",
-        "decisions/effects",
-        "timeline/get",
-        "budget/get",
-        "pace/get",
-        "records/status",
-    ];
-
-    /// The store's methods that read only (Urdr Task 15b), the front's too.
-    const FRONT_READS: [&str; 9] = [
-        "graph/entity",
-        "graph/neighbors",
-        "graph/path",
-        "graph/history",
-        "graph/sql",
-        "graph/export",
-        "graph/backup",
-        "tasks/ready",
-        "tasks/find",
-    ];
-
+    /// Every method is the hub's own: each name decodes to a `Params` variant of its own, and every variant is some
+    /// method's.  The front's `serve` matches `Params` with no catch-all arm, so a variant it does not serve does not
+    /// compile; together, no method can be listed without a handler.
     #[test]
-    fn every_method_has_a_home() {
-        let front: Vec<&str> = registry()
+    fn every_method_is_served() {
+        let methods = methods_json();
+        let names: Vec<&str> = methods["methods"]
+            .as_array()
+            .unwrap()
             .iter()
-            .filter(|m| m.home == Home::Front)
-            .map(|m| m.name)
+            .map(|m| {
+                assert!(m.get("home").is_none(), "{m}");
+                m["name"].as_str().unwrap()
+            })
             .collect();
-        let mut want = vec![
-            "hello",
-            "ping",
-            "status",
-            "subscribe",
-            "shutdown",
-            "restart",
-            "events/since",
-            "coord/notify",
-            "mcp/session",
-            "mcp/session-close",
-            "mcp/attach",
-            // the gateway (Task 22): registrations, keys, the provider table and spend
-            "spend",
-            "gateway/register",
-            "gateway/unregister",
-            "gateway/keys",
-            "gateway/set-budget",
-            // the editor's runtime settings (unified-settings Task 21; replaces config/providers)
-            "config/settings",
-            "config/changed",
-            // the editor's token and the held keys' ids (Task 22b)
-            "gateway/editor-token",
-            "gateway/keys-held",
-            // the editor's settings_get answer (unified-settings Task 32)
-            "settings/explained",
-            // the login shell's variables: an overlay on what the hub starts
-            "env/set",
-        ];
-        want.extend(FRONT_WRITES);
-        want.extend(FRONT_READS);
-        // the agent core (agent system part 1): the hub serves every session and plan run itself
-        want.extend(CORE_WRITES);
-        want.extend(CORE_READS);
-        want.push("records/proposals");
-        want.extend(
-            registry()
-                .iter()
-                .map(|m| m.name)
-                .filter(|n| n.starts_with("agents/") || n.starts_with("job/"))
-                .filter(|n| !CORE_WRITES.contains(n) && !CORE_READS.contains(n)),
-        );
-        want.sort();
-        assert_eq!(front, want, "the methods the front serves itself");
+        let mut variants: Vec<&str> = names
+            .iter()
+            .map(|n| find(n).unwrap_or_else(|| panic!("{n}")).variant)
+            .collect();
+        variants.sort();
+        let mut all = Params::VARIANTS.to_vec();
+        all.sort();
+        assert_eq!(variants, all, "one Params variant per method, and no other");
+        // a variant names its method: decoding a method's params gives the variant the registry says
+        for (name, params) in [
+            ("ping", json!({})),
+            ("env/set", json!({"env": []})),
+            ("job/stop", json!({"id": "j"})),
+            ("agents/list", json!({})),
+            ("graph/backup", json!({})),
+            ("coord/prune", json!({})),
+        ] {
+            let m = find(name).unwrap();
+            let (p, _) = (m.decode)(&params).unwrap();
+            assert_eq!(p.variant(), m.variant, "{name}");
+        }
         // every method of the store is the user's alone
         assert!(
             registry()
@@ -572,64 +501,29 @@ mod tests {
             find("mcp/session").map(|m| m.classes),
             Some(&[Class::User][..])
         );
-        // every other method is the backend's, and each event names the side that sends it
+        // an event names no side that sends it: the hub sends them all
         assert!(
-            registry()
+            methods["events"]
+                .as_array()
+                .unwrap()
                 .iter()
-                .filter(|m| !want.contains(&m.name))
-                .all(|m| m.home == Home::Backend)
+                .all(|e| e.get("from").is_none())
         );
-        let from = |name| events().iter().find(|e| e.name == name).map(|e| e.from);
-        assert_eq!(from("events"), Some(Home::Front));
-        assert_eq!(from("challenge"), Some(Home::Front));
-        assert_eq!(from("job"), Some(Home::Front));
-        assert_eq!(from("card"), Some(Home::Backend));
-        assert_eq!(from("budget"), Some(Home::Front));
-        let methods = methods_json();
-        let env_set = methods["methods"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|m| m["name"] == "env/set")
-            .unwrap();
-        assert_eq!(env_set["home"], json!("front"), "{env_set}");
-    }
-
-    /// The editor's switch (agent system part 1, Task 27): the hub serves every `agents/*` and `job/*` method; the
-    /// Lisp backend serves none, in the registry and in the committed `methods.json` the editor reads.
-    #[test]
-    fn no_agent_or_job_method_is_backend() {
-        assert!(
-            registry()
-                .iter()
-                .filter(|m| m.name.starts_with("agents/") || m.name.starts_with("job/"))
-                .all(|m| m.home == Home::Front)
-        );
-        let methods = methods_json();
-        let backend: Vec<&str> = methods["methods"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|m| m["home"] == json!("backend"))
-            .filter_map(|m| m["name"].as_str())
-            .filter(|n| n.starts_with("agents/") || n.starts_with("job/"))
-            .collect();
-        assert!(backend.is_empty(), "served by the backend: {backend:?}");
     }
 
     #[test]
-    fn the_docs_table_has_the_home_column() {
+    fn the_docs_table_has_no_home_column() {
         let t = markdown_table();
         assert!(
-            t.starts_with("| Method | Class | Params | Result | Writes | Home |\n"),
+            t.starts_with("| Method | Class | Params | Result | Writes |\n"),
             "{t}"
         );
         assert!(
-            t.contains("| `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes | front |"),
+            t.contains("| `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |\n"),
             "{t}"
         );
         assert!(
-            t.contains("| `coord/notify` | user, agent, service | `{}` | `boolean` | no | front |"),
+            t.contains("| `coord/notify` | user, agent, service | `{}` | `boolean` | no |\n"),
             "{t}"
         );
     }
@@ -890,11 +784,11 @@ mod tests {
     fn the_table_spells_out_params() {
         let t = markdown_table();
         assert!(
-            t.contains("| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no | front |"),
+            t.contains("| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |\n"),
             "{t}"
         );
         assert!(
-            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes | front |"),
+            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes |\n"),
             "{t}"
         );
         assert!(

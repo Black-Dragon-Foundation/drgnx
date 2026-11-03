@@ -357,57 +357,57 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "agents/list", AgentsList(Empty) -> Sessions,
-            classes: [User, Agent, Service], writes: false, home: Front,
+            classes: [User, Agent, Service], writes: false,
             doc: "the sessions: snapshots for the user, {id, name, job, task} for the others (an agent: its own job's)",
         ),
         method!(
             "agents/start", AgentsStart(StartParams) -> Started,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a session the hub holds",
         ),
         method!(
             "agents/get", AgentsGet(ById) -> Transcript,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a session's snapshot, whole transcript and change number",
         ),
         method!(
             "agents/send", AgentsSend(SendParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a prompt to the session (queued or steering as its mode says)",
         ),
         method!(
             "agents/stop", AgentsStop(ById) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the session's turn stops",
         ),
         method!(
             "agents/kill", AgentsKill(ById) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the session ends",
         ),
         method!(
             "agents/permission", AgentsPermission(PermissionParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the user's answer to a permission request: the only way one is answered",
         ),
         method!(
             "agents/do", AgentsDo(DoParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
         ),
         method!(
             "agents/move", AgentsMove(MoveParams) -> Started,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a session moved to another profile: stopped after its tool call, the new one started in the same worktree with a summary handoff",
         ),
         method!(
             "agents/role", AgentsRole(RoleParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a session's role (its matrix column): the user's only, the one way to make a manager",
         ),
         method!(
             "agents/slice", AgentsSlice(SliceParams) -> Slice,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
             check: check_slice,
         ),

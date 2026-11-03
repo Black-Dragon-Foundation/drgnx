@@ -217,18 +217,18 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "tasks/ready", TasksReady(ReadyParams) -> TaskList,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the ready tracker tasks (open, nothing open blocks them, no live lease), by priority then age",
             check: check_ready,
         ),
         method!(
             "tasks/find", TasksFind(FindParams) -> TaskList,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "tasks by words (full text), status, assignee, labels and project, 50 a page",
         ),
         method!(
             "tasks/write", TasksWrite(WriteParams) -> WriteAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools): done, a conflict with what changed, a lost lease, or a close proposal",
             check: check_write,
         ),

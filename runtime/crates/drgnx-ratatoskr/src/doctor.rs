@@ -365,12 +365,6 @@ fn summary(v: &Value) -> String {
         text(&v["runtime"]["commit"]),
         text(&v["socket"])
     );
-    if let Some(b) = v.get("backend") {
-        out.push_str(&format!("\nbackend: {}", text(&b["state"])));
-        if let Some(pid) = b.get("pid") {
-            out.push_str(&format!(" (pid {pid})"));
-        }
-    }
     if let Some(n) = v.get("read_only") {
         out.push_str(&format!(
             "\nread-only: work.db is schema {n}, newer than this hub's"
@@ -798,13 +792,14 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_names_pid_commit_backend_and_job_agents() {
+    fn the_summary_names_pid_commit_and_job_agents() {
+        // an older hub's `backend` is not shown: no hub runs one any more
         let s = summary(&json!({
             "pid": 5, "socket": "/s", "runtime": {"commit": "c1"},
             "backend": {"state": "running", "pid": 9}, "job_agents": JOB_AGENTS,
         }));
         assert!(s.contains("pid 5, commit c1, socket /s"), "{s}");
-        assert!(s.contains("backend: running (pid 9)"), "{s}");
+        assert!(!s.contains("backend"), "{s}");
         assert!(s.contains("unsandboxed (as on main"), "{s}");
     }
 }

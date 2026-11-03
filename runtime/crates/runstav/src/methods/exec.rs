@@ -208,28 +208,28 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "exec/start", ExecStart(StartParams) -> Started,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a job the hub runs as a unit of its own (in a project folder; a container job from the allowed images only); local only",
             check: check_start,
         ),
         method!(
             "exec/get", ExecGet(ById) -> ExecRow,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "one job: its status and, once it ended, its summary",
         ),
         method!(
             "exec/list", ExecList(ListParams) -> Jobs,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the jobs (a session's, or the running ones), newest first",
         ),
         method!(
             "exec/stop", ExecStop(ById) -> ExecRow,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a running job ended (its unit stopped); its starter is woken as for any end",
         ),
         method!(
             "exec/log", ExecLog(LogParams) -> LogSlice,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "lines of a job's log (at most 1000 a call)",
             check: check_log,
         ),

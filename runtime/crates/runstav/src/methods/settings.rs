@@ -195,18 +195,18 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "settings/record", SettingsRecord(RecordParams) -> RecordAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed; a value that looks like a secret is never stored: no value, redacted true), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
             check: check_record,
         ),
         method!(
             "settings/confirm", SettingsConfirm(ConfirmParams) -> ConfirmAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the editor's answer to settings/proposed: ok accepts the agent's proposed tx (the editor wrote the file), else it is reverted (blocked when a later change of the setting came first); the agent gets a message either way; only a proposed tx of the tool mcp:settings_change",
         ),
         method!(
             "settings/explained", SettingsExplained(ExplainedParams) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the editor's answer to settings/explain (one object per setting) for the settings_get waiting on req; false when none waits (it timed out)",
         ),
     ]

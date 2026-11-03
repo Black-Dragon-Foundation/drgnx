@@ -41,21 +41,18 @@ pub(crate) fn invalid(path: &str, message: &str) -> Error {
 }
 
 /// One method's definition (`registry::Method`): the params and result types give its schemas, its typed decode
-/// (wrapped in `Params::$variant`) and its result check.  `home: Front` marks a method the front serves itself (the
-/// default is the backend's); `check:` adds a check of meaning after the decode.
+/// (wrapped in `Params::$variant`) and its result check.  `check:` adds a check of meaning after the decode.
 macro_rules! method {
-    (@home) => { $crate::registry::Home::Backend };
-    (@home $home:ident) => { $crate::registry::Home::$home };
     (
         $name:literal, $variant:ident($params:ty) -> $result:ty,
-        classes: [$($class:ident),+], writes: $writes:expr, $(home: $home:ident,)? doc: $doc:literal
+        classes: [$($class:ident),+], writes: $writes:expr, doc: $doc:literal
         $(, check: $check:expr)? $(,)?
     ) => {
         $crate::registry::Method {
             name: $name,
             classes: &[$($crate::registry::Class::$class),+],
             writes: $writes,
-            home: $crate::methods::method!(@home $($home)?),
+            variant: stringify!($variant),
             doc: $doc,
             params: $crate::registry::schema_of::<$params>,
             result: $crate::registry::schema_of::<$result>,
@@ -78,8 +75,17 @@ macro_rules! params {
         }
 
         impl Params {
-            /// The params re-encoded (what the front forwards to the backend): optional values that were absent or
-            /// `null` are left out.
+            /// Every variant's name, one per method (`registry::Method::variant`).
+            pub const VARIANTS: &'static [&'static str] = &[$(stringify!($variant)),+];
+
+            /// This variant's name.
+            pub fn variant(&self) -> &'static str {
+                match self {
+                    $(Params::$variant(_) => stringify!($variant)),+
+                }
+            }
+
+            /// The params re-encoded: optional values that were absent or `null` are left out.
             pub fn to_value(&self) -> Value {
                 match self {
                     $(Params::$variant(p) => serde_json::to_value(p)),+
@@ -88,8 +94,7 @@ macro_rules! params {
             }
         }
 
-        /// The params as `to_value` has them, written straight into the line the front sends the backend (keys are
-        /// exposed only while that line is serialised).
+        /// The params as `to_value` has them (keys are exposed only while they are serialised).
         impl Serialize for Params {
             fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
                 match self {

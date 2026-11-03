@@ -2,26 +2,22 @@
 //!
 //! 1. an unknown method → `no-method`;
 //! 2. a class the method does not take → `not-allowed`;
-//!    2b. the Lisp backend calling the front ([`Caller::backend`]): a method the front does not serve, or `subscribe`
-//!    → `not-allowed` (the seam rule: a backend call never waits on the backend, so it cannot deadlock);
 //! 3. a call on a user connection whose hello said a newer protocol → `proto`;
 //! 4. the typed decode → `invalid-params` with its `path` (keys the method does not know are dropped and listed);
 //! 5. a method that writes while work.db is newer than this hub → `schema`;
 //! 6. the handler, whose failure is `internal`.
 //!
-//! [`prelude_as`] is steps 1–5 with no handler: the connection loop calls it, the fuzz target [`prelude`] (no backend).  A refusal is
-//! logged and counted by [`Refusals::note`], with the method, the code, the class and the path, never the params or
-//! the message (a decode error's message can quote a value: a key, a prompt).
+//! [`prelude`] is steps 1–5 with no handler: the connection loop and the fuzz target call it.  A refusal is logged and
+//! counted by [`Refusals::note`], with the method, the code, the class and the path, never the params or the message
+//! (a decode error's message can quote a value: a key, a prompt).
 
 use runstav::line;
 use runstav::methods::Params;
-use runstav::methods::hub::{Backend, Refusals as RefusalsResult};
-use runstav::registry::{self, Class, Home, Method};
+use runstav::methods::hub::Refusals as RefusalsResult;
+use runstav::registry::{self, Class, Method};
 use runstav::wire::{Error, ErrorCode, Id, Request};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
 
 /// How many refusals `status` lists.
 pub const KEEP: usize = 20;
@@ -59,20 +55,9 @@ pub enum ErrorAnswerOrDrop {
 }
 
 /// Steps 1–5 for LINE on a connection of CLASS whose hello said PROTO (0: no hello), while work.db's schema is
-/// READ_ONLY when it is newer than this hub's.  A connection that is not the backend's: [`prelude_as`].
+/// READ_ONLY when it is newer than this hub's.
 pub fn prelude(
     class: Class,
-    proto: u32,
-    read_only: Option<u32>,
-    line: &str,
-) -> Result<Call, ErrorAnswerOrDrop> {
-    prelude_as(class, false, proto, read_only, line)
-}
-
-/// [`prelude`] on a connection that is the Lisp backend's when BACKEND ([`Caller::backend`]): step 2b applies.
-pub fn prelude_as(
-    class: Class,
-    backend: bool,
     proto: u32,
     read_only: Option<u32>,
     line: &str,
@@ -138,21 +123,6 @@ pub fn prelude_as(
             )
         };
         return Err(refuse(ErrorCode::NotAllowed, message, None));
-    }
-    // 2b: the backend waits on nothing that waits on it
-    if backend && m.home == Home::Backend {
-        return Err(refuse(
-            ErrorCode::NotAllowed,
-            "the backend may call only what the front serves".into(),
-            None,
-        ));
-    }
-    if backend && m.name == "subscribe" {
-        return Err(refuse(
-            ErrorCode::NotAllowed,
-            "the backend hears the front through notifications".into(),
-            None,
-        ));
     }
     // 3
     if class == Class::User && m.name != "hello" && proto > registry::PROTO {
@@ -262,69 +232,15 @@ impl Refusals {
     }
 }
 
-/// Who calls a method: the connection's class, for an agent socket its session and job, and whether it is the Lisp
-/// backend.
+/// Who calls a method: the connection's class, and for an agent socket its session and job.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
     pub class: Class,
     pub sid: Option<String>,
     pub job: Option<String>,
     pub conn_id: u64,
-    /// The connection's peer pid is the backend's (starting or running): the seam rule (dispatch step 2b) holds it to
-    /// what the front serves, and only it may name a message's sender.  Any relaxation of the peer-pid rule (R-FIX-M9:
-    /// a backend that connects through a helper, say) must keep marking the backend's connections, or a backend call
-    /// could wait on the backend itself (call 2, review m10).
+    /// Always false: no connection is the Lisp backend's any more.
     pub backend: bool,
-}
-
-/// What a forwarded call answers.
-pub type Answer<'a> = Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>>;
-
-/// What `status` says of the backend: its state and pid (the gateway's numbers are the front's own).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct BackendInfo {
-    pub backend: Option<Backend>,
-}
-
-/// The methods the front does not serve itself go here (the Lisp backend: [`crate::forward`]).  PARAMS are the
-/// decoded params, re-encoded only into the line sent on, never the line as it came.
-pub trait Forward: Send + Sync {
-    fn call<'a>(&'a self, caller: Caller, method: &'static Method, params: Params) -> Answer<'a>;
-
-    /// What `status` says of the backend (nothing, without one).
-    fn status<'a>(&'a self) -> Pin<Box<dyn Future<Output = BackendInfo> + Send + 'a>> {
-        Box::pin(async { BackendInfo::default() })
-    }
-
-    /// The backend's pid while it is starting (once spawned) or running: a connection from it is [`Caller::backend`].
-    fn backend_pid(&self) -> Option<i32> {
-        None
-    }
-
-    /// METHOD with PARAMS sent to the backend as a notification (no id, never awaited): dropped when no backend runs.
-    fn notify_backend<'a>(
-        &'a self,
-        method: &'static str,
-        params: Value,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        let _ = (method, params);
-        Box::pin(async {})
-    }
-}
-
-/// No backend: every forwarded call is `internal` "backend not running".
-pub struct NoBackend;
-
-impl Forward for NoBackend {
-    fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> Answer<'a> {
-        Box::pin(async {
-            Err(Error {
-                code: ErrorCode::Internal,
-                message: "backend not running".into(),
-                path: None,
-            })
-        })
-    }
 }
 
 #[cfg(test)]
@@ -334,7 +250,6 @@ mod tests {
     use crate::front::Front;
     use crate::hello::{Session, Socket};
     use runstav::proof::Cap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     fn refused(r: Result<Call, ErrorAnswerOrDrop>) -> Refusal {
@@ -433,66 +348,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "phase 7: Task 2 deletes forwarding"]
-    fn a_backend_caller_gets_only_front_methods() {
-        use Class::*;
-        // the backend (a proven user) may call what the front serves
-        for line in [
-            r#"{"id":1,"method":"ping"}"#,
-            r#"{"id":1,"method":"status"}"#,
-            r#"{"id":1,"method":"coord/notify"}"#,
-            r#"{"id":1,"method":"events/add","params":{"kind":"job"}}"#,
-        ] {
-            assert!(prelude_as(User, true, 1, None, line).is_ok(), "{line}");
-        }
-        // never what it serves itself: that call would wait on the backend
-        let r = refused(prelude_as(
-            User,
-            true,
-            1,
-            None,
-            r#"{"id":1,"method":"env/set","params":{"env":[]}}"#,
-        ));
-        assert_eq!(
-            (r.error.code, r.error.message.as_str()),
-            (
-                ErrorCode::NotAllowed,
-                "the backend may call only what the front serves"
-            )
-        );
-        let r = refused(prelude_as(
-            User,
-            true,
-            1,
-            None,
-            r#"{"id":1,"method":"subscribe"}"#,
-        ));
-        assert_eq!(
-            (r.error.code, r.error.message.as_str()),
-            (
-                ErrorCode::NotAllowed,
-                "the backend hears the front through notifications"
-            )
-        );
-        // every method: step 2b refuses exactly the backend's own and subscribe (step 2 refuses, before it, what the
-        // user class may not call: the service-only mcp/attach)
-        for m in registry::registry() {
-            let line = json!({"id": 1, "method": m.name}).to_string();
-            let r = prelude_as(User, true, 1, None, &line);
-            let not_allowed = matches!(&r, Err(ErrorAnswerOrDrop::Refused(x)) if x.error.code == ErrorCode::NotAllowed);
-            assert_eq!(
-                not_allowed,
-                !m.allows(User) || m.home == Home::Backend || m.name == "subscribe",
-                "{}",
-                m.name
-            );
-        }
-        // another user connection is not held to it
-        assert!(prelude_as(User, false, 1, None, r#"{"id":1,"method":"job/status"}"#).is_ok());
-        assert!(prelude(User, 1, None, r#"{"id":1,"method":"subscribe"}"#).is_ok());
-    }
-
-    #[test]
     fn lines_that_are_no_request() {
         use Class::*;
         // a duplicate key, with the id read: invalid-params at its path
@@ -567,24 +422,13 @@ mod tests {
         );
     }
 
-    /// A `Forward` that counts its calls.
-    struct Spy(AtomicUsize);
-
-    impl Forward for Spy {
-        fn call<'a>(&'a self, _: Caller, _: &'static Method, _: Params) -> Answer<'a> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Ok(json!(true)) })
-        }
-    }
-
-    fn front(dir: &std::path::Path, forward: Arc<dyn Forward>) -> Arc<Front> {
+    fn front(dir: &std::path::Path) -> Arc<Front> {
         let work_db = crate::store::WorkDb::spawn(dir.join("work.db")).unwrap();
         Arc::new(Front::new(
             Cap::generate().unwrap(),
             dir.join("hub-x.sock"),
             work_db,
             norn::store::CoordDb::spawn(dir.join("work.db")),
-            forward,
         ))
     }
 
@@ -595,47 +439,6 @@ mod tests {
         s.proto = 1;
         s.hello_done = true;
         s
-    }
-
-    #[tokio::test]
-    #[ignore = "phase 7: Task 2 deletes forwarding"]
-    async fn bad_params_never_reach_forward() {
-        let dir = tempfile::tempdir().unwrap();
-        let spy = Arc::new(Spy(AtomicUsize::new(0)));
-        let f = front(dir.path(), spy.clone());
-        let mut s = user(&f);
-        let out = Arc::new(Outbox::new(s.conn));
-        for bad in [
-            r#"{"id":1,"method":"job/stop","params":{}}"#,
-            r#"{"id":2,"method":"job/stop","params":{"id":5}}"#,
-            r#"{"id":3,"method":"job/stop","params":{"id":"a","id":"b"}}"#,
-            r#"{"id":4,"method":"agents/start","params":{"profile":"p","cwd":"/ssh:h:/x"}}"#,
-            r#"{"id":5,"method":"env/set","params":{"env":[{"name":"PATH","value":"bin"}]}}"#,
-            r#"{"id":6,"method":"job/stop","params":[]}"#,
-            r#"{"method":"job/stop","params":{}}"#,
-        ] {
-            f.line(&mut s, &out, bad).await;
-        }
-        assert_eq!(
-            spy.0.load(Ordering::SeqCst),
-            0,
-            "a bad call reached the backend"
-        );
-        let answers = out.take_lines();
-        assert_eq!(answers.len(), 6, "{answers:?}");
-        assert!(
-            answers.iter().all(|a| a.contains("\"invalid-params\"")),
-            "{answers:?}"
-        );
-        // the spy counts: a good call is forwarded once (env/set: the backend's last method)
-        f.line(
-            &mut s,
-            &out,
-            r#"{"id":9,"method":"env/set","params":{"env":[]}}"#,
-        )
-        .await;
-        assert_eq!(spy.0.load(Ordering::SeqCst), 1);
-        assert_eq!(f.status().refusals.map(|r| r.count), Some(7));
     }
 
     std::thread_local! {
@@ -683,7 +486,7 @@ mod tests {
     async fn a_refusal_log_has_no_params() {
         const CANARY: &str = "sk-canary-1f2e3d";
         let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path(), Arc::new(NoBackend));
+        let f = front(dir.path());
         let log = capture_log();
         let out = Arc::new(Outbox::new(1));
         // a service connection: not-allowed
@@ -733,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn an_unhardened_hub_takes_no_key() {
         let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path(), Arc::new(NoBackend));
+        let f = front(dir.path());
         let out = Arc::new(Outbox::new(1));
         let mut u = user(&f);
         let keys =

@@ -5,35 +5,31 @@
 //! 3. the lock ([`crate::lock`]); signals are caught from here on; the process made not dumpable ([`harden`]: no core
 //!    file, no `ptrace` or `/proc/PID/mem` of it by another process of the user), before a key can reach it;
 //! 4. only while holding it: a stale socket removed, the cap written (0600, temp + rename), the socket bound and made
-//!    0600, and the agent sockets (test-hooks) bound as `s/SID/hub.sock`, each session's dir private and apart from
-//!    the backend's `hub-HASH.d/` (review M10);
+//!    0600, and the agent sockets (test-hooks) bound as `s/SID/hub.sock`, each session's dir private;
 //! 5. `runtime.db`, then the read-only `work.db` reader, whose schema is read now and at each 2 s tick, and the
 //!    store (`open_store`): the graph writer with `norn::migrate7`'s opening rule (a missing file made at schema 7,
 //!    a schema-6 one migrated after a checked copy), waited for, so a migration ends before the first request; the
 //!    coordination writer (`norn::store::CoordDb`) on the same file, and the graph store the tools use
 //!    ([`crate::coord`]);
-//! 6. the processes `runtime.db` recorded reaped, then the Lisp backend started (and kept running) on its own socket,
-//!    the sessions' `mcp.sock` of live owners bound again ([`crate::sessions`]; their owners watched each second),
-//!    the gateway listening on 127.0.0.1 and its registrations of live owners kept ([`crate::gateway`]; pruned each
-//!    second), the `events` broadcaster and the `coord/notify` coalescer.
+//! 6. the process groups `runtime.db` recorded reaped (a crashed hub's children, an old hub's Lisp backend), the
+//!    sessions' `mcp.sock` of live owners bound again ([`crate::sessions`]; their owners watched each second), the
+//!    gateway listening on 127.0.0.1 and its registrations of live owners kept ([`crate::gateway`]; pruned each
+//!    second), and the `events` broadcaster.  No child Emacs is started: every method is the front's.
 //!
-//! Every socket is close-on-exec (Rust's default, tested), so no child (the backend, an agent) inherits a listener.
+//! Every socket is close-on-exec (Rust's default, tested), so no child (an agent, a job) inherits a listener.
 //!
 //! It serves until SIGTERM, SIGINT, `shutdown` or the `--parent-pid` process is gone (checked each second), then
 //! stops accepting and removes the sockets (the sessions' too; their rows stay) and the cap while the lock is still
 //! held.
 
-use crate::backend::{self, Backend};
 use crate::cli::{AgentSocket, ServeArgs, Supervisor};
 use crate::conn;
 use crate::coord;
-use crate::forward::ToBackend;
 use crate::front::Front;
 use crate::gateway;
 use crate::hello::Socket;
 use crate::idle;
 use crate::lock::{self, LockError};
-use crate::relay;
 use crate::sessions;
 use crate::store::WorkDb;
 use crate::{Exit, log, runtime_db};
@@ -52,9 +48,6 @@ pub const SQLITE_FLOOR: i32 = 3_051_003;
 
 /// How often work.db's schema is read (read-only while it is newer).
 pub const SCHEMA_TICK: Duration = Duration::from_secs(2);
-
-/// How long the stop waits for the backend to end (its group gets SIGKILL 2 s after SIGTERM).
-const BACKEND_STOP: Duration = Duration::from_secs(10);
 
 pub async fn run(args: ServeArgs) -> Exit {
     // the executable's path, once, while it still names the file on disk (restart-when-idle, re-exec)
@@ -176,19 +169,16 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
-    // what a crashed run left (its backend's group): killed before a new backend starts
-    if let Err(e) = backend::reap_recorded(&runtime).await {
+    // what a crashed run left, or an older hub's Lisp backend: killed before anything is served
+    if let Err(e) = reap_recorded(&runtime).await {
         tracing::warn!("{e}");
     }
-    let (events_tx, events_rx) = tokio::sync::mpsc::channel(relay::QUEUE);
-    let backend = new_backend(&env, &socket, runtime.clone(), events_tx);
     let front = Arc::new(Front::with_graph(
         cap,
         socket.clone(),
         work_db,
         coord_db,
         Some(graph),
-        Arc::new(ToBackend(backend.clone())),
     ));
     front.tool_hub.bind(&front);
     let _ = front.dirs.set(crate::graph::StoreDirs {
@@ -266,11 +256,9 @@ pub async fn run(args: ServeArgs) -> Exit {
             .as_deref(),
     );
     tokio::spawn(watch_schema(front.clone()));
-    tokio::spawn(relay::run(events_rx, front.clone()));
     tokio::spawn(coord::broadcast_events(front.clone()));
     crate::records::install_tool(&front);
     tokio::spawn(crate::records::follow(front.clone()));
-    tokio::spawn(coord::notify_backend(front.clone()));
     front.core.runs.set_git(Arc::new(
         crate::runner::git::HubGit::new(
             crate::sandbox::runs_root(&env),
@@ -287,12 +275,11 @@ pub async fn run(args: ServeArgs) -> Exit {
     tokio::spawn(crate::runner::tick::run(front.clone()));
     tokio::spawn(crate::supervisor::run(front.clone()));
     tokio::spawn(crate::manager::run(front.clone()));
-    let supervisor = tokio::spawn(backend.clone().supervise());
     #[cfg(feature = "test-hooks")]
     let tick = args.idle_tick_ms.map_or(idle::TICK, Duration::from_millis);
     #[cfg(not(feature = "test-hooks"))]
     let tick = idle::TICK;
-    tokio::spawn(idle::run(front.clone(), backend.clone(), tick));
+    tokio::spawn(idle::run(front.clone(), tick));
     for (l, s) in agents {
         tokio::spawn(accept(l, front.clone(), s));
     }
@@ -357,14 +344,6 @@ pub async fn run(args: ServeArgs) -> Exit {
         }
     };
     drop(listener);
-    // the backend stopped (its group: SIGTERM, then SIGKILL) and its row gone, while runtime.db is still open
-    backend.stop();
-    if tokio::time::timeout(BACKEND_STOP, supervisor)
-        .await
-        .is_err()
-    {
-        tracing::warn!("the Lisp backend did not stop within 10 s");
-    }
     // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
     front.core.agents.shutdown().await;
     // the lock is still held: these are ours (the sessions' rows stay for the next start)
@@ -416,36 +395,39 @@ pub fn harden() -> Result<(), String> {
     r
 }
 
-/// The Lisp backend for this hub (its socket's directory made private here, under the lock), its events to EVENTS;
-/// `missing` when there is no command or no socket path for it.
-fn new_backend(
-    env: &Env,
-    socket: &Path,
-    runtime: urdr::Handle,
-    events: tokio::sync::mpsc::Sender<(String, serde_json::Value)>,
-) -> Arc<Backend> {
-    let get = |k: &str| env.vars.get(k).cloned();
-    let program = backend::program(
-        &get,
-        &paths::data_dir(env),
-        &paths::config_dir(env),
-        backend::CHECKOUT,
-    );
-    // its directory only for a backend that can start
-    let serve = paths::backend_socket_path(env, socket)
-        .map_err(|e| e.to_string())
-        .and_then(|p| match &program {
-            Err(_) => Ok(p),
-            Ok(_) => {
-                let dir = p.parent().unwrap_or(Path::new("/"));
-                paths::private_dir(dir)
-                    .and_then(|()| paths::trusted_dir(dir))
-                    .map(|_| p.clone())
-                    .map_err(|e| format!("its socket's directory: {e}"))
-            }
-        });
-    let home = PathBuf::from(get("HOME").unwrap_or_else(|| "/".into()));
-    Backend::new(program, serve, home, runtime, events)
+/// Every process group `runtime.db` recorded (a crashed hub's, or an older hub's Lisp backend, purpose `backend`)
+/// reaped: a live one whose pid, start time and boot still match is killed, a reused pid is left alone.  The rows go.
+async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
+    let rows: Vec<draugr::Record> = db
+        .read(|c| {
+            let mut st = c.prepare("select pid, start_time, pgid, boot_id from proc")?;
+            let rows = st
+                .query_map([], |r| {
+                    let int = |i: usize| r.get::<_, Option<i64>>(i).ok().flatten();
+                    Ok(draugr::Record {
+                        pid: int(0).and_then(|p| i32::try_from(p).ok()),
+                        start_time: int(1).and_then(|t| u64::try_from(t).ok()),
+                        pgid: int(2).and_then(|p| i32::try_from(p).ok()),
+                        boot_id: r.get::<_, Option<String>>(3).ok().flatten(),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| format!("cannot read runtime.db's processes: {e}"))?;
+    let outcomes = draugr::reap(&rows, &draugr::RealSignaller).await;
+    for (r, o) in rows.iter().zip(&outcomes) {
+        if *o == draugr::ReapOutcome::Killed {
+            tracing::warn!(pid = ?r.pid, pgid = ?r.pgid, "killed an orphan a crashed or older hub left");
+        } else {
+            tracing::info!(pid = ?r.pid, outcome = ?o, "a recorded process");
+        }
+    }
+    db.write(|c| Ok(c.execute("delete from proc", [])?))
+        .await
+        .map_err(|e| format!("cannot clear runtime.db's processes: {e}"))?;
+    Ok(())
 }
 
 /// Accept on an agent socket for as long as the hub serves.

@@ -160,18 +160,19 @@ fn context_closes_data_state_config_and_sockets() {
 }
 
 /// Review M10: what an agent session is given is its session dir (`s/SID`, from `paths::make_session_dir`), which
-/// Gleipnir takes as a run source; the backend's directory is never one, nor can any other source reach it, and a
-/// session dir holds no `backend.sock`.
+/// Gleipnir takes as a run source; another directory beside the hub's socket (an older hub's `hub-HASH.d/`, say) is
+/// never one, nor can any other source reach it.
 #[test]
-fn an_agent_session_dir_never_reaches_the_backend_socket() {
+fn an_agent_session_dir_reaches_nothing_else_beside_the_socket() {
     let fx = Fx::new();
     let env = fx.env();
     let ctx = context_for(&env, Some(&fx.p("bin/ratatoskr")));
     let socket = paths::socket_path(&env);
     let session = paths::make_session_dir(&env, &socket, "0123456789ab").unwrap();
     fs::write(session.join(paths::SESSION_HUB_SOCKET), "").unwrap();
-    let backend = paths::backend_socket_path(&env, &socket).unwrap();
-    let backend_dir = backend.parent().unwrap().to_path_buf();
+    let stem = socket.file_stem().unwrap().to_string_lossy().into_owned();
+    let backend_dir = socket.parent().unwrap().join(format!("{stem}.d"));
+    let backend = backend_dir.join("backend.sock");
     paths::private_dir(&backend_dir).unwrap();
     fs::write(&backend, "").unwrap();
     assert!(!session.join("backend.sock").exists());
@@ -209,7 +210,7 @@ fn an_agent_session_dir_never_reaches_the_backend_socket() {
         Target::LinuxBwrap,
     )
     .expect("a session dir passes");
-    // the backend's dir is no run source, nor readable, nor a socket's place
+    // the other dir is no run source, nor readable, nor a socket's place
     for (what, s) in [
         ("run", spec(run(&backend_dir), vec![], vec![])),
         ("read", spec(None, vec![backend_dir.clone()], vec![])),

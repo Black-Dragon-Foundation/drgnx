@@ -273,23 +273,23 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "timeline/get", TimelineGet(TimelineParams) -> Timeline,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the steps of a session, task, plan or project (500 a page), or their rollup: time by class, cost by unit, tokens",
         ),
         method!(
             "budget/get", BudgetGet(BudgetGetParams) -> BudgetView,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a scope's budget: its limits, spend and what remains (the least over its ancestors), by unit",
         ),
         method!(
             "budget/set", BudgetSet(BudgetSetParams) -> BudgetView,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a scope's limits, one per unit (empty clears); the gateway admits usd against the nested minimum",
             check: check_budget_set,
         ),
         method!(
             "pace/get", PaceGet(PaceParams) -> Paces,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the subscriptions' meters: share used, rate per hour and when it runs out at that rate (estimates)",
         ),
     ]

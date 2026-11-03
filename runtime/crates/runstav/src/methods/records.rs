@@ -187,22 +187,22 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "records/import", RecordsImport(ImportParams) -> ImportReport,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the org folder's record files into the graph (a backup of each first; idempotent), their views written; the hub never commits",
         ),
         method!(
             "records/status", RecordsStatus(ByPath) -> Views,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the view files: when each was written, whether it changed by hand, the proposal holding it",
         ),
         method!(
             "records/proposals", RecordsProposals(ByPath) -> Proposals,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the proposals hand edits to views became (a view's, or every open one)",
         ),
         method!(
             "records/decide", RecordsDecide(DecideParams) -> Decided,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a proposal accepted (its ops applied if its base still holds, else stale) or rejected (the edit backed up); then the view is rewritten",
         ),
     ]

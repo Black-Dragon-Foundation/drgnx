@@ -109,38 +109,3 @@ pub async fn serve(
         other => return Err(Box::new(other)),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use runstav::registry::{Home, registry};
-
-    /// Every method the front serves that is not one of the older parts' is routed here: the agent core's families.
-    #[test]
-    fn every_agent_core_method_is_a_front_method() {
-        let core = [
-            "agents/",
-            "exec/",
-            "job/",
-            "matrix/",
-            "plans/",
-            "brief/",
-            "reports/",
-            "timeline/",
-            "budget/",
-            "records/",
-        ];
-        for m in registry() {
-            if core.iter().any(|p| m.name.starts_with(p))
-                || [
-                    "presence/set",
-                    "messages/retract",
-                    "decisions/effects",
-                    "pace/get",
-                ]
-                .contains(&m.name)
-            {
-                assert_eq!(m.home, Home::Front, "{}", m.name);
-            }
-        }
-    }
-}

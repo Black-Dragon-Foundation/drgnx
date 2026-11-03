@@ -283,7 +283,6 @@ mod tests {
             dir.join("hub-x.sock"),
             crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
             norn::store::CoordDb::spawn(dir.join("work.db")),
-            Arc::new(crate::dispatch::NoBackend),
         );
         if !db {
             return (f, None);

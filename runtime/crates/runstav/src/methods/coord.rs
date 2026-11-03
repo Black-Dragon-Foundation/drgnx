@@ -1,5 +1,5 @@
 //! Coordination: the front writes work.db's coordination and job tables (docs/develop/coordination.md, "Who writes
-//! what").  Every method here is the front's own (`Home::Front`), so the Lisp backend may call them too:
+//! what"):
 //!
 //! - `coord/notify`: a coordination server wrote; the front's events go out and the backend hears it (coalesced);
 //! - the editor's five writes: `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark`;
@@ -524,88 +524,88 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "messages/retract", MessagesRetract(RetractParams) -> Retracted,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the user's message taken back while it is still queued (never once delivered)",
         ),
         method!(
             "coord/notify", CoordNotify(Empty) -> bool,
-            classes: [User, Agent, Service], writes: false, home: Front,
+            classes: [User, Agent, Service], writes: false,
             doc: "a coordination server wrote: the new events go out, and the backend hears it (coalesced: one a 0.25 s) and runs delivery (a notification; users too, SB-T12-4)",
         ),
         method!(
             "cards/settle", CardsSettle(SettleParams) -> Settled,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "an open card settled with a choice, once (drgnx-coord-card-settle)",
         ),
         method!(
             "messages/send", MessagesSend(SendParams) -> SendResult,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a message, from the user (only the backend names another sender); held when seen is behind the decision log (drgnx-coord-send)",
         ),
         method!(
             "messages/mark", MessagesMark(MarkParams) -> Changed,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a message moved on to delivered, read or acted, never back (drgnx-coord-mark)",
         ),
         method!(
             "events/add", EventsAdd(AddEventParams) -> Added,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "an event in the log (drgnx-coord-event-add; best_effort: a busy work.db is no error)",
         ),
         method!(
             "review/mark", ReviewMark(ReviewMarkParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
         ),
         method!(
             "coord/job-create", CoordJobCreate(JobCreateParams) -> JobCreated,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-create)",
         ),
         method!(
             "coord/job-set", CoordJobSet(JobSetParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-set)",
         ),
         method!(
             "coord/task-status", CoordTaskStatus(TaskStatusParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-force-status)",
         ),
         method!(
             "coord/leases", CoordLeases(LeasesParams) -> Leases,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-renew, drgnx-coord-release-stale)",
         ),
         method!(
             "coord/decide", CoordDecide(DecideParams) -> Decided,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-decide)",
         ),
         method!(
             "coord/agent", CoordAgent(AgentParams) -> AgentResult,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-agent-register, drgnx-coord-agent-seen)",
             check: check_agent,
         ),
         method!(
             "coord/card-create", CoordCardCreate(CardCreateParams) -> CardCreated,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-create)",
         ),
         method!(
             "coord/card-set", CoordCardSet(CardSetParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-set)",
         ),
         method!(
             "coord/held", CoordHeld(HeldParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-note-held)",
         ),
         method!(
             "coord/prune", CoordPrune(Empty) -> Pruned,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-events-prune-daily; never fails)",
         ),
     ]

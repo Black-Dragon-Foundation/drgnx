@@ -253,23 +253,6 @@ pub fn lock_path(socket: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// The Lisp backend's private socket: `<socket dir>/hub-HASH.d/backend.sock` (per data dir, so two data dirs sharing
-/// one runtime dir never collide); over 103 bytes `<tmp>/drgnx-hub-UID/hub-HASH.d/backend.sock`; over 103 bytes
-/// there too, [`PathError::TooLong`].  `env` gives `<tmp>` and the uid.
-pub fn backend_socket_path(env: &Env, socket: &Path) -> Result<PathBuf, PathError> {
-    let stem = socket.file_stem().unwrap_or_default().to_string_lossy();
-    let rest = format!("{stem}.d/backend.sock");
-    let beside = socket.parent().unwrap_or(Path::new("/")).join(&rest);
-    if beside.as_os_str().len() <= MAX_SOCKET_PATH {
-        return Ok(beside);
-    }
-    let under_tmp = PathBuf::from(expand_in(&rest, &private_tmp(env)));
-    if under_tmp.as_os_str().len() <= MAX_SOCKET_PATH {
-        return Ok(under_tmp);
-    }
-    Err(PathError::TooLong(under_tmp))
-}
-
 /// The agent-class hub socket in a session dir ([`session_dir`]), design §4.2.
 pub const SESSION_HUB_SOCKET: &str = "hub.sock";
 
@@ -293,8 +276,8 @@ pub fn session_parents(env: &Env, socket: &Path) -> [PathBuf; 2] {
 }
 
 /// One agent session's private directory (design §4.2): `<socket dir>/s/SID/`, holding that session's sockets
-/// (`hub.sock`, agent class; later `mcp.sock`, `search.sock`, `gateway.sock`).  Never `hub-HASH.d/`, the backend's
-/// (review M10): a sandbox is given `s/SID` alone, so nothing bound into it reaches `backend.sock`.  When its longest
+/// (`hub.sock`, agent class; later `mcp.sock`, `search.sock`, `gateway.sock`): a sandbox is given `s/SID` alone.  When
+/// its longest
 /// socket would be over 103 bytes, `<tmp>/drgnx-hub-UID/s/SID/`; over there too, [`PathError::TooLong`].  SID is a
 /// name of letters, digits, `-` and `_` ([`PathError::BadName`] otherwise).
 pub fn session_dir(env: &Env, socket: &Path, sid: &str) -> Result<PathBuf, PathError> {
@@ -528,62 +511,9 @@ mod tests {
         assert_eq!(lock_path(s), Path::new("/r/drgnx/hub-546b5fa5.sock.lock"));
     }
 
+    /// An agent session's sockets are in `s/SID/`, within 103 bytes.
     #[test]
-    fn backend_socket_is_per_data_dir_and_within_103_bytes() {
-        let a = Env::new(
-            &[
-                ("HOME", "/hm/u"),
-                ("XDG_RUNTIME_DIR", "/tmp"),
-                ("DRGNX_DATA_DIR", "/srv/a"),
-            ],
-            4242,
-        );
-        let b = Env::new(
-            &[
-                ("HOME", "/hm/u"),
-                ("XDG_RUNTIME_DIR", "/tmp"),
-                ("DRGNX_DATA_DIR", "/srv/b"),
-            ],
-            4242,
-        );
-        let (sa, sb) = (socket_path(&a), socket_path(&b));
-        assert_eq!(sa.parent(), sb.parent(), "one runtime dir");
-        let (ba, bb) = (
-            backend_socket_path(&a, &sa).unwrap(),
-            backend_socket_path(&b, &sb).unwrap(),
-        );
-        assert_ne!(ba, bb);
-        let stem = sa.file_stem().unwrap().to_str().unwrap();
-        assert_eq!(
-            ba,
-            Path::new("/tmp/drgnx").join(format!("{stem}.d/backend.sock"))
-        );
-        // a main socket of 100 bytes: the backend's would be over 103, so it goes under <tmp>
-        let dir = format!("/{}", "s".repeat(100 - "/hub-546b5fa5.sock".len() - 1));
-        let main = PathBuf::from(format!("{dir}/hub-546b5fa5.sock"));
-        assert_eq!(main.as_os_str().len(), 100);
-        let t = Env::new(&[("HOME", "/hm/u"), ("TMPDIR", "/var/tmp")], 4242);
-        assert_eq!(
-            backend_socket_path(&t, &main).unwrap(),
-            Path::new("/var/tmp/drgnx-hub-4242/hub-546b5fa5.d/backend.sock")
-        );
-        // past 103 bytes there too: refused
-        let long_tmp = format!("/{}", "t".repeat(90));
-        let t = Env::new(&[("HOME", "/hm/u"), ("TMPDIR", &long_tmp)], 4242);
-        assert!(matches!(
-            backend_socket_path(&t, &main),
-            Err(PathError::TooLong(_))
-        ));
-        // every path it gives is within 103 bytes
-        for env in [&a, &b] {
-            let p = backend_socket_path(env, &socket_path(env)).unwrap();
-            assert!(p.as_os_str().len() <= 103, "{p:?}");
-        }
-    }
-
-    /// Review M10: an agent session's sockets are in `s/SID/`, never in or around the backend's `hub-HASH.d/`.
-    #[test]
-    fn session_dirs_are_apart_from_the_backend_and_within_103_bytes() {
+    fn session_dirs_are_within_103_bytes() {
         let env = Env::new(
             &[
                 ("HOME", "/hm/u"),
@@ -593,18 +523,8 @@ mod tests {
             4242,
         );
         let socket = socket_path(&env);
-        let stem = socket.file_stem().unwrap().to_str().unwrap();
         let s1 = session_dir(&env, &socket, "s1").unwrap();
         assert_eq!(s1, Path::new("/tmp/drgnx/s/s1"));
-        let backend_dir = backend_socket_path(&env, &socket).unwrap();
-        let backend_dir = backend_dir.parent().unwrap();
-        assert_eq!(
-            backend_dir,
-            Path::new("/tmp/drgnx").join(format!("{stem}.d"))
-        );
-        // neither holds the other: a sandbox given s/SID never reaches backend.sock, nor the reverse
-        assert!(!s1.starts_with(backend_dir) && !backend_dir.starts_with(&s1));
-        assert!(!backend_dir.starts_with(s1.parent().unwrap()));
         assert_eq!(
             session_parents(&env, &socket),
             [

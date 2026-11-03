@@ -763,7 +763,6 @@ pub async fn watch(front: Arc<Front>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::NoBackend;
     use crate::store::WorkDb;
     use runstav::proof::Cap;
     use serde_json::{Value, json};
@@ -802,7 +801,6 @@ mod tests {
             socket.to_path_buf(),
             WorkDb::spawn(dir.join("work.db")).unwrap(),
             norn::store::CoordDb::spawn(dir.join("work.db")),
-            Arc::new(NoBackend),
         )
     }
 

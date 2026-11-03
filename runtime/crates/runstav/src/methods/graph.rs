@@ -1,5 +1,5 @@
 //! The graph store's methods (docs/develop/store.md): the tracker scan's door (Urdr Task 15a; storage §5.6 door 1, §9
-//! step 3).  Every method here is the front's own, so the Lisp backend may call them too:
+//! step 3):
 //!
 //! - `graph/put-parsed`: what one scan read, by source (a file, a spec, the commits, the branches), applied in one
 //!   transaction with the personal-notes deny-list at the door;
@@ -824,103 +824,103 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "graph/put-parsed", GraphPutParsed(PutParsedParams) -> PutParsedAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "what a tracker scan read, by typed source, in one transaction: every path a record carries checked against the personal-notes deny-list (a denied path refuses its whole source), unchanged entities untouched, derived statuses, collected keys",
             check: check_put,
         ),
         method!(
             "graph/record", GraphRecord(RecordParams) -> RecordAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "commits that did a task (implements links), once per collected key (the request's key: a second record answers the first)",
             check: check_record,
         ),
         method!(
             "graph/entity", GraphEntity(EntityParams) -> EntityAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "an entity (as of a tx) with who wrote it; its links, the notes about it and its history on request",
         ),
         method!(
             "graph/neighbors", GraphNeighbors(NeighborsParams) -> WalkAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a breadth-first walk from an entity (depth 1 to 4, kinds past 3), within its budget: what stopped it in truncated",
             check: check_neighbors,
         ),
         method!(
             "graph/path", GraphPath(PathParams) -> WalkAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a shortest path between two entities (at most 6 links), within its budget",
             check: check_path,
         ),
         method!(
             "graph/history", GraphHistory(HistoryParams) -> HistoryAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "every version of an entity, with its tx's author, class and tool",
         ),
         method!(
             "graph/revert", GraphRevert(RevertParams) -> RevertAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a tx reverted (or an entity put back to a version) as a new tx of the user's; a later change to what it wrote blocks it and is named; cascade only lists",
             check: check_revert,
         ),
         method!(
             "graph/excise", GraphExcise(ExciseParams) -> ExciseAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "an entity's (or a tx's) text blanked in every version, its search rows and copies in the coordination tables, then VACUUM and a WAL checkpoint; the backups and transcripts still holding it, removed or redacted on request",
             check: check_excise,
         ),
         method!(
             "graph/grants", GraphGrants(GrantsParams) -> GrantsAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks, or the change of settings: access options, what options:global or options:project, names globs), revoke one; the store refuses a grant from any other class",
             check: check_grants,
         ),
         method!(
             "graph/proposed", GraphProposed(ProposedParams) -> RevertAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "proposed txs accepted, or rejected (reverted newest first)",
             check: check_proposed,
         ),
         method!(
             "graph/sql", GraphSql(SqlParams) -> SqlAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "one read-only SELECT on a hardened connection of its own (no ATTACH, PRAGMA, writes, recursive CTEs or extension loading), with a deadline and a row cap",
             check: check_sql,
         ),
         method!(
             "graph/export", GraphExport(ExportParams) -> PortAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the store as sorted JSON lines (entities, links, txs; history and activity on request) in <data>/export/ or OUT, the personal-notes deny-list applied",
             check: check_export,
         ),
         method!(
             "graph/import", GraphImport(ImportParams) -> PortAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "an export read back, idempotent by version, the personal-notes deny-list applied; never a grant",
         ),
         method!(
             "graph/backup", GraphBackup(Empty) -> BackupAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a checked copy of work.db in <data>/backup/ (VACUUM INTO), then the old copies rotated",
         ),
         method!(
             "graph/compact", GraphCompact(CompactParams) -> CompactAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "parsed entities' old versions thinned and retired sessions' link stats folded (authored facts never)",
         ),
         method!(
             "graph/scrub", GraphScrub(Empty) -> ScrubAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "VACUUM and a WAL checkpoint (TRUNCATE) of work.db as a writer request, saying when readers keep the WAL from being truncated",
         ),
         method!(
             "graph/settings", GraphSettings(SettingsParams) -> Settings,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the store's settings (only_user_closes: only I close my tasks), written in a user-class tx only",
             check: check_settings,
         ),
         method!(
             "graph/privacy", GraphPrivacy(PrivacyParams) -> PrivacyAnswer,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the personal-notes opt-ins and hard entries read again now and applied: a removed opt-in excises what came in",
             check: check_privacy,
         ),
