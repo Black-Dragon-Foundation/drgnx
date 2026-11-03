@@ -19,12 +19,13 @@
 use gleipnir::net::host::parse_target;
 use gleipnir::net::proxy::{self, Listener, ProxyConfig, ProxyEvent, SystemResolver};
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 /// 24 random hex digits from the kernel.
 pub fn random_hex() -> String {
@@ -55,12 +56,39 @@ pub struct Addrs {
     pub abstract_name: String,
 }
 
+/// The listeners on Unix sockets, by name and path under the root. The Lisp backend's socket sits beside the hub's, and
+/// another session's dir has its own (Task 13b's layout).
+const UNIX_LISTENERS: [(&str, &str); 7] = [
+    ("hub", "run/drgnx/hub-0000.sock"),
+    ("backend", "run/drgnx/hub-0000.d/backend.sock"),
+    ("session2", "run/drgnx/s/S2/hub.sock"),
+    ("emacs", "run/emacs/server"),
+    ("bus", "run/bus"),
+    ("ssh-agent", "run/ssh-agent.sock"),
+    ("gateway", "run/drgnx/s/S1/gateway.sock"),
+];
+
+/// How long a wait of the fixture's may take before it is called failed. Never what makes anything pass.
+const FAILED_AFTER: Duration = Duration::from_secs(30);
+
+/// A listener's accepts, settled: one round trip through the listener, so that every connection made before it has been
+/// accepted and counted (a listener accepts in the order the kernel queued the connections), and how many such trips
+/// were made, which are not the probe's.
+struct Sentinel {
+    trip: Box<dyn Fn() -> io::Result<()> + Send + Sync>,
+    made: AtomicUsize,
+}
+
 pub struct Fixture {
     pub root: PathBuf,
     pub canaries: Vec<Canary>,
     pub addrs: Addrs,
     counts: HashMap<&'static str, Arc<AtomicUsize>>,
-    events: Arc<Mutex<Vec<String>>>,
+    sentinels: HashMap<&'static str, Sentinel>,
+    /// The proxy's events as the sink task made them, and what tells that it added one.
+    events: Arc<(Mutex<Vec<String>>, Condvar)>,
+    /// Numbers the sentinel targets sent through the proxy (each is told about once per tag).
+    asked: AtomicUsize,
     rt: Option<tokio::runtime::Runtime>,
     _proxy: proxy::ProxyHandle,
     pub sleep: Option<Child>,
@@ -126,7 +154,7 @@ impl Fixture {
             .enable_all()
             .build()?;
         let mut counts: HashMap<&'static str, Arc<AtomicUsize>> = HashMap::new();
-        let events = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
         let abstract_name = format!("glp-{}", random_hex());
         let (addrs, handle) = {
             let _g = rt.enter();
@@ -135,16 +163,7 @@ impl Fixture {
                 counts.insert(name, c.clone());
                 c
             };
-            for (name, rel) in [
-                ("hub", "run/drgnx/hub-0000.sock"),
-                // The Lisp backend's socket beside the hub's, and another session's dir (Task 13b's layout).
-                ("backend", "run/drgnx/hub-0000.d/backend.sock"),
-                ("session2", "run/drgnx/s/S2/hub.sock"),
-                ("emacs", "run/emacs/server"),
-                ("bus", "run/bus"),
-                ("ssh-agent", "run/ssh-agent.sock"),
-                ("gateway", "run/drgnx/s/S1/gateway.sock"),
-            ] {
+            for (name, rel) in UNIX_LISTENERS {
                 serve_unix(tokio::net::UnixListener::bind(p(rel))?, count(name));
             }
             serve_unix(abstract_listener(&abstract_name)?, count("abstract"));
@@ -180,12 +199,13 @@ impl Fixture {
             let sink = events.clone();
             tokio::spawn(async move {
                 while let Some(e) = rx.recv().await {
-                    sink.lock().unwrap().push(match e {
+                    sink.0.lock().unwrap().push(match e {
                         ProxyEvent::Denied { target, .. } => format!("Denied {target}"),
                         ProxyEvent::Refused { target, why, .. } => {
                             format!("Refused {why:?} {target}")
                         }
                     });
+                    sink.1.notify_all();
                 }
             });
             (
@@ -201,12 +221,45 @@ impl Fixture {
                 handle,
             )
         };
+        let mut sentinels: HashMap<&'static str, Sentinel> = HashMap::new();
+        let mut sentinel =
+            |name: &'static str, trip: Box<dyn Fn() -> io::Result<()> + Send + Sync>| {
+                sentinels.insert(
+                    name,
+                    Sentinel {
+                        trip,
+                        made: AtomicUsize::new(0),
+                    },
+                );
+            };
+        for (name, rel) in UNIX_LISTENERS {
+            let path = p(rel);
+            sentinel(name, Box::new(move || trip_unix(&path)));
+        }
+        let abstract_name = addrs.abstract_name.clone();
+        sentinel("abstract", Box::new(move || trip_abstract(&abstract_name)));
+        for (name, addr) in [
+            ("tcp-lo", Some(addrs.tcp_lo)),
+            ("upstream", Some(addrs.upstream)),
+            ("tcp-nl", addrs.tcp_nl),
+        ] {
+            if let Some(addr) = addr {
+                sentinel(name, Box::new(move || trip_tcp(addr)));
+            }
+        }
+        for (name, addr) in [("udp-lo", Some(addrs.udp_lo)), ("udp-nl", addrs.udp_nl)] {
+            if let Some(addr) = addr {
+                sentinel(name, Box::new(move || trip_udp(addr)));
+            }
+        }
         Ok(Fixture {
             root,
             canaries,
             addrs,
             counts,
+            sentinels,
             events,
+            asked: AtomicUsize::new(0),
             rt: Some(rt),
             _proxy: handle,
             sleep: None,
@@ -260,18 +313,45 @@ impl Fixture {
     }
 
     /// How many connections (or datagrams) the named listener has seen.
+    ///
+    /// A connection is counted when the listener accepts it, which can be after the connecting process is gone. So
+    /// this first makes one trip of its own through the listener: it is accepted after every connection queued
+    /// before it, so when it is back, those are counted. It is not counted in the answer.
     pub fn seen(&self, listener: &str) -> usize {
-        self.counts
-            .get(listener)
-            .map_or(0, |c| c.load(Ordering::SeqCst))
+        let Some(count) = self.counts.get(listener) else {
+            return 0;
+        };
+        let own = self.sentinels.get(listener).map_or(0, |s| {
+            (s.trip)().unwrap_or_else(|e| panic!("a trip through the {listener} listener: {e}"));
+            s.made.fetch_add(1, Ordering::SeqCst) + 1
+        });
+        count.load(Ordering::SeqCst) - own
     }
 
     /// The proxy's events so far, sorted.
+    ///
+    /// An event is sent to the sink before the client is answered, and the sink adds it some time after. So this first
+    /// asks the proxy for a target of its own: its event comes after every event sent before, so when the sink has it,
+    /// it has them all. It is not in the answer.
     pub fn proxy_events(&self) -> Vec<String> {
-        // Events are sent before the client is answered, so they are in by the time the probe has its answer; a
-        // short wait covers the channel hop.
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        let mut e = self.events.lock().unwrap().clone();
+        let target = format!(
+            "sentinel-{}.test:1",
+            self.asked.fetch_add(1, Ordering::SeqCst)
+        );
+        let told = format!("Denied {target}");
+        let status = ask_proxy(&self.path("run/drgnx/s/S1/proxy.sock"), &target)
+            .unwrap_or_else(|e| panic!("a request of the fixture's own to the proxy: {e}"));
+        assert!(status.contains(" 403 "), "the proxy answered {status:?}");
+        let (events, added) = &*self.events;
+        let (mut events, timed_out) = added
+            .wait_timeout_while(events.lock().unwrap(), FAILED_AFTER, |e| !e.contains(&told))
+            .unwrap();
+        assert!(
+            !timed_out.timed_out(),
+            "the proxy's event for {target} never came"
+        );
+        events.retain(|e| *e != told);
+        let mut e = events.clone();
         e.sort();
         e
     }
@@ -424,6 +504,57 @@ fn abstract_listener(name: &str) -> io::Result<tokio::net::UnixListener> {
     tokio::net::UnixListener::bind(std::env::temp_dir().join(format!("{name}.sock")))
 }
 
+/// One byte out and back through a stream to a listener (which echoes it), so the listener has accepted this connection.
+fn trip_stream<S: Read + Write>(mut s: S) -> io::Result<()> {
+    s.write_all(b"s")?;
+    let mut back = [0u8; 1];
+    s.read_exact(&mut back)
+}
+
+fn trip_unix(path: &Path) -> io::Result<()> {
+    let s = std::os::unix::net::UnixStream::connect(path)?;
+    s.set_read_timeout(Some(FAILED_AFTER))?;
+    trip_stream(s)
+}
+
+#[cfg(target_os = "linux")]
+fn trip_abstract(name: &str) -> io::Result<()> {
+    use std::os::linux::net::SocketAddrExt;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name)?;
+    let s = std::os::unix::net::UnixStream::connect_addr(&addr)?;
+    s.set_read_timeout(Some(FAILED_AFTER))?;
+    trip_stream(s)
+}
+
+/// The listener `abstract_listener` made on a path.
+#[cfg(not(target_os = "linux"))]
+fn trip_abstract(name: &str) -> io::Result<()> {
+    trip_unix(&std::env::temp_dir().join(format!("{name}.sock")))
+}
+
+fn trip_tcp(addr: SocketAddr) -> io::Result<()> {
+    let s = std::net::TcpStream::connect(addr)?;
+    s.set_read_timeout(Some(FAILED_AFTER))?;
+    trip_stream(s)
+}
+
+fn trip_udp(addr: SocketAddr) -> io::Result<()> {
+    let s = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    s.set_read_timeout(Some(FAILED_AFTER))?;
+    s.send_to(b"s", addr)?;
+    s.recv_from(&mut [0u8; 8]).map(|_| ())
+}
+
+/// `CONNECT target` to the proxy's socket, the status line of its answer.
+fn ask_proxy(socket: &Path, target: &str) -> io::Result<String> {
+    let mut s = std::os::unix::net::UnixStream::connect(socket)?;
+    s.set_read_timeout(Some(FAILED_AFTER))?;
+    s.write_all(format!("CONNECT {target} HTTP/1.1\r\n\r\n").as_bytes())?;
+    let mut line = String::new();
+    io::BufRead::read_line(&mut io::BufReader::new(s), &mut line)?;
+    Ok(line)
+}
+
 /// Accept, count, then echo until the peer closes.
 fn serve_unix(l: tokio::net::UnixListener, count: Arc<AtomicUsize>) {
     tokio::spawn(async move {
@@ -539,12 +670,22 @@ mod tests {
         assert_eq!(f.seen("hub"), 0);
         std::os::unix::net::UnixStream::connect(f.path("run/drgnx/hub-0000.sock")).unwrap();
         std::net::TcpStream::connect(f.addrs.tcp_lo).unwrap();
-        for _ in 0..50 {
-            if f.seen("hub") == 1 && f.seen("tcp-lo") == 1 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        // `seen` settles the listener first: no wait for the accept to show
         assert_eq!((f.seen("hub"), f.seen("tcp-lo"), f.seen("bus")), (1, 1, 0));
+        assert_eq!(
+            (f.seen("hub"), f.seen("tcp-lo")),
+            (1, 1),
+            "its own trips are not counted"
+        );
+    }
+
+    #[test]
+    fn proxy_events_are_all_in_when_asked_for() {
+        let f = Fixture::new().unwrap();
+        assert!(f.proxy_events().is_empty());
+        let socket = f.path("run/drgnx/s/S1/proxy.sock");
+        assert!(ask_proxy(&socket, "x.test:443").unwrap().contains(" 403 "));
+        assert_eq!(f.proxy_events(), vec!["Denied x.test:443".to_string()]);
+        assert_eq!(f.proxy_events(), vec!["Denied x.test:443".to_string()]);
     }
 }

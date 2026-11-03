@@ -995,9 +995,11 @@ pub(crate) mod tests {
             .unwrap();
     }
 
-    /// Let spawned writes reach the channel.
+    /// Let spawned writes reach the channel. The tests run on a single-threaded runtime: a spawned write runs, as soon
+    /// as this task waits, up to the answer it then waits for, which is after its request is on the channel; and a
+    /// yield lets every task spawned before it run first.
     async fn settle() {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
     }
 
     fn spawn_at(

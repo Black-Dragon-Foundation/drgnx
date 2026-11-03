@@ -66,7 +66,8 @@ const CANARY: &[u8] = b"CANARY-7f3a";
 
 /// A schema-6 file from the shaped fixture under a temporary HOME.
 struct Fx {
-    dir: tempfile::TempDir,
+    /// Holds the temporary folder for as long as the fixture lives.
+    _dir: tempfile::TempDir,
     home: PathBuf,
     db: PathBuf,
     opts: MigrateOpts,
@@ -99,7 +100,7 @@ fn empty_fx() -> Fx {
         config_dir: dir.path().join("config"),
     };
     Fx {
-        dir,
+        _dir: dir,
         home,
         db,
         opts,
@@ -811,7 +812,9 @@ fn interrupted_migration_leaves_schema_6() {
         )
     };
     let before = census(&fx.db);
-    let marker = fx.dir.path().join("paused");
+    // The pause hook writes "paused" to its file: here the child's own stdout, a pipe to this test. Reading it returns
+    // when the child has paused, or at the end of the pipe when the child is gone without (nothing to poll for).
+    let (mut said, said_to) = std::io::pipe().unwrap();
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -819,21 +822,20 @@ fn interrupted_migration_leaves_schema_6() {
             "--test-threads=1",
         ])
         .env(CHILD, &fx.db)
-        .env(
-            "DRGNX_TEST_MIGRATE7_PAUSE",
-            format!("entities:{}", marker.display()),
-        )
-        .stdout(Stdio::null())
+        .env("DRGNX_TEST_MIGRATE7_PAUSE", "entities:/dev/stdout")
+        .stdout(Stdio::from(said_to))
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !marker.exists() {
-        if let Some(s) = child.try_wait().unwrap() {
-            panic!("the child ended before the pause: {s}");
+    let mut got = String::new();
+    while !got.contains("paused") {
+        let mut buf = [0u8; 256];
+        let n = std::io::Read::read(&mut said, &mut buf).unwrap();
+        if n == 0 {
+            let s = child.wait().unwrap();
+            panic!("the child ended before the pause: {s}; it said {got:?}");
         }
-        assert!(Instant::now() < deadline, "the child never paused");
-        std::thread::sleep(Duration::from_millis(50));
+        got.push_str(&String::from_utf8_lossy(&buf[..n]));
     }
     // SIGKILL, mid-transaction.
     child.kill().unwrap();

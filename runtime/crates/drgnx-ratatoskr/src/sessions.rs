@@ -976,12 +976,19 @@ mod tests {
         let start = draugr::start_time(pid as i32).unwrap();
         assert!(owner_alive(&row(pid, start)));
         child.kill().unwrap();
-        for _ in 0..200 {
-            if peer::zombie(pid as i32) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // Wait for the child to have ended without reaping it (WNOWAIT): from then on it is a zombie.
+        // SAFETY: waitid(2) on our own child, with a zeroed `siginfo_t` for it to fill in.
+        let waited = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(waited, 0, "{}", std::io::Error::last_os_error());
+        assert!(peer::zombie(pid as i32), "ended, not reaped");
         assert!(!owner_alive(&row(pid, start)), "a zombie is gone");
         child.wait().unwrap();
         assert!(!owner_alive(&row(pid, start)));

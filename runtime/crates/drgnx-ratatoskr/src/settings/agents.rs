@@ -190,15 +190,10 @@ mod tests {
             let e = e.clone();
             tokio::spawn(async move { e.propose(proposed(5), Duration::from_secs(10)).await })
         };
-        // the event goes out first
-        let mut sent = Vec::new();
-        for _ in 0..200 {
-            sent = lines(&out);
-            if !sent.is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        // the event goes out first: on this single-threaded runtime the spawned `propose` runs as soon as this task
+        // yields, and it sends the event before its first wait (the answer's)
+        tokio::task::yield_now().await;
+        let sent = lines(&out);
         assert_eq!(sent[0]["event"], "settings/proposed");
         assert_eq!(sent[0]["data"]["tx"], 5);
         e.confirmed(4, true, None); // another tx's: nobody waits for it
@@ -257,14 +252,9 @@ mod tests {
                 .await
             })
         };
-        let mut sent = Vec::new();
-        for _ in 0..200 {
-            sent = lines(&out);
-            if !sent.is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        // as above: the request goes out before the spawned `explain` first waits
+        tokio::task::yield_now().await;
+        let sent = lines(&out);
         assert_eq!(sent[0]["event"], "settings/explain");
         assert_eq!(
             sent[0]["data"],

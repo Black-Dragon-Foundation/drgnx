@@ -1,7 +1,6 @@
 //! Task 11's rows: `exec/*` in this crate (the hub-level ones are `test/conformance/exec/*.jsonl`).
 
 use super::*;
-use std::time::Instant;
 
 fn hooks() -> Hooks {
     Hooks {
@@ -22,19 +21,33 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
     }
 }
 
+/// The row of job `id` once it has ended. A job's result is written before the runner says `Done`, so: subscribe, look,
+/// and while it has not ended wait for the next event (any job's) and look again. An end between the look and the wait
+/// is an event the subscription already holds. The deadline only bounds a failure.
 async fn ended(r: &Runner, id: &str) -> ExecRow {
-    let t = Instant::now();
-    loop {
-        let row = r.get(id).expect("the job");
-        if !matches!(row.status, ExecStatus::Running | ExecStatus::Queued) {
-            return row;
+    let mut events = r.subscribe();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let row = r.get(id).expect("the job");
+            if !matches!(row.status, ExecStatus::Running | ExecStatus::Queued) {
+                return row;
+            }
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(e) => panic!("the runner's events ended: {e}"),
+            }
         }
-        assert!(
-            t.elapsed() < Duration::from_secs(20),
-            "job {id} never ended"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("job {id} never ended"))
+}
+
+/// A named pipe at `path`: a shell's `read x < path` waits there until something is written to it.
+fn fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: mkfifo(3) on a path we own.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
 }
 
 fn open(root: &Path) -> Runner {
@@ -78,10 +91,8 @@ async fn exec_timebox_ends_it() {
         ))
         .await
         .unwrap();
-    let t = Instant::now();
     let row = ended(&r, &id).await;
     assert_eq!(row.status, ExecStatus::TimedOut);
-    assert!(t.elapsed() < Duration::from_secs(10));
 }
 
 #[tokio::test]
@@ -131,13 +142,16 @@ async fn bad_jobs_are_refused() {
 #[test]
 fn exec_survives_a_hub_restart() {
     let d = tempfile::tempdir().unwrap();
+    // The job waits for the test to write to this pipe: it is running for exactly as long as the test wants.
+    let go = d.path().join("go");
+    fifo(&go);
     let first = tokio::runtime::Runtime::new().unwrap();
     let id = first.block_on(async {
         let r = open(d.path());
         r.start(spec(
             Starter::User,
             d.path(),
-            "sleep 1; echo survived",
+            &format!("read x < {}; echo survived", go.display()),
             Duration::from_secs(60),
         ))
         .await
@@ -149,6 +163,8 @@ fn exec_survives_a_hub_restart() {
     second.block_on(async {
         let r = open(d.path());
         assert_eq!(r.get(&id).unwrap().status, ExecStatus::Running);
+        // opens the pipe once the job's shell is reading it
+        std::fs::write(&go, "go\n").unwrap();
         let row = ended(&r, &id).await;
         assert_eq!(row.status, ExecStatus::Done);
         assert_eq!(row.summary.unwrap().lines, vec!["survived".to_string()]);
@@ -486,17 +502,20 @@ async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
         ))
         .await
         .unwrap();
-    let t = Instant::now();
-    let second = r
-        .start(spec(
+    // the first job holds the only slot until the gate is written, below: a start that waited for the slot would wait
+    // for ever (the deadline only bounds that failure)
+    let second = tokio::time::timeout(
+        Duration::from_secs(30),
+        r.start(spec(
             Starter::User,
             d.path(),
             "echo second",
             Duration::from_secs(30),
-        ))
-        .await
-        .unwrap();
-    assert!(t.elapsed() < Duration::from_secs(2), "the start blocked");
+        )),
+    )
+    .await
+    .expect("the start blocked")
+    .unwrap();
     assert!(r.is_queued(&second) && !r.is_queued(&first));
     assert_eq!(r.get(&second).unwrap().status, ExecStatus::Queued);
     assert_eq!(r.get(&first).unwrap().status, ExecStatus::Running);
@@ -629,17 +648,20 @@ async fn waiting_for_a_process_ends_with_the_process() {
     let pid = child.id() as i32;
     let start = draugr::start_time(pid).unwrap();
     let waiter = tokio::spawn(wait_gone(pid, start));
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The waiter runs, on this single-threaded runtime, as soon as this task waits, up to its first wait: the process's
+    // end (everything before that is synchronous). So after a yield it is waiting, and the process is alive.
+    tokio::task::yield_now().await;
     assert!(!waiter.is_finished());
     child.kill().unwrap();
     child.wait().unwrap();
-    tokio::time::timeout(Duration::from_secs(5), waiter)
+    // the deadlines here only bound a failure
+    tokio::time::timeout(Duration::from_secs(30), waiter)
         .await
         .expect("the wait ended with the process")
         .unwrap();
     // a pid that is not that process (reused) is not waited on
     tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(30),
         wait_gone(std::process::id() as i32, 1),
     )
     .await

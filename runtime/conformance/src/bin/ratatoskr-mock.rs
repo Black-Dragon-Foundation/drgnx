@@ -9,7 +9,8 @@
 //!   else 404 `{}`.  `once` answers once and goes; `status` 0 never answers; `chunks` `[[delay_ms, text]…]` streams
 //!   (the head at once, no length, each text after its delay, then the close; with `no_end` the connection is dropped
 //!   instead).  The log is JSONL: `{"request": {method, path, headers (lower-case names), body}}` per request, then
-//!   `{"closed": true}` when the client hangs up before it was answered to the end.
+//!   `{"closed": true}` when the client hangs up before it was answered to the end; with `--print-closed` it also
+//!   prints `MOCK-LLM-CLOSED` then.
 //! - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
 //!   tunnelled, anything else gets 405 (logged as `{"refused": "METHOD TARGET"}`).
 //!
@@ -146,6 +147,9 @@ fn parse_entry(v: &Value) -> Result<Entry, String> {
 struct Shared {
     script: Mutex<Vec<Entry>>,
     log: Option<Mutex<File>>,
+    /// `--print-closed`: say `MOCK-LLM-CLOSED` on stdout (after the log line) when a client hangs up early, so a test
+    /// can wait for the hang-up instead of reading the log until it shows.
+    print_closed: bool,
 }
 
 /// A client connection, plain or TLS.
@@ -335,6 +339,11 @@ fn serve(mut w: Box<dyn Wire>, shared: &Shared) {
     );
     if answer(&mut *w, entry.as_ref()) {
         log_line(&shared.log, &json!({"closed": true}));
+        if shared.print_closed {
+            // a reader that is gone is no concern of the mock
+            let mut out = std::io::stdout();
+            let _ = writeln!(out, "MOCK-LLM-CLOSED").and_then(|()| out.flush());
+        }
     }
 }
 
@@ -404,6 +413,7 @@ fn llm(args: &[String]) {
     let shared = Arc::new(Shared {
         script: Mutex::new(script),
         log: open_log(args),
+        print_closed: args.iter().any(|a| a == "--print-closed"),
     });
     let listener =
         TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| die(&format!("cannot listen: {e}")));

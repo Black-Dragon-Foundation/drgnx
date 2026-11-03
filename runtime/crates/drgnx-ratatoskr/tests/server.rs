@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr");
@@ -58,8 +58,13 @@ impl Root {
     }
 }
 
+/// How long a wait for the hub may take before it is called failed. Never what makes anything pass.
+const FAILED_AFTER: Duration = Duration::from_secs(30);
+
 struct Hub {
-    child: Child,
+    pid: u32,
+    /// The hub's exit status, sent by a thread that waits for the process (the one place that reaps it).
+    ended: std::sync::mpsc::Receiver<ExitStatus>,
     stderr: PathBuf,
     status: Option<ExitStatus>,
 }
@@ -71,7 +76,7 @@ impl Hub {
 
     fn start_with(root: &Root, n: usize, extra: &[&str]) -> Hub {
         let stderr = root.dir.path().join(format!("hub-{n}.err"));
-        let child = Command::new(BIN)
+        let mut child = Command::new(BIN)
             .args([
                 "serve",
                 "--foreground",
@@ -87,37 +92,46 @@ impl Hub {
             .stderr(std::fs::File::create(&stderr).unwrap())
             .spawn()
             .unwrap();
+        let pid = child.id();
+        let (tx, ended) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait().unwrap());
+        });
         Hub {
-            child,
+            pid,
+            ended,
             stderr,
             status: None,
         }
     }
 
     fn pid(&self) -> u32 {
-        self.child.id()
+        self.pid
     }
 
     fn exited(&mut self) -> Option<ExitStatus> {
         if self.status.is_none() {
-            self.status = self.child.try_wait().unwrap();
+            self.status = self.ended.try_recv().ok();
         }
         self.status
     }
 
-    fn wait_exit(&mut self, within: Duration) -> ExitStatus {
-        let deadline = Instant::now() + within;
-        loop {
-            if let Some(s) = self.exited() {
-                return s;
-            }
-            assert!(Instant::now() < deadline, "the hub is still running");
-            std::thread::sleep(Duration::from_millis(20));
+    /// The hub's exit status, when it has ended: waited for, not looked for.
+    fn wait_exit(&mut self) -> ExitStatus {
+        if self.status.is_none() {
+            self.status = Some(
+                self.ended
+                    .recv_timeout(FAILED_AFTER)
+                    .expect("the hub is still running"),
+            );
         }
+        self.status.unwrap()
     }
 
+    /// Returns when the hub answers a ping. This one is a look repeated (the hub says nothing when it is ready); it
+    /// ends at once, with the hub's stderr, when the hub ended, and `FAILED_AFTER` only bounds a failure.
     fn wait_ready(&mut self, socket: &Path) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + FAILED_AFTER;
         while !ping(socket) {
             if let Some(s) = self.exited() {
                 panic!("the hub ended with {s}: {}", self.stderr_text());
@@ -145,13 +159,10 @@ impl Hub {
 impl Drop for Hub {
     fn drop(&mut self) {
         self.term();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while self.exited().is_none() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        if self.exited().is_none() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        if self.status.is_none() && self.ended.recv_timeout(FAILED_AFTER).is_err() {
+            // it ignored SIGTERM: a failure of its own, and no process is left behind
+            unsafe { libc::kill(self.pid() as i32, libc::SIGKILL) };
+            let _ = self.ended.recv_timeout(FAILED_AFTER);
         }
     }
 }
@@ -167,9 +178,7 @@ struct Client {
 impl Client {
     fn open(socket: &Path) -> Client {
         let stream = UnixStream::connect(socket).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
+        stream.set_read_timeout(Some(FAILED_AFTER)).unwrap();
         let reader = BufReader::new(stream.try_clone().unwrap());
         Client { stream, reader }
     }
@@ -264,7 +273,7 @@ fn two_hubs_one_lock_second_exits_3() {
     let mut first = Hub::start(&root, 1);
     first.wait_ready(&socket);
     let mut second = Hub::start(&root, 2);
-    let status = second.wait_exit(Duration::from_secs(10));
+    let status = second.wait_exit();
     assert_eq!(status.code(), Some(3), "{}", second.stderr_text());
     assert!(
         second.stderr_text().contains("another hub serves here"),
@@ -285,18 +294,13 @@ fn the_path_is_statted_not_proc_self_exe() {
         .find(|p| Path::new(p).exists())
         .expect("a sleep binary");
     let (live, other) = (dir.path().join("live"), dir.path().join("other"));
-    std::fs::copy(sleep, &live).unwrap();
+    // `live` is a link to the system's sleep, never a file this process wrote: executing a file just written can fail
+    // as busy (ETXTBSY) while another thread forks, and the link has nothing to wait for. The watch statts the path
+    // (through the link); the replacement is a file of another inode.
+    std::os::unix::fs::symlink(sleep, &live).unwrap();
     std::fs::copy(sleep, &other).unwrap();
-    // a running process whose image is `live` (a file just written can be busy for a moment while another thread forks)
-    let mut child = (0..50)
-        .find_map(|_| {
-            Command::new(&live)
-                .arg("60")
-                .spawn()
-                .map_err(|_| std::thread::sleep(Duration::from_millis(20)))
-                .ok()
-        })
-        .expect("the copied sleep starts");
+    // a running process whose image is what `live` points to
+    let mut child = Command::new(&live).arg("60").spawn().unwrap();
     let by_path = ExeWatch::new(&live).unwrap();
     #[cfg(target_os = "linux")]
     let by_link = ExeWatch::new(Path::new(&format!("/proc/{}/exe", child.id()))).unwrap();
@@ -325,7 +329,7 @@ fn launchd_never_loops_on_exit_3() {
     let mut first = Hub::start(&root, 1);
     first.wait_ready(&socket);
     let mut second = Hub::start_with(&root, 2, &["--supervisor", "launchd"]);
-    let status = second.wait_exit(Duration::from_secs(10));
+    let status = second.wait_exit();
     assert_eq!(status.code(), Some(0), "{}", second.stderr_text());
     assert!(
         second.stderr_text().contains("another hub serves here"),
@@ -378,7 +382,7 @@ fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
             .contains(&format!("stopped Ratatoskr (pid {})", hub.pid())),
         "{out:?}"
     );
-    assert_eq!(hub.wait_exit(Duration::from_secs(10)).code(), Some(0));
+    assert_eq!(hub.wait_exit().code(), Some(0));
 }
 
 #[test]
@@ -404,7 +408,7 @@ fn cap_is_64_hex_0600_and_gone_after_stop() {
         .collect();
     assert_eq!(names.len(), 3, "socket, cap and lock only: {names:?}");
     hub.term();
-    let status = hub.wait_exit(Duration::from_secs(5));
+    let status = hub.wait_exit();
     assert_eq!(status.code(), Some(0), "{}", hub.stderr_text());
     assert!(!cap.exists(), "the cap is removed at stop");
     assert!(!socket.exists(), "the socket is removed at stop");
@@ -495,7 +499,9 @@ fn a_stopped_reader_is_dropped_after_16_mib_while_another_keeps_reading() {
     );
     // the hub serves on, and says why it dropped the reader
     assert!(ping(&socket));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // the line is written by the hub, which says nothing when it has: the log is looked at again until it shows
+    // (`FAILED_AFTER` only bounds a failure)
+    let deadline = Instant::now() + FAILED_AFTER;
     loop {
         let log: String = std::fs::read_dir(root.log_dir())
             .unwrap()
