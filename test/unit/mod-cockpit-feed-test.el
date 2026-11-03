@@ -224,27 +224,8 @@ buffers are killed after: they owned their hooks and their timers."
 
 (ert-deftest drgnx-cockpit-feed/answers-never-interrupt ()
   (drgnx-cockpit-feed-test--with
-    (let ((prompts nil))
-      (cl-letf (((symbol-function 'drgnx-agents--prompt) (lambda (s text) (push (list s text) prompts)))
-                ((symbol-function 'drgnx-agents-steer) (lambda (&rest _) (ert-fail "a queued answer steered"))))
-        ;; a session of this Emacs whose mode interrupts, busy: the answer waits in its queue, nothing is stopped
-        (let ((busy (drgnx-agents--make :id "s-4" :name "busy" :status 'busy :mode 'interrupt))
-              (idle (drgnx-agents--make :id "s-5" :name "idle" :status 'idle :mode 'interrupt :acp-id "acp-5")))
-          (setq mirrors (append (list busy idle) mirrors))
-          (drgnx-cockpit-fixture-send :sender "s-4" :recipient "user" :text "[escalation] keep going?" :question t)
-          (should (eq (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-4"))) "yes")
-                      'session))
-          (should (equal (drgnx-agent-session-queue busy) '("yes")))
-          (should (eq (drgnx-agent-session-mode busy) 'interrupt))          ; its mode is its own again
-          (should-not prompts)
-          (should-not (drgnx-coord-inbox "s-4" '("queued")))
-          ;; …idle: the answer starts its turn
-          (drgnx-cockpit-fixture-send :sender "s-5" :recipient "user" :text "[escalation] start?" :question t)
-          (should (eq (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-5"))) "go")
-                      'session))
-          (should (equal prompts (list (list idle "go"))))
-          (should (eq (drgnx-agent-session-mode idle) 'interrupt))
-          (setq prompts nil))
+    (progn
+      (cl-letf (((symbol-function 'drgnx-agents-steer) (lambda (&rest _) (ert-fail "a queued answer steered"))))
         ;; a hub session's mirror whose mode interrupts: the answer waits in the store, the hub gives it when it is free
         (setf (drgnx-agent-session-mode m2) 'interrupt)
         (drgnx-cockpit-fixture-send :sender "s-2" :recipient "user" :text "[escalation] which file?" :question t)
@@ -252,16 +233,6 @@ buffers are killed after: they owned their hooks and their timers."
           (should (eq (drgnx-cockpit-answer q "a.el") 'message))
           (should (equal (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "s-2" '("queued"))) '("a.el")))
           (should-not (drgnx-cockpit-feed-test--open-p (plist-get q :id))))
-        ;; a session of this Emacs, busy, in the default mode: queued in it
-        (let ((local (drgnx-agents--make :id "s-3" :name "local" :status 'busy :mode 'queue)))
-          (push local mirrors)
-          (drgnx-cockpit-fixture-send :sender "s-3" :recipient "user" :text "[escalation] go on?" :question t)
-          (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-3"))) "yes")
-          (should (equal (drgnx-agent-session-queue local) '("yes")))
-          ;; a reply to an agent with no question: queued too
-          (drgnx-cockpit-feed-reply "s-3" "and then stop")
-          (should (equal (drgnx-agent-session-queue local) '("yes" "and then stop"))))
-        (should-not prompts)                                              ; busy sessions: no turn started
         ;; the hub was never asked to stop, kill or cancel anything
         (dolist (c drgnx-cockpit-feed-test--hub)
           (should-not (member (car c) '("agents/stop" "agents/kill")))

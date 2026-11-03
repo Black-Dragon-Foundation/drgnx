@@ -1021,9 +1021,9 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
-     ;; the editor starts no agent process of its own (drgnx-agents still loads the ACP client until it goes)
-     (cl-letf (((symbol-function 'drgnx-acp-start) (lambda (&rest _) (error "the editor started an agent"))))
-       (should (equal (drgnx-onboard--claude-profile) '(t . "the claude profile answered (mock-claude 0.1.0)"))))
+     ;; the editor starts no agent process of its own: it has no ACP client
+     (should (equal (drgnx-onboard--claude-profile) '(t . "the claude profile answered (mock-claude 0.1.0)")))
+     (should-not (featurep 'drgnx-acp))
      ;; one call: `agents/probe' for the claude profile, with the step's wait, and the call's own a few seconds longer
      (should (equal drgnx-onboard-test--hub-calls
                     (list (list "agents/probe" (list :profile "claude" :wait_s drgnx-onboard-agent-wait)
@@ -1438,7 +1438,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (equal (car (last exec-path)) dir))
       (should (equal (getenv "PATH") (concat bin path-separator dir))))))
 
-(require 'drgnx-hub)                    ; so a stub of `drgnx-hub-running-p' is not replaced by the load
+(require 'drgnx-hub-client)             ; so a stub of `drgnx-hub-running-p' is not replaced by the load
 
 (ert-deftest drgnx-ai-onboard/path-added-with-a-hub-says-hub-stop ()
   :tags '(:cond)
@@ -1547,15 +1547,10 @@ record the prompts and the default in the lists they return as the cars of (PROM
                    ((symbol-function 'completing-read) (nth 0 b)) ((symbol-function 'y-or-n-p) (nth 1 b)))
            (should (string-match-p "tools for agents: coordination\\'" (cadr (drgnx-onboard--agents-step '(:interactive t))))))
          (should (equal (car (car (nth 3 b))) "claude (Ollama)")))
-       ;; the sessions started now get both servers; one agent, one search server for its own project
-       (let ((s (drgnx-agents--make :id "s1" :name "s1" :cwd root :mcp-sid "x1" :mcp-socket "/x/mcp.sock"))
-             (process-environment (cons "DRGNX_RATATOSKR_BIN=/usr/bin/true" process-environment)))
-         (should (equal (mapcar (lambda (e) (plist-get e :name)) (drgnx-agents--mcp-servers s)) '("drgnx")))
-         (drgnx-agents-set-setting :mcp '(coordination search))
-         (let ((servers (drgnx-agents--mcp-servers s)))
-           (should (equal (mapcar (lambda (e) (plist-get e :name)) servers) '("drgnx" "drgnx-search")))
-           (should (equal (aref (plist-get (aref servers 1) :args) (1- (length (plist-get (aref servers 1) :args))))
-                          (directory-file-name root)))))))))
+       ;; the setting the hub reads for the sessions it starts
+       (should (equal (drgnx-agents-mcp-names) '(coordination)))
+       (drgnx-agents-set-setting :mcp '(coordination search))
+       (should (equal (drgnx-agents-mcp-names) '(coordination search)))))))
 
 (ert-deftest drgnx-ai-onboard/agent-defaults-are-never-asked-without-interaction ()
   :tags '(:cond)
@@ -1589,7 +1584,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
           (should-not (cadr (assq 'drgnx-agents-mcp entries)))
           (should (equal (cadr (assq 'drgnx-agents-profiles entries)) '(("mine" :command ("x")))))
           (should (assq 'drgnx-agents-routes entries))))
-      (should (equal (drgnx-agents--mcp-servers (drgnx-agents--make :id "s1" :name "s1" :cwd root)) []))
+      (should-not (drgnx-agents-mcp-names))
       ;; a file that cannot be read is not touched; the result says so
       (write-region "(drgnx-settings :version 1 (drgnx-agents-profiles" nil file nil 'silent)
       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "claude")) ((symbol-function 'y-or-n-p) (nth 1 a)))

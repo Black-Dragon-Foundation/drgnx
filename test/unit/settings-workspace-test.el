@@ -175,8 +175,7 @@ fixture settings; the buffers it opened are killed after."
 
 (ert-deftest drgnx-settings-workspace/w1-refuses-the-sandbox-settings ()
   ;; US-WORKSPACE-NEVER-1: a repository's .drgnx/settings.el never sets the sandbox's secrets, cap or pinned names
-  (require 'drgnx-sandbox)
-  (require 'drgnx-sandbox-proxy)
+  (require 'drgnx-settings-runtime)
   (let ((vars '(drgnx-sandbox-memory-max drgnx-sandbox-proxy-pinned-addresses drgnx-sandbox-secret-files)))
     (dolist (v vars)
       (should (equal (mapcar (lambda (k) (plist-get (drgnx-setting-meta v) k)) '(:scope :workspace :agents))

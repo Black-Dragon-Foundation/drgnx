@@ -4,37 +4,20 @@
 (require 'ert)
 (require 'drgnx-agents)
 (require 'drgnx-agents-mirror)
-(require 'drgnx-hub)
+(require 'drgnx-hub-client)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
-(load (expand-file-name "test/fixtures/lisp-hub-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
 
 (defmacro drgnx-agents-mirror-permission-test--with (&rest body)
-  "BODY with drgnx's dirs under ROOT, a hub process serving them (profile \"mock\" in its settings.el), no mirrors yet."
+  "BODY with Ratatoskr serving drgnx's dirs under ROOT (profile \"mock\" in its settings.el), no mirrors yet; skipped
+without the binary (`drgnx-hub-client-test--with-ratatoskr')."
   (declare (indent 0))
-  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-mirror-perm" t)))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
-                                             (concat "XDG_STATE_HOME=" root "state") "DRGNX_NO_HUB_START" "DRGNX_JOBS_LAUNCHER=detached")
-                                       process-environment))
-          (drgnx-agents--sessions nil) (drgnx-agents-profiles nil) (drgnx-hub-event-functions nil))
-     (unwind-protect
-         (progn
-           (make-directory (concat root "config") t)
-           (setq drgnx-agents-profiles
-                 (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                                   "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
-           (drgnx-test-write-settings (concat root "config/settings.el") 'drgnx-agents-profiles drgnx-agents-profiles)
-           (drgnx-test-lisp-hub-ensure)
-           ,@body)
-       (ignore-errors (drgnx-hub-call-sync "shutdown" nil 3))
-       (ignore-errors (drgnx-test-wait (lambda () (not (drgnx-hub-running-p))) :what "the hub gone"))
-       ;; the socket goes while the hub still exits; its job's wrapper then writes the exit code into ROOT: ROOT is
-       ;; removed once no job of it runs (the wrapper has ended)
-       (ignore-errors (drgnx-test-wait (lambda () (not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))
-                                       :what "the hub's job ended"))
-       (drgnx-agents-mirror-stop)
-       (drgnx-hub-disconnect)
-       (delete-directory root t))))
+  `(drgnx-hub-client-test--with-ratatoskr
+     (drgnx-hub-client-test--mock-profile root)
+     (let ((drgnx-agents--sessions nil) (drgnx-agents-profiles nil))
+       (unwind-protect (progn ,@body)
+         (drgnx-agents-mirror-stop)))))
 
 (defun drgnx-agents-mirror-permission-test--wait (pred &optional secs)
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "a mirror's condition"))
@@ -45,15 +28,13 @@
   (mapconcat (lambda (e) (format "%s" (or (plist-get e :text) ""))) (drgnx-agent-session-entries s) " "))
 
 (defun drgnx-agents-mirror-permission-test--start ()
-  (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd temporary-file-directory)) :id)))
+  (let ((id (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd (getenv "HOME"))) :id)))   ; ROOT/home
     (drgnx-agents-mirror-permission-test--wait
      (lambda () (equal (plist-get (plist-get (drgnx-hub-call-sync "agents/get" (list :id id)) :session) :status) "idle")))
     id))
 
 (ert-deftest drgnx-agents-mirror-permission/a-new-editor-sees-the-pending-request-and-answers-it ()
   :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
-  ;; The hub's start has a wall-clock deadline that a loaded machine misses ("The drgnx hub did not start"); the Rust
-  ;; runtime replaces the hub, so the test is not reworked.
   (drgnx-agents-mirror-permission-test--with
     (let ((id (drgnx-agents-mirror-permission-test--start)))
       (drgnx-agents-mirror-sync)

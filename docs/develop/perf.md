@@ -403,9 +403,9 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
     `gc-idle` is cancelled; turned off, drgnx's threshold, `gc-cons-percentage` 0.1 and `gc-idle` are back
     (gcmh's own mode function sets its low threshold after the watcher ran, so `gcmh-mode-off-hook` restores
     them too). A `let` of `gcmh-mode` changes nothing.
-  - **Batch Emacs** (the hub and workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
-    `gc-cons-percentage` 0.2. It is the first form of `drgnx-hub-main`, `drgnx-search-index-cli`,
-    `drgnx-search-mcp-main` and `drgnx-coord-mcp-main`; short CLI commands keep Emacs's defaults.
+  - **Batch Emacs** (workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
+    `gc-cons-percentage` 0.2. It is the first form of `drgnx-search-index-cli` and `drgnx-search-mcp-main`; short CLI
+    commands keep Emacs's defaults.
   - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
     `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
   - **The origin of a collection:** `drgnx-gc--idle` binds `nidhogg-watchdog-gc-origin` to `idle` around its

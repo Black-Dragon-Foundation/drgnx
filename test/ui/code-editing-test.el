@@ -14,7 +14,7 @@
 
 (ert-deftest drgnx-ui-code/sticky-guides-smooth ()
   (let* ((root (drgnx-uitest-root-frame)) (dir (make-temp-file "drgnx-code-shot" t))
-         (file (expand-file-name "core/drgnx-job.el" drgnx-code-ui-test--repo))
+         (file (expand-file-name "core/drgnx-hub-client.el" drgnx-code-ui-test--repo))
          (guides (and (file-directory-p drgnx-code-ui-test--elpa)
                       (car (directory-files drgnx-code-ui-test--elpa t "\\`indent-bars-[0-9]"))))
          (buf nil))
@@ -29,11 +29,11 @@
           (drgnx-smooth--setup)
           ;; into a long function: its first line has scrolled off
           (goto-char (point-min))
-          (re-search-forward "^(defun drgnx-job-step ")
+          (re-search-forward "^(defun drgnx-hub--note-card ")
           (forward-line 12)
           (set-window-start (selected-window) (line-beginning-position))
           (drgnx-test-wait-presented)
-          (should (string-search "(defun drgnx-job-step" (drgnx-sticky--segment (selected-window))))
+          (should (string-search "(defun drgnx-hub--note-card" (drgnx-sticky--segment (selected-window))))
           (should (or (bound-and-true-p ultra-scroll-mode) (bound-and-true-p pixel-scroll-precision-mode)))
           (when guides (should (bound-and-true-p indent-bars-mode)))
           (let ((shot (plist-get (drgnx-uitest-capture dir) :root)))

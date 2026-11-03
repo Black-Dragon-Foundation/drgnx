@@ -25,6 +25,11 @@
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-live" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(require 'drgnx-agents-mirror)
+
+(defun drgnx-live-test--agent-env (s)
+  "What the agent of session S gets from `drgnx-agents-env-functions' as it starts in the hub: \"NAME=value\" strings."
+  (mapcar (lambda (v) (concat (plist-get v :name) "=" (plist-get v :value))) (drgnx-agents-mirror--module-env s)))
 
 (defmacro drgnx-live-test--with (&rest body)
   "BODY with a temp state dir, the mock browser serving on PORT as the running live browser (job \"job-live\"),
@@ -167,7 +172,7 @@ no agents, and everything closed afterwards."
            (idle (drgnx-agents--make :name "idle" :profile "claude" :status 'idle))
            (steered nil))
       (setq drgnx-agents--sessions (list busy idle))
-      (drgnx-agents--env busy) (drgnx-agents--env idle)  ; both get the endpoint
+      (drgnx-live-test--agent-env busy) (drgnx-live-test--agent-env idle)  ; both get the endpoint
       (cl-letf (((symbol-function 'drgnx-agents-steer)
                  (lambda (s text) (push (list (drgnx-agent-session-name s) text) steered))))
         (drgnx-live-test--open)
@@ -236,7 +241,7 @@ no agents, and everything closed afterwards."
       (unwind-protect
           (let ((drgnx-agents-env-functions (list #'drgnx-live--agent-env)))   ; as the module's setup adds it
             ;; no browser yet: nothing extra
-            (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-agents--env s)))
+            (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-live-test--agent-env s)))
             ;; Live: Start Browser for Agents starts Chrome once, headless, on 127.0.0.1, a throwaway profile, capped
             (drgnx-live-start-browser)
             (should (equal (drgnx-live-browser) '(:port 9555 :ws "ws://127.0.0.1:9555/devtools/browser/abc")))
@@ -248,14 +253,14 @@ no agents, and everything closed afterwards."
                                   (concat "--user-data-dir=" dir) "--no-first-run"))
                 (should (member flag command)))
               (should (equal (plist-get keys :memory-max) (and (eq system-type 'gnu/linux) "1G"))))
-            (should (member "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9555" (drgnx-agents--env s)))
+            (should (member "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9555" (drgnx-live-test--agent-env s)))
             (should (memq s drgnx-live--given))
             ;; a job that reads as gone (systemd's) runs as long as the browser's own lock names a live process
             (setq status 'gone)
             (should-not (drgnx-live-running))
             (make-symbolic-link (format "testhost-%d" (process-id chrome)) (expand-file-name "SingletonLock" dir))
             (should (equal (plist-get (drgnx-live-running) :port) 9555))
-            (should (member "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9555" (drgnx-agents--env s)))
+            (should (member "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9555" (drgnx-live-test--agent-env s)))
             (should (= 1 (length starts)))
             ;; stopping it: the job ends, the profile goes once the browser has exited (not after the 3 s cap),
             ;; agents started now get no endpoint
@@ -265,7 +270,7 @@ no agents, and everything closed afterwards."
             (should-not (process-live-p chrome))
             (should (equal stopped '("job-1")))
             (should-not (file-exists-p dir))
-            (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-agents--env s))))
+            (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-live-test--agent-env s))))
         (delete-process chrome)
         (delete-directory root t)))))
 
@@ -329,7 +334,7 @@ no agents, and everything closed afterwards."
           (late (drgnx-agents--make :name "late" :profile "claude" :status 'idle))
           (fine (drgnx-agents--make :name "fine" :profile "claude" :status 'idle)))
       (setq drgnx-agents--sessions (list early late fine))
-      (drgnx-agents--env late) (drgnx-agents--env fine)
+      (drgnx-live-test--agent-env late) (drgnx-live-test--agent-env fine)
       (setf (drgnx-agent-session-entries late)
             (list (list :type 'tool :title "browser_navigate" :url "https://elsewhere.test/")))
       (setf (drgnx-agent-session-entries fine)
@@ -355,7 +360,7 @@ are pushed to STEERED as (NAME TEXT)."
   (declare (indent 1))
   `(let ((busy (drgnx-agents--make :name "busy" :profile "claude" :status 'busy)))
      (setq drgnx-agents--sessions (list busy))
-     (drgnx-agents--env busy)
+     (drgnx-live-test--agent-env busy)
      (cl-letf (((symbol-function 'drgnx-agents-steer)
                 (lambda (s text) (push (list (drgnx-agent-session-name s) text) ,steered))))
        (drgnx-live-test--open)

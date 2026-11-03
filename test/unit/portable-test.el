@@ -7,7 +7,6 @@
 (require 'drgnx-projects)
 (require 'drgnx-doctor)
 (require 'drgnx-onboard)
-(require 'drgnx-acp)
 
 (defmacro drgnx-portable-test--with (root &rest body)
   "BODY with ROOT a temp dir holding home/, config/, data/, state/ and org/ (HOME and drgnx's dirs set to them)."
@@ -176,24 +175,6 @@
       (should-not (file-exists-p (expand-file-name "systemd" (drgnx-user-dir))))
       (should-not (file-exists-p (expand-file-name "applications" (drgnx-user-dir))))
       (should-not (plist-get (drgnx-portable-config-problems) :machine-local)))))
-
-(ert-deftest drgnx-acp/a-tilde-command-starts ()
-  :tags '(:cond)
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
-  (drgnx-portable-test--with root
-    (let ((fake (concat root "home/bin/fake-acp")))
-      (drgnx-portable-test--write fake (format "#!/bin/sh\nexec %s --batch -Q -l %s\n"
-                                               (shell-quote-argument (expand-file-name invocation-name invocation-directory))
-                                               (shell-quote-argument (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
-      (set-file-modes fake #o755)
-      (let ((conn (drgnx-acp-start '("~/bin/fake-acp"))) r)
-        (unwind-protect
-            (progn
-              (drgnx-acp-request conn "initialize" '(:protocolVersion 1) (lambda (res) (setq r res)))
-              (let ((deadline (+ (float-time) 10)))
-                (while (and (not r) (< (float-time) deadline)) (accept-process-output nil 0.02)))
-              (should (eql (plist-get (car r) :protocolVersion) 1)))
-          (drgnx-acp-stop conn))))))
 
 ;;;; Fix round 1
 

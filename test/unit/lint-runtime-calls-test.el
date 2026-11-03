@@ -5,8 +5,9 @@
 ;; coordination readers in `drgnx-coord-read.el', the agent settings in `drgnx-agents.el', ...).  This lint reads
 ;; `core/ modules/ wb/ harness/ settings/' with the Lisp reader (comments and strings never count) and fails on any
 ;; symbol that only a doomed file defines, used in a kept file, and on any `require' or `declare-function' of a doomed
-;; feature.  `drgnx-agents.el' is half doomed: its forms after the runtime section marker count as doomed unless the
-;; name is on `drgnx-lint-runtime--agents-kept'.
+;; feature.  `drgnx-agents.el' was half doomed: forms after the runtime section marker, should it come back, count as
+;; doomed unless the name is on `drgnx-lint-runtime--agents-kept'.  `drgnx-lint/no-runtime-lisp' checks that the
+;; runtime is gone.
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)
@@ -15,10 +16,10 @@
 
 (defconst drgnx-lint-runtime--doomed-files
   (mapcar (lambda (n) (format "core/drgnx-%s.el" n))
-          '("hub" "job" "job-snapshot" "job-worktree" "job-clash" "coord" "coord-mcp" "acp" "gateway" "mcp-bridge"
+          '("hub" "job" "job-snapshot" "job-worktree" "job-clash" "jobs" "coord" "coord-mcp" "acp" "gateway" "mcp-bridge"
             "sandbox" "sandbox-macos" "sandbox-mcp" "sandbox-proxy" "sandbox-relay"))
-  "The files the runtime deletion removes whole.  `core/drgnx-jobs.el' (its callers move to `drgnx-exec') and
-`core/drgnx-mcp.el' (it goes with the search indexer's port) join the list when their callers are gone.")
+  "The files the runtime deletion removed whole.  `core/drgnx-mcp.el' (it goes with the search indexer's port) joins
+the list when its callers are gone.")
 
 (defconst drgnx-lint-runtime--agents-marker ";;;; The agent's requests"
   "In `core/drgnx-agents.el', the line from which the forms are the runtime half unless kept.")
@@ -30,18 +31,13 @@
                      drgnx-agents-kill drgnx-agents-free-p drgnx-agents-deliver drgnx-agents-steer)
   "Names in the runtime half of `core/drgnx-agents.el' that stay: they ask the hub (`drgnx-agents--remote').")
 
-(defconst drgnx-lint-runtime--agents-partial
-  '(drgnx-agents-answer-permission drgnx-agents-finish-review drgnx-agents-send drgnx-agents-deliver-queue
-                                   drgnx-agents-unqueue drgnx-agents-requeue drgnx-agents-stop drgnx-agents-kill)
-  "The kept names that still carry the in-process branch after their hub branch: those forms are not scanned.  The
-branch is the runtime half's, and goes with it; each of these is then only its `drgnx-agents--remote' call.")
+(defconst drgnx-lint-runtime--agents-partial nil
+  "The kept names that still carry an in-process branch after their hub branch: those forms are not scanned.  None:
+each of the kept names is only its `drgnx-agents--remote' call.")
 
-(defconst drgnx-lint-runtime--waiting
-  '(("core/drgnx-onboard.el" :symbols (drgnx-acp-start drgnx-acp-request drgnx-acp-stop) :features (drgnx-acp))
-    ("core/drgnx-doctor.el" :symbols (drgnx-sandbox-check) :features (drgnx-sandbox)))
+(defconst drgnx-lint-runtime--waiting nil
   "(FILE :symbols S :features F): callers of the runtime that wait for the hub method or the doctor section that
-replaces them (the onboarding's agent probe, the doctor's sandbox check).  The list is empty when the runtime files
-are deleted.")
+replaces them.  None: the runtime files are deleted.")
 
 (defun drgnx-lint-runtime--waiting-p (rel kind name)
   "Whether NAME (of KIND, :symbols or :features) in the file REL is on `drgnx-lint-runtime--waiting'."
@@ -146,21 +142,69 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
     (should-not (and problems (mapconcat #'identity (sort problems #'string<) "\n")))))
 
 (ert-deftest drgnx-lint/no-require-of-deleted-runtime ()
-  "Nothing but the half-doomed `drgnx-agents.el' requires or declares from a feature a runtime file provides."
+  "Nothing requires, autoloads or declares from a feature a runtime file provided."
+  (let ((problems (drgnx-lint-runtime--feature-uses (drgnx-lint-runtime--files))))
+    (should-not (and problems (mapconcat #'identity (sort problems #'string<) "\n")))))
+
+(defun drgnx-lint-runtime--feature-uses (files)
+  "\"FILE: FEATURE\" for each `require', `autoload' or `declare-function' of a runtime feature in FILES (relative)."
   (let ((features (mapcar #'drgnx-lint-runtime--feature drgnx-lint-runtime--doomed-files)) problems)
     (cl-labels ((walk (rel form)
                   (when (consp form)
                     (pcase form
-                      ((or `(require (quote ,f) . ,_) `(declare-function ,_ ,(and f (pred stringp)) . ,_))
-                       (let ((f (if (stringp f) (intern f) f)))
+                      ((or `(require (quote ,f) . ,_) `(declare-function ,_ ,(and f (pred stringp)) . ,_)
+                           `(autoload ,_ ,(and f (pred stringp)) . ,_))
+                       (let ((f (if (stringp f) (intern (file-name-sans-extension (file-name-nondirectory f))) f)))
                          (when (and (memq f features) (not (drgnx-lint-runtime--waiting-p rel :features f)))
                            (push (format "%s: %s" rel f) problems)))))
                     (while (consp form) (walk rel (pop form))))))
-      (dolist (rel (drgnx-lint-runtime--files))
-        (unless (or (member rel drgnx-lint-runtime--doomed-files) (equal rel "core/drgnx-agents.el"))
+      (dolist (rel files)
+        (unless (member rel drgnx-lint-runtime--doomed-files)
           (dolist (sf (drgnx-lint-runtime--forms (expand-file-name rel drgnx-dir)))
             (walk rel (cdr sf))))))
-    (should-not (and problems (mapconcat #'identity (sort problems #'string<) "\n")))))
+    problems))
+
+(defconst drgnx-lint-runtime--core-kept
+  (cons "core/drgnx.el"
+        (mapcar (lambda (n) (format "core/drgnx-%s.el" n))
+                '("agent-check" "agent-config-claude" "agent-config-codex" "agent-config-gemini" "agent-config-kimi"
+                  "agent-config" "agents-matrix" "agents-mirror" "agents" "ai-client" "ai-probe" "ai" "bootstrap" "build"
+                  "check" "cockpit-model" "compat-gryphn" "config" "coord-read" "deny" "doctor" "exec" "face-state" "file"
+                  "fmt" "frame-kind" "gc-census" "gc" "guard" "heap" "hooks" "http" "hub-client" "keys-edit" "keys-modal"
+                  "keys" "large-file" "lisp-index" "macos" "mcp" "memo" "modal-choose" "modal" "modules-fingerprint"
+                  "modules-helpers" "modules-record" "modules" "notice-desktop" "notice-echo" "notice-save" "notice"
+                  "notices" "onboard" "owner" "palette" "paths" "pkg-activate" "pkg" "platform" "portable" "projects"
+                  "records-review" "records" "registry" "sandbox-vc" "schema" "search-chunk" "search-index" "search-mcp"
+                  "search-query" "search-setup" "search-store" "secrets-scan" "secrets" "session" "setting"
+                  "settings-agents" "settings-apply" "settings-area" "settings-defaults" "settings-described"
+                  "settings-editors" "settings-file" "settings-history" "settings-index" "settings-lisp-page"
+                  "settings-live" "settings-migrate" "settings-mode" "settings-move" "settings-page" "settings-prov"
+                  "settings-resolve" "settings-review" "settings-runtime" "settings-tidy" "settings-trust"
+                  "settings-workspace" "shell-env" "shell" "startup-trace" "store-privacy" "surfaces" "timer" "toml"
+                  "trust" "tty-fallback" "tty-recommend" "tty" "ui-kit" "user-lisp" "work-db" "work-scan" "work")))
+  "Every file under core/ after the Lisp agent runtime was deleted: a new core file is added here on purpose, so no
+runtime file comes back unnoticed.")
+
+(ert-deftest drgnx-lint/no-runtime-lisp ()
+  "The Lisp agent runtime is gone: none of its files exists, nothing (tests included) requires, autoloads or declares
+from its features, and core/ holds exactly the kept files."
+  (dolist (rel drgnx-lint-runtime--doomed-files)
+    (should-not (file-exists-p (expand-file-name rel drgnx-dir))))
+  (let* ((tests (let (out)
+                  (dolist (f (directory-files-recursively (expand-file-name "test" drgnx-dir) "\\.el\\'") out)
+                    (push (file-relative-name f drgnx-dir) out))))
+         ;; the frozen tests of other plans' Lisp (`:off', test/class-exempt.eld) are not loaded
+         (off (let ((rows (with-temp-buffer
+                            (insert-file-contents (expand-file-name "test/class-exempt.eld" drgnx-dir))
+                            (read (current-buffer)))))
+                (delq nil (mapcar (lambda (r) (and (plist-get (cdr r) :off) (car r))) rows))))
+         (problems (drgnx-lint-runtime--feature-uses
+                    (append (drgnx-lint-runtime--files) (seq-remove (lambda (f) (member f off)) tests)))))
+    (should-not (and problems (mapconcat #'identity (sort problems #'string<) "\n"))))
+  (let ((core (sort (seq-filter (lambda (f) (string-suffix-p ".el" f))
+                                (process-lines "git" "-C" drgnx-dir "ls-files" "core"))
+                    #'string<)))
+    (should (equal core (sort (copy-sequence drgnx-lint-runtime--core-kept) #'string<)))))
 
 (provide 'lint-runtime-calls-test)
 ;;; lint-runtime-calls-test.el ends here

@@ -488,13 +488,16 @@ buffer is not affected."
 
 (defun drgnx-remote-auto--agent-review (cwd path)
   "Open the review of an edit the agent proposes for PATH in a session at CWD.  (BUFFER ANSWERS): the review
-buffer, or nil; what the agent was told."
+buffer, or nil; what the agent was told through the hub: (ITEM nil REJECT)."
   (let* ((answers nil)
-         (s (drgnx-agents--make :name "auto-remote" :cwd cwd))
+         (s (drgnx-agents--make :name "auto-remote" :cwd cwd :remote "s-auto"))
          (item (list :id 5 :path path :content "x\n")))
     (setf (drgnx-agent-session-reviews s) (list item))
     (setq drgnx-tramp-mock-sends 0)
-    (cl-letf (((symbol-function 'drgnx-acp-respond) (lambda (_c id r &optional err) (push (list id r err) answers))))
+    (cl-letf (((symbol-function 'drgnx-hub-call)
+               (lambda (method params &rest _)
+                 (when (equal method "agents/do")
+                   (push (list (plist-get params :item) nil (plist-get params :reject)) answers)))))
       (let ((b (condition-case nil (drgnx-agents-ui-review s item) (user-error nil))))
         (list b answers (drgnx-agent-session-reviews s))))))
 

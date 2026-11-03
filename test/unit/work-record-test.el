@@ -52,22 +52,6 @@
       (should-not (drgnx-work-task-collect st))                       ; nothing new: nothing twice
       (should (equal (drgnx-work-rec--titles "task:/p.md#1") '("four" "three" "two" "one"))))))
 
-(ert-deftest drgnx-work/an-agent-task-gets-its-commits-at-the-end-of-each-turn ()
-  (drgnx-work-rec--with repo
-    (let* ((drgnx-agents-profiles
-            (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
-                                              (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
-           (drgnx-agents--sessions nil)
-           (s (drgnx-agents-start "mock" repo "task:/p.md#2"))
-           (wait (lambda (pred) (drgnx-test-wait pred :secs 10 :what "the agent's turn"))))
-      (unwind-protect
-          (progn
-            (funcall wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
-            (drgnx-agents-send s "commit")
-            (funcall wait (lambda () (and (eq (drgnx-agent-session-status s) 'idle) (drgnx-work-rec--titles "task:/p.md#2"))))
-            (should (equal (drgnx-work-rec--titles "task:/p.md#2") '("agent work for task:/p.md#2"))))
-        (drgnx-agents-kill s)))))
-
 (load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
 (require 'drgnx-agents-mirror)
 

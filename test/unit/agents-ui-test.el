@@ -13,8 +13,6 @@
 (defvar drgnx-hub--client)
 (defvar drgnx-hub--subscribing)
 
-(defconst drgnx-agents-ui-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
-
 (defun drgnx-agents-ui-test--wait (pred &optional secs)
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the agent session's condition"))
 
@@ -69,36 +67,40 @@
         (kill-buffer)))))
 
 (ert-deftest drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk ()
-  ;; The agent proposes two changes (first line, a new last line); the user takes the first only.
-  (let* ((dir (make-temp-file "drgnx-review" t))
-         (file (expand-file-name "f.txt" dir))
-         (drgnx-agents-profiles
-          (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-ui-test--mock))))
-         (drgnx-agents--sessions nil)
-         (drgnx-agents-changed-functions nil))
-    (write-region (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 12) "\n") nil file nil 'silent)
-    (write-region "\n" nil file t 'silent)
-    (let ((s (drgnx-agents-start "mock" dir)))
-      (unwind-protect
-          (progn
-            (should (drgnx-agents-ui-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle))))
-            (drgnx-agents-send s (concat "write " file))
-            (should (drgnx-agents-ui-test--wait (lambda () (drgnx-agent-session-reviews s))))
-            (let ((b (drgnx-agents-ui-review s (car (drgnx-agent-session-reviews s)))))
-              (with-current-buffer b
-                (goto-char (point-min))
-                (diff-hunk-next)
-                (let ((inhibit-interaction t)) (diff-apply-hunk))   ; the first hunk only
-                (drgnx-agents-ui-review-done)))
-            (should (drgnx-agents-ui-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle))))
-            (should (member "write done" (mapcar (lambda (e) (plist-get e :text))
-                                                 (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)))))
-            (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
-              (should (string-prefix-p "CHANGED line 1\n" text))
-              (should-not (string-search "ADDED LINE" text))))
-        (drgnx-agents-kill s)
-        (when-let* ((b (find-buffer-visiting file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-        (delete-directory dir t)))))
+  ;; The agent (in the hub; this Emacs holds its mirror) proposes two changes (first line, a new last line); the user
+  ;; takes the first only.
+  (drgnx-hub-client-test--with-ratatoskr
+    (drgnx-hub-client-test--mock-profile root)
+    (let* ((dir (file-name-as-directory (expand-file-name "work" root)))
+           (file (expand-file-name "f.txt" dir))
+           (drgnx-agents-profiles nil)
+           (drgnx-agents--sessions nil)
+           (drgnx-agents-changed-functions nil))
+      (make-directory dir t)
+      (write-region (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 12) "\n") nil file nil 'silent)
+      (write-region "\n" nil file t 'silent)
+      (let ((s (drgnx-agents-mirror-start "mock" dir)))
+        (unwind-protect
+            (progn
+              (should (drgnx-agents-ui-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle))))
+              (drgnx-agents-send s (concat "write " file))
+              (should (drgnx-agents-ui-test--wait (lambda () (drgnx-agent-session-reviews s))))
+              (let ((b (drgnx-agents-ui-review s (car (drgnx-agent-session-reviews s)))))
+                (with-current-buffer b
+                  (goto-char (point-min))
+                  (diff-hunk-next)
+                  (let ((inhibit-interaction t)) (diff-apply-hunk))   ; the first hunk only
+                  (drgnx-agents-ui-review-done)))
+              (should (drgnx-agents-ui-test--wait
+                       (lambda () (member "write done" (mapcar (lambda (e) (plist-get e :text))
+                                                               (seq-filter (lambda (e) (eq (plist-get e :type) 'agent))
+                                                                           (drgnx-agent-session-entries s)))))))
+              (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+                (should (string-prefix-p "CHANGED line 1\n" text))
+                (should-not (string-search "ADDED LINE" text))))
+          (drgnx-agents-kill s)
+          (drgnx-agents-mirror-stop)
+          (when-let* ((b (find-buffer-visiting file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))))))
 
 (ert-deftest drgnx-agents-ui/every-command-is-registered ()
   (drgnx-test-with-modules '(tools/agents) :strict t
@@ -197,10 +199,14 @@
 answers recorded in ANSWERS)."
   (declare (indent 2))
   `(let* ((answers nil)
-          (s (drgnx-agents--make :name "fake" :cwd (file-name-directory ,file)))
+          (s (drgnx-agents--make :name "fake" :cwd (file-name-directory ,file) :remote "s-fake"))
           (item (list :id 5 :path ,file :content ,content)))
      (setf (drgnx-agent-session-reviews s) (list item))
-     (cl-letf (((symbol-function 'drgnx-acp-respond) (lambda (_c id r &optional err) (push (list id r err) answers))))
+     ;; the answer goes to the hub: (ITEM nil REJECT)
+     (cl-letf (((symbol-function 'drgnx-hub-call)
+                (lambda (method params &rest _)
+                  (when (equal method "agents/do")
+                    (push (list (plist-get params :item) nil (plist-get params :reject)) answers)))))
        (let ((review (drgnx-agents-ui-review s item)))
          ,@body))))
 
@@ -485,7 +491,7 @@ three runs after two warm ones)."
       (drgnx-agents-ui-test--draw)
       (should (string-search "? Run tests" (drgnx-agents-ui-test--text b)))
       (let ((removed (drgnx-agents-ui-test--stat v :removed)))
-        (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+        (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
           (drgnx-agents-answer-permission s p2 "a")
           (drgnx-agents-ui-test--draw)
           (should (= 1 (- (drgnx-agents-ui-test--stat v :removed) removed)))
@@ -888,7 +894,7 @@ mirror does nothing."
               (should (drgnx-agents-ui--path-ok-p s (concat wt "gz/y")))     ; local, outside: shown as such
               (should (drgnx-agents-ui--path-ok-p s (car (plist-get paths :inside))))
               (setf (drgnx-agent-session-reviews s) (list item))
-              (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+              (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
                 (with-current-buffer (drgnx-agents-ui-review s item)
                   (should (string-search "OUTSIDE" (format "%s" header-line-format)))
                   (drgnx-agents-ui-review-reject))))
@@ -910,7 +916,7 @@ mirror does nothing."
                 (should-not (drgnx-agents-ui--path-ok-p s p)))
               (should (drgnx-agents-ui--path-ok-p s file))
               (setf (drgnx-agent-session-reviews s) (list item))
-              (cl-letf (((symbol-function 'drgnx-acp-respond) #'ignore))
+              (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
                 (with-current-buffer (drgnx-agents-ui-review s item)
                   (should-not (string-suffix-p "n.txt" (nth 2 drgnx-agents-ui--review)))   ; the copy's own suffix
                   (drgnx-agents-ui-review-done))))
@@ -925,14 +931,16 @@ mirror does nothing."
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-ui-sealed" t))) (secret (concat root "n.gpg"))
          (plain (concat root "plain.txt")) (said nil))
     (unwind-protect
-        (let ((s (drgnx-agents--make :name "fake" :cwd root)))
+        (let ((s (drgnx-agents--make :name "fake" :cwd root :remote "s-fake")))
           (let ((file-name-handler-alist nil)) (write-region "sealed\n" nil secret nil 'silent))
-          (cl-letf (((symbol-function 'drgnx-acp-respond) (lambda (_conn id _result &optional err) (push (list id err) said))))
+          (cl-letf (((symbol-function 'drgnx-hub-call)
+                     (lambda (method params &rest _)
+                       (when (equal method "agents/do") (push (list (plist-get params :item) (plist-get params :reject)) said)))))
             (dolist (p (list secret (concat root "n.gz")))
               (let ((item (list :id 7 :path p :content "plain\n")))
                 (setf (drgnx-agent-session-reviews s) (list item))
                 (should-not (drgnx-agents-ui-review s item))
-                (should (plist-get (cadr (car said)) :message))     ; rejected: the agent hears it
+                (should (cadr (car said)))                          ; rejected: the agent hears it
                 (should-not (drgnx-agent-session-reviews s))))
             (let ((item (list :id 8 :path plain :content "plain\n")))
               (setf (drgnx-agent-session-reviews s) (list item))

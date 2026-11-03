@@ -139,18 +139,6 @@ killed after."
       (insert "edit")
       (should (consp buffer-undo-list)))))
 
-(ert-deftest drgnx-large-files-chunks/agents-never-get-the-chunk ()
-  (drgnx-large-files-chunks-test--with
-    (let* ((f (drgnx-large-files-chunks-test--file "big.log" 131072))
-           (disk (with-temp-buffer (insert-file-contents f) (buffer-string)))
-           (s (drgnx-agents--make :cwd drgnx-large-files-chunks-test--dir)))
-      (with-current-buffer (drgnx-large-files-chunks-test--open f)
-        (goto-char (point-min))
-        (insert "CHUNK EDIT"))
-      (should (equal (plist-get (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path f) 1) :result)
-                                :content)
-                     disk)))))
-
 (ert-deftest drgnx-large-files-chunks/the-header-in-a-chunk-buffer ()
   (drgnx-large-files-chunks-test--with
     (let* ((f (drgnx-large-files-chunks-test--file "big.log" 131072))

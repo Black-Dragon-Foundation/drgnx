@@ -9,7 +9,6 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (require 'drgnx-agents)
-(require 'drgnx-job)
 
 (defconst drgnx-agents-eld-test--builtin-names
   (mapcar #'car drgnx-agents-builtin-profiles) "The built-in profiles' names.")

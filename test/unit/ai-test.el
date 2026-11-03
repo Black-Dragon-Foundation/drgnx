@@ -529,7 +529,8 @@ LOG/security.calls."
   (require 'drgnx-agents)
   (drgnx-ai-test--with root
     (let ((drgnx-agents-profiles '(("local claude" :command ("claude-agent-acp") :ai claude-ollama))))
-      (should (member "ANTHROPIC_AUTH_TOKEN=ollama" (drgnx-agents--env (drgnx-agents--make :profile "local claude"))))
+      (should (member "ANTHROPIC_AUTH_TOKEN=ollama"
+                      (drgnx-ai-agent-env (list :kind (plist-get (cdr (drgnx-agents-profile "local claude")) :ai)))))
       (should (assoc "claude (OpenRouter)" drgnx-agents-builtin-profiles))                 ; offered without setup
       (should (assoc "claude (Ollama)" drgnx-agents-builtin-profiles)))))
 

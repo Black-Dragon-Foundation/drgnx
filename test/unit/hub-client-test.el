@@ -9,9 +9,7 @@
 (require 'drgnx-notice)
 (require 'drgnx-hub-client)
 (require 'drgnx-shell-env)
-(require 'drgnx-hub)
 (require 'drgnx-agents-mirror)
-(require 'drgnx-coord-mcp)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)   ; seeding as the hub's stand-in
 (require 'drgnx-ai)
@@ -104,44 +102,20 @@
     (should (drgnx-hub-has-method-p "agents/list"))
     (should-not (drgnx-hub-has-method-p "no/such-method"))))
 
-(ert-deftest drgnx-hub-client/ping-probe-and-coord-mcp-skip-the-challenge ()
-  ;; binary: the challenge is the first line on every connection; the probe and a coordination server's client read
-  ;; past it to the answer
+(ert-deftest drgnx-hub-client/ping-probe-skips-the-challenge ()
+  ;; binary: the challenge is the first line on every connection; the probe reads past it to the answer
   (drgnx-hub-client-test--with-ratatoskr
-    (should (drgnx-hub--ping-socket (drgnx-hub-socket)))
-    (drgnx-hub-disconnect)
-    (let ((drgnx-hub-client-proves nil))
-      (should (listp (drgnx-coord-mcp--hub-agents))))))
+    (should (drgnx-hub--ping-socket (drgnx-hub-socket)))))
 
-(ert-deftest drgnx-hub-client/coord-mcp-stays-service-class ()
-  ;; binary (review C1): a coordination server started by an agent never reads the cap, so it stays service class
-  (drgnx-hub-client-test--with-ratatoskr
-    (let ((inside nil))
-      (cl-letf (((symbol-function 'drgnx-gc-batch-setup) #'ignore)
-                ((symbol-function 'drgnx-coord-mcp--parent) #'ignore)
-                ((symbol-function 'drgnx-mcp-serve)
-                 (lambda (&rest _)
-                   (drgnx-hub-call-sync "ping" nil 10)
-                   (setq inside (plist-get drgnx-hub--last-hello :class)))))
-        (drgnx-coord-mcp-main))
-      (should (equal inside "service")))
-    (drgnx-hub-disconnect)
-    (drgnx-hub-call-sync "ping" nil 10)
-    (should (equal (plist-get drgnx-hub--last-hello :class) "user"))))
-
-(ert-deftest drgnx-hub-client/outside-coord-server-still-works ()
-  ;; binary: an outside agent's coordination server tells the hub with a raw `coord/notify' (service class, no
-  ;; hello): never refused, while a service line that asks for keys is
+(ert-deftest drgnx-hub-client/a-service-line-asking-for-keys-is-refused ()
+  ;; binary: a connection with no hello is service class: a line that asks for keys is refused and counted
   (drgnx-hub-client-test--with-ratatoskr
     (let ((refused (lambda () (plist-get (plist-get (drgnx-hub-call-sync "status" nil 10) :refusals) :count))))
       (should (eql (funcall refused) 0))
       (let ((c (make-network-process :name "raw" :family 'local :service (drgnx-hub-socket) :noquery t)))
         (process-send-string c "{\"id\":1,\"method\":\"gateway/keys\",\"params\":{\"keys\":{}}}\n")
         (drgnx-hub-client-test--wait (lambda () (eql (funcall refused) 1)) "the service's gateway/keys is refused")
-        (delete-process c))
-      (drgnx-coord-mcp--notify-hub)
-      (drgnx-test-pause 0.5)
-      (should (eql (funcall refused) 1)))))
+        (delete-process c)))))
 
 (ert-deftest drgnx-hub-client/mirror-over-ratatoskr ()
   ;; binary: a session the hub starts reaches this Emacs's mirror

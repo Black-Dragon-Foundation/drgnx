@@ -3,8 +3,6 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-records)
-(require 'drgnx-hub)
-(require 'drgnx-job)
 (require 'drgnx-work-scan)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
@@ -65,22 +63,14 @@
                                                           :options '((:optionId "allow" :name "Allow" :kind "allow_once"))))
           (drgnx-agent-session-reviews s) (list (list :id "r1" :path "/work/repo/a.el" :content "text"))
           (drgnx-agent-session-via s) 'direct)
-    ;; the snapshot, a running and an exited one
-    (should (records-test--round 'drgnx-records-session (drgnx-hub--snapshot s)))
-    (setf (drgnx-agent-session-status s) 'exited (drgnx-agent-session-exit s) 3 (drgnx-agent-session-stderr s) "bye")
-    (should (records-test--round 'drgnx-records-session (drgnx-hub--snapshot s)))
     ;; every entry kind the agent layer makes today, children of tool entries too
     (let ((entries (drgnx-agent-session-entries s)))
       (should (equal (delete-dups (mapcar (lambda (e) (plist-get e :type)) entries))
                      '(user thought agent tool plan error stop)))
       (dolist (e entries) (should (records-test--round 'drgnx-records-entry e)))))
   ;; one event data per kind and shape, one card data per kind of card
-  (let ((kinds 0))
-    (dolist (row (records-test--fixture "events.eld"))
-      (should (member (car row) drgnx-coord-event-kinds))
-      (cl-incf kinds)
-      (dolist (data (cdr row)) (should (records-test--round 'drgnx-records-event-data data))))
-    (should (= kinds (length drgnx-coord-event-kinds))))
+  (dolist (row (records-test--fixture "events.eld"))
+    (dolist (data (cdr row)) (should (records-test--round 'drgnx-records-event-data data))))
   (dolist (data (records-test--fixture "cards.eld")) (should (records-test--round 'drgnx-records-card-data data)))
   (should (records-test--round 'drgnx-records-job-data (records-test--fixture "job-runtime.eld"))))
 
@@ -91,22 +81,10 @@
           (process-environment (append (list (concat "DRGNX_DATA_DIR=" root "data") (concat "DRGNX_CONFIG_DIR=" root "config")
                                              (concat "XDG_STATE_HOME=" root "state"))
                                        process-environment))
-          (drgnx-work-db--handles nil) (drgnx-job-routes nil))
+          (drgnx-work-db--handles nil))
      (unwind-protect (progn (make-directory (concat root "config") t) ,@body)
        (drgnx-work-db-close-all)
        (delete-directory root t))))
-
-(ert-deftest drgnx-records/a-proposal-the-job-code-makes-round-trips ()
-  (records-test--with-root
-    (let ((plan (concat root "p.md")))
-      (make-directory (concat root "code") t)
-      (write-region "# Build\n\n**Repo:** code\n\n### Task 1: A\n- [ ] one\n\n### Task 2: B\n**Depends:** Task 1\n**Role:** test\n- [ ] two\n"
-                    nil plan nil 'silent)
-      (let* ((drgnx-job-routes '((implement . "claude") (test "claude")))
-             ;; the proposal is made where the hub makes it (the job code writes the job row)
-             (data (plist-get (drgnx-job-get (drgnx-work-fixture-as-hub (drgnx-job-propose plan :budget 5))) :proposal)))
-        (should (plist-get data :routes))
-        (should (records-test--round 'drgnx-records-job-data data))))))
 
 (ert-deftest drgnx-records/nodes-a-scan-makes-round-trip ()
   :tags '(:cond)                        ; runs git

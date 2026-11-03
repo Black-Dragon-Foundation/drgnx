@@ -39,8 +39,7 @@
 (defconst drgnx-lint-bt--hooked-buffers
   ;; Each one needs no buffer hook (no `kill-buffer-hook' of its own, nobody lists it): they can take
   ;; `inhibit-buffer-hooks' — left for the next change to those files.
-  '(("core/drgnx-acp.el" . "generate-new-buffer \" *drgnx-acp-input*\"")           ; an agent's input framing
-    ("core/drgnx-projects.el" . "generate-new-buffer \" *drgnx-plan*\"")            ; a plan's text while synced
+  '(("core/drgnx-projects.el" . "generate-new-buffer \" *drgnx-plan*\"")            ; a plan's text while synced
     ("modules/tools/drgnx-work-ui.el" . "get-buffer-create \" *drgnx work scan*\""))  ; the scan's output
   "Internal buffers made with buffer hooks, allowed: (FILE . CALL).")
 

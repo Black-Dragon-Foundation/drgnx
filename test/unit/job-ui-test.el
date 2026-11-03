@@ -8,7 +8,7 @@
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)   ; the `jobs' segment is defined into its table
-(require 'drgnx-hub)                                   ; before any stub of its functions
+(require 'drgnx-hub-client)                            ; before any stub of its functions
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-job-ui-test--summary

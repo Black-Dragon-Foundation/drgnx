@@ -1,18 +1,18 @@
 ;;; agents-profiles-test.el --- batch tests: Kimi and DeepSeek in Claude Code, on their own APIs or through OpenRouter -*- lexical-binding: t -*-
 ;; Keys here are fakes in a let-bound environment; no assertion prints one (booleans are asserted, not values).
-;; test-class: cond
+;; The profiles and their provider environment are the editor's; the hub (Ratatoskr) starts the agents and registers
+;; them with its gateway, so the gateway's address and token are a fake one here.
+;; test-class: det
 (require 'ert)
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-agents)
 (require 'drgnx-ai)
 (require 'drgnx-agent-config-claude)
-(require 'drgnx-hub)
-(require 'drgnx-gateway)
 
 (defmacro drgnx-agents-profiles-test--with (&rest body)
-  "BODY with drgnx's dirs, HOME and CLAUDE_CONFIG_DIR under a temp ROOT, fake provider keys, no hub (a keyed profile
-does not start without one: `drgnx-agents-profiles-test--served')."
+  "BODY with drgnx's dirs, HOME and CLAUDE_CONFIG_DIR under a temp ROOT, fake provider keys, and GW a fake gateway
+registration (:url :token)."
   (declare (indent 0))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-agents-prof" t)))
           (process-environment
@@ -21,38 +21,22 @@ does not start without one: `drgnx-agents-profiles-test--served')."
                          (concat "CLAUDE_CONFIG_DIR=" root "claude")
                          "MOONSHOT_API_KEY=fake-moon-key" "DEEPSEEK_API_KEY=fake-deep-key"
                          "OPENROUTER_API_KEY=fake-or-key" "ANTHROPIC_API_KEY")
-                   ;; …and every other variable agents must not inherit, with a recognisable fake value
-                   (mapcar (lambda (n) (concat n "=fake-inherited"))
-                           (seq-difference drgnx-agents-scrubbed-env
-                                           '("MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY")))
                    process-environment))
           (drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil)
-          (drgnx-agents-use-gateway nil) (drgnx-agents-env-functions nil) (drgnx-agents-profiles nil))
+          (drgnx-agents-env-functions nil) (drgnx-agents-profiles nil)
+          (gw (list :url "http://127.0.0.1:1" :token (make-string 64 ?a))))
+     (ignore gw)
      (unwind-protect
          (progn (make-directory (concat root "config") t) (make-directory (concat root "claude") t) ,@body)
        (delete-directory root t))))
 
-(defmacro drgnx-agents-profiles-test--served (&rest body)
-  "BODY as `drgnx-agents-profiles-test--with', with this Emacs serving the standalone Lisp hub: a keyed profile
-reaches its provider through the hub's gateway with a token, the only way it can (the hub holds the keys)."
-  (declare (indent 0))
-  `(drgnx-agents-profiles-test--with
-     (let ((drgnx-work-db--handles nil)
-           (drgnx-gateway--keys (make-hash-table :test #'eq))
-           (drgnx-gateway--registrations (make-hash-table :test #'equal))
-           (drgnx-hub--exit-function #'drgnx-hub-stop))
-       (unwind-protect
-           (progn (drgnx-hub-serve (drgnx-hub-socket)) ,@body)
-         (drgnx-hub-disconnect)
-         (drgnx-hub-stop)
-         (drgnx-work-db-close-all)))))
-
-(defun drgnx-agents-profiles-test--token-p (v)
-  "Whether V is a gateway token (64 hex digits), not a key."
-  (and (stringp v) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" v) t))
-
-(defun drgnx-agents-profiles-test--env (profile)
-  (drgnx-agents--env (drgnx-agents--make :name "t" :profile profile :cwd temporary-file-directory)))
+(defun drgnx-agents-profiles-test--env (name gw)
+  "The provider environment the profile NAME's agent gets through the gateway GW."
+  (let ((profile (cdr (drgnx-agents-profile name))))
+    (drgnx-ai-check-agent-model (plist-get profile :ai) (plist-get profile :model))
+    (drgnx-ai-agent-env (list :kind (plist-get profile :ai) :model (plist-get profile :model)
+                              :small-model (plist-get profile :small-model))
+                        gw)))
 
 (defun drgnx-agents-profiles-test--var (env name)
   "The value of NAME in ENV (\"NAME=value\" strings), or `absent'."
@@ -68,14 +52,13 @@ reaches its provider through the hub's gateway with a token, the only way it can
 
 (ert-deftest drgnx-agents-profiles/kimi-and-deepseek-env ()
   ;; through the hub's gateway: its address and a token, never the provider's URL or key; the model for every tier
-  (drgnx-agents-profiles-test--served
+  (drgnx-agents-profiles-test--with
     (dolist (c '(("claude (Kimi)" "https://api.moonshot.ai/anthropic" "fake-moon-key")
                  ("claude (DeepSeek)" "https://api.deepseek.com/anthropic" "fake-deep-key")))
-      (let* ((env (drgnx-agents-profiles-test--env (car c)))
+      (let* ((env (drgnx-agents-profiles-test--env (car c) gw))
              (model (drgnx-agents-profiles-test--model (car c)))
-             (url-ok (let ((u (drgnx-agents-profiles-test--var env "ANTHROPIC_BASE_URL")))
-                       (and (stringp u) (not (equal u (nth 1 c))))))
-             (token-ok (drgnx-agents-profiles-test--token-p (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN")))
+             (url-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_BASE_URL") (plist-get gw :url)))
+             (token-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN") (plist-get gw :token)))
              (leaked (drgnx-agents-profiles-test--leaks env (nth 2 c)))
              (api-key-empty (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_API_KEY") ""))
              (model-ok (and (stringp model) (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_MODEL") model)))
@@ -86,33 +69,32 @@ reaches its provider through the hub's gateway with a token, the only way it can
         (should tiers-ok)))))
 
 (ert-deftest drgnx-agents-profiles/small-model-defaults-to-model-and-a-model-is-required ()
-  (drgnx-agents-profiles-test--served
+  (drgnx-agents-profiles-test--with
     (let ((drgnx-agents-profiles
            '(("k" :command ("claude-agent-acp") :ai claude-deepseek :model "big" :small-model "tiny")
              ("nomodel" :command ("claude-agent-acp") :ai claude-moonshot)
              ("nomodel2" :command ("claude-agent-acp") :ai claude-deepseek))))
-      (let* ((env (drgnx-agents-profiles-test--env "k"))
+      (let* ((env (drgnx-agents-profiles-test--env "k" gw))
              (small-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_DEFAULT_HAIKU_MODEL") "tiny"))
              (main-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_MODEL") "big")))
         (should small-ok) (should main-ok))
       (dolist (name '("nomodel" "nomodel2"))
-        (let ((err (should-error (drgnx-agents-profiles-test--env name) :type 'user-error)))
+        (let ((err (should-error (drgnx-agents-profiles-test--env name gw) :type 'user-error)))
           (should (string-search ":model" (error-message-string err))))))))
 
 (ert-deftest drgnx-agents-profiles/through-the-gateway-a-token-only ()
   ;; with the gateway the agent holds a token and the gateway's address, never the provider's key
   (drgnx-agents-profiles-test--with
-    (let ((gw (list :url "http://127.0.0.1:1" :token (make-string 64 ?a))))
-      (dolist (c '(("claude (Kimi)" . "fake-moon-key") ("claude (DeepSeek)" . "fake-deep-key")
-                   ("claude (Kimi via OpenRouter)" . "fake-or-key")))
-        (let* ((profile (cdr (drgnx-agents-profile (car c))))
-               (env (drgnx-ai-agent-env (list :kind (plist-get profile :ai) :model (plist-get profile :model)) gw))
-               (url-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_BASE_URL") (plist-get gw :url)))
-               (token-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN") (plist-get gw :token)))
-               (empty-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_API_KEY") ""))
-               (model-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_MODEL") (plist-get profile :model)))
-               (leaked (drgnx-agents-profiles-test--leaks env (cdr c))))
-          (should url-ok) (should token-ok) (should empty-ok) (should model-ok) (should-not leaked))))
+    (dolist (c '(("claude (Kimi)" . "fake-moon-key") ("claude (DeepSeek)" . "fake-deep-key")
+                 ("claude (Kimi via OpenRouter)" . "fake-or-key")))
+      (let* ((profile (cdr (drgnx-agents-profile (car c))))
+             (env (drgnx-ai-agent-env (list :kind (plist-get profile :ai) :model (plist-get profile :model)) gw))
+             (url-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_BASE_URL") (plist-get gw :url)))
+             (token-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN") (plist-get gw :token)))
+             (empty-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_API_KEY") ""))
+             (model-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_MODEL") (plist-get profile :model)))
+             (leaked (drgnx-agents-profiles-test--leaks env (cdr c))))
+        (should url-ok) (should token-ok) (should empty-ok) (should model-ok) (should-not leaked)))
     ;; both are gateway kinds, and the gateway chain is the one provider with the profile's model
     (should (memq 'claude-moonshot drgnx-ai-gateway-kinds))
     (should (memq 'claude-deepseek drgnx-ai-gateway-kinds))))
@@ -125,61 +107,18 @@ reaches its provider through the hub's gateway with a token, the only way it can
   (let ((drgnx-ai-default-roles '((agent (openrouter . "role-model")))) (auth-sources nil))
     (cl-letf (((symbol-function 'drgnx-config-get) (lambda (&rest _) nil)))    ; no ai.eld
       (should (equal (drgnx-ai-agent-gateway-chain 'claude-openrouter) '((openrouter . "role-model"))))))
-  (drgnx-agents-profiles-test--served
+  (drgnx-agents-profiles-test--with
     (dolist (name '("claude (Kimi via OpenRouter)" "claude (DeepSeek via OpenRouter)"))
-      (let* ((env (drgnx-agents-profiles-test--env name))
+      (let* ((env (drgnx-agents-profiles-test--env name gw))
              (model (drgnx-agents-profiles-test--model name))
-             (url-ok (let ((u (drgnx-agents-profiles-test--var env "ANTHROPIC_BASE_URL")))
-                       (and (stringp u) (not (equal u "https://openrouter.ai/api")))))
-             (token-ok (drgnx-agents-profiles-test--token-p (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN")))
+             (url-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_BASE_URL") (plist-get gw :url)))
              (model-ok (and (stringp model) (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_MODEL") model)))
              (small-ok (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_DEFAULT_HAIKU_MODEL") model)))
-        (should url-ok) (should token-ok) (should model-ok) (should small-ok)))
+        (should url-ok) (should model-ok) (should small-ok)))
     ;; the plain OpenRouter profile has no model of its own: no model variables
-    (let ((env (drgnx-agents-profiles-test--env "claude (OpenRouter)")))
+    (let ((env (drgnx-agents-profiles-test--env "claude (OpenRouter)" gw)))
       (should (eq (drgnx-agents-profiles-test--var env "ANTHROPIC_MODEL") 'absent))
       (should (eq (drgnx-agents-profiles-test--var env "ANTHROPIC_DEFAULT_HAIKU_MODEL") 'absent)))))
-
-(ert-deftest drgnx-agents-profiles/no-key-says-how-one-comes ()
-  ;; the hub has no key for the profile's provider: the start fails and says which provider and how a key comes
-  (drgnx-agents-profiles-test--served
-    (dolist (c '(("claude (Kimi)" "MOONSHOT_API_KEY" "moonshot")
-                 ("claude (DeepSeek)" "DEEPSEEK_API_KEY" "deepseek")
-                 ("claude (Kimi via OpenRouter)" "OPENROUTER_API_KEY" "openrouter")))
-      (let ((process-environment (cons (nth 1 c) process-environment))   ; a bare name unsets it
-            (drgnx-ai--keys (make-hash-table :test #'eq)))
-        (let ((err (should-error (drgnx-agents-profiles-test--env (car c)) :type 'user-error)))
-          (let ((names-provider (string-search (nth 2 c) (error-message-string err)))
-                (says-how (string-search "hands its keys over" (error-message-string err))))
-            (should names-provider) (should says-how)))))))
-
-(defun drgnx-agents-profiles-test--snapshot (dir)
-  "DIR's files and their contents, as a sorted alist."
-  (sort (mapcar (lambda (f) (cons f (if (file-directory-p f) 'dir
-                                      (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))))
-                (directory-files-recursively dir "" t))
-        (lambda (a b) (string< (car a) (car b)))))
-
-(ert-deftest drgnx-agents-profiles/two-profiles-share-claude-dir-not-routes ()
-  (drgnx-agents-profiles-test--served
-    (with-temp-file (concat root "claude/settings.json") (insert "{\"theme\":\"dark\"}\n"))
-    (make-directory (concat root "home") t)
-    (let* ((files (lambda () (mapcar (lambda (d) (drgnx-agents-profiles-test--snapshot (concat root d))) '("claude" "config" "home"))))
-           (before (funcall files))
-           (a (drgnx-agents-profiles-test--env "claude (Kimi)"))
-           (b (drgnx-agents-profiles-test--env "claude (DeepSeek)"))
-           (route-vars '("ANTHROPIC_BASE_URL" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL"
-                         "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL"))
-           (names (lambda (env) (mapcar (lambda (s) (car (split-string s "="))) env)))
-           (outside (lambda (env) (seq-remove (lambda (s) (member (car (split-string s "=")) route-vars)) env))))
-      ;; the same variables, and apart from the route's own, the same values
-      (should (equal (sort (funcall names a) #'string<) (sort (funcall names b) #'string<)))
-      (should (equal (funcall outside a) (funcall outside b)))
-      (should-not (equal (drgnx-agents-profiles-test--var a "ANTHROPIC_AUTH_TOKEN")    ; each its own registration
-                         (drgnx-agents-profiles-test--var b "ANTHROPIC_AUTH_TOKEN")))
-      ;; neither Claude's config directory nor drgnx's nor HOME changed: the route lives in the environment (and the hub)
-      (should (equal (funcall files) before))
-      (should-not (file-exists-p (concat root "home/.claude/settings.json"))))))
 
 (ert-deftest drgnx-agents-profiles/page-lists-the-new-routes ()
   (drgnx-agents-profiles-test--with
@@ -199,99 +138,5 @@ reaches its provider through the hub's gateway with a token, the only way it can
   (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
   (dolist (v (append drgnx-agents-scrubbed-env '("CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME")))
     (should-not (getenv v))))
-
-(defun drgnx-agents-profiles-test--inherited (env)
-  "The names of the variables a child started with ENV in front of `process-environment' would see with a fake
-value (a recognisable prefix; the values themselves are never shown)."
-  (let ((process-environment (append env process-environment)) names)
-    (dolist (e process-environment)
-      (let ((n (car (split-string e "="))) (v nil))
-        (setq v (getenv n))
-        (when (and v (string-prefix-p "fake-" v)) (cl-pushnew n names :test #'equal))))
-    (sort names #'string<)))
-
-(ert-deftest drgnx-agents-profiles/agents-see-only-their-own-routes-key ()
-  ;; a routed profile sees no key at all (its token is the gateway's); the login profile keeps its vendor's names
-  (drgnx-agents-profiles-test--served
-    (let ((expected '(("claude" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_DEFAULT_FABLE_MODEL"
-                       "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
-                       "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL" "CLAUDE_CODE_OAUTH_TOKEN"
-                       "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX")
-                      ("claude (Kimi)") ("claude (DeepSeek)") ("claude (Kimi via OpenRouter)")
-                      ("claude (DeepSeek via OpenRouter)") ("claude (OpenRouter)") ("claude (Ollama)"))))
-      (dolist (x expected)
-        (let* ((env (drgnx-agents-profiles-test--env (car x)))
-               (seen (drgnx-agents-profiles-test--inherited env))
-               (ok (equal seen (cdr x))))
-          (should ok)))
-      ;; …and Kimi's token is a gateway token of its own, no key
-      (let* ((env (drgnx-agents-profiles-test--env "claude (Kimi)"))
-             (own (drgnx-agents-profiles-test--token-p (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN"))))
-        (should own)))))
-
-(ert-deftest drgnx-agents-profiles/a-login-profile-keeps-its-own-vendors-credentials-only ()
-  ;; no `:ai' route: the user's own login, which may come from the environment — but only that vendor's
-  (drgnx-agents-profiles-test--served
-    (let ((process-environment (cons "ANTHROPIC_API_KEY=fake-anthropic-key" process-environment))
-          (drgnx-agents-profiles
-           '(("cx" :command ("/opt/bin/codex-acp")) ("gm" :command ("gemini" "--experimental-acp")))))
-      (let* ((claude (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude")))
-             (codex (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "cx")))
-             (gemini (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "gm")))
-             (claude-keeps (and (member "ANTHROPIC_API_KEY" claude) (member "CLAUDE_CODE_USE_BEDROCK" claude)
-                                (member "CLAUDE_CODE_OAUTH_TOKEN" claude) (member "ANTHROPIC_BASE_URL" claude) t))
-             (claude-others (seq-intersection claude '("MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "OPENROUTER_API_KEY"
-                                                       "OPENAI_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")))
-             (codex-ok (equal codex '("OPENAI_API_KEY" "OPENAI_BASE_URL")))
-             (gemini-ok (equal gemini '("GEMINI_API_KEY" "GOOGLE_API_KEY"))))
-        (should claude-keeps) (should-not claude-others) (should codex-ok) (should gemini-ok)))
-    ;; …and a profile with a route gets its gateway token and none of the exemptions: the Moonshot one sees neither
-    ;; the exported Anthropic key nor the Moonshot key, by name or as its token
-    (let* ((process-environment (cons "ANTHROPIC_API_KEY=fake-anthropic-key" process-environment))
-           (env (drgnx-agents-profiles-test--env "claude (Kimi)"))
-           (no-key (null (drgnx-agents-profiles-test--inherited env)))
-           (token-own (drgnx-agents-profiles-test--token-p (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN"))))
-      (should no-key) (should token-own))))
-
-(ert-deftest drgnx-agents-profiles/a-variable-taken-off-the-list-is-passed-on ()
-  (drgnx-agents-profiles-test--with
-    (let ((drgnx-agents-scrubbed-env (remove "OPENAI_API_KEY" drgnx-agents-scrubbed-env)))
-      (let* ((seen (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude")))
-             (passed (and (member "OPENAI_API_KEY" seen) t)))
-        (should passed)))
-    ;; with the list as it is, a Claude agent does not get the OpenAI key
-    (let* ((seen (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude")))
-           (passed (and (member "OPENAI_API_KEY" seen) t)))
-      (should-not passed))))
-
-(ert-deftest drgnx-agents-profiles/the-hub-registers-the-profiles-provider-and-model ()
-  ;; a started agent on a Kimi profile is registered with the gateway as one provider and the profile's model
-  (require 'drgnx-hub)
-  (require 'drgnx-gateway)
-  (drgnx-agents-profiles-test--with
-    (let ((drgnx-agents-use-gateway t) (drgnx-work-db--handles nil)
-          (drgnx-gateway--keys (make-hash-table :test #'eq))
-          (drgnx-gateway--registrations (make-hash-table :test #'equal))
-          (drgnx-hub--exit-function #'drgnx-hub-stop))
-      (unwind-protect
-          (progn
-            (drgnx-hub-serve (drgnx-hub-socket))
-            (let* ((s (drgnx-agents--make :name "t" :profile "claude (Kimi)" :cwd temporary-file-directory))
-                   (env (drgnx-agents--env s))
-                   (model (drgnx-agents-profiles-test--model "claude (Kimi)"))
-                   (reg (cdar (drgnx-gateway-registrations)))
-                   (chain (plist-get reg :chain))
-                   (chain-ok (and (= (length chain) 1) (eq (caar chain) 'moonshot)
-                                  (equal (or (cdar chain) (cadar chain)) model)))
-                   (token-ok (string-match-p "\\`[0-9a-f]\\{64\\}\\'"
-                                             (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN")))
-                   (leaked (drgnx-agents-profiles-test--leaks env "fake-moon-key")))
-              (should chain-ok) (should token-ok) (should-not leaked)
-              ;; a gateway agent inherits no key at all, not even its own provider's
-              (should (equal (drgnx-agents-profiles-test--inherited env) nil))
-              (should (eq (drgnx-agent-session-via s) 'gateway))))
-        (drgnx-hub-disconnect)
-        (drgnx-hub-stop)
-        (drgnx-work-db-close-all)))))
 
 ;;; agents-profiles-test.el ends here

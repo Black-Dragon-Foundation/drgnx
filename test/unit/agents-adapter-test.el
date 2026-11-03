@@ -1,5 +1,6 @@
 ;;; agents-adapter-test.el --- batch tests: which Claude Code adapter the claude profiles run -*- lexical-binding: t -*-
 ;; Fake npm prefixes in a temp directory: package.json files and links only.  No npm, no network, no agent runs.
+;; test-class: det
 (require 'ert)
 (require 'drgnx-agents)
 
@@ -122,20 +123,6 @@ collected in MESSAGES."
     (let ((exec-path (list root)))
       (should-not (drgnx-agents-claude-adapter))
       (should (equal (drgnx-agents-command '("claude-agent-acp")) '("claude-agent-acp"))))))
-
-(ert-deftest drgnx-agents-adapter/agent-sessions-and-jobs-start-the-chosen-program ()
-  ;; job agents start through `drgnx-agents-start' too (drgnx-job--launch-task)
-  (drgnx-agents-adapter-test--with
-    (let* ((old (drgnx-agents-adapter-test--prefix root "old" "@zed-industries/claude-agent-acp" "0.23.1"))
-           (new (drgnx-agents-adapter-test--prefix root "new" "@agentclientprotocol/claude-agent-acp" "0.93.0"))
-           (exec-path (list (drgnx-agents-adapter-test--bin old) (drgnx-agents-adapter-test--bin new)))
-           (drgnx-agents-profiles nil) (drgnx-agents--sessions nil) (started nil))
-      (cl-letf (((symbol-function 'drgnx-acp-start)
-                 (lambda (command &rest _) (push command started) (error "not started in this test"))))
-        (let ((s (drgnx-agents-start "claude" root)))
-          (should (eq (drgnx-agent-session-status s) 'exited))))
-      (should (equal started (list (list (expand-file-name "claude-agent-acp" (drgnx-agents-adapter-test--bin new)))))))))
-
 
 (require 'drgnx-doctor)
 

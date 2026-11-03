@@ -1,7 +1,6 @@
 ;;; fake-hub-main.el --- the fake hub (fake-hub.el) in a process of its own -*- lexical-binding: t -*-
-;; A batch Nidhogg entry point for tests whose own Emacs must not answer: a front call (`drgnx-hub-call-front') waits
-;; with JUST-THIS-ONE an integer, which starves every other filter and timer of the waiting Emacs, a fake hub served
-;; there too.  Run as
+;; A batch Nidhogg entry point for tests whose own Emacs must not answer: a call that waits with JUST-THIS-ONE an
+;; integer starves every other filter and timer of the waiting Emacs, a fake hub served there too.  Run as
 ;;   EMACS --batch -Q -L CORE -l test/fixtures/fake-hub-main.el -f drgnx-fake-hub-main
 ;; with the environment:
 ;; - DRGNX_FAKE_HUB_SOCKET: where it serves (the cap file goes beside it; the test waits for that file);

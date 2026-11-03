@@ -1,16 +1,16 @@
-;;; drgnx-agents.el --- Agent sessions over ACP: transcript, input that queues, Stop, permissions -*- lexical-binding: t -*-
+;;; drgnx-agents.el --- Agent sessions: settings, profiles, the transcript model, what the editor asks the hub -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; A session is one ACP agent process (a profile: command and environment) working in a directory.
-;; Its transcript is a list of entries — user, agent, thought, tool (with children: subagents), plan —
-;; built from the agent's updates.  Sending never cancels: to a busy session a message is queued
-;; (delivered once, in order, when the turn ends), or steers the running turn when the profile says
-;; `steer' and the agent supports it; only Stop cancels (the turn ends within a second; pending
-;; permission requests are answered "cancelled"; the queue waits).  An agent's questions — may I run
-;; this? may I write that file? — become pending items for the viewer: nothing here ever asks.
-;; See docs/guide/agents.md.
+;; A session is one ACP agent process (a profile: command and environment) working in a directory.  The hub
+;; (Ratatoskr) runs it; this Emacs holds a mirror of it (drgnx-agents-mirror.el).  Its transcript is a list of
+;; entries — user, agent, thought, tool (with children: subagents), plan — built from the agent's updates.
+;; Sending never cancels: to a busy session the hub queues a message (delivered once, in order, when the turn
+;; ends), or steers the running turn when the profile says `steer' and the agent supports it; only Stop cancels.
+;; An agent's questions — may I run this? may I write that file? — become pending items for the viewer: nothing
+;; here ever asks.  This file holds the agent settings, the Claude Code adapter checks, the "needs you" set, the
+;; transcript model and the calls that ask the hub to act on a session.  See docs/guide/agents.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -20,11 +20,7 @@
 (require 'drgnx-config)
 (require 'drgnx-setting)
 (require 'drgnx-settings-defaults)     ; the shipped built-in profiles, and `drgnx-agents-set-setting's writer
-(require 'drgnx-file)                 ; `drgnx-file-truename': an agent's names, with no file name handler
-(require 'drgnx-acp)
-(require 'drgnx-timer)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
-(require 'drgnx-large-file)            ; `drgnx-large-file-p': a large file is read from disk
 (require 'drgnx-notice)                 ; what waits on you is the `agents' set of the "needs you" count
 
 (defun drgnx-agents--openrouter-check (raw)
@@ -139,8 +135,7 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
-  mcp-dir                               ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
-  mcp-sid mcp-socket)                   ; the hub's MCP session for the agent's bridge (`drgnx-agents--with-mcp'), or nil
+  mcp-dir mcp-sid mcp-socket)           ; unused since the hub runs every session; kept so the shape stays
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 
@@ -148,7 +143,7 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
   "Called with a session whenever it changes (status, transcript, queue, pending items).")
 
 (defvar drgnx-agents-task-functions nil
-  "Called with a session working on a task (see `drgnx-agents-start's TASK) and `start', `turn-start' or
+  "Called with a session working on a task (a mirror's `task', `drgnx-agents-mirror') and `start', `turn-start' or
 `turn-end': the work tracker records the commits each turn made (docs/guide/work.md).")
 
 (defconst drgnx-agents-builtin-profiles
@@ -490,245 +485,12 @@ do not reach back to FROM), or nil when the text is shorter than FROM."
          (window (or (plist-get u :size) (plist-get u :contextWindow))))
     (and (numberp used) (numberp window) (> window 0) (min 100 (round (* 100.0 used) window)))))
 
-;;;; The agent's requests
-
-(defun drgnx-agents--path-ok-p (path)
-  "PATH is a real absolute path (not ~, not relative)."
-  (and (stringp path) (file-name-absolute-p path) (not (string-prefix-p "~" path))))
-
-(defconst drgnx-agents-read-max (* 10 1024 1024)
-  "The largest file served to an agent's fs/read_text_file, in bytes (10 MiB): a bigger one is refused, never read.")
-
-(defun drgnx-agents--read-problem (path)
-  "Why the hub will not read the local PATH for an agent (a message), or nil (also when PATH does not exist): not a
-regular file — a FIFO would block the hub in a process filter, a device may never end; only a mode string starting
-with \"-\" counts, as `file-attribute-type' calls a FIFO a file — or bigger than `drgnx-agents-read-max'.  Checked
-with no file name handlers."
-  (let* ((file-name-handler-alist nil)
-         (attrs (and (file-attributes path) (or (file-attributes (file-truename path)) '(nil)))))   ; a link: its target
-    (cond ((null attrs) nil)
-          ((not (string-prefix-p "-" (or (file-attribute-modes attrs) ""))) (format "%s is not a regular file" path))
-          ((> (file-attribute-size attrs) drgnx-agents-read-max)
-           (format "%s is bigger than %d bytes" path drgnx-agents-read-max)))))
-
-(defun drgnx-agents--lines (text line limit)
-  "TEXT from LINE (1-based) for LIMIT lines (both optional: ACP's ranged read)."
-  (if (not (or line limit)) text
-    (let* ((lines (split-string text "\n"))
-           (from (max 0 (1- (or line 1))))
-           (part (seq-take (nthcdr from lines) (or limit (length lines)))))
-      (concat (string-join part "\n") (if (and part (< (+ from (length part)) (length lines))) "\n" "")))))
-
-(defvar drgnx-agents-request-functions nil
-  "Functions called with (SESSION METHOD PARAMS ID) when an agent asks drgnx something (a permission, a file): the
-first non-nil answer is used — (:result R), (:error E) or `:deferred'; nil lets the session's own handling run.
-Jobs answer routine requests by a policy here (drgnx-job.el).")
-
-(defvar drgnx-agents-error-functions nil
-  "Functions called with (SESSION ERROR) when a turn ends in an error (ERROR the agent's (:code :message)): jobs move
-a task whose provider failed to the next profile (drgnx-job.el).  Called in the process filter: only schedule work.")
-
-(defun drgnx-agents--on-request (s method params id)
-  (or (run-hook-with-args-until-success 'drgnx-agents-request-functions s method params id)
-      (drgnx-agents--on-request-1 s method params id)))
-
-(defun drgnx-agents--on-request-1 (s method params id)
-  (pcase method
-    ("session/request_permission"
-     (setf (drgnx-agent-session-permissions s)
-           (append (drgnx-agent-session-permissions s)
-                   (list (list :id id :title (plist-get (plist-get params :toolCall) :title)
-                               :tool (plist-get params :toolCall) :options (plist-get params :options)))))
-     (drgnx-agents--changed s)
-     :deferred)
-    ("fs/read_text_file"
-     ;; local files only, the agent's name used with no file name handler (`drgnx-file-truename': a link to a remote
-     ;; name is remote too, and nothing reaches Tramp, jka-compr or EasyPG); an open buffer as it is, else a regular
-     ;; file up to `drgnx-agents-read-max'.  A large-file buffer (a chunk, or a lean or raw file) or an open buffer
-     ;; over the cap is not served: it holds a part of the file, or more than an agent may get, so the disk is read
-     ;; under the cap, as for a file no buffer visits
-     (let* ((file-name-handler-alist nil)
-            (path (plist-get params :path)) (local (and (drgnx-agents--path-ok-p path) (drgnx-file-truename path)))
-            (buf (let ((b (and local (find-buffer-visiting path))))
-                   (and b (not (drgnx-large-file-p b)) (<= (buffer-size b) drgnx-agents-read-max) b)))
-            (problem (and local (not buf) (drgnx-agents--read-problem path))))
-       (cond ((not (drgnx-agents--path-ok-p path)) (list :error '(:code -32602 :message "an absolute path is needed")))
-             ((not local) (list :error (list :code -32602 :message (format "%s is remote: only local files are served" path))))
-             (problem (list :error (list :code -32002 :message problem)))
-             ((or buf (file-readable-p path))
-              (list :result (list :content (drgnx-agents--lines (if buf (with-current-buffer buf (buffer-substring-no-properties (point-min) (point-max)))
-                                                                  (with-temp-buffer (insert-file-contents path nil 0 drgnx-agents-read-max) (buffer-string)))
-                                                                (plist-get params :line) (plist-get params :limit)))))
-             (t (list :error (list :code -32002 :message (format "%s is not readable" path)))))))
-    ((and "fs/write_text_file" (guard (not (and (drgnx-agents--path-ok-p (plist-get params :path)) (stringp (plist-get params :content))))))
-     (list :error '(:code -32602 :message "an absolute path and the content are needed")))
-    ((and "fs/write_text_file" (guard (drgnx-file-sealed-p (plist-get params :path))))
-     ;; plain text never goes into a `.gpg' or `.gz' file, not even through a review (`drgnx-file-sealed-p')
-     (list :error (list :code -32002 :message (format "%s is a file Emacs keeps encrypted or compressed: an agent never writes it; ask the user to"
-                                                      (plist-get params :path)))))
-    ("fs/write_text_file"
-     ;; never written behind the user's back: a review item (accept hunks, then Done answers)
-     (setf (drgnx-agent-session-reviews s)
-           (append (drgnx-agent-session-reviews s)
-                   (list (list :id id :path (plist-get params :path) :content (plist-get params :content)))))
-     (drgnx-agents--changed s)
-     :deferred)
-    (_ (list :error (list :code -32601 :message (format "%s is not supported" method))))))
-
-(cl-defun drgnx-agents-answer-permission (s item option-id)
-  "Answer the pending permission ITEM of session S with OPTION-ID (nil: cancelled)."
-  (when (drgnx-agent-session-remote s)
-    (setf (drgnx-agent-session-permissions s) (delq item (drgnx-agent-session-permissions s)))
-    (drgnx-agents--remote s "agents/permission" (list :request (plist-get item :id) :option option-id))
-    (cl-return-from drgnx-agents-answer-permission))
-  (setf (drgnx-agent-session-permissions s) (delq item (drgnx-agent-session-permissions s)))
-  (drgnx-acp-respond (drgnx-agent-session-conn s) (plist-get item :id)
-                     (list :outcome (if option-id (list :outcome "selected" :optionId option-id) (list :outcome "cancelled"))))
-  (drgnx-agents--changed s))
-
-(cl-defun drgnx-agents-finish-review (s item &optional reject)
-  "Answer the agent's write request ITEM: done (the user applied what they accepted) or REJECT."
-  (when (drgnx-agent-session-remote s)
-    (setf (drgnx-agent-session-reviews s) (delq item (drgnx-agent-session-reviews s)))
-    (drgnx-agents--remote s "agents/do" (list :op "review" :item (plist-get item :id) :reject (and reject t)))
-    (cl-return-from drgnx-agents-finish-review))
-  (setf (drgnx-agent-session-reviews s) (delq item (drgnx-agent-session-reviews s)))
-  (if reject
-      (drgnx-acp-respond (drgnx-agent-session-conn s) (plist-get item :id) nil '(:code -32003 :message "the user rejected the change"))
-    (drgnx-acp-respond (drgnx-agent-session-conn s) (plist-get item :id) nil))
-  (drgnx-agents--changed s))
-
-;;;; Starting, prompting, stopping
-
-(defun drgnx-agents--connect (s on-ready)
-  "Start S's agent and initialize it; then call ON-READY with the `_meta' its session/new or session/load carries
-\(`drgnx-agents--session-meta', made from the environment the agent was started with: nil sends none)."
-  (let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
-         (env (drgnx-agents--env s))
-         (meta (drgnx-agents--session-meta s env))
-         (conn (drgnx-acp-start (drgnx-agents-command (plist-get profile :command)) :cwd (drgnx-agent-session-cwd s) :env env
-                                :on-notification (lambda (_c method params)
-                                                   (when (equal method "session/update")
-                                                     (drgnx-agents--update s (plist-get params :update))))
-                                :on-request (lambda (_c method params id) (drgnx-agents--on-request s method params id))
-                                :on-exit (lambda (_c status stderr)
-                                           (setf (drgnx-agent-session-status s) 'exited
-                                                 (drgnx-agent-session-exit s) status
-                                                 (drgnx-agent-session-stderr s) stderr)
-                                           (drgnx-agents--release-gateway s)
-                                           (drgnx-agents--close-mcp s)
-                                           (drgnx-agents--changed s)))))
-    (setf (drgnx-agent-session-conn s) conn (drgnx-agent-session-mode s) (or (plist-get profile :mode) 'queue))
-    (drgnx-acp-request conn "initialize"
-                       '(:protocolVersion 1 :clientCapabilities (:fs (:readTextFile t :writeTextFile t) :terminal :false))
-                       (lambda (r)
-                         (if (cdr r) (drgnx-agents--failed s (cdr r))
-                           (setf (drgnx-agent-session-capabilities s) (plist-get (car r) :agentCapabilities))
-                           (funcall on-ready (prog1 meta (setq meta nil))))))))   ; keys in it: not kept once sent
-
-(defun drgnx-agents--failed (s err)
-  (drgnx-agents--add s (list :type 'error :text (format "%s" (or (plist-get err :message) err))))
-  (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
-  (drgnx-agents--changed s))
-
-(declare-function drgnx-gateway-restrictions "drgnx-gateway")
-(declare-function drgnx-ai-agent-env "drgnx-ai")
-(declare-function drgnx-ai-check-agent-model "drgnx-ai")
-(declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
-(declare-function drgnx-ai-provider "drgnx-ai")
-(declare-function drgnx-ai-key "drgnx-ai")
-(declare-function drgnx-ai-agent-keyed-p "drgnx-ai")
-(declare-function drgnx-hub-ensure "drgnx-hub-client")
-(declare-function drgnx-hub--drop-keys "drgnx-hub-client")
-(declare-function drgnx-hub-call-sync "drgnx-hub-client")
-(declare-function drgnx-hub-serving-p "drgnx-hub")
-(declare-function drgnx-hub-register "drgnx-hub")
-(defvar drgnx-ai-gateway-kinds)
+;;;; The hub's sessions: what the editor asks of them
 
 (defvar drgnx-agents-use-gateway t
-  "Non-nil: an Ollama agent (a keyless profile) talks to the hub's gateway too, and goes to Ollama directly only when
-no hub can be had; nil: it always goes directly.  For keyed profiles (OpenRouter, Anthropic, Kimi, DeepSeek:
-`drgnx-ai-agent-keyed-p') it means nothing any more: only the hub holds keys, so they always go through its gateway
-\(a token, never a key), and without a hub they do not start.")
-
-(defun drgnx-agents--in-hub-p ()
-  "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
-  (and (featurep 'drgnx-hub) (drgnx-hub-serving-p)))
-
-(defun drgnx-agents--gateway (s kind &optional model)
-  "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token).  When no hub can
-be had a keyed KIND (`drgnx-ai-agent-keyed-p') fails closed with a `user-error' (only the hub holds keys); a keyless
-one (Ollama) gets nil, goes direct and says so.  Keys this command finds go with the registration, and once the hub
-took them this Emacs drops them (`drgnx-hub--drop-keys').  In the standalone Lisp hub, keys are only those editors
-handed over (and the environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says
-how one comes.  In the Lisp backend behind Ratatoskr (`drgnx-hub--behind-front') the front registers it and judges
-the chain and its keys itself; there is no direct route there (the backend holds no key): a refusal fails the start
-with the front's text.
-An OpenRouter chain with restrictions (`drgnx-agents-openrouter-restrictions') fails closed: restrictions that do
-not read, no hub, or a hub that did not keep them all is a `user-error' — never a direct start without them."
-  (let* ((chain (drgnx-ai-agent-gateway-chain kind model))
-         ;; read before anything can fall back: a file that does not read refuses the start here
-         (restrictions (and (assq 'openrouter chain) (drgnx-agents-openrouter-restrictions))))
-    (when (and (drgnx-agents--in-hub-p) (not (bound-and-true-p drgnx-hub--behind-front)))
-      (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
-                        chain)
-        (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
-                    (mapconcat (lambda (st) (symbol-name (car st))) chain ", "))))
-    (let ((r (condition-case err
-                 (progn
-                   (require 'drgnx-hub-client)
-                   (unless (drgnx-agents--in-hub-p) (drgnx-hub-ensure))
-                   (let* (;; keys this command can read (also from sources that ask) travel to the hub's memory — never
-                          ;; in the hub, which has what editors gave it
-                          (keys (unless (drgnx-agents--in-hub-p)
-                                  (cl-loop for (id . _) in chain
-                                           for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
-                                           when key append (list (intern (concat ":" (symbol-name id))) key))))
-                          (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
-                                        :agent (drgnx-agent-session-name s)
-                                        :owner (emacs-pid) ; its agent is this Emacs's child: gone with it, its token goes too
-                                        :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
-                                        :keys keys))
-                          (params (if restrictions
-                                      (append params (list :openrouter (drgnx-agents--openrouter-json restrictions)))
-                                    params))
-                          (r (if (drgnx-agents--in-hub-p) (drgnx-hub-register params)
-                               (drgnx-hub-call-sync "gateway/register"
-                                                    (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
-                                                               :keys (or keys (make-hash-table)))))))
-                     (when keys (drgnx-hub--drop-keys keys))     ; the hub holds them now
-                     (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
-                     r))
-               (error
-                (when (bound-and-true-p drgnx-hub--behind-front)
-                  (user-error "%s is not started: %s" (drgnx-agent-session-name s)
-                              (if (eq (car err) 'drgnx-hub-front-error) (plist-get (cdr err) :message)
-                                (error-message-string err))))
-                (when restrictions
-                  (user-error "OpenRouter restrictions are set in drgnx-agents-openrouter and apply through drgnx's hub only, which is not available (%s): %s is not started without them; start the hub"
-                              (error-message-string err) (drgnx-agent-session-name s)))
-                (when (drgnx-ai-agent-keyed-p kind)
-                  (user-error "%s is not started: the drgnx hub is not running; agents reach providers through it (%s)"
-                              (drgnx-agent-session-name s) (error-message-string err)))
-                (setf (drgnx-agent-session-via s) 'direct)
-                (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
-                         (drgnx-agent-session-name s))
-                nil))))
-      ;; a hub started before restrictions existed registers without them, and says nothing about them
-      (when (and restrictions
-                 (not (equal (ignore-errors (drgnx-gateway-restrictions (plist-get r :openrouter) t)) restrictions)))
-        (drgnx-agents--release-gateway s)
-        (user-error "The drgnx hub did not keep the OpenRouter restrictions (it predates them): %s is not started; restart the hub (`drgnx hub stop', then start an agent)"
-                    (drgnx-agent-session-name s)))
-      r)))
-
-(declare-function drgnx-hub-call "drgnx-hub-client")
-
-(defun drgnx-agents--release-gateway (s)
-  "S's agent is gone: its gateway token goes too (asynchronously; never waits — an exit runs from a timer)."
-  (when-let* ((token (drgnx-agent-session-gateway s)))
-    (setf (drgnx-agent-session-gateway s) nil)
-    (ignore-errors (drgnx-hub-call "gateway/unregister" (list :token token) #'ignore))))
+  "Non-nil: an Ollama agent (a keyless profile) talks to the hub's gateway too; nil: it goes to Ollama directly.  For
+keyed profiles (OpenRouter, Anthropic, Kimi, DeepSeek: `drgnx-ai-agent-keyed-p') it means nothing: only the hub holds
+keys, so they always go through its gateway (a token, never a key).")
 
 (defvar drgnx-agents-env-functions nil
   "Called with a session as its agent starts; each returns extra \"NAME=value\" strings for the agent's environment
@@ -758,277 +520,6 @@ at all."
   :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx
   :scope 'global :workspace 'never :agents 'never)
 
-(defun drgnx-agents--command-agent (command)
-  "Which agent in `drgnx-agents-own-env' the profile COMMAND (a list) starts, or nil: the first of claude, codex
-and gemini that a program or argument's file name contains."
-  (let ((words (mapcar #'file-name-nondirectory (seq-filter #'stringp command))))
-    (seq-find (lambda (agent) (seq-some (lambda (w) (string-search (symbol-name agent) w)) words))
-              (mapcar #'car (default-value 'drgnx-agents-own-env)))))
-
-(defun drgnx-agents--scrub (env &optional profile)
-  "ENV (\"NAME=value\"…) followed by a bare-name entry (it unsets the variable) for each of
-`drgnx-agents-scrubbed-env' that ENV does not set itself; ENV's own entries come first and so win.  PROFILE (a
-profile's options) without an `:ai' route keeps its agent's own names (`drgnx-agents-own-env')."
-  (let* ((set (mapcar (lambda (e) (car (split-string e "="))) env))
-         (own (and profile (not (plist-get profile :ai))
-                   (cdr (assq (drgnx-agents--command-agent (plist-get profile :command))
-                              (default-value 'drgnx-agents-own-env))))))
-    (append env (seq-remove (lambda (name) (or (member name set) (member name own)))
-                            (default-value 'drgnx-agents-scrubbed-env)))))
-
-(defun drgnx-agents--env (s)
-  "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
-can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK when S works on a task, and what
-`drgnx-agents-env-functions' add; from Emacs's own, the variables in `drgnx-agents-scrubbed-env' are not passed on."
-  (drgnx-agents--scrub
-   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
-           (when-let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
-                       (kind (plist-get profile :ai)))
-             (require 'drgnx-ai)
-             (drgnx-ai-check-agent-model kind (plist-get profile :model))   ; before a gateway token is made
-             (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model) :small-model (plist-get profile :small-model))
-                                 ;; a keyed kind always: only the hub holds keys
-                                 (and (memq kind drgnx-ai-gateway-kinds)
-                                      (or drgnx-agents-use-gateway (drgnx-ai-agent-keyed-p kind))
-                                      (drgnx-agents--gateway s kind (plist-get profile :model)))))
-           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
-           (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
-           (let (extra)
-             (run-hook-wrapped 'drgnx-agents-env-functions
-                               (lambda (f)
-                                 (let ((r (with-demoted-errors "drgnx agents: %S" (funcall f s))))
-                                   (if (not (proper-list-p r))
-                                       (drgnx-notify 'agents 'warn
-                                                     (format "an environment function returned %S, not a list of NAME=value strings; ignored" r))
-                                     (dolist (e r)
-                                       (if (stringp e) (setq extra (append extra (list e)))
-                                         (drgnx-notify 'agents 'warn
-                                                       (format "an environment function returned %S, not a NAME=value string; ignored" e))))))
-                                 nil))
-             extra))
-   (cdr (drgnx-agents-profile (drgnx-agent-session-profile s)))))
-
-(defconst drgnx-agents-job-claude-options
-  (list :allowDangerouslySkipPermissions :false
-        :managedSettings (list :allowManagedPermissionRulesOnly t :allowManagedHooksOnly t
-                               :permissions '(:disableBypassPermissionsMode "disable" :disableAutoMode "disable"))
-        :strictMcpConfig t
-        :settings '(:sandbox (:enabled :false)))
-  "The options a job session's Claude Code gets (`_meta.claudeCode.options' of claude-agent-acp), so that nothing
-pre-allows a tool in a job: bypass mode gone from every settings tier; as the policy tier, every permission rule
-\(allow, deny and ask) and hook of the user, project and local settings ignored and bypass and auto modes disabled;
-only drgnx's MCP servers (no .mcp.json, user, plugin or agent servers); Claude Code's own sandbox off, as drgnx's
-sandbox is the boundary.  `drgnx-agents--session-meta' adds the deny and ask rules of those settings to the policy
-tier, so they still apply.  `settingSources' is left to the adapter, so CLAUDE.md and skills load.
-docs/guide/agents.md, \"Jobs and your Claude settings\".")
-
-(defun drgnx-agents--claude-adapter-p (command)
-  "Does the profile COMMAND (a list) run Claude Code's ACP adapter, by the package.json of the program it starts
-\(`drgnx-agents-command', `drgnx-agents--adapter-package': the maintained package or the deprecated one)?  Nil when
-drgnx cannot tell the package (a shim of pnpm, volta, asdf or mise; a wrapper): see `drgnx-agents--runs-claude-p'."
-  (let ((program (and (stringp (car command)) (executable-find (car (drgnx-agents-command command))))))
-    (and program
-         (member (plist-get (drgnx-agents--adapter-package program) :name)
-                 (list drgnx-agents-claude-package drgnx-agents-claude-old-package))
-         t)))
-
-(defun drgnx-agents--runs-claude-p (command)
-  "Does the profile COMMAND run Claude Code, so a job session of it gets Claude's lock (`drgnx-agents--session-meta')?
-When either its program's package (`drgnx-agents--claude-adapter-p') or a file name in it
-\(`drgnx-agents--command-agent') says so: the test fails closed, as another agent ignores `_meta.claudeCode' and at
-worst refuses the `default' mode, which ends its session."
-  (or (drgnx-agents--claude-adapter-p command) (eq (drgnx-agents--command-agent command) 'claude)))
-
-(defun drgnx-agents-job-safe-p (profile)
-  "May a job's session run on PROFILE (a name)?  When its options say `:job-safe' and it runs Claude Code, whose job
-sessions ignore a repository's own settings (`drgnx-agents--session-meta'); other agents have no such switch yet.  A
-built-in profile (they all say `:job-safe') runs Claude when `drgnx-agents--runs-claude-p' says so, as its bare
-`claude-agent-acp' is the adapter drgnx chooses; a profile of the user's only when the package of the program it
-starts is the adapter's (`drgnx-agents--claude-adapter-p'): a wrapper whose name says claude gets the lock, not a
-job.  On macOS not a profile without `:ai': its Claude logs in with the subscription, whose token is in the
-Keychain (jobs there use the gateway profiles).  Nil for a profile there is none of."
-  (let* ((cell (ignore-errors (drgnx-agents-profile profile))) (p (cdr cell)))
-    (and (plist-get p :job-safe)
-         (if (memq cell drgnx-agents-builtin-profiles)
-             (drgnx-agents--runs-claude-p (plist-get p :command))
-           (drgnx-agents--claude-adapter-p (plist-get p :command)))
-         (not (and (eq system-type 'darwin) (not (plist-get p :ai))))
-         t)))
-
-(defun drgnx-agents--env-object (env)
-  "ENV (\"NAME=value\" strings, and bare names that unset) as the agent's process sees it, a plist (:NAME VALUE…):
-the first entry of a name decides, so a bare name before a value leaves it out."
-  (let (seen object)
-    (dolist (e env)
-      (let* ((i (string-search "=" e)) (name (if i (substring e 0 i) e)))
-        (unless (or (equal name "") (member name seen))
-          (push name seen)
-          (when i (setq object (plist-put object (intern (concat ":" name)) (substring e (1+ i))))))))
-    object))
-
-(defconst drgnx-agents--claude-settings-max 1048576 "The largest Claude settings file drgnx reads, in bytes.")
-
-(defun drgnx-agents--claude-rules (file &optional within)
-  "The deny and ask rules of the Claude settings FILE, as (DENY . ASK), lists of strings; nil when FILE is not a
-regular file (a link is not followed), is larger than `drgnx-agents--claude-settings-max', is not inside the
-directory WITHIN (when given, after links are resolved) or does not parse.  Never signals: a task folder's files are
-the agent's to write, and are read only as these strings."
-  (when (and (file-regular-p file) (not (file-symlink-p file))
-             (<= (or (file-attribute-size (file-attributes file)) 0) drgnx-agents--claude-settings-max)
-             (or (not within) (file-in-directory-p (file-truename file) (file-truename within))))
-    (let ((perms (ignore-errors
-                   (with-temp-buffer
-                     (insert-file-contents file nil 0 drgnx-agents--claude-settings-max)
-                     (plist-get (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)
-                                :permissions)))))
-      (and (plistp perms)
-           (cl-flet ((strings (key) (let ((v (plist-get perms key))) (and (proper-list-p v) (seq-filter #'stringp v)))))
-             (cons (strings :deny) (strings :ask)))))))
-
-(defun drgnx-agents--claude-deny-ask (env cwd)
-  "The deny and ask rules of Claude's user settings (settings.json in CLAUDE_CONFIG_DIR as ENV sets it, else
-~/.claude; a link there is followed, as dotfile managers make one) and of CWD's project and local settings
-\(.claude/settings.json, .claude/settings.local.json; never through a link), as (DENY . ASK), without duplicates."
-  (let* ((config (let ((process-environment (append env process-environment)))
-                   (or (getenv "CLAUDE_CONFIG_DIR") (expand-file-name "~/.claude"))))
-         (all (list (drgnx-agents--claude-rules (file-truename (expand-file-name "settings.json" config)))
-                    (drgnx-agents--claude-rules (expand-file-name ".claude/settings.json" cwd) cwd)
-                    (drgnx-agents--claude-rules (expand-file-name ".claude/settings.local.json" cwd) cwd))))
-    (cons (delete-dups (apply #'append (mapcar #'car all))) (delete-dups (apply #'append (mapcar #'cdr all))))))
-
-(defun drgnx-agents--session-meta (s env)
-  "The `_meta' S's session/new and session/load carry: for a session of a job whose profile runs Claude Code's
-adapter (`drgnx-agents--runs-claude-p'), (:claudeCode (:options OPTS)), OPTS being
-`drgnx-agents-job-claude-options' with the deny and ask rules of the user's and S's folder's Claude settings added
-to its policy tier's permissions (`drgnx-agents--claude-deny-ask'; never an allow rule) and `:env', ENV (the
-\"NAME=value\" strings S's agent was started with) as the agent's process sees it (`drgnx-agents--env-object'); nil,
-so no `_meta' at all, for any other."
-  (and (drgnx-agent-session-job s)
-       (drgnx-agents--runs-claude-p (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :command))
-       (let* ((options (copy-tree drgnx-agents-job-claude-options))
-              (managed (plist-get options :managedSettings))
-              (rules (drgnx-agents--claude-deny-ask env (drgnx-agent-session-cwd s)))
-              (permissions (append (plist-get managed :permissions)
-                                   (and (car rules) (list :deny (vconcat (car rules))))
-                                   (and (cdr rules) (list :ask (vconcat (cdr rules)))))))
-         (list :claudeCode
-               (list :options (append (plist-put options :managedSettings (plist-put managed :permissions permissions))
-                                      (list :env (drgnx-agents--env-object env))))))))
-
-(defvar drgnx-agents-coordination t
-  "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")
-
-(declare-function drgnx-coord-mcp-server-spec "drgnx-coord-mcp")
-
-(declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp")
-
-(declare-function drgnx-sandbox-mcp-server-specs "drgnx-sandbox-mcp" (s inside-dir))
-(declare-function drgnx-sandbox-mcp-inside-dir "drgnx-sandbox-mcp" (s))
-(declare-function drgnx-sandbox-mcp-close "drgnx-sandbox-mcp" (s))
-
-(defconst drgnx-agents-own-mcp-servers '("drgnx" "drgnx-search")
-  "The names of drgnx's own MCP servers, the ones drgnx gives an agent's session: the coordination tools
-\(drgnx-coord-mcp.el) and the search tool (drgnx-search-mcp.el).  No server of a profile's `:mcp-servers' takes them.")
-
-(defun drgnx-agents--profile-mcp-servers (s)
-  "The `:mcp-servers' of S's profile (ACP `mcpServers' entries the user wrote in
-a profile of `drgnx-agents-profiles'), those that are a plist with a name: one that takes a name of
-`drgnx-agents-own-mcp-servers' is left out, and a message says so (a job's
-permission check lets drgnx's own servers through).  A session without a profile (or one whose profile is gone) has
-none."
-  (let ((profile (and (drgnx-agent-session-profile s)
-                      (assoc (drgnx-agent-session-profile s)
-                             (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles)))))
-    (seq-filter (lambda (e)
-                  (and (plistp e) (stringp (plist-get e :name))
-                       (or (not (member (plist-get e :name) drgnx-agents-own-mcp-servers))
-                           (progn (drgnx-notify 'agents 'warn
-                                                (format "profile %s: MCP server %s left out (the name is drgnx's own)"
-                                                        (drgnx-agent-session-profile s) (plist-get e :name)))
-                                  nil))))
-                (plist-get (cdr profile) :mcp-servers))))
-
-(defun drgnx-agents--mcp-servers (s)
-  "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
-`drgnx-agents-mcp' asks for it (`drgnx-agents-mcp-names'), then the servers of S's profile
-\(`drgnx-agents--profile-mcp-servers'), for a job's session too.  A sandboxed session (its `mcp-dir' set by
-`drgnx-sandbox-mcp-open') gets bridges to its own sockets instead of the first two: the hub runs the servers
-outside, as S."
-  (vconcat (if (drgnx-agent-session-mcp-dir s)
-               (progn (require 'drgnx-sandbox-mcp)
-                      (drgnx-sandbox-mcp-server-specs s (drgnx-sandbox-mcp-inside-dir s)))
-             (drgnx-agents--stdio-mcp-servers s))
-           (drgnx-agents--profile-mcp-servers s)))
-
-(declare-function drgnx-hub-mcp-session "drgnx-hub-client")
-(declare-function drgnx-hub-mcp-session-close "drgnx-hub-client")
-
-(defun drgnx-agents--close-mcp (s)
-  "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close'), and the hub's
-session for its bridge closes (`drgnx-hub-mcp-session-close')."
-  (when (drgnx-agent-session-mcp-dir s) (drgnx-sandbox-mcp-close s))
-  (when-let* ((sid (drgnx-agent-session-mcp-sid s)))
-    (setf (drgnx-agent-session-mcp-sid s) nil (drgnx-agent-session-mcp-socket s) nil)
-    (drgnx-hub-mcp-session-close sid)))
-
-(defun drgnx-agents--coordination-p (_s)
-  "Does S's agent get the coordination tools of a hub session?  A sandboxed one too: the hub's bridge behind its own
-mcp.sock attaches to that session (`drgnx-sandbox-mcp--spec')."
-  (and drgnx-agents-coordination (memq 'coordination (drgnx-agents-mcp-names))))
-
-(defun drgnx-agents--tracker-tools (s)
-  "The `:tools' of S's `mcp/session': `(:tracker t)' or `(:tracker :false)' from its profile's `:tracker-tools', nil
-when the profile says nothing (the hub's task setting, else on, then decides)."
-  (when-let* ((name (drgnx-agent-session-profile s))
-              (profile (assoc name (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles)))
-              (v (plist-get (cdr profile) :tracker-tools)))
-    (list :tracker (if (member v '(off "off")) :false t))))
-
-(defun drgnx-agents--with-mcp (s k)
-  "Make S's MCP session at the hub (`drgnx-hub-mcp-session', identity = S's id: a name repeats across hubs and
-editors), then call K with no arguments, which sends session/new or session/load (`drgnx-agents--mcp-servers').
-In a daemon path the hub is asked without waiting and K runs from its answer (as a start, `drgnx-agents--start-safely').
-An agent whose session could not be made starts without the coordination tools and says why in its transcript."
-  (if (or (not (drgnx-agents--coordination-p s)) (drgnx-agent-session-mcp-socket s))
-      (funcall k)
-    (require 'drgnx-hub-client)
-    (let* ((keep (lambda (answer err)
-                   (if answer
-                       (setf (drgnx-agent-session-mcp-sid s) (plist-get answer :sid)
-                             (drgnx-agent-session-mcp-socket s) (plist-get answer :socket))
-                     (drgnx-agents--add s (list :type 'error
-                                                :text (format "the coordination tools are not available: %s" err))))))
-           (later (lambda (answer err)  ; a daemon path: the hub's answer, after the command that started S returned
-                    (if (eq (drgnx-agent-session-status s) 'exited)
-                        (when answer (drgnx-hub-mcp-session-close (plist-get answer :sid)))
-                      (funcall keep answer err)
-                      (drgnx-agents--start-safely s k))))
-           (answer nil) (failed nil))
-      (condition-case err
-          (setq answer (drgnx-hub-mcp-session (drgnx-agent-session-id s)
-                                              :job (drgnx-agent-session-job s) :task (drgnx-agent-session-task s)
-                                              :cwd (drgnx-agent-session-cwd s) :profile (drgnx-agent-session-profile s)
-                                              :tools (drgnx-agents--tracker-tools s) :callback later))
-        (error (setq failed (error-message-string err))))
-      ;; a daemon path returned nil with no error: `later' runs from the hub's answer; any other has one now
-      (unless (and (null answer) (null failed))
-        (funcall keep answer failed)
-        (funcall k)))))
-
-(defun drgnx-agents--stdio-mcp-servers (s)
-  "The servers S's agent starts itself (`drgnx-agents--mcp-servers'): the bridge to its hub session's socket when it
-has one (`drgnx-agents--with-mcp')."
-  (let ((names (drgnx-agents-mcp-names)))
-    (vconcat
-     (and (drgnx-agents--coordination-p s) (drgnx-agent-session-mcp-socket s)
-          (progn (require 'drgnx-coord-mcp)
-                 (list (drgnx-coord-mcp-server-spec (list :sid (drgnx-agent-session-mcp-sid s)
-                                                          :socket (drgnx-agent-session-mcp-socket s))))))
-     (and (memq 'search names)
-          (with-demoted-errors "drgnx agents: the search tool: %S"
-            (require 'drgnx-search-mcp)
-            (list (drgnx-search-mcp-server-spec (drgnx-agent-session-cwd s))))))))
-
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -1044,113 +535,21 @@ the command that asked (stop, answer, send): said in the echo area each time."
                         (drgnx-notice-clear 'agents text)
                         (drgnx-notify 'agents 'warn text :id text :echo t))))))
 
-(defun drgnx-agents--new (profile cwd &optional task job)
-  (let* ((base (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd)))))
-         (name base) (n 1))
-    (while (seq-find (lambda (x) (equal (drgnx-agent-session-name x) name)) drgnx-agents--sessions)
-      (setq n (1+ n) name (format "%s <%d>" base n)))
-    (let ((s (drgnx-agents--make :name name :profile profile :cwd (expand-file-name cwd) :task task :job job
-                                 :id (concat "s-" (substring (secure-hash 'sha1 (format "%s %s %s %s" name (float-time) (random) (emacs-pid))) 0 8)))))
-      (push s drgnx-agents--sessions)
-      (when task
-        (require 'drgnx-work)                    ; the tracker notes where the work starts
-        (run-hook-with-args 'drgnx-agents-task-functions s 'start))
-      s)))
-
-(defun drgnx-agents--start-safely (s fn)
-  "Run FN (starting S's agent); an agent that cannot start makes S an exited session that says why."
-  (condition-case err (funcall fn)
-    (error (setf (drgnx-agent-session-status s) 'exited)
-           (drgnx-agents--add s (list :type 'error :text (format "the agent did not start: %s" (error-message-string err))))
-           (drgnx-agents--changed s))))
-
-(defun drgnx-agents-start (profile cwd &optional task job)
-  "Start a session of PROFILE in CWD; it is idle once the agent made it.  Returns the session.
-TASK (a work-tracker node id) is what the session works on: the agent gets it as DRGNX_TASK, and
-the commits each turn makes are recorded for it.  JOB: the coordination job it belongs to; with one, a PROFILE that
-is not job-safe (`drgnx-agents-job-safe-p') starts nothing: the session has exited and says why."
-  (let ((s (drgnx-agents--new profile cwd task job)))
-    (drgnx-agents--start-safely
-     s (lambda ()
-         (when (and job (not (drgnx-agents-job-safe-p profile)))
-           (error "%s is not job-safe: a job's agent runs on a profile of Claude Code (docs/guide/jobs.md)" profile))
-         (drgnx-agents--connect
-          s (lambda (meta)
-              (drgnx-agents--with-mcp
-               s (lambda ()
-                   (let ((pin (and meta t)))
-                     (drgnx-agents--request
-                      s "session/new"
-                      (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
-                              (and meta (list :_meta meta)))
-                      (lambda (r)
-                        (if (cdr r) (drgnx-agents--failed s (cdr r))
-                          (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId))
-                          (drgnx-agents--pin-mode s pin #'drgnx-agents--ready)))))))))))
-    s))
-
-(defun drgnx-agents--ready (s)
-  "S's agent made or loaded its session: S is idle, and what waited goes."
-  (setf (drgnx-agent-session-status s) 'idle)
+(defun drgnx-agents-answer-permission (s item option-id)
+  "Answer the pending permission ITEM of session S with OPTION-ID (nil: cancelled): it leaves S's list at once, and
+the hub hears the answer when S is its session's mirror."
+  (setf (drgnx-agent-session-permissions s) (delq item (drgnx-agent-session-permissions s)))
   (drgnx-agents--changed s)
-  (drgnx-agents--next s))
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/permission" (list :request (plist-get item :id) :option option-id))))
 
-(defun drgnx-agents--request (s method params callback)
-  "Send request METHOD with PARAMS to S's agent, CALLBACK as in `drgnx-acp-request'.  Params that cannot be
-written as JSON (an environment value that is not valid UTF-8) end S, with a message that never shows them.  Once
-drgnx ended S (`drgnx-agents-kill'), CALLBACK is not called: the agent's exit fails what was pending, and S has
-said why already."
-  (condition-case nil
-      (drgnx-acp-request (drgnx-agent-session-conn s) method params
-                         (lambda (r) (unless (eq (drgnx-agent-session-status s) 'exited) (funcall callback r))))
-    (error (drgnx-agents--end s (format "drgnx could not send %s to the agent: a value in it (an environment variable of the profile?) cannot be written as JSON" method)))))
-
-(defun drgnx-agents--end (s text)
-  "End S, saying TEXT once: S is `exited' before its agent is stopped, so what the stop fails is not reported again
-\(`drgnx-agents--request')."
-  (drgnx-agents--add s (list :type 'error :text text))
-  (setf (drgnx-agent-session-status s) 'exited)
-  (drgnx-agents-kill s))
-
-(defun drgnx-agents--pin-mode (s pin then)
-  "With PIN (a job session of Claude Code's adapter, `drgnx-agents--session-meta'), set S's permission mode to
-`default' (ACP session/set_mode) and call THEN with S once the agent agrees; a refusal ends S, so it never takes a
-turn in a mode its settings chose (acceptEdits, auto, or a resumed session's).  Without PIN, THEN at once."
-  (if (not pin) (funcall then s)
-    (drgnx-agents--request
-     s "session/set_mode" (list :sessionId (drgnx-agent-session-acp-id s) :modeId "default")
-     (lambda (r)
-       (if (not (cdr r)) (funcall then s)
-         (drgnx-agents--end s (format "the agent's permission mode could not be set to default (%s): the session ends"
-                                      (or (plist-get (cdr r) :message) (cdr r)))))))))
-
-(defun drgnx-agents-take-over (profile cwd session-id &optional task id name job)
-  "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
-its history is replayed into the transcript.  Needs an agent that can load sessions: when it cannot, the session
-ends and says why.  TASK and JOB as in `drgnx-agents-start'; ID and NAME, the session's own when it keeps them (a
-hub resuming its sessions: messages and spend follow them)."
-  (let ((s (drgnx-agents--new profile cwd task job)))
-    (when id (setf (drgnx-agent-session-id s) id))
-    (when (stringp name) (setf (drgnx-agent-session-name s) name))
-    (setf (drgnx-agent-session-acp-id s) session-id)
-    (drgnx-agents--start-safely
-     s (lambda ()
-         (drgnx-agents--connect
-          s (lambda (meta)
-              (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
-                  (progn (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)") (drgnx-agents-kill s))
-                (drgnx-agents--with-mcp
-                 s (lambda ()
-                     (let ((pin (and meta t)))
-                       (drgnx-agents--request
-                        s "session/load"
-                        (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
-                                      :mcpServers (drgnx-agents--mcp-servers s))
-                                (and meta (list :_meta meta)))
-                        (lambda (r)
-                          (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
-                            (drgnx-agents--pin-mode s pin #'drgnx-agents--ready))))))))))))
-    s))
+(defun drgnx-agents-finish-review (s item &optional reject)
+  "Answer the agent's write request ITEM of session S: done (the user applied what they accepted) or REJECT.  It
+leaves S's list at once, and the hub hears the answer when S is its session's mirror."
+  (setf (drgnx-agent-session-reviews s) (delq item (drgnx-agent-session-reviews s)))
+  (drgnx-agents--changed s)
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/do" (list :op "review" :item (plist-get item :id) :reject (and reject t)))))
 
 (defun drgnx-agents-free-p (s)
   "Can mirror S take a new turn now (idle, not paused by a Stop, nothing queued)?"
@@ -1162,65 +561,6 @@ hub resuming its sessions: messages and spend follow them)."
 queues, never steers, never interrupts, whatever S's mode — for drgnx's own deliveries."
   (when (drgnx-agents-free-p s) (drgnx-agents--remote s "agents/send" (list :text text)) t))
 
-(defvar drgnx-agents-prompt-functions nil
-  "Called with (SESSION TEXT) when TEXT goes to the agent as a prompt (the hub marks delivered messages read).")
-
-(defun drgnx-agents--prompt (s text)
-  (run-hook-with-args 'drgnx-agents-prompt-functions s text)
-  (drgnx-agents--add s (list :type 'user :text text))
-  (setf (drgnx-agent-session-status s) 'busy (drgnx-agent-session-stopping s) nil (drgnx-agent-session-paused s) nil)
-  (when (drgnx-agent-session-task s) (with-demoted-errors "drgnx work: %S" (run-hook-with-args 'drgnx-agents-task-functions s 'turn-start)))
-  (drgnx-agents--changed s)
-  (let (id)
-    (setq id (drgnx-acp-request (drgnx-agent-session-conn s) "session/prompt"
-                                (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))
-                                (lambda (r) (drgnx-agents--turn-ended s r id))))
-    (setf (drgnx-agent-session-turn s) id)))
-
-(defun drgnx-agents--turn-ended (s r id)
-  "The answer R to prompt ID: it ends the turn only if ID is the turn running.  The late answer of a
-turn Stop's deadline ended lets the held messages go."
-  (cond
-   ((and id (eql id (drgnx-agent-session-draining s)))
-    (setf (drgnx-agent-session-draining s) nil)
-    (drgnx-agents--changed s)
-    (drgnx-agents--next s))
-   ((and (eq (drgnx-agent-session-status s) 'busy) (eql id (drgnx-agent-session-turn s)))
-    (let ((reason (or (plist-get (car r) :stopReason) (and (cdr r) "error")))
-          (interrupt (eq (drgnx-agent-session-stopping s) 'interrupt)))
-      (when-let* ((u (or (plist-get (car r) :usage) (plist-get (plist-get (car r) :_meta) :usage))))
-        (setf (drgnx-agent-session-usage s) u))
-      (drgnx-agents-join-text s)                ; a done entry's :text is whole
-      (dolist (e (drgnx-agent-session-entries s)) (plist-put e :done t))
-      (when (cdr r) (drgnx-agents--add s (list :type 'error :text (format "%s" (plist-get (cdr r) :message)))))
-      (drgnx-agents--add s (list :type 'stop :stop reason :done t))
-      (setf (drgnx-agent-session-turn s) nil (drgnx-agent-session-stopping s) nil)
-      (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
-      (when (and (equal reason "cancelled") (not interrupt)) (setf (drgnx-agent-session-paused s) t))
-      (when (drgnx-agent-session-task s) (with-demoted-errors "drgnx work: %S" (run-hook-with-args 'drgnx-agents-task-functions s 'turn-end)))
-      (let ((conn (drgnx-agent-session-conn s)))
-        (unless (and conn (drgnx-acp-live-p conn))   ; the agent died (or is gone): the queue waits
-          (setf (drgnx-agent-session-status s) 'exited
-                (drgnx-agent-session-stderr s) (and conn (drgnx-acp-conn-stderr conn)))))
-      (when (cdr r) (with-demoted-errors "drgnx agents: %S" (run-hook-with-args 'drgnx-agents-error-functions s (cdr r))))
-      (drgnx-agents--changed s)
-      (drgnx-agents--next s)))))
-
-(defun drgnx-agents--ready-p (s)
-  "S can take a prompt: idle, made by the agent, not waiting for a stopped turn's last answer."
-  (and (eq (drgnx-agent-session-status s) 'idle) (drgnx-agent-session-acp-id s) (not (drgnx-agent-session-draining s))))
-
-(defun drgnx-agents--next (s)
-  "Deliver the next queued message when S is ready and its queue is not paused by a Stop."
-  (when (and (drgnx-agents--ready-p s) (drgnx-agent-session-queue s) (not (drgnx-agent-session-paused s)))
-    (drgnx-agents--prompt s (pop (drgnx-agent-session-queue s)))))
-
-(defun drgnx-agents--steerable-p (s)
-  (let ((m (plist-get (drgnx-agent-session-capabilities s) :_meta)))
-    (and (plist-get m :steering) (not (eq (plist-get m :steering) :false)))))
-
-(defun drgnx-agents--enqueue (s text) (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text))))
-
 (defun drgnx-agents-steer (s text)
   "Put TEXT into mirror S's running turn: `agents/send', and the hub steers when the profile's mode is `steer' and
 the agent can, else it queues TEXT for the turn's end.  t when S is busy under mode `steer' (the hub is asked to
@@ -1229,91 +569,37 @@ steer), else nil."
     (drgnx-agents--remote s "agents/send" (list :text text))
     (and (eq (drgnx-agent-session-status s) 'busy) (eq (drgnx-agent-session-mode s) 'steer))))
 
-(cl-defun drgnx-agents-send (s text)
-  "Send TEXT to session S: now when ready; when busy, queued (default), steering the turn (mode
-`steer', when the agent can; queued if it refuses), or — only in mode `interrupt' — after cancelling
-the turn."
+(defun drgnx-agents-send (s text)
+  "Send TEXT to mirror S: the hub sends it now when the session is ready; when busy, it queues it (default), steers
+the turn (mode `steer', when the agent can) or — only in mode `interrupt' — sends it after cancelling the turn."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/send" (list :text text)) (cl-return-from drgnx-agents-send))
-  (pcase (drgnx-agent-session-status s)
-    ((guard (drgnx-agents--ready-p s))
-     (if (drgnx-agent-session-queue s)
-         (progn (drgnx-agents--enqueue s text) (setf (drgnx-agent-session-paused s) nil) (drgnx-agents--next s))
-       (drgnx-agents--prompt s text)))
-    ('busy
-     (cond ((eq (drgnx-agent-session-mode s) 'steer) (drgnx-agents-steer s text))
-           ((eq (drgnx-agent-session-mode s) 'interrupt)
-            (setf (drgnx-agent-session-queue s) (cons text (drgnx-agent-session-queue s)))
-            (drgnx-agents-stop s 'interrupt))
-           (t (drgnx-agents--enqueue s text))))
-    ('idle (drgnx-agents--enqueue s text)              ; not ready yet (a stopped turn drains): it goes next
-           (setf (drgnx-agent-session-paused s) nil))
-    (_ (drgnx-agents--enqueue s text)))
-  (drgnx-agents--changed s))
+    (drgnx-agents--remote s "agents/send" (list :text text))))
 
-(cl-defun drgnx-agents-deliver-queue (s)
+(defun drgnx-agents-deliver-queue (s)
   "Send the queued messages a Stop held back."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/do" (list :op "deliver-queue")) (cl-return-from drgnx-agents-deliver-queue))
-  (setf (drgnx-agent-session-paused s) nil)
-  (drgnx-agents--next s))
+    (drgnx-agents--remote s "agents/do" (list :op "deliver-queue"))))
 
-(cl-defun drgnx-agents-unqueue (s n)
+(defun drgnx-agents-unqueue (s n)
   "Remove the Nth queued message of S (before it is sent)."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/do" (list :op "unqueue" :n n)) (cl-return-from drgnx-agents-unqueue))
-  (setf (drgnx-agent-session-queue s) (append (seq-take (drgnx-agent-session-queue s) n) (nthcdr (1+ n) (drgnx-agent-session-queue s))))
-  (drgnx-agents--changed s))
+    (drgnx-agents--remote s "agents/do" (list :op "unqueue" :n n))))
 
-(cl-defun drgnx-agents-requeue (s n text)
+(defun drgnx-agents-requeue (s n text)
   "Replace the Nth queued message of S with TEXT (empty: remove it)."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/do" (list :op "requeue" :n n :text text)) (cl-return-from drgnx-agents-requeue))
-  (if (string-empty-p (string-trim text)) (drgnx-agents-unqueue s n)
-    (setf (nth n (drgnx-agent-session-queue s)) text)
-    (drgnx-agents--changed s)))
+    (drgnx-agents--remote s "agents/do" (list :op "requeue" :n n :text text))))
 
-(cl-defun drgnx-agents-stop (s &optional why)
-  "Cancel S's running turn: it ends within a second; pending permission requests are answered
-cancelled and pending edits rejected; queued messages wait (`drgnx-agents-deliver-queue') unless WHY
-is `interrupt'."
+(defun drgnx-agents-stop (s &optional _why)
+  "Cancel S's running turn: the hub ends it within a second; pending permission requests are answered cancelled and
+pending edits rejected; queued messages wait (`drgnx-agents-deliver-queue')."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/stop" nil) (cl-return-from drgnx-agents-stop))
-  (when (eq (drgnx-agent-session-status s) 'busy)
-    (dolist (p (drgnx-agent-session-permissions s)) (drgnx-agents-answer-permission s p nil))
-    (dolist (r (drgnx-agent-session-reviews s))
-      (setf (drgnx-agent-session-reviews s) (delq r (drgnx-agent-session-reviews s)))
-      (drgnx-acp-respond (drgnx-agent-session-conn s) (plist-get r :id) nil '(:code -32003 :message "the turn was stopped")))
-    (setf (drgnx-agent-session-stopping s) (or why t))
-    (drgnx-acp-notify (drgnx-agent-session-conn s) "session/cancel" (list :sessionId (drgnx-agent-session-acp-id s)))
-    ;; an agent that does not answer the cancel in time: this turn ends here anyway; its late answer
-    ;; (and chunks) are then dropped, and nothing new is sent until it came (or 10 s passed)
-    (drgnx-timer-start (cons 'agents-stop (drgnx-agent-session-id s)) 0.9 #'drgnx-agents--stop-deadline
-                       :args (list s (drgnx-agent-session-turn s)) :owner :core)))
+    (drgnx-agents--remote s "agents/stop" nil)))
 
-(defun drgnx-agents--stop-deadline (s turn)
-  "The Stop of S's TURN got no answer in time: end the turn here and hold the queue 10 s more, or until its late answer."
-  (when (and (eq (drgnx-agent-session-status s) 'busy) (eql (drgnx-agent-session-turn s) turn))
-    (drgnx-agents--turn-ended s '((:stopReason "cancelled")) turn)
-    (setf (drgnx-agent-session-draining s) turn)
-    (drgnx-timer-start (cons 'agents-drain (drgnx-agent-session-id s)) 10 #'drgnx-agents--drain-deadline
-                       :args (list s turn) :owner :core)))
-
-(defun drgnx-agents--drain-deadline (s turn)
-  "The stopped TURN of S never answered: let the held messages go."
-  (when (eql (drgnx-agent-session-draining s) turn)
-    (setf (drgnx-agent-session-draining s) nil)
-    (drgnx-agents--next s)))
-
-(cl-defun drgnx-agents-kill (s)
-  "End session S's agent process."
+(defun drgnx-agents-kill (s)
+  "End session S's agent process (in the hub)."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/kill" nil) (cl-return-from drgnx-agents-kill))
-  (when-let* ((c (drgnx-agent-session-conn s))) (drgnx-acp-stop c))
-  (drgnx-agents--release-gateway s)
-  (drgnx-agents--close-mcp s)
-  (setf (drgnx-agent-session-status s) 'exited)
-  (drgnx-agents--changed s))
+    (drgnx-agents--remote s "agents/kill" nil)))
 
 (defun drgnx-agents-sessions () drgnx-agents--sessions)
 
