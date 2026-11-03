@@ -81,9 +81,10 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
                        (if pty
                            (let* ((buf (generate-new-buffer " ttybin"))
                                   (p (make-process :name "ttybin" :buffer buf :command (cons tty-bin-test--bin args)
-                                                   :connection-type 'pty :noquery t :sentinel #'ignore)))
-                             (while (process-live-p p) (accept-process-output p 0.05))
-                             (accept-process-output p 0.1)
+                                                   :connection-type 'pty :noquery t
+                                                   :sentinel (lambda (p _e) (process-put p :done t)))))
+                             ;; the sentinel runs after the run's last output has been read
+                             (drgnx-test-wait (lambda () (process-get p :done)) :what "bin/drgnx's exit on a terminal")
                              (prog1 (cons (process-exit-status p) (with-current-buffer buf (buffer-string)))
                                (kill-buffer buf)))
                          (with-temp-buffer (cons (apply #'call-process tty-bin-test--bin nil t nil args) (buffer-string)))))))
