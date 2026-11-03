@@ -305,6 +305,47 @@ pub struct Slice {
     pub next: Option<u64>,
 }
 
+/// Check that the agent of PROFILE starts and answers `initialize`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ProbeParams {
+    /// The agent profile's name.
+    pub profile: Bounded<String, 128>,
+    /// Seconds the agent has to answer (1 to 60; default 15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_s: Option<u64>,
+}
+
+/// What an agent called itself in its `initialize` answer.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentInfo {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// The check's answer: the agent answered (`ok`, with `agent`), or why not (`why`, and the end of its stderr when it
+/// ended first).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeResult {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// At most 2 KiB, secrets redacted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_tail: Option<String>,
+}
+
+fn check_probe(p: &ProbeParams) -> Result<(), crate::wire::Error> {
+    match p.wait_s {
+        Some(n) if !(1..=60).contains(&n) => Err(invalid("wait_s", "1 to 60 seconds")),
+        _ => Ok(()),
+    }
+}
+
 fn check_slice(p: &SliceParams) -> Result<(), crate::wire::Error> {
     match p.n {
         Some(n) if !(1..=50).contains(&n) => Err(invalid("n", "1 to 50 steps")),
@@ -369,6 +410,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false, home: Front,
             doc: "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
             check: check_slice,
+        ),
+        method!(
+            "agents/probe", AgentsProbe(ProbeParams) -> ProbeResult,
+            classes: [User], writes: false, home: Front,
+            doc: "whether a profile's agent starts and answers initialize (it is started in its sandbox, asked, and ended; no session is made)",
+            check: check_probe,
         ),
     ]
 }

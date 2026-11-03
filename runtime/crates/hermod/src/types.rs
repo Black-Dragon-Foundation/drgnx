@@ -31,6 +31,9 @@ impl Default for ConnOpts {
 /// What `initialize` answered.
 #[derive(Clone, Debug)]
 pub struct AgentInfo {
+    /// What the agent calls itself (`agentInfo`): its name and version.
+    pub name: Option<String>,
+    pub version: Option<String>,
     pub caps: AgentCapabilities,
     pub meta: Option<Value>,
     pub auth: Vec<AuthMethod>,

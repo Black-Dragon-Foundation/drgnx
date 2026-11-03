@@ -15,6 +15,7 @@ pub mod deliver;
 pub mod handoff;
 pub mod launch;
 pub mod lock;
+pub mod probe;
 pub mod queue;
 pub mod session;
 pub mod transcript;

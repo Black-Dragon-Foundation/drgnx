@@ -5,6 +5,7 @@
   "agents/list": ["user", "agent", "service"],
   "agents/move": ["user"],
   "agents/permission": ["user"],
+  "agents/probe": ["user"],
   "agents/role": ["user"],
   "agents/send": ["user"],
   "agents/slice": ["user"],

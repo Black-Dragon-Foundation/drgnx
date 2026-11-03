@@ -876,6 +876,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no | front |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes | front |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes | front |
+| `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no | front |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes | front |
 | `agents/send` | user | `{id: Id, text: Prompt}` | `boolean` | yes | front |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no | front |

@@ -2549,6 +2549,99 @@
       "classes": [
         "user"
       ],
+      "doc": "whether a profile's agent starts and answers initialize (it is started in its sandbox, asked, and ended; no session is made)",
+      "home": "front",
+      "name": "agents/probe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Check that the agent of PROFILE starts and answers `initialize`.",
+        "properties": {
+          "profile": {
+            "description": "The agent profile's name.",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "wait_s": {
+            "description": "Seconds the agent has to answer (1 to 60; default 15).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "ProbeParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AgentInfo": {
+            "additionalProperties": false,
+            "description": "What an agent called itself in its `initialize` answer.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The check's answer: the agent answered (`ok`, with `agent`), or why not (`why`, and the end of its stderr when it\nended first).",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "stderr_tail": {
+            "description": "At most 2 KiB, secrets redacted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ProbeResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a session's role (its matrix column): the user's only, the one way to make a manager",
       "home": "front",
       "name": "agents/role",

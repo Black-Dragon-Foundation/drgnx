@@ -643,9 +643,9 @@ pub(crate) fn find_profile(front: &Front, name: &str) -> Option<AgentProfile> {
 }
 
 /// A launch ready to spawn: the process, the sandbox helper's status pipe, and whether the lock is enforced.
-struct Prepared {
-    spec: draugr::Spec,
-    status: Option<std::os::fd::OwnedFd>,
+pub(super) struct Prepared {
+    pub(super) spec: draugr::Spec,
+    pub(super) status: Option<std::os::fd::OwnedFd>,
     plan: plock::LaunchPlan,
     enforced: bool,
     enforced_why: Option<String>,
@@ -762,7 +762,7 @@ fn spawn_spec(
 
 /// Everything before the process: the matrix's cells, the provider's lock plan, the refusal of a lock that is not
 /// enforced for a worker or a manager under any preset but the autonomous one, and the spawn spec.
-async fn prepare(
+pub(super) async fn prepare(
     front: &Front,
     profile: &AgentProfile,
     role: Role,

@@ -1142,13 +1142,9 @@ ensured first, also from the CLI (\"from the environment\")."
 (defconst drgnx-onboard-login-header "Type /login, finish in the browser, then press Return on the Agents row in the Welcome (Done)"
   "The header line of the terminal Claude Code's login happens in.")
 
-(declare-function drgnx-agents-profile "drgnx-agents")
-(declare-function drgnx-agents-command "drgnx-agents")
 (declare-function drgnx-agents-claude-adapter "drgnx-agents")
 (declare-function drgnx-agents-adapter-problem "drgnx-agents")
-(declare-function drgnx-acp-start "drgnx-acp")
-(declare-function drgnx-acp-request "drgnx-acp")
-(declare-function drgnx-acp-stop "drgnx-acp")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function make-term "term")
 (declare-function term-char-mode "term")
 
@@ -1218,40 +1214,26 @@ end: a program you chose earlier on the PATH keeps winning."
     buf))
 
 (defun drgnx-onboard--claude-profile ()
-  "Start the `claude' agent profile's program, ask it ACP initialize and stop it: (t . TEXT) when it answers within
-`drgnx-onboard-agent-wait' seconds, else (nil . WHY)."
-  (require 'drgnx-agents)
-  (make-directory (drgnx-state-dir) t)
-  (let* ((command (plist-get (cdr (drgnx-agents-profile "claude")) :command))
-         (answer nil) (ended nil) (conn nil))
-    (drgnx-onboard--say "Starting the claude profile's agent…")
-    (condition-case err
-        (setq conn (drgnx-acp-start (drgnx-agents-command command) :cwd (drgnx-state-dir)
-                                    :on-exit (lambda (_c status stderr) (setq ended (cons status stderr)))))
-      (error (setq answer (cons nil (list :message (error-message-string err))))))
-    (unwind-protect
-        (progn
-          (when conn
-            (drgnx-acp-request conn "initialize"
-                               '(:protocolVersion 1 :clientCapabilities (:fs (:readTextFile t :writeTextFile t) :terminal :false))
-                               (lambda (r) (setq answer r)))
-            (drgnx-onboard--wait (lambda () answer) drgnx-onboard-agent-wait)
-            (when answer (drgnx-onboard--wait (lambda () (or ended (not (cdr answer)))) 1)))
-          (cond ((null answer)
-                 (cons nil (format "%s did not answer within %d second%s" (string-join command " ") drgnx-onboard-agent-wait
-                                   (if (= drgnx-onboard-agent-wait 1) "" "s"))))
-                ((cdr answer)
-                 (cons nil (if ended
-                               (format "%s ended at once (exit %s)%s" (string-join command " ") (car ended)
-                                       (if-let* ((line (car (last (split-string (or (cdr ended) "") "[\r\n]+" t "[ \t]+")))))
-                                           (concat ": " line) ""))
-                             (format "%s: %s" (string-join command " ") (plist-get (cdr answer) :message)))))
-                (t (let ((info (plist-get (car answer) :agentInfo)))
-                     (cons t (format "the claude profile answered%s"
-                                     (if (plist-get info :name)
-                                         (format " (%s)" (string-trim (format "%s %s" (plist-get info :name) (or (plist-get info :version) ""))))
-                                       "")))))))
-      (when conn (drgnx-acp-stop conn)))))
+  "Ask the hub whether the `claude' agent profile's program starts and answers ACP initialize (`agents/probe'; the hub
+starts and ends it, this Emacs starts no agent process): (t . TEXT) when it answers within `drgnx-onboard-agent-wait'
+seconds, else (nil . WHY).  Called by the step's command, never from a timer: it waits for the answer."
+  (require 'drgnx-hub-client)
+  (drgnx-onboard--say "Starting the claude profile's agent…")
+  (condition-case err
+      (let* ((r (drgnx-hub-call-sync "agents/probe" (list :profile "claude" :wait_s drgnx-onboard-agent-wait)
+                                     (+ drgnx-onboard-agent-wait 5)))
+             (ok (plist-get r :ok)))
+        (if (and ok (not (eq ok :false)))
+            (let ((info (plist-get r :agent)))
+              (cons t (format "the claude profile answered%s"
+                              (if (plist-get info :name)
+                                  (format " (%s)" (string-trim (format "%s %s" (plist-get info :name) (or (plist-get info :version) ""))))
+                                ""))))
+          (cons nil (format "the claude profile's agent %s%s" (or (plist-get r :why) "did not answer")
+                            (if-let* ((tail (plist-get r :stderr_tail))
+                                      (line (car (last (split-string tail "[\r\n]+" t "[ \t]+")))))
+                                (concat ": " line) "")))))
+    (error (cons nil (format "the hub could not check the claude profile's agent (%s)" (error-message-string err))))))
 
 (defun drgnx-onboard--agents-failed (tool result)
   "(fail MESSAGE) of TOOL's failed install RESULT (fail REASON LOG): why, how to retry, where the log is."

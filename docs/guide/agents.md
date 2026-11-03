@@ -117,6 +117,15 @@ permission request stays on the session until you answer it; nothing another age
 agent reads and writes files inside its session's folder only, and a brainstorm session writes only its design
 document.
 
+## Checking an agent
+
+Onboarding's Agents step (and anything else that wants to know whether a profile works) asks the hub to check it,
+without making a session. The hub starts the profile's program as it would for a chat — its lock, its sandbox, a
+scratch folder of its own — sends the ACP `initialize` request, waits (15 seconds unless the caller says 1 to 60), and ends the
+program and everything it started. The answer says `ok` and the name and version the agent gave, or why not: it did not
+answer in time, it could not start, or it ended first, with its exit status and the last 2 KiB of its error output (secrets
+blanked out). Nothing is recorded and no gateway token is made for it. The check is yours alone: an agent cannot ask it.
+
 ## Reviewing an agent's edits
 
 When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,
