@@ -121,7 +121,9 @@ Rows are compared whole first, so equal pictures cost one string compare a row."
 
 (defmacro drgnx-test-glitnir--with-fixture (&rest body)
   "Run BODY on a bare root frame, no chrome, in a fixture buffer with corfu and quick help available.
-The fixture is 60 lines of Lisp (so it scrolls) with the cursor on the last line; popups are shown by BODY."
+The fixture is 60 lines of Lisp (so it scrolls) with the cursor on the last line; popups are shown by BODY.
+Eldoc documents nothing in it: its idle timer (`global-eldoc-mode' runs it in any buffer it supports) would write the
+signature at point to the echo area, in one picture and not the other."
   (declare (indent 0))
   `(let ((glitnir-debug nil) (child-frame-chrome nil))
      (drgnx-test-glitnir--skip-unless-ready)
@@ -136,6 +138,7 @@ The fixture is 60 lines of Lisp (so it scrolls) with the cursor on the last line
              (switch-to-buffer buf)
              (dotimes (i 60) (insert (format "(defun fixture-%d (x) \"A function.\" (car (cdr x)))\n" i)))
              (emacs-lisp-mode)
+             (setq-local eldoc-documentation-strategy #'ignore)
              (drgnx-test-glitnir--candidates '("car-alpha" "car-beta" "car-gamma") "Documentation.")
              (corfu-mode 1)
              (message nil)
