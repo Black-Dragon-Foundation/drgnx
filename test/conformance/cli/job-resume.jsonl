@@ -1,4 +1,4 @@
-{"scenario": "cli/job-resume", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "ratatoskr job resume: an approved job that was stopped goes on from the command line, with a new --budget; a job the hub does not know is exit 1 (its text on stderr); a budget that is not a number is a usage error (exit 2). The job is stopped at the end."}
+{"scenario": "cli/job-resume", "requires": ["v1", "test-hooks"], "doc": "ratatoskr job resume: an approved job that was stopped goes on from the command line, with a new --budget; a job the hub does not know is exit 1 (its text on stderr); a budget that is not a number is a usage error (exit 2). The job is stopped at the end."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}

@@ -1,4 +1,4 @@
-{"scenario": "runner/resume-of-a-rejected-proposal-is-refused", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "job/stop of a proposal rejects it; job/resume of it is refused (it was never approved: the plan has to be proposed again) and the job stays stopped."}
+{"scenario": "runner/resume-of-a-rejected-proposal-is-refused", "requires": ["v1", "test-hooks"], "doc": "job/stop of a proposal rejects it; job/resume of it is refused (it was never approved: the plan has to be proposed again) and the job stays stopped."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "write_file", "path": "$ROOT/plan.md", "text": "# One\n\n**Repo:** $ROOT/repo\n\n### Task 1: One\n\nx\n"}

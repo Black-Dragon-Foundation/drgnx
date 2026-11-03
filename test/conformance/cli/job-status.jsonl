@@ -1,4 +1,4 @@
-{"scenario": "cli/job-status", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "ratatoskr job status: with no job it says so; once a plan is proposed the list and the one job show it (text, then --json: the list is {\"jobs\": [...]}, one job is the job); an id the hub does not know is exit 1."}
+{"scenario": "cli/job-status", "requires": ["v1", "test-hooks"], "doc": "ratatoskr job status: with no job it says so; once a plan is proposed the list and the one job show it (text, then --json: the list is {\"jobs\": [...]}, one job is the job); an id the hub does not know is exit 1."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}

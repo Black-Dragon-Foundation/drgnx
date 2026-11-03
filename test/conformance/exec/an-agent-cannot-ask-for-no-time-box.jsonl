@@ -1,4 +1,4 @@
-{"scenario": "exec/an-agent-cannot-ask-for-no-time-box", "requires": ["v1", "fake-backend"], "doc": "A session (an agent) that asks job_start for no_timebox is refused (the tool's error names the field) and no job starts: only the user's jobs may run without a time box."}
+{"scenario": "exec/an-agent-cannot-ask-for-no-time-box", "requires": ["v1"], "doc": "A session (an agent) that asks job_start for no_timebox is refused (the tool's error names the field) and no job starts: only the user's jobs may run without a time box."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

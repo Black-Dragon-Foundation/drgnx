@@ -1,4 +1,4 @@
-{"scenario": "agents/start-env-reaches-the-agent", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "An editor module's variable (agents/start env, a name on drgnx-agents-start-env-names) is in the started agent's environment: the profile's command is a shell that writes the variable to a file before it runs the mock ACP agent."}
+{"scenario": "agents/start-env-reaches-the-agent", "requires": ["v1", "test-hooks"], "doc": "An editor module's variable (agents/start env, a name on drgnx-agents-start-env-names) is in the started agent's environment: the profile's command is a shell that writes the variable to a file before it runs the mock ACP agent."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

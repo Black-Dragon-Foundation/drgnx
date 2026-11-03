@@ -1,4 +1,4 @@
-{"scenario": "agents/start-env-refuses-other-names", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "agents/start env takes only the names on drgnx-agents-start-env-names, and never a name that looks like a credential or a provider's key_env, even one the setting lists: invalid-params at env[i].name, and no session starts."}
+{"scenario": "agents/start-env-refuses-other-names", "requires": ["v1", "test-hooks"], "doc": "agents/start env takes only the names on drgnx-agents-start-env-names, and never a name that looks like a credential or a provider's key_env, even one the setting lists: invalid-params at env[i].name, and no session starts."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
