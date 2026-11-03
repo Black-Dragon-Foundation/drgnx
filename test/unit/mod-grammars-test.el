@@ -46,7 +46,8 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
 (ert-deftest drgnx-grammars/install-is-a-job ()
   (drgnx-grammars-test--with
     (let ((started nil))
-      (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (name command &rest _) (setq started (list name command)) "J1"))
+      (cl-letf (((symbol-function 'drgnx-exec-start)
+                 (lambda (name command &rest keys) (setq started (list name command)) (funcall (plist-get keys :callback) "J1" nil) nil))
                 ((symbol-function 'drgnx-grammars--watch) #'ignore))
         (drgnx-grammars-install '(python tsx)))
       (should (equal (car started) "grammars"))
@@ -130,7 +131,7 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
   (drgnx-grammars-test--with
     (drgnx-test-with-clock ()
       (let ((job (list :status 'running)) (installed nil) (said nil))
-        (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) job))
+        (cl-letf (((symbol-function 'drgnx-exec-get) (lambda (_id) job))
                   ((symbol-function 'drgnx-grammars--installed) (lambda (langs) (push langs installed)))
                   ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
           (drgnx-grammars--watch "J1" '(python))
@@ -138,7 +139,7 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
           (should (= 1 (seq-count (lambda (e) (equal (car e) '(grammars-watch . "J1"))) (drgnx-timer-pending))))
           (drgnx-test-advance 10)
           (should-not installed)                                    ; running: looked at, nothing done
-          (setq job (list :status 'exited :exit 0))
+          (setq job (list :status 'done :exit 0))
           (drgnx-test-advance 2)
           (should (equal installed '((python))))
           (should (string-match-p "Language support installed: python" (car said)))
@@ -149,7 +150,7 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
 (ert-deftest drgnx-grammars/a-job-that-never-ends-is-given-up-after-an-hour ()
   (drgnx-grammars-test--with
     (drgnx-test-with-clock ()
-      (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) (list :status 'running)))
+      (cl-letf (((symbol-function 'drgnx-exec-get) (lambda (_id) (list :status 'running)))
                 ((symbol-function 'drgnx-grammars--installed) (lambda (_) (error "installed"))))
         (drgnx-grammars--watch "J2" '(python))
         (drgnx-test-advance 3598)

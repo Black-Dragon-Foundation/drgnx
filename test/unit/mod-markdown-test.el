@@ -80,7 +80,7 @@
   (drgnx-markdown-test--with
     (let ((jobs nil))
       (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "mmdc") "/usr/bin/mmdc")))
-                ((symbol-function 'drgnx-jobs-start) (lambda (name cmd &rest _) (push (cons name cmd) jobs) "J"))
+                ((symbol-function 'drgnx-exec-start) (lambda (name cmd &rest _) (push (cons name cmd) jobs) nil))
                 ((symbol-function 'drgnx-markdown--watch) #'ignore))
         (let* ((src (drgnx-markdown--with-diagrams drgnx-markdown-test--doc))
                (job (car jobs)) (png (nth (1+ (seq-position (cdr job) "-o")) (cdr job))))
@@ -99,7 +99,7 @@
 (ert-deftest drgnx-markdown/without-mmdc-diagrams-stay-code ()
   (drgnx-markdown-test--with
     (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil))
-              ((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (error "No job without mmdc"))))
+              ((symbol-function 'drgnx-exec-start) (lambda (&rest _) (error "No job without mmdc"))))
       (should (equal (drgnx-markdown--with-diagrams drgnx-markdown-test--doc) drgnx-markdown-test--doc)))))
 
 (ert-deftest drgnx-markdown/preview-through-pandoc ()
@@ -117,7 +117,7 @@
   (drgnx-markdown-test--with
     (let ((jobs 0))
       (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "mmdc") "/usr/bin/mmdc")))
-                ((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (cl-incf jobs) "J"))
+                ((symbol-function 'drgnx-exec-start) (lambda (&rest _) (cl-incf jobs) nil))
                 ((symbol-function 'drgnx-markdown--watch) #'ignore))
         (drgnx-markdown--with-diagrams drgnx-markdown-test--doc)
         (should (= jobs 1))
@@ -171,20 +171,20 @@
   (drgnx-markdown-test--with
     (drgnx-test-with-clock (:auto t)
       (let ((job (list :status 'running)) (drawn nil))
-        (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) job))
+        (cl-letf (((symbol-function 'drgnx-exec-get) (lambda (_id) job))
                   ((symbol-function 'drgnx-markdown--drawn) (lambda (hash exit) (push (list hash exit) drawn))))
           (drgnx-markdown--watch "J1" "h1")
           (drgnx-markdown--watch "J2" "h2")
           (drgnx-test-advance 4)
           (should-not drawn)
-          (setq job (list :status 'exited :exit 0))
+          (setq job (list :status 'done :exit 0))
           (drgnx-test-advance 2)
           (should (equal (sort (mapcar #'car drawn) #'string<) '("h1" "h2")))
           (should (equal (mapcar #'cadr drawn) '(0 0)))
           (should-not (drgnx-timer-active-p '(markdown-watch . "J1"))))
         ;; a job that never ends: after ten minutes the diagram stays code
         (setq job (list :status 'running) drawn nil)
-        (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) job))
+        (cl-letf (((symbol-function 'drgnx-exec-get) (lambda (_id) job))
                   ((symbol-function 'drgnx-markdown--drawn) (lambda (hash exit) (push (list hash exit) drawn))))
           (drgnx-markdown--watch "J3" "h3")
           (drgnx-test-advance 598)

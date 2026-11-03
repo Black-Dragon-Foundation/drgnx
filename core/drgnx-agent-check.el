@@ -29,8 +29,16 @@
 (require 'drgnx-agent-config)
 (require 'drgnx-paths)
 (require 'drgnx-file)
-(require 'drgnx-jobs)
 (require 'drgnx-timer)
+
+(defun drgnx-agent-check--launcher ()
+  "`systemd' when a systemd user manager runs this session, else `detached' ($DRGNX_JOBS_LAUNCHER wins)."
+  (let ((env (getenv "DRGNX_JOBS_LAUNCHER")))
+    (cond (env (intern env))
+          ((and (executable-find "systemd-run") (getenv "XDG_RUNTIME_DIR")
+                (file-exists-p (expand-file-name "systemd" (getenv "XDG_RUNTIME_DIR"))))
+           'systemd)
+          (t 'detached))))
 
 (defvar drgnx-agent-check-timeout 20
   "Seconds an MCP Test may take before the server and the check's Emacs are ended.")
@@ -110,7 +118,7 @@ else from `process-attributes' (a few hundred)."
 
 (defun drgnx-agent-check--unit ()
   "A new name for a systemd scope, or nil where systemd does not run the session."
-  (and (eq (drgnx-jobs-launcher) 'systemd)
+  (and (eq (drgnx-agent-check--launcher) 'systemd)
        ;; the random part: a scope left by an earlier Emacs with the same pid cannot have this name
        (format "drgnx-check-%d-%d-%06x" (emacs-pid) (cl-incf drgnx-agent-check--unit-counter) (random #xffffff))))
 
@@ -713,7 +721,7 @@ is told as such."
 
 (defun drgnx-agent-check--wrap (argv &optional unit)
   "ARGV, run in a systemd scope (named UNIT) with a memory cap where systemd runs the session."
-  (if (eq (drgnx-jobs-launcher) 'systemd)
+  (if (eq (drgnx-agent-check--launcher) 'systemd)
       (append (list "systemd-run" "--user" "--scope" "-q")
               (and unit (list (concat "--unit=" unit)))
               (list "-p" (concat "MemoryMax=" drgnx-agent-check--memory) "-p" "MemorySwapMax=0" "--")

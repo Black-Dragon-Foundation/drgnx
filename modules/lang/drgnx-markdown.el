@@ -16,7 +16,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 (require 'drgnx-timer)
 
 (defvar shr-blocked-images)
@@ -46,8 +46,10 @@
            (png (expand-file-name (concat hash ".png") dir)))
       (make-directory dir t)
       (write-region code nil mmd nil 'silent)
-      (drgnx-markdown--watch (drgnx-jobs-start "mermaid" (list "mmdc" "-i" mmd "-o" png "-b" "transparent" "-t" (drgnx-markdown--theme)))
-                             hash))))
+      (drgnx-exec-start "mermaid" (list "mmdc" "-i" mmd "-o" png "-b" "transparent" "-t" (drgnx-markdown--theme))
+                        :callback (lambda (id _why)
+                                    ;; the hub took it, or it did not: either way the drawing is judged
+                                    (if id (drgnx-markdown--watch id hash) (drgnx-markdown--drawn hash 1)))))))
 
 (defun drgnx-markdown--drawn (hash exit)
   "The drawing of HASH ended with EXIT: the previews show it — or, when mmdc failed, it stays code and is not tried again."
@@ -63,7 +65,7 @@
 
 (defun drgnx-markdown--watch-tick (id hash)
   "The poll of `drgnx-markdown--watch': non-nil, once job ID is over and HASH's drawing has been judged."
-  (let ((job (drgnx-jobs-get id)))
+  (let ((job (drgnx-exec-get id)))
     (unless (eq (plist-get job :status) 'running)
       (drgnx-markdown--drawn hash (plist-get job :exit))
       t)))

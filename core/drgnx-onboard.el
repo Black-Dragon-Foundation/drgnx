@@ -642,11 +642,11 @@ Claude Code's parts (`drgnx-onboard--agents-step'); age and chezmoi carry keys a
 (defvar drgnx-onboard-server-wait 60 "Seconds a model server started here may take to answer.")
 (defvar drgnx-onboard-app-wait 600 "Seconds onboarding waits for a runner you install yourself (Linux) to answer.")
 
-(declare-function drgnx-jobs-start "drgnx-jobs")
-(declare-function drgnx-jobs-get "drgnx-jobs")
-(declare-function drgnx-jobs-log "drgnx-jobs")
-(declare-function drgnx-jobs-stop "drgnx-jobs")
-(declare-function drgnx-jobs--dir "drgnx-jobs")
+(declare-function drgnx-exec-start "drgnx-exec")
+(declare-function drgnx-exec-sync "drgnx-exec")
+(declare-function drgnx-exec-get "drgnx-exec")
+(declare-function drgnx-exec-log "drgnx-exec")
+(declare-function drgnx-exec-stop "drgnx-exec")
 (declare-function drgnx-ai-default-models "drgnx-ai")
 (declare-function drgnx-ai-store-key "drgnx-ai")
 (declare-function drgnx-ai-embed-sync "drgnx-ai-client")
@@ -703,15 +703,14 @@ step (a command): C-g quits."
 (defun drgnx-onboard--refresh-welcome ()
   (when-let* ((b (get-buffer "*drgnx Welcome*"))) (with-current-buffer b (tabulated-list-print t))))
 
+(defun drgnx-onboard--log-file (id)
+  "Where the hub keeps job ID's log (for a message: the editor reads it through `drgnx-exec-log')."
+  (expand-file-name "log" (expand-file-name id (expand-file-name "exec" (expand-file-name "hub" (drgnx-state-dir))))))
+
 (defun drgnx-onboard--last-line (id)
-  "The last line job ID wrote (a progress bar's last state, without ANSI escapes), or nil.  Reads only the end of
-the log (4 KB): it is called twice a second."
-  (let* ((file (expand-file-name "log" (drgnx-jobs--dir id)))
-         (size (file-attribute-size (file-attributes file)))
-         (tail (if (not size) ""
-                 (with-temp-buffer
-                   (insert-file-contents file nil (max 0 (- size 4096)) size)
-                   (buffer-string)))))
+  "The last line job ID wrote (a progress bar's last state, without ANSI escapes), or nil.  Asks the hub for the end
+of the log (4 KB, `drgnx-exec-log': it waits for the hub, so only from the command that waits)."
+  (let ((tail (or (ignore-errors (drgnx-exec-log id 4096)) "")))
     (car (last (split-string (replace-regexp-in-string "\e\\[[0-9;?]*[ -/]*[@-~]" "" tail) "[\r\n]+" t "[ \t]+")))))
 
 (defun drgnx-onboard--say (text &optional step)
@@ -724,46 +723,59 @@ area.  Never asks anything (the progress timer calls it too)."
       (message "%s" text))))
 
 (defun drgnx-onboard--show-progress (step what id)
-  "The progress timer: WHAT and job ID's last log line, in STEP's row of the Welcome and the echo area.  Reads only."
+  "WHAT and job ID's last log line, in STEP's row of the Welcome and the echo area.  Asks the hub (see
+`drgnx-onboard--last-line'): from the command that waits, at most once a second."
   (drgnx-onboard--say (string-trim-right (format "%s… %s" what (or (drgnx-onboard--last-line id) ""))) step))
+
+(defun drgnx-onboard--exec-start (name command &optional timebox)
+  "Start COMMAND (a list) as the hub's job NAME in the state folder and wait (30 s at most) for the hub to take it:
+\(ID) or (nil WHY).  Follows the hub's job events from then on (`drgnx-exec-sync'), also in the CLI's batch Emacs.
+TIMEBOX: the job's seconds."
+  (require 'drgnx-exec)
+  (make-directory (drgnx-state-dir) t)
+  (let (id why done)
+    (drgnx-exec-start name command :cwd (drgnx-state-dir) :timebox timebox
+                      :callback (lambda (i w) (setq id i why w done t)))
+    (let ((deadline (+ (float-time) 30)))
+      (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.1)))
+    (when id (drgnx-exec-sync))
+    (list id (or why (and (not done) "the hub did not answer")))))
 
 (defun drgnx-onboard--job (what command &optional secs)
   "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour; `:none': as
 long as it takes — a model download or a package sync, which C-g still stops); meanwhile the Welcome shows its last
 log line.  `ok', or (fail REASON LOG): REASON ends with the log's last line.  C-g stops the
 job, then quits."
-  (require 'drgnx-jobs)
-  (make-directory (drgnx-state-dir) t)
-  (let* ((id (drgnx-jobs-start (concat "Onboarding: " what) command :cwd (drgnx-state-dir)))
-         (log (expand-file-name "log" (drgnx-jobs--dir id)))
-         (t0 (float-time)) (job nil)
-         ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job
-         (stop (lambda () (drgnx-jobs-stop id)))
-         (key (cons 'onboard-progress id)))
-    ;; :core, not a process or buffer: the job is a detached unit, and the Welcome may not exist (the CLI); the
-    ;; `unwind-protect' below ends the timer with this wait.
-    (drgnx-timer-start key 0.5 #'drgnx-onboard--show-progress :repeat 0.5
-                       :args (list drgnx-onboard--current what id) :owner :core)
-    (when noninteractive (add-hook 'kill-emacs-hook stop))
-    (unwind-protect
-        (condition-case nil
-            (progn
-              (drgnx-onboard--until (lambda ()
-                                      (setq job (drgnx-jobs-get id))
-                                      ;; gone: it ended without writing its exit (killed); not while it starts
-                                      (or (plist-get job :exit) (and (eq (plist-get job :status) 'gone) (> (- (float-time) t0) 3))))
-                                    (if (eq secs :none) nil (or secs 3600)))
-              (if (eql (plist-get job :exit) 0) 'ok
-                (when (eq (plist-get job :status) 'running) (drgnx-jobs-stop id))
-                (list 'fail (format "%s failed (%s)%s" what
-                                    (cond ((plist-get job :exit) (format "exit %d" (plist-get job :exit)))
-                                          ((eq (plist-get job :status) 'running) "it took too long and was stopped")
-                                          (t "it ended without an exit status"))
-                                    (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
-                      log)))
-          (quit (drgnx-jobs-stop id) (signal 'quit nil)))
-      (remove-hook 'kill-emacs-hook stop)
-      (drgnx-timer-cancel key))))
+  (let* ((started (drgnx-onboard--exec-start (concat "Onboarding: " what) command
+                                             (if (eq secs :none) 86400 (ceiling (+ (or secs 3600) 30)))))
+         (id (car started)))
+    (if (not id)
+        (list 'fail (format "%s did not start: %s" what (cadr started)) nil)
+      (let* ((log (drgnx-onboard--log-file id)) (job nil) (shown 0)
+             ;; the CLI (batch) ends on Ctrl-C without unwinding: the exit stops the job
+             (stop (lambda () (drgnx-exec-stop id))))
+        (when noninteractive (add-hook 'kill-emacs-hook stop))
+        (unwind-protect
+            (condition-case nil
+                (progn
+                  (drgnx-onboard--until (lambda ()
+                                          (setq job (drgnx-exec-get id))
+                                          (when (>= (- (float-time) shown) 1)
+                                            (setq shown (float-time))
+                                            (drgnx-onboard--show-progress drgnx-onboard--current what id))
+                                          ;; no row: the hub forgot it (it ended)
+                                          (or (null job) (not (eq (plist-get job :status) 'running))))
+                                        (if (eq secs :none) nil (or secs 3600)))
+                  (if (eql (plist-get job :exit) 0) 'ok
+                    (when (eq (plist-get job :status) 'running) (drgnx-exec-stop id))
+                    (list 'fail (format "%s failed (%s)%s" what
+                                        (cond ((plist-get job :exit) (format "exit %d" (plist-get job :exit)))
+                                              ((eq (plist-get job :status) 'running) "it took too long and was stopped")
+                                              (t "it ended without an exit status"))
+                                        (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
+                          log)))
+              (quit (drgnx-exec-stop id) (signal 'quit nil)))
+          (remove-hook 'kill-emacs-hook stop))))))
 
 (declare-function browse-url "browse-url")
 
@@ -847,28 +859,31 @@ first on the job's PATH: npm's `node' is there); a `~/' argument is the home dir
 (defun drgnx-onboard--start (tool)
   "TOOL's server: `ok' when its address answers — at once, or after its :start command as a drgnx job (`ollama
 serve' keeps running as one; `lms server start' starts LM Studio's and ends) — else (fail REASON LOG)."
-  (require 'drgnx-jobs)
   (let* ((r (alist-get tool drgnx-onboard-install-recipes)) (provider (plist-get r :provider)) (name (plist-get r :name))
          (program (drgnx-onboard--program tool)))
     (cond
      ((drgnx-onboard--up-p provider) 'ok)
      ((not program) (list 'fail (format "%s is not installed" name) nil))
      (t
-      (make-directory (drgnx-state-dir) t)
       (drgnx-onboard--say (format "Starting %s…" name))
-      (let* ((id (drgnx-jobs-start (format "%s server" name) (cons program (cdr (plist-get r :start))) :cwd (drgnx-state-dir)))
-             (log (expand-file-name "log" (drgnx-jobs--dir id)))
-             (up (condition-case nil
-                     (drgnx-onboard--until (lambda ()
-                                             (or (drgnx-onboard--up-p provider)
-                                                 (let ((exit (plist-get (drgnx-jobs-get id) :exit))) (and exit (/= exit 0) 'failed))))
-                                           drgnx-onboard-server-wait)
-                   (quit (drgnx-jobs-stop id) (signal 'quit nil)))))
-        (if (eq up t) 'ok
-          (drgnx-jobs-stop id)
-          (list 'fail (format "%s did not answer at %s%s" name (plist-get (drgnx-ai-provider provider) :url)
-                              (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
-                log)))))))
+      ;; a server: the hub's longest time box (a look at it starts it again, `drgnx-ai-ensure-local')
+      (let* ((started (drgnx-onboard--exec-start (format "%s server" name) (cons program (cdr (plist-get r :start))) 86400))
+             (id (car started)))
+        (if (not id)
+            (list 'fail (format "%s did not start: %s" name (cadr started)) nil)
+          (let* ((log (drgnx-onboard--log-file id))
+                 (up (condition-case nil
+                         (drgnx-onboard--until (lambda ()
+                                                 (or (drgnx-onboard--up-p provider)
+                                                     (let ((exit (plist-get (drgnx-exec-get id) :exit)))
+                                                       (and exit (/= exit 0) 'failed))))
+                                               drgnx-onboard-server-wait)
+                       (quit (drgnx-exec-stop id) (signal 'quit nil)))))
+            (if (eq up t) 'ok
+              (drgnx-exec-stop id)
+              (list 'fail (format "%s did not answer at %s%s" name (plist-get (drgnx-ai-provider provider) :url)
+                                  (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
+                    log)))))))))
 
 (defun drgnx-onboard--pull-name (tool model)
   "The name TOOL downloads Ollama's MODEL by."
@@ -1676,7 +1691,15 @@ terminal.  Without interaction it only reports."
 (declare-function drgnx-doctor-run "drgnx-doctor")
 (declare-function drgnx-doctor-facts "drgnx-doctor")
 
-(declare-function drgnx-jobs--detach "drgnx-jobs")
+(defvar drgnx-onboard--setsid (executable-find "setsid") "setsid(1) where the system has it (Linux; macOS has none).")
+
+(defun drgnx-onboard--detach (line)
+  "Start `sh -c LINE' in its own session and process group, not waited for, outliving this Emacs: `setsid -f'
+where there is one, else perl (every macOS has it).  perl forks first, as `setsid -f' does: Emacs's child already
+leads its own process group, and setsid(2) refuses a group leader."
+  (if drgnx-onboard--setsid
+      (call-process "setsid" nil 0 nil "-f" "sh" "-c" line)
+    (call-process "perl" nil 0 nil "-MPOSIX" "-e" "fork and exit; POSIX::setsid(); exec @ARGV" "sh" "-c" line)))
 
 (defun drgnx-onboard--under-systemd-p ()
   "Non-nil when this Emacs is a process of a systemd unit (INVOCATION_ID) and a user manager can start another."
@@ -1687,12 +1710,11 @@ terminal.  Without interaction it only reports."
 session.  As a systemd service (drgnx.service) this Emacs shares a cgroup with it, and systemd kills what is left
 in the cgroup when the main process ends — the detached waiter too — so there it runs as its own transient unit
 \(`KillMode=process': a daemon `drgnx open' starts stays); the detached way is also the fallback."
-  (require 'drgnx-jobs)
   (unless (and (drgnx-onboard--under-systemd-p)
                (eql 0 (call-process "systemd-run" nil nil nil "--user" "--quiet" "--collect"
                                     (format "--unit=drgnx-restart-%d" (emacs-pid)) "-p" "KillMode=process"
                                     "sh" "-c" (replace-regexp-in-string "[$%]" "\\&\\&" line))))   ; ExecStart reads $ and %
-    (drgnx-jobs--detach line)))
+    (drgnx-onboard--detach line)))
 
 (defun drgnx-onboard--restart ()
   "Restart drgnx: ask the quit questions first (`drgnx-session-quit-confirm': save, lose changes?), then — only

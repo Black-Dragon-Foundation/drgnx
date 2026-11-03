@@ -109,7 +109,7 @@ pending at the end is cancelled."
   (drgnx-search-ui-test--project
     (drgnx-search-ui-test--index-exists root)
     (let* ((file (expand-file-name "a.txt" root)) (started nil))
-      (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (error "a timer listed the jobs")))
+      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (error "a timer listed the jobs")))
                 ((symbol-function 'drgnx-search-index-start) (lambda (r &rest _) (push r started) 1)))
         (drgnx-search-ui-test--timed
           (dotimes (_ 3)
@@ -135,7 +135,7 @@ pending at the end is cancelled."
     (let ((started nil)
           (lock (drgnx-search-index--lock-file root)))
       (write-region (format "%d %s" (emacs-pid) (drgnx-search-index--start-time (emacs-pid))) nil lock nil 'silent)
-      (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (error "a timer listed the jobs")))
+      (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (error "a timer listed the jobs")))
                 ((symbol-function 'drgnx-search-index-start) (lambda (r &rest _) (push r started) 1)))
         (drgnx-search-ui-test--timed
           (drgnx-search--reindex root)
@@ -451,16 +451,17 @@ pending at the end is cancelled."
     (let* ((proc (make-process :name "fake-indexer" :command '("sleep" "60") :noquery t))
            (pid (process-id proc))
            (lock (drgnx-search-index--lock-file root))
-           (job (list :status 'running :name "search-index: proj" :pid pid
-                      :command (list (drgnx-emacs-program) "--batch" "-f" "drgnx-search-index-cli" (directory-file-name root)))))
+           (stopped nil)
+           (job (list :id "j1" :status 'running :name "search-index: proj"
+                      :argv (list (drgnx-emacs-program) "--batch" "-f" "drgnx-search-index-cli" (directory-file-name root)))))
       (unwind-protect
           (progn
             (make-directory (file-name-directory lock) t)
             (write-region (format "%d 0" pid) nil lock nil 'silent)
             (should (drgnx-search-index-running-p root))
-            (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (list job))))
+            (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () (list job)))
+                      ((symbol-function 'drgnx-exec-stop) (lambda (id) (push id stopped))))
               (drgnx-search--teardown))
-            (should-not (file-exists-p lock))                   ; at once: no stale lock
-            (drgnx-test-wait-ended proc :secs 5 :what "the signal to end the process")                 ; the signal does the rest, nothing here waited
-            (should-not (process-live-p proc)))
+            (should (equal stopped '("j1")))                    ; the hub is asked, nothing here waited
+            (should-not (file-exists-p lock)))                  ; at once: no stale lock
         (when (process-live-p proc) (kill-process proc))))))

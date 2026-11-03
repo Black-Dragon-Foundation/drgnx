@@ -15,7 +15,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 (require 'drgnx-timer)
 
 (defvar treesit-extra-load-path)
@@ -115,10 +115,11 @@ buffers of those languages switch to their tree-sitter modes when it is done."
              (list (intern (completing-read "Install language support for: "
                                             (mapcar (lambda (e) (symbol-name (car e))) drgnx-grammars-sources) nil t)))))))
   (make-directory (drgnx-grammars-dir) t)
-  (let ((id (drgnx-jobs-start "grammars" (drgnx-grammars--job-command langs))))
-    (message "Installing language support for %s in the background (Show Job Log: grammars)" (mapconcat #'symbol-name langs ", "))
-    (drgnx-grammars--watch id langs)
-    id))
+  (drgnx-exec-start "grammars" (drgnx-grammars--job-command langs)
+                    :callback (lambda (id why)
+                                (if id (drgnx-grammars--watch id langs) (message "drgnx: %s" why))))
+  (message "Installing language support for %s in the background (Show Job Log: grammars)" (mapconcat #'symbol-name langs ", "))
+  nil)
 
 (defun drgnx-grammars--watch (id langs)
   "When job ID ends: LANGS's buffers switch (looked at every 2 s for an hour; never waits)."
@@ -126,7 +127,7 @@ buffers of those languages switch to their tree-sitter modes when it is done."
 
 (defun drgnx-grammars--watch-tick (id langs)
   "The poll of `drgnx-grammars--watch': non-nil, once job ID is over and LANGS's buffers have switched."
-  (let ((job (drgnx-jobs-get id)))
+  (let ((job (drgnx-exec-get id)))
     (unless (eq (plist-get job :status) 'running)
       (drgnx-grammars--installed langs)
       (message (if (eql (plist-get job :exit) 0) "Language support installed: %s"

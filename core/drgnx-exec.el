@@ -10,8 +10,8 @@
 ;; Everything that can run in a timer or in redisplay is a cache read: `drgnx-exec-get' and `drgnx-exec-list' read what
 ;; this client keeps from `exec/list' (at `drgnx-exec-sync') and from the hub's `exec-done' events, and never call
 ;; the hub.  `drgnx-exec-start' and `drgnx-exec-stop' are asynchronous.  `drgnx-exec-log' waits for the hub (5 s at
-;; most): commands only.  A job is a plist (:id :name :status :exit :cwd :started :argv) with :status one of `running',
-;; `done', `failed', `stopped', `gone', as `drgnx-jobs' gave.
+;; most): commands only.  A job is a plist (:id :name :status :exit :cwd :started :argv :task) with :status one of `running',
+;; `done', `failed', `stopped', `gone'.
 
 ;;; Code:
 (require 'cl-lib)
@@ -43,7 +43,7 @@ holds the jobs this client started or heard end, trimmed to `drgnx-exec--keep' b
   (let ((exit (plist-get (plist-get json :summary) :exit)))
     (list :id (plist-get json :id) :name (plist-get json :name)
           :status (drgnx-exec--status (plist-get json :status) exit) :exit exit
-          :cwd (plist-get json :cwd)
+          :cwd (plist-get json :cwd) :task (plist-get json :task)
           :started (and (numberp (plist-get json :started))
                         (format-time-string "%FT%T%z" (seconds-to-time (plist-get json :started))))
           :argv (plist-get json :argv))))
@@ -110,7 +110,8 @@ holds the jobs this client started or heard end, trimmed to `drgnx-exec--keep' b
 safe to call again.  `drgnx-exec-unsync' undoes it."
   (add-hook 'drgnx-hub-event-functions #'drgnx-exec--event)
   (add-hook 'drgnx-hub-disconnect-functions #'drgnx-exec--hub-gone)
-  (condition-case nil (drgnx-hub-connect) (error nil))
+  (unless (process-live-p drgnx-hub--events)    ; not again from the subscription's own answer
+    (condition-case nil (drgnx-hub-connect) (error nil)))
   (drgnx-exec--refresh))
 
 (defun drgnx-exec-unsync ()

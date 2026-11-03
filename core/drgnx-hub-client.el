@@ -16,7 +16,6 @@
 (require 'subr-x)
 (require 'seq)
 (require 'drgnx-paths)
-(require 'drgnx-jobs)
 (require 'drgnx-guard)
 (require 'drgnx-timer)
 (require 'drgnx-file)
@@ -24,6 +23,8 @@
 (require 'drgnx-agents-matrix)          ; `drgnx-agents-away-after'
 (require 'drgnx-work-db)                ; `drgnx-work-db-schema-version', which the hello says
 
+(declare-function drgnx-exec-sync "drgnx-exec")
+(declare-function drgnx-exec-unsync "drgnx-exec")
 (declare-function drgnx-settings-agents--event "drgnx-settings-agents")
 (declare-function drgnx-records-review--event "drgnx-records-review")
 (declare-function drgnx-ai-providers "drgnx-ai")
@@ -880,6 +881,7 @@ closes it when this Emacs dies."
     (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--client nil drgnx-hub--events nil drgnx-hub--subscribing nil)
   (drgnx-hub--presence-stop)
+  (when (featurep 'drgnx-exec) (drgnx-exec-unsync))
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-notice)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
@@ -1294,6 +1296,10 @@ before them."
     (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))
     (drgnx-hub--resubscribe-stop)
     (drgnx-hub--presence-start)
+    ;; the editor's own jobs (grammars, mermaid, the browser, …): their cache, read again on every subscription
+    (with-demoted-errors "drgnx hub: jobs not synced: %S"
+      (require 'drgnx-exec)
+      (drgnx-exec-sync))
     (drgnx-notice-clear 'hub 'resubscribe-gave-up)
     (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--hand-over))))
 

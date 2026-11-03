@@ -55,7 +55,11 @@ In Lisp, `core/drgnx-exec.el` is the client. `drgnx-exec-start` is asynchronous 
 reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache that follows the hub's `exec-done` events
 and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read a job's log
 (waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
-or the time box), `stopped` or `gone` (lost).
+or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
+hours): the servers the editor starts (the local AI runner, the Playwright server of Test Report, the browser for
+agents, the search indexer) ask for the longest. Onboarding runs its installs and downloads as jobs too and waits for
+each in its command (the progress line is the end of the job's log, asked once a second); `drgnx onboard` in a terminal
+does the same, and C-g, or Ctrl-C there, stops the job.
 
 ### Container jobs
 

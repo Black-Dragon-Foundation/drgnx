@@ -17,7 +17,7 @@
 (require 'drgnx-groups)
 (require 'drgnx-rules)
 (require 'drgnx-agents)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 (require 'drgnx-keys-edit)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-m11c1-ui-test--repo) nil t)
@@ -179,7 +179,7 @@
                        (drgnx-live--browser (list :port port :ws (format "ws://127.0.0.1:%d/devtools/browser/mock" port) :job "job-live"))
                        (jpeg (drgnx-m11c1-ui-test--jpeg)))
                   (unwind-protect
-                      (cl-letf (((symbol-function 'drgnx-jobs-get)
+                      (cl-letf (((symbol-function 'drgnx-exec-get)
                                  (lambda (id) (and (equal id "job-live") (list :id id :status 'running)))))
                         (drgnx-live-view)
                         (should (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.startScreencast"))))

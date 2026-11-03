@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The hub is a batch Emacs started as a durable job (drgnx-jobs.el): it outlives the Emacs that started it, and
+;; The hub is a batch Emacs started as a durable job: it outlives the Emacs that started it, and
 ;; holds what must keep running while editors come and go — today the agent traffic gateway (drgnx-gateway.el).
 ;; Editors, the CLI and tests talk to it over a Unix socket in a directory only the user can enter: one JSON object
 ;; per line, requests {id, method, params} answered {id, result} or {id, error}, and events {event, data} for the
@@ -17,7 +17,6 @@
 (require 'drgnx-file)
 (require 'drgnx-hub-client)
 (require 'drgnx-gateway)
-(require 'drgnx-jobs)
 (require 'drgnx-gc)
 (require 'drgnx-agents)
 (require 'drgnx-coord)

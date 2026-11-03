@@ -5,7 +5,7 @@
 (require 'drgnx-ai-probe)
 (require 'drgnx-hub-client)             ; its variables are let-bound below
 (require 'drgnx-file)
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
 (require 'auth-source)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
@@ -532,18 +532,6 @@ LOG/security.calls."
       (should (member "ANTHROPIC_AUTH_TOKEN=ollama" (drgnx-agents--env (drgnx-agents--make :profile "local claude"))))
       (should (assoc "claude (OpenRouter)" drgnx-agents-builtin-profiles))                 ; offered without setup
       (should (assoc "claude (Ollama)" drgnx-agents-builtin-profiles)))))
-
-(ert-deftest drgnx-ai/a-job-receives-keys-that-no-command-line-or-state-file-shows ()
-  (drgnx-ai-test--with root
-    (let* ((id (drgnx-jobs-start "k" (list "sh" "-c" "printf %s \"$SECRET_FOR_JOB\" > got") :cwd root :env '("SECRET_FOR_JOB=s3cret"))))
-      (drgnx-test-wait (lambda () (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) :secs 10 :what "the job to exit")
-      (should (equal (with-temp-buffer (insert-file-contents (concat root "got")) (buffer-string)) "s3cret"))
-      (dolist (f (directory-files (drgnx-jobs--dir id) t "\\`[^.]"))
-        (should-not (string-search "s3cret" (with-temp-buffer (insert-file-contents f) (buffer-string))))))
-    ;; under systemd the value travels in systemd-run's environment: --setenv=NAME, never NAME=value
-    (let ((args (drgnx-jobs--systemd-args "1" root "true" '("SECRET_FOR_JOB=s3cret"))))
-      (should (member "--setenv=SECRET_FOR_JOB" args))
-      (should-not (seq-find (lambda (a) (string-search "s3cret" a)) args)))))
 
 (ert-deftest drgnx-ai/the-mock-llm-server-answers-from-its-script-and-logs-requests ()
   (drgnx-ai-test--with root

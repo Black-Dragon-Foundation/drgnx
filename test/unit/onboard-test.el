@@ -743,7 +743,8 @@ Returns (RESULT PROMPTS)."
 
 ;;;; Step 6: Claude Code — installed with permission, its own login, the agent checked
 
-(require 'drgnx-jobs)
+(require 'drgnx-exec)
+(load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)   ; the jobs are the hub's: the real Ratatoskr
 (require 'drgnx-acp)
 (require 'drgnx-agents)
 
@@ -769,10 +770,10 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
           (bin (concat root "bin/")) (tpl (concat root "tpl/")) (home (concat root "home/")) (calls (concat root "calls"))
           (real-path (getenv "PATH"))
           ;; the ones this system has (macOS: no setsid; detached jobs use perl there)
-          (basics (delq nil (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mkdir" "sleep" "setsid" "perl" "date"))))
+          (basics (delq nil (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mv" "mkdir" "sleep" "setsid" "perl" "date"))))
           (log-line (lambda (name) (format "printf '%%s\\n' \"%s $*\" >> %s\n" name calls)))
           (process-environment (append (list (concat "HOME=" home) (concat "DRGNX_CONFIG_DIR=" root "config")
-                                             (concat "XDG_STATE_HOME=" root "state") "DRGNX_JOBS_LAUNCHER=detached"
+                                             (concat "XDG_STATE_HOME=" root "state") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "PATH=" bin))
                                        process-environment))
           (exec-path (list bin))
@@ -807,7 +808,8 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
             (concat (funcall log-line "npm")
                     "[ \"$1 $2\" = 'install -g' ] || exit 0\nshift 2; d=" bin "\n"
                     "if [ \"$1\" = --prefix ]; then d=\"$2/bin\"; mkdir -p \"$d\"; shift 2; fi\n"
-                    "[ -n \"$FAKE_NPM_FAIL\" ] && { echo 'npm ERR! code EACCES'; exit 243; }\n"
+                    ;; a flag file, not a variable: a job has the hub's environment, not this Emacs's
+                    "[ -e \"$HOME/.npm-fail\" ] && { echo 'npm ERR! code EACCES'; exit 243; }\n"
                     "cp " tpl "claude-agent-acp \"$d/claude-agent-acp\"\n"
                     ;; the package it was asked for, where npm puts it: PREFIX/lib/node_modules/PKG
                     "p=\"$d/../lib/node_modules/$1\"; mkdir -p \"$p\"\n"
@@ -818,11 +820,16 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
                     "echo 'mkdir -p $HOME/.local/bin; cp " tpl "claude $HOME/.local/bin/claude; echo Installed'\n"))
            (drgnx-onboard-test--script (concat bin "dnf") "exit 0\n")
            ;; the agent defaults are asked after a good check (their own tests below turn the question back on)
-           (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform))
-                     ((symbol-function 'drgnx-onboard--agents-offers) #'ignore))
-             ,@body))
+           ;; the fixture binds its own `bin' (Ratatoskr's program): the fakes' folder is put back inside
+           (let ((fakes bin))
+             (drgnx-test-with-ratatoskr root
+               (let ((bin fakes))
+                 (unwind-protect
+                     (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform))
+                               ((symbol-function 'drgnx-onboard--agents-offers) #'ignore))
+                       ,@body)
+                   (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id))))))))
        (drgnx-test-runtime-settings--forget)
-       (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
        (when-let* ((b (get-buffer "*Claude login*")))
          (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
        (delete-directory root t))))
@@ -854,7 +861,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                                 (cadr r)))
         (should-not (string-match-p "gry" (cadr r))))
       (should (equal (split-string (drgnx-onboard-test--slurp calls) "\n" t) nil))
-      (should-not (drgnx-jobs-list))
+      (should-not (drgnx-exec-list))
       ;; interactive: asked once with the commands, then installed in order, logged in, the agent checked
       (write-region "" nil (concat home ".logged-in"))
       (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
@@ -999,7 +1006,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   :tags '(:cond)
   (drgnx-onboard-test--claude 'macos
     (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
-          (process-environment (cons "FAKE_NPM_FAIL=1" process-environment)))
+          (_ (write-region "" nil (concat home ".npm-fail") nil 'silent)))
       (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
         (should (eq (car r) 'fail))
         (should (string-match-p "EACCES" (cadr r)))                  ; why: the log's last line
@@ -1008,7 +1015,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should (string-match-p "log: " (cadr r))))
       ;; Claude Code and Node were installed; the retry installs only the adapter
       (should (file-executable-p (concat bin "claude")))
-      (let* ((process-environment (cons "FAKE_NPM_FAIL=" process-environment))
+      (let* ((_ (delete-file (concat home ".npm-fail")))
              (asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code: npm install -g" . t)))))
         (write-region "" nil (concat home ".logged-in"))
         (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
@@ -1290,7 +1297,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 (ert-deftest drgnx-onboard/restart-waiter-outlives-a-systemd-service ()
   :tags '(:cond)
   (let ((detached nil) (calls nil) (rc 0))
-    (cl-letf (((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line detached)))
+    (cl-letf (((symbol-function 'drgnx-onboard--detach) (lambda (line) (push line detached)))
               ((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "systemd-run") "/usr/bin/systemd-run")))
               ((symbol-function 'call-process)
                (lambda (program _in _out _display &rest args) (push (cons program args) calls) rc)))
@@ -1327,7 +1334,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                 ((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer))
                 ((symbol-function 'drgnx-doctor-run) (lambda (&rest _) nil))
                 ((symbol-function 'drgnx-doctor-facts) #'ignore)
-                ((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line lines)))
+                ((symbol-function 'drgnx-onboard--detach) (lambda (line) (push line lines)))
                 ((symbol-function 'drgnx-session-quit-confirm) (lambda () t))
                 ((symbol-function 'drgnx-onboard--under-systemd-p) #'ignore)
                 ((symbol-function 'kill-emacs) (lambda (&rest _) (cl-incf quit)))

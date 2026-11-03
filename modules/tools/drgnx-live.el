@@ -31,11 +31,11 @@
 (declare-function websocket-frame-text "websocket")
 ;; only in an Emacs with image support (Homebrew's terminal Emacs has none): each call is in `ignore-errors'
 (declare-function image-flush "image.c" (spec &optional frame))
-(declare-function drgnx-jobs-start "drgnx-jobs")
-(declare-function drgnx-jobs-get "drgnx-jobs")
-(declare-function drgnx-jobs-list "drgnx-jobs")
-(declare-function drgnx-jobs-log "drgnx-jobs")
-(declare-function drgnx-jobs-stop "drgnx-jobs")
+(declare-function drgnx-exec-start "drgnx-exec")
+(declare-function drgnx-exec-get "drgnx-exec")
+(declare-function drgnx-exec-list "drgnx-exec")
+(declare-function drgnx-exec-log "drgnx-exec")
+(declare-function drgnx-exec-stop "drgnx-exec")
 (declare-function drgnx-agents-sessions "drgnx-agents")
 (declare-function drgnx-agents-steer "drgnx-agents")
 (declare-function drgnx-agent-session-name "drgnx-agents")
@@ -81,29 +81,25 @@
 (defun drgnx-live-running ()
   "The browser for agents while it runs: (:port :ws :job :dir), else nil."
   (when drgnx-live--browser
-    (require 'drgnx-jobs)
-    (let ((status (plist-get (drgnx-jobs-get (plist-get drgnx-live--browser :job)) :status)))
-      ;; a job systemd runs can read as `gone' while it runs: then the browser's own lock says
+    (require 'drgnx-exec)
+    (let ((status (plist-get (drgnx-exec-get (plist-get drgnx-live--browser :job)) :status)))
+      ;; a job the hub lost sight of reads as `gone' while it may run: then the browser's own lock says
       (and (or (eq status 'running) (and (eq status 'gone) (drgnx-live--chrome-pid (plist-get drgnx-live--browser :dir))))
            drgnx-live--browser))))
 
 (defun drgnx-live--stop-job (id)
-  "Stop the browser's job ID: through the jobs, and its systemd unit too (which the jobs may not see running).  The
-unit is not waited for (--no-block): callers that need the browser gone wait for its pid, a bounded time."
-  (let ((job (drgnx-jobs-get id)))
-    (drgnx-jobs-stop id)
-    (when-let* ((unit (plist-get job :unit))
-                ((not (memq (plist-get job :status) '(exited stopped)))))
-      (call-process "systemctl" nil nil nil "--user" "--no-block" "stop" unit))))
+  "Ask the hub to stop the browser's job ID.  Not waited for: callers that need the browser gone wait for its pid, a
+bounded time."
+  (drgnx-exec-stop id))
 
 (defun drgnx-live--clean-stale ()
   "Profiles of Emacs sessions that are gone: their browser job stops, their directory goes."
   (dolist (dir (directory-files (drgnx-state-dir) t "\\`live-profile-[0-9]+\\'"))
     (let ((pid (string-to-number (substring (file-name-nondirectory dir) 13))))
       (unless (or (= pid (emacs-pid)) (process-attributes pid))
-        (dolist (job (drgnx-jobs-list))
-          (when (and (not (memq (plist-get job :status) '(exited stopped)))
-                     (member (concat "--user-data-dir=" dir) (plist-get job :command)))
+        (dolist (job (drgnx-exec-list))
+          (when (and (not (memq (plist-get job :status) '(done failed stopped)))
+                     (member (concat "--user-data-dir=" dir) (plist-get job :argv)))
             (drgnx-live--stop-job (plist-get job :id))))
         (ignore-errors (delete-directory dir t))))))
 
@@ -114,35 +110,48 @@ unit is not waited for (--no-block): callers that need the browser gone wait for
       (and (= 2 (length lines)) (> (string-to-number (car lines)) 0)
            (cons (string-to-number (car lines)) (cadr lines))))))
 
+(defun drgnx-live--exec-start (argv dir deadline)
+  "Start ARGV as the hub's job \"live-browser\" in DIR and wait for the hub to take it, until DEADLINE (`float-time'):
+the job's id.  Signals a `user-error' (and deletes DIR) when it did not start.  A command's wait, never a timer's.  A
+server: the hub's longest time box; no memory cap on macOS (the hub refuses one there)."
+  (let (id why done)
+    (drgnx-exec-start "live-browser" argv :cwd dir :memory-max (and (eq system-type 'gnu/linux) "1G") :timebox 86400
+                      :callback (lambda (i w) (setq id i why w done t)))
+    (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    (unless id
+      (ignore-errors (delete-directory dir t))
+      (user-error "Live: the browser did not start: %s" (or why "the hub did not answer in time")))
+    id))
+
 (defun drgnx-live--start ()
   "Start the browser for agents and wait (at most `drgnx-live-start-timeout') for its debugging port."
   (let ((chrome (or (drgnx-live--chrome)
                     (user-error "Live: no Chrome or Chromium found (looked for %s); install one to watch agents' browsers"
                                 (string-join (seq-remove #'file-name-absolute-p drgnx-live-chrome-programs) ", "))))
         (dir (drgnx-live--profile-dir)))
-    (require 'drgnx-jobs)
+    (require 'drgnx-exec)
     (make-directory (drgnx-state-dir) t)
     (drgnx-live--cleanup)                                    ; an earlier browser of this Emacs: it has ended
     (drgnx-live--clean-stale)
     (when (file-directory-p dir) (delete-directory dir t))
     (make-directory dir t)
-    (let* ((job (drgnx-jobs-start "live-browser"
-                                  (list chrome "--headless=new" "--remote-debugging-address=127.0.0.1"
-                                        "--remote-debugging-port=0" (concat "--user-data-dir=" dir)
-                                        "--no-first-run" "--no-default-browser-check" "about:blank")
-                                  :cwd dir :memory-max "1G" :no-wait t))
-           (file (expand-file-name "DevToolsActivePort" dir))
+    (let* ((file (expand-file-name "DevToolsActivePort" dir))
            (deadline (+ (float-time) drgnx-live-start-timeout))
+           (job (drgnx-live--exec-start
+                 (list chrome "--headless=new" "--remote-debugging-address=127.0.0.1"
+                       "--remote-debugging-port=0" (concat "--user-data-dir=" dir)
+                       "--no-first-run" "--no-default-browser-check" "about:blank")
+                 dir deadline))
            port exited)
       ;; whatever ends the wait without a port (the deadline, the browser exiting, C-g), the browser and its
       ;; profile go: nothing else knows of them yet
       (unwind-protect
           (progn
             (while (and (not (setq port (drgnx-live--read-port file))) (< (float-time) deadline)
-                        (not (setq exited (memq (plist-get (drgnx-jobs-get job) :status) '(exited stopped)))))
-              (sleep-for 0.05))
+                        (not (setq exited (memq (plist-get (drgnx-exec-get job) :status) '(done failed stopped)))))
+              (accept-process-output nil 0.05))
             (unless port
-              (let ((log (string-trim (or (ignore-errors (drgnx-jobs-log job 600)) ""))))
+              (let ((log (string-trim (or (ignore-errors (drgnx-exec-log job 600)) ""))))
                 (user-error "Live: %s %s%s" (file-name-nondirectory chrome)
                             (if exited "exited before it opened its debugging port"
                               (format "did not open its debugging port in %d s" drgnx-live-start-timeout))

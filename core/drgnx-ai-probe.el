@@ -148,8 +148,8 @@ not GPU memory); else the first GPU's when nvidia-smi is there; else nil."
 ;;;; The local runner onboarding set up: started again when it is down (after a restart, a crash)
 
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
-(declare-function drgnx-jobs-start "drgnx-jobs")
-(declare-function drgnx-jobs-list "drgnx-jobs")
+(declare-function drgnx-exec-start "drgnx-exec")
+(declare-function drgnx-exec-list "drgnx-exec")
 
 (defvar drgnx-ai-ensure-interval 60 "Seconds between two looks of `drgnx-ai-ensure-local'.")
 (defvar drgnx-ai--ensure-time nil "When `drgnx-ai-ensure-local' last looked (`float-time').")
@@ -198,10 +198,10 @@ One message says what happens.  LM Studio without its lms command: the message s
 
 (defun drgnx-ai--start-local (id command name)
   "Start COMMAND, provider ID's runner (NAME), as a drgnx job unless one runs it already; one message.  From a
-timer: never waits for the job (`:no-wait'), never asks."
-  (require 'drgnx-jobs)
-  (cond ((seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command)))
-                   (drgnx-jobs-list)))
+timer: the start is asynchronous (the hub answers later), never asks."
+  (require 'drgnx-exec)
+  (cond ((seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :argv) command)))
+                   (drgnx-exec-list)))
         ((not (and (stringp (car command)) (file-executable-p (car command))))
          (require 'drgnx-notice)
          (drgnx-notify 'agents 'warn
@@ -212,7 +212,9 @@ timer: never waits for the job (`:no-wait'), never asks."
         (t (message "Starting %s…" name)
            (with-demoted-errors "drgnx: the local AI server did not start: %S"
              (make-directory (drgnx-state-dir) t)
-             (drgnx-jobs-start (format "%s server" name) command :cwd (drgnx-state-dir) :no-wait t)))))
+             (drgnx-exec-start (format "%s server" name) command :cwd (drgnx-state-dir)
+                               :timebox 86400 ; a server: the hub's longest time box; a look at it starts it again
+                               :callback (lambda (_id why) (when why (message "drgnx: %s" why))))))))
 
 (defun drgnx-ai--refused (id)
   "`drgnx-ai-refused-functions': nothing listened at ID — the runner drgnx keeps running is started again."

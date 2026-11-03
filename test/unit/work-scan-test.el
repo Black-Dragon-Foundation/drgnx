@@ -267,13 +267,14 @@ changed, nothing refused; `drgnx-work-scan-test--refused' sets a refusal), no hu
 
 (ert-deftest drgnx-work/collect-jobs-sends-its-key ()
   (drgnx-work-scan-test--with-tree root
-    (require 'drgnx-jobs)
+    (require 'drgnx-exec)
     (pcase-let ((`(,repo ,c0 ,_c1 ,c2) (drgnx-work-scan-test--repo root)))
-      (let ((jobs (list (list :id "j9" :task "task:/p.md#1" :status 'exited :cwd repo :head c0 :start-time 0)
-                        (list :id "j8" :task "task:/p.md#2" :status 'exited :cwd repo :head c2 :start-time 0))))
-        (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () jobs))
-                  ((symbol-function 'drgnx-jobs--dir) (lambda (_id) root))
-                  ((symbol-function 'drgnx-jobs--text) (lambda (&rest _) c2)))
+      ;; the hub keeps no start commit: the tracker read it when it first saw each job (j9 saw the repository at c0)
+      (let ((jobs (list (list :id "j9" :task "task:/p.md#1" :status 'done :cwd repo :started "1970-01-01T00:00:00+0000")
+                        (list :id "j8" :task "task:/p.md#2" :status 'done :cwd repo :started "1970-01-01T00:00:00+0000")))
+            (drgnx-work--job-starts (make-hash-table :test #'equal)))
+        (puthash "j9" (list :head c0 :repo (drgnx-work--main-repo repo)) drgnx-work--job-starts)
+        (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () jobs)))
           (drgnx-work-scan-test--recording (drgnx-work-collect-jobs)))
         ;; j9 made commits: graph/record with its key; j8 made none: the key alone, through put-parsed
         (let ((record (seq-find (lambda (c) (equal (car c) "graph/record")) drgnx-work-scan-test--calls))
