@@ -353,7 +353,6 @@
         "type": "object"
       },
       "doc": "a session's snapshot changed (at most one per session per 50 ms)",
-      "from": "front",
       "name": "agent"
     },
     {
@@ -429,7 +428,6 @@
         "type": "object"
       },
       "doc": "a session's entries new or changed since the last time",
-      "from": "front",
       "name": "agent-entries"
     },
     {
@@ -684,7 +682,6 @@
         "type": "object"
       },
       "doc": "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)",
-      "from": "front",
       "name": "agent-step"
     },
     {
@@ -717,7 +714,6 @@
         "type": "object"
       },
       "doc": "a job's spend reached its budget",
-      "from": "front",
       "name": "budget"
     },
     {
@@ -762,7 +758,6 @@
         "type": "object"
       },
       "doc": "a job's card needs the user",
-      "from": "backend",
       "name": "card"
     },
     {
@@ -790,7 +785,6 @@
         "type": "object"
       },
       "doc": "the hub's nonce, sent on accept",
-      "from": "front",
       "name": "challenge"
     },
     {
@@ -886,7 +880,6 @@
         "type": "object"
       },
       "doc": "the event log's new rows (at most 200 a time, every 0.25 s at most)",
-      "from": "front",
       "name": "events"
     },
     {
@@ -1001,7 +994,6 @@
         "type": "object"
       },
       "doc": "a job ended: its status, exit and summary",
-      "from": "front",
       "name": "exec-done"
     },
     {
@@ -1051,7 +1043,6 @@
         "type": "object"
       },
       "doc": "a request or a task moved to the next provider or profile",
-      "from": "front",
       "name": "fallback"
     },
     {
@@ -1080,7 +1071,6 @@
         "type": "object"
       },
       "doc": "the providers whose key the hub holds changed: their ids, never a key (to user connections)",
-      "from": "front",
       "name": "gateway/keys-changed"
     },
     {
@@ -1101,7 +1091,6 @@
         "type": "object"
       },
       "doc": "a registration needs keys the hub does not hold (to user connections)",
-      "from": "front",
       "name": "gateway/need-keys"
     },
     {
@@ -1121,7 +1110,6 @@
         "type": "object"
       },
       "doc": "a job's status, tasks or open cards changed",
-      "from": "front",
       "name": "job"
     },
     {
@@ -1152,7 +1140,6 @@
         "type": "object"
       },
       "doc": "a task's claim ran out",
-      "from": "backend",
       "name": "lease-released"
     },
     {
@@ -1195,7 +1182,6 @@
         "type": "object"
       },
       "doc": "a message for the user from the hub itself",
-      "from": "front",
       "name": "notice"
     },
     {
@@ -1269,7 +1255,6 @@
         "type": "object"
       },
       "doc": "the gateway forwarded a request: its tokens and cost",
-      "from": "front",
       "name": "request"
     },
     {
@@ -1322,7 +1307,6 @@
         "type": "object"
       },
       "doc": "an agent's settings_get: the editor answers settings/explained with the same req",
-      "from": "front",
       "name": "settings/explain"
     },
     {
@@ -1383,7 +1367,6 @@
         "type": "object"
       },
       "doc": "an agent's granted settings change, as a proposed tx: the editor checks it, writes the file and answers settings/confirm",
-      "from": "front",
       "name": "settings/proposed"
     },
     {
@@ -1449,7 +1432,6 @@
         "type": "object"
       },
       "doc": "the supervisor paused an agent by a rule, with its card",
-      "from": "front",
       "name": "supervisor"
     },
     {
@@ -1479,7 +1461,6 @@
         "type": "object"
       },
       "doc": "a hand edit to a view became a proposal (Records: Review Proposal)",
-      "from": "front",
       "name": "view-proposal"
     },
     {
@@ -1520,7 +1501,6 @@
         "type": "object"
       },
       "doc": "the hub wrote a record view file (never committed)",
-      "from": "front",
       "name": "view-written"
     }
   ],
@@ -1530,7 +1510,6 @@
         "user"
       ],
       "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
-      "home": "front",
       "name": "agents/do",
       "params": {
         "$defs": {
@@ -1630,7 +1609,6 @@
         "user"
       ],
       "doc": "a session's snapshot, whole transcript and change number",
-      "home": "front",
       "name": "agents/get",
       "params": {
         "$defs": {
@@ -2043,7 +2021,6 @@
         "user"
       ],
       "doc": "the session ends",
-      "home": "front",
       "name": "agents/kill",
       "params": {
         "$defs": {
@@ -2080,7 +2057,6 @@
         "service"
       ],
       "doc": "the sessions: snapshots for the user, {id, name, job, task} for the others (an agent: its own job's)",
-      "home": "front",
       "name": "agents/list",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2436,7 +2412,6 @@
         "user"
       ],
       "doc": "a session moved to another profile: stopped after its tool call, the new one started in the same worktree with a summary handoff",
-      "home": "front",
       "name": "agents/move",
       "params": {
         "$defs": {
@@ -2490,7 +2465,6 @@
         "user"
       ],
       "doc": "the user's answer to a permission request: the only way one is answered",
-      "home": "front",
       "name": "agents/permission",
       "params": {
         "$defs": {
@@ -2550,7 +2524,6 @@
         "user"
       ],
       "doc": "a session's role (its matrix column): the user's only, the one way to make a manager",
-      "home": "front",
       "name": "agents/role",
       "params": {
         "$defs": {
@@ -2598,7 +2571,6 @@
         "user"
       ],
       "doc": "a prompt to the session (queued or steering as its mode says)",
-      "home": "front",
       "name": "agents/send",
       "params": {
         "$defs": {
@@ -2642,7 +2614,6 @@
         "user"
       ],
       "doc": "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
-      "home": "front",
       "name": "agents/slice",
       "params": {
         "$defs": {
@@ -2998,7 +2969,6 @@
         "user"
       ],
       "doc": "a session the hub holds",
-      "home": "front",
       "name": "agents/start",
       "params": {
         "$defs": {
@@ -3129,7 +3099,6 @@
         "user"
       ],
       "doc": "the session's turn stops",
-      "home": "front",
       "name": "agents/stop",
       "params": {
         "$defs": {
@@ -3164,7 +3133,6 @@
         "user"
       ],
       "doc": "a task's brief from the graph (plan section, AGENTS.md, the matrix as it applies, base branch, earlier interfaces, the check), or the user's edited one",
-      "home": "front",
       "name": "brief/build",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3282,7 +3250,6 @@
         "user"
       ],
       "doc": "the user's edited brief for a task (a brief note the runner uses at dispatch)",
-      "home": "front",
       "name": "brief/set",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3326,7 +3293,6 @@
         "user"
       ],
       "doc": "a scope's budget: its limits, spend and what remains (the least over its ancestors), by unit",
-      "home": "front",
       "name": "budget/get",
       "params": {
         "$defs": {
@@ -3563,7 +3529,6 @@
         "user"
       ],
       "doc": "a scope's limits, one per unit (empty clears); the gateway admits usd against the nested minimum",
-      "home": "front",
       "name": "budget/set",
       "params": {
         "$defs": {
@@ -3858,7 +3823,6 @@
         "user"
       ],
       "doc": "an open card settled with a choice, once (drgnx-coord-card-settle)",
-      "home": "front",
       "name": "cards/settle",
       "params": {
         "$defs": {
@@ -3908,7 +3872,6 @@
         "user"
       ],
       "doc": "settings.el may have changed: its stamp is checked now",
-      "home": "front",
       "name": "config/changed",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3928,7 +3891,6 @@
         "user"
       ],
       "doc": "the editor's runtime settings values per project (or global), each set kept as last good; a bad value is refused with its path; replaces config/providers",
-      "home": "front",
       "name": "config/settings",
       "params": {
         "$defs": {
@@ -4017,7 +3979,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-agent-register, drgnx-coord-agent-seen)",
-      "home": "front",
       "name": "coord/agent",
       "params": {
         "$defs": {
@@ -4196,7 +4157,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-create)",
-      "home": "front",
       "name": "coord/card-create",
       "params": {
         "$defs": {
@@ -4300,7 +4260,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-set)",
-      "home": "front",
       "name": "coord/card-set",
       "params": {
         "$defs": {
@@ -4377,7 +4336,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-decide)",
-      "home": "front",
       "name": "coord/decide",
       "params": {
         "$defs": {
@@ -4633,7 +4591,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-note-held)",
-      "home": "front",
       "name": "coord/held",
       "params": {
         "$defs": {
@@ -4673,7 +4630,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-create)",
-      "home": "front",
       "name": "coord/job-create",
       "params": {
         "$defs": {
@@ -4803,7 +4759,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-set)",
-      "home": "front",
       "name": "coord/job-set",
       "params": {
         "$defs": {
@@ -4869,7 +4824,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-renew, drgnx-coord-release-stale)",
-      "home": "front",
       "name": "coord/leases",
       "params": {
         "$defs": {
@@ -4955,7 +4909,6 @@
         "service"
       ],
       "doc": "a coordination server wrote: the new events go out, and the backend hears it (coalesced: one a 0.25 s) and runs delivery (a notification; users too, SB-T12-4)",
-      "home": "front",
       "name": "coord/notify",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4975,7 +4928,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-events-prune-daily; never fails)",
-      "home": "front",
       "name": "coord/prune",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5005,7 +4957,6 @@
         "user"
       ],
       "doc": "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-force-status)",
-      "home": "front",
       "name": "coord/task-status",
       "params": {
         "$defs": {
@@ -5068,7 +5019,6 @@
         "user"
       ],
       "doc": "a decision's commits and the later hunks that overlap its lines (computed from git)",
-      "home": "front",
       "name": "decisions/effects",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5163,7 +5113,6 @@
         "user"
       ],
       "doc": "the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
-      "home": "front",
       "name": "env/set",
       "params": {
         "$defs": {
@@ -5231,7 +5180,6 @@
         "user"
       ],
       "doc": "an event in the log (drgnx-coord-event-add; best_effort: a busy work.db is no error)",
-      "home": "front",
       "name": "events/add",
       "params": {
         "$defs": {
@@ -5381,7 +5329,6 @@
         "user"
       ],
       "doc": "the event log after since (0), oldest first, at most limit (200; at most 1000)",
-      "home": "front",
       "name": "events/since",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5506,7 +5453,6 @@
         "user"
       ],
       "doc": "one job: its status and, once it ended, its summary",
-      "home": "front",
       "name": "exec/get",
       "params": {
         "$defs": {
@@ -5711,7 +5657,6 @@
         "user"
       ],
       "doc": "the jobs (a session's, or the running ones), newest first",
-      "home": "front",
       "name": "exec/list",
       "params": {
         "$defs": {
@@ -5941,7 +5886,6 @@
         "user"
       ],
       "doc": "lines of a job's log (at most 1000 a call)",
-      "home": "front",
       "name": "exec/log",
       "params": {
         "$defs": {
@@ -6030,7 +5974,6 @@
         "user"
       ],
       "doc": "a job the hub runs as a unit of its own (in a project folder; a container job from the allowed images only); local only",
-      "home": "front",
       "name": "exec/start",
       "params": {
         "$defs": {
@@ -6159,7 +6102,6 @@
         "user"
       ],
       "doc": "a running job ended (its unit stopped); its starter is woken as for any end",
-      "home": "front",
       "name": "exec/stop",
       "params": {
         "$defs": {
@@ -6364,7 +6306,6 @@
         "user"
       ],
       "doc": "the caller's editor token (loopback only, the /p/PROVIDER/… paths; one per owner, kept across a restart)",
-      "home": "front",
       "name": "gateway/editor-token",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6398,7 +6339,6 @@
         "user"
       ],
       "doc": "provider keys to the hub's memory (never a file, never the backend)",
-      "home": "front",
       "name": "gateway/keys",
       "params": {
         "$defs": {
@@ -6446,7 +6386,6 @@
         "user"
       ],
       "doc": "the providers whose key the hub holds (ids only)",
-      "home": "front",
       "name": "gateway/keys-held",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6485,7 +6424,6 @@
         "user"
       ],
       "doc": "an agent's token and where it is good (the URL, or a session's socket); its keys go to the hub's memory",
-      "home": "front",
       "name": "gateway/register",
       "params": {
         "$defs": {
@@ -6728,7 +6666,6 @@
         "user"
       ],
       "doc": "seam: every registration of the job gets the budget (drgnx-gateway-set-budget)",
-      "home": "front",
       "name": "gateway/set-budget",
       "params": {
         "$defs": {
@@ -6773,7 +6710,6 @@
         "user"
       ],
       "doc": "the token no longer forwards",
-      "home": "front",
       "name": "gateway/unregister",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6801,7 +6737,6 @@
         "user"
       ],
       "doc": "a checked copy of work.db in <data>/backup/ (VACUUM INTO), then the old copies rotated",
-      "home": "front",
       "name": "graph/backup",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6859,7 +6794,6 @@
         "user"
       ],
       "doc": "parsed entities' old versions thinned and retired sessions' link stats folded (authored facts never)",
-      "home": "front",
       "name": "graph/compact",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6908,7 +6842,6 @@
         "user"
       ],
       "doc": "an entity (as of a tx) with who wrote it; its links, the notes about it and its history on request",
-      "home": "front",
       "name": "graph/entity",
       "params": {
         "$defs": {
@@ -7019,7 +6952,6 @@
         "user"
       ],
       "doc": "an entity's (or a tx's) text blanked in every version, its search rows and copies in the coordination tables, then VACUUM and a WAL checkpoint; the backups and transcripts still holding it, removed or redacted on request",
-      "home": "front",
       "name": "graph/excise",
       "params": {
         "$defs": {
@@ -7186,7 +7118,6 @@
         "user"
       ],
       "doc": "the store as sorted JSON lines (entities, links, txs; history and activity on request) in <data>/export/ or OUT, the personal-notes deny-list applied",
-      "home": "front",
       "name": "graph/export",
       "params": {
         "$defs": {
@@ -7316,7 +7247,6 @@
         "user"
       ],
       "doc": "the user's grants: list them, grant a project, profile or session read access (or the edit of user-made tasks, or the change of settings: access options, what options:global or options:project, names globs), revoke one; the store refuses a grant from any other class",
-      "home": "front",
       "name": "graph/grants",
       "params": {
         "$defs": {
@@ -7525,7 +7455,6 @@
         "user"
       ],
       "doc": "every version of an entity, with its tx's author, class and tool",
-      "home": "front",
       "name": "graph/history",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7571,7 +7500,6 @@
         "user"
       ],
       "doc": "an export read back, idempotent by version, the personal-notes deny-list applied; never a grant",
-      "home": "front",
       "name": "graph/import",
       "params": {
         "$defs": {
@@ -7666,7 +7594,6 @@
         "user"
       ],
       "doc": "a breadth-first walk from an entity (depth 1 to 4, kinds past 3), within its budget: what stopped it in truncated",
-      "home": "front",
       "name": "graph/neighbors",
       "params": {
         "$defs": {
@@ -7772,7 +7699,6 @@
         "user"
       ],
       "doc": "a shortest path between two entities (at most 6 links), within its budget",
-      "home": "front",
       "name": "graph/path",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7861,7 +7787,6 @@
         "user"
       ],
       "doc": "the personal-notes opt-ins and hard entries read again now and applied: a removed opt-in excises what came in",
-      "home": "front",
       "name": "graph/privacy",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7956,7 +7881,6 @@
         "user"
       ],
       "doc": "proposed txs accepted, or rejected (reverted newest first)",
-      "home": "front",
       "name": "graph/proposed",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -8055,7 +7979,6 @@
         "user"
       ],
       "doc": "what a tracker scan read, by typed source, in one transaction: every path a record carries checked against the personal-notes deny-list (a denied path refuses its whole source), unchanged entities untouched, derived statuses, collected keys",
-      "home": "front",
       "name": "graph/put-parsed",
       "params": {
         "$defs": {
@@ -8476,7 +8399,6 @@
         "user"
       ],
       "doc": "commits that did a task (implements links), once per collected key (the request's key: a second record answers the first)",
-      "home": "front",
       "name": "graph/record",
       "params": {
         "$defs": {
@@ -8582,7 +8504,6 @@
         "user"
       ],
       "doc": "a tx reverted (or an entity put back to a version) as a new tx of the user's; a later change to what it wrote blocks it and is named; cascade only lists",
-      "home": "front",
       "name": "graph/revert",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -8689,7 +8610,6 @@
         "user"
       ],
       "doc": "VACUUM and a WAL checkpoint (TRUNCATE) of work.db as a writer request, saying when readers keep the WAL from being truncated",
-      "home": "front",
       "name": "graph/scrub",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -8730,7 +8650,6 @@
         "user"
       ],
       "doc": "the store's settings (only_user_closes: only I close my tasks), written in a user-class tx only",
-      "home": "front",
       "name": "graph/settings",
       "params": {
         "$defs": {
@@ -8799,7 +8718,6 @@
         "user"
       ],
       "doc": "one read-only SELECT on a hardened connection of its own (no ATTACH, PRAGMA, writes, recursive CTEs or extension loading), with a deadline and a row cap",
-      "home": "front",
       "name": "graph/sql",
       "params": {
         "$defs": {
@@ -8912,7 +8830,6 @@
         "service"
       ],
       "doc": "a connection's first line: versions, and the proofs that make it a user connection",
-      "home": "front",
       "name": "hello",
       "params": {
         "$defs": {
@@ -9124,7 +9041,6 @@
         "user"
       ],
       "doc": "a proposed job runs, with an optional budget",
-      "home": "front",
       "name": "job/approve",
       "params": {
         "$defs": {
@@ -9267,7 +9183,6 @@
         "user"
       ],
       "doc": "a task waits for the user, with a reason (the Work graph)",
-      "home": "front",
       "name": "job/block",
       "params": {
         "$defs": {
@@ -9409,7 +9324,6 @@
         "user"
       ],
       "doc": "the user's action on a card (once: a settled card is an error)",
-      "home": "front",
       "name": "job/card",
       "params": {
         "$defs": {
@@ -9563,7 +9477,6 @@
         "user"
       ],
       "doc": "a message acted on without an answer",
-      "home": "front",
       "name": "job/dismiss",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -9592,7 +9505,6 @@
         "user"
       ],
       "doc": "a task moves in its job's run order (the Work graph)",
-      "home": "front",
       "name": "job/order",
       "params": {
         "$defs": {
@@ -9729,7 +9641,6 @@
         "user"
       ],
       "doc": "a job from a plan, proposed (approved at once with auto)",
-      "home": "front",
       "name": "job/propose",
       "params": {
         "$defs": {
@@ -9925,7 +9836,6 @@
         "user"
       ],
       "doc": "a task goes to another profile (the Work graph)",
-      "home": "front",
       "name": "job/reassign",
       "params": {
         "$defs": {
@@ -10057,7 +9967,6 @@
         "user"
       ],
       "doc": "the user's answer to an agent's message",
-      "home": "front",
       "name": "job/reply",
       "params": {
         "$defs": {
@@ -10097,7 +10006,6 @@
         "user"
       ],
       "doc": "a stopped job runs again, with an optional new budget",
-      "home": "front",
       "name": "job/resume",
       "params": {
         "$defs": {
@@ -10240,7 +10148,6 @@
         "user"
       ],
       "doc": "Start as Job: task n of a plan and the tasks it needs, proposed; the plan is only read",
-      "home": "front",
       "name": "job/start-task",
       "params": {
         "$defs": {
@@ -10427,7 +10334,6 @@
         "user"
       ],
       "doc": "one job (with its decision log when asked), or every job",
-      "home": "front",
       "name": "job/status",
       "params": {
         "$defs": {
@@ -10588,7 +10494,6 @@
         "user"
       ],
       "doc": "a job's agents stop and it waits",
-      "home": "front",
       "name": "job/stop",
       "params": {
         "$defs": {
@@ -10715,7 +10620,6 @@
         "user"
       ],
       "doc": "a blocked task may run again (the Work graph)",
-      "home": "front",
       "name": "job/unblock",
       "params": {
         "$defs": {
@@ -10842,7 +10746,6 @@
         "user"
       ],
       "doc": "what the matrix decides for who doing action (no card is made)",
-      "home": "front",
       "name": "matrix/check",
       "params": {
         "$defs": {
@@ -10993,7 +10896,6 @@
         "user"
       ],
       "doc": "the permissions matrix: the preset, the one in force, the layers' cells, and the effective verdicts for who",
-      "home": "front",
       "name": "matrix/get",
       "params": {
         "$defs": {
@@ -11386,7 +11288,6 @@
         "service"
       ],
       "doc": "an outside agent's bridge: the connection carries MCP after the answer, as ext:KIND:PID-HASH from the peer process",
-      "home": "front",
       "name": "mcp/attach",
       "params": {
         "$defs": {
@@ -11431,7 +11332,6 @@
         "user"
       ],
       "doc": "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db with its profile and tool sets, and closed with its owner; the tracker tools unless the session's task or its profile turns them off",
-      "home": "front",
       "name": "mcp/session",
       "params": {
         "$defs": {
@@ -11589,7 +11489,6 @@
         "user"
       ],
       "doc": "a session's mcp.sock and its directory gone (false: no such session)",
-      "home": "front",
       "name": "mcp/session-close",
       "params": {
         "$defs": {
@@ -11624,7 +11523,6 @@
         "user"
       ],
       "doc": "a message moved on to delivered, read or acted, never back (drgnx-coord-mark)",
-      "home": "front",
       "name": "messages/mark",
       "params": {
         "$defs": {
@@ -11678,7 +11576,6 @@
         "user"
       ],
       "doc": "the user's message taken back while it is still queued (never once delivered)",
-      "home": "front",
       "name": "messages/retract",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -11722,7 +11619,6 @@
         "user"
       ],
       "doc": "a message, from the user (only the backend names another sender); held when seen is behind the decision log (drgnx-coord-send)",
-      "home": "front",
       "name": "messages/send",
       "params": {
         "$defs": {
@@ -11951,7 +11847,6 @@
         "user"
       ],
       "doc": "the subscriptions' meters: share used, rate per hour and when it runs out at that rate (estimates)",
-      "home": "front",
       "name": "pace/get",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12037,7 +11932,6 @@
         "service"
       ],
       "doc": "the hub's pid",
-      "home": "front",
       "name": "ping",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12068,7 +11962,6 @@
         "user"
       ],
       "doc": "a plan from the graph: its tasks with status, deps, interfaces, steps and their reports' interfaces",
-      "home": "front",
       "name": "plans/get",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12222,7 +12115,6 @@
         "user"
       ],
       "doc": "a plan created or changed with its tasks, steps and blocks links, in one tx (refused when base_version is behind)",
-      "home": "front",
       "name": "plans/write",
       "params": {
         "$defs": {
@@ -12421,7 +12313,6 @@
         "user"
       ],
       "doc": "the editor says the user is away or back (never an agent): the time presets follow from the next action",
-      "home": "front",
       "name": "presence/set",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12448,7 +12339,6 @@
         "user"
       ],
       "doc": "a proposal accepted (its ops applied if its base still holds, else stale) or rejected (the edit backed up); then the view is rewritten",
-      "home": "front",
       "name": "records/decide",
       "params": {
         "$defs": {
@@ -12533,7 +12423,6 @@
         "user"
       ],
       "doc": "the org folder's record files into the graph (a backup of each first; idempotent), their views written; the hub never commits",
-      "home": "front",
       "name": "records/import",
       "params": {
         "$defs": {
@@ -12671,7 +12560,6 @@
         "user"
       ],
       "doc": "the proposals hand edits to views became (a view's, or every open one)",
-      "home": "front",
       "name": "records/proposals",
       "params": {
         "$defs": {
@@ -12848,7 +12736,6 @@
         "user"
       ],
       "doc": "the view files: when each was written, whether it changed by hand, the proposal holding it",
-      "home": "front",
       "name": "records/status",
       "params": {
         "$defs": {
@@ -12959,7 +12846,6 @@
         "user"
       ],
       "doc": "a task's structured reports, or one by id",
-      "home": "front",
       "name": "reports/get",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13158,7 +13044,6 @@
         "user"
       ],
       "doc": "answers true, then the hub exits 75 for its supervisor to start it again",
-      "home": "front",
       "name": "restart",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13178,7 +13063,6 @@
         "user"
       ],
       "doc": "a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
-      "home": "front",
       "name": "review/mark",
       "params": {
         "$defs": {
@@ -13325,7 +13209,6 @@
         "user"
       ],
       "doc": "the editor's answer to settings/proposed: ok accepts the agent's proposed tx (the editor wrote the file), else it is reverted (blocked when a later change of the setting came first); the agent gets a message either way; only a proposed tx of the tool mcp:settings_change",
-      "home": "front",
       "name": "settings/confirm",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13396,7 +13279,6 @@
         "user"
       ],
       "doc": "the editor's answer to settings/explain (one object per setting) for the settings_get waiting on req; false when none waits (it timed out)",
-      "home": "front",
       "name": "settings/explained",
       "params": {
         "$defs": {
@@ -13441,7 +13323,6 @@
         "user"
       ],
       "doc": "one write of a settings file recorded as one user-class tx on kind option (data {value, file, line}; null value: removed; a value that looks like a secret is never stored: no value, redacted true), its tool the editor's door (ui:settings, file:<name>, lisp:<file>), keyed by req so a retry is one tx; the project from the ids",
-      "home": "front",
       "name": "settings/record",
       "params": {
         "$defs": {
@@ -13552,7 +13433,6 @@
         "user"
       ],
       "doc": "answers true, then the hub exits",
-      "home": "front",
       "name": "shutdown",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13574,7 +13454,6 @@
         "service"
       ],
       "doc": "what a job's, task's or agent's requests came to (an agent: its own job's)",
-      "home": "front",
       "name": "spend",
       "params": {
         "$defs": {
@@ -13676,8 +13555,7 @@
         "agent",
         "service"
       ],
-      "doc": "the hub's state: versions, refusals, read-only, the backend, the gateway",
-      "home": "front",
+      "doc": "the hub's state: versions, refusals, read-only, the gateway",
       "name": "status",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13687,36 +13565,6 @@
       },
       "result": {
         "$defs": {
-          "Backend": {
-            "additionalProperties": false,
-            "description": "The Lisp backend behind the front (phases 1–6).",
-            "properties": {
-              "pid": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "state": {
-                "$ref": "#/$defs/BackendState"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          "BackendState": {
-            "enum": [
-              "running",
-              "starting",
-              "missing",
-              "failed"
-            ],
-            "type": "string"
-          },
           "GatewayStatus": {
             "additionalProperties": false,
             "description": "The gateway the front serves: its loopback port (none until it listens), the registrations held, and what it\ncarried since the hub started (requests answered, those that failed, fallbacks, request and answer bytes); the\nprovider table's size, the ids whose key the hub holds (never a key) and the clear-text warnings.",
@@ -14025,16 +13873,6 @@
         "additionalProperties": false,
         "description": "The hub's status: the Lisp hub's keys and the front's.",
         "properties": {
-          "backend": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/Backend"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "drgnx_version": {
             "type": [
               "string",
@@ -14201,7 +14039,6 @@
         "user"
       ],
       "doc": "this connection receives the events from now on",
-      "home": "front",
       "name": "subscribe",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -14221,7 +14058,6 @@
         "user"
       ],
       "doc": "tasks by words (full text), status, assignee, labels and project, 50 a page",
-      "home": "front",
       "name": "tasks/find",
       "params": {
         "$defs": {
@@ -14328,7 +14164,6 @@
         "user"
       ],
       "doc": "the ready tracker tasks (open, nothing open blocks them, no live lease), by priority then age",
-      "home": "front",
       "name": "tasks/ready",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -14396,7 +14231,6 @@
         "user"
       ],
       "doc": "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools): done, a conflict with what changed, a lost lease, or a close proposal",
-      "home": "front",
       "name": "tasks/write",
       "params": {
         "$defs": {
@@ -14667,7 +14501,6 @@
         "user"
       ],
       "doc": "the steps of a session, task, plan or project (500 a page), or their rollup: time by class, cost by unit, tokens",
-      "home": "front",
       "name": "timeline/get",
       "params": {
         "$defs": {

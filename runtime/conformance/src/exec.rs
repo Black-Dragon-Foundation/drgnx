@@ -1045,12 +1045,10 @@ impl Runner<'_> {
         let path = match socket.as_str() {
             "main" => hub.socket.clone(),
             s if s.starts_with("path:") => PathBuf::from(&s[5..]),
-            "backend" => runstav::paths::backend_socket_path(&hub.env, &hub.socket)
-                .map_err(|e| e.to_string())?,
             s if s.starts_with("agent:") => agent_socket(hub, &s[6..])?,
             other => {
                 return Err(format!(
-                    "\"socket\" is \"main\", \"backend\", \"agent:SID\" or \"path:STRING\", not {other:?}"
+                    "\"socket\" is \"main\", \"agent:SID\" or \"path:STRING\", not {other:?}"
                 ));
             }
         };

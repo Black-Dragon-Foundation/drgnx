@@ -426,7 +426,6 @@ fn front(dir: &std::path::Path) -> Front {
         dir.join("hub-x.sock"),
         crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
         CoordDb::spawn(dir.join("work.db")),
-        Arc::new(crate::dispatch::NoBackend),
     )
 }
 

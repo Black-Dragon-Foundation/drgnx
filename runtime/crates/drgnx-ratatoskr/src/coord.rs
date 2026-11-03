@@ -6,13 +6,11 @@
 //!   `coord/agent seen` answer `{}` instead); a writer's refusal `invalid-params` with its text.
 //! - **`events`:** every committed write wakes [`broadcast_events`], which reads the new `event` rows on the reader's
 //!   thread and sends `events` `{since, last, events}` to the subscribers: at most 200 rows a batch, every 0.25 s at
-//!   most (the Lisp hub's `drgnx-hub--events-check`).  Forwarded calls that write (the Lisp backend still writes the
-//!   rest) and the 2 s schema tick wake it too.
-//! - **`coord/notify`:** the front's writes and every `coord/notify` feed one coalescer, [`notify_backend`]: at most
-//!   one notification to the backend each 0.25 s, never awaited.  The backend runs delivery and the clash scan.
-//! - **The tools' hub** ([`ToolHub`]): `sessions()` is the backend's `agents/list` (2 s), `notify()` the above.
+//!   most (the Lisp hub's `drgnx-hub--events-check`).  The 2 s schema tick wakes it too.
+//! - **The tools' hub** ([`ToolHub`]): `sessions()` is the front's `agents/list` (2 s), `notify()` wakes the
+//!   broadcast and the records' views.
 
-use crate::dispatch::{Caller, Forward};
+use crate::dispatch::Caller;
 use crate::front::Front;
 use mimir::BoxFuture;
 use norn::read::decisions::{self as decision_log, Decision as Logged};
@@ -31,11 +29,11 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use urdr::graph::{Class as TxClass, TxMeta};
 
-/// The `events` broadcast's and the backend notification's pace.
+/// The `events` broadcast's pace.
 pub const PACE: Duration = Duration::from_millis(250);
 /// The most event rows one `events` event carries.
 pub const EVENTS_BATCH: u64 = 200;
-/// How long the tools wait for the backend's `agents/list`.
+/// How long the tools wait for the front's `agents/list`.
 pub const SESSIONS_DEADLINE: Duration = Duration::from_secs(2);
 
 /// What a write wakes, and the writes counted for `status`.
@@ -593,23 +591,8 @@ pub async fn broadcast_events(front: Arc<Front>) {
     }
 }
 
-/// Tell the backend `coord/notify` whenever asked, at most once each [`PACE`]: what is asked meanwhile is one
-/// notification after it.
-pub async fn notify_backend(front: Arc<Front>) {
-    let signals = front.writer.signals.clone();
-    loop {
-        signals.notify.notified().await;
-        front
-            .forward()
-            .notify_backend("coord/notify", json!({}))
-            .await;
-        tokio::time::sleep(PACE).await;
-    }
-}
-
 /// The hub as the coordination tools see it (`norn::tools::Hub`).
 pub struct ToolHub {
-    pub forward: Arc<dyn Forward>,
     pub signals: Arc<Signals>,
     /// The editors the settings tools ask (unified-settings Task 32).
     pub editors: Arc<crate::settings::agents::Editors>,
@@ -629,6 +612,7 @@ impl ToolHub {
 impl Hub for ToolHub {
     fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
         Box::pin(async move {
+            let front = self.front.get().and_then(std::sync::Weak::upgrade)?;
             let m = registry::find("agents/list")?;
             let (params, _) = (m.decode)(&json!({})).ok()?;
             let caller = Caller {
@@ -638,10 +622,14 @@ impl Hub for ToolHub {
                 conn_id: 0,
                 backend: false,
             };
-            let v = tokio::time::timeout(SESSIONS_DEADLINE, self.forward.call(caller, m, params))
-                .await
-                .ok()?
-                .ok()?;
+            let v = tokio::time::timeout(
+                SESSIONS_DEADLINE,
+                crate::agent_core::serve(&front, &caller, params),
+            )
+            .await
+            .ok()?
+            .ok()?
+            .ok()?;
             serde_json::from_value::<Sessions>(v)
                 .ok()
                 .map(|s| s.sessions)
@@ -998,7 +986,6 @@ mod tests {
     async fn a_tool_write_reaches_the_view() {
         let signals = Arc::new(Signals::default());
         let hub = ToolHub {
-            forward: Arc::new(crate::dispatch::NoBackend),
             signals: signals.clone(),
             editors: Arc::new(Default::default()),
             settings: Arc::new(crate::settings::Settings::new()),

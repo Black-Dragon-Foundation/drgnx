@@ -111,13 +111,10 @@ AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only
   `HMAC-SHA256(cap, "drgnx-hub hub " + client_nonce + " " + hub_nonce)`, keyed with the cap's 64 hex characters as ASCII
   (as the Lisp `drgnx-hub-hmac`). `verify` decodes both proofs to 32 bytes (a malformed one, uppercase included, is never
   valid) and compares the bytes in constant time (`subtle`).
-- **`paths`**: `data_dir`, `socket_path`, `cap_path` (`hub-HASH.cap`), `lock_path` (`hub-HASH.sock.lock`) and
-  `backend_socket_path`, the Lisp backend's private socket `<socket dir>/hub-HASH.d/backend.sock` (one per data dir, so
-  two data dirs sharing a runtime dir never collide). Over 103 bytes it goes to `<tmp>/drgnx-hub-UID/hub-HASH.d/`, and
-  past 103 bytes there too it is `PathError::TooLong`. `session_dir(env, socket, SID)` is one agent session's
-  directory, `<socket dir>/s/SID/` (design §4.2): it holds that session's sockets, `hub.sock` (agent class) today and
-  `mcp.sock`, `search.sock` and `gateway.sock` later, and never the backend's (review M10): a sandbox is given `s/SID`
-  alone (Gleipnir's run parent is `s/`), so nothing bound into it reaches `backend.sock`. Over 103 bytes for its longest
+- **`paths`**: `data_dir`, `socket_path`, `cap_path` (`hub-HASH.cap`) and `lock_path` (`hub-HASH.sock.lock`).
+  `session_dir(env, socket, SID)` is one agent session's directory, `<socket dir>/s/SID/` (design §4.2): it holds
+  that session's sockets, `hub.sock` (agent class) today and `mcp.sock`, `search.sock` and `gateway.sock` later; a
+  sandbox is given `s/SID` alone (Gleipnir's run parent is `s/`). Over 103 bytes for its longest
   socket (`gateway.sock`) it is `<tmp>/drgnx-hub-UID/s/SID/`; a SID that is not letters, digits, `-` and `_` is
   `PathError::BadName`. `make_session_dir` makes the socket dir (or that `<tmp>` one), `s/` and `s/SID/` with
   `private_dir` and checks each with `trusted_dir`. `private_dir` makes a directory 0700 (parents too) when it is not

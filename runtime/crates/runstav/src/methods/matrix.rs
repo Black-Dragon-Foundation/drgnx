@@ -335,18 +335,18 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "matrix/get", MatrixGet(GetParams) -> MatrixView,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the permissions matrix: the preset, the one in force, the layers' cells, and the effective verdicts for who",
         ),
         method!(
             "matrix/check", MatrixCheck(CheckParams) -> CheckAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "what the matrix decides for who doing action (no card is made)",
             check: check_check,
         ),
         method!(
             "presence/set", PresenceSet(PresenceParams) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the editor says the user is away or back (never an agent): the time presets follow from the next action",
         ),
     ]

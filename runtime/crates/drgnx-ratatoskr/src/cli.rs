@@ -31,7 +31,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
 /// How long `ensure` waits for the hub to answer `ping`.
 pub const ENSURE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long `stop` waits for the lock to be released (the hub stops its backend for up to 10 s first).
+/// How long `stop` waits for the lock to be released.
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, PartialEq, Eq)]

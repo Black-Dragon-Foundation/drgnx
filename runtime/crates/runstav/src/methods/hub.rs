@@ -82,24 +82,6 @@ pub struct Refusals {
     pub last: Vec<Value>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum BackendState {
-    Running,
-    Starting,
-    Missing,
-    Failed,
-}
-
-/// The Lisp backend behind the front (phases 1–6).
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Backend {
-    pub state: BackendState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pid: Option<u64>,
-}
-
 /// Whether the front's writer can write work.db: a schema-7 file the hub made or migrated (`not-ready` while the
 /// migration waits or after it failed, `read-only` for a newer file).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -191,8 +173,6 @@ pub struct HubStatus {
     pub refusals: Option<Refusals>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_agents: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backend: Option<Backend>,
     /// The gateway the front serves (none from a Lisp hub).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway: Option<GatewayStatus>,
@@ -361,42 +341,42 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "hello", Hello(HelloParams) -> HelloReply,
-            classes: [User, Agent, Service], writes: false, home: Front,
+            classes: [User, Agent, Service], writes: false,
             doc: "a connection's first line: versions, and the proofs that make it a user connection",
         ),
         method!(
             "ping", Ping(Empty) -> PingResult,
-            classes: [User, Agent, Service], writes: false, home: Front,
+            classes: [User, Agent, Service], writes: false,
             doc: "the hub's pid",
         ),
         method!(
             "status", Status(Empty) -> HubStatus,
-            classes: [User, Agent, Service], writes: false, home: Front,
-            doc: "the hub's state: versions, refusals, read-only, the backend, the gateway",
+            classes: [User, Agent, Service], writes: false,
+            doc: "the hub's state: versions, refusals, read-only, the gateway",
         ),
         method!(
             "restart", Restart(Empty) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "answers true, then the hub exits 75 for its supervisor to start it again",
         ),
         method!(
             "shutdown", Shutdown(Empty) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "answers true, then the hub exits",
         ),
         method!(
             "subscribe", Subscribe(Empty) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "this connection receives the events from now on",
         ),
         method!(
             "events/since", EventsSince(EventsSinceParams) -> EventsPage,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the event log after since (0), oldest first, at most limit (200; at most 1000)",
         ),
         method!(
             "env/set", EnvSet(EnvSetParams) -> EnvSetResult,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
             check: check_env,
         ),

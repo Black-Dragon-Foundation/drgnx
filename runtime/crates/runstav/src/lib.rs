@@ -4,7 +4,7 @@
 //! - [`line`]: the line limits and the strict parse of one line (duplicate keys and deep nesting refused).
 //! - [`decode`]: typed decode of params, with the path of a failure and the keys it dropped.
 //! - [`proof`]: the cap, the nonces and the HMAC proofs of `hello`.
-//! - [`paths`]: where the data dir, the socket, the cap, the lock and the backend's socket are.
+//! - [`paths`]: where the data dir, the socket, the cap, the lock and the sessions' sockets are.
 //! - [`registry`]: every method, its classes, schemas and `writes` flag; `methods.json` and the docs table.
 //! - [`methods`]: each method's params and result types; [`types`]: the named input types; [`events`]: the event
 //!   types.

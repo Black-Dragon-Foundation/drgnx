@@ -74,17 +74,17 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "mcp/session", McpSession(SessionParams) -> SessionAnswer,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the coordination tools on a session's own mcp.sock (the socket is the identity), kept in runtime.db with its profile and tool sets, and closed with its owner; the tracker tools unless the session's task or its profile turns them off",
         ),
         method!(
             "mcp/session-close", McpSessionClose(SessionCloseParams) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a session's mcp.sock and its directory gone (false: no such session)",
         ),
         method!(
             "mcp/attach", McpAttach(AttachParams) -> AttachAnswer,
-            classes: [Service], writes: false, home: Front,
+            classes: [Service], writes: false,
             doc: "an outside agent's bridge: the connection carries MCP after the answer, as ext:KIND:PID-HASH from the peer process",
         ),
     ]

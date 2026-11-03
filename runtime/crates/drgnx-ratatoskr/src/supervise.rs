@@ -36,8 +36,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The names a supervisor passes on, each only when set (review I11): the directories (a long path would resolve
-/// differently under systemd or launchd than in the editor without `TMPDIR` and `HOME`), drgnx's own, and the names the
-/// backend's agents use.
+/// differently under systemd or launchd than in the editor without `TMPDIR` and `HOME`), drgnx's own (`DRGNX_DIR`: the
+/// checkout, which the sandbox closes to agents), and the names the hub's agents use.
 pub const SUPERVISOR_ENV: &[&str] = &[
     "DRGNX_DATA_DIR",
     "DRGNX_CONFIG_DIR",
@@ -50,7 +50,6 @@ pub const SUPERVISOR_ENV: &[&str] = &[
     "TMPDIR",
     "TMP",
     "TEMP",
-    "DRGNX_EMACS",
     "DRGNX_DIR",
     "DRGNX_RATATOSKR_LOG",
     "SSH_AUTH_SOCK",
@@ -226,7 +225,7 @@ pub enum Launched {
 }
 
 /// Load the job at PLIST for LABEL in `gui/UID`: `bootstrap`, or `kickstart` when the label is already loaded (a
-/// second `bootstrap` fails).  A loaded label whose plist CHANGED (a new `DRGNX_EMACS`, a new `SSH_AUTH_SOCK` after
+/// second `bootstrap` fails).  A loaded label whose plist CHANGED (a new `DRGNX_DIR`, a new `SSH_AUTH_SOCK` after
 /// logging in again) is `bootout` first and bootstrapped again: `kickstart` would run it with the old arguments and
 /// environment until logout (review M8).
 pub fn launchd_start(
@@ -743,7 +742,6 @@ mod tests {
             "TMPDIR",
             "TMP",
             "TEMP",
-            "DRGNX_EMACS",
             "DRGNX_DIR",
             "DRGNX_RATATOSKR_LOG",
             "SSH_AUTH_SOCK",
@@ -755,6 +753,8 @@ mod tests {
         ] {
             assert!(SUPERVISOR_ENV.contains(&n), "{n}");
         }
+        // no child Emacs: the hub has no use for the editor's Emacs
+        assert!(!SUPERVISOR_ENV.contains(&"DRGNX_EMACS"));
         // no provider key is ever passed on
         assert!(SUPERVISOR_ENV.iter().all(|n| !n.contains("KEY")));
     }

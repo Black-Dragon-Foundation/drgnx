@@ -12,12 +12,11 @@
 //! - [`server`]: the start order (the store opened, or made, or migrated, before anything is served), the accept loops, signals, the parent watch, the schema tick and the stop.
 //! - [`conn`]: one connection: the peer-uid check, the challenge, lines, the writer queue that drops a stopped reader.
 //! - [`hello`]: a connection's class and `hello` v1 (the challenge, the proofs both ways, at most once).
-//! - [`dispatch`]: the contract's checks before any method runs, the refusals, and [`dispatch::Forward`].
-//! - [`front`]: what connections share and the methods the front serves itself (the seam rule: the backend's own
-//!   connection is held to them).
+//! - [`dispatch`]: the contract's checks before any method runs, and the refusals.
+//! - [`front`]: what connections share, and every method's handler (one `match` with no catch-all arm).
 //! - [`store`]: `work.db`, read-only, on a thread of its own.
-//! - [`coord`]: the front's writes to `work.db` (the editor's methods, the seam's `coord/*`), the `events` broadcast,
-//!   the `coord/notify` coalescer and the coordination tools' hub.
+//! - [`coord`]: the front's writes to `work.db` (the editor's methods, `coord/*`), the `events` broadcast and the
+//!   coordination tools' hub.
 //! - [`graph`]: the graph store's methods the front serves: `graph/put-parsed` (the tracker scan's door) and
 //!   `graph/record`.
 //! - [`backup_timer`]: the nightly checked backup's schedule (03:00, or the first tick after a missed night).
@@ -33,13 +32,10 @@
 //!   the main socket as `service`; it redials after a hub restart.
 //! - [`log`]: tracing to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` and warnings to stderr.
 //! - [`runtime_db`]: `<state>/hub/runtime.db`, the hub's own recovery state.
-//! - [`backend`]: the Lisp backend: its command, environment, record, connection and restarts.
-//! - [`forward`]: what goes to the backend (re-encoded typed params with the caller) and what comes back (checked).
-//! - [`relay`]: the backend's events, checked against the registry, to the front's subscribers.
 //! - [`sandbox`]: Gleipnir as Ratatoskr uses it: the context of closed paths, the helper, the spawn, `sandbox run`.
 //! - [`settings`]: `settings.el` and the shipped `runtime-defaults.el`, read as data with `huginn`: the runtime
 //!   settings only, their fallbacks, `status.settings`.
-//! - [`shape`]: what a caller of each class may ask and see of a forwarded method.
+//! - [`shape`]: what a caller of each class may ask and see of `agents/list` and `spend`.
 //! - [`shell_env`]: `env/set`: the login shell's variables, an overlay on the environment of what the hub starts.
 //! - [`version`]: what `version --json` says.
 //!
@@ -58,7 +54,6 @@
 
 pub mod agent_core;
 pub mod agents;
-pub mod backend;
 pub mod backup_timer;
 pub mod bridge;
 pub mod brief;
@@ -71,7 +66,6 @@ pub mod dispatch;
 pub mod doctor;
 pub mod embed;
 pub mod exec;
-pub mod forward;
 pub mod front;
 pub mod gateway;
 pub mod graph;
@@ -84,7 +78,6 @@ pub mod manager;
 pub mod matrix_gate;
 pub mod peer;
 pub mod records;
-pub mod relay;
 pub mod runner;
 pub mod runtime_db;
 pub mod sandbox;

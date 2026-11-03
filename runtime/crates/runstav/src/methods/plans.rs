@@ -341,34 +341,34 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "plans/get", PlansGet(ByPlan) -> PlanView,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a plan from the graph: its tasks with status, deps, interfaces, steps and their reports' interfaces",
         ),
         method!(
             "plans/write", PlansWrite(WriteParams) -> PlanWritten,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a plan created or changed with its tasks, steps and blocks links, in one tx (refused when base_version is behind)",
             check: check_write,
         ),
         method!(
             "brief/build", BriefBuild(ByTask) -> Brief,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a task's brief from the graph (plan section, AGENTS.md, the matrix as it applies, base branch, earlier interfaces, the check), or the user's edited one",
         ),
         method!(
             "brief/set", BriefSet(BriefSetParams) -> BriefSet,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the user's edited brief for a task (a brief note the runner uses at dispatch)",
         ),
         method!(
             "reports/get", ReportsGet(ReportsParams) -> Reports,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a task's structured reports, or one by id",
             check: check_reports,
         ),
         method!(
             "decisions/effects", DecisionsEffects(EffectsParams) -> Effects,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "a decision's commits and the later hunks that overlap its lines (computed from git)",
         ),
     ]

@@ -1,6 +1,5 @@
 //! The gateway in the hub (docs/develop/hub.md, "Registrations", "Forwarding", "Keys"; design §5.6, §6.2): the front
-//! serves `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget` and `spend` itself, and `bifrost` forwards the requests.  Nothing of it goes to the Lisp backend but the `budget`
-//! notification.
+//! serves `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget` and `spend` itself, and `bifrost` forwards the requests.
 //!
 //! - **Registrations** live in memory (what `bifrost` admits by) and in `runtime.db`'s `registration` table, keyed by
 //!   the SHA-256 of their token: the token is answered once and kept nowhere.  The row is written before the answer.
@@ -1190,11 +1189,10 @@ pub async fn run_events(mut events: mpsc::UnboundedReceiver<GatewayEvent>, front
                 );
             }
             GatewayEvent::Budget { job, spent, budget } => {
-                let data = json!({"job": job, "spent": spent, "budget": budget});
-                front.broadcast("budget", data.clone());
-                // to the backend's method dispatch, never awaited here (the seam: it never subscribes)
-                let f = front.clone();
-                tokio::spawn(async move { f.forward().notify_backend("budget", data).await });
+                front.broadcast(
+                    "budget",
+                    json!({"job": job, "spent": spent, "budget": budget}),
+                );
             }
             GatewayEvent::NeedKeys { providers } => {
                 front.broadcast("gateway/need-keys", json!({"providers": providers}));
@@ -1216,7 +1214,7 @@ pub async fn watch(front: Arc<Front>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::{Caller, NoBackend};
+    use crate::dispatch::Caller;
     use crate::store::WorkDb;
     use runstav::proof::Cap;
     use runstav::registry::{self, Class as WireClass};
@@ -1242,7 +1240,6 @@ mod tests {
             socket.clone(),
             WorkDb::spawn(dir.path().join("work.db")).unwrap(),
             coord.clone(),
-            Arc::new(NoBackend),
         );
         let env = runstav::paths::Env::new(&[("TMPDIR", dir.path().to_str().unwrap())], front.uid);
         front.mcp.open_store(env, socket, db.clone());

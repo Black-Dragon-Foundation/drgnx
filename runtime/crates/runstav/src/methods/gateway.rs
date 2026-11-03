@@ -255,37 +255,37 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "spend", Spend(SpendParams) -> Spend,
-            classes: [User, Agent, Service], writes: false, home: Front,
+            classes: [User, Agent, Service], writes: false,
             doc: "what a job's, task's or agent's requests came to (an agent: its own job's)",
         ),
         method!(
             "gateway/register", GatewayRegister(RegisterParams) -> Registration,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "an agent's token and where it is good (the URL, or a session's socket); its keys go to the hub's memory",
         ),
         method!(
             "gateway/unregister", GatewayUnregister(UnregisterParams) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the token no longer forwards",
         ),
         method!(
             "gateway/keys", GatewayKeys(KeysParams) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "provider keys to the hub's memory (never a file, never the backend)",
         ),
         method!(
             "gateway/set-budget", GatewaySetBudget(SetBudgetParams) -> bool,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "seam: every registration of the job gets the budget (drgnx-gateway-set-budget)",
         ),
         method!(
             "gateway/editor-token", GatewayEditorToken(Empty) -> EditorToken,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the caller's editor token (loopback only, the /p/PROVIDER/… paths; one per owner, kept across a restart)",
         ),
         method!(
             "gateway/keys-held", GatewayKeysHeld(Empty) -> KeysHeld,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "the providers whose key the hub holds (ids only)",
         ),
     ]

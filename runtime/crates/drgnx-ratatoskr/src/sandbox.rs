@@ -17,14 +17,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Environment names never passed into a sandbox beside `gleipnir::BASE_ENV_DENY`: drgnx's own dirs, the agent's
-/// identity, and the backend's socket, parent pid and secret.
+/// identity, and the names the Lisp backend of older hubs was given (its socket, parent pid and secret), should one
+/// still be set.
 pub const ENV_DENY: &[&str] = &[
     "DRGNX_DATA_DIR",
     "DRGNX_CONFIG_DIR",
     "DRGNX_AGENT",
     "DRGNX_HUB_SERVE_SOCKET",
     "DRGNX_HUB_PARENT_PID",
-    crate::backend::SECRET_ENV,
+    "DRGNX_HUB_SERVE_SECRET",
 ];
 
 /// What no spec may expose, for the hub `env` describes, as true names (GL-T2-2):

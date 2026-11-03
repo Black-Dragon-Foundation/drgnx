@@ -204,67 +204,67 @@ pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "job/propose", JobPropose(ProposeParams) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a job from a plan, proposed (approved at once with auto)",
         ),
         method!(
             "job/start-task", JobStartTask(StartTaskParams) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "Start as Job: task n of a plan and the tasks it needs, proposed; the plan is only read",
         ),
         method!(
             "job/reassign", JobReassign(ReassignParams) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a task goes to another profile (the Work graph)",
         ),
         method!(
             "job/block", JobBlock(BlockParams) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a task waits for the user, with a reason (the Work graph)",
         ),
         method!(
             "job/unblock", JobUnblock(ByTask) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a blocked task may run again (the Work graph)",
         ),
         method!(
             "job/order", JobOrder(OrderParams) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a task moves in its job's run order (the Work graph)",
         ),
         method!(
             "job/approve", JobApprove(WithBudget) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a proposed job runs, with an optional budget",
         ),
         method!(
             "job/stop", JobStop(ById) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a job's agents stop and it waits",
         ),
         method!(
             "job/resume", JobResume(WithBudget) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a stopped job runs again, with an optional new budget",
         ),
         method!(
             "job/card", JobCard(CardParams) -> JobSummary,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the user's action on a card (once: a settled card is an error)",
         ),
         method!(
             "job/reply", JobReply(ReplyParams) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "the user's answer to an agent's message",
         ),
         method!(
             "job/dismiss", JobDismiss(ByMessage) -> bool,
-            classes: [User], writes: true, home: Front,
+            classes: [User], writes: true,
             doc: "a message acted on without an answer",
         ),
         method!(
             "job/status", JobStatus(StatusParams) -> JobStatusResult,
-            classes: [User], writes: false, home: Front,
+            classes: [User], writes: false,
             doc: "one job (with its decision log when asked), or every job",
         ),
     ]
