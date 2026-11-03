@@ -36,8 +36,9 @@ it does not depend on the agent that started it or on the editor, and it survive
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
   waits at no cost and is woken by the end.
-- **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call); agents use
-  the `job_*` tools.
+- **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call from line
+  `from`, or with `tail_bytes` the log's last bytes, up to 1 MiB, read from the file's end; bytes that are not UTF-8
+  come back replaced); agents use the `job_*` tools.
 
 ### The editor's jobs
 
@@ -60,8 +61,8 @@ left out. An agent's job gets only the tool paths.
 
 In Lisp, `core/drgnx-exec.el` is the client. `drgnx-exec-start` is asynchronous (its callback gets the job's id, or the
 reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache that follows the hub's `exec-done` events
-and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read a job's log
-(waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
+and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read the end of a job's log
+(one call, `tail_bytes`; waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
 or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
 hours) or `:no-timebox`. The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
 Report, the browser for agents) run without a time box, so a daemon that stays up for days never loses them: they end

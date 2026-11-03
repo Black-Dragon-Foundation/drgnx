@@ -95,6 +95,23 @@
       (let ((inhibit-interaction t))
         (should-error (drgnx-exec-log id 1000))))))
 
+(ert-deftest drgnx-exec/log-reads-the-end-in-one-call ()
+  (drgnx-exec-test--with-hub root
+    (let ((long (drgnx-exec-test--start root "long" '("seq" "1" "3000")))
+          (bytes (drgnx-exec-test--start root "bytes" '("sh" "-c" "printf 'one\\n\\377 end\\n'")))
+          (calls 0) (call (symbol-function 'drgnx-hub-call-sync)))
+      (drgnx-test-wait (lambda () (and (eq (plist-get (drgnx-exec-get long) :status) 'done)
+                                       (eq (plist-get (drgnx-exec-get bytes) :status) 'done)))
+                       :what "both jobs end")
+      (cl-letf (((symbol-function 'drgnx-hub-call-sync) (lambda (&rest args) (cl-incf calls) (apply call args))))
+        ;; the end of a log longer than one slice, asked once: the hub reads the file's end, not all of it
+        (should (equal (drgnx-exec-log long 10) "2999\n3000\n"))
+        (should (eql calls 1)))
+      ;; a byte that is not UTF-8 is replaced, the rest kept
+      (let ((log (drgnx-exec-log bytes 100)))
+        (should (string-prefix-p "one\n" log))
+        (should (string-suffix-p " end\n" log))))))
+
 (provide 'exec-test)
 ;;; exec-test.el ends here
 

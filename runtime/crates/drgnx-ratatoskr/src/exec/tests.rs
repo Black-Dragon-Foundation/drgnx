@@ -469,7 +469,10 @@ async fn a_user_job_gets_the_shells_environment_and_an_agents_the_list() {
         lines(ended(&r, &user).await),
         ["models=/models/here access=unset"]
     );
-    assert_eq!(lines(ended(&r, &agent).await), ["models=unset access=unset"]);
+    assert_eq!(
+        lines(ended(&r, &agent).await),
+        ["models=unset access=unset"]
+    );
 }
 
 /// The user's base environment drops what looks like a key, a provider's key variable and a name that is not text.
@@ -951,6 +954,54 @@ async fn finished_job_folders_past_the_retention_are_pruned() {
     assert!(!left.contains(&"xancient".to_string()));
     assert!(!left.contains(&format!("xold{:03}", KEEP_JOBS + 4)));
     assert!(left.contains(&"xold000".to_string()));
+}
+
+/// A log with bytes that are not UTF-8 is read with replacement characters, never as nothing.
+#[tokio::test]
+async fn a_log_that_is_not_text_is_read_with_replacements() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let dir = d.path().join("exec/xbytes");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("log"), b"one\n\xff two\nthree\n").unwrap();
+    assert_eq!(r.log_slice("xbytes", 1, 5), ["\u{fffd} two", "three"]);
+    assert_eq!(r.log_slice("xbytes", 0, 1), ["one"]);
+    // its end too
+    assert_eq!(r.log_tail("xbytes", 100), ["one", "\u{fffd} two", "three"]);
+}
+
+/// The end of a log: its last bytes as lines, a character the cut began inside dropped, the whole log when it is
+/// shorter, nothing for a job without a log.
+#[tokio::test]
+async fn the_end_of_a_log_is_its_last_bytes() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let dir = d.path().join("exec/xtail");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("log"), "one\ntwo\nthree\nh\u{e9}llo\n").unwrap();
+    assert_eq!(
+        r.log_tail("xtail", 1000),
+        ["one", "two", "three", "h\u{e9}llo"]
+    );
+    assert_eq!(r.log_tail("xtail", 13), ["three", "h\u{e9}llo"]);
+    assert_eq!(r.log_tail("xtail", 12), ["hree", "h\u{e9}llo"]);
+    // "\u{e9}" is two bytes: a cut after its first leaves its second, which is dropped
+    assert_eq!(r.log_tail("xtail", 5), ["llo"]);
+    assert!(r.log_tail("xnone", 100).is_empty());
+}
+
+#[test]
+fn a_tail_takes_no_slice_and_a_bounded_size() {
+    let m = runstav::registry::find("exec/log").expect("exec/log");
+    assert!((m.decode)(&json!({"id": "x1", "tail_bytes": 4096})).is_ok());
+    for bad in [
+        json!({"id": "x1", "tail_bytes": 0}),
+        json!({"id": "x1", "tail_bytes": 1_048_577}),
+        json!({"id": "x1", "tail_bytes": 10, "from": 0}),
+        json!({"id": "x1", "tail_bytes": 10, "n": 5}),
+    ] {
+        assert!((m.decode)(&bad).is_err(), "{bad}");
+    }
 }
 
 /// N7: a re-attached job is waited on by the process's end, not by polling for it.

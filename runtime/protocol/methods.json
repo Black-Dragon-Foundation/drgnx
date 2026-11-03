@@ -6031,7 +6031,7 @@
       "classes": [
         "user"
       ],
-      "doc": "lines of a job's log (at most 1000 a call)",
+      "doc": "lines of a job's log (at most 1000 a call), or its end (tail_bytes)",
       "name": "exec/log",
       "params": {
         "$defs": {
@@ -6064,6 +6064,15 @@
               "integer",
               "null"
             ]
+          },
+          "tail_bytes": {
+            "description": "The end of the log instead of a slice: its last bytes, at most this many (1 to 1048576), as lines (the first may\nbe cut).  Read from the file's end, never the whole file.  Not with `from` or `n`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -6075,12 +6084,16 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "A slice of a job's log.",
+        "description": "A slice of a job's log (bytes that are not UTF-8 replaced).",
         "properties": {
           "from": {
+            "description": "The slice's first line; absent for the end of the log (`tail_bytes`).",
             "format": "uint64",
             "minimum": 0,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "id": {
             "type": "string"
@@ -6107,7 +6120,6 @@
         },
         "required": [
           "id",
-          "from",
           "running"
         ],
         "title": "LogSlice",

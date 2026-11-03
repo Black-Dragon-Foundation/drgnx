@@ -821,7 +821,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
-| `exec/log` | user | `{from?: natnum, id: Id, n?: natnum}` | `{from: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
+| `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
@@ -1398,7 +1398,9 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 
 ## Jobs (`exec/*`)
 
-`drgnx-ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice}`. A job's folder
+`drgnx-ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice, log_tail}` (`exec/log`'s slice
+reads lines only up to the last it answers; its `tail_bytes` form seeks to the file's end; both replace bytes that are
+not UTF-8). A job's folder
 `<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
 (`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is

@@ -425,14 +425,43 @@ impl Runner {
         self.inner.get()?.clone().stop(id).await
     }
 
-    /// N lines of the job's log from line FROM (0-based).
+    /// N lines of the job's log from line FROM (0-based), read up to the last of them only; bytes that are not UTF-8
+    /// are replaced.
     pub fn log_slice(&self, id: &str, from: usize, n: usize) -> Vec<String> {
+        use std::io::BufRead;
+        let Some(f) = self
+            .inner
+            .get()
+            .and_then(|i| std::fs::File::open(i.dir(id).join("log")).ok())
+        else {
+            return vec![];
+        };
+        std::io::BufReader::new(f)
+            .split(b'\n')
+            .skip(from)
+            .take(n)
+            .map_while(Result::ok)
+            .map(|l| String::from_utf8_lossy(l.strip_suffix(b"\r").unwrap_or(&l)).into_owned())
+            .collect()
+    }
+
+    /// The end of the job's log, at most BYTES of it, as lines (the first may be cut); read from the file's end, a
+    /// character cut at the start dropped and bytes that are not UTF-8 replaced.
+    pub fn log_tail(&self, id: &str, bytes: u64) -> Vec<String> {
         let Some(i) = self.inner.get() else {
             return vec![];
         };
-        std::fs::read_to_string(i.dir(id).join("log"))
-            .map(|t| t.lines().skip(from).take(n).map(String::from).collect())
-            .unwrap_or_default()
+        let buf = tail_bytes(&i.dir(id).join("log"), bytes);
+        // the rest of a character the cut began inside (continuation bytes, at most 3)
+        let skip = buf
+            .iter()
+            .take(3)
+            .take_while(|b| (0x80..0xc0).contains(*b))
+            .count();
+        String::from_utf8_lossy(&buf[skip..])
+            .lines()
+            .map(String::from)
+            .collect()
     }
 }
 
@@ -643,7 +672,11 @@ impl Inner {
                 None => Some("its start request is gone".to_string()),
                 Some(p) => {
                     let slot = permit.take().expect("the slot");
-                    match self.clone().launch(&id, &dir, p.into_spec(), Some(slot)).await {
+                    match self
+                        .clone()
+                        .launch(&id, &dir, p.into_spec(), Some(slot))
+                        .await
+                    {
                         Ok(()) => return,
                         Err(e) => Some(e.message),
                     }
@@ -1152,10 +1185,7 @@ fn agent_plain_env(shell: &crate::shell_env::ShellEnv) -> Vec<(OsString, OsStrin
 /// The base environment of a user's job: SOURCE (the hub's environment with the login shell's overlay, as the editor's
 /// jobs had the user manager's or Emacs's whole environment), less every name that looks like a key
 /// (`refused_env_name`) and every provider's key variable (KEY_ENVS).
-fn user_env(
-    source: Vec<(OsString, OsString)>,
-    key_envs: &[String],
-) -> Vec<(OsString, OsString)> {
+fn user_env(source: Vec<(OsString, OsString)>, key_envs: &[String]) -> Vec<(OsString, OsString)> {
     source
         .into_iter()
         .filter(|(k, _)| {
@@ -1178,18 +1208,23 @@ fn unsandboxed_for_tests(_hooks: &Hooks) -> bool {
 
 /// The last megabyte of a log, as text.
 fn tail_of(path: &Path) -> String {
+    String::from_utf8_lossy(&tail_bytes(path, 1 << 20)).into_owned()
+}
+
+/// The last MAX bytes of the file at PATH (seeking from its end; nothing when it cannot be read).
+fn tail_bytes(path: &Path, max: u64) -> Vec<u8> {
     use std::io::{Read, Seek, SeekFrom};
-    const MAX: u64 = 1 << 20;
     let Ok(mut f) = std::fs::File::open(path) else {
-        return String::new();
+        return Vec::new();
     };
     let len = f.metadata().map_or(0, |m| m.len());
     let mut buf = Vec::new();
-    if f.seek(SeekFrom::Start(len.saturating_sub(MAX))).is_err() || f.read_to_end(&mut buf).is_err()
+    if f.seek(SeekFrom::Start(len.saturating_sub(max))).is_err()
+        || f.take(max).read_to_end(&mut buf).is_err()
     {
-        return String::new();
+        return Vec::new();
     }
-    String::from_utf8_lossy(&buf).into_owned()
+    buf
 }
 
 /// The environment a session's job gets inside its sandbox: the tool paths, nothing else of the hub's.
@@ -1543,6 +1578,16 @@ pub async fn stop(f: &Front, c: &Caller, p: ById) -> Result<ExecRow, Error> {
 pub async fn log(f: &Front, c: &Caller, p: LogParams) -> Result<LogSlice, Error> {
     let r = runner(f)?;
     let row = visible(r, c, p.id.as_str())?;
+    let running = matches!(row.status, ExecStatus::Running | ExecStatus::Queued);
+    if let Some(bytes) = p.tail_bytes {
+        return Ok(LogSlice {
+            lines: r.log_tail(p.id.as_str(), bytes),
+            id: row.id,
+            from: None,
+            next: None,
+            running,
+        });
+    }
     let from = p.from.unwrap_or(0);
     let n = p.n.unwrap_or(200) as usize;
     let mut lines = r.log_slice(p.id.as_str(), from as usize, n + 1);
@@ -1550,10 +1595,10 @@ pub async fn log(f: &Front, c: &Caller, p: LogParams) -> Result<LogSlice, Error>
     lines.truncate(n);
     Ok(LogSlice {
         id: row.id,
-        from,
+        from: Some(from),
         next: more.then(|| from + n as u64),
         lines,
-        running: matches!(row.status, ExecStatus::Running | ExecStatus::Queued),
+        running,
     })
 }
 

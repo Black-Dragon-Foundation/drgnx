@@ -27,7 +27,7 @@ holds the jobs this client started or heard end, trimmed to `drgnx-exec--keep' b
 (defvar drgnx-exec--stale nil
   "Non-nil after the hub's connection closed: the next event from the hub (it is back) refreshes the cache.")
 
-(defconst drgnx-exec--log-lines 1000 "Lines an `exec/log' call reads at most (the hub's limit).")
+(defconst drgnx-exec--log-tail-max 1048576 "Bytes of a log's end an `exec/log' call reads at most (the hub's limit).")
 
 (defun drgnx-exec--status (status exit)
   "The editor's status for the hub's STATUS (a string) and EXIT."
@@ -178,18 +178,13 @@ when it stops); it replaces TIMEBOX.  The job is in the cache
     (sort jobs (lambda (a b) (string> (or (plist-get a :started) "") (or (plist-get b :started) ""))))))
 
 (defun drgnx-exec-log (id max-bytes)
-  "The end of job ID's log: at most MAX-BYTES characters.  Waits for the hub (5 s per call): for commands, never a
-timer or a hook."
+  "The end of job ID's log: at most MAX-BYTES characters (and bytes).  One call to the hub, which reads only the
+file's end (`exec/log' with `tail_bytes'); waits for it (5 s at most): for commands, never a timer or a hook."
   (when inhibit-interaction
     (error "`drgnx-exec-log' waits for the hub: call it from a command, not from a timer or a hook"))
-  (let ((from 0) (text "") (more t))
-    (while more
-      (let ((slice (drgnx-hub-call-sync "exec/log" (list :id id :from from :n drgnx-exec--log-lines) 5)))
-        (setq text (concat text (mapconcat (lambda (l) (concat l "\n")) (plist-get slice :lines) ""))
-              from (plist-get slice :next)
-              more (and from t))
-        ;; only the end is wanted: what is far before it is dropped as it goes
-        (when (> (length text) (* 2 max-bytes)) (setq text (substring text (- (length text) max-bytes))))))
+  (let* ((bytes (max 1 (min max-bytes drgnx-exec--log-tail-max)))
+         (slice (drgnx-hub-call-sync "exec/log" (list :id id :tail_bytes bytes) 5))
+         (text (mapconcat (lambda (l) (concat l "\n")) (plist-get slice :lines) "")))
     (if (> (length text) max-bytes) (substring text (- (length text) max-bytes)) text)))
 
 (defun drgnx-exec-stop (id)
