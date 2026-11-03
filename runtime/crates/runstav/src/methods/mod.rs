@@ -185,6 +185,7 @@ params! {
     AgentsMove(agents::MoveParams),
     AgentsRole(agents::RoleParams),
     AgentsSlice(agents::SliceParams),
+    AgentsProbe(agents::ProbeParams),
     ExecStart(exec::StartParams),
     ExecGet(exec::ById),
     ExecList(exec::ListParams),

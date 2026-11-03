@@ -8,6 +8,7 @@
 
 use crate::agents::launch::NetCell;
 use crate::settings::ContainerImage;
+use crate::shell_env::ShellEnv;
 use gleipnir::{Refusal, Rule};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -90,8 +91,8 @@ pub const PULL_TIMEOUT: Duration = Duration::from_secs(600);
 /// fewer of these than the pull did looked in another store and found no image.  `DBUS_SESSION_BUS_ADDRESS` is how
 /// podman reaches the user's systemd, which applies the job's limits ([`check_limits`]) when `XDG_RUNTIME_DIR` is not
 /// the session's own.
-pub fn podman_env() -> Vec<(OsString, OsString)> {
-    draugr::env::build(
+pub fn podman_env(shell: &ShellEnv) -> Vec<(OsString, OsString)> {
+    shell.build(
         &[
             "PATH",
             "HOME",
@@ -333,6 +334,7 @@ pub fn start_proxy(
 
 /// Run `podman ARGS`; kill it and say so when it outlives LIMIT.
 fn run_limited(
+    shell: &ShellEnv,
     podman: &Path,
     args: &[&str],
     limit: Duration,
@@ -345,7 +347,7 @@ fn run_limited(
     let mut child = std::process::Command::new(podman)
         .args(args)
         .env_clear()
-        .envs(podman_env())
+        .envs(podman_env(shell))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -376,14 +378,19 @@ fn run_limited(
 
 /// Make sure REF (an image pinned by digest) is in the local store: the hub pulls it, a job never does.  A pull that
 /// takes longer than LIMIT ([`PULL_TIMEOUT`]) refuses the job.
-pub fn ensure_image(podman: &Path, reference: &str, limit: Duration) -> Result<(), Refusal> {
-    if run_limited(podman, &["image", "exists", reference], limit)?
+pub fn ensure_image(
+    shell: &ShellEnv,
+    podman: &Path,
+    reference: &str,
+    limit: Duration,
+) -> Result<(), Refusal> {
+    if run_limited(shell, podman, &["image", "exists", reference], limit)?
         .status
         .success()
     {
         return Ok(());
     }
-    let pull = run_limited(podman, &["pull", "--quiet", reference], limit)?;
+    let pull = run_limited(shell, podman, &["pull", "--quiet", reference], limit)?;
     if pull.status.success() {
         return Ok(());
     }
@@ -440,13 +447,13 @@ pub fn limits_enforced(info: &serde_json::Value) -> Result<(), String> {
 }
 
 /// Refuse the job unless PODMAN enforces its caps ([`limits_enforced`]), asked within LIMIT.
-pub fn check_limits(podman: &Path, limit: Duration) -> Result<(), Refusal> {
+pub fn check_limits(shell: &ShellEnv, podman: &Path, limit: Duration) -> Result<(), Refusal> {
     let setup = |m: String| Refusal {
         rule: Rule::Setup,
         path: None,
         message: format!("container jobs are refused here: {m}"),
     };
-    let out = run_limited(podman, &["info", "--format", "json"], limit)?;
+    let out = run_limited(shell, podman, &["info", "--format", "json"], limit)?;
     if !out.status.success() {
         return Err(setup(format!(
             "podman info failed: {}",
@@ -460,9 +467,14 @@ pub fn check_limits(podman: &Path, limit: Duration) -> Result<(), Refusal> {
 
 /// At hub start: remove the `drgnx-job-*` containers whose job is not in RUNNING (a podman client killed with the
 /// hub leaves its container behind).  Only names under [`NAME_PREFIX`] are looked at; answers how many it removed.
-pub fn remove_leftovers(podman: &Path, running: &std::collections::HashSet<String>) -> usize {
+pub fn remove_leftovers(
+    shell: &ShellEnv,
+    podman: &Path,
+    running: &std::collections::HashSet<String>,
+) -> usize {
     let limit = Duration::from_secs(30);
     let Ok(list) = run_limited(
+        shell,
         podman,
         &[
             "ps",
@@ -485,7 +497,8 @@ pub fn remove_leftovers(podman: &Path, running: &std::collections::HashSet<Strin
         if running.contains(id) || name_of(id).is_err() {
             continue;
         }
-        if run_limited(podman, &["rm", "-f", name], limit).is_ok_and(|o| o.status.success()) {
+        if run_limited(shell, podman, &["rm", "-f", name], limit).is_ok_and(|o| o.status.success())
+        {
             n += 1;
         }
     }
@@ -890,7 +903,7 @@ mod name_and_pull_tests {
     fn podman_info_that_fails_refuses_the_job() {
         let d = tempfile::tempdir().unwrap();
         let p = script(d.path(), "echo 'no session' >&2; exit 125");
-        let e = check_limits(&p, Duration::from_secs(10)).unwrap_err();
+        let e = check_limits(&ShellEnv::default(), &p, Duration::from_secs(10)).unwrap_err();
         assert_eq!(e.rule, Rule::Setup);
         assert!(e.message.contains("no session"), "{}", e.message);
     }
@@ -911,7 +924,13 @@ mod name_and_pull_tests {
             "if [ \"$1\" = image ]; then exit 1; fi\nexec sleep 30",
         );
         let t = Instant::now();
-        let e = ensure_image(&p, "r@sha256:0", Duration::from_millis(300)).unwrap_err();
+        let e = ensure_image(
+            &ShellEnv::default(),
+            &p,
+            "r@sha256:0",
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
         assert!(e.message.contains("longer than"), "{}", e.message);
         assert!(t.elapsed() < Duration::from_secs(10));
     }
@@ -928,7 +947,7 @@ mod name_and_pull_tests {
             ),
         );
         let running = ["live".to_string()].into_iter().collect();
-        assert_eq!(remove_leftovers(&p, &running), 1);
+        assert_eq!(remove_leftovers(&ShellEnv::default(), &p, &running), 1);
         let said = std::fs::read_to_string(&log).unwrap();
         assert!(said.contains("rm -f drgnx-job-dead"), "{said}");
         assert!(!said.contains("rm -f drgnx-job-live") && !said.contains("rm -f other"));

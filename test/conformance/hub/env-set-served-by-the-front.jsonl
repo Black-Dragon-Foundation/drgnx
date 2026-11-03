@@ -1,0 +1,7 @@
+{"scenario": "hub/env-set-served-by-the-front", "requires": ["v1"], "doc": "env/set is the front's own method (the registry says front): a hub with no backend answers it itself, and a value that is not a list of absolute directories is refused for PATH before it is applied."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "env/set", "params": {"env": [{"name": "DRGNX_ROW_PROBE", "value": "1"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": ["DRGNX_ROW_PROBE"]}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "env/set", "params": {"env": [{"name": "PATH", "value": "bin"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "env[0].value"}}}

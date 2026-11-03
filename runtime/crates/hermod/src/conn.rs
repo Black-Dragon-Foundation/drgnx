@@ -174,7 +174,13 @@ impl Conn {
             "clientInfo": {"name": "hermod", "version": env!("CARGO_PKG_VERSION")},
         });
         let r: acp::InitializeResponse = self.typed("initialize", params).await?;
+        let (name, version) = match r.agent_info {
+            Some(i) => (Some(i.name), Some(i.version)),
+            None => (None, None),
+        };
         Ok(AgentInfo {
+            name,
+            version,
             caps: r.agent_capabilities,
             meta: r.meta.map(Value::Object),
             auth: r.auth_methods,

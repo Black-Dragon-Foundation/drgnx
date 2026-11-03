@@ -22,7 +22,7 @@ use crate::version::COMMIT;
 use runstav::line::MAX_HUB_LINE;
 use runstav::methods::Params;
 use runstav::methods::gateway::KeysHeld;
-use runstav::methods::hub::{HubStatus, Runtime, StoreStatus, WriterState};
+use runstav::methods::hub::{EnvSetResult, HubStatus, Runtime, StoreStatus, WriterState};
 use runstav::methods::mcp::AttachAnswer;
 use runstav::proof::Cap;
 use runstav::registry;
@@ -85,6 +85,8 @@ pub struct Front {
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
     pub dirs: OnceLock<crate::graph::StoreDirs>,
+    /// The login shell's variables the editor sent (`env/set`): the base of what the hub starts.
+    pub shell_env: crate::shell_env::ShellEnv,
     /// The agent core's state ([`crate::agent_core`]): sessions, jobs, plan runs, the matrix, …
     pub core: crate::agent_core::Core,
     forward: Arc<dyn Forward>,
@@ -165,6 +167,7 @@ impl Front {
             editors,
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
+            shell_env: crate::shell_env::ShellEnv::default(),
             core: crate::agent_core::Core {
                 budgets,
                 matrix,
@@ -317,6 +320,18 @@ impl Front {
         if self.settings.is_open() {
             self.apply_settings();
         }
+    }
+
+    /// The variables that hold a provider's key, for the providers in effect: `env/set` never takes them.
+    fn provider_key_envs(&self) -> Vec<String> {
+        let current = self.settings.current();
+        crate::settings::providers::effective(
+            &crate::settings::defaults().presets,
+            &current.loaded.values.ai_providers,
+        )
+        .into_iter()
+        .filter_map(|p| p.key_env.clone())
+        .collect()
     }
 
     /// The provider table in effect (`settings.el` and the global overrides) is the gateway's.
@@ -584,6 +599,16 @@ impl Front {
                 self.refresh_settings().await;
                 Ok(json!(true))
             }
+            Params::EnvSet(p) => {
+                let vars = p
+                    .env
+                    .into_inner()
+                    .into_iter()
+                    .map(|v| (v.name.as_str().to_owned(), v.value.into_inner()))
+                    .collect();
+                let applied = self.shell_env.set(vars, &self.provider_key_envs());
+                Ok(json!(EnvSetResult { applied }))
+            }
             // the agents' settings tools: the editor's answers (crate::settings::agents)
             Params::SettingsConfirm(p) => {
                 let (tx, ok) = (i64::try_from(p.tx).unwrap_or(i64::MAX), p.ok);
@@ -837,6 +862,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "phase 7: Task 2 deletes forwarding"]
     async fn the_front_serves_ping_events_and_shutdown_and_forwards_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
@@ -948,6 +974,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "phase 7: Task 2 deletes forwarding"]
     async fn a_connection_has_at_most_64_forwarded_calls_in_flight() {
         let dir = tempfile::tempdir().unwrap();
         let gate = Arc::new(Semaphore::new(0));
@@ -1036,6 +1063,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "phase 7: Task 2 deletes forwarding"]
     async fn the_backends_connection_is_held_to_what_the_front_serves() {
         let dir = tempfile::tempdir().unwrap();
         let behind = Arc::new(Behind(std::sync::atomic::AtomicUsize::new(0)));

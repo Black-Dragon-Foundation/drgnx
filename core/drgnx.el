@@ -164,6 +164,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (drgnx-notice-echo-mode 1)                     ; failures and new things waiting on you, in the echo area
         (drgnx-session-setup)                         ; keep running or quit; the close button
         (drgnx-shell-env-start)                        ; the login shell's PATH, asynchronously
+        (add-hook 'drgnx-hub-connected-functions #'drgnx-shell-env--resend)   ; and again to every hub that connects
         (drgnx-notice-mode-line-mode 1)                ; the needs-you and problems counts in the mode line
         (drgnx-notice-save-mode 1)                     ; this Emacs's notices in its session file, for the doctor
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome

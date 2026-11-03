@@ -309,8 +309,25 @@ pub struct EnvSetParams {
 /// The variables whose value is a `:`-separated list of directories.
 pub const DIR_LISTS: [&str; 3] = ["PATH", "MANPATH", "INFOPATH"];
 
+/// Whether NAME is never taken from a login shell: uppercased it contains `KEY`, `TOKEN`, `SECRET`, `PASSWORD`,
+/// `PASSPHRASE` or `CREDENTIAL` (keys come from the keyring).  A provider's own key variable is refused too; the
+/// hub knows those from its settings.
+pub fn refused_env_name(name: &str) -> bool {
+    let up = name.to_uppercase();
+    [
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSPHRASE",
+        "CREDENTIAL",
+    ]
+    .iter()
+    .any(|w| up.contains(w))
+}
+
 /// `PATH`, `MANPATH` and `INFOPATH` must be `:`-separated absolute directories (SB-T12-7): no empty, relative, `~`
-/// or remote entry.  Whether each exists is the backend's check.
+/// or remote entry.
 fn check_env(p: &EnvSetParams) -> Result<(), Error> {
     for (i, var) in p.env.iter().enumerate() {
         if DIR_LISTS.contains(&var.name.as_str())
@@ -379,8 +396,8 @@ pub(crate) fn methods() -> Vec<Method> {
         ),
         method!(
             "env/set", EnvSet(EnvSetParams) -> EnvSetResult,
-            classes: [User], writes: false,
-            doc: "the user's login-shell variables the hub allows, for the agents and jobs it starts next",
+            classes: [User], writes: false, home: Front,
+            doc: "the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
             check: check_env,
         ),
     ]

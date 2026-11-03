@@ -43,6 +43,11 @@ one that fails or asks is recorded as a notice, and the next still runs.")
   "Called when this Emacs's event connection to the hub closes (the hub ended, or `drgnx-hub-disconnect'); each
 inside the guard, as `drgnx-hub-event-functions'.")
 
+(defvar drgnx-hub-connected-functions nil
+  "Called, with no arguments, each time this Emacs's subscription to a hub that proved itself is up (the first time,
+and again after a hub restart); each inside the guard, as `drgnx-hub-event-functions'.  For what the hub keeps in memory
+only and must be told again, such as the login shell's variables.")
+
 (defvar drgnx-hub--event-conn nil
   "The connection whose event `drgnx-hub-event-functions' run for, while they run (else nil): a handler that acts
 only for a hub that proved itself checks its `:drgnx-proven'.")
@@ -1146,7 +1151,9 @@ before them."
     (drgnx-hub--resubscribe-stop)
     (drgnx-hub--presence-start)
     (drgnx-notice-clear 'hub 'resubscribe-gave-up)
-    (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--hand-over))))
+    (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--hand-over))
+    (when (process-get conn :drgnx-proven)
+      (drgnx-guard-run-hook 'drgnx-hub-connected-functions))))
 
 ;;;; The away signal (agent system part 1, Task 13)
 ;; The editor tells the hub when you are away (`presence/set'), so the matrix's time presets follow.  Never from an

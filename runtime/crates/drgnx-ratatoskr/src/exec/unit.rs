@@ -65,7 +65,12 @@ pub fn unit_name(id: &str) -> String {
 
 /// Wrap INNER (the starter's launch, or the bare command) in the logging shell and, with `unit`, in a transient scope
 /// with `MemoryMax=MEMORY`.  The child leads a session of its own either way.
-pub fn wrap(inner: Spec, dir: &Path, unit: Option<(&str, &str)>) -> Spec {
+pub fn wrap(
+    inner: Spec,
+    dir: &Path,
+    unit: Option<(&str, &str)>,
+    shell: &crate::shell_env::ShellEnv,
+) -> Spec {
     let mut args: Vec<OsString> = Vec::new();
     let program = match unit {
         Some((name, memory)) => {
@@ -102,7 +107,7 @@ pub fn wrap(inner: Spec, dir: &Path, unit: Option<(&str, &str)>) -> Spec {
             "HOME",
         ] {
             if !env.iter().any(|(n, _)| n == k)
-                && let Some(v) = std::env::var_os(k)
+                && let Some(v) = shell.var_os(k)
             {
                 env.push((k.into(), v));
             }
@@ -151,11 +156,17 @@ mod tests {
 
     #[test]
     fn the_wrapper_keeps_the_command_and_names_the_scope() {
-        let s = wrap(bare(&["a"]), Path::new("/d"), None);
+        let shell = crate::shell_env::ShellEnv::default();
+        let s = wrap(bare(&["a"]), Path::new("/d"), None, &shell);
         assert_eq!(s.program, PathBuf::from("sh"));
         assert!(s.new_session);
         assert_eq!(s.args.last().unwrap(), "a");
-        let s = wrap(bare(&["a"]), Path::new("/d"), Some(("drgnx-exec-x", "4G")));
+        let s = wrap(
+            bare(&["a"]),
+            Path::new("/d"),
+            Some(("drgnx-exec-x", "4G")),
+            &shell,
+        );
         assert_eq!(s.program, PathBuf::from("systemd-run"));
         let args: Vec<_> = s.args.iter().map(|a| a.to_string_lossy()).collect();
         assert!(args.contains(&"MemoryMax=4G".into()));

@@ -1,0 +1,7 @@
+{"scenario": "agents/probe-times-out", "requires": ["v1", "test-hooks"], "doc": "An agent that starts but never answers initialize: agents/probe answers ok false with why naming the wait, after wait_s seconds, and ends the agent."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mute\" :command (\"/bin/sh\" \"-c\" \"sleep 60\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/probe", "params": {"profile": "mute", "wait_s": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"ok": false, "why": "did not answer within 1 seconds"}}, "within_ms": 30000}

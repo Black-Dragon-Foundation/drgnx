@@ -1,0 +1,13 @@
+{"scenario": "agents/probe-answers", "requires": ["v1", "test-hooks"], "doc": "agents/probe starts the profile's agent (a mock ACP agent), asks it initialize and answers ok with the name and version the agent gave; no session is made."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/probe", "params": {"profile": "mock-claude"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"ok": true, "agent": {"name": "ratatoskr-mock-claude", "version": "0.1.0"}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": []}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/probe", "params": {"profile": "no-such-profile"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "profile"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/probe", "params": {"profile": "mock-claude", "wait_s": 61}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "path": "wait_s"}}}

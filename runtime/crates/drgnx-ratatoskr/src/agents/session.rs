@@ -643,9 +643,9 @@ pub(crate) fn find_profile(front: &Front, name: &str) -> Option<AgentProfile> {
 }
 
 /// A launch ready to spawn: the process, the sandbox helper's status pipe, and whether the lock is enforced.
-struct Prepared {
-    spec: draugr::Spec,
-    status: Option<std::os::fd::OwnedFd>,
+pub(super) struct Prepared {
+    pub(super) spec: draugr::Spec,
+    pub(super) status: Option<std::os::fd::OwnedFd>,
     plan: plock::LaunchPlan,
     enforced: bool,
     enforced_why: Option<String>,
@@ -678,6 +678,7 @@ fn step_provider(profile: &AgentProfile) -> Option<String> {
 /// through `launch::spawn` and Gleipnir.
 #[cfg(any(test, feature = "test-hooks"))]
 fn spawn_spec(
+    shell: &crate::shell_env::ShellEnv,
     p: &AgentProfile,
     plan: &plock::LaunchPlan,
     _: &Path,
@@ -707,7 +708,7 @@ fn spawn_spec(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_os_str()))
         .collect();
-    let env = draugr::env::build(&["PATH", "HOME", "LANG", "TMPDIR"], &[], &set);
+    let env = shell.build(&["PATH", "HOME", "LANG", "TMPDIR"], &[], &set);
     let spec = draugr::Spec {
         program: PathBuf::from(prog),
         args: args.to_vec(),
@@ -724,6 +725,7 @@ fn spawn_spec(
 /// (`launch::scratch_dir`) is the plain one.  The network is the provider's alone: `Open` is never granted here.
 #[cfg(not(any(test, feature = "test-hooks")))]
 fn spawn_spec(
+    shell: &crate::shell_env::ShellEnv,
     _: &AgentProfile,
     plan: &plock::LaunchPlan,
     scratch: &Path,
@@ -738,10 +740,12 @@ fn spawn_spec(
     ),
     Error,
 > {
+    let env = shell.paths_env();
     let launched = if cwd == scratch {
-        launch::spawn_plain(plan, sid)
+        launch::spawn_plain(&env, plan, sid)
     } else {
         launch::spawn(
+            &env,
             plan,
             &launch::SandboxReq {
                 sid: sid.to_string(),
@@ -758,7 +762,7 @@ fn spawn_spec(
 
 /// Everything before the process: the matrix's cells, the provider's lock plan, the refusal of a lock that is not
 /// enforced for a worker or a manager under any preset but the autonomous one, and the spawn spec.
-async fn prepare(
+pub(super) async fn prepare(
     front: &Front,
     profile: &AgentProfile,
     role: Role,
@@ -823,7 +827,8 @@ async fn prepare(
         )));
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
-    let (spec, status, unsandboxed) = spawn_spec(profile, &plan, &scratch, cwd, sid, role)?;
+    let (spec, status, unsandboxed) =
+        spawn_spec(&front.shell_env, profile, &plan, &scratch, cwd, sid, role)?;
     Ok(Prepared {
         spec,
         status,

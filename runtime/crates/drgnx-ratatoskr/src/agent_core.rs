@@ -8,6 +8,7 @@
 //! | `agents/{list,start,get,stop,kill,permission,do}` | [`crate::agents::session`] | 8a |
 //! | `agents/send` | [`crate::agents::session`] | 8b |
 //! | `agents/move` | [`crate::agents::session`] | 26 |
+//! | `agents/probe` | [`crate::agents::probe`] | P7 |
 //! | `messages/retract` | [`crate::agents::deliver`] | 24 |
 //! | `agents/role`, `agents/slice` | [`crate::manager`] | 25 |
 //! | `exec/*` | [`crate::exec`] | 11 |
@@ -66,6 +67,7 @@ pub async fn serve(
         Params::AgentsPermission(p) => answer(agents::session::permission(f, c, p).await),
         Params::AgentsDo(p) => answer(agents::session::do_op(f, c, p).await),
         Params::AgentsMove(p) => answer(agents::session::move_to(f, c, p).await),
+        Params::AgentsProbe(p) => answer(agents::probe::probe(f, c, p).await),
         Params::MessagesRetract(p) => answer(agents::deliver::retract(f, c, p).await),
         Params::AgentsRole(p) => answer(manager::role(f, c, p).await),
         Params::AgentsSlice(p) => answer(manager::slice(f, c, p).await),

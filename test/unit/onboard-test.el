@@ -744,8 +744,11 @@ Returns (RESULT PROMPTS)."
 ;;;; Step 6: Claude Code — installed with permission, its own login, the agent checked
 
 (require 'drgnx-jobs)
-(require 'drgnx-acp)
 (require 'drgnx-agents)
+
+(defvar drgnx-onboard-test--probe '(:ok t :agent (:name "mock-claude" :version "0.1.0"))
+  "What the hub stub answers to `agents/probe' (the plist the hub's result decodes to).")
+(defvar drgnx-onboard-test--hub-calls nil "The calls the hub stub took, newest first: (METHOD PARAMS TIMEOUT).")
 
 (defun drgnx-onboard-test--script (file text)
   (make-directory (file-name-directory file) t)
@@ -763,11 +766,13 @@ Returns (RESULT PROMPTS)."
 is installed — `brew install --cask claude-code', `curl … | bash' (the Linux installer: a fake script), `brew install
 node' and `npm install -g PKG' put the fakes in TPL into BIN (`npm … --prefix P' into P/bin).  `claude auth status'
 says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no auth); `claude' alone waits.
-`claude-agent-acp' is the mock ACP agent (FAKE_ACP: a script for it).  Every call is logged to CALLS."
+`claude-agent-acp' is a program that is there (the hub starts the agent: `drgnx-hub-call-sync' answers
+`drgnx-onboard-test--probe', and the calls are in `drgnx-onboard-test--hub-calls').  Every call is logged to CALLS."
   (declare (indent 1))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-claude" t)))
           (bin (concat root "bin/")) (tpl (concat root "tpl/")) (home (concat root "home/")) (calls (concat root "calls"))
-          (real-path (getenv "PATH"))
+          (drgnx-onboard-test--probe '(:ok t :agent (:name "mock-claude" :version "0.1.0")))
+          (drgnx-onboard-test--hub-calls nil)
           ;; the ones this system has (macOS: no setsid; detached jobs use perl there)
           (basics (delq nil (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mkdir" "sleep" "setsid" "perl" "date"))))
           (log-line (lambda (name) (format "printf '%%s\\n' \"%s $*\" >> %s\n" name calls)))
@@ -791,11 +796,7 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
                     " *) exec sleep 30;;\nesac\n"))
            (drgnx-onboard-test--script
             (concat tpl "claude-agent-acp")
-            (format "if [ -n \"$FAKE_ACP\" ]; then eval \"$FAKE_ACP\"; fi\nPATH=%s; exec sh %s %s --batch -Q -l %s\n"
-                    (shell-quote-argument real-path)     ; the emacs launcher script needs the real one
-                    (shell-quote-argument (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir))
-                    (shell-quote-argument (expand-file-name invocation-name invocation-directory))
-                    (shell-quote-argument (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
+            "exit 0\n")
            (drgnx-onboard-test--script (concat tpl "node") "exit 0\n")
            (drgnx-onboard-test--script
             (concat bin "brew")
@@ -819,6 +820,10 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
            (drgnx-onboard-test--script (concat bin "dnf") "exit 0\n")
            ;; the agent defaults are asked after a good check (their own tests below turn the question back on)
            (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform))
+                     ((symbol-function 'drgnx-hub-call-sync)
+                      (lambda (method params &optional timeout)
+                        (push (list method params timeout) drgnx-onboard-test--hub-calls)
+                        drgnx-onboard-test--probe))
                      ((symbol-function 'drgnx-onboard--agents-offers) #'ignore))
              ,@body))
        (drgnx-test-runtime-settings--forget)
@@ -978,22 +983,41 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   (drgnx-onboard-test--claude 'macos
     (drgnx-onboard-test--installed
      (write-region "" nil (concat home ".logged-in"))
-     ;; the mock agent answers initialize: ok (without interaction too), and nothing is left running
+     ;; the hub says the agent answered: ok (without interaction too)
      (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
        (should (equal r (list 'ok (cadr r))))
-       (should (string-match-p "claude profile answered" (cadr r))))
-     (should-not (seq-find (lambda (p) (string-prefix-p "drgnx-acp" (process-name p))) (process-list)))
-     ;; an agent that dies at once: a failure that says why
-     (let* ((process-environment (cons "FAKE_ACP=echo 'cannot find module' >&2; exit 1" process-environment))
+       (should (string-match-p "claude profile answered (mock-claude 0.1.0)" (cadr r))))
+     ;; an agent that died at once: a failure that says why, with the last line of its stderr
+     (let* ((drgnx-onboard-test--probe '(:ok :false :why "ended before it answered (exit 1)" :stderr_tail "npm warn\ncannot find module"))
             (r (drgnx-onboard--agents-step '(:interactive nil))))
        (should (eq (car r) 'fail))
+       (should (string-match-p "ended before it answered (exit 1): cannot find module" (cadr r)))
        (should (string-match-p "claude-agent-acp" (cadr r))))
      ;; one that never answers: after the wait
-     (let* ((process-environment (cons "FAKE_ACP=exec sleep 30" process-environment))
+     (let* ((drgnx-onboard-test--probe '(:ok :false :why "did not answer within 1 seconds"))
             (drgnx-onboard-agent-wait 1)
             (r (drgnx-onboard--agents-step '(:interactive nil))))
        (should (eq (car r) 'fail))
-       (should (string-match-p "did not answer within 1 second" (cadr r)))))))
+       (should (string-match-p "did not answer within 1 seconds" (cadr r))))
+     ;; the hub itself does not answer: a failure too, never an error out of the step
+     (cl-letf (((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (error "The drgnx hub did not answer agents/probe"))))
+       (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+         (should (eq (car r) 'fail))
+         (should (string-match-p "hub could not check" (cadr r))))))))
+
+(ert-deftest drgnx-onboard/claude-profile-asks-the-hub ()
+  :tags '(:cond)
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (write-region "" nil (concat home ".logged-in"))
+     ;; the editor starts no agent process of its own (drgnx-agents still loads the ACP client until it goes)
+     (cl-letf (((symbol-function 'drgnx-acp-start) (lambda (&rest _) (error "the editor started an agent"))))
+       (should (equal (drgnx-onboard--claude-profile) '(t . "the claude profile answered (mock-claude 0.1.0)"))))
+     ;; one call: `agents/probe' for the claude profile, with the step's wait, and the call's own a few seconds longer
+     (should (equal drgnx-onboard-test--hub-calls
+                    (list (list "agents/probe" (list :profile "claude" :wait_s drgnx-onboard-agent-wait)
+                                (+ drgnx-onboard-agent-wait 5)))))
+     (should-not (seq-find (lambda (p) (string-prefix-p "drgnx-acp" (process-name p))) (process-list))))))
 
 (ert-deftest drgnx-onboard/an-npm-failure-says-how-to-retry ()
   :tags '(:cond)

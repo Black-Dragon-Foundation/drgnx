@@ -158,9 +158,9 @@ Return on its row in the Welcome (that is Done — it runs the step again) and i
 drgnx could not tell still checks the agent; the result says the login was not verified. It never fails the step on
 that alone.
 
-**The check.** With Claude Code logged in, it starts the `claude` profile's program (`claude-agent-acp`, or what
-your `drgnx-agents-profiles` says), sends the ACP `initialize` request, waits up to ten seconds for the answer and stops it
-again — `ok` when it answers; otherwise the step fails, saying whether the program ended at once (with the end of
+**The check.** With Claude Code logged in, it asks the hub to start the `claude` profile's program (`claude-agent-acp`,
+or what your `drgnx-agents-profiles` says) the way a session would be started, send the ACP `initialize` request, wait
+up to ten seconds for the answer and stop it again ([Checking an agent](agents.md#checking-an-agent)); drgnx itself starts no agent. `ok` when it answers; otherwise the step fails, saying whether the program ended at once (with the end of
 its error output) or did not answer. Then Agents: New Agent Session… starts it in the agent panel
 ([agents.md](agents.md)). The adapter is not pinned: npm installs the latest version. When the adapter that answered
 is the deprecated `@zed-industries/claude-agent-acp`, which earlier drgnx versions installed, or

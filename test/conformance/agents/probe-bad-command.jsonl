@@ -1,0 +1,9 @@
+{"scenario": "agents/probe-bad-command", "requires": ["v1", "test-hooks"], "doc": "A profile whose program is missing, and one that exits at once with a message on stderr: agents/probe answers ok false (never an error), the second with its exit status and the end of its stderr."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"missing\" :command (\"/no/such/agent-program\")) (\"dies\" :command (\"/bin/sh\" \"-c\" \"echo agent-says-no >&2; exit 7\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/probe", "params": {"profile": "missing"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"ok": false, "why": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/probe", "params": {"profile": "dies"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"ok": false, "why": "ended before it answered (exit 7)", "stderr_tail": "agent-says-no"}}, "within_ms": 30000}
