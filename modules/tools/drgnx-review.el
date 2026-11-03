@@ -4,9 +4,8 @@
 
 ;;; Commentary:
 ;; Review Branch asks an agent — the `review' route's profile, the one jobs use (docs/guide/jobs.md) — to review
-;; this branch's changes against its base (origin/HEAD, main or master) before you push.  It works under the job
-;; reviewer's policy: it may read, search and run read-only git; it never writes (anything else is asked of you,
-;; as for any agent).  It answers one line per problem, FINDING: path:line: severity: what and why, and a verdict;
+;; this branch's changes against its base (origin/HEAD, main or master) before you push.  Its permission requests
+;; go through the hub's agent matrix, as for any agent: what that does not allow is asked of you.  It answers one line per problem, FINDING: path:line: severity: what and why, and a verdict;
 ;; the panel's Review tab lists them, worst first — RET opens the line, Show Branch Diff the diff view.  The
 ;; session is an ordinary agent session: its transcript is in the agents view.  See docs/guide/git.md.
 
@@ -20,10 +19,8 @@
 
 (declare-function drgnx-diff-default-base "drgnx-diff")
 (declare-function drgnx-diff-show "drgnx-diff")
-(declare-function drgnx-job-route "drgnx-job")
+(declare-function drgnx-agents-route "drgnx-agents")
 (declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
-(declare-function drgnx-job-policy "drgnx-job")
-(declare-function drgnx-agents-start "drgnx-agents")
 (declare-function drgnx-agents-free-p "drgnx-agents")
 (declare-function drgnx-agents-deliver "drgnx-agents")
 (declare-function drgnx-agent-session-id "drgnx-agents")
@@ -36,7 +33,6 @@
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
-(defvar drgnx-agents-request-functions)
 (defvar drgnx-agents-changed-functions)
 
 (defface drgnx-review-critical '((t :inherit error)) "A critical finding." :group 'drgnx)
@@ -119,17 +115,6 @@ End with VERDICT: pass or VERDICT: fail." base))
         (plist-put run :state 'done)
         (when (fboundp 'drgnx-agents-kill) (drgnx-agents-kill s))   ; answered: no idle agent left (its transcript stays)
         (when (equal drgnx-review--current (drgnx-agent-session-id s)) (drgnx-review-refresh)))))))
-
-(defun drgnx-review--request (s method params _id)
-  "`drgnx-agents-request-functions': a review session's routine reads are allowed by the review policy; it never writes."
-  (when-let* ((run (gethash (drgnx-agent-session-id s) drgnx-review--runs)))
-    (pcase method
-      ("session/request_permission"
-       (require 'drgnx-job)
-       (when (eq (drgnx-job-policy "review" (plist-get params :toolCall) (plist-get run :root)) 'allow)
-         (let ((opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
-           (and opt (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId))))))))
-      ("fs/write_text_file" (list :error (list :code -32000 :message "a review only reads"))))))
 
 ;;;; The tab
 
@@ -261,9 +246,9 @@ master); its findings land in the Review tab."
          (base (or base (drgnx-diff-default-base root) (user-error "No base branch: set origin/HEAD or create main")))
          (count (drgnx-review--git root "rev-list" "--count" (format "%s..HEAD" base))))
     (when (member count '(nil "0")) (user-error "Nothing to review against %s" base))
-    (require 'drgnx-job)
+    (require 'drgnx-agents)
     (require 'drgnx-agents-mirror)
-    (let* ((s (drgnx-agents-mirror-start (car (drgnx-job-route 'review)) (file-name-as-directory root)))
+    (let* ((s (drgnx-agents-mirror-start (car (drgnx-agents-route 'review)) (file-name-as-directory root)))
            (sid (drgnx-agent-session-id s)))
       (puthash sid (list :root (file-name-as-directory root) :base base
                          :branch (or (drgnx-review--git root "rev-parse" "--abbrev-ref" "HEAD") "HEAD")
@@ -293,7 +278,6 @@ the runs are forgotten and the Review tab is closed."
                      :stage 'idle :requires '(tools/diff) :teardown #'drgnx-review--teardown
                      :setup
                      (lambda ()
-                       (add-hook 'drgnx-agents-request-functions #'drgnx-review--request)
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-review--changed)
                        (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'panel 'review :title "Review"))
                        (pcase-dolist (`(,id ,title ,fn ,doc)

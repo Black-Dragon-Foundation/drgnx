@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The client half of the hub (drgnx-hub.el serves): where the hub's socket is and whether it can be trusted, the
+;; The client of the hub (Ratatoskr serves): where the hub's socket is and whether it can be trusted, the
 ;; line protocol (one JSON object per line), protocol v1 (the hub's challenge, `hello' with the proofs both ways, the
 ;; skew rules), requests with deadlines and their answers, the event subscription, starting the hub as a durable job,
 ;; and `drgnx hub start|stop|status'.  It loads none of the hub's runtime (gateway, jobs, agents, coordination): an
@@ -31,7 +31,6 @@
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
 (declare-function drgnx-commands-get "drgnx-registry" (id))
-(defvar drgnx-hub--server)              ; drgnx-hub.el: this Emacs's hub socket, when it is the hub
 (defvar drgnx-hub--editor)              ; the editor token and the held keys: defined below, used by `drgnx-hub-disconnect'
 (defvar drgnx-hub--keys-held)
 
@@ -75,8 +74,8 @@ a hub whose hello says a schema from `drgnx-work-db-schema-version' to this one 
 
 (defvar drgnx-hub-client-proves t
   "Non-nil: this Emacs's hello proves it read the hub's cap file, which makes its connections user class.  nil: the
-hello carries no proof and the cap is never read, so the connections stay service class.  `drgnx-coord-mcp-main'
-binds it to nil: a coordination server an agent started must never become user class by reading the cap.")
+hello carries no proof and the cap is never read, so the connections stay service class.  A client an agent
+started binds it to nil: it must never become user class by reading the cap.")
 
 (defvar drgnx-hub-skew-functions nil
   "Abnormal hook: (SKEW REPLY) after each hub's answer to this Emacs's hello — REPLY its plist, or `:legacy' for a hub
@@ -409,13 +408,6 @@ path: a filter, a timer) never waits: the cached value, or nil while the read it
 
 ;;;; Connections: the challenge, hello, the queue, deadlines
 
-(defun drgnx-hub--serving-here-p (socket)
-  "Whether this Emacs itself serves SOCKET (`drgnx-hub--server' live on that path: the Lisp hub's own tests, where
-keys never leave the process).  Such a hub sends no challenge and is proven without a hello."
-  (let ((server (bound-and-true-p drgnx-hub--server)))
-    (and (processp server) (process-live-p server)
-         (equal (expand-file-name (process-contact server :service)) (expand-file-name socket)))))
-
 (defun drgnx-hub--client-filter (conn chunk)
   "A client connection's filter: the challenge starts the hello, an answer settles its call, an event (on the
 subscribed connection) goes to `drgnx-hub-event-functions'."
@@ -523,21 +515,18 @@ forgotten and the subscription is redialled with a backoff (`drgnx-hub--resubscr
 
 (defun drgnx-hub--open (events)
   "A new connection to the hub (`drgnx-hub--connect-socket'); EVENTS non-nil: the subscribed connection.  Calls on it
-wait in its queue until it is proven or `legacy' (`drgnx-hub--hello'); on a socket this Emacs serves it is proven at
-once.  Otherwise a `ping' goes at once: a hub of before protocol 1 answers it, where Ratatoskr's challenge always
-comes first, so such a hub is not waited for.  None of the two within `drgnx-hub--challenge-wait' closes the
-connection (`drgnx-hub--challenge-late'): only the probe's answer makes a hub `legacy'."
-  (let* ((socket (drgnx-hub-socket)) (c (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
+wait in its queue until it is proven or `legacy' (`drgnx-hub--hello').  A `ping' goes at once: a hub of before
+protocol 1 answers it, where Ratatoskr's challenge always comes first, so such a hub is not waited for.  None of the
+two within `drgnx-hub--challenge-wait' closes the connection (`drgnx-hub--challenge-late'): only the probe's answer
+makes a hub `legacy'."
+  (let ((c (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
     (process-put c :drgnx-events events)
     (set-process-sentinel c (drgnx-guard-wrap #'drgnx-hub--client-sentinel "hub connection"))
-    (if (drgnx-hub--serving-here-p socket)
-        (progn (process-put c :drgnx-state 'ready)
-               (process-put c :drgnx-proven t))
-      (process-put c :drgnx-state 'wait)
-      (drgnx-hub-client-binary-version t)       ; read now, never waiting: for this hello and the skew
-      (drgnx-timer-start (cons 'hub-challenge c) drgnx-hub--challenge-wait #'drgnx-hub--challenge-late :args (list c) :owner :core)
-      (drgnx-hub--call-on c "ping" nil (lambda (_r err) (unless err (drgnx-hub--legacy-now c)))
-                          :deadline drgnx-hub--challenge-wait :first t))
+    (process-put c :drgnx-state 'wait)
+    (drgnx-hub-client-binary-version t)         ; read now, never waiting: for this hello and the skew
+    (drgnx-timer-start (cons 'hub-challenge c) drgnx-hub--challenge-wait #'drgnx-hub--challenge-late :args (list c) :owner :core)
+    (drgnx-hub--call-on c "ping" nil (lambda (_r err) (unless err (drgnx-hub--legacy-now c)))
+                        :deadline drgnx-hub--challenge-wait :first t)
     c))
 
 (defun drgnx-hub--challenge-late (conn)
@@ -684,137 +673,6 @@ error, or when it does not answer."
           (error (error "drgnx hub: %s" error))
           (t result))))
 
-;;;; The backend's calls to the front
-
-(define-error 'drgnx-hub-front-error "drgnx hub: a call to the front failed")
-
-(defvar drgnx-hub--behind-front nil
-  "Non-nil in the Lisp backend behind Ratatoskr (`drgnx-hub-main' with a serve socket): only there does
-`drgnx-hub-call-front' wait for the front.")
-
-(defvar drgnx-hub--front-conn nil
-  "The Lisp backend's one connection to the front, proven as user class (`drgnx-hub-call-front'); never the
-editor's `drgnx-hub--client', never subscribed.")
-
-(defvar drgnx-hub--front-waiting nil
-  "Non-nil while a call to the front waits: a second one (from a filter, a sentinel or a handler) is refused.")
-
-(defvar drgnx-hub-front-deadline 10 "Seconds a call to the front may take, by default (`drgnx-hub-call-front').")
-
-(defun drgnx-hub--front-now () "The real clock: a test's virtual one never moves a front call's deadline."
-       (float-time (time-convert nil t)))
-
-(defun drgnx-hub--front-fail (message &optional code path)
-  "Signal `drgnx-hub-front-error' with (:code CODE :message MESSAGE :path PATH); CODE nil is this side's failure."
-  (signal 'drgnx-hub-front-error (list :code code :message message :path path)))
-
-(defun drgnx-hub--front-filter (conn chunk)
-  "The front connection CONN's filter: its answers and its challenge go to CONN's inbox, in order.  It never subscribes,
-so nothing else should come; any other event is dropped."
-  (drgnx-hub--lines conn chunk
-                    (lambda (json)
-                      (when (or (plist-get json :id) (equal (plist-get json :event) "challenge"))
-                        (process-put conn :front-inbox (nconc (process-get conn :front-inbox) (list json)))))))
-
-(defun drgnx-hub--front-take (conn pred deadline)
-  "The first line in CONN's inbox that PRED accepts, taken out of it, waiting until DEADLINE (`drgnx-hub--front-now')
-for it: nil when none came by then or CONN closed.  It waits with JUST-THIS-ONE an integer: no other process's output
-is read and no timer runs meanwhile (src/process.c), so nothing re-enters the backend while it waits.  Each wait
-is 50 ms at most and never past DEADLINE."
-  (let (found left)
-    (while (and (not (setq found (cl-find-if pred (process-get conn :front-inbox))))
-                (process-live-p conn) (> (setq left (- deadline (drgnx-hub--front-now))) 0))
-      (accept-process-output conn (min 0.05 left) nil 1))
-    (when found (process-put conn :front-inbox (delq found (process-get conn :front-inbox))))
-    found))
-
-(defun drgnx-hub--front-exchange (conn method params deadline)
-  "Send METHOD with PARAMS on CONN and wait for its answer until DEADLINE: its result, decoded (`drgnx-hub--lines':
-objects as plists, arrays as lists, false and null as nil).  The front's error is signalled with its code and path."
-  (let ((id (cl-incf drgnx-hub--next-id)))
-    (drgnx-hub--send conn (list :id id :method method :params (or params (make-hash-table))))
-    (let ((answer (drgnx-hub--front-take conn (lambda (j) (eql (plist-get j :id) id)) deadline)))
-      (cond ((and (null answer) (process-live-p conn))
-             (drgnx-hub--front-fail (format "the drgnx hub did not answer %s in time" method)))
-            ((null answer) (drgnx-hub--front-fail "the drgnx hub's connection closed"))
-            ((plist-get answer :error)
-             (let ((e (plist-get answer :error)))
-               (drgnx-hub--front-fail (or (plist-get e :message) "the drgnx hub refused the call")
-                                      (plist-get e :code) (plist-get e :path))))
-            (t (plist-get answer :result))))))
-
-(defun drgnx-hub--front-open (deadline)
-  "A new connection to the front (`drgnx-hub-socket', never one not private to this user), proven by DEADLINE: the
-front's challenge, then a hello with the cap's proof (user class), then the front's proof checked.  Signals
-`drgnx-hub-front-error' when it cannot connect or the front does not prove itself; nothing is left open then."
-  (let* ((socket (drgnx-hub-socket))
-         (why (drgnx-hub--untrusted socket))
-         (conn (if why (drgnx-hub--front-fail (format "not connecting to the drgnx hub: %s" why))
-                 (condition-case err
-                     (make-network-process :name "drgnx-hub-front" :family 'local :service socket :noquery t
-                                           :coding 'utf-8-unix :sentinel #'ignore
-                                           :filter (drgnx-guard-wrap #'drgnx-hub--front-filter "hub front connection"))
-                   (error (drgnx-hub--front-fail (format "cannot connect to the drgnx hub at %s: %s" socket
-                                                         (error-message-string err))))))))
-    (condition-case err
-        (let* ((challenge (drgnx-hub--front-take conn (lambda (j) (equal (plist-get j :event) "challenge")) deadline))
-               (hub-nonce (plist-get (plist-get challenge :data) :nonce))
-               (cap (drgnx-hub--read-cap))
-               (nonce (drgnx-hub--nonce)))
-          (unless (stringp hub-nonce) (drgnx-hub--front-fail (format "the drgnx hub at %s sent no challenge" socket)))
-          (unless (stringp cap)
-            (drgnx-hub--front-fail (format "cannot read the hub's cap %s (%s)" (drgnx-hub-cap-file) (plist-get cap :problem))))
-          (let ((reply (drgnx-hub--front-exchange
-                        conn "hello" (list :proto drgnx-hub-proto :nonce nonce :schema drgnx-work-db-schema-version
-                                           :records drgnx-hub-records :client "backend"
-                                           :proof (drgnx-hub-hmac cap (format "drgnx-hub client %s %s" hub-nonce nonce)))
-                        deadline)))
-            (unless (drgnx-hub--same-p (plist-get reply :proof) (drgnx-hub-hmac cap (format "drgnx-hub hub %s %s" nonce hub-nonce)))
-              (drgnx-hub--front-fail (format "the drgnx hub at %s did not prove it read %s" socket (drgnx-hub-cap-file)))))
-          conn)
-      (error (delete-process conn) (signal (car err) (cdr err))))))
-
-(defun drgnx-hub-call-front (method params &optional deadline)
-  "Call METHOD with PARAMS (a plist) on the front and wait for it: the decoded result.  Only the Lisp backend behind
-Ratatoskr calls it (`drgnx-hub--behind-front'), for what the front serves (its coordination writes); an editor uses
-the asynchronous `drgnx-hub-call'.  On failure it signals `drgnx-hub-front-error' with (:code :message :path) — CODE
-the front's, or nil for this side's — once: it never retries.
-- One connection, `drgnx-hub--front-conn', proven once (`drgnx-hub--front-open'); it never subscribes, so only answers
-  arrive on it, and no key ever goes on it: `gateway/keys' is refused, and so is a `gateway/register' with `:keys'
-  (the backend registers its agents with the keys the front holds).
-- It waits with (accept-process-output CONN 0.05 nil 1) until the answer or DEADLINE (`drgnx-hub-front-deadline')
-  seconds: the integer JUST-THIS-ONE reads no other process's output and runs no timer meanwhile.  The front never
-  waits on the backend while it serves such a call (the seam rule), so this cannot deadlock.
-- A second call while one waits is refused at once, with nothing sent (it would read the same connection's lines).
-- A connection that closed, did not prove itself or passed a deadline is dropped: the next call connects again.
-Each call's time is logged."
-  (cond ((not drgnx-hub--behind-front)
-         (drgnx-hub--front-fail "only the Lisp backend calls the front and waits"))
-        (drgnx-hub--front-waiting (drgnx-hub--front-fail "a front call is already waiting"))
-        ((member method '("gateway/keys" "subscribe"))
-         (drgnx-hub--front-fail (format "the backend's front connection never carries %s" method)))
-        ((and (equal method "gateway/register") (plist-get params :keys))
-         (drgnx-hub--front-fail "the backend's front connection never carries gateway/register with keys")))
-  (let* ((drgnx-hub--front-waiting t)
-         (t0 (drgnx-hub--front-now))
-         (limit (+ t0 (or deadline drgnx-hub-front-deadline)))
-         (ok nil))
-    (unwind-protect
-        (condition-case err
-            (progn
-              (unless (process-live-p drgnx-hub--front-conn)
-                (setq drgnx-hub--front-conn nil)
-                (setq drgnx-hub--front-conn (drgnx-hub--front-open limit)))
-              (prog1 (drgnx-hub--front-exchange drgnx-hub--front-conn method params limit) (setq ok t)))
-          (drgnx-hub-front-error
-           ;; the front's own refusal leaves the connection as it is; anything else drops it
-           (unless (plist-get (cdr err) :code)
-             (when (process-live-p drgnx-hub--front-conn) (delete-process drgnx-hub--front-conn))
-             (setq drgnx-hub--front-conn nil))
-           (signal (car err) (cdr err))))
-      (message "drgnx hub: front call %s: %d ms%s" method (round (* 1000 (- (drgnx-hub--front-now) t0)))
-               (if ok "" " (failed)")))))
-
 ;;;; MCP sessions: the socket an agent's bridge connects to
 
 (defun drgnx-hub--mcp-answer (result)
@@ -836,8 +694,7 @@ agent socket made the directory already; JOB, TASK, CWD as the session has them.
 \(grants by `profile:NAME' name it; see `drgnx-hub-profile-id'); TOOLS: the profile's tool sets, `(:tracker t)' or
 `(:tracker :false)' (agents.eld's `:tracker-tools'), absent when the profile says nothing — the hub resolves the task's
 own setting against it.
-- In the Lisp backend behind Ratatoskr it calls the front (`drgnx-hub-call-front') and waits.
-- In an editor, from a command, it waits at most 2 s (`drgnx-hub-call-sync').
+- From a command, it waits at most 2 s (`drgnx-hub-call-sync').
 - In a daemon path (`inhibit-interaction') it never waits: it asks with `drgnx-hub-call' and returns nil, and
   CALLBACK is called later with (ANSWER ERROR) — ANSWER the plist above, or nil with ERROR a message.
 Signals \"Ratatoskr is not built: run `drgnx runtime build'\" when there is no binary."
@@ -848,9 +705,7 @@ Signals \"Ratatoskr is not built: run `drgnx runtime build'\" when there is no b
                         (list :owner (emacs-pid))
                         (and profile (list :profile (drgnx-hub-profile-id profile)))
                         (and tools (list :tools tools)))))
-    (cond (drgnx-hub--behind-front
-           (drgnx-hub--mcp-answer (drgnx-hub-call-front "mcp/session" params)))
-          (inhibit-interaction
+    (cond (inhibit-interaction
            (unless callback (error "A daemon path asks for an MCP session with a callback"))
            (drgnx-hub-call "mcp/session" params
                            (lambda (result err)
@@ -864,9 +719,7 @@ Signals \"Ratatoskr is not built: run `drgnx runtime build'\" when there is no b
   "Tell the hub session SID's agent is gone (`mcp/session-close'); never waits and never signals: the hub also
 closes it when this Emacs dies."
   (ignore-errors
-    (if drgnx-hub--behind-front
-        (drgnx-hub-call-front "mcp/session-close" (list :sid sid))
-      (drgnx-hub-call "mcp/session-close" (list :sid sid) #'ignore))))
+    (drgnx-hub-call "mcp/session-close" (list :sid sid) #'ignore)))
 
 (defun drgnx-hub-disconnect ()
   "Close this Emacs's connections to the hub; the calls waiting on them fail (once)."
@@ -955,11 +808,9 @@ each start and each (re)connect.  The call's id."
 
 (defun drgnx-hub--drop-keys (keys)
   "The hub took KEYS (:PROVIDER KEY…) over a connection that proved itself (`gateway/keys', or `gateway/register'
-with them, answered): this Emacs keeps none of them (`drgnx-ai-forget-keys').  Not in an Emacs that serves the hub
-itself (the standalone Lisp hub): there the key table is the hub's own."
-  (unless (process-live-p (bound-and-true-p drgnx-hub--server))
-    (require 'drgnx-ai)
-    (drgnx-ai-forget-keys keys)))
+with them, answered): this Emacs keeps none of them (`drgnx-ai-forget-keys')."
+  (require 'drgnx-ai)
+  (drgnx-ai-forget-keys keys))
 
 (defun drgnx-hub-hand-over-keys ()
   "Hand the hub the keys this Emacs holds now, without waiting (AI: Load Keys): to the hub this Emacs is subscribed to

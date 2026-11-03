@@ -13,15 +13,6 @@
 (require 'ert)
 (require 'drgnx-test-env (expand-file-name "drgnx-test-env" (file-name-directory (or load-file-name buffer-file-name))))
 
-;; The unit suite sets up coordination data itself: its Emacs writes work.db's coordination tables (the editor's
-;; default, `refuse', is for real editors; core/drgnx-coord.el).  Set before or after drgnx-coord.el loads alike.  A
-;; test of an editor's writes binds `refuse' itself.  In gate mode (DRGNX_WORK_DB_GATE=1, test/support/work-db-gate.el)
-;; the default stays `refuse': a test that writes binds `local' itself (`drgnx-work-db-writer-deftest', the fixture), or
-;; fails there.
-(defvar drgnx-coord-writer)
-(unless (equal (getenv "DRGNX_WORK_DB_GATE") "1")
-  (setq drgnx-coord-writer 'local))
-
 (defun drgnx-run-ert-drain-events ()
   "Handle the events queued for a command loop batch Emacs does not have (file-notify events from a test's
 watches): while one waits in the input queue, Emacs runs no process sentinel — later tests would never hear

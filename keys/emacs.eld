@@ -22,7 +22,6 @@
         (agents-stop "C-c C-c" :map drgnx-agents-transcript-mode-map)
         (agents-deliver "C-c C-d" :map drgnx-agents-transcript-mode-map)
         (agents-edit-queued :none "the [×] buttons in a transcript; the palette")
-        (agents-take-over :none "the Agents tab and transcripts; the palette")
         (agents-answer :none "the Agents tab and transcripts; the palette")
         (records-review-proposal :none "the notice of a plan file's hand edit; the palette")
         (records-accept-proposal :none "C-c C-a in the proposal's diff buffer; the palette")

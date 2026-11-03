@@ -15,12 +15,10 @@
 (require 'drgnx-work-db)
 (require 'drgnx-hub-client)
 
-(defvar drgnx-coord-writer)
-(defvar drgnx-work-db-gate-hub-standin nil
-  "Non-nil while the fixture, the hub's stand-in, opens work.db for writing: the one-writer gate lets that through.")
+(defvar drgnx-coord-writer)             ; core/drgnx-coord.el, until the Lisp writers are deleted
 
 (defmacro drgnx-work-fixture-as-hub (&rest body)
-  "BODY as the hub's stand-in: in the `local' writer mode, past the one-writer gate (test/support/work-db-gate.el).
+  "BODY as the hub's stand-in: `drgnx-work-db' opens read-write, past the one-writer gate (test/support/work-db-gate.el).
 For a test's own seeding (the rows the hub would write) only: the code under test never runs inside it."
   (declare (indent 0))
   `(let ((drgnx-coord-writer 'local) (drgnx-work-db-gate-hub-standin t)) ,@body))

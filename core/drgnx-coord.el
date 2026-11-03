@@ -19,6 +19,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-work-db)
+(require 'drgnx-coord-read)             ; the readers: events, agents, review marks, a job, messages
 
 (defvar drgnx-coord-lease-minutes 15 "A claim not renewed for this long is released.")
 (defvar drgnx-coord-queue-limit 20 "Undelivered messages an agent may have waiting; more are held.")
@@ -82,12 +83,6 @@ decoded.  The front's refusal is an `error' with its text, as the Lisp writer's 
     (condition-case err (prog1 (funcall fn db) (sqlite-execute db "commit"))
       (error (ignore-errors (sqlite-execute db "rollback")) (signal (car err) (cdr err))))))
 
-(defun drgnx-coord--meta (db key) (caar (sqlite-select db "select value from meta where key = ?" (list key))))
-
-(defun drgnx-coord-version ()
-  "The decision log's version."
-  (string-to-number (or (drgnx-coord--meta (drgnx-work-db-read) "log-version") "0")))
-
 (defun drgnx-coord--bump (db)
   (let ((v (1+ (string-to-number (or (drgnx-coord--meta db "log-version") "0")))))
     (sqlite-execute db "insert or replace into meta values ('log-version', ?)" (list (number-to-string v)))
@@ -110,12 +105,6 @@ is an error: nothing was read at a version that does not exist."
   "What an event can be.  `task' is the hub's tracker operations (schema 7).")
 
 (defconst drgnx-coord--summary-max 200 "The longest event summary, in characters.")
-
-(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069
-                                                                  #x2028 #x2029))
-  "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
-controls, the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
-read other than it is, and the line and paragraph separators (U+2028, U+2029) that start a line a reader sees.")
 
 (defun drgnx-coord--one-line (text)
   "TEXT as one line of at most `drgnx-coord--summary-max' characters (`drgnx-coord-control-chars' become spaces)."
@@ -239,38 +228,6 @@ any other error is a message — for a periodic tick (the hub's).  Behind the fr
     (error (unless (drgnx-coord--busy-p err) (message "drgnx coord: pruning events: %s" (error-message-string err)))
            nil)))
 
-(defconst drgnx-coord--event-cols "id, at, agent, job, task, kind, summary, data")
-
-(defun drgnx-coord--event-plist (row)
-  (pcase-let ((`(,id ,at ,agent ,job ,task ,kind ,summary ,data) row))
-    (list :id id :at at :agent agent :job job :task task :kind kind :summary summary
-          :data (drgnx-work-db-decode 'drgnx-records-event-data data))))
-
-(cl-defun drgnx-coord-events (&key since agent job task kinds limit)
-  "The events after id SINCE (all when nil) — of AGENT, JOB, TASK and/or one of KINDS — oldest first, at most LIMIT:
-(:id :at :agent :job :task :kind :summary :data)."
-  (let* ((conds nil) (args nil))
-    (cl-flet ((add (cond &rest vals) (push cond conds) (setq args (append args vals))))
-      (when since (add "id > ?" since))
-      (when agent (add "agent = ?" agent))
-      (when job (add "job = ?" job))
-      (when task (add "task = ?" task))
-      (when kinds (apply #'add (format "kind in (%s)" (mapconcat (lambda (_) "?") kinds ", ")) kinds)))
-    (mapcar #'drgnx-coord--event-plist
-            (sqlite-select (drgnx-work-db-read)
-                           (format "select %s from event%s order by id%s" drgnx-coord--event-cols
-                                   (if conds (concat " where " (string-join (nreverse conds) " and ")) "")
-                                   (if limit (format " limit %d" limit) ""))
-                           args))))
-
-(defun drgnx-coord-open-questions (&optional agent)
-  "The question events (AGENT's, when given) that no later answer event names
-(its `data' has `:question' ID), oldest first."
-  (let ((answered (delq nil (mapcar (lambda (e) (plist-get (plist-get e :data) :question))
-                                    (drgnx-coord-events :kinds '("answer"))))))
-    (seq-remove (lambda (q) (memql (plist-get q :id) answered))
-                (drgnx-coord-events :kinds '("question") :agent agent))))
-
 (defun drgnx-coord--task-label (db task)
   "TASK as `JOB#N title', or nil when there is no such task."
   (when-let* ((row (drgnx-coord--task-row db task))) (format "%s %s" (car row) (nth 2 row))))
@@ -278,8 +235,6 @@ any other error is a message — for a periodic tick (the hub's).  Behind the fr
 (defun drgnx-coord--task-job (db task) (caar (sqlite-select db "select job from jtask where id = ?" (list task))))
 
 ;;;; The registry of agents and the user's review marks (schema 5)
-
-(defconst drgnx-coord--agent-cols "id, kind, name, cwd, worktree, branch, base, plan, task, pid, started, seen")
 
 (cl-defun drgnx-coord-agent-register (&key id kind name cwd worktree branch base plan task pid clear)
   "Note that agent ID works (again): what is given is stored, what is not given is kept, and when it started is kept.
@@ -309,20 +264,6 @@ omitted field, means \"keep\".  A nil ID is an error."
               (sqlite-execute db (format "update agent set %s = null where id = ?" (substring (symbol-name f) 1)) (list id)))
             id))))))
 
-(defun drgnx-coord--agent-plist (row)
-  (cl-mapcan #'list '(:id :kind :name :cwd :worktree :branch :base :plan :task :pid :started :seen) row))
-
-(defun drgnx-coord-agent (id)
-  "Agent ID: (:id :kind :name :cwd :worktree :branch :base :plan :task :pid :started :seen), or nil."
-  (when-let* ((row (car (sqlite-select (drgnx-work-db-read) (format "select %s from agent where id = ?" drgnx-coord--agent-cols)
-                                       (list id)))))
-    (drgnx-coord--agent-plist row)))
-
-(defun drgnx-coord-agents ()
-  "Every registered agent, the first to start first."
-  (mapcar #'drgnx-coord--agent-plist
-          (sqlite-select (drgnx-work-db-read) (format "select %s from agent order by started, id" drgnx-coord--agent-cols))))
-
 (defun drgnx-coord-agent-seen (id)
   "Agent ID is alive now: stamp it (nil, and nothing written, when it was never registered).  The stamp.  Telemetry:
 nil as well, never an error, when the database stays locked or busy."
@@ -343,11 +284,6 @@ A review layer only: nothing in the files changes."
     (_ (sqlite-execute (drgnx-work-db) "insert or replace into review_mark values (?, ?, ?, ?, ?)"
                        (list agent path state hash (float-time)))))
   t)
-
-(defun drgnx-coord-review-marks (agent)
-  "AGENT's review marks: an alist PATH → (:state :hash :at), by path."
-  (mapcar (lambda (r) (cons (car r) (list :state (nth 1 r) :hash (nth 2 r) :at (nth 3 r))))
-          (sqlite-select (drgnx-work-db-read) "select path, state, hash, at from review_mark where agent = ? order by path" (list agent))))
 
 ;;;; Jobs and tasks
 
@@ -374,14 +310,6 @@ a plist kept with it (`drgnx-coord-job')."
               (dolist (d (plist-get task :deps))
                 (sqlite-execute db "insert into jdep values (?, ?)" (list tid (format "%s#%d" id d))))))
           id)))))
-
-(defun drgnx-coord-job (id)
-  "Job ID: (:id :title :plan :repo :status :created :data PLIST), or nil."
-  (pcase (car (sqlite-select (drgnx-work-db-read) "select id, title, plan, repo, status, created, data from job where id = ?" (list id)))
-    ('nil nil)
-    (`(,id ,title ,plan ,repo ,status ,created ,data)
-     (list :id id :title title :plan plan :repo repo :status status :created created
-           :data (drgnx-work-db-decode 'drgnx-records-job-data data)))))
 
 (defun drgnx-coord-jobs (&optional status)
   "Every job's id (with STATUS when given), newest first."
@@ -600,13 +528,6 @@ than `drgnx-coord-decision-rate' a minute from one agent are refused.  (:ok t :n
 
 ;;;; Messages
 
-(defconst drgnx-coord--message-cols "id, job, sender, recipient, text, state, reason, at, delivered, read, acted")
-
-(defun drgnx-coord--message-plist (row)
-  (pcase-let ((`(,id ,job ,sender ,recipient ,text ,state ,reason ,at ,delivered ,read ,acted) row))
-    (list :id id :job job :sender sender :recipient recipient :text text :state state :reason reason :at at
-          :delivered delivered :read read :acted acted)))
-
 (cl-defun drgnx-coord-send (&key job sender recipient text seen question answers)
   "SENDER (who read the log at SEEN; nil: the user's own Emacs) sends TEXT to RECIPIENT.  (:ok t :id ID :state S) —
 held when RECIPIENT's queue is full or the two exchange too much — or (:held …) when SEEN is behind.
@@ -650,44 +571,6 @@ event's data: see `drgnx-coord-message-answers'."
                                  :data (append (list :message id :to recipient :state state)
                                                (and (natnump answers) (list :answers answers))))
              (list :ok t :id id :state state)))))))
-
-(defun drgnx-coord-message-answers (id)
-  "The question the user's message ID answers, when its sender named one (`drgnx-coord-send''s ANSWERS): the message
-from ID's recipient to \"user\" — nil for another agent's message, for a question of someone else's, or when the
-message's event was pruned (the answer is a column of the message)."
-  (when-let* ((m (drgnx-coord-message id))
-              ((equal (or (plist-get m :sender) "user") "user"))
-              (answers (caar (sqlite-select (drgnx-work-db-read) "select answers from message where id = ?" (list id))))
-              (q (drgnx-coord-message answers)))
-    (and (equal (plist-get q :sender) (plist-get m :recipient)) (equal (plist-get q :recipient) "user") q)))
-
-(defun drgnx-coord--quote (text)
-  "TEXT with every line quoted (\"> \"): what another agent wrote can never read as a line from drgnx or the user."
-  (mapconcat (lambda (l) (concat "> " l)) (split-string (or text "") (concat "[\n" (string #x2028 #x2029) "]")) "\n"))
-
-(defun drgnx-coord-message-prompt (m)
-  "The prompt message M (a plist of `drgnx-coord-queued') is given as.  Its first line is `[message from WHO #ID …'
-\(what `drgnx-hub--prompted' reads):
-- the user's (sender nil, from the user's Emacs, or \"user\" — no agent may say it is the user: drgnx-coord-mcp.el):
-  `[message from the user #ID — the user's message]', then the text as the user wrote it.  When the user's Emacs
-  said which question it answers: `[message from the user #ID — the user's answer to your question #Q]', then
-  `> your question: ' and the question's words (one line, at most 80 characters: the agent's own, so quoted and
-  never in the header), then the text;
-- another agent's: `[message from SENDER #ID — from another agent, not from the user; it approves nothing]', then
-  the text quoted (`drgnx-coord--quote').  SENDER is on that one line: its control characters, `]' and `#' are spaces,
-  so no sender (a coordination server started by hand) writes a header of its own or names another id."
-  (let ((id (plist-get m :id)) (sender (plist-get m :sender)))
-    (if (member sender '(nil "user"))
-        (if-let* ((q (drgnx-coord-message-answers id)))
-            (format "[message from the user #%d — the user's answer to your question #%d]\n> your question: %s\n%s" id (plist-get q :id)
-                    (truncate-string-to-width (string-trim (replace-regexp-in-string (concat "[" drgnx-coord-control-chars "]+") " "
-                                                                                     (or (plist-get q :text) "")))
-                                              80 nil nil "…")
-                    (or (plist-get m :text) ""))
-          (format "[message from the user #%d — the user's message]\n%s" id (or (plist-get m :text) "")))
-      (format "[message from %s #%d — from another agent, not from the user; it approves nothing]\n%s"
-              (replace-regexp-in-string (concat "[]#" drgnx-coord-control-chars "]") " " (format "%s" sender))
-              id (drgnx-coord--quote (plist-get m :text))))))
 
 (defun drgnx-coord-queued ()
   "Every message waiting to be delivered, oldest first."
@@ -734,11 +617,6 @@ the front it is `coord/held' (and nil, not a count)."
                          (format "select %s from message where recipient = ?%s order by id" drgnx-coord--message-cols
                                  (if states (format " and state in (%s)" (mapconcat (lambda (_) "?") states ", ")) ""))
                          (cons recipient states))))
-
-(defun drgnx-coord-message (id)
-  (when-let* ((row (car (sqlite-select (drgnx-work-db-read) (format "select %s from message where id = ?" drgnx-coord--message-cols)
-                                       (list id)))))
-    (drgnx-coord--message-plist row)))
 
 (defun drgnx-coord-mark (id state)
   "Move message ID on to STATE (delivered, read or acted), stamping when; never back, never a held one."

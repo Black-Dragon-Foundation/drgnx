@@ -88,8 +88,7 @@ Agents: Send to Agent (RET in a transcript) sends; Stop Agent (`C-c C-c` in a tr
 running turn — it ends within a second, pending permission requests are answered "cancelled", pending edits
 rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
 removes one before it is sent). If the agent answers the cancel late, its last words are dropped and nothing new
-is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
-(the agent replays it), when the agent can load sessions (otherwise the new session ends and says why). The **context** column shows how full the agent's
+is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. The **context** column shows how full the agent's
 context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
 agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. The list updates in place: when an agent changes, or every 30
 seconds for the ages, only the lines that differ are rewritten, and each window (and the cursor) stays on its
@@ -356,7 +355,7 @@ task's folder, never links; any other is skipped. `CLAUDE.md`, skills and agent 
 load (which settings files Claude reads is left as it is: they are content, and the permission check bounds what they
 can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
 
-Your own sessions (New Agent Session…, Take Over) and agents other than Claude get none of this. Other agents
+Your own sessions (New Agent Session…) and agents other than Claude get none of this. Other agents
 (Gemini CLI, Codex) have no such switch yet, so a job runs only **job-safe** profiles (`drgnx-agents-job-safe-p`):
 those whose options say `:job-safe t` and that run Claude Code's adapter, so a job-safe profile always gets these
 options. drgnx's built-in profiles say so (their bare `claude-agent-acp` is the adapter drgnx chooses, a shim
@@ -716,7 +715,7 @@ condition clears. A silent session also gets a `stalled` step on the timeline.
   split / malformed / 1 MB lines, the agent exiting with its error output.
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
   cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
-  dying agent, Take Over, `/compact`; what waits on you as the `agents` set of the "needs you" count (a mirror's
+  dying agent, `/compact`; what waits on you as the `agents` set of the "needs you" count (a mirror's
   too, scoped by job, gone once answered or ended, and no allocation for a session that did not change).
 - `test/unit/agents-claude-options-test.el` — a job session's Claude cannot be pre-allowed
   ([above](#jobs-and-your-claude-settings)).

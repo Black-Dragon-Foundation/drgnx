@@ -227,7 +227,7 @@ parsed summary."
     (should (= (plist-get r :passed) 1))))
 
 (ert-deftest drgnx-run-ert/gate-mode-skips-only-tagged-tests ()
-  (let ((tests "(drgnx-work-db-writer-deftest gate-tagged () (should (eq drgnx-coord-writer 'local)))
+  (let ((tests "(drgnx-work-db-writer-deftest gate-tagged () (should drgnx-work-db-gate-hub-standin))
                 (ert-deftest gate-plain () (should t))"))
     (let ((r (drgnx-run-ert-test--gate-run tests "DRGNX_WORK_DB_GATE=1")))
       (should (equal (list (plist-get r :total) (plist-get r :passed)) '(1 1)))

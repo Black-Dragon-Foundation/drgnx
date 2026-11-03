@@ -9,6 +9,12 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 
 ## The store (`core/drgnx-coord.el`, `work.db` schema 6)
 
+What the editor reads of it lives in `core/drgnx-coord-read.el`, on `drgnx-work-db-read` (the read-only handle):
+`drgnx-coord-version`, `-events`, `-open-questions`, `-agent`, `-agents`, `-review-marks`, `-job`, `-message`,
+`-message-answers` and `-message-prompt` (with `drgnx-coord--event-cols`/`-event-plist` for the cockpit's own
+queries). The cockpit requires `drgnx-coord-read`, never `drgnx-coord`; the Lisp writers stay in `drgnx-coord.el`
+until the Lisp runtime is deleted, and `drgnx-coord.el` requires the readers.
+
 Schema 6 (Ratatoskr): every `data` column (`node`, `job`, `jtask`, `card`, `event`) is JSON text, checked by the
 database (`check (data is null or json_valid(data))`), written and read through the record schemas of
 `core/drgnx-records.el` (`drgnx-records-node-data`, `-job-data`, `-card-data`, `-event-data`). A nil value leaves its
@@ -252,9 +258,11 @@ The hub (Ratatoskr) makes work.db at schema 7, or migrates a schema-6 file, befo
 thread is the file's one writer. No Lisp opens it read-write outside the `local` mode:
 
 - `(drgnx-work-db)`, the read-write, migrating handle, signals `drgnx-work-db-not-the-writer` ("work.db is written by
-  the drgnx hub") unless `drgnx-coord-writer` is `local`, before it opens or makes anything. An editor and the CLI
-  (`refuse`) and the Lisp backend behind Ratatoskr (`front`) get the error, so a write that slipped past the writers'
-  `pcase` fails instead of taking the write lock (and, on schema 7, instead of migrating a newer file).
+  the drgnx hub") unless `drgnx-work-db-gate-hub-standin` is bound, which only a test's seeding does
+  (`drgnx-work-fixture-as-hub`, `test/fixtures/work-fixture.el`): it stands in for the hub, work.db's one writer.
+  The editor, the CLI and the test runner get the error, so a write that slipped past the writers' `pcase` fails
+  instead of taking the write lock (and, on schema 7, instead of migrating a newer file). There is no `local` mode of
+  the editor any more: `harness/run-ert.el` no longer sets `drgnx-coord-writer`.
 - Everything the Lisp backend reads goes through `(drgnx-work-db-read)`, which reads schema 7 through the compat
   views: the event log's last id at start and in the tick (`drgnx-hub-serve`, `drgnx-hub--events-check`), the
   events a client catches up on (`drgnx-hub--event-rows`), a task's job (`drgnx-job--job-of`), and a coordination
@@ -589,7 +597,8 @@ and data directories, not drgnx's own access rules.
 
 `drgnx-hub--deliver` runs on `coord/notify` and every 2 s:
 - a `queued` message stays in the store until its agent is **free** (idle, not paused by the user's Stop, nothing
-  queued: `drgnx-agents-free-p`), then goes to it as a new turn (`drgnx-agents-deliver`: never queued, steered or
+  queued: `drgnx-agents-free-p`, on the editor's mirror of the session), then goes to it as a new turn
+  (`drgnx-agents-deliver`, an `agents/send` through `drgnx-agents--remote`: never queued, steered or
   interrupting, whatever the profile's mode) and is `delivered`; when that prompt reaches the agent
   (`drgnx-agents-prompt-functions`) it is `read`. Meanwhile `read_inbox` finds it too (and then it is not delivered
   again). The prompt is `drgnx-coord-message-prompt`'s. Another agent's text is **quoted** under a header —
@@ -620,7 +629,7 @@ A peer message is text for the agent and nothing else: permission requests are a
 for an edit or a command (kinds `edit` `delete` `move` `execute`; reading — `read_decisions` included, which Claude
 Code asks for as an `other` tool — is never held) is checked against the log first (`drgnx-job--gate`): behind it — decisions of its job
 since its `seen` — the call is refused (its `reject_once` option) and, once per version, the changes go into the
-running turn (`drgnx-agents-steer`, the notice of delivery: `drgnx-coord-notice`) with "Your last tool call was
+running turn (`drgnx-agents-steer`, an `agents/send` the hub steers by the profile's mode; the notice of delivery: `drgnx-coord-notice`) with "Your last tool call was
 refused because you had not read these." Its next request after `read_decisions` goes by the policy again. An agent
 that can be steered is held this way (its snapshot says `:enforced t`); one that cannot gets the coordination-tool
 hold and turn-end delivery only (`:enforced nil`, which the job window shows). Reviewers are never gated (they read).

@@ -27,13 +27,39 @@
 (require 'drgnx-large-file)            ; `drgnx-large-file-p': a large file is read from disk
 (require 'drgnx-notice)                 ; what waits on you is the `agents' set of the "needs you" count
 
-(declare-function drgnx-gateway--restrictions-check "drgnx-gateway")
+(defun drgnx-agents--openrouter-check (raw)
+  "Signal a `user-error' naming the first part of RAW (an `:openrouter' value) that is not a restriction: RAW not a
+plist, a key other than :only :ignore :data-collection :zdr, a list of slugs that is not one, a :data-collection
+other than deny or allow, a :zdr other than t or false.  Empty values (nil, [], JSON false or null) are no
+restriction."
+  (unless (and (proper-list-p raw) (cl-evenp (length raw)))
+    (user-error "OpenRouter restrictions: :openrouter is %S, not a list of keys and values" raw))
+  (cl-loop for (key value) on raw by #'cddr
+           do (pcase key
+                ((or :only :ignore)
+                 (unless (and (or (listp value) (vectorp value))
+                              (cl-every (lambda (s) (and (stringp s) (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._/-]*\\'" s)))
+                                        (append value nil)))
+                   (user-error "OpenRouter restrictions: %s is %S, not a list of provider slugs (like (\"anthropic\"))"
+                               key value)))
+                (:data-collection
+                 (unless (member value '(nil :null deny allow "deny" "allow"))
+                   (user-error "OpenRouter restrictions: :data-collection is %S, not deny or allow" value)))
+                (:zdr
+                 (unless (memq value '(nil t :false :null))
+                   (user-error "OpenRouter restrictions: :zdr is %S, not t or nil" value)))
+                (_ (user-error "OpenRouter restrictions: %S is not one of :only :ignore :data-collection :zdr" key)))))
+
+(defun drgnx-agents--openrouter-slugs (value)
+  "The provider slugs in VALUE (a list or a vector): the strings that are plain slugs (letters, digits, . _ / -)."
+  (and (or (listp value) (vectorp value))
+       (cl-loop for s in (append value nil)
+                when (and (stringp s) (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._/-]*\\'" s)) collect s)))
 
 (defun drgnx-agents--openrouter-ok-p (value)
-  "Whether VALUE is an `:openrouter' restriction: t when `drgnx-gateway--restrictions-check' accepts it, else its
+  "Whether VALUE is an `:openrouter' restriction: t when `drgnx-agents--openrouter-check' accepts it, else its
 `user-error' (the schema reports its message, which names the offending key)."
-  (require 'drgnx-gateway)
-  (drgnx-gateway--restrictions-check value)
+  (drgnx-agents--openrouter-check value)
   t)
 
 (defconst drgnx-agents-config-schema
@@ -255,6 +281,12 @@ not installed (starting it says so) is left as it is."
   (let ((d (default-value 'drgnx-agents-default)))
     (if (and (stringp d) (member d (drgnx-agents-profile-names))) d "claude")))
 
+(defun drgnx-agents-route (role)
+  "ROLE's profiles from `drgnx-agents-routes', in order (the first is used; the rest are its fallbacks); claude when
+the setting names none for ROLE."
+  (let ((r (alist-get role (default-value 'drgnx-agents-routes))))
+    (cond ((null r) (list "claude")) ((listp r) r) (t (list r)))))
+
 (defun drgnx-agents-mcp-names ()
   "The MCP servers agents get, from `drgnx-agents-mcp' (`coordination', `search'): the coordination tools alone
 until it says otherwise."
@@ -268,7 +300,6 @@ once: only that entry changes, comments and the rest stay.  A settings.el with a
     (user-error "No agent setting %s" key))
   (drgnx-settings-defaults-save (intern (concat "drgnx-agents-" (substring (symbol-name key) 1))) value))
 
-(declare-function drgnx-gateway-restrictions "drgnx-gateway")
 (defvar drgnx-settings-apply-problems)
 
 (defun drgnx-agents-openrouter-restrictions ()
@@ -277,14 +308,24 @@ once: only that entry changes, comments and the rest stay.  A settings.el with a
 an entry of it that did not apply (a value that is not a restriction), is a `user-error' naming it: OpenRouter agents
 do not start until it is fixed, and a typo never turns a restriction off.  One setting for every OpenRouter route; it
 applies through the gateway only."
-  (require 'drgnx-gateway)
   (when-let* ((p (or (drgnx-config-problem 'settings)
                      (and (boundp 'drgnx-settings-apply-problems)
                           (seq-find (lambda (p) (eq (plist-get p :var) 'drgnx-agents-openrouter))
                                     drgnx-settings-apply-problems)))))
     (user-error "%s has a mistake (line %s: %s): OpenRouter agents do not start until it is fixed"
                 (abbreviate-file-name (or (plist-get p :file) "settings.el")) (plist-get p :line) (plist-get p :text)))
-  (drgnx-gateway-restrictions (default-value 'drgnx-agents-openrouter) t))
+  (let ((raw (default-value 'drgnx-agents-openrouter)))
+    (drgnx-agents--openrouter-check raw)
+    (when (proper-list-p raw)
+      (let ((only (drgnx-agents--openrouter-slugs (plist-get raw :only)))
+            (ignore (drgnx-agents--openrouter-slugs (plist-get raw :ignore)))
+            (dc (let ((v (plist-get raw :data-collection))) (if (stringp v) (intern v) v)))
+            (out nil))
+        (when (eq (plist-get raw :zdr) t) (setq out (list :zdr t)))
+        (when (memq dc '(deny allow)) (setq out (nconc (list :data-collection dc) out)))
+        (when ignore (setq out (nconc (list :ignore ignore) out)))
+        (when only (setq out (nconc (list :only only) out)))
+        out))))
 
 (defun drgnx-agents--openrouter-json (restrictions)
   "RESTRICTIONS as a hub call carries them (vectors for lists, a string for the symbol)."
@@ -583,6 +624,7 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
   (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
   (drgnx-agents--changed s))
 
+(declare-function drgnx-gateway-restrictions "drgnx-gateway")
 (declare-function drgnx-ai-agent-env "drgnx-ai")
 (declare-function drgnx-ai-check-agent-model "drgnx-ai")
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
@@ -1104,14 +1146,14 @@ hub resuming its sessions: messages and spend follow them)."
     s))
 
 (defun drgnx-agents-free-p (s)
-  "Can S take a new turn now (idle, not paused by a Stop, nothing queued)?"
-  (and (eq (drgnx-agent-session-status s) 'idle) (not (drgnx-agent-session-paused s)) (null (drgnx-agent-session-queue s))
-       (drgnx-agent-session-conn s) t))
+  "Can mirror S take a new turn now (idle, not paused by a Stop, nothing queued)?"
+  (and (drgnx-agent-session-remote s) (eq (drgnx-agent-session-status s) 'idle) (not (drgnx-agent-session-paused s))
+       (null (drgnx-agent-session-queue s)) t))
 
 (defun drgnx-agents-deliver (s text)
-  "Give TEXT to S as a new turn if it is free (`drgnx-agents-free-p'); t when it did.  Never queues, never steers,
-never interrupts, whatever S's mode — for drgnx's own deliveries (messages, decision notices)."
-  (when (drgnx-agents-free-p s) (drgnx-agents--prompt s text) t))
+  "Give TEXT to mirror S as a new turn (`agents/send') if it is free (`drgnx-agents-free-p'); t when it did.  Never
+queues, never steers, never interrupts, whatever S's mode — for drgnx's own deliveries."
+  (when (drgnx-agents-free-p s) (drgnx-agents--remote s "agents/send" (list :text text)) t))
 
 (defvar drgnx-agents-prompt-functions nil
   "Called with (SESSION TEXT) when TEXT goes to the agent as a prompt (the hub marks delivered messages read).")
@@ -1173,20 +1215,12 @@ turn Stop's deadline ended lets the held messages go."
 (defun drgnx-agents--enqueue (s text) (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text))))
 
 (defun drgnx-agents-steer (s text)
-  "Put TEXT into S's running turn when it can be steered (t); else queue it for the turn's end (nil).  A refused
-steer waits for the turn too."
-  (if (not (and (eq (drgnx-agent-session-status s) 'busy) (drgnx-agents--steerable-p s)))
-      (progn (drgnx-agents--enqueue s text) nil)
-    (let ((entry (list :type 'user :text text :steer t)))
-      (drgnx-agents--add s entry)
-      (drgnx-acp-request (drgnx-agent-session-conn s) "_session/steering"
-                         (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))
-                         (lambda (r)
-                           (when (cdr r)            ; refused: the message waits for the turn instead
-                             (setf (drgnx-agent-session-entries s) (delq entry (drgnx-agent-session-entries s)))
-                             (drgnx-agents--enqueue s text)
-                             (drgnx-agents--changed s))))
-      t)))
+  "Put TEXT into mirror S's running turn: `agents/send', and the hub steers when the profile's mode is `steer' and
+the agent can, else it queues TEXT for the turn's end.  t when S is busy under mode `steer' (the hub is asked to
+steer), else nil."
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/send" (list :text text))
+    (and (eq (drgnx-agent-session-status s) 'busy) (eq (drgnx-agent-session-mode s) 'steer))))
 
 (cl-defun drgnx-agents-send (s text)
   "Send TEXT to session S: now when ready; when busy, queued (default), steering the turn (mode

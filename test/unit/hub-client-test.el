@@ -379,40 +379,6 @@ without the binary."
           (should-not (eq drgnx-hub--last-hello :legacy))
           (should-not (member "agents/list" (drgnx-fake-hub-methods hub))))))))
 
-;;;; This Emacs's own hub
-
-(defmacro drgnx-hub-client-test--in-process (&rest body)
-  "BODY with this Emacs serving the hub (the Lisp backend's tests: keys never leave the process)."
-  (declare (indent 0))
-  `(drgnx-hub-client-test--with
-     (let ((drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil) (drgnx-work-db--handles nil)
-           (drgnx-gateway--keys (make-hash-table :test #'eq)) (drgnx-gateway--registrations (make-hash-table :test #'equal))
-           (drgnx-hub--exit-function #'drgnx-hub-stop))
-       (unwind-protect (progn (drgnx-hub-serve (drgnx-hub-socket)) ,@body)
-         (drgnx-hub-disconnect)
-         (drgnx-hub-stop)
-         (drgnx-work-db-close-all)))))
-
-(ert-deftest drgnx-hub-client/a-hub-in-this-emacs-counts-as-proven ()
-  (drgnx-hub-client-test--in-process
-    (should (eq (drgnx-hub-call-sync "gateway/keys" (list :keys (list :openrouter "sk-here")) 5) t))
-    (should (equal (gethash 'openrouter drgnx-gateway--keys) "sk-here"))
-    (should (process-get drgnx-hub--client :drgnx-proven))
-    (should-not drgnx-hub--last-hello)))
-
-(defvar drgnx-hub-client-test--timers nil "The keys `drgnx-timer-start' was given.")
-(defun drgnx-hub-client-test--note-timer (key &rest _) (push key drgnx-hub-client-test--timers))
-
-(ert-deftest drgnx-hub-client/an-in-process-hub-is-not-waited-for ()
-  ;; review I13: an in-process Lisp hub never sends a challenge, so the client does not wait for one
-  (drgnx-hub-client-test--in-process
-    (let ((drgnx-hub-client-test--timers nil))
-      (advice-add 'drgnx-timer-start :before #'drgnx-hub-client-test--note-timer)
-      (unwind-protect (should (natnump (plist-get (drgnx-hub-call-sync "ping" nil 5) :pid)))
-        (advice-remove 'drgnx-timer-start #'drgnx-hub-client-test--note-timer))
-      ;; no challenge timer was started: nothing waited for one
-      (should-not (seq-find (lambda (k) (and (consp k) (eq (car k) 'hub-challenge))) drgnx-hub-client-test--timers)))))
-
 ;;;; Skew
 
 (ert-deftest drgnx-hub-client/skew-rules ()
@@ -443,7 +409,7 @@ without the binary."
   (let (sent)
     (cl-letf (((symbol-function 'drgnx-hub-client-binary) (lambda () "ratatoskr"))
               ((symbol-function 'drgnx-hub-call-sync) (lambda (m p &optional _) (setq sent (cons m p)) (list :sid "s1" :socket "/x"))))
-      (let ((drgnx-hub--behind-front nil) (inhibit-interaction nil))
+      (let ((inhibit-interaction nil))
         (should (equal (drgnx-hub-mcp-session "a" :profile "claude (OpenRouter)") '(:sid "s1" :socket "/x")))
         (should (equal (plist-get (cdr sent) :profile) "claude-OpenRouter"))
         (should-not (plist-member (cdr sent) :tools))))))
@@ -452,7 +418,7 @@ without the binary."
   (let (sent)
     (cl-letf (((symbol-function 'drgnx-hub-client-binary) (lambda () "ratatoskr"))
               ((symbol-function 'drgnx-hub-call-sync) (lambda (m p &optional _) (setq sent (cons m p)) (list :sid "s1" :socket "/x"))))
-      (let ((drgnx-hub--behind-front nil) (inhibit-interaction nil))
+      (let ((inhibit-interaction nil))
         (drgnx-hub-mcp-session "a" :profile "p" :tools '(:tracker :false))
         (should (equal (plist-get (cdr sent) :tools) '(:tracker :false)))
         (should (equal (json-serialize (drgnx-hub--jsonable (plist-get (cdr sent) :tools))) "{\"tracker\":false}"))))))

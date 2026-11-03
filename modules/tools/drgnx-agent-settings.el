@@ -18,6 +18,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'button)
+(require 'drgnx-paths)                   ; `drgnx-data-dir'
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-agent-config)
@@ -28,7 +29,6 @@
 (require 'drgnx-agent-check)
 
 (declare-function drgnx-wb-place "drgnx-rules")
-(declare-function drgnx-coord-mcp-outside-spec "drgnx-coord-mcp")
 (declare-function drgnx-agents-profile "drgnx-agents")
 (declare-function drgnx-agent-session-p "drgnx-agents")
 (declare-function drgnx-agent-session-profile "drgnx-agents")
@@ -258,7 +258,20 @@
             "\n")))
 
 (defconst drgnx-agent-settings--report-name "drgnx"
-  "The name of the MCP server that makes an agent report to drgnx (`drgnx-coord-mcp-outside-spec').")
+  "The name of the MCP server that makes an agent report to drgnx (`drgnx-agent-settings--outside-spec').")
+
+(defun drgnx-agent-settings--valid-kind (kind)
+  "KIND (a string or symbol) as a string when it is a short lower-case name, else an error."
+  (let ((k (format "%s" kind)) (case-fold-search nil))
+    (if (string-match-p "\\`[a-z0-9][a-z0-9_-]\\{0,31\\}\\'" k) k
+      (error "An agent kind is a short lower-case name (claude, codex, zed…), not %S" k))))
+
+(defun drgnx-agent-settings--outside-spec (kind)
+  "The MCP server item an agent outside drgnx of KIND (claude, codex, …) is given — what the agent settings pages
+write into its config: Ratatoskr's `mcp-bridge --outside --kind KIND', at the installed path (<data>/bin/ratatoskr,
+stable across updates), which connects to the hub as a service and is ext:KIND:PID-HASH there."
+  (list :type 'stdio :command (expand-file-name "bin/ratatoskr" (drgnx-data-dir))
+        :args (list "mcp-bridge" "--outside" "--kind" (drgnx-agent-settings--valid-kind kind))))
 
 (defun drgnx-agent-settings--reporting-item ()
   "The MCP server called `drgnx-agent-settings--report-name' on this page (in any scope), or nil."
@@ -964,13 +977,12 @@ in the Work cockpit.  Asks first, names the file, and writes no token or key (th
                                      (drgnx-agent-config-title kind)
                                      (abbreviate-file-name (or (plist-get on :file) "its file"))))
             (drgnx-agent-settings--write 'remove (drgnx-agent-settings--fresh on) (plist-get on :from))))
-      (require 'drgnx-coord-mcp)
       (let ((file (nth 2 (assq 'user (drgnx-agent-config-scopes kind 'mcp drgnx-agent-settings--root)))))
         (when (yes-or-no-p (format "Let %s report to drgnx (add the drgnx MCP server to %s)? "
                                    (drgnx-agent-config-title kind) (abbreviate-file-name (or file "its user settings"))))
           (drgnx-agent-settings--write
            'add (list :kind kind :section 'mcp :name drgnx-agent-settings--report-name :from 'user :enabled t
-                      :spec (drgnx-coord-mcp-outside-spec kind))
+                      :spec (drgnx-agent-settings--outside-spec kind))
            'user))))))
 
 (defun drgnx-agent-settings--ask-slugs (prompt current)

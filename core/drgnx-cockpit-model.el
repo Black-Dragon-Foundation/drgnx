@@ -19,7 +19,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-file)                   ; `drgnx-file-truename': an agent's names, with no file name handler
 (require 'drgnx-work-db)
-(require 'drgnx-coord)
+(require 'drgnx-coord-read)
 
 (defgroup drgnx-cockpit nil
   "The Work cockpit: the Work graph, each agent's edits, what happened, questions and the timeline."

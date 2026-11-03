@@ -3,7 +3,7 @@
 ;; In gate mode (DRGNX_WORK_DB_GATE=1, test/support/work-db-gate.el) opening work.db read-write signals, and the
 ;; tests tagged `:work-db-writer' are left out.  The tag is for tests of the `local' writer mode of Lisp that a plan
 ;; replaces with Rust: it may be used only in the test files listed here, and the test's body must bind
-;; `drgnx-coord-writer' to `local' (`drgnx-work-db-writer-deftest' does).  So the tag cannot hide an editor writer or
+;; `drgnx-work-db-gate-hub-standin' (`drgnx-work-db-writer-deftest' does).  So the tag cannot hide an editor writer or
 ;; a backend reader: those run in gate mode.  Phase 7 deletes the tagged tests and this list.
 (require 'ert)
 (require 'cl-lib)
@@ -36,9 +36,9 @@
         ((consp tree) (or (drgnx-lint-work-db--mentions-p (car tree) thing) (drgnx-lint-work-db--mentions-p (cdr tree) thing)))))
 
 (defun drgnx-lint-work-db--binds-local-p (tree)
-  "Whether TREE holds a binding `(drgnx-coord-writer (quote local))' (a `let' of `local')."
+  "Whether TREE holds a binding `(drgnx-work-db-gate-hub-standin t)' (a `let' of the hub's stand-in)."
   (cond ((not (consp tree)) nil)
-        ((and (eq (car tree) 'drgnx-coord-writer) (equal (cadr tree) '(quote local))) t)
+        ((and (eq (car tree) 'drgnx-work-db-gate-hub-standin) (equal (cadr tree) t)) t)
         (t (or (drgnx-lint-work-db--binds-local-p (car tree)) (drgnx-lint-work-db--binds-local-p (cdr tree))))))
 
 (defun drgnx-lint-work-db--tags-name-p (rest)
@@ -57,14 +57,14 @@ names `:work-db-writer'.  The value is `macro' or `tag'."
 
 (defun drgnx-lint-work-db--problems (forms file)
   "The problems of the test FILE (a base name) whose top-level FORMS are given: each tagged test outside the list,
-and each one that does not bind `drgnx-coord-writer' to `local'."
+and each one that does not bind `drgnx-work-db-gate-hub-standin' to t."
   (let (problems)
     (dolist (form forms)
       (when-let* ((how (drgnx-lint-work-db--tagged-p form)))
         (unless (member file drgnx-lint-work-db--files)
           (push (format "%s: %s carries :work-db-writer, but %s is not a Rust-bound test file" file (cadr form) file) problems))
         (when (and (eq how 'tag) (not (drgnx-lint-work-db--binds-local-p (cdddr form))))
-          (push (format "%s: %s carries :work-db-writer but does not bind drgnx-coord-writer to local" file (cadr form)) problems))))
+          (push (format "%s: %s carries :work-db-writer but does not bind drgnx-work-db-gate-hub-standin" file (cadr form)) problems))))
     (nreverse problems)))
 
 (ert-deftest drgnx-lint/work-db-writer-tags-only-in-local-mode ()
@@ -82,7 +82,7 @@ and each one that does not bind `drgnx-coord-writer' to `local'."
     (should (drgnx-lint-work-db--problems
              '((ert-deftest a/reads () :tags '(:work-db-writer) (should (drgnx-work-node "x")))) listed))
     (should-not (drgnx-lint-work-db--problems
-                 '((ert-deftest a/writes () :tags '(:work-db-writer) (let ((drgnx-coord-writer 'local)) (should t)))) listed))
+                 '((ert-deftest a/writes () :tags '(:work-db-writer) (let ((drgnx-work-db-gate-hub-standin t)) (should t)))) listed))
     (should-not (drgnx-lint-work-db--problems '((drgnx-work-db-writer-deftest a/macro () (should t))) listed))
     (should-not (drgnx-lint-work-db--problems '((ert-deftest a/untagged () (should t))) "cockpit-model-test.el"))))
 
@@ -90,5 +90,5 @@ and each one that does not bind `drgnx-coord-writer' to `local'."
   ;; the tag cannot hide an editor writer or a backend reader: their test files are not on the list
   (should (drgnx-lint-work-db--problems '((drgnx-work-db-writer-deftest a/macro () (should t))) "cockpit-model-test.el"))
   (should (drgnx-lint-work-db--problems
-           '((ert-deftest a/writes () :tags '(:work-db-writer) (let ((drgnx-coord-writer 'local)) (should t))))
+           '((ert-deftest a/writes () :tags '(:work-db-writer) (let ((drgnx-work-db-gate-hub-standin t)) (should t))))
            "work-ui-test.el")))

@@ -296,7 +296,7 @@ never called."
          (:usage (plist (:used number) (:size number) (:cost any))) (:commands (list-of any)) (:capabilities any)
          (:exit integer "The agent process's exit status") (:stderr string) (:entries-count natnum) (:enforced boolean)
          (:enforced_why string "Why the provider's lock is not enforced"))
- "What an editor mirrors of an agent session, everything but its transcript: the keys of `drgnx-hub--snapshot'.")
+ "What an editor mirrors of an agent session, everything but its transcript: the keys of the hub's `agents/get' answer.")
 
 (drgnx-schema-deftype
  'drgnx-records-entry

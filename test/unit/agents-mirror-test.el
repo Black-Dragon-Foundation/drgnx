@@ -129,6 +129,41 @@
           (should-not (drgnx-agents-mirror-test--mirror "bad")))
       (drgnx-agents-mirror-stop))))
 
+(defmacro drgnx-agents-mirror-test--calls (&rest body)
+  "BODY with `drgnx-hub-call' recording each (METHOD . PARAMS); the list, oldest first, is the value."
+  (declare (indent 0))
+  `(let ((calls nil))
+     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params &rest _) (push (cons method params) calls))))
+       ,@body)
+     (nreverse calls)))
+
+(ert-deftest drgnx-agents-mirror/deliver-sends-agents-send ()
+  ;; a free mirror takes the text as a new turn: one `agents/send', and t
+  (let ((m (drgnx-agents--make :remote "s-d" :id "s-d" :status 'idle)) (took nil))
+    (should (equal (drgnx-agents-mirror-test--calls (setq took (drgnx-agents-deliver m "go on")))
+                   '(("agents/send" :id "s-d" :text "go on"))))
+    (should took))
+  ;; one that is not free (busy, paused by a Stop, something queued) or is no mirror gets nothing
+  (dolist (s (list (drgnx-agents--make :remote "s-d" :id "s-d" :status 'busy)
+                   (drgnx-agents--make :remote "s-d" :id "s-d" :status 'idle :paused t)
+                   (drgnx-agents--make :remote "s-d" :id "s-d" :status 'idle :queue '("waiting"))
+                   (drgnx-agents--make :id "s-local" :status 'idle)))
+    (let ((took 'unset))
+      (should-not (drgnx-agents-mirror-test--calls (setq took (drgnx-agents-deliver s "go on"))))
+      (should-not took))))
+
+(ert-deftest drgnx-agents-mirror/steer-sends-steer ()
+  ;; a steer is an `agents/send': the hub steers a busy session under mode `steer', else queues; t says the hub steers
+  (let ((m (drgnx-agents--make :remote "s-t" :id "s-t" :status 'busy :mode 'steer)) (steered nil))
+    (should (equal (drgnx-agents-mirror-test--calls (setq steered (drgnx-agents-steer m "left, not right")))
+                   '(("agents/send" :id "s-t" :text "left, not right"))))
+    (should steered))
+  (let ((m (drgnx-agents--make :remote "s-t" :id "s-t" :status 'busy :mode 'queue)) (steered 'unset))
+    (should (drgnx-agents-mirror-test--calls (setq steered (drgnx-agents-steer m "later"))))
+    (should-not steered))
+  (let ((s (drgnx-agents--make :id "s-local" :status 'busy :mode 'steer)))
+    (should-not (drgnx-agents-mirror-test--calls (drgnx-agents-steer s "nobody to ask")))))
+
 (ert-deftest drgnx-agents-mirror/a-malformed-transcript-entry-does-not-lose-the-others ()
   (let ((m (drgnx-agents--make :remote "s-x" :id "s-x")))
     (let ((inhibit-message t))

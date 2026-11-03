@@ -5,7 +5,6 @@
 ;; loaded before the tests stub `drgnx-agents-mirror-start': `drgnx-review-branch' requires it, and a first load
 ;; inside the stub's `cl-letf' would put the real function (a hub call) back
 (require 'drgnx-agents-mirror)
-(require 'drgnx-job)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
@@ -27,7 +26,7 @@
      (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Add b")
      (let* ((default-directory repo) (delivered nil) (drgnx-review--runs (make-hash-table :test #'equal))
             (drgnx-review--current nil)
-            (s (drgnx-agents--make :id "rev-1" :name "reviewer" :status 'idle :conn 'fake :cwd repo)))
+            (s (drgnx-agents--make :id "rev-1" :remote "rev-1" :name "reviewer" :status 'idle :cwd repo)))
        (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (_profile _cwd &rest _) s))
                  ((symbol-function 'drgnx-agents-deliver) (lambda (_s text) (push text delivered) t))
                  ((symbol-function 'drgnx-agents-kill) #'ignore))
@@ -75,21 +74,6 @@ buffer) and no check asked for meanwhile is still to follow it."
       (should (string-search "feature vs main · 3 findings · fail" tab))
       (should (string-search "src/a.el:12" tab))
       (should (< (string-search "the loop never ends" tab) (string-search "a long name" tab))))))
-
-(ert-deftest drgnx-review/the-review-policy-answers-permissions ()
-  (drgnx-review-test--branch
-    (drgnx-review-branch)
-    (let ((opts (vector '(:optionId "o1" :kind "allow_once") '(:optionId "o2" :kind "reject_once"))))
-      (should (equal (drgnx-review--request s "session/request_permission"
-                                            (list :toolCall (list :kind "read" :title "Read a.el" :locations (vector (list :path (concat repo "src/a.el"))))
-                                                  :options opts)
-                                            7)
-                     '(:result (:outcome (:outcome "selected" :optionId "o1")))))
-      (should-not (drgnx-review--request s "session/request_permission"
-                                         (list :toolCall (list :kind "edit" :title "Edit a.el" :locations (vector (list :path (concat repo "src/a.el")))) :options opts) 8))
-      (should (equal (drgnx-review--request s "fs/write_text_file" (list :path (concat repo "x") :content "x") 9)
-                     '(:error (:code -32000 :message "a review only reads"))))
-      (should-not (drgnx-review--request (drgnx-agents--make :id "other") "fs/write_text_file" (list :path "/x" :content "x") 10)))))
 
 (ert-deftest drgnx-review/edge-cases ()
   (drgnx-review-test--branch
@@ -267,11 +251,9 @@ buffer) and no check asked for meanwhile is still to follow it."
 (ert-deftest drgnx-review/turning-it-off-closes-the-tab-and-takes-the-hooks ()
   (let (buf)
     (drgnx-test-with-modules '(tools/review) :strict t
-                             (should (memq 'drgnx-review--request drgnx-agents-request-functions))
                              (should (memq 'drgnx-review--changed drgnx-agents-changed-functions))
                              (setq buf (drgnx-review--buffer)))
     (should-not (buffer-live-p buf))
-    (should-not (memq 'drgnx-review--request drgnx-agents-request-functions))
     (should-not (memq 'drgnx-review--changed drgnx-agents-changed-functions))))
 
 (ert-deftest drgnx-review/visit-refuses-a-symlink-out-of-the-repository ()
@@ -331,15 +313,12 @@ buffer) and no check asked for meanwhile is still to follow it."
   ;; the reviewer's tool calls and findings name paths in the user's own Emacs: a link in the repository to a remote
   ;; name never makes it load Tramp; it is outside the repository
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-review-links" t))) (repo (concat root "repo/"))
-         (drgnx-review--runs (make-hash-table :test #'equal)) (drgnx-review--current "rev-links")
-         (s (drgnx-agents--make :id "rev-links")) (opts (vector '(:optionId "o1" :kind "allow_once"))))
+         (drgnx-review--runs (make-hash-table :test #'equal)) (drgnx-review--current "rev-links"))
     (unwind-protect
         (let ((paths (progn (make-directory repo) (drgnx-test-hostile-paths repo))))
           (puthash "rev-links" (list :root repo) drgnx-review--runs)
           (drgnx-test-with-handler-trap
             (dolist (p (plist-get paths :outside))
-              (should-not (drgnx-review--request s "session/request_permission"
-                                                 (list :toolCall (list :kind "read" :locations (vector (list :path p))) :options opts) 1))
               (with-temp-buffer
                 (insert (propertize "finding" 'drgnx-review-finding (list :path p :line 1)))
                 (goto-char (point-min))

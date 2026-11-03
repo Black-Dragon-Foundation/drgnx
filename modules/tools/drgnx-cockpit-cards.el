@@ -24,7 +24,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-state)
 (require 'drgnx-view)
-(require 'drgnx-coord)                                ; Message…: the user's text, left in the store
+(require 'drgnx-coord-read)                           ; Message…: the user's text, left in the store
 (require 'drgnx-cockpit-model)                        ; `drgnx-cockpit-shown-p', `drgnx-cockpit-row-cell'
 (require 'drgnx-notice)                               ; `drgnx-needs-you-count': the one count the heads show
 ;; the jobs module's source of what needs you, beside this file
@@ -42,8 +42,8 @@
 (declare-function drgnx-cockpit-edits--write "drgnx-cockpit-edits")
 (declare-function drgnx-cockpit-edits--args "drgnx-cockpit-edits")
 (declare-function drgnx-cockpit-edits--sent-p "drgnx-cockpit-edits")
-(declare-function drgnx-coord-version "drgnx-coord")
-(declare-function drgnx-coord-message "drgnx-coord")
+(declare-function drgnx-coord-version "drgnx-coord-read")
+(declare-function drgnx-coord-message "drgnx-coord-read")
 (declare-function drgnx-job-ui--schedule-recount "drgnx-job-ui")
 (declare-function drgnx-layouts-apply "drgnx-layouts")
 (declare-function drgnx-layouts-names "drgnx-layouts")

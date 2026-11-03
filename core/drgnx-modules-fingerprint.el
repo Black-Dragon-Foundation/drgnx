@@ -31,12 +31,10 @@
                      prog-mode-hook tabulated-list-revert-hook context-menu-functions completion-at-point-functions
                      git-commit-setup-hook dape-active-mode-hook apheleia-inhibit-functions
                      drgnx-first-gui-frame-hook drgnx-agents-changed-functions drgnx-agents-task-functions
-                     drgnx-agents-request-functions drgnx-agents-prompt-functions drgnx-agents-error-functions
                      drgnx-agents-env-functions drgnx-hub-event-functions drgnx-hub-disconnect-functions
-                     drgnx-gateway-event-functions drgnx-git-changed-functions drgnx-surfaces-run-functions
+                     drgnx-git-changed-functions drgnx-surfaces-run-functions
                      drgnx-signal-window-functions drgnx-rules-mode-hook drgnx-persist-state-functions
-                     drgnx-persist-after-restore-functions drgnx-modules-after-stage-functions drgnx-job-tick-functions
-                     drgnx-job-clash-answer-functions drgnx-job-card-action-functions drgnx-job-before-review-functions
+                     drgnx-persist-after-restore-functions drgnx-modules-after-stage-functions
                      drgnx-ai-refused-functions drgnx-ai-probe-done-hook drgnx-session-before-open-functions
                      tty-setup-hook server-visit-hook pre-redisplay-functions kkp-terminal-setup-complete-hook
                      kkp-terminal-teardown-complete-hook

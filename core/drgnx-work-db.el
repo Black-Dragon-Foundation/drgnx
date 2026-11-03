@@ -218,16 +218,19 @@ in `meta' `migrate-6-dropped'.  New columns: event.turn, message.answers, card.r
     (error (ignore-errors (sqlite-execute db "rollback"))
            (signal (car err) (cdr err)))))
 
-(defvar drgnx-coord-writer)            ; core/drgnx-coord.el: who writes work.db from this Emacs
+(defvar drgnx-work-db-gate-hub-standin nil
+  "Non-nil only while a test's own seeding (test/fixtures/work-fixture.el) stands in for the hub, work.db's one
+writer: `drgnx-work-db' opens read-write then and the one-writer gate (test/support/work-db-gate.el) lets it through.
+Product code never binds it.")
 
 (define-error 'drgnx-work-db-not-the-writer "work.db is written by the drgnx hub")
 
 (defun drgnx-work-db ()
-  "The open database (opened, created and migrated on first use), read-write.  Only for the Rust-bound `local' writer
-mode (`drgnx-coord-writer': the standalone Lisp hub of the v0 rows and the coordination unit tests).  Anywhere else —
-an editor, the CLI, the Lisp backend behind Ratatoskr — it signals `drgnx-work-db-not-the-writer' and opens nothing:
-the hub is the one writer of work.db, and readers use `drgnx-work-db-read'."
-  (unless (and (boundp 'drgnx-coord-writer) (eq drgnx-coord-writer 'local))
+  "The open database (opened, created and migrated on first use), read-write.  Only for a test's seeding that stands
+in for the hub (`drgnx-work-db-gate-hub-standin').  Anywhere else — an editor, the CLI — it signals
+`drgnx-work-db-not-the-writer' and opens nothing: the hub is the one writer of work.db, and readers use
+`drgnx-work-db-read'."
+  (unless drgnx-work-db-gate-hub-standin
     (signal 'drgnx-work-db-not-the-writer nil))
   (let ((file (drgnx-work-db-file)))
     (or (alist-get file drgnx-work-db--handles nil nil #'equal)
@@ -243,7 +246,7 @@ the hub is the one writer of work.db, and readers use `drgnx-work-db-read'."
 (defvar drgnx-work-db--read-handles nil "Alist file → read-only database (`drgnx-work-db-read').")
 
 (defconst drgnx-work-db--writer-reads
-  '((drgnx-coord-events-prune-daily . "reads the last prune time, then prunes and writes the new time"))
+  nil
   "(NAME . REASON) of the functions that may `sqlite-select' on `(drgnx-work-db)': a read followed by a write.
 Every other read goes through `drgnx-work-db-read' (checked by `drgnx-work-db/readers-use-the-read-only-path').")
 

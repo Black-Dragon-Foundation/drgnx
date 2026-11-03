@@ -33,7 +33,7 @@
     ;; processes with no notice model of their own: the hub, the sandbox plumbing, the MCP bridge, batch entry
     ;; points (their lines are their log; Rust-bound)
     ("core/drgnx-coord.el" . 1)
-    ("core/drgnx-hub-client.el" . 3)         ; + front calls' timing line (headless backend only, where `message' is its log)
+    ("core/drgnx-hub-client.el" . 2)
     ("core/drgnx-hub.el" . 8)          ; + Gleipnir 13b: the backend's refused connection, two serve-env errors
     ("core/drgnx-mcp-bridge.el" . 1)
     ("core/drgnx-sandbox-mcp.el" . 3)

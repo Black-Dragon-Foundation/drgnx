@@ -1389,8 +1389,7 @@ connection struct.
   `hub-events` is `drgnx-timer-soon` `drgnx-hub-events-interval`: `events` go at most that often. `hub-exit` is the
   `shutdown` request's exit 0.1 s later (`drgnx-hub--exit-now` with the exit function that was set when it came); a
   hub stopped meanwhile cancels it. `drgnx-hub-stop` cancels all of them. The hub's `coord/notify` deferrals
-  (`run-at-time 0`) stay raw. `drgnx-hub-main` sets `drgnx-timer-report-file` to `hub-timers-report.eld`, so a timer
-  the hub stops is written beside, not over, the editor's report.
+  (`run-at-time 0`) stay raw.
 
 ### The clock seams
 
