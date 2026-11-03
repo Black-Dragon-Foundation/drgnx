@@ -676,7 +676,7 @@ Module flags: ((MODULE FLAG…)…).
 ## drgnx-sandbox-memory-max
 
 The memory cap of each sandboxed agent, the `:memory-max' of a spec that does not give one: a systemd size (4G,
-512M, 50%) or nil for none.  It applies where a systemd user manager answers (`drgnx-sandbox-memory-prefix').  An
+512M, 50%) or nil for none.  It applies where a systemd user manager answers.  An
 operational guard, so that one agent's build cannot run the session out of memory; not a security boundary.
 
 | Key | Value |
@@ -714,9 +714,8 @@ job's allowlist.
 
 ## drgnx-sandbox-secret-files
 
-Where package managers keep tokens, relative to a toolchain root: each that exists inside a root of
-`drgnx-sandbox-toolchain-roots' is hidden in the sandbox (`drgnx-sandbox-toolchain-hide').  npm's global config is
-PREFIX/etc/npmrc.
+Where package managers keep tokens, relative to a toolchain root: each that exists inside a toolchain root is
+hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc.
 
 | Key | Value |
 | --- | --- |

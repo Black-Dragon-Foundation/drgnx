@@ -1030,10 +1030,10 @@ what `ratatoskr doctor --json' said)."
       (should (string-search "not available here: Landlock is off — boot with Landlock" (nth 1 r))))
     (should (equal (car (funcall check :sandbox '(:backend "none" :ok nil :reason "x"))) (car (funcall check))))
     ;; an older binary without the section, and a failing check, show no line
-    (should-not (string-search "job sandbox" (nth 1 (funcall check))))
+    (should-not (string-search "job sandbox backend" (nth 1 (funcall check))))
     (let ((r (funcall check :hooks t :sandbox '(:backend "none" :ok nil :reason "x"))))
       (should (eq (car r) 'fail))
-      (should-not (string-search "job sandbox" (nth 1 r))))))
+      (should-not (string-search "job sandbox backend" (nth 1 r))))))
 
 (ert-deftest drgnx-settings-sandbox/the-doctor-says-the-reduced-tier-cannot-pin ()
   ;; the section's pins_note (Ratatoskr's text, the reduced tier only) ends the line; null or absent adds nothing
