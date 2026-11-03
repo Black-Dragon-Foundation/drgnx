@@ -283,6 +283,13 @@ one-line command that fixes it, or advice when the adapter is not in a global np
 The `ai-env-keys` check names the provider key variables set in this Emacs's environment (never a value), as
 information: "OPENROUTER_API_KEY is set in this Emacs's environment; children inherit it; agents use the copy the hub
 holds". drgnx leaves them there ([security.md](security.md#where-your-keys-live)).
+The `job-sandbox` check shows the job sandbox's state as Ratatoskr reports it (`sandbox` in `ratatoskr doctor --json`):
+the back end and its version, or a warning with the reason and the fix; with no answer from Ratatoskr it is only a
+notice. The `lisp-runtime` check (Agents group) says the old Lisp agent runtime is gone. It fails when a Lisp hub of
+yours still runs (`ratatoskr stop`, then `kill` the pid; drgnx starts Ratatoskr again). It warns when an outside
+agent's MCP config (Claude Code, Codex, Gemini, Kimi Code) still starts the Lisp coordination server (Agent settings →
+Register drgnx again), and when command jobs from before the move still run (they finish on their own, then drgnx
+moves their folders). Otherwise it says `gone`, with how many old files wait in `hub/migrated-p7/`.
 
 **What drgnx has told you.** Each running drgnx writes the problems it knows (the notices that are still true, and
 the last 50 warnings and failures) to its own file in `~/.local/state/drgnx/notices/`, two seconds after a change; at

@@ -183,34 +183,14 @@ its package read from its package.json, never run), nil when none is installed, 
           (t (list 'ok (format "%s %s (%s)" (plist-get a :name) (plist-get a :version) (abbreviate-file-name (plist-get a :program)))
                    nil)))))
 
-(declare-function drgnx-sandbox-check "drgnx-sandbox")
-(defvar drgnx-sandbox-memory-max)
-
-(defun drgnx-doctor--sandbox ()
-  "The fact of the `job-sandbox' check: `drgnx-sandbox-check' (its probes take at most a few seconds) with
-:memory-max, `drgnx-sandbox-memory-max', and :memory-max-default t when no init file was loaded (`drgnx doctor'
-runs with -Q, so it sees the default, not the user's setting); or (:error MESSAGE)."
-  (condition-case err
-      (progn (require 'drgnx-sandbox)
-             (append (drgnx-sandbox-check)
-                     (list :memory-max drgnx-sandbox-memory-max :memory-max-default (null user-init-file))))
-    (error (list :error (error-message-string err)))))
-
-(defun drgnx-doctor--job-sandbox-check (s)
-  "The `job-sandbox' check of the fact S (`drgnx-doctor--sandbox')."
-  (let ((program (if (eq (plist-get s :backend) 'seatbelt) "sandbox-exec" "bwrap")))
-    (cond ((null s) (list 'info "not checked" nil))
-          ((plist-get s :error) (list 'warn (format "could not check: %s" (plist-get s :error)) "run drgnx doctor again"))
+(defun drgnx-doctor--job-sandbox-check (f)
+  "The `job-sandbox' check of the fact F (`drgnx-doctor--ratatoskr'): the `sandbox' section of `ratatoskr doctor --json'."
+  (let* ((s (plist-get (plist-get (plist-get f :ratatoskr) :report) :sandbox))
+         (program (if (equal (plist-get s :backend) "seatbelt") "sandbox-exec" (plist-get s :backend))))
+    (cond ((null s) (list 'info "not checked: no answer from Ratatoskr" nil))
           ((plist-get s :ok)
-           (list 'ok (concat program (if (plist-get s :version) (concat " " (plist-get s :version)) "") " ok"
-                             (cond ((not (eq (plist-get s :backend) 'bwrap)) "")
-                                   ((null (plist-get s :memory-max)) "; no memory cap (drgnx-sandbox-memory-max is nil)")
-                                   ((plist-get s :scope)
-                                    (format "; memory cap %s per agent%s" (plist-get s :memory-max)
-                                            (if (plist-get s :memory-max-default) " by default (drgnx-sandbox-memory-max)" "")))
-                                   (t "; no memory cap (no systemd user manager answers)")))
-                 nil))
-          (t (list 'warn (format "jobs' agents cannot be sandboxed, so jobs do not start: %s" (plist-get s :reason))
+           (list 'ok (concat program (if (plist-get s :version) (concat " " (plist-get s :version)) "") " ok") nil))
+          (t (list 'warn (format "jobs' agents cannot be sandboxed, so jobs do not start: %s" (or (plist-get s :reason) "unknown"))
                    (plist-get s :fix))))))
 
 (defvar drgnx-macos-app-dir)
@@ -483,8 +463,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :ai-env-keys (drgnx-doctor--ai-env-keys)
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
-           :sandbox (drgnx-doctor--sandbox)
            :ratatoskr (drgnx-doctor--ratatoskr)
+           :coord-configs (drgnx-doctor--coord-configs)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
            :trust-guards (drgnx-doctor--trust-guards)
            :config-dir (drgnx-doctor--config-dir)
@@ -799,7 +779,7 @@ severity, the fix the first `:fix'."
 
 (drgnx-doctor-define 'job-sandbox :group "Agents"
                      :doc "Jobs' agents run in a sandbox: bubblewrap (bwrap) on Linux, sandbox-exec on macOS"
-                     :check (lambda (f) (drgnx-doctor--job-sandbox-check (plist-get f :sandbox))))
+                     :check #'drgnx-doctor--job-sandbox-check)
 
 (drgnx-doctor-define-notices 'modules :group "drgnx" :doc "Modules that failed, wait or are off (this session, or the last one)")
 
@@ -848,12 +828,12 @@ severity, the fix the first `:fix'."
 
 (defun drgnx-doctor--ratatoskr-sandbox-line (s)
   "The detail line for the job sandbox section S of `ratatoskr doctor --json' (nil without one).
-It only informs: nothing runs in the sandbox yet (phase 6), so the check's status never depends on it.  The
+It only informs: the `job-sandbox' check owns the status.  The
 section's `pins_note' (the reduced tier cannot pin your settings files in a job's folders) ends the line."
   (when s
     (concat
      (if (plist-get s :ok)
-         (format "job sandbox backend: %s%s works here (%s); job agents do not use it yet (phase 6)"
+         (format "job sandbox backend: %s%s works here (%s)"
                  (plist-get s :backend)
                  (if-let* ((v (plist-get s :version))) (concat " " v) "")
                  (if (equal (plist-get s :backend) "seatbelt")
@@ -906,6 +886,52 @@ section's `pins_note' (the reduced tier cannot pin your settings files in a job'
 (drgnx-doctor-define 'ratatoskr :group "Agents"
                      :doc "Ratatoskr, the agent runtime: built, current, no test hooks, a private socket directory"
                      :check (lambda (f) (drgnx-doctor--ratatoskr-check (plist-get f :ratatoskr))))
+
+;; The old Lisp agent runtime is gone: the `legacy' section of `ratatoskr doctor --json' (what its first start moved
+;; aside, command jobs still running, Lisp processes still alive) and the outside agents' MCP configs (read only).
+(declare-function drgnx-agent-config-read "drgnx-agent-config" (kind root))
+
+(defun drgnx-doctor--coord-configs ()
+  "The files of outside agents' (Claude, Codex, Gemini, Kimi) MCP configs that still start the Lisp coordination
+server, as abbreviated names (the readers of `drgnx-agent-config-read'; a kind that cannot be read counts as none)."
+  (let (files)
+    (dolist (kind '(claude codex gemini kimi))
+      (ignore-errors
+        (require (intern (format "drgnx-agent-config-%s" kind)))
+        (dolist (item (plist-get (drgnx-agent-config-read kind nil) :items))
+          (let* ((spec (plist-get item :spec))
+                 (line (string-join (cons (or (plist-get spec :command) "") (plist-get spec :args)) " ")))
+            (when (and (eq (plist-get item :section) 'mcp)
+                       (or (string-search "drgnx-coord-mcp-main" line) (string-search "-l drgnx-coord-mcp" line)))
+              (cl-pushnew (abbreviate-file-name (or (plist-get item :file) (symbol-name kind))) files :test #'equal))))))
+    (nreverse files)))
+
+(defun drgnx-doctor--lisp-runtime-check (f)
+  "The `lisp-runtime' check of the fact F: failures first, then warnings."
+  (let* ((report (plist-get (plist-get f :ratatoskr) :report))
+         (legacy (plist-get report :legacy))
+         (procs (append (plist-get legacy :lisp_processes) nil))
+         (left (append (plist-get legacy :left) nil))
+         (moved (append (plist-get legacy :moved) nil))
+         (configs (plist-get f :coord-configs)))
+    (cond
+     (procs
+      (let ((pid (plist-get (car procs) :pid)))
+        (list 'fail (format "a Lisp hub still runs (pid %s)" pid)
+              (format "`ratatoskr stop', then `kill %s'; drgnx starts Ratatoskr again" pid))))
+     (configs
+      (list 'warn (format "outside agent config %s still starts the Lisp coordination server" (car configs))
+            "Agent settings → Register drgnx again"))
+     (left
+      (list 'warn (format "%d command jobs from before phase 7 still run" (length left))
+            "they finish on their own; drgnx moves their folders after"))
+     ((null report) (list 'info "not checked: no answer from Ratatoskr" nil))
+     (moved (list 'ok (format "gone; old files in hub/migrated-p7/ (%d)" (length moved)) nil))
+     (t (list 'ok "gone" nil)))))
+
+(drgnx-doctor-define 'lisp-runtime :group "Agents"
+                     :doc "The old Lisp agent runtime is gone: no Lisp hub running, its files moved aside, outside agents use Ratatoskr's bridge"
+                     :check #'drgnx-doctor--lisp-runtime-check)
 
 ;; The work store (work.db, Urdr): the `store' section of `ratatoskr doctor --json' (schema, a failed migration, the
 ;; WAL, the backups, the personal-notes opt-in file, the copies a deny-list kept text out of).

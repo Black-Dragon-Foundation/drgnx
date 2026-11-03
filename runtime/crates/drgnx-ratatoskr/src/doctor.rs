@@ -79,8 +79,7 @@ fn sandbox_section(c: &Check) -> Value {
     })
 }
 
-/// The doctor's text line about the sandbox. It says what works here and that jobs do not use it yet; it never says a
-/// job is "sandboxed". On the reduced tier it adds that pins cannot hold there.
+/// The doctor's text line about the sandbox. It says what works here; it never says a job is "sandboxed". On the reduced tier it adds that pins cannot hold there.
 pub fn sandbox_line(c: &Check) -> String {
     let line = sandbox_state(c);
     match crate::sandbox_settings::pins_note(c.backend) {
@@ -96,7 +95,7 @@ fn sandbox_state(c: &Check) -> String {
             None => c.backend.name().to_string(),
         };
         format!(
-            "job sandbox backend: {name} works here ({}); job agents do not use it yet (phase 6)",
+            "job sandbox backend: {name} works here ({})",
             c.layers_text()
         )
     } else {
@@ -733,7 +732,7 @@ mod tests {
         assert_eq!(v["sandbox"]["in_use"], false);
         assert_eq!(
             sandbox_line(&working()),
-            "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp); job agents do not use it yet (phase 6)"
+            "job sandbox backend: bwrap 0.12.0 works here (Landlock ABI 10, seccomp)"
         );
         assert_eq!(
             sandbox_line(&broken()),
@@ -769,7 +768,7 @@ mod tests {
                 "{text}"
             );
         }
-        assert!(sandbox_line(&working()).contains("job agents do not use it yet"));
+        assert!(!sandbox_line(&working()).contains("phase 6"));
     }
 
     /// Review m2: a hub that refuses keys (on macOS, started under a debugger) says why in `doctor` and `status`.
