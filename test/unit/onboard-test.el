@@ -1024,10 +1024,11 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
      ;; the editor starts no agent process of its own: it has no ACP client
      (should (equal (drgnx-onboard--claude-profile) '(t . "the claude profile answered (mock-claude 0.1.0)")))
      (should-not (featurep 'drgnx-acp))
-     ;; one call: `agents/probe' for the claude profile, with the step's wait, and the call's own a few seconds longer
+     ;; one call: `agents/probe' for the claude profile, with the step's wait, and the call's own 25 s longer: the
+     ;; hub's worst case is the wait + 20 s (sandbox status) + 3 s, and calls on one connection are served in order
      (should (equal drgnx-onboard-test--hub-calls
                     (list (list "agents/probe" (list :profile "claude" :wait_s drgnx-onboard-agent-wait)
-                                (+ drgnx-onboard-agent-wait 5)))))
+                                (+ drgnx-onboard-agent-wait 25)))))
      (should-not (seq-find (lambda (p) (string-prefix-p "drgnx-acp" (process-name p))) (process-list))))))
 
 (ert-deftest drgnx-onboard/an-npm-failure-says-how-to-retry ()
