@@ -1039,7 +1039,7 @@ what `ratatoskr doctor --json' said)."
   ;; the section's pins_note (Ratatoskr's text, the reduced tier only) ends the line; null or absent adds nothing
   (let* ((note "the reduced tier cannot pin .dir-locals.el, .dir-locals-2.el or .drgnx/ read-only")
          (line (lambda (s) (nth 1 (drgnx-doctor-check 'ratatoskr (drgnx-doctor-test--rtsk :sandbox s))))))
-    (should (string-search (concat "works here (Landlock ABI 9, seccomp); job agents do not use it yet (phase 6); " note)
+    (should (string-search (concat "works here (Landlock ABI 9, seccomp); " note)
                            (funcall line (list :backend "reduced" :ok t :landlock_abi 9 :pins_note note))))
     (should (string-search (concat "not available here: x; " note)
                            (funcall line (list :backend "reduced" :ok nil :reason "x" :pins_note note))))

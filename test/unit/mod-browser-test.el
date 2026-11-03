@@ -148,40 +148,42 @@
           (should (equal (drgnx-browser-newest root) (list :kind 'trace :path trace)))
           (drgnx-browser-test--touch trace 1800)
           ;; the command: a durable job, then the page at the URL the server prints
-          (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "npx") "/usr/bin/npx")))
-                    ((symbol-function 'drgnx-exec-start)
-                     (lambda (name command &rest args)
-                       (push (list name command args) jobs)
-                       (funcall (plist-get args :callback) "job-1" nil)   ; the hub's answer
-                       nil))
-                    ((symbol-function 'drgnx-exec-list) (lambda () nil))
-                    ;; the hub's log of the job: asked asynchronously, answered here at once
-                    ((symbol-function 'drgnx-hub-call)
-                     (lambda (method _params callback &rest _)
-                       (should (equal method "exec/log"))
-                       (funcall callback (list :lines '("Serving HTML report at http://localhost:9323. Press Ctrl+C to quit.")) nil)))
-                    ((symbol-function 'drgnx-exec-get) (lambda (&rest _) (list :status 'running)))
-                    ((symbol-function 'drgnx-exec-stop) #'ignore)
-                    ((symbol-function 'drgnx-browser-open) (lambda (url &optional keep) (push (if keep url (list :steals-focus url)) msgs))))
-            (let ((default-directory root))
-              (drgnx-browser-test-report))
-            (should (equal (cadr (car jobs))
-                           (list "npx" "playwright" "show-report" (directory-file-name (file-name-directory new)) "--port" "0")))
-            (should (equal (plist-get (nth 2 (car jobs)) :cwd) root))
-            (should (null msgs))                                 ; nothing opened before the server speaks
-            (should (drgnx-timer-active-p '(browser-watch . "job-1")))   ; the server is waited for, by a poll
-            (should-not (drgnx-browser--watch-tick "job-1"))    ; asks the hub; its answer ends the wait
-            (should-not (drgnx-timer-active-p '(browser-watch . "job-1")))
-            ;; the page opens from a timer (the answer came in a process filter)
-            (let ((end (+ (float-time) 2)))
-              (while (and (not msgs) (< (float-time) end)) (accept-process-output nil 0.05)))
-            (should (equal msgs '("http://localhost:9323")))
-            ;; a trace goes to show-trace
-            (setq jobs nil)
-            (drgnx-browser-test--touch trace 5)
-            (let ((default-directory root))
-              (drgnx-browser-test-report))
-            (should (equal (cadr (car jobs)) (list "npx" "playwright" "show-trace" trace "--port" "0")))))
+          (drgnx-test-with-clock ()
+            (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "npx") "/usr/bin/npx")))
+                      ((symbol-function 'drgnx-exec-start)
+                       (lambda (name command &rest args)
+                         (push (list name command args) jobs)
+                         (funcall (plist-get args :callback) "job-1" nil)   ; the hub's answer
+                         nil))
+                      ((symbol-function 'drgnx-exec-list) (lambda () nil))
+                      ;; the hub's log of the job: asked asynchronously, answered here at once
+                      ((symbol-function 'drgnx-hub-call)
+                       (lambda (method _params callback &rest _)
+                         (should (equal method "exec/log"))
+                         (funcall callback (list :lines '("Serving HTML report at http://localhost:9323. Press Ctrl+C to quit.")) nil)))
+                      ((symbol-function 'drgnx-exec-get) (lambda (&rest _) (list :status 'running)))
+                      ((symbol-function 'drgnx-exec-stop) #'ignore)
+                      ((symbol-function 'drgnx-browser-open) (lambda (url &optional keep) (push (if keep url (list :steals-focus url)) msgs))))
+              (let ((default-directory root))
+                (drgnx-browser-test-report))
+              (should (equal (cadr (car jobs))
+                             (list "npx" "playwright" "show-report" (directory-file-name (file-name-directory new)) "--port" "0")))
+              (should (equal (plist-get (nth 2 (car jobs)) :cwd) root))
+              (should (null msgs))                                 ; nothing opened before the server speaks
+              (should (drgnx-timer-active-p '(browser-watch . "job-1")))   ; the server is waited for, by a poll
+              (should-not (drgnx-browser--watch-tick "job-1"))    ; asks the hub; its answer ends the wait
+              (should-not (drgnx-timer-active-p '(browser-watch . "job-1")))
+              ;; the page opens from a timer (the answer came in a process filter)
+              (should (null msgs))
+              (drgnx-test-advance 0.01)
+              (should (equal msgs '("http://localhost:9323")))
+              ;; a trace goes to show-trace
+              (setq jobs nil)
+              (drgnx-browser-test--touch trace 5)
+              (let ((default-directory root))
+                (drgnx-browser-test-report))
+              (should (equal (cadr (car jobs)) (list "npx" "playwright" "show-trace" trace "--port" "0")))
+              (drgnx-timer-cancel '(browser-watch . "job-1")))))
       (drgnx-timer-cancel '(browser-watch . "job-1"))
       (delete-directory root t))))
 
