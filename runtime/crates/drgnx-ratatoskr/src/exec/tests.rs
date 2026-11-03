@@ -587,16 +587,73 @@ async fn a_container_job_runs_the_fixed_podman_line() {
     assert_eq!(&log[log.len() - 3..], [REF, "make", "test"]);
 }
 
-fn one_slot(root: &Path) -> Runner {
+/// A runner whose sessions' jobs run unsandboxed (as the conformance lane's do).
+fn plain(root: &Path, slots: usize) -> Runner {
     let r = Runner::default();
     r.open(
         root.join("exec"),
         Hooks {
-            slots: 1,
+            slots,
+            plain_sessions: true,
             ..hooks()
         },
     );
     r
+}
+
+fn one_slot(root: &Path) -> Runner {
+    plain(root, 1)
+}
+
+/// An agent's job, in the folder D.
+fn agents(d: &Path, script: &str) -> ExecSpec {
+    spec(
+        Starter::Session("S1".into()),
+        d,
+        script,
+        Duration::from_secs(30),
+    )
+}
+
+/// The machine's slots are the agents': four of the editor's servers (no time box) run, and an agent's job still starts
+/// at once, as does a fifth job of the user's.
+#[tokio::test]
+async fn the_users_servers_leave_the_agents_slots_free() {
+    let d = tempfile::tempdir().unwrap();
+    let r = plain(d.path(), 4);
+    let mut servers = Vec::new();
+    for _ in 0..4 {
+        let mut s = spec(
+            Starter::User,
+            d.path(),
+            "exec sleep 600",
+            Duration::from_secs(30),
+        );
+        s.user.no_timebox = true;
+        let id = r.start(s).await.unwrap();
+        assert!(!r.is_queued(&id));
+        servers.push(id);
+    }
+    let agent = r.start(agents(d.path(), "echo agent")).await.unwrap();
+    assert!(
+        !r.is_queued(&agent),
+        "the agent's job waits behind the user's servers"
+    );
+    let fifth = r
+        .start(spec(
+            Starter::User,
+            d.path(),
+            "echo fifth",
+            Duration::from_secs(30),
+        ))
+        .await
+        .unwrap();
+    assert!(!r.is_queued(&fifth));
+    assert_eq!(ended(&r, &agent).await.status, ExecStatus::Done);
+    assert_eq!(ended(&r, &fifth).await.status, ExecStatus::Done);
+    for id in servers {
+        assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
+    }
 }
 
 /// B1: a session's job runs in its worktree or inside it; any other folder is refused before anything starts.
@@ -701,18 +758,17 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
     assert!(container::argv(&req, &caps).is_ok());
 }
 
-/// S6: a job that finds the machine full is recorded as queued and answered at once; it starts when the slot frees.
+/// S6: an agent's job that finds the machine full is recorded as queued and answered at once; it starts when the slot
+/// frees.
 #[tokio::test]
 async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
     let d = tempfile::tempdir().unwrap();
     let r = one_slot(d.path());
     let gate = d.path().join("gate");
     let first = r
-        .start(spec(
-            Starter::User,
+        .start(agents(
             d.path(),
             &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
-            Duration::from_secs(30),
         ))
         .await
         .unwrap();
@@ -720,12 +776,7 @@ async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
     // for ever (the deadline only bounds that failure)
     let second = tokio::time::timeout(
         Duration::from_secs(30),
-        r.start(spec(
-            Starter::User,
-            d.path(),
-            "echo second",
-            Duration::from_secs(30),
-        )),
+        r.start(agents(d.path(), "echo second")),
     )
     .await
     .expect("the start blocked")
@@ -734,7 +785,7 @@ async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
     assert_eq!(r.get(&second).unwrap().status, ExecStatus::Queued);
     assert_eq!(r.get(&first).unwrap().status, ExecStatus::Running);
     assert_eq!(r.list(None, true).len(), 2, "queued counts as live");
-    assert!(r.live().ids("nobody").is_empty());
+    assert_eq!(r.live().ids("S1").len(), 2);
     std::fs::write(&gate, "").unwrap();
     assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
     let row = ended(&r, &second).await;
@@ -750,32 +801,17 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
     let r = one_slot(d.path());
     let gate = d.path().join("gate");
     let first = r
-        .start(spec(
-            Starter::User,
+        .start(agents(
             d.path(),
             &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
-            Duration::from_secs(30),
         ))
         .await
         .unwrap();
     let stopped = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "touch ran-stopped",
-            Duration::from_secs(30),
-        ))
+        .start(agents(d.path(), "touch ran-stopped"))
         .await
         .unwrap();
-    let kept = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "echo kept",
-            Duration::from_secs(30),
-        ))
-        .await
-        .unwrap();
+    let kept = r.start(agents(d.path(), "echo kept")).await.unwrap();
     assert_eq!(r.stop(&stopped).await.unwrap().status, ExecStatus::Stopped);
     // the next hub: its own runner on the same folder, the first job's slot free again
     std::fs::write(&gate, "").unwrap();

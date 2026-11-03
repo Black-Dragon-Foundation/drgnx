@@ -181,10 +181,14 @@ pub struct Hooks {
     pub podman: Option<PathBuf>,
     /// `drgnx-fwd` (next to the hub, else on the PATH): the forwarder a container job granted network runs.
     pub forwarder: Option<PathBuf>,
-    /// Jobs running at once on this machine; the next waits for a slot (the session's step is a machine-queue wait).
+    /// Agents' jobs running at once on this machine; the next waits for a slot (the session's step is a machine-queue
+    /// wait).  The user's jobs take no slot.
     pub slots: usize,
     /// The login shell's variables (`env/set`): the base environment of every job and podman the hub starts.
     pub shell_env: crate::shell_env::ShellEnv,
+    /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
+    #[cfg(test)]
+    pub plain_sessions: bool,
 }
 
 impl Default for Hooks {
@@ -202,6 +206,8 @@ impl Default for Hooks {
                 .or_else(|| unit::find_on_path("drgnx-fwd")),
             slots: 4,
             shell_env: crate::shell_env::ShellEnv::default(),
+            #[cfg(test)]
+            plain_sessions: false,
         }
     }
 }
@@ -358,7 +364,8 @@ impl Runner {
 
     /// Start a job; answers its id.  A session's job runs in that session's sandbox (its worktree, writable, is the
     /// only folder it writes; its CWD must be the worktree or inside it; no sandbox here is a refusal); the user's
-    /// runs with the user's rights.  On a full machine the job is recorded as queued and the id answered at once.
+    /// runs with the user's rights.  A session's job on a full machine is recorded as queued and the id answered at
+    /// once; the user's take no machine slot.
     pub async fn start(&self, spec: ExecSpec) -> Result<String, Refusal> {
         self.inner()?.clone().start(spec).await
     }
@@ -540,14 +547,22 @@ impl Inner {
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
-        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
-            if let Err(e) = self.enqueue(&id, &dir, &spec) {
-                let _ = std::fs::remove_dir_all(&dir);
-                return Err(e);
-            }
-            // a slot may have freed between the failed try and the queue entry
-            self.pump();
-            return Ok(id);
+        // The slots are the agents': the user's jobs (the editor's servers, which run for days, and its one-shot work)
+        // take none, so they never queue an agent's job, nor wait behind one.
+        let permit = match spec.starter {
+            Starter::User => None,
+            Starter::Session(_) => match self.slots.clone().try_acquire_owned() {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    if let Err(e) = self.enqueue(&id, &dir, &spec) {
+                        let _ = std::fs::remove_dir_all(&dir);
+                        return Err(e);
+                    }
+                    // a slot may have freed between the failed try and the queue entry
+                    self.pump();
+                    return Ok(id);
+                }
+            },
         };
         let r = self.clone().launch(&id, &dir, spec, permit).await;
         if r.is_err() {
@@ -625,7 +640,7 @@ impl Inner {
                 None => Some("its start request is gone".to_string()),
                 Some(p) => {
                     let slot = permit.take().expect("the slot");
-                    match self.clone().launch(&id, &dir, p.into_spec(), slot).await {
+                    match self.clone().launch(&id, &dir, p.into_spec(), Some(slot)).await {
                         Ok(()) => return,
                         Err(e) => Some(e.message),
                     }
@@ -717,7 +732,7 @@ impl Inner {
         id: &str,
         dir: &Path,
         spec: ExecSpec,
-        permit: tokio::sync::OwnedSemaphorePermit,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> Result<(), Refusal> {
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let mut proxy = None;
@@ -728,7 +743,7 @@ impl Inner {
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests() => {
+            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => {
                 (plain_spec(&spec, &self.hooks.shell_env), None)
             }
             Starter::Session(sid) => {
@@ -1119,8 +1134,13 @@ fn plain_spec(spec: &ExecSpec, shell: &crate::shell_env::ShellEnv) -> draugr::Sp
     }
 }
 
-/// Tests and `test-hooks` builds with `DRGNX_TEST_PLAIN_JOBS` set: the conformance container has no sandbox helper.
-fn unsandboxed_for_tests() -> bool {
+/// Tests and `test-hooks` builds with `DRGNX_TEST_PLAIN_JOBS` set: the conformance container has no sandbox helper;
+/// unit tests ask for it in their `Hooks`.
+fn unsandboxed_for_tests(_hooks: &Hooks) -> bool {
+    #[cfg(test)]
+    if _hooks.plain_sessions {
+        return true;
+    }
     cfg!(any(test, feature = "test-hooks")) && std::env::var_os("DRGNX_TEST_PLAIN_JOBS").is_some()
 }
 

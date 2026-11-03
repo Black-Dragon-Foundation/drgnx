@@ -48,8 +48,7 @@ agent that sends any of them is refused with `invalid-params`:
 
 - **`name`**: what the job is called in lists (`exec/get` and `exec/list` return it as `name`).
 - **`env`**: variables added to the job's environment (at most 16). A name that contains `KEY`, `TOKEN`, `SECRET`,
-  `PASSWORD`, `PASSPHRASE` or `CREDENTIAL` is refused, so a key never travels in a job. A queued job keeps its
-  variables in its `pending.json` until it starts. A container job takes none.
+  `PASSWORD`, `PASSPHRASE` or `CREDENTIAL` is refused, so a key never travels in a job. A container job takes none.
 - **`memory_max`**: the unit's memory cap, in systemd's syntax (`512M`, `2G`), instead of `agents-job-memory`. Without
   a user systemd on Linux it changes nothing; macOS has no memory cap for jobs, and refuses it.
 - **`nice`**: 0 to 19, how much nicer than the hub the job runs (`nice -n`, so the same with and without a unit).
@@ -115,7 +114,9 @@ cache for this).
   the agent's process ends (`session/close` first, for the CLIs that have it). The job's end, or your next message,
   resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with
   `session/load`).
-- **Machine slots.** This machine runs four jobs at once. A fifth is recorded as queued and `job_start` answers at once
+- **Machine slots.** This machine runs four agents' jobs at once (your own jobs, the editor's servers and one-shot work
+  among them, take no slot: they never hold an agent's job up, nor wait behind one, as the editor's jobs never had a
+  limit). A fifth agent's job is recorded as queued and `job_start` answers at once
   ("queued ... you will be woken"): the agent ends its turn like for any job. The queued job (its row says `queued`,
   with no unit yet) starts when a slot frees, oldest first, and also after a hub restart; `exec/stop` ends it without
   it ever starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the

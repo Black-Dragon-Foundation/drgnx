@@ -1404,7 +1404,9 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result. The graph record is
+command stays the hub's child. `Runner::open` re-attaches every folder without a result. The machine's slots
+(`Hooks::slots`, 4) are the sessions' jobs': `Inner::start` gives a `Starter::User` job no permit, so the editor's
+servers (`no_timebox`, up for days) never fill them and a user's job never queues. The graph record is
 `norn::write::exec`. The `exec/runs-in-the-starters-sandbox` row (`exec::tests::exec_runs_in_the_starters_sandbox`) is
 `#[ignore]`d where bwrap is missing (build containers): run it on a host with bwrap or in CI with `-- --ignored`. So are
 the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch spec run in a real sandbox): a
