@@ -28,19 +28,33 @@ watches): while one waits in the input queue, Emacs runs no process sentinel —
 their processes end.  The runner calls this after every test."
   (dotimes (_ 2) (read-event nil nil 0.002)))     ; 0 reads nothing: the event must be fetched first
 
+(defvar drgnx-run-ert--self)
+
+(defun drgnx-run-ert--off-files ()
+  "The true names of the test files test/class-exempt.eld turns off (rows with `:off t': Lisp a plan deletes), or
+nil when DRGNX_TEST_FROZEN=1 runs them."
+  (unless (equal (getenv "DRGNX_TEST_FROZEN") "1")
+    (let* ((root (file-name-directory (directory-file-name (file-name-directory drgnx-run-ert--self))))
+           (eld (expand-file-name "test/class-exempt.eld" root)))
+      (when (file-readable-p eld)
+        (let ((rows (with-temp-buffer (insert-file-contents eld) (read (current-buffer)))) off)
+          (dolist (row rows off)
+            (when (plist-get (cdr row) :off) (push (file-truename (expand-file-name (car row) root)) off))))))))
+
 (defun drgnx-run-ert--files (where)
-  "The test files WHERE names: every *-test.el under a directory, or a list of files (a shard)."
-  (if (and (stringp where) (file-directory-p where))
-      (directory-files-recursively (expand-file-name where) "-test\\.el\\'")
-    (mapcar #'expand-file-name (if (listp where) where (list where)))))
+  "The test files WHERE names: every *-test.el under a directory, or a list of files (a shard).
+The files test/class-exempt.eld turns off are left out (`drgnx-run-ert--off-files')."
+  (let ((off (drgnx-run-ert--off-files)))
+    (seq-remove (lambda (f) (member (file-truename f) off))
+                (if (and (stringp where) (file-directory-p where))
+                    (directory-files-recursively (expand-file-name where) "-test\\.el\\'")
+                  (mapcar #'expand-file-name (if (listp where) where (list where)))))))
 
 ;;;; The leak census
 
 ;; With DRGNX_TEST_LEAKS set (`bin/drgnx test --leaks'), the cheap fingerprint (core/drgnx-modules-fingerprint.el) is
 ;; read around every test, the full one around every test file; each difference is a leak, recorded with the test, its
 ;; file and the file that defined the function concerned.  Report only: the exit status is the tests'.
-
-(defvar drgnx-run-ert--self)
 
 (defvar drgnx-run-ert--leaks nil "The leaks recorded so far, newest first: plists (:test :file :what :source).")
 

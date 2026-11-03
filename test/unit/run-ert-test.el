@@ -643,7 +643,9 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
            suite `(("socket-test.el" . ,(format "(require 'drgnx-hub)\n(ert-deftest iso-socket/where () (write-region (drgnx-hub-socket) nil %S))"
                                                 probe))))
           (should (>= (string-bytes parent) 100))
-          (let ((process-environment (append (list (concat "TMPDIR=" parent) "DRGNX_RUN_TMP" (concat "DRGNX_TEST_RESULTS=" results)
+          ;; DRGNX_TEST_FROZEN=1: hub-test.el's row in test/class-exempt.eld is off (P7 deletes the Lisp hub)
+          (let ((process-environment (append (list (concat "TMPDIR=" parent) "DRGNX_TEST_FROZEN=1" "DRGNX_RUN_TMP"
+                                                   (concat "DRGNX_TEST_RESULTS=" results)
                                                    "DRGNX_TEST_SELECTOR=\"\\\\`\\\\(iso-socket/where\\\\|drgnx-hub/ping-status-and-register-over-the-socket\\\\)\\\\'\"")
                                              process-environment)))
             (should (eql 0 (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
