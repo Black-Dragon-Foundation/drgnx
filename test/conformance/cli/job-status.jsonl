@@ -1,0 +1,12 @@
+{"scenario": "cli/job-status", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "ratatoskr job status: with no job it says so; once a plan is proposed the list and the one job show it (text, then --json: the list is {\"jobs\": [...]}, one job is the job); an id the hub does not know is exit 1."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "run", "args": ["job", "status"], "expect_code": 0, "expect_stdout": "No jobs."}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--json"], "expect_code": 0, "expect_stdout": {"id": "$capture:job", "status": "proposed"}}
+{"do": "run", "args": ["job", "status"], "expect_code": 0, "expect_stdout": "$job  Job CLI  [proposed]"}
+{"do": "run", "args": ["job", "status", "$job"], "expect_code": 0, "expect_stdout": "  card #"}
+{"do": "run", "args": ["job", "status", "--json"], "expect_code": 0, "expect_stdout": {"jobs": [{"id": "$job", "status": "proposed"}]}}
+{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "proposed", "cards": [{"kind": "proposal"}]}}
+{"do": "run", "args": ["job", "status", "job-nope"], "expect_code": 1, "expect_stderr": "ratatoskr job:"}

@@ -23,6 +23,8 @@
 //! - [`backup_timer`]: the nightly checked backup's schedule (03:00, or the first tick after a missed night).
 //! - [`graph_cli`]: `ratatoskr graph …`, the store's commands from a terminal (export, import, backup, revert,
 //!   excise, scrub, grants, sql, compact, proposed), a client of the running hub.
+//! - [`job_cli`]: `ratatoskr job …`, plan runs from a terminal (propose, approve, status, stop, resume), a client of
+//!   the running hub.
 //! - [`sessions`]: the coordination tools on a socket per session (the socket is the identity) and for outside
 //!   agents' bridges (`mcp/session`, `mcp/session-close`, `mcp/attach`), kept in `runtime.db`.
 //! - [`peer`]: the process behind a connection: its parent and start time, for an outside agent's identity; the
@@ -77,6 +79,7 @@ pub mod graph;
 pub mod graph_cli;
 pub mod hello;
 pub mod idle;
+pub mod job_cli;
 pub mod lock;
 pub mod log;
 pub mod manager;

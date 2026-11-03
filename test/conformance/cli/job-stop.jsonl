@@ -1,0 +1,11 @@
+{"scenario": "cli/job-stop", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "ratatoskr job stop: a proposed job is stopped from the command line (its proposal is rejected: status stopped, in text and --json); a stop without an id is a usage error (exit 2); a stop of an unknown job is exit 1."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--json"], "expect_code": 0, "expect_stdout": {"id": "$capture:job", "status": "proposed"}}
+{"do": "run", "args": ["job", "stop", "$job"], "expect_code": 0, "expect_stdout": "$job  Job CLI  [stopped]"}
+{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "stopped", "cards": []}}
+{"do": "sql_expect", "sql": "select kind, state, choice from card", "rows": [["proposal", "settled", "reject"]]}
+{"do": "run", "args": ["job", "stop"], "expect_code": 2, "expect_stderr": "needs a job id"}
+{"do": "run", "args": ["job", "stop", "job-nope"], "expect_code": 1, "expect_stderr": "ratatoskr job:"}

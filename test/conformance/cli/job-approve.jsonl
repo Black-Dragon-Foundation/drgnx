@@ -1,0 +1,15 @@
+{"scenario": "cli/job-approve", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "ratatoskr job approve: a proposed job is started from the command line (the mock Claude takes its first task; --budget is the job's budget); a budget that is not a number is a usage error (exit 2) that approves nothing; an unknown job is exit 1. The job is stopped at the end."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "silent 600\n"}
+{"do": "start", "hub": "h"}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--json"], "expect_code": 0, "expect_stdout": {"id": "$capture:job", "status": "proposed"}}
+{"do": "run", "args": ["job", "approve", "$job", "--budget", "lots"], "expect_code": 2, "expect_stderr": "--budget"}
+{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "proposed"}}
+{"do": "run", "args": ["job", "approve", "job-nope"], "expect_code": 1, "expect_stderr": "ratatoskr job:"}
+{"do": "run", "args": ["job", "approve", "$job", "--budget", "5"], "expect_code": 0, "expect_stdout": "budget 5.0 USD"}
+{"do": "file", "path": "$ROOT/w.log", "contains": "\"prompt\"", "within_ms": 90000}
+{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "running", "budget": 5.0, "agents": [{"status": "$string"}]}}
+{"do": "run", "args": ["job", "stop", "$job"], "expect_code": 0, "expect_stdout": "[stopped]"}

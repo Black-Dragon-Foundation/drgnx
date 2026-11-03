@@ -119,6 +119,27 @@ was never approved: propose the plan again. In Emacs: **Start Job from Plan…**
 proposal, in the Work cockpit, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
 Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
 
+### From the command line
+
+`drgnx job` runs `ratatoskr job`, a client of the running hub (started first when none runs). Each subcommand is one
+call to the hub (`job/propose`, `job/approve`, `job/status`, `job/stop`, `job/resume`, 30 seconds at most), so it needs
+no editor, and the hub's own checks apply:
+
+```
+ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]
+ratatoskr job approve ID [--budget USD] [--json]
+ratatoskr job status [ID] [--json]
+ratatoskr job stop ID [--json]
+ratatoskr job resume ID [--budget USD] [--json]
+```
+
+A relative `PLAN` or `--repo` is taken from the folder you run it in. Without `--json` the job prints as text: its
+title and status, the repository, one line per task (with what it waits for), the estimate, the budget and what was
+spent, then any warnings, agents, permission requests, open cards and messages. A proposed job ends with `Approve
+with: drgnx job approve ID`. `--json` prints the hub's answer on one line. The exit code is 0 when the hub did what
+was asked, 1 when it answered with an error (its text goes to stderr), and 2 when the arguments do not parse (an
+unknown option, a missing plan or id, a `--budget` that is not a number).
+
 ## A job in the Work cockpit
 
 **Show Job in Work…** (`job-show`) filters the [Work cockpit](cockpit.md) to a job: the Work graph shows that job's

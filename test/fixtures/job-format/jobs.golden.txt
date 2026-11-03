@@ -1,0 +1,21 @@
+job-0007  Seam  [running]
+  repository /work/repo
+  Task 1: Do the thing  — implement on mock-claude, done
+  Task 2: Check the thing  — review on mock-gemini, claimed, after Task 1
+  Task 22b: Wrap up  — implement on mock-claude, pending, after Task 1, Task 2
+  estimate ~3.46 USD, 330000 tokens (unpriced: local-llm, other)
+  budget 5.0 USD, spent 1.50 USD
+  warning: budget does not cover the unpriced profiles
+  agent s-3 (mock-gemini) running on job-0007#2
+  asks: Run cargo test (s-3)
+  card #4 [ci] job-0007#1: CI is red
+  card #5 [proposal] Approve the plan
+  message #9 from agent:s-3: Is the seam public?
+=====
+job-0008  Small  [proposed]
+  repository /work/repo
+  Task 1: One  — implement on mock-claude, ready
+  estimate ~0.00 USD, 1200 tokens
+  budget none, spent 0.00 USD
+  card #1 [proposal] Approve Small
+=====

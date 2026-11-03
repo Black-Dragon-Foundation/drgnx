@@ -1,0 +1,12 @@
+{"scenario": "cli/job-propose", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "ratatoskr job propose: a plan file from the command line becomes a proposed job (text: its tasks, a hint to approve it; --json: the hub's answer on one line); the plan path, --repo and --budget reach job/propose; a budget that is not a number, a missing plan and an unknown option are usage errors (exit 2) that call nothing; a plan the hub refuses is exit 1 with its text on stderr."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--budget", "5"], "expect_code": 0, "expect_stdout": "Task 2: Check the note  — review on"}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo"], "expect_code": 0, "expect_stdout": "Approve with: drgnx job approve job-"}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--budget", "5", "--json"], "expect_code": 0, "expect_stdout": {"id": "$string", "status": "proposed", "budget": 5.0, "repo": "$string", "tasks": [{"n": 1, "status": "ready"}, {"n": 2, "status": "pending"}]}}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--budget", "lots"], "expect_code": 2, "expect_stderr": "--budget"}
+{"do": "run", "args": ["job", "propose"], "expect_code": 2, "expect_stderr": "needs a plan"}
+{"do": "run", "args": ["job", "propose", "$ROOT/none.md", "--nope"], "expect_code": 2}
+{"do": "run", "args": ["job", "propose", "$ROOT/none.md"], "expect_code": 1, "expect_stderr": "ratatoskr job:"}

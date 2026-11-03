@@ -22,6 +22,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr store migrate-check --db FILE --scratch DIR [--json]   (migrate a copy of work.db; counts only)\n\
     \x20      ratatoskr store restore-pre7 [--yes]   (the hub stopped: work.db back from before schema 7)\n\
     \x20      ratatoskr graph export|import|backup|revert|excise|scrub|grants|sql|compact|proposed ...   (the store, from a terminal)\n\
+    \x20      ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]   (plan runs, from a terminal)\n\
+    \x20      ratatoskr job approve ID [--budget USD] | status [ID] | stop ID | resume ID [--budget USD]   [--json]\n\
     \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
@@ -81,6 +83,8 @@ pub enum Command {
     Store(StoreCommand),
     /// `graph …`: the store's commands, a client of the running hub (`crate::graph_cli`).
     Graph(crate::graph_cli::GraphCommand),
+    /// `job …`: plan runs, a client of the running hub (`crate::job_cli`).
+    Job(crate::job_cli::JobCommand),
 }
 
 /// `store`'s subcommands.
@@ -339,6 +343,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "mcp-bridge" => mcp_bridge(&mut p).map(Command::McpBridge),
         "store" => store(&mut p).map(Command::Store),
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
+        "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
         other => Err(format!("unknown command {other:?}")),
     }
 }
