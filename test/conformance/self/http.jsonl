@@ -1,4 +1,4 @@
-{"scenario": "self/http", "requires": ["v0"], "doc": "The harness's own row for the http verbs: a request with a header and a counted body, the head read first and the rest read later by expect_http, a connection reused, a response matched by status, header and body, and file_grep over the logs of a scripted listener (ratatoskr-mock llm)."}
+{"scenario": "self/http", "requires": ["v1"], "doc": "The harness's own row for the http verbs: a request with a header and a counted body, the head read first and the rest read later by expect_http, a connection reused, a response matched by status, header and body, and file_grep over the logs of a scripted listener (ratatoskr-mock llm)."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/stream", "chunks": [[0, "data: a\n\n"], [300, "data: b\n\n"]]}, {"path": "/upload", "status": 201, "headers": {"x-reply": "yes"}, "body": "{\"ok\": true}"}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}

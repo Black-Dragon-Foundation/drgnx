@@ -84,8 +84,8 @@ impl Root {
         self.dir.path()
     }
 
-    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` and
-    /// `DBUS_SESSION_BUS_ADDRESS`): every directory points into this root, so nothing reaches `~`.  The session bus is
+    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` (the
+    /// editor's own CLIs that a row runs need it) and `DBUS_SESSION_BUS_ADDRESS`): every directory points into this root, so nothing reaches `~`.  The session bus is
     /// how a container job's podman reaches the user's systemd, which enforces the job's caps (the hub refuses the job
     /// without it; `XDG_RUNTIME_DIR` here is the root's, so podman cannot find the bus there).  `extra` wins.
     pub fn base_env(&self, extra: Vec<(String, String)>) -> BTreeMap<String, String> {
@@ -148,6 +148,7 @@ fn layout_vars(root: &Root, env: &Env) -> BTreeMap<&'static str, String> {
         ("CONFIG", s(&root.path().join("config"))),
         ("SOCKET", s(&socket)),
         ("SOCKET_DIR", s(&socket_dir)),
+        // where the Lisp backend of an older hub kept its socket and lock: a row plants leftovers there
         (
             "BACKEND_SOCKET",
             s(&socket_dir.join(format!("{stem}.d")).join("backend.sock")),

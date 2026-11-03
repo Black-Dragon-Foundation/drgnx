@@ -1,4 +1,4 @@
-{"scenario": "agents/steps-are-streamed", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: a session's timeline is cut into steps by the hub's own clock: a turn with a tool call gives a think step, a tool step (its title and ACP kind) and a think step, each announced as an agent-step event once its row is in the step table."}
+{"scenario": "agents/steps-are-streamed", "requires": ["v1", "test-hooks"], "doc": "Task 8b: a session's timeline is cut into steps by the hub's own clock: a turn with a tool call gives a think step, a tool step (its title and ACP kind) and a think step, each announced as an agent-step event once its row is in the step table."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && echo hi > $ROOT/work/note.txt"], "expect_code": 0}

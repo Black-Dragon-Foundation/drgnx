@@ -1,4 +1,4 @@
-{"scenario": "perf/agents-idle-20", "requires": ["v1", "fake-backend", "test-hooks", "perf"], "doc": "Exit criterion perf, hub half: 20 mock agents sit idle for 10 s with an editor subscribed. Budget, checked in the row: the hub's CPU over the window (utime + stime from /proc) stays under 3 percent of one core (the supervisor's one-second tick and the sessions' timers are all that may run). Linux only (/proc)."}
+{"scenario": "perf/agents-idle-20", "requires": ["v1", "test-hooks", "perf"], "doc": "Exit criterion perf, hub half: 20 mock agents sit idle for 10 s with an editor subscribed. Budget, checked in the row: the hub's CPU over the window (utime + stime from /proc) stays under 3 percent of one core (the supervisor's one-second tick and the sessions' timers are all that may run). Linux only (/proc)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

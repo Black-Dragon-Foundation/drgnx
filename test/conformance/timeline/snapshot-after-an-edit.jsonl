@@ -1,4 +1,4 @@
-{"scenario": "timeline/snapshot-after-an-edit", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19: a snapshot is taken at the turn's first step and after the completed edit (two of the three steps carry a tree id), kept as a ref in the worktree's shadow repository."}
+{"scenario": "timeline/snapshot-after-an-edit", "requires": ["v1", "test-hooks"], "doc": "Task 19: a snapshot is taken at the turn's first step and after the completed edit (two of the three steps carry a tree id), kept as a ref in the worktree's shadow repository."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

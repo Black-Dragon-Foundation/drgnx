@@ -1,4 +1,4 @@
-{"scenario": "graph/record-twice-is-one", "requires": ["v1", "fake-backend"], "doc": "graph/record (Urdr Task 15a; storage §9 step 3): a job's commits recorded against its task, keyed by the job's collected key; the same record again answers the first answer and writes nothing: one tx, the commits once, the implements links once, the key collected."}
+{"scenario": "graph/record-twice-is-one", "requires": ["v1"], "doc": "graph/record (Urdr Task 15a; storage §9 step 3): a job's commits recorded against its task, keyed by the job's collected key; the same record again answers the first answer and writes nothing: one tx, the commits once, the implements links once, the key collected."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/work/docs/plans/p.md", "text": "# P\n### Task 1: one\n"}
 {"do": "start", "hub": "h"}

@@ -12,25 +12,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct Config {
-    pub lisp_target: bool,
     pub hub_bin: PathBuf,
-    pub lisp_hub: Option<PathBuf>,
-    pub fake_backend: Option<PathBuf>,
     /// The scenarios' directory, absolute (`$SCENARIOS`: fixtures beside the rows).
     pub scenarios: PathBuf,
 }
 
-/// The Emacs the harness and the Lisp hub use: `$DRGNX_EMACS`, else `emacs` (`$EMACS`).
-fn emacs() -> String {
-    std::env::var("DRGNX_EMACS")
-        .ok()
-        .filter(|e| !e.is_empty())
-        .unwrap_or_else(|| "emacs".into())
-}
-
 pub struct Runner<'a> {
     cfg: &'a Config,
-    requires: Vec<String>,
     hubs: Vec<Hub>,
     conns: BTreeMap<String, Conn>,
     spawned: BTreeMap<String, Child>,
@@ -47,12 +35,11 @@ pub struct Runner<'a> {
 type R<T = ()> = Result<T, String>;
 
 /// Longest first, so `$SOCKET_DIR` is not read as `$SOCKET` and `_DIR`.
-const VAR_NAMES: [&str; 15] = [
+const VAR_NAMES: [&str; 14] = [
     "BACKEND_SOCKET",
     "SCENARIOS",
     "SOCKET_DIR",
     "HARNESS_PID",
-    "EMACS",
     "SOCKET",
     "CONFIG",
     "STATE",
@@ -69,7 +56,6 @@ const VAR_NAMES: [&str; 15] = [
 pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>)>) -> R {
     let mut r = Runner {
         cfg,
-        requires: s.requires.clone(),
         hubs: vec![],
         conns: BTreeMap::new(),
         spawned: BTreeMap::new(),
@@ -446,7 +432,6 @@ impl Runner<'_> {
             "SCENARIOS".into(),
             self.cfg.scenarios.to_string_lossy().into_owned(),
         );
-        m.insert("EMACS".into(), emacs());
         // ratatoskr-mock is built beside domr
         if let Some(dir) = std::env::current_exe()
             .ok()
@@ -574,23 +559,18 @@ impl Runner<'_> {
             .collect())
     }
 
-    /// The program a `start` or `run` step uses: the one under test, the Lisp hub, or an absolute path (`$ROOT` is
-    /// ROOT's: a copy that `install_bin` made there).
+    /// The program a `start` or `run` step uses: the one under test, or an absolute path (`$ROOT` is ROOT's: a copy
+    /// that `install_bin` made there).
     fn bin(&self, step: &Step, root: &Root) -> R<PathBuf> {
         match str_of(&step.obj, "bin").unwrap_or("under-test") {
             "under-test" => Ok(self.cfg.hub_bin.clone()),
-            "lisp" => self
-                .cfg
-                .lisp_hub
-                .clone()
-                .ok_or_else(|| "bin \"lisp\" needs --lisp-hub".to_string()),
             other => {
                 let p = other.replace("$ROOT", &root.path().to_string_lossy());
                 if p.starts_with('/') {
                     Ok(PathBuf::from(p))
                 } else {
                     Err(format!(
-                        "\"bin\" is \"under-test\", \"lisp\" or an absolute path, not {other:?}"
+                        "\"bin\" is \"under-test\" or an absolute path, not {other:?}"
                     ))
                 }
             }
@@ -715,7 +695,6 @@ impl Runner<'_> {
             "proc" => self.proc(step),
             "write_file" => self.write_file(step),
             "sqlite" => self.sqlite(step),
-            "backend_log" => self.backend_log(step),
             "pid" => self.pid(step),
             "class_matrix" => self.class_matrix(step),
             "bad_params" => self.bad_params(step),
@@ -762,7 +741,6 @@ impl Runner<'_> {
                 "SCENARIOS",
                 self.cfg.scenarios.to_string_lossy().into_owned(),
             ),
-            ("EMACS", emacs()),
         ]);
         let pre_sub = |s: String| -> String {
             let mut out = s;
@@ -776,33 +754,11 @@ impl Runner<'_> {
             .into_iter()
             .map(pre_sub)
             .collect();
-        let mut env: Vec<(String, String)> = self
+        let env: Vec<(String, String)> = self
             .env_pairs(None, step)?
             .into_iter()
             .map(|(k, v)| (k, pre_sub(v)))
             .collect();
-        if !self.cfg.lisp_target {
-            // a v0 row runs through the front against the Lisp backend (review I1)
-            if self
-                .requires
-                .iter()
-                .any(|t| t == "lisp-backend" || t == "v0")
-            {
-                if let Some(p) = &self.cfg.lisp_hub {
-                    env.push((
-                        "DRGNX_RATATOSKR_BACKEND".into(),
-                        p.to_string_lossy().into_owned(),
-                    ));
-                }
-            } else if self.requires.iter().any(|t| t == "fake-backend")
-                && let Some(p) = &self.cfg.fake_backend
-            {
-                env.push((
-                    "DRGNX_RATATOSKR_BACKEND".into(),
-                    p.to_string_lossy().into_owned(),
-                ));
-            }
-        }
         self.started += 1;
         let mut hub = Hub::start(StartSpec {
             name: &name,
@@ -1068,7 +1024,7 @@ impl Runner<'_> {
             }
         };
         self.conns.insert(name.clone(), conn);
-        if who == "user" && !self.cfg.lisp_target {
+        if who == "user" {
             let cap = self.hubs[idx].cap();
             let conn = self.conns.get_mut(&name).expect("just inserted");
             Self::do_hello(conn, &cap, &HelloSpec::user(), &mut self.caps, None)?;
@@ -1077,9 +1033,6 @@ impl Runner<'_> {
     }
 
     fn hello(&mut self, step: &Step) -> R {
-        if self.cfg.lisp_target {
-            return Err("hello is a v1 verb: it has no meaning against --target lisp".into());
-        }
         let idx = self.hub_index(str_of(&step.obj, "hub")).ok();
         let proof = match str_of(&step.obj, "proof").unwrap_or("valid") {
             "valid" => Proof::Valid,
@@ -2081,68 +2034,6 @@ impl Runner<'_> {
                 Err(e) if Instant::now() > deadline => return Err(e),
                 Err(_) => std::thread::sleep(Duration::from_millis(50)),
             }
-        }
-    }
-
-    fn backend_log(&mut self, step: &Step) -> R {
-        let i = self.hub_index(str_of(&step.obj, "hub"))?;
-        let file = self.hubs[i].state_dir().join("fake-backend.log");
-        let found = |this: &mut Self, pattern: &Value| -> bool {
-            let text = std::fs::read_to_string(&file).unwrap_or_default();
-            text.lines().any(|l| match pattern {
-                Value::String(s) => l.contains(s.as_str()),
-                p => serde_json::from_str::<Value>(l)
-                    .is_ok_and(|v| matcher::matches(p, &v, &mut this.caps.clone()).is_ok()),
-            })
-        };
-        if let Some(p) = step.obj.get("expect_line") {
-            let p = self.subst(Some(i), p, false);
-            let deadline = Instant::now() + ms(&step.obj, "within_ms", 5000);
-            while !found(self, &p) {
-                if Instant::now() > deadline {
-                    return Err(format!(
-                        "the fake backend never logged {p} ({})",
-                        file.display()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Ok(())
-        } else if let Some(p) = step.obj.get("expect_no_line") {
-            let p = self.subst(Some(i), p, false);
-            std::thread::sleep(ms(&step.obj, "for_ms", 500));
-            if found(self, &p) {
-                Err(format!("the fake backend logged {p}"))
-            } else {
-                Ok(())
-            }
-        } else if let Some(p) = step.obj.get("count") {
-            // after "for_ms", the lines matching "count" number "at_least" (0) to "at_most" (any)
-            let p = self.subst(Some(i), p, false);
-            std::thread::sleep(ms(&step.obj, "for_ms", 500));
-            let text = std::fs::read_to_string(&file).unwrap_or_default();
-            let n = text
-                .lines()
-                .filter(|l| match &p {
-                    Value::String(s) => l.contains(s.as_str()),
-                    p => serde_json::from_str::<Value>(l)
-                        .is_ok_and(|v| matcher::matches(p, &v, &mut self.caps.clone()).is_ok()),
-                })
-                .count();
-            let bound = |k: &str| step.obj.get(k).and_then(Value::as_u64).map(|v| v as usize);
-            let (lo, hi) = (
-                bound("at_least").unwrap_or(0),
-                bound("at_most").unwrap_or(usize::MAX),
-            );
-            if (lo..=hi).contains(&n) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "the fake backend logged {p} {n} times, not {lo} to {hi}"
-                ))
-            }
-        } else {
-            Err("backend_log needs expect_line, expect_no_line or count".into())
         }
     }
 

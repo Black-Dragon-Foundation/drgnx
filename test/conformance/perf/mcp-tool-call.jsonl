@@ -1,4 +1,4 @@
-{"scenario": "perf/mcp-tool-call", "requires": ["v1", "fake-backend", "perf"], "doc": "The baseline of a tool call over a session socket: tools/call read_inbox on an initialized MCP connection, 100 times (--perf records every sample, no budget)."}
+{"scenario": "perf/mcp-tool-call", "requires": ["v1", "perf"], "doc": "The baseline of a tool call over a session socket: tools/call read_inbox on an initialized MCP connection, 100 times (--perf records every sample, no budget)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

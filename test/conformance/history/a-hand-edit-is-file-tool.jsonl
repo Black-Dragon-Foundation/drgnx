@@ -1,4 +1,4 @@
-{"scenario": "history/a-hand-edit-is-file-tool", "requires": ["v1", "fake-backend"], "doc": "settings/record (unified-settings Task 24; design §12): a change drgnx did not make is recorded with tool file:<name>, your Lisp's effect with lisp:<file>, both user class; any other tool, a malformed id, or one record across two projects is invalid-params and writes nothing."}
+{"scenario": "history/a-hand-edit-is-file-tool", "requires": ["v1"], "doc": "settings/record (unified-settings Task 24; design §12): a change drgnx did not make is recorded with tool file:<name>, your Lisp's effect with lisp:<file>, both user class; any other tool, a malformed id, or one record across two projects is invalid-params and writes nothing."}
 {"do": "root"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}

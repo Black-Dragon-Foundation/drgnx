@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 35] = [
+pub const VERBS: [&str; 34] = [
     "start",
     "root",
     "rename",
@@ -26,7 +26,6 @@ pub const VERBS: [&str; 35] = [
     "proc",
     "write_file",
     "sqlite",
-    "backend_log",
     "pid",
     "class_matrix",
     "bad_params",
@@ -54,8 +53,8 @@ pub struct Scenario {
     /// What the row pins, for whoever reads the file (the runner does not use it).
     #[allow(dead_code)]
     pub doc: String,
-    /// `"pending": REASON`: a known red on Ratatoskr until REASON's task lands (a failure counts as expected, a pass
-    /// fails the run so the mark goes); ignored with `--target lisp`.
+    /// `"pending": REASON`: a known red until REASON's task lands (a failure counts as expected, a pass fails the run
+    /// so the mark goes).
     pub pending: Option<String>,
     pub steps: Vec<Step>,
 }
@@ -66,11 +65,8 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 11] = [
-    "v0",
+pub const TAGS: [&str; 8] = [
     "v1",
-    "fake-backend",
-    "lisp-backend",
     "sudo",
     "test-hooks",
     "linux",
@@ -205,13 +201,10 @@ pub fn glob(pattern: &str, name: &str) -> bool {
 
 #[derive(Debug, Clone, Default)]
 pub struct Host {
-    pub lisp_target: bool,
     pub sudo: bool,
     pub linux: bool,
     pub macos: bool,
     pub test_hooks: bool,
-    pub fake_backend: bool,
-    pub lisp_backend: bool,
     pub perf: bool,
     /// `podman` is on the PATH.
     pub podman: bool,
@@ -222,8 +215,6 @@ pub struct Host {
 #[derive(Debug, PartialEq)]
 pub enum Gate {
     Run,
-    /// Not selected on this target (a lisp run keeps only `v0` rows): not listed.
-    Exclude,
     /// Listed as SKIP; `excused` skips do not fail `--require-all`.
     Skip {
         reason: String,
@@ -233,9 +224,6 @@ pub enum Gate {
 
 pub fn gate(s: &Scenario, h: &Host) -> Gate {
     let has = |t: &str| s.requires.iter().any(|r| r == t);
-    if h.lisp_target && !has("v0") {
-        return Gate::Exclude;
-    }
     let skip = |reason: &str, excused: bool| Gate::Skip {
         reason: reason.to_string(),
         excused,
@@ -248,12 +236,6 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     }
     if has("sudo") && !h.sudo {
         return skip("needs root or passwordless sudo", true);
-    }
-    if has("fake-backend") && !h.fake_backend {
-        return skip("needs --fake-backend", false);
-    }
-    if has("lisp-backend") && !h.lisp_backend {
-        return skip("needs --lisp-hub", false);
     }
     if has("test-hooks") && !h.test_hooks {
         return skip("the hub binary is built without test-hooks", false);
@@ -326,7 +308,7 @@ mod tests {
     use super::*;
 
     const EVERY_VERB: &str = r#"
-{"scenario": "t/every", "requires": ["v0", "v1", "fake-backend", "lisp-backend", "sudo", "test-hooks", "linux", "macos", "perf"], "doc": "d"}
+{"scenario": "t/every", "requires": ["v1", "sudo", "test-hooks", "linux", "macos", "perf", "agent-locks", "podman"], "doc": "d"}
 {"do": "start", "hub": "h"}
 {"do": "root"}
 {"do": "rename", "from": "$ROOT/a", "to": "$ROOT/b"}
@@ -350,7 +332,6 @@ mod tests {
 {"do": "proc", "pid": "$PID(h)", "part": "argv", "lacks": "x"}
 {"do": "write_file", "path": "$ROOT/x", "text": "t"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql": ["select 1"]}
-{"do": "backend_log", "expect_line": "x"}
 {"do": "pid", "capture": "s", "alive": false}
 {"do": "class_matrix", "table": "t.json"}
 {"do": "bad_params", "registry": "r.json"}
@@ -368,7 +349,7 @@ mod tests {
     fn every_verb_parses() {
         let s = parse(EVERY_VERB).unwrap();
         assert_eq!(s.name, "t/every");
-        assert_eq!(s.requires.len(), 9);
+        assert_eq!(s.requires.len(), 8);
         let verbs: Vec<&str> = s.steps.iter().map(|x| x.verb.as_str()).collect();
         for v in VERBS {
             assert!(verbs.contains(&v), "verb {v} did not parse");
@@ -420,6 +401,27 @@ mod tests {
             parse("{\"scenario\": \"t/x\", \"requires\": [\"nonsense\"]}").is_err(),
             "an unknown tag is an error"
         );
+    }
+
+    #[test]
+    fn an_unknown_requirement_is_an_error() {
+        for gone in ["fake-backend", "lisp-backend", "v0"] {
+            let e = parse(&format!(
+                "{{\"scenario\": \"t/x\", \"requires\": [\"v1\", \"{gone}\"]}}"
+            ))
+            .unwrap_err();
+            assert_eq!(e.line, 1);
+            assert!(e.msg.contains(gone), "the error names {gone}: {}", e.msg);
+        }
+        for known in TAGS {
+            assert!(
+                parse(&format!(
+                    "{{\"scenario\": \"t/x\", \"requires\": [\"{known}\"]}}"
+                ))
+                .is_ok(),
+                "{known} is known"
+            );
+        }
     }
 
     #[test]
@@ -504,24 +506,20 @@ mod tests {
             linux: true,
             ..Host::default()
         };
+        // a hub built without test-hooks fails the run: that row is not a missing capability
         assert!(matches!(
-            gate(&row("\"fake-backend\""), &host),
+            gate(&row("\"test-hooks\""), &host),
             Gate::Skip { excused: false, .. }
         ));
         assert!(matches!(
             gate(&row("\"macos\""), &host),
             Gate::Skip { excused: true, .. }
         ));
-        let lisp = Host {
-            lisp_target: true,
-            ..host.clone()
-        };
         // the perf rows wait for --perf; a run without it (CI's --require-all) is not failed by them
         assert!(matches!(
             gate(&row("\"perf\""), &host),
             Gate::Skip { excused: true, .. }
         ));
-        assert_eq!(gate(&row("\"v1\""), &lisp), Gate::Exclude);
-        assert_eq!(gate(&row("\"v0\""), &lisp), Gate::Run);
+        assert_eq!(gate(&row("\"v1\""), &host), Gate::Run);
     }
 }

@@ -1,4 +1,4 @@
-{"scenario": "timeline/cap-prunes-finished-first", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19, on a plan run (Task 16b): task 1 is worked, reviewed and merged, so its worker's session is finished and its snapshot refs are the first to go; with the cap lowered to 1 byte, task 2's first edit takes a snapshot, finds the repository over the cap and removes the finished session's refs (the running one's stay)."}
+{"scenario": "timeline/cap-prunes-finished-first", "requires": ["v1", "test-hooks"], "doc": "Task 19, on a plan run (Task 16b): task 1 is worked, reviewed and merged, so its worker's session is finished and its snapshot refs are the first to go; with the cap lowered to 1 byte, task 2's first edit takes a snapshot, finds the repository over the cap and removes the finished session's refs (the running one's stay)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}

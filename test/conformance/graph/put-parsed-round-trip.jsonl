@@ -1,4 +1,4 @@
-{"scenario": "graph/put-parsed-round-trip", "requires": ["v1", "fake-backend"], "doc": "A scan's plan through graph/put-parsed (Urdr Task 15a): the plan, its task and step stored as parsed entities with their parent links and file time, read back through the Lisp readers' node, edge and file views; the same scan again writes nothing; a derived status is one new version; the file gone retires all it held."}
+{"scenario": "graph/put-parsed-round-trip", "requires": ["v1"], "doc": "A scan's plan through graph/put-parsed (Urdr Task 15a): the plan, its task and step stored as parsed entities with their parent links and file time, read back through the Lisp readers' node, edge and file views; the same scan again writes nothing; a derived status is one new version; the file gone retires all it held."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/work/docs/plans/p.md", "text": "# P\n### Task 1: one\n- [ ] a\n"}
 {"do": "start", "hub": "h"}

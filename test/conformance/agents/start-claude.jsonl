@@ -1,4 +1,4 @@
-{"scenario": "agents/start-claude", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8a: the hub starts a claude-shaped mock ACP agent as a session it holds: agents/start answers the id and name, agents/list shows it idle on its profile, in its cwd, with the agent's capabilities and an enforced flag (false: a test launch)."}
+{"scenario": "agents/start-claude", "requires": ["v1", "test-hooks"], "doc": "Task 8a: the hub starts a claude-shaped mock ACP agent as a session it holds: agents/start answers the id and name, agents/list shows it idle on its profile, in its cwd, with the agent's capabilities and an enforced flag (false: a test launch)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

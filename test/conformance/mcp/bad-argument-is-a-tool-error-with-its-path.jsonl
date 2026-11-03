@@ -1,4 +1,4 @@
-{"scenario": "mcp/bad-argument-is-a-tool-error-with-its-path", "requires": ["v1", "fake-backend"], "doc": "Over a session socket, an argument of the wrong type is a tool error (isError) whose _meta dev.drgnx/error names its path, and the tool never runs (no event row)."}
+{"scenario": "mcp/bad-argument-is-a-tool-error-with-its-path", "requires": ["v1"], "doc": "Over a session socket, an argument of the wrong type is a tool error (isError) whose _meta dev.drgnx/error names its path, and the tool never runs (no event row)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

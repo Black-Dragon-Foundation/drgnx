@@ -1,0 +1,18 @@
+{"scenario": "reaper/a-recorded-orphan-is-killed-at-start", "requires": ["v1", "linux"], "doc": "A process runtime.db recorded (what a crashed hub, or an older hub's Lisp backend, left: its own group, pid, start time and boot) is killed when the next hub starts, and the row goes. The row plants the record for a live process of its own group, left running by a shell that has gone (as a crashed hub's child is); a hub that finds the pid, the start time and the boot unchanged kills it within 4 s and says so in its log."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; setsid sleep 300 </dev/null >/dev/null 2>&1 & p=$!; sleep 0.3; st=$(awk '{ sub(/^.*\\) /, \"\"); print $20 }' /proc/$p/stat); boot=$(tr -d '\\n' < /proc/sys/kernel/random/boot_id); printf '{\"pid\": %s, \"st\": %s, \"boot\": \"%s\"}' \"$p\" \"$st\" \"$boot\" > $ROOT/orphan.json"], "expect_code": 0}
+{"do": "capture_file", "path": "$ROOT/orphan.json", "capture": "orphan", "json_path": "pid"}
+{"do": "capture_file", "path": "$ROOT/orphan.json", "capture": "st", "json_path": "st"}
+{"do": "capture_file", "path": "$ROOT/orphan.json", "capture": "boot", "json_path": "boot"}
+{"do": "start", "hub": "h"}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["insert into proc (purpose, pid, start_time, pgid, boot_id, at) values ('backend', $orphan, $st, $orphan, '$boot', 1.5)"], "query": "select count(*) from proc", "expect": [[1]]}
+{"do": "pid", "capture": "orphan", "alive": true, "within_ms": 1000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "pid", "capture": "orphan", "alive": false, "within_ms": 4000}
+{"do": "connect", "conn": "d", "hub": "h2"}
+{"do": "send", "conn": "d", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "d", "json": {"id": 1, "result": {"pid": "$PID(h2)"}}}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "query": "select count(*) from proc", "expect": [[0]]}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "killed an orphan a crashed or older hub left", "within_ms": 5000}

@@ -1,4 +1,4 @@
-{"scenario": "budget/worker-paused-at-its-managers-limit", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 20: a session that reaches a limit is paused after its turn (held) and a budget card is made. The worker here carries the limit itself (usd-est 0.005, the mock Claude reports 0.01 after its first turn); a manager-level limit is the same code through the link a manager makes (Task 25), tested as nested_minimum."}
+{"scenario": "budget/worker-paused-at-its-managers-limit", "requires": ["v1", "test-hooks"], "doc": "Task 20: a session that reaches a limit is paused after its turn (held) and a budget card is made. The worker here carries the limit itself (usd-est 0.005, the mock Claude reports 0.01 after its first turn); a manager-level limit is the same code through the link a manager makes (Task 25), tested as nested_minimum."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

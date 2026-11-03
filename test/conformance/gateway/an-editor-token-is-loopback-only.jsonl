@@ -1,4 +1,4 @@
-{"scenario": "gateway/an-editor-token-is-loopback-only", "requires": ["v1", "fake-backend"], "doc": "An editor token is good on the loopback listener only: on a session's gateway.sock (bound by an agent's registration for that session) its /p/… request is 401, while the same request on 127.0.0.1 reaches the mock provider; the session's agent token on the socket never reaches /p/… (404)."}
+{"scenario": "gateway/an-editor-token-is-loopback-only", "requires": ["v1"], "doc": "An editor token is good on the loopback listener only: on a session's gateway.sock (bound by an agent's registration for that session) its /p/… request is 401, while the same request on 127.0.0.1 reaches the mock provider; the session's agent token on the socket never reaches /p/… (404)."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/chat/completions", "body": "{\"id\": \"chat-1\", \"usage\": {\"prompt_tokens\": 1, \"completion_tokens\": 1}}"}]}
 {"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}

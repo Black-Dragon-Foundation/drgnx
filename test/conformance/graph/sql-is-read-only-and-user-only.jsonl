@@ -1,4 +1,4 @@
-{"scenario": "graph/sql-is-read-only-and-user-only", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "graph/sql runs one read-only SELECT with bound values and a row cap for the user; a write, a second statement or an ATTACH is invalid-params and changes nothing; an agent's connection is not-allowed."}
+{"scenario": "graph/sql-is-read-only-and-user-only", "requires": ["v1", "test-hooks"], "doc": "graph/sql runs one read-only SELECT with bound values and a row cap for the user; a write, a second statement or an ATTACH is invalid-params and changes nothing; an agent's connection is not-allowed."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}

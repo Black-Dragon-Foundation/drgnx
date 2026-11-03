@@ -1,4 +1,4 @@
-{"scenario": "restart/run-continues", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 24: a plan run goes on across a hub restart from the store: its worker session is resumed (session/resume, no second session/new), the task stays claimed by the same session, and the runner does not take the worker for a dead one and start another while the sessions are being resumed."}
+{"scenario": "restart/run-continues", "requires": ["v1", "test-hooks", "agent-locks"], "doc": "Task 24: a plan run goes on across a hub restart from the store: its worker session is resumed (session/resume, no second session/new), the task stays claimed by the same session, and the runner does not take the worker for a dead one and start another while the sessions are being resumed."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}

@@ -456,42 +456,19 @@ binary, so build it first: `cargo build -p domr --bin ratatoskr-mock` (a workspa
 Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not `$TMPDIR`, so macOS socket paths stay
 short) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
-test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` and `DRGNX_EMACS` are inherited.
+test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`, `DRGNX_EMACS` (for the rows that
+run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited.
 `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes the roots `DIR/PREFIXXXXXXX/` instead. Keep DIR short: the socket path
 must stay within 103 bytes.
 
 ```
-domr --target lisp|ratatoskr --hub-bin PATH --scenarios DIR
-                  [--lisp-hub PATH] [--fake-backend PATH]
-                  [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
+domr --hub-bin PATH --scenarios DIR
+     [--only GLOB] [--only-tag TAG] [--require-all] [--perf OUT.json]
 domr connect-as --socket PATH
 ```
 
-- `--target lisp` runs only the `v0` rows, against the Lisp hub (through `test/conformance/lisp-hub.sh`, which maps
-  `serve --foreground --parent-pid PID` to `emacs --batch -Q -L core -l drgnx-hub -f drgnx-hub-main` using
-  `$DRGNX_EMACS`). `--target ratatoskr` runs every row, the `v0` ones too: they must pass both ways.
-- `--lisp-hub` and `--fake-backend` are what a `lisp-backend` / `fake-backend` row hands Ratatoskr as
-  `DRGNX_RATATOSKR_BACKEND`; with `--target ratatoskr`, a `v0` row gets the Lisp hub as its backend too, so the v0 rows
-  run through the front (`--target ratatoskr --lisp-hub test/conformance/lisp-hub.sh --only-tag v0`). A row with
-  neither runs with the backend `missing` (the harness sets no `DRGNX_DIR`).
-- **The fake backend** (`runtime/target/debug/ratatoskr-fake-backend`, `conformance/src/bin/`) stands in for the
-  Lisp backend: it serves `DRGNX_HUB_SERVE_SOCKET` the v0 way, closes a connection whose first line is not `{"auth":
-  DRGNX_HUB_SERVE_SECRET}` (as the Lisp backend does; that line is not logged), appends every other line it gets to
-  `$STATE/fake-backend.log` and writes its environment as a JSON object to `$STATE/fake-backend.env`. It answers from
-  the JSON script in `DRGNX_FAKE_BACKEND_SCRIPT` (a row's `start` `env`): `{METHOD: ANSWER}`, ANSWER an object with
-  `result` or `error` (sent with the request's id), a string (the whole line, `$ID` the id), `null` (never
-  answered), `{"exit": CODE}` (it exits) or `{"from_file": PATH}` (the answer object is read from PATH at each call,
-  which a row rewrites meanwhile). Without a script: `ping`, `status` (`gateway_port` and `registrations`
-  0), `subscribe` and `coord/notify` answer, anything else is an error. When the script's `trigger` method
-  (`coord/notify`) is called, it sends its subscribers the events of the file `events` (a JSON array of `{event,
-  data}`), then `flood` `card` events with a title of `flood_size` bytes (65536). It ends with its parent
-  (`DRGNX_HUB_PARENT_PID`) unless the script says `"ignore_parent": true`. An entry `{METHOD: {"call_front":
-  {"method": M, "params": P}, "then": ANSWER}}` makes it call M on the front's main socket as a proven user (it reads
-  `hub-HASH.cap`, answers the challenge with the HMAC proof, and keeps that one connection for later calls), wait up to
-  10 s, log `front-answer {...}`, and answer METHOD with ANSWER (`"$front"`: the front's own answer). It logs
-  `notification {"method", "params"}` for every `coord/notify` and `budget` it receives, and answers no line without
-  an id (the front's coalesced `coord/notify` is a notification); its front connection never subscribes (the front
-  would refuse it: the seam rule).
+- One target, Ratatoskr: every row runs against the one hub binary. There is no Lisp hub and no stand-in backend; a
+  row that needs a second process (an agent, a provider, a proxy) starts one of `ratatoskr-mock`'s.
 - `--only GLOB` matches the scenario name (`*` and `?`); `--only-tag TAG` the rows that require the tag.
 - Output: one `PASS name`, `SKIP name (reason)` or `FAIL name: step N (VERB): what` line per scenario, then
   `N passed, N skipped, N failed`. Exit 0 only with no FAIL. With `--require-all` a SKIP fails too, except `linux` /
@@ -506,29 +483,28 @@ domr connect-as --socket PATH
 A scenario is one file, `test/conformance/<group>/<name>.jsonl`. Line 1 is the header
 
 ```json
-{"scenario": "<group>/<name>", "requires": ["v0"], "doc": "what this row pins"}
+{"scenario": "<group>/<name>", "requires": ["v1"], "doc": "what this row pins"}
 ```
 
 Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in failure messages.
 
-**Tags** (`requires`): `v0` (any hub), `v1` (hello v1: Ratatoskr), `fake-backend`, `lisp-backend`, `sudo` (euid 0, or
-`sudo -n true` succeeds), `test-hooks` (the binary's `version --json` says `"test_hooks": true`), `linux`, `macos`,
-`perf`, `podman` (`podman` is on the PATH; an excused skip otherwise). A row whose requirement is missing is skipped (with `--target lisp`, rows without `v0` are not selected at all).
+**Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
+binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
+the PATH; an excused skip otherwise). A tag that is not in this list is a parse error naming it. A row whose
+requirement is missing is skipped.
 
-**Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): on Ratatoskr the
-row runs, and a failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a
-row that passes while marked fails the run, so the mark goes as soon as its task lands. With `--target lisp` the mark
-is ignored. It is for behaviour a plan moves out of the frozen Lisp backend into the hub, between the move of the
-methods and the task that ports it; a row is never deleted for it.
+**Known reds** (`"pending": "REASON"` in the header, REASON naming the task that turns it green): the row runs, and a
+failure is listed as `PENDING` and counted apart (`N pending` in the summary), never as a failure; a row that passes
+while marked fails the run, so the mark goes as soon as its task lands. A row is never deleted for it.
 
 | VERB | Keys | Meaning |
 |---|---|---|
-| `start` | `hub` (a name, default `hub`), `bin` (`"under-test"`, `"lisp"` or an absolute path, `$ROOT` being the root: a copy `install_bin` made), `args`, `env`, `same_root_as`, `wait` | start `BIN serve --foreground --parent-pid <harness pid> ARGS` in a fresh root (the `root` step's, or another hub's root); with `wait` (default true) it waits up to 10 s until `ping` answers; `wait: false` is for a start expected to exit |
+| `start` | `hub` (a name, default `hub`), `bin` (`"under-test"` or an absolute path, `$ROOT` being the root: a copy `install_bin` made), `args`, `env`, `same_root_as`, `wait` | start `BIN serve --foreground --parent-pid <harness pid> ARGS` in a fresh root (the `root` step's, or another hub's root); with `wait` (default true) it waits up to 10 s until `ping` answers; `wait: false` is for a start expected to exit |
 | `root` | none | make a root with no hub in it (`$ROOT $SOCKET $LOCK …` name its paths). The `run`, `start` and file steps after it work in that root; what `ensure` started there, detached, is stopped when the scenario ends (the lock file's pid, while its start time is the recorded one) |
 | `run` | `capture`, `bin`, `args`, `env`, `hub`, `concurrent`, `retry_ms`, `drop_ptrace`, `expect_code`, `expect_stdout`, `expect_stderr` | run `BIN ARGS` to completion (30 s) in the hub's root (else the `root` step's): `ensure`, `stop`, `status`, `restart`. `DRGNX_HUB_PARENT_PID` is the harness's, so a hub it starts detached ends with the harness. `concurrent: N` runs N copies at once, each of which must satisfy the expectations; `retry_ms` repeats the run until they hold. The capture is `{stdout, code, json}`; `expect_stdout` is a string the output contains or a pattern for its JSON (`$capture:NAME` / `$NAME` work in both); `expect_stderr` is a string the error output contains. `drop_ptrace: true` runs it without `CAP_SYS_PTRACE` where the harness has it (bit 19 of `CapEff`: root on a CI host, `--cap-add`), under `setpriv --inh-caps=-sys_ptrace --bounding-set=-sys_ptrace`, since the capability sees through a non-dumpable hub; where `setpriv` is missing the row is skipped with that reason. Podman's default set lacks it, so rows run as they are there |
 | `rename`, `remove` | `from`, `to` / `path` | rename-replace a file, remove one (an update of a binary on disk) |
 | `install_bin` | `to` | copy the hub under test to `to` (0755), a binary a scenario can replace |
-| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"`, `"backend"`, the Lisp backend's own socket, `"agent:SID"` or `"path:STRING"`, a captured path with `$NAME` substituted), `as` | open a connection; lines are buffered per connection. `"user"` (default) on a v1 target performs the `hello` macro with a valid proof and consumes the `challenge`; on `--target lisp` it does nothing. `"service"` and `"raw"` connect and read nothing first (the `challenge`, if the socket sends one, stays buffered; the `mcp.sock` of a session sends none). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
+| `connect` | `conn` (default `c`), `hub`, `socket` (`"main"`, `"agent:SID"` or `"path:STRING"`, a captured path with `$NAME` substituted), `as` | open a connection; lines are buffered per connection. `"user"` (default) performs the `hello` macro with a valid proof and consumes the `challenge`. `"service"` and `"raw"` connect and read nothing first (the `challenge`, if the socket sends one, stays buffered; the `mcp.sock` of a session sends none). `"other-uid"` needs `sudo`: it runs `connect-as` as another uid, and makes the root directory 0711 for it |
 | `spawn` | `capture`, `argv`, `capture_stdout: {regex, name}` | start a helper (for example `sleep 60`); the capture is its pid, and `NAME_start` its start time. Killed when the scenario ends. `capture_stdout`: the first stdout line that matches within 5 s, its group captured as `name` (a number stays a number). The regex is a small form: literal text and at most one group, `(\d+)`, `([0-9]+)`, `(\w+)`, `(\S+)` or `(.+)`; `\x` in the literals is `x` |
 | `http` | `conn` (default `c`), `to` (`"tcp:HOST:PORT"` or `"unix:PATH"`; without it the open connection is used again), `method` (GET), `path`, `headers`, `body` or `body_bytes {fill, n}`, `read` (`"all"` (default), `"head"` or `{bytes: N}`), `close_after` (true: close the connection after the read), `within_ms` (5000) | one HTTP/1.1 request, a `Host` and a `Content-Length` added when missing. `read: "head"` leaves the body unread; `{bytes: N}` reads until N body bytes are in. A server that answers early and closes without reading all of a big body is not an error |
 | `expect_http` | `conn`, `status`, `headers` (pattern; names compare lower-case), `body_contains`, `body_json` (pattern; a chunked body is decoded), `within_ms` (5000) | the response read so far must match; more is read until `within_ms` |
@@ -552,7 +528,6 @@ methods and the task that ports it; a row is never deleted for it.
 | `sql_expect` | `path` (`$DATA/work.db`), `sql`, `rows` | run a read-only query and match its rows (`[[value…]…]`) against the pattern `rows` |
 | `db_digest` | `path` (`$DATA/work.db`), `capture` or `same_as`, `except` (tables, each with a reason in the row) | a digest of every table (row count and sha256 of its rows); `same_as` fails when any table appeared, went or changed since the capture |
 | `capture_file` | `path`, `capture`, `json_path`, `within_ms` (5000) | read a JSON file (waiting for it to exist) and capture the value at `json_path` (dot-separated keys and array indexes, `$` or absent: the whole file), for example a socket path a helper wrote |
-| `backend_log` | `hub`, `expect_line`, `expect_no_line`, `count` (`at_least`, `at_most`), `within_ms`, `for_ms` | lines the fake backend received (`$STATE/fake-backend.log`): a substring, or a pattern for lines that are JSON; `count`: after `for_ms`, how many lines match is within the bounds |
 | `pid` | `capture`, `alive` (true), `within_ms` (5000), `stays_for_ms` | a captured pid is (or is no longer) running; a reused pid does not count. With `stays_for_ms` a pid that is running must stay so that long (a signal sent a moment ago has landed by then) |
 | `class_matrix` | `table`, `args`, `env`, `agent`, `last`, `within_ms` | every method of `table` (`{method: [classes]}`, `class-matrix.json`) gets `{}` from `user` (a valid hello), `service` (no hello) and, with `agent: SID`, `agent` (that session's socket, which `args` such as `["--agent-socket", "s1:j1"]` makes the hub serve). A listed class must not get `not-allowed`; any other must. The step starts its own hubs with `args` and `env`: one for the table, and for each method of `last` (default `restart`, `shutdown`, which a user call runs) one per class |
 | `bad_params` | `conn`, `registry`, `within_ms` | every method of the registry file (`methods.json`; a relative path is from the current directory) with required params gets `{}` and a wrong type for its first required key (`true` where a list belongs, else `[]`) on `conn`; each must be `invalid-params` with a `path` (one of the required keys, then that key). `hello`, and a method whose classes leave out `user` (`mcp/attach`), go on a fresh connection (service class) each time |
@@ -587,8 +562,9 @@ methods and the task that ports it; a row is never deleted for it.
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
 
 **Variables** in strings: `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
-$HARNESS_PID` (of the step's `hub`, else the latest started), `$SCENARIOS` (the scenarios' directory, absolute: its
-`fixtures/`), `$EMACS` (`$DRGNX_EMACS`, else `emacs`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
+$HARNESS_PID` (of the step's `hub`, else the latest started; `$BACKEND_SOCKET` is where an older hub's Lisp backend
+kept its socket, for a row that plants its leftovers), `$SCENARIOS` (the scenarios' directory, absolute: its
+`fixtures/`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are
 `$SOCKET_DIR/s/SID/hub.sock` (`paths::session_dir`).
 
@@ -622,55 +598,49 @@ harness and in `runstav`) all read it. To add a case, run the Lisp side to measu
 
 `cargo test -p domr` covers the parser, the matcher, the paths, the proofs and, in `tests/harness.rs`, whole
 runs against a scripted hub (a small hub inside the test binary). `test/conformance/self/*.jsonl` are the harness's own
-rows: they are valid against any hub, so they also run against the Lisp hub.
+rows: they test the harness's verbs against whatever hub it is given.
 
-### The v0 rows
+### The basic rows
 
-The rows with `"requires": ["v0"]` pin what every hub does, today's Lisp hub and Ratatoskr alike. Each `connect` takes the
-default `"as": "user"`, so the same rows run through Ratatoskr's front once it exists.
+The first rows pin what a hub does at its socket. Each `connect` takes the default `"as": "user"`, so the hello is
+done for them.
 
 | Group | Rows |
 |---|---|
 | `framing/` | `one-object-per-line`, `line-over-1-mib-closes`, `malformed-line-with-id-gets-an-error`, `malformed-line-without-id-is-dropped` |
-| `basics/` | `ping`, `status-shape`, `agents-list-empty`, `shutdown-ends-the-hub`, `a-second-hub-exits-3` (a second hub on the same data dir exits 3) |
+| `basics/` | `ping`, `agents-list-empty`, `shutdown-ends-the-hub`, `a-second-hub-exits-3` (a second hub on the same data dir exits 3); `status-shape` is `status-shape-v1`'s |
 | `events/` | `since-shape`, `subscribe-relays-events` (a proposed then stopped job: its event's `data` is a JSON object, from `events/since` and as an `events` event) |
 
-Run them against the Lisp hub (Emacs from `$DRGNX_EMACS`, else `emacs` on `PATH`):
-
-```
-cargo build --locked --manifest-path runtime/Cargo.toml -p domr
-runtime/target/debug/domr --target lisp --hub-bin test/conformance/lisp-hub.sh --scenarios test/conformance
-```
-
-Green is 11 `PASS` for these rows (plus the 2 `self/` rows).
+(The rows once ran against the Lisp hub too, tagged `v0`; where a `v1` row of the same behaviour existed, the `v0`
+one was deleted, the others became `v1`.)
 
 ### Ratatoskr's server-core rows
 
-`v1` rows (Ratatoskr only) pin the server core ([hub.md](hub.md#the-control-socket)):
+`v1` rows pin the server core ([hub.md](hub.md#the-control-socket)):
 
 | Group | Rows |
 |---|---|
 | `framing/` | `a-partial-line-then-eof-closes-only-that-connection` |
 | `basics/` | `two-hundred-connections-each-get-an-answer` |
-| `lifecycle/` | `socket-dir-0700-cap-0600`, `sigterm-removes-socket-and-cap`, `parent-pid-gone-ends-the-hub`, `a-newer-runtime-db-is-moved-aside`; with `lisp-backend` (a Lisp hub started through `--lisp-hub`): `a-live-lisp-hub-makes-ratatoskr-exit-3`, `a-busy-lisp-hub-is-not-taken-over` (stopped with SIGSTOP), `a-stale-lisp-lock-directory-is-taken-over`, `a-lisp-lock-naming-another-program-is-taken-over` |
+| `lifecycle/` | `socket-dir-0700-cap-0600`, `sigterm-removes-socket-and-cap`, `parent-pid-gone-ends-the-hub`, `a-newer-runtime-db-is-moved-aside`; the leftovers of an older Lisp hub, planted by the row (no Lisp process): `a-stale-lisp-lock-directory-is-taken-over`, `a-lisp-lock-naming-another-program-is-taken-over`, `a-stale-backend-lock-is-removed` (no obstacle) |
 | `security/` | `another-uid-is-refused` (`sudo`: as root in the Fedora 45 test image, or through passwordless sudo on macOS) |
 
 ```
 cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
 cargo test  --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks
-runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
-    --lisp-hub test/conformance/lisp-hub.sh --scenarios test/conformance --only 'lifecycle/*'
+runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr --scenarios test/conformance --only 'lifecycle/*'
 ```
 
 `tests/server.rs` starts the real binary in roots under `$TMPDIR`. It covers two hubs on one lock (the second exits
 3), the cap (64 hex, 0600, gone after SIGTERM, never in the log) and the lock file's `PID START_TIME`. With
 `test-hooks` it also covers a reader that stops while a `__test_flood` of 32 MiB comes. That reader is dropped past
-16 MiB while another reader gets every line. In CI the `conformance-lisp` step runs this in the Linux job
-(Nidhogg from `test/container/nidhogg.sh fedora-45`) and the macOS job (`nidhogg.sh macos`, which sets `DRGNX_EMACS`).
+16 MiB while another reader gets every line. In CI the `conformance` step runs every row in the Linux job
+(Nidhogg from `test/container/nidhogg.sh fedora-45`) and the macOS job (`nidhogg.sh macos`, which sets `DRGNX_EMACS`);
+the Emacs is for the canary row's editor CLIs.
 
 ### The v1 rows
 
-Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`):
+Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 
 | Group | Rows |
 |---|---|
@@ -679,32 +649,28 @@ Rows with `"requires": ["v1"]` run only against Ratatoskr (`--target ratatoskr`)
 | `class/` | `matrix` (`test-hooks`: `class_matrix` over `class-matrix.json`, the agent class through `--agent-socket s1:j1`) |
 | `agents/` (`test-hooks`, probe) | `probe-answers` (a mock ACP agent answers `agents/probe` with its name and version; no session; an unknown profile and `wait_s` over 60 are `invalid-params`), `probe-times-out` (an agent that never answers: `ok: false`, "did not answer within 1 seconds"), `probe-bad-command` (a missing program, and one that exits 7 with a line on stderr: `ok: false`, the status and the stderr tail) |
 | `hub/` | `env-set-served-by-the-front` (no backend: the front answers, a `PATH` that is no list of absolute directories is `invalid-params`), `env-set-applies-path` (the next job's `PATH` has the sent directory), `env-set-refuses-key-names` (a secret-looking name and a provider's key variable are left out of `applied` and out of the job's environment) |
-| `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer; `internal` from a fake backend's answer that does not fit) |
+| `errors/` | `every-error-has-a-code` (each code but `schema`; a refused notification gets no answer), `empty-lists-are-arrays` (A-17: an empty list is `[]` on the wire, never null), `results-match-schemas` (a populated store: a proposed job, a review card, a mock agent session with entries; every read method answers without `internal`; `test-hooks`) |
 | `readonly/` | `a-newer-work-db-refuses-writes` (work.db at schema 9: `schema` for a writing method within the 2 s tick) |
 | `basics/` | `status-shape-v1`, `events-since-without-a-work-db`, `events-since-from-the-store` (rows written into work.db with `sqlite`) |
-| `forward/` (`fake-backend`) | `a-raw-duplicate-key-never-reaches-the-backend`, `a-tramp-path-never-reaches-the-backend`, `params-are-re-encoded-with-the-caller`, `a-malformed-backend-answer-is-internal`, `the-backend-gets-no-provider-key`, `the-backend-keeps-ssh-and-proxy-env`, `the-backend-gets-the-serve-socket-only`, `events-are-relayed-and-decoded` (and the backend's `events` dropped), `every-backend-event-kind-is-relayed` (`fixtures/backend-events.json`: one event of each of the nine kinds, as main sends it; `events`, `request`, `budget` and the job-less `fallback` are the front's and dropped, the hub log says so three times for the gateway's), `a-malformed-backend-event-is-dropped`, `backend-gone-calls-fail-once-and-it-restarts`, `an-oversized-forward-is-refused`, `empty-lists-are-arrays` (A-17: `{applied: null}` reaches the client as `[]`); with `test-hooks` too: `spend-is-own-job-for-an-agent` (summed from work.db's rows; the backend is never asked). Since agent system part 1 the backend serves only `env/set`, so it is these rows' vehicle (with `from_file` when one row needs several answers); `agents/list` per class is `agents/list-is-shaped-per-class` (the hub's sessions) |
-| `gateway/` (`fake-backend`; [hub.md](hub.md#registrations)) | `register-keeps-only-the-hash` (the token's SHA-256, computed by `sh`, is the row's `hash`; `file_grep` finds the token in no file under the root), `a-gone-owners-registrations-are-pruned` (owner a `spawn`ed `sleep`, killed: `status --json` with `retry_ms`), `config-providers-refuses-a-bad-url`, `a-lan-http-provider-is-allowed-with-a-warning` (logged once after two calls: `file` with `count` and `at_most`; `doctor --json`), `the-backend-never-gets-keys`, `budget-reaches-the-backend-as-a-notification` (a request through the gateway to `ratatoskr-mock llm`, the spend row in work.db, `notification {"method":"budget",…}` in the backend log), `no-usable-step-is-refused`; with `test-hooks` too: `keys-only-on-a-user-connection` (service and agent connections) |
-| `coord/` (`fake-backend`) | the front's writes (`sqlite` makes a schema-6 work.db from `fixtures/work-db-6.sql`): `cards-settle-once`, `messages-send-held-by-version`, `events-add-is-broadcast-once`, `review-mark-and-its-event-commit-together` (a trigger refuses the second event: neither is written), `a-write-before-work-db-is-ready-says-so`, `a-newer-work-db-refuses-coord-writes` (a `sender` on `messages/send`: `messages/a-sender-is-refused`); with `lisp-backend`: `results-are-typed` |
-| `graph/` (`fake-backend`; [store.md](store.md#parsed-entities-task-15a)) | `put-parsed-round-trip` (read back through the `node`, `file` and `link` rows; the same scan again writes nothing; a derived status; `gone`), `put-parsed-refuses-a-denied-source` (a personal-notes fixture under the row's HOME as a `file` source, a `spec` source and a plan's link end: refused whole, no row holds its canary or path), `record-twice-is-one` (keyed by the collected key) |
-| `seam/` (`fake-backend`) | `a-backend-call-to-the-front-never-deadlocks` (the backend's `env/set` calls `events/add` on the front before it answers), `the-backend-may-call-only-what-the-front-serves` (`env/set` and `subscribe` from the backend's connection: `not-allowed`) |
-| `seam/` (`lisp-backend`; `pending` until Task 16a ports plan runs) | `a-lisp-job-writes-through-the-front` (`job/propose` and `job/stop`: `status.store.writes` 0 → 3 → 6, the rows in work.db), `the-backend-sends-no-events` (the front broadcasts the event log; the backend's `events` is never dropped since none comes), `a-lisp-job-reads-its-own-writes` |
-| `forward/` (`lisp-backend`) | `results-match-schemas` (a populated store: a proposed job, a review card, a mock-acp session with entries; every read method answers without `internal`; `pending` until Task 16a) |
-| `settings/` (`fake-backend`; [hub.md](hub.md#settings)) | `the-hub-reads-settings-el` (a profile and a provider of the user's join the built-in ones: `status.settings`), `no-editor-still-has-presets-and-profiles` (16 and 7 with no file), `a-package-entry-never-stops-the-hub` (entries of any shape the hub does not know: no problem), `a-broken-file-gives-strict-agents-and-last-good-providers` (the file breaks; the next `mcp/session` reads it again: a `notice`, the profile gone, the provider kept from `kv`, and the same after a restart) |
-| `backpressure/` (`fake-backend`) | `a-stopped-reader-is-dropped-others-keep-going` (the backend floods 400 events of 64 KiB; a subscriber that `pause`d is closed, another gets every event) |
+| `gateway/` ([hub.md](hub.md#registrations)) | `register-keeps-only-the-hash` (the token's SHA-256, computed by `sh`, is the row's `hash`; `file_grep` finds the token in no file under the root), `a-gone-owners-registrations-are-pruned` (owner a `spawn`ed `sleep`, killed: `status --json` with `retry_ms`), `config-providers-refuses-a-bad-url`, `a-lan-http-provider-is-allowed-with-a-warning` (logged once after two calls: `file` with `count` and `at_most`; `doctor --json`), `a-spend-over-the-budget-is-recorded` (a request through the gateway to `ratatoskr-mock llm`, the spend row in work.db), `keys-are-never-on-disk` (`file_grep` over the hub's roots), `no-usable-step-is-refused`; with `test-hooks` too: `keys-only-on-a-user-connection` (service and agent connections), `spend-is-own-job-for-an-agent` (summed from work.db's rows) |
+| `coord/` | the front's writes (`sqlite` makes a schema-6 work.db from `fixtures/work-db-6.sql`): `cards-settle-once`, `messages-send-held-by-version`, `events-add-is-broadcast-once`, `review-mark-and-its-event-commit-together` (a trigger refuses the second event: neither is written), `a-write-before-work-db-is-ready-says-so`, `a-newer-work-db-refuses-coord-writes` (a `sender` on `messages/send`: `messages/a-sender-is-refused`) |
+| `graph/` ([store.md](store.md#parsed-entities-task-15a)) | `put-parsed-round-trip` (read back through the `node`, `file` and `link` rows; the same scan again writes nothing; a derived status; `gone`), `put-parsed-refuses-a-denied-source` (a personal-notes fixture under the row's HOME as a `file` source, a `spec` source and a plan's link end: refused whole, no row holds its canary or path), `record-twice-is-one` (keyed by the collected key) |
+| `settings/` ([hub.md](hub.md#settings)) | `the-hub-reads-settings-el` (a profile and a provider of the user's join the built-in ones: `status.settings`), `no-editor-still-has-presets-and-profiles` (16 and 7 with no file), `a-package-entry-never-stops-the-hub` (entries of any shape the hub does not know: no problem), `a-broken-file-gives-strict-agents-and-last-good-providers` (the file breaks; the next `mcp/session` reads it again: a `notice`, the profile gone, the provider kept from `kv`, and the same after a restart) |
 | `lifecycle/` (Task 16) | `ensure-starts-once` (two `ensure`s at once with no supervisor: one hub), `stop-ends-it`, `kill-9-then-ensure-restarts`, `stop-ends-a-non-dumpable-hub` (`test-hooks`: `--test-ignore-shutdown`, so `stop` reaches its SIGTERM through the listener's pidfd; `drop_ptrace`), `stop-never-signals-a-forged-argv0` (`test-hooks`, `linux`: the lock's text rewritten to name a `sleep` started as `exec -a ratatoskr`, with its true start time; `stop` exits 1 and both live), `stop-with-a-stale-lock-signals-nothing` (a lock file naming a live `sleep` that nobody holds: not running, no signal), `stop-ends-a-lisp-hub` (`lisp-backend`) |
-| `restart/` | `the-restart-method-exits-75`, `a-self-detached-hub-re-execs`; with `fake-backend` and `test-hooks` (`--idle-tick-ms 200`; the answers of `agents/list` come from a file the row rewrites): `a-changed-binary-sends-the-notice`, `a-busy-backend-delays-it`, `a-missing-or-broken-new-binary-never-restarts` |
-| `reaper/` | `a-recorded-orphan-backend-is-killed-at-start` (`fake-backend`: the hub SIGKILLed, its backend ignoring its parent; the next hub kills it within 4 s), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
+| `restart/` | `the-restart-method-exits-75`, `a-self-detached-hub-re-execs`; with `test-hooks` (`--idle-tick-ms 200`; a running turn of a mock agent is what keeps the hub): `a-changed-binary-sends-the-notice`, `a-busy-session-delays-it`, `a-missing-or-broken-new-binary-never-restarts` |
+| `reaper/` | `a-recorded-orphan-is-killed-at-start` (`linux`: the row plants a `runtime.db` record for a live process of its own group, as an older hub's Lisp backend left one; the next hub kills it within 4 s and logs it), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
 | `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`; with `fake-backend` (a schema-6 work.db): `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`; with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
-| `bridge/` | `ratatoskr mcp-bridge` ([hub.md](hub.md#the-mcp-bridge)), a copy of the hub under test (`install_bin`) run by `spawn_conn`: `outside-refuses-an-untrusted-directory` (the socket's directory at 0755: exit 1, the reason on stderr); with `fake-backend`: `survives-a-hub-restart` and `survives-a-hub-restart-modern` (the gate rows: a TERM, a start on the same root, the next call works; both eras), `an-in-flight-call-is-an-error-never-a-retry` (a call to a STOPped hub, then KILL: the went-away tool error, one event after the restart), `a-call-while-away-waits-then-errors`, `tools-list-from-the-cache-while-away`, `drgnx-agent-in-the-environment-is-ignored`, `outside-is-service-class-and-ext`, `stdin-eof-ends-it`; with `test-hooks` (`--bridge-backoff-ms`, `--bridge-give-up-ms`): `gives-up` |
+| `bridge/` | `ratatoskr mcp-bridge` ([hub.md](hub.md#the-mcp-bridge)), a copy of the hub under test (`install_bin`) run by `spawn_conn`: `outside-refuses-an-untrusted-directory` (the socket's directory at 0755: exit 1, the reason on stderr); more: `survives-a-hub-restart` and `survives-a-hub-restart-modern` (the gate rows: a TERM, a start on the same root, the next call works; both eras), `an-in-flight-call-is-an-error-never-a-retry` (a call to a STOPped hub, then KILL: the went-away tool error, one event after the restart), `a-call-while-away-waits-then-errors`, `tools-list-from-the-cache-while-away`, `drgnx-agent-in-the-environment-is-ignored`, `outside-is-service-class-and-ext`, `stdin-eof-ends-it`; with `test-hooks` (`--bridge-backoff-ms`, `--bridge-give-up-ms`): `gives-up` |
 
-The forwarding rows run with both helpers:
+All rows run with one command:
 
 ```
 cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
-runtime/target/debug/domr --target ratatoskr --hub-bin runtime/target/debug/ratatoskr \
-    --lisp-hub test/conformance/lisp-hub.sh --fake-backend runtime/target/debug/ratatoskr-fake-backend \
-    --scenarios test/conformance
+runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr --scenarios test/conformance
 ```
+
+Run it as a child of a shell (`bash -c '…; exit $?'`) in a container: the outside-agent rows need the harness to have
+a parent process, which the container's first process has not.
 
 Paths: the agent sockets are `<root>/run/drgnx/s/SID/hub.sock`; past 103 bytes (sized for the longest session socket,
 `gateway.sock`) a session dir goes to `<tmp>/drgnx-hub-UID/s/SID/`.
@@ -722,8 +688,7 @@ budgets (a recorded baseline, not a regression gate); the `agents-*` rows check 
 |---|---|---|
 | `start` | starting the hub to its first answered `ping` on a proven connection | 1 |
 | `hello-round-trip` | `ping` and its answer on a proven connection | 100 |
-| `a-1-mib-request-line` | an `env/set` line of about 1 MiB read and decoded: its 16 values of 32 KiB re-encoded, forwarded to the fake backend and answered, a 500 KB unknown key dropped (`env/set` is the one method the backend still serves; `agents/*` are the hub's own) | 20 |
-| `a-4-mb-snapshot` | an answer of about 4 MB from the fake backend (an `env/set` result), checked and written to the client | 10 |
+| `a-1-mib-request-line` | an `env/set` line of about 1 MiB read and decoded: its 16 values of 32 KiB re-encoded, answered by the front, a 500 KB unknown key dropped | 20 |
 | `mcp-tool-call` | `tools/call read_inbox` over a session socket (initialized, `hello` called once before) | 100 |
 | `coord-write` | `events/add` through the main socket, answered with the new id | 100 |
 | `gateway-added-latency` | an agent's `POST /v1/messages` to the mock provider, head read: `direct-first-byte` against the mock, `gateway-first-byte` through the gateway with an agent token (the difference is the gateway's) | 50 each |
@@ -740,8 +705,7 @@ The writer-level group-commit number, with `secure_delete` on and off, is `urdr`
 
 ```
 cargo build --locked --release --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr
-runtime/target/release/domr --target ratatoskr --hub-bin runtime/target/release/ratatoskr \
-    --fake-backend runtime/target/release/ratatoskr-fake-backend --scenarios test/conformance \
+runtime/target/release/domr --hub-bin runtime/target/release/ratatoskr --scenarios test/conformance \
     --only 'perf/*' --perf perf.json
 ```
 
@@ -780,7 +744,7 @@ mock's answers are `fixtures/llm-*.json` or a `write_file` in the row. All rows 
 `domr` run: `--only 'gateway/*'`.
 
 - **The gate rows** (phase 3, design §12): `fallback-on-429-before-the-head`, `budget-pauses-a-lisp-job`
-  (`lisp-backend`: a git repo made with `run`, `fixtures/plan-budget.md`, `job/propose` and `job/approve`, a job
+  (a git repo made with `run`, `fixtures/plan-budget.md`, `job/propose` and `job/approve`, a job
   registration with a budget that one priced request passes; a `card` event of kind `budget`, `job/status` `paused`,
   then 429 `budget_exceeded`), `streaming-first-chunk-first`, `a-bad-token-is-refused-before-the-body` (a 20 MiB
   `Content-Length`, no body sent, 401 within 1 s), `proxy-from-the-environment` (`linux`: `HTTPS_PROXY` and

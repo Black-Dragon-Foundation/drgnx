@@ -1,4 +1,4 @@
-{"scenario": "history/a-ui-change-is-one-tx", "requires": ["v1", "fake-backend"], "doc": "settings/record (unified-settings Task 24; design §12): one write in Settings is one user-class tx of tool ui:settings on kind option, data {value, file, line}; the same req again answers the first tx and writes nothing; a removal leaves no value; an undo carries reverts."}
+{"scenario": "history/a-ui-change-is-one-tx", "requires": ["v1"], "doc": "settings/record (unified-settings Task 24; design §12): one write in Settings is one user-class tx of tool ui:settings on kind option, data {value, file, line}; the same req again answers the first tx and writes nothing; a removal leaves no value; an undo carries reverts."}
 {"do": "root"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}

@@ -1,4 +1,4 @@
-{"scenario": "wake/gemini-reloads", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 15 (Calls made 10): Gemini can load a session but not close or resume one: idle past agents-close-idle-after the hub ends its process without a session/close, and the job's end starts it again with session/load, then prompts it with the result."}
+{"scenario": "wake/gemini-reloads", "requires": ["v1", "test-hooks"], "doc": "Task 15 (Calls made 10): Gemini can load a session but not close or resume one: idle past agents-close-idle-after the hub ends its process without a session/close, and the job's end starts it again with session/load, then prompts it with the result."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}

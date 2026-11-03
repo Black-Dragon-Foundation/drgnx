@@ -1,4 +1,4 @@
-{"scenario": "restart/resumed-session-gets-the-options", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 24 (found at A2-W): a Claude session resumed after a hub restart is given the same _meta.claudeCode.options (the lock: managedSettings) as a new one, so it obeys the hub as before. The mock logs the options of the session it opens, once at session/new and once at session/resume."}
+{"scenario": "restart/resumed-session-gets-the-options", "requires": ["v1", "test-hooks", "agent-locks"], "doc": "Task 24 (found at A2-W): a Claude session resumed after a hub restart is given the same _meta.claudeCode.options (the lock: managedSettings) as a new one, so it obeys the hub as before. The mock logs the options of the session it opens, once at session/new and once at session/resume."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

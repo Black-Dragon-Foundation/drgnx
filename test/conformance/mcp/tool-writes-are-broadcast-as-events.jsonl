@@ -1,4 +1,4 @@
-{"scenario": "mcp/tool-writes-are-broadcast-as-events", "requires": ["v1", "fake-backend"], "doc": "A report_test over a session socket writes one event row as that agent, and a subscribed user gets it as one events event."}
+{"scenario": "mcp/tool-writes-are-broadcast-as-events", "requires": ["v1"], "doc": "A report_test over a session socket writes one event row as that agent, and a subscribed user gets it as one events event."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

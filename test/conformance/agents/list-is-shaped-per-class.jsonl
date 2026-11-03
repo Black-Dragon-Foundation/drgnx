@@ -1,4 +1,4 @@
-{"scenario": "agents/list-is-shaped-per-class", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "agents/list, served by the hub's sessions (Task 8a; was forward/agents-list-is-shaped-per-class when the backend served it): the user gets the full snapshots; a service connection {id, name, job, task} of each and nothing else; an agent only its own job's sessions, the same way."}
+{"scenario": "agents/list-is-shaped-per-class", "requires": ["v1", "test-hooks"], "doc": "agents/list, served by the hub's sessions (Task 8a; was forward/agents-list-is-shaped-per-class when the backend served it): the user gets the full snapshots; a service connection {id, name, job, task} of each and nothing else; an agent only its own job's sessions, the same way."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

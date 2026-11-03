@@ -1,4 +1,4 @@
-{"scenario": "agents/transcript-redacts-a-key", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: the session transcript <state>/hub/transcripts/<sid>.jsonl is mode 0600 and holds no key: a key-shaped token a message carries is replaced by [redacted: KIND] before it is written."}
+{"scenario": "agents/transcript-redacts-a-key", "requires": ["v1", "test-hooks"], "doc": "Task 8b: the session transcript <state>/hub/transcripts/<sid>.jsonl is mode 0600 and holds no key: a key-shaped token a message carries is replaced by [redacted: KIND] before it is written."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

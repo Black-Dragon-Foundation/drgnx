@@ -1,4 +1,4 @@
-{"scenario": "wake/idle-session-closed-and-resumed", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 15 (Calls made 10): a session idle on a job past agents-close-idle-after (1 s here) is closed (session/close, the agent's process ends); the job's end resumes it (session/resume on the same ACP session, a second process) and prompts it with the result, with no new session."}
+{"scenario": "wake/idle-session-closed-and-resumed", "requires": ["v1", "test-hooks"], "doc": "Task 15 (Calls made 10): a session idle on a job past agents-close-idle-after (1 s here) is closed (session/close, the agent's process ends); the job's end resumes it (session/resume on the same ACP session, a second process) and prompts it with the result, with no new session."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}

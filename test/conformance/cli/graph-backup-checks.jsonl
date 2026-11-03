@@ -1,4 +1,4 @@
-{"scenario": "cli/graph-backup-checks", "requires": ["v1", "fake-backend"], "doc": "ratatoskr graph backup (Urdr Task 17; storage §8.1): a checked copy in <data>/backup/ (mode 0600, the folder 0700), the answer says ok, and status.store carries last_backup and backup_ok. scrub and compact answer; an excise with no terminal and no --yes is refused (exit 2) before the hub is asked."}
+{"scenario": "cli/graph-backup-checks", "requires": ["v1"], "doc": "ratatoskr graph backup (Urdr Task 17; storage §8.1): a checked copy in <data>/backup/ (mode 0600, the folder 0700), the answer says ok, and status.store carries last_backup and backup_ok. scrub and compact answer; an excise with no terminal and no --yes is refused (exit 2) before the hub is asked."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

@@ -1,4 +1,4 @@
-{"scenario": "agents/mirror-shapes-unchanged", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8a: a session's snapshot and entries are the records-2 shapes the mirror reads: a turn gives a user entry, the agent's text and a stop entry, agents/get returns the snapshot, the entries and a change number, and the events carry the same shapes. A brainstorm start without its document is refused."}
+{"scenario": "agents/mirror-shapes-unchanged", "requires": ["v1", "test-hooks"], "doc": "Task 8a: a session's snapshot and entries are the records-2 shapes the mirror reads: a turn gives a user entry, the agent's text and a stop entry, agents/get returns the snapshot, the entries and a change number, and the events carry the same shapes. A brainstorm start without its document is refused."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

@@ -1,4 +1,4 @@
-{"scenario": "locks/a-lock-that-does-not-hold-kills-the-session", "requires": ["v1", "fake-backend", "test-hooks", "agent-locks"], "doc": "Task 9 (activated by Task 8b, which calls lock::verify at session start): a Claude-shaped mock ACP agent that refuses session/set_mode default has a lock that does not hold; the hub kills the session (agents/start answers an error naming the lock, agents/list shows no session) and never runs it as enforced."}
+{"scenario": "locks/a-lock-that-does-not-hold-kills-the-session", "requires": ["v1", "test-hooks", "agent-locks"], "doc": "Task 9 (activated by Task 8b, which calls lock::verify at session start): a Claude-shaped mock ACP agent that refuses session/set_mode default has a lock that does not hold; the hub kills the session (agents/start answers an error naming the lock, agents/list shows no session) and never runs it as enforced."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

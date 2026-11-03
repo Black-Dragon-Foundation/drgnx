@@ -1,4 +1,4 @@
-{"scenario": "mcp/an-outside-bridge-is-ext-and-unverified", "requires": ["v1", "fake-backend"], "doc": "An outside agent's bridge: a hello without a proof but with its cwd (service class), mcp/attach {kind: claude}, then MCP on the same connection.  Its identity is ext:claude:PID-HASH of the bridge's parent (the harness's here), and a job's tool (claim_task) is a tool error."}
+{"scenario": "mcp/an-outside-bridge-is-ext-and-unverified", "requires": ["v1"], "doc": "An outside agent's bridge: a hello without a proof but with its cwd (service class), mcp/attach {kind: claude}, then MCP on the same connection.  Its identity is ext:claude:PID-HASH of the bridge's parent (the harness's here), and a job's tool (claim_task) is a tool error."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

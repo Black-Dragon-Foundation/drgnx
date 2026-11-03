@@ -1,4 +1,4 @@
-{"scenario": "timeline/permission-wait-is-user-wait", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19: a permission request the hub answers is a user-wait step of its own, apart from the tool step it interrupted."}
+{"scenario": "timeline/permission-wait-is-user-wait", "requires": ["v1", "test-hooks"], "doc": "Task 19: a permission request the hub answers is a user-wait step of its own, apart from the tool step it interrupted."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

@@ -1,4 +1,4 @@
-{"scenario": "bridge/survives-a-hub-restart-modern", "requires": ["v1", "fake-backend"], "doc": "The gate row, stateless era (2026-07-28): no initialize to replay; after a TERM and a start on the same root the next tools/call (with its _meta) goes through the redialled socket, and both report_test calls are events."}
+{"scenario": "bridge/survives-a-hub-restart-modern", "requires": ["v1"], "doc": "The gate row, stateless era (2026-07-28): no initialize to replay; after a TERM and a start on the same root the next tools/call (with its _meta) goes through the redialled socket, and both report_test calls are events."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

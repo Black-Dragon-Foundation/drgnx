@@ -1,4 +1,4 @@
-{"scenario": "basics/ping", "requires": ["v0"], "doc": "ping answers the hub's pid."}
+{"scenario": "basics/ping", "requires": ["v1"], "doc": "ping answers the hub's pid."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}

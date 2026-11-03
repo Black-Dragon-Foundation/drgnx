@@ -1,4 +1,4 @@
-{"scenario": "runner/order-and-block", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 16a: job/order moves a task in the run order among the open tasks, job/block keeps a task from getting an agent with its reason (control characters replaced, 500 characters) and job/unblock lets it run again; an unknown task is refused."}
+{"scenario": "runner/order-and-block", "requires": ["v1", "test-hooks"], "doc": "Task 16a: job/order moves a task in the run order among the open tasks, job/block keeps a task from getting an agent with its reason (control characters replaced, 500 characters) and job/unblock lets it run again; an unknown task is refused."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "write_file", "path": "$ROOT/plan.md", "text": "# Three\n\n**Repo:** $ROOT/repo\n\n### Task 1: One\n\nx\n\n### Task 2: Two\n\nx\n\n### Task 3: Three\n\nx\n"}

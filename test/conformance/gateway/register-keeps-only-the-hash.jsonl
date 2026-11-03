@@ -1,4 +1,4 @@
-{"scenario": "gateway/register-keeps-only-the-hash", "requires": ["v1", "fake-backend"], "doc": "gateway/register answers a token and the loopback URL; runtime.db keeps one row whose hash is the token's SHA-256, and the token itself is in no file under the root (database, log, backend log)."}
+{"scenario": "gateway/register-keeps-only-the-hash", "requires": ["v1"], "doc": "gateway/register answers a token and the loopback URL; runtime.db keeps one row whose hash is the token's SHA-256, and the token itself is in no file under the root (database, log, backend log)."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"local":{"kind":"anthropic","url":"http://127.0.0.1:9","caps":["chat"],"messages":true}}}]}}}

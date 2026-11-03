@@ -1,4 +1,4 @@
-{"scenario": "gateway/no-fallback-once-started", "requires": ["v1", "fake-backend"], "doc": "Task 24: once a provider's head is out the answer is that provider's: A sends a 200 head and one chunk and then drops the connection; B would have answered, but is never asked. The agent has A's first chunk, no fallback event is sent and B's log is empty."}
+{"scenario": "gateway/no-fallback-once-started", "requires": ["v1"], "doc": "Task 24: once a provider's head is out the answer is that provider's: A sends a 200 head and one chunk and then drops the connection; B would have answered, but is never asked. The agent has A's first chunk, no fallback event is sent and B's log is empty."}
 {"do": "root"}
 {"do": "write_file", "path": "$ROOT/a.json", "json": [{"path": "/v1/messages", "content_type": "text/event-stream", "chunks": [[0, "data: a\n\n"]], "no_end": true}]}
 {"do": "spawn", "capture": "mock_a", "argv": ["$MOCK", "llm", "--script", "$ROOT/a.json", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port_a"}}

@@ -1,4 +1,4 @@
-{"scenario": "settings/overrides-win-and-persist-without-an-editor", "requires": ["v1", "fake-backend"], "doc": "config/settings (unified-settings Task 21) with a global drgnx-ai-providers override: the gateway's table is the 16 presets plus the editor's provider at once, the answer counts the overrides, and after a restart with no editor connected the table is the same (the set is kept as last good in runtime.db). An empty list clears it."}
+{"scenario": "settings/overrides-win-and-persist-without-an-editor", "requires": ["v1"], "doc": "config/settings (unified-settings Task 21) with a global drgnx-ai-providers override: the gateway's table is the 16 presets plus the editor's provider at once, the answer counts the overrides, and after a restart with no editor connected the table is the same (the set is kept as last good in runtime.db). An empty list clears it."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "start", "hub": "h"}

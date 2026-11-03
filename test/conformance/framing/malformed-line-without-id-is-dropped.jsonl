@@ -1,4 +1,4 @@
-{"scenario": "framing/malformed-line-without-id-is-dropped", "requires": ["v0"], "doc": "A malformed line with no id gets no answer; the next request is answered."}
+{"scenario": "framing/malformed-line-without-id-is-dropped", "requires": ["v1"], "doc": "A malformed line with no id gets no answer; the next request is answered."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "raw": "not json at all"}

@@ -1,4 +1,4 @@
-{"scenario": "runner/fallback-at-limit", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 16b: a worker whose turn ends in a 429 (\"rate limit exceeded\") hands its task to the next profile of its role's route: a fallback event names the job, task, from and to; the new worker starts in the same tree with a handover (\"You are continuing this task\") and holds the task."}
+{"scenario": "runner/fallback-at-limit", "requires": ["v1", "test-hooks"], "doc": "Task 16b: a worker whose turn ends in a 429 (\"rate limit exceeded\") hands its task to the next profile of its role's route: a fallback event names the job, task, from and to; the new worker starts in the same tree with a handover (\"You are continuing this task\") and holds the task."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}

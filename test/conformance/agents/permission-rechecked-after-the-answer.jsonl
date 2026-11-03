@@ -1,4 +1,4 @@
-{"scenario": "agents/permission-rechecked-after-the-answer", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "S2 (gate-F): the user's answer to a permission request is the answer to its matrix card: the card is settled with it, and the hub checks the matrix again before the agent goes on. The cell became Never while the request waited, so the agent is refused although the user said yes."}
+{"scenario": "agents/permission-rechecked-after-the-answer", "requires": ["v1", "test-hooks"], "doc": "S2 (gate-F): the user's answer to a permission request is the answer to its matrix card: the card is settled with it, and the hub checks the matrix again before the agent goes on. The cell became Never while the request waited, so the agent is refused although the user said yes."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

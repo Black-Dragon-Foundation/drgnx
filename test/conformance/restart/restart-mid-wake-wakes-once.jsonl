@@ -1,4 +1,4 @@
-{"scenario": "restart/restart-mid-wake-wakes-once", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: a wake the hub went down with (a wake row of runtime.db left sending, the prompt already in the session transcript) is not delivered again at the next start, and a wake row of a job that is gone is dropped; nothing is left undelivered and the session was woken once. A wake row left pending is delivered at the next start, once, and kept as done."}
+{"scenario": "restart/restart-mid-wake-wakes-once", "requires": ["v1", "test-hooks"], "doc": "Task 24: a wake the hub went down with (a wake row of runtime.db left sending, the prompt already in the session transcript) is not delivered again at the next start, and a wake row of a job that is gone is dropped; nothing is left undelivered and the session was woken once. A wake row left pending is delivered at the next start, once, and kept as done."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

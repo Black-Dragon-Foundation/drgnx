@@ -1,4 +1,4 @@
-{"scenario": "self/captures", "requires": ["v0"], "doc": "The harness's own row: a captured pid is reused, a captured pid is alive, a quiet connection stays quiet, and a hub that is killed is gone."}
+{"scenario": "self/captures", "requires": ["v1"], "doc": "The harness's own row: a captured pid is reused, a captured pid is alive, a quiet connection stays quiet, and a hub that is killed is gone."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 7, "method": "ping"}}

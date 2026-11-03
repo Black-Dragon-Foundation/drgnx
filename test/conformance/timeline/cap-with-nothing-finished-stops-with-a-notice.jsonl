@@ -1,4 +1,4 @@
-{"scenario": "timeline/cap-with-nothing-finished-stops-with-a-notice", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 19: over drgnx-agents-checkpoint-cap with no finished task, snapshots stop and the editors get one notice; the running task's snapshot refs stay."}
+{"scenario": "timeline/cap-with-nothing-finished-stops-with-a-notice", "requires": ["v1", "test-hooks"], "doc": "Task 19: over drgnx-agents-checkpoint-cap with no finished task, snapshots stop and the editors get one notice; the running task's snapshot refs stay."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

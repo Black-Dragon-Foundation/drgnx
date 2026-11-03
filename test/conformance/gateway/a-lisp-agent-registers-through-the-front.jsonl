@@ -1,4 +1,4 @@
-{"scenario": "gateway/a-lisp-agent-registers-through-the-front", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 20: an agent the hub starts on a gateway profile (:ai claude-openrouter) is registered by the hub's gateway: status.gateway.registrations is 1, and the mock ACP agent's Claude options carry ANTHROPIC_BASE_URL = the gateway's URL and a token, never the key (a canary the user connection handed over)."}
+{"scenario": "gateway/a-lisp-agent-registers-through-the-front", "requires": ["v1", "test-hooks"], "doc": "Task 20: an agent the hub starts on a gateway profile (:ai claude-openrouter) is registered by the hub's gateway: status.gateway.registrations is 1, and the mock ACP agent's Claude options carry ANTHROPIC_BASE_URL = the gateway's URL and a token, never the key (a canary the user connection handed over)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

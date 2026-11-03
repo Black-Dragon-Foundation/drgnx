@@ -1,4 +1,4 @@
-{"scenario": "restart/message-delivered-once-across-a-crash", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 24: the hub dies (test hook) after a message prompt is queued in its session and before the message is marked read. At the next start the message is found sending, the session already holds its prompt, so it is marked read and not delivered again."}
+{"scenario": "restart/message-delivered-once-across-a-crash", "requires": ["v1", "test-hooks"], "doc": "Task 24: the hub dies (test hook) after a message prompt is queued in its session and before the message is marked read. At the next start the message is found sending, the session already holds its prompt, so it is marked read and not delivered again."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}

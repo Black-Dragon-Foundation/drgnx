@@ -1,10 +1,10 @@
-{"scenario": "agents/update-waits-only-for-a-running-turn", "requires": ["v1", "fake-backend", "test-hooks"], "doc": "Task 8b: a new build on disk waits for a session's running turn (the notice counts it), not for the session: when the turn ends the hub restarts (exit 75) although the idle chat is still there."}
+{"scenario": "agents/update-waits-only-for-a-running-turn", "requires": ["v1", "test-hooks"], "doc": "Task 8b: a new build on disk waits for a session's running turn (the notice counts it), not for the session: when the turn ends the hub restarts (exit 75) although the idle chat is still there."}
 {"do": "root"}
 {"do": "install_bin", "to": "$ROOT/bin/ratatoskr"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
-{"do": "start", "hub": "h", "bin": "$ROOT/bin/ratatoskr", "args": ["--idle-tick-ms", "200"], "env": {"DRGNX_FAKE_BACKEND_SCRIPT": "{\"agents/list\": {\"result\": {\"sessions\": []}}, \"job/status\": {\"result\": {\"jobs\": []}}}"}}
+{"do": "start", "hub": "h", "bin": "$ROOT/bin/ratatoskr", "args": ["--idle-tick-ms", "200"]}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
