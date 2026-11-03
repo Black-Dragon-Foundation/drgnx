@@ -380,7 +380,7 @@ impl Child {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     fn sh(script: &str, stdin_null: bool) -> Spec {
         Spec {
@@ -408,7 +408,8 @@ mod tests {
         (r, w)
     }
 
-    /// Everything readable from `r` until EOF, or `None` when no EOF came within 5 s (a writer is still open).
+    /// Everything readable from `r` until EOF, or `None` when no EOF came within 30 s (a writer is still open; the
+    /// deadline only bounds a failure).
     fn read_to_eof(r: OwnedFd) -> Option<String> {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -416,7 +417,7 @@ mod tests {
             let _ = io::Read::read_to_string(&mut std::fs::File::from(r), &mut s);
             let _ = tx.send(s);
         });
-        rx.recv_timeout(Duration::from_secs(5)).ok()
+        rx.recv_timeout(Duration::from_secs(30)).ok()
     }
 
     fn pass(fd: &Arc<OwnedFd>, target: i32) -> PassFd {
@@ -567,31 +568,66 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn pinned_spawn_survives_its_callers_thread() {
+        // The runtime reports each thread that retires (its tid, from the thread itself).
+        let (stopped_tx, mut stopped) = tokio::sync::mpsc::unbounded_channel();
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_keep_alive(Duration::from_millis(100))
+            .on_thread_stop(move || {
+                let _ = stopped_tx.send(unsafe { libc::gettid() });
+            })
             .enable_all()
             .build()
             .unwrap();
         rt.block_on(async {
             let spec = Spec {
                 program: "/usr/bin/setpriv".into(),
-                args: ["--pdeathsig", "KILL", "--", "/bin/sleep", "30"]
-                    .map(OsString::from)
-                    .to_vec(),
-                ..sh("", true)
+                args: [
+                    "--pdeathsig",
+                    "KILL",
+                    "--",
+                    "/bin/sh",
+                    "-c",
+                    "read x; echo alive",
+                ]
+                .map(OsString::from)
+                .to_vec(),
+                ..sh("", false)
             };
             let mut child =
                 tokio::task::spawn_blocking(|| Handle::current().block_on(spawn_pinned(spec)))
                     .await
                     .unwrap()
                     .unwrap();
-            // The blocking thread retires after 100 ms idle; a child forked there would get SIGKILL.
-            tokio::time::sleep(Duration::from_millis(1200)).await;
-            let status = child.inner.try_wait().unwrap();
-            unsafe { libc::kill(-child.id(), libc::SIGKILL) };
-            let _ = child.wait().await;
-            assert_eq!(status, None, "the child died with its caller's thread");
+            // The blocking thread retires after 100 ms idle; a child forked there would get SIGKILL as the thread
+            // exits. Wait for the retirement itself: the runtime says it is stopping, and its /proc entry goes after
+            // the kernel has sent the signals of its exit. (The deadline only bounds a failure.)
+            let tid = tokio::time::timeout(Duration::from_secs(30), stopped.recv())
+                .await
+                .expect("the blocking thread retired within 30 s")
+                .expect("the runtime is running");
+            let entry = format!("/proc/self/task/{tid}");
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while std::path::Path::new(&entry).exists() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the retired thread exited within 30 s");
+            // Alive now means alive for good: the child answers, and a SIGKILL sent before this would have ended it.
+            let mut stdin = child.take_stdin().unwrap();
+            stdin.write_all(b"\n").await.unwrap();
+            let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
+            let said = lines.next_line().await.unwrap();
+            if said.is_none() {
+                unsafe { libc::kill(-child.id(), libc::SIGKILL) };
+            }
+            assert_eq!(
+                said.as_deref(),
+                Some("alive"),
+                "the child died with its caller's thread"
+            );
+            assert!(child.wait().await.unwrap().unwrap().success());
         });
     }
 
