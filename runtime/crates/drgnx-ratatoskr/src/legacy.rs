@@ -6,7 +6,8 @@
 //!
 //! - from `<state>/hub/`: `registrations.eld`, `sessions.eld`, `port`, `hub-timers-report.eld`, the folder `bodies/` and
 //!   every `hub-*.d/` folder that holds only `backend.sock`;
-//! - `<state>/sandbox/`;
+//! - everything in `<state>/sandbox/` but `folders.eld`, which stays: the VC guard of the editor
+//!   (`core/drgnx-sandbox-vc.el`) still reads it;
 //! - the editor's command jobs, `<state>/jobs/<id>/`, but only a job that has ended (an `exit` file, or a `pid` file
 //!   that names a process that is gone).  A job that still runs keeps its folder, so its log is not pulled from under
 //!   it, and is reported in `left` until a later start finds it ended.
@@ -36,6 +37,8 @@ const HUB_FILES: [&str; 5] = [
     "hub-timers-report.eld",
     "bodies",
 ];
+/// The file in `<state>/sandbox/` that stays where it is: the folders the VC guard protects.
+const VC_GUARD_LIST: &str = "folders.eld";
 /// A job folder with no readable `pid` and no `exit` is a job still starting until its folder has been quiet this long.
 const JOB_QUIET: Duration = Duration::from_secs(60);
 /// What names the Lisp runtime's processes on their command lines.
@@ -98,8 +101,8 @@ fn migrate_in(state: &Path, rename: Rename) -> io::Result<Moved> {
             left.push(it.name);
             continue;
         }
-        if it.name.starts_with("jobs/") {
-            paths::private_dir(&mig.join("jobs"))?;
+        if let Some(dir) = it.to.parent().filter(|d| *d != mig) {
+            paths::private_dir(dir)?; // jobs/, sandbox/
         }
         match relocate(rename, &it.from, &it.to) {
             Ok(()) => m.moved.push(it.name),
@@ -136,8 +139,16 @@ fn plan(state: &Path, mig: &Path, first: bool) -> (Vec<Item>, Vec<String>) {
                 add(format!("hub/{n}"), hub.join(&n), mig.join(&n));
             }
         }
-        if std::fs::symlink_metadata(state.join("sandbox")).is_ok() {
-            add("sandbox".into(), state.join("sandbox"), mig.join("sandbox"));
+        // each entry of sandbox/ but the VC guard's folder list, which the kept core/drgnx-sandbox-vc.el still reads
+        let sandbox = state.join("sandbox");
+        for n in names(&sandbox) {
+            if n != VC_GUARD_LIST {
+                add(
+                    format!("sandbox/{n}"),
+                    sandbox.join(&n),
+                    mig.join("sandbox").join(&n),
+                );
+            }
         }
     }
     let mut left = Vec::new();
@@ -400,6 +411,7 @@ mod tests {
         put(&s.join("hub/hub-keep.d/other"), "stays");
         put(&s.join("hub/runtime.db"), "stays");
         put(&s.join("sandbox/profile.eld"), "sb");
+        put(&s.join("sandbox/folders.eld"), "(\"/a/\")");
     }
 
     fn moved_names() -> Vec<String> {
@@ -410,7 +422,7 @@ mod tests {
             "hub/hub-timers-report.eld",
             "hub/bodies",
             "hub/hub-ab12.d",
-            "sandbox",
+            "sandbox/profile.eld",
         ]
         .map(String::from)
         .to_vec()
@@ -432,7 +444,7 @@ mod tests {
         ] {
             assert!(!s.join("hub").join(n).exists(), "{n} was left in hub/");
         }
-        assert!(!s.join("sandbox").exists());
+        assert!(!s.join("sandbox/profile.eld").exists());
         // the rest of hub/ is not the old runtime's
         assert!(s.join("hub/runtime.db").exists());
         assert!(s.join("hub/hub-keep.d/other").exists());
@@ -481,8 +493,36 @@ mod tests {
         }
         assert!(!s.join("jobs/20260101-1").exists());
         assert!(!s.join("hub/bodies").exists());
+        assert!(!s.join("sandbox/profile.eld").exists());
         // no copy in progress is left behind
         assert!(names(&mig).iter().all(|n| !n.ends_with(".partial")));
+        assert!(names(&mig.join("sandbox")).iter().all(|n| n != "folders.eld"));
+    }
+
+    #[test]
+    fn the_vc_guard_list_stays() {
+        // the kept VC guard (core/drgnx-sandbox-vc.el) reads <state>/sandbox/folders.eld: it is never moved, by rename
+        // or by copy, and a later start leaves it too
+        for rename in [&by_rename as Rename, &exdev as Rename] {
+            let t = old_state();
+            let s = t.path();
+            let m = migrate_in(s, rename).unwrap();
+            assert!(m.moved.contains(&"sandbox/profile.eld".to_string()));
+            assert!(!m.moved.iter().any(|n| n.contains("folders.eld")));
+            assert!(!m.left.iter().any(|n| n.contains("folders.eld")));
+            assert_eq!(
+                std::fs::read_to_string(s.join("sandbox/folders.eld")).unwrap(),
+                "(\"/a/\")"
+            );
+            assert!(!s.join("hub").join(DIR).join("sandbox/folders.eld").exists());
+            assert_eq!(migrate_in(s, rename).unwrap(), m);
+            assert!(s.join("sandbox/folders.eld").exists());
+        }
+        // a sandbox folder with only the list has nothing to move: nothing is written
+        let t = tempfile::tempdir().unwrap();
+        put(&t.path().join("sandbox/folders.eld"), "()");
+        assert_eq!(migrate_in(t.path(), &by_rename).unwrap(), Moved::default());
+        assert!(!t.path().join("hub").exists());
     }
 
     #[test]

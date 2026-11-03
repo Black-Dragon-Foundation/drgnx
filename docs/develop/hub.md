@@ -452,7 +452,8 @@ pid went to another process's group before the next start.
 `legacy::migrate` (`src/legacy.rs`) runs once per start, after the reaper and before anything is served. It moves, each
 only when present, into `<state>/hub/migrated-p7/` (0700, original names): from `<state>/hub/` the files
 `registrations.eld`, `sessions.eld`, `port` and `hub-timers-report.eld`, the folder `bodies/` and every `hub-*.d/` that
-holds only `backend.sock`; then `<state>/sandbox/`; and each `<state>/jobs/<id>/` of the editor's old command jobs
+holds only `backend.sock`; then each entry of `<state>/sandbox/` except `folders.eld` (the editor's VC guard,
+`core/drgnx-sandbox-vc.el`, still reads that list, so it stays; it is written by nothing now); and each `<state>/jobs/<id>/` of the editor's old command jobs
 (`core/drgnx-jobs.el`) that has ended (an `exit` file, or a `pid` file naming a process that is gone; a job with neither
 counts as ended once its folder has been quiet for a minute). A live job's folder stays and is listed in `left`.
 

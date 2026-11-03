@@ -19,4 +19,4 @@
 {"do": "file", "path": "$STATE/sandbox/profile.eld", "contains": "new sandbox"}
 {"do": "file", "path": "$STATE/hub/migrated-p7/registrations.eld", "contains": "old registrations", "lacks": "new"}
 {"do": "file", "path": "$STATE/hub/migrated-p7/sandbox/profile.eld", "contains": "old sandbox", "lacks": "new"}
-{"do": "run", "args": ["doctor", "--json"], "expect_code": 0, "expect_stdout": {"legacy": {"moved": ["hub/registrations.eld", "sandbox"], "left": []}}}
+{"do": "run", "args": ["doctor", "--json"], "expect_code": 0, "expect_stdout": {"legacy": {"moved": ["hub/registrations.eld", "sandbox/profile.eld"], "left": []}}}
