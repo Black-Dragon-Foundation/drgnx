@@ -276,7 +276,9 @@ lines and limits, with these differences:
 - **The lock is a file**, `hub-HASH.sock.lock`, under an exclusive `flock` held for the hub's life. The kernel drops
   the lock with the process, so a crashed Ratatoskr leaves no stale lock. The file holds `"PID START_TIME\n"` for
   display (Linux `/proc/PID/stat` field 22; macOS `proc_pidinfo`, microseconds) and stays after a stop. A lock that is
-  held makes `serve` exit 3 ("another hub serves here").
+  held makes `serve` exit 3 ("another hub serves here"). Dropping the lock, and a probe that took it, unlock with
+  `LOCK_UN` before the close: a child another thread forked shares the open file until its exec, and a close alone
+  would leave the lock held through that copy.
 - **A Lisp hub's lock directory** (`SOCKET.lock/` with `pid`, from before Ratatoskr) is judged from its `pid`, never
   from a ping. Ratatoskr exits 3 ("a Lisp hub from before Ratatoskr serves here: drgnx hub stop") and touches nothing
   in two cases:

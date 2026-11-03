@@ -26,6 +26,15 @@ pub struct Lock {
     pub path: PathBuf,
 }
 
+/// Dropping unlocks before the descriptor closes: a child another thread forked shares the open file until its exec,
+/// and closing only our descriptor would leave the `flock` held through that copy.  `LOCK_UN` on any descriptor of the
+/// open file releases it for all.
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
 #[derive(Debug)]
 pub enum LockError {
     /// A Lisp hub holds its lock directory here (exit 3).
@@ -167,7 +176,7 @@ pub fn lisp_dir(path: &Path, procs: &impl Procs) -> Option<(Option<u32>, LispLoc
 /// Who holds the lock at PATH.  Its directory must pass [`runstav::paths::trusted_dir`] first (refused: an error; not
 /// there: nobody), and the file is read through it, never through a link, and only when it is this user's.  A
 /// Ratatoskr's file is probed with `flock(LOCK_EX|LOCK_NB)`: it succeeding means nobody holds it (released again at
-/// once), so a stale file naming a live pid is no holder at all.
+/// by an explicit unlock), so a stale file naming a live pid is no holder at all.
 pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
     let dir = match runstav::paths::trusted_dir(path.parent().unwrap_or(Path::new("/"))) {
         Ok(d) => d,
@@ -187,7 +196,11 @@ pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
         Err(e) => return Err(e),
     };
     match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => return Ok(Holder::Nobody),
+        Ok(()) => {
+            // released by name, not by the close: a child forked meanwhile shares this open file (see `Lock`'s drop)
+            let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
+            return Ok(Holder::Nobody);
+        }
         Err(rustix::io::Errno::WOULDBLOCK) => {}
         Err(e) => return Err(e.into()),
     }
@@ -377,7 +390,6 @@ mod tests {
         assert!(command_line(me).is_some_and(|a| !a.is_empty()));
         // pid 1 exists and is not ours: EPERM counts as alive
         assert!(alive(1));
-        // no child is spawned here: a fork in this process would hold the other test's lock until its exec
         assert!(!alive(0) && !alive(u32::MAX), "not pids");
     }
 
@@ -416,6 +428,51 @@ mod tests {
             Holder::Lisp { pid: Some(100) }
         );
         assert_eq!(holder(&path, &Fake(vec![])).unwrap(), Holder::Nobody);
+    }
+
+    #[test]
+    fn a_dropped_lock_is_free_while_a_child_is_between_fork_and_exec() {
+        // A child forked by any thread of this process shares the lock's open file until its exec closes it (macOS
+        // CI: another test's `pre_exec` child kept a dropped lock held, and `restore-pre7` saw a running hub). The
+        // child here stops between its fork and its exec until the test lets it go.
+        use std::os::unix::process::CommandExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("hub-x.sock.lock");
+        let held = acquire(&path, &Fake(vec![])).unwrap();
+        // two pipes: the child says it has forked on READY, and waits on GO before its exec
+        let (mut ready, mut go) = ([0 as libc::c_int; 2], [0 as libc::c_int; 2]);
+        // SAFETY: pipe(2) fills the two-element arrays
+        assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::pipe(go.as_mut_ptr()) }, 0);
+        let (ready_w, go_r) = (ready[1], go[0]);
+        let mut cmd = std::process::Command::new("true");
+        // SAFETY: only write(2) and read(2) on two descriptors, both async-signal-safe
+        unsafe {
+            cmd.pre_exec(move || {
+                let mut b = [0u8; 1];
+                libc::write(ready_w, b.as_ptr().cast(), 1);
+                libc::read(go_r, b.as_mut_ptr().cast(), 1);
+                Ok(())
+            });
+        }
+        // spawn returns only after the child's exec, so it runs beside the test
+        let child = std::thread::spawn(move || cmd.spawn().unwrap().wait().unwrap());
+        let mut b = [0u8; 1];
+        // SAFETY: a read of one byte into B from the pipe made above
+        assert_eq!(unsafe { libc::read(ready[0], b.as_mut_ptr().cast(), 1) }, 1);
+        drop(held);
+        assert_eq!(holder(&path, &Fake(vec![])).unwrap(), Holder::Nobody);
+        drop(acquire(&path, &Fake(vec![])).unwrap());
+        // SAFETY: a write of one byte to the pipe made above, then closing the four ends
+        unsafe {
+            assert_eq!(libc::write(go[1], b.as_ptr().cast(), 1), 1);
+        }
+        assert!(child.join().unwrap().success());
+        for fd in ready.into_iter().chain(go) {
+            // SAFETY: each descriptor is one of the pipes' ends, closed once
+            unsafe { libc::close(fd) };
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
