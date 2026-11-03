@@ -3,6 +3,7 @@
 //! `job/*` ([`super::jobs`]); these are `exec/*`.  An agent starts and reads jobs through its tools (`job_*`), which
 //! answer with these same shapes.
 
+use super::hub::EnvVar;
 use super::{invalid, method};
 use crate::registry::Method;
 use crate::types::{AbsPath, Bounded, Id, null_as_empty};
@@ -70,6 +71,9 @@ pub struct ExecRow {
     /// A container job's image, by digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    /// The name the user gave it, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub status: ExecStatus,
     /// When it started and ended (seconds since the epoch).
     pub started: f64,
@@ -109,6 +113,53 @@ pub struct StartParams {
     /// The machine: only `local` in part 1 (any other is refused: Calls made 3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<Id>,
+    /// What the job is called in lists (the user's jobs only; at most 128 characters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Bounded<String, 128>>,
+    /// Variables the job gets besides its base environment (the user's jobs only; at most 16; a name that looks like
+    /// a key is refused).  Their values are kept nowhere but a queued job's `pending.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Bounded<Vec<EnvVar>, 16>>,
+    /// The most memory the job's unit may use, in systemd's syntax (`512M`, `2G`; the user's jobs only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max: Option<Bounded<String, 16>>,
+    /// How much nicer than the hub the job runs, 0 to 19 (the user's jobs only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nice: Option<i8>,
+}
+
+impl StartParams {
+    /// The first field only the user may send that this request sets: an agent's job never has its own name,
+    /// environment or limits.
+    pub fn user_only_field(&self) -> Option<&'static str> {
+        if self.name.is_some() {
+            Some("name")
+        } else if self.env.is_some() {
+            Some("env")
+        } else if self.memory_max.is_some() {
+            Some("memory_max")
+        } else if self.nice.is_some() {
+            Some("nice")
+        } else {
+            None
+        }
+    }
+}
+
+/// Whether NAME looks like it carries a key, whatever its value: the names the shell environment never passes to the
+/// hub (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `CREDENTIAL` anywhere in it, in any case).
+pub fn key_like_env_name(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    [
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSPHRASE",
+        "CREDENTIAL",
+    ]
+    .iter()
+    .any(|w| up.contains(w))
 }
 
 /// `exec/start`'s answer (and `job_start`'s): the job's id and what the agent does now.
@@ -185,6 +236,29 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     }
     if p.timebox_s.is_some_and(|t| !(1..=86_400).contains(&t)) {
         return Err(invalid("timebox_s", "a time box of 1 to 86400 seconds"));
+    }
+    if let Some(m) = &p.memory_max {
+        let size = m.as_str();
+        let digits = size.strip_suffix(['K', 'M', 'G']).unwrap_or(size);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(invalid(
+                "memory_max",
+                "a size such as 512M or 2G (digits, then K, M or G)",
+            ));
+        }
+    }
+    if p.nice.is_some_and(|n| !(0..=19).contains(&n)) {
+        return Err(invalid("nice", "a niceness of 0 to 19"));
+    }
+    if let Some(vars) = &p.env {
+        for (i, v) in vars.iter().enumerate() {
+            if key_like_env_name(v.name.as_str()) {
+                return Err(invalid(
+                    &format!("env[{i}].name"),
+                    "a name that looks like a key is not passed to a job",
+                ));
+            }
+        }
     }
     match (p.kind, &p.image) {
         (Some(ExecKind::Container), None) => {

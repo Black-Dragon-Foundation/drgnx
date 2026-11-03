@@ -5688,6 +5688,13 @@
           "kind": {
             "$ref": "#/$defs/ExecKind"
           },
+          "name": {
+            "description": "The name the user gave it, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "session": {
             "description": "The session that started it; none: the user.",
             "type": [
@@ -5830,6 +5837,13 @@
               },
               "kind": {
                 "$ref": "#/$defs/ExecKind"
+              },
+              "name": {
+                "description": "The name the user gave it, if any.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "session": {
                 "description": "The session that started it; none: the user.",
@@ -6076,6 +6090,29 @@
             "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
             "type": "string"
           },
+          "EnvName": {
+            "description": "an environment variable's name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "EnvVar": {
+            "description": "One variable from the user's login shell.",
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/EnvName"
+              },
+              "value": {
+                "maxLength": 32768,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          },
           "ExecKind": {
             "description": "What a job runs, for its summary's parser; `container` runs an allowed image (Task 11b).",
             "enum": [
@@ -6117,6 +6154,17 @@
             ],
             "description": "The folder it runs in: the starter's worktree or a folder under it (the user's: any project folder)."
           },
+          "env": {
+            "description": "Variables the job gets besides its base environment (the user's jobs only; at most 16; a name that looks like\na key is refused).  Their values are kept nowhere but a queued job's `pending.json`.",
+            "items": {
+              "$ref": "#/$defs/EnvVar"
+            },
+            "maxItems": 16,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "image": {
             "description": "A container job's image: a name on `agents-container-images` (kind container only).",
             "maxLength": 256,
@@ -6146,10 +6194,36 @@
             ],
             "description": "The machine: only `local` in part 1 (any other is refused: Calls made 3)."
           },
+          "memory_max": {
+            "description": "The most memory the job's unit may use, in systemd's syntax (`512M`, `2G`; the user's jobs only).",
+            "maxLength": 16,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "What the job is called in lists (the user's jobs only; at most 128 characters).",
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "network": {
             "description": "A container job started by the user asks for the proxy network (default: none).  An agent's job gets the\nmatrix's Network cell instead, and this field changes nothing for it.",
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "nice": {
+            "description": "How much nicer than the hub the job runs, 0 to 19 (the user's jobs only).",
+            "format": "int8",
+            "maximum": 127,
+            "minimum": -128,
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -6336,6 +6410,13 @@
           },
           "kind": {
             "$ref": "#/$defs/ExecKind"
+          },
+          "name": {
+            "description": "The name the user gave it, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "session": {
             "description": "The session that started it; none: the user.",

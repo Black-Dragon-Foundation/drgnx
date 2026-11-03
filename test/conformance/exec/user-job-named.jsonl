@@ -1,0 +1,14 @@
+{"scenario": "exec/user-job-named", "requires": ["v1"], "doc": "A job the user starts may carry a name: exec/get and exec/list return it on the row, and it survives the job's end."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo named-job"], "cwd": "$ROOT", "name": "grammars"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["named-job"]}}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/get", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "name": "grammars", "status": "done"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"jobs": {"$contains": [{"id": "$job", "name": "grammars"}]}}}, "within_ms": 10000}

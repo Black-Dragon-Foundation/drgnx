@@ -32,6 +32,9 @@ pub struct Meta {
     /// A container job's image name (`agents-container-images`).
     #[serde(default)]
     pub image: Option<String>,
+    /// A user's job's name.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The job waits for a machine slot (`pending.json` holds what to start); it has no process yet.
     #[serde(default)]
     pub queued: bool,
@@ -64,11 +67,13 @@ pub fn unit_name(id: &str) -> String {
 }
 
 /// Wrap INNER (the starter's launch, or the bare command) in the logging shell and, with `unit`, in a transient scope
-/// with `MemoryMax=MEMORY`.  The child leads a session of its own either way.
+/// with `MemoryMax=MEMORY`.  The child leads a session of its own either way.  NICE runs the command under `nice -n`
+/// (a scope takes no `Nice=`; the same line works with and without a unit).
 pub fn wrap(
     inner: Spec,
     dir: &Path,
     unit: Option<(&str, &str)>,
+    nice: Option<i8>,
     shell: &crate::shell_env::ShellEnv,
 ) -> Spec {
     let mut args: Vec<OsString> = Vec::new();
@@ -96,6 +101,11 @@ pub fn wrap(
     args.push(SCRIPT.into());
     args.push("sh".into());
     args.push(dir.into());
+    if let Some(n) = nice {
+        args.push("nice".into());
+        args.push("-n".into());
+        args.push(n.to_string().into());
+    }
     args.push(inner.program.into());
     args.extend(inner.args);
     let mut env = inner.env;
@@ -157,7 +167,7 @@ mod tests {
     #[test]
     fn the_wrapper_keeps_the_command_and_names_the_scope() {
         let shell = crate::shell_env::ShellEnv::default();
-        let s = wrap(bare(&["a"]), Path::new("/d"), None, &shell);
+        let s = wrap(bare(&["a"]), Path::new("/d"), None, None, &shell);
         assert_eq!(s.program, PathBuf::from("sh"));
         assert!(s.new_session);
         assert_eq!(s.args.last().unwrap(), "a");
@@ -165,6 +175,7 @@ mod tests {
             bare(&["a"]),
             Path::new("/d"),
             Some(("drgnx-exec-x", "4G")),
+            None,
             &shell,
         );
         assert_eq!(s.program, PathBuf::from("systemd-run"));

@@ -1,0 +1,18 @@
+{"scenario": "exec/user-job-memory-max", "requires": ["v1", "linux"], "doc": "A job the user starts may set memory_max (systemd syntax) and nice (0 to 19); a malformed size or an out-of-range nice is refused with invalid-params, and a good pair runs the job to its end."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "memory_max": "lots"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "memory_max": "1.5G"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "nice": 20}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "nice": -1}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo capped"], "cwd": "$ROOT", "memory_max": "512M", "nice": 3}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["capped"]}}}}, "within_ms": 30000}

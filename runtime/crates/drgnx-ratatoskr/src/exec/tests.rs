@@ -18,6 +18,7 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
         timebox,
         kind: CheckKind::Other,
         container: None,
+        user: UserJob::default(),
     }
 }
 
@@ -190,6 +191,7 @@ fn a_job_whose_process_is_gone_is_lost() {
         start_time: Some(1),
         entity: None,
         image: None,
+        name: None,
         queued: false,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
@@ -215,6 +217,116 @@ fn exec_remote_machine_refused() {
     let e = check_machine(&start_params(Some("desktop"))).unwrap_err();
     assert_eq!(e.code, ErrorCode::InvalidParams);
     assert!(e.message.contains("this machine only"));
+}
+
+fn params(extra: serde_json::Value) -> StartParams {
+    let mut v = json!({"argv": ["true"], "cwd": "/"});
+    v.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    serde_json::from_value(v).unwrap()
+}
+
+#[test]
+fn agent_cannot_set_memory_max() {
+    for extra in [
+        json!({"memory_max": "1G"}),
+        json!({"nice": 5}),
+        json!({"name": "mine"}),
+        json!({"env": [{"name": "A", "value": "1"}]}),
+    ] {
+        let p = params(extra);
+        let e = user_job(&Some("s1".into()), CheckKind::Other, &p).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidParams);
+        assert!(e.message.contains("only the user"), "{}", e.message);
+        assert!(user_job(&None, CheckKind::Other, &p).is_ok());
+    }
+    // an agent that sends none of them is untouched
+    let none = user_job(&Some("s1".into()), CheckKind::Other, &params(json!({}))).unwrap();
+    assert!(none.name.is_none() && none.env.is_empty() && none.nice.is_none());
+}
+
+#[test]
+fn env_names_refused() {
+    use runstav::methods::exec::key_like_env_name;
+    for bad in [
+        "OPENAI_API_KEY",
+        "gh_token",
+        "DB_PASSWORD",
+        "MY_SECRET",
+        "AWS_CREDENTIALS",
+    ] {
+        assert!(key_like_env_name(bad), "{bad}");
+    }
+    for ok in ["PATH", "PLAYWRIGHT_MCP_CDP_ENDPOINT", "LANG", "HF_HOME"] {
+        assert!(!key_like_env_name(ok), "{ok}");
+    }
+    // the same check runs when a request is decoded and checked
+    let m = runstav::registry::find("exec/start").expect("exec/start");
+    let bad = json!({"argv": ["true"], "cwd": "/", "env": [{"name": "GH_TOKEN", "value": "x"}]});
+    assert!((m.decode)(&bad).is_err());
+    let good = json!({"argv": ["true"], "cwd": "/", "env": [{"name": "PATH", "value": "/bin"}]});
+    assert!((m.decode)(&good).is_ok());
+}
+
+#[test]
+fn unit_has_memory_max_and_nice() {
+    let inner = draugr::Spec {
+        program: "echo".into(),
+        args: vec!["a".into()],
+        env: vec![],
+        cwd: None,
+        stdin_null: true,
+        pass_fds: vec![],
+        new_session: false,
+    };
+    let s = unit::wrap(
+        inner,
+        Path::new("/d"),
+        Some(("drgnx-exec-x", "512M")),
+        Some(7),
+        &crate::shell_env::ShellEnv::default(),
+    );
+    let args: Vec<String> = s
+        .args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(args.contains(&"MemoryMax=512M".to_string()), "{args:?}");
+    let at = args.iter().position(|a| a == "nice").expect("nice");
+    assert_eq!(args[at..], ["nice", "-n", "7", "echo", "a"]);
+}
+
+#[tokio::test]
+async fn a_user_job_gets_its_name_env_and_nice() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    let mut s = spec(
+        Starter::User,
+        d.path(),
+        "echo \"$JOB_VAR\"; nice",
+        Duration::from_secs(30),
+    );
+    s.user = UserJob {
+        name: Some("grammars".into()),
+        env: vec![("JOB_VAR".into(), "from-the-request".into())],
+        memory_max: None,
+        nice: Some(7),
+    };
+    let id = r.start(s).await.unwrap();
+    let row = ended(&r, &id).await;
+    assert_eq!(row.name.as_deref(), Some("grammars"));
+    // `nice -n` adds to the hub's own niceness
+    // SAFETY: getpriority(2) reads this process's niceness.
+    let base = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    assert_eq!(
+        row.summary.unwrap().lines,
+        vec![
+            "from-the-request".to_string(),
+            (base + 7).min(19).to_string()
+        ]
+    );
+    assert_eq!(r.list(None, false)[0].name.as_deref(), Some("grammars"));
 }
 
 /// The row `exec/runs-in-the-starters-sandbox`: needs the real sandbox's bwrap tier, which the build container lacks
@@ -287,6 +399,7 @@ fn container_spec(cwd: &Path) -> ExecSpec {
             },
             net: None,
         }),
+        user: UserJob::default(),
     }
 }
 
@@ -586,6 +699,7 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
         start_time: None,
         entity: None,
         image: None,
+        name: None,
         queued: true,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();

@@ -87,6 +87,13 @@ keeps the old report. They are read with `drgnx-file-read`: `drgnx-tty--read-rep
 `ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its
 next run, so a report with a mistake is not kept aside.
 
+**drgnx-exec.el.** The editor's client for the hub's jobs (`exec/*`; `docs/guide/jobs.md`, "The editor's jobs"), the
+replacement for `drgnx-jobs.el`'s units. `drgnx-exec-get` and `drgnx-exec-list` read `drgnx-exec--jobs`, a cache that
+`drgnx-exec-sync` fills from `exec/list` and the `exec-done` events (bounded by `drgnx-exec--keep`; a closed hub
+connection marks it stale, and the next event refreshes it): they never call the hub, so a timer or redisplay may use
+them. `drgnx-exec-start` and `-stop` are asynchronous; `drgnx-exec-log` is a synchronous call for commands (it refuses
+under `inhibit-interaction`). `drgnx-exec-unsync` removes the hooks and clears the cache.
+
 **job.eld.** A durable job's `jobs/ID/job.eld` is a plist of plain data in one form: `drgnx-jobs-start` writes it with
 `drgnx-file-write` (text properties on the name and command are dropped first), `drgnx-jobs--read` reads it with
 `drgnx-file-read` (nil for a missing or unreadable file), and the stamp (`drgnx-jobs--stamp`: `:boot` and `:start`) is

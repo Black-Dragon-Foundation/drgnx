@@ -1,0 +1,16 @@
+{"scenario": "exec/user-job-env", "requires": ["v1"], "doc": "A job the user starts gets the variables it names on top of the base environment; a name that looks like a key, or a malformed one, is refused with invalid-params before anything starts."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo \"value=$JOB_VAR\""], "cwd": "$ROOT", "env": [{"name": "JOB_VAR", "value": "from-the-row"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["value=from-the-row"]}}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "env": [{"name": "GH_TOKEN", "value": "x"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "env": [{"name": "1BAD", "value": "x"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "kind": "container", "image": "tools", "env": [{"name": "A", "value": "1"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params"}}, "within_ms": 10000}
