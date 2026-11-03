@@ -51,10 +51,23 @@ pub struct Moved {
     pub at: Option<PathBuf>,
     pub moved: Vec<String>,
     pub left: Vec<String>,
+    /// Names in `moved` whose copy is in place but whose source could not be removed yet: a later start removes it,
+    /// while the copy still covers it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_left: Vec<String>,
 }
 
 /// The one `rename` the moves go through: a test replaces it to make a move cross a filesystem.
 type Rename<'a> = &'a dyn Fn(&Path, &Path) -> io::Result<()>;
+/// The removal of a source after its copy is in place: a test replaces it to make that fail.
+type Remove<'a> = &'a dyn Fn(&Path) -> io::Result<()>;
+
+/// How a move ended.
+enum Relocated {
+    Moved,
+    /// The copy is in place; the source stays (it could not be removed, or the copy's folder could not be synced).
+    SourceLeft,
+}
 
 struct Item {
     name: String,
@@ -73,11 +86,19 @@ fn by_rename(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 fn migrate_in(state: &Path, rename: Rename) -> io::Result<Moved> {
+    migrate_with(state, rename, &remove_any)
+}
+
+fn migrate_with(state: &Path, rename: Rename, remove: Remove) -> io::Result<Moved> {
     let mig = state.join("hub").join(DIR);
     let done_path = mig.join(DONE);
     let prior = read_done(&done_path);
-    let (items, jobs_left) = plan(state, &mig, prior.is_none());
     let mut m = prior.clone().unwrap_or_default();
+    // sources an earlier start could not remove: finish that first
+    m.source_left
+        .retain(|n| !finish_removal(state, &mig, n, remove));
+    let (mut items, jobs_left) = plan(state, &mig, prior.is_none());
+    items.retain(|it| !m.source_left.contains(&it.name)); // its copy is in place already
     let mut left: Vec<String> = m
         .left
         .iter()
@@ -86,7 +107,13 @@ fn migrate_in(state: &Path, rename: Rename) -> io::Result<Moved> {
         .collect();
     left.extend(jobs_left);
     left.sort();
-    if items.is_empty() && (left.is_empty() || prior.as_ref().is_some_and(|p| p.left == left)) {
+    let retried = prior
+        .as_ref()
+        .is_some_and(|p| p.source_left != m.source_left);
+    if items.is_empty()
+        && !retried
+        && (left.is_empty() || prior.as_ref().is_some_and(|p| p.left == left))
+    {
         // nothing to move, and nothing new to say (a first start on a fresh install writes nothing at all)
         return Ok(m);
     }
@@ -104,8 +131,12 @@ fn migrate_in(state: &Path, rename: Rename) -> io::Result<Moved> {
         if let Some(dir) = it.to.parent().filter(|d| *d != mig) {
             paths::private_dir(dir)?; // jobs/, sandbox/
         }
-        match relocate(rename, &it.from, &it.to) {
-            Ok(()) => m.moved.push(it.name),
+        match relocate(rename, remove, &it.from, &it.to) {
+            Ok(Relocated::Moved) => m.moved.push(it.name),
+            Ok(Relocated::SourceLeft) => {
+                m.source_left.push(it.name.clone());
+                m.moved.push(it.name);
+            }
             Err(e) => {
                 tracing::warn!("cannot move {} aside: {e}: left where it is", it.name);
                 left.push(it.name);
@@ -115,6 +146,8 @@ fn migrate_in(state: &Path, rename: Rename) -> io::Result<Moved> {
     left.sort();
     left.dedup();
     m.left = left;
+    m.source_left.sort();
+    m.source_left.dedup();
     m.at = Some(mig);
     write_done(&done_path, &m)?;
     Ok(m)
@@ -227,10 +260,12 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
 
 /// FROM to TO, by rename; across filesystems (EXDEV) by copy, sync, then removal of the source.  The copy is made
 /// under a name of its own and renamed into place, so a failed copy leaves no half-made TO and the source untouched.
-fn relocate(rename: Rename, from: &Path, to: &Path) -> io::Result<()> {
+/// Once the copy is in place the move has happened: a failure to sync it or to remove the source is
+/// [`Relocated::SourceLeft`], not an error.
+fn relocate(rename: Rename, remove: Remove, from: &Path, to: &Path) -> io::Result<Relocated> {
     match rename(from, to) {
         Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {}
-        done => return done,
+        done => return done.map(|()| Relocated::Moved),
     }
     let name = to.file_name().unwrap_or_default().to_string_lossy();
     let partial = to.with_file_name(format!(".{name}.partial"));
@@ -242,8 +277,73 @@ fn relocate(rename: Rename, from: &Path, to: &Path) -> io::Result<()> {
         let _ = remove_any(&partial);
         return Err(e);
     }
-    sync_dir(to.parent().unwrap_or(Path::new("/")))?;
-    remove_any(from)
+    match sync_dir(to.parent().unwrap_or(Path::new("/"))).and_then(|()| remove(from)) {
+        Ok(()) => Ok(Relocated::Moved),
+        Err(e) => {
+            tracing::warn!(
+                "{} is copied to {} but its source stays: {e}: removed at a later start",
+                from.display(),
+                to.display()
+            );
+            Ok(Relocated::SourceLeft)
+        }
+    }
+}
+
+/// Where the move of NAME (relative to STATE, as `moved` lists it) put its copy under MIG.
+fn target(mig: &Path, name: &str) -> PathBuf {
+    mig.join(name.strip_prefix("hub/").unwrap_or(name))
+}
+
+/// Finish the removal an earlier start could not: true when NAME needs no more attempts (removed, already gone, or
+/// not ours to remove), false when the removal failed again.  The source goes only while the copy is there and holds
+/// all of it, so a source that changed since, or a copy that is gone, is left alone.
+fn finish_removal(state: &Path, mig: &Path, name: &str, remove: Remove) -> bool {
+    let from = state.join(name);
+    if std::fs::symlink_metadata(&from).is_err() {
+        return true;
+    }
+    if !is_covered(&from, &target(mig, name)) {
+        tracing::warn!(
+            "{name} differs from its copy in {}: left where it is",
+            mig.display()
+        );
+        return true;
+    }
+    match remove(&from) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(
+                "cannot remove {name} after its copy: {e}: tried again at the next start"
+            );
+            false
+        }
+    }
+}
+
+/// Whether everything in SRC is in DST, the same: a folder's entries each, a file's bytes, a link's target.
+fn is_covered(src: &Path, dst: &Path) -> bool {
+    let (Ok(a), Ok(b)) = (
+        std::fs::symlink_metadata(src),
+        std::fs::symlink_metadata(dst),
+    ) else {
+        return false;
+    };
+    let kind = a.file_type();
+    if kind.is_dir() {
+        b.is_dir()
+            && names(src)
+                .iter()
+                .all(|n| is_covered(&src.join(n), &dst.join(n)))
+    } else if kind.is_file() {
+        b.is_file()
+            && a.len() == b.len()
+            && matches!((std::fs::read(src), std::fs::read(dst)), (Ok(x), Ok(y)) if x == y)
+    } else if kind.is_symlink() {
+        b.file_type().is_symlink() && std::fs::read_link(src).ok() == std::fs::read_link(dst).ok()
+    } else {
+        false
+    }
 }
 
 /// SRC copied to DST (which must not exist), every file and folder synced.  What is neither a file, a folder nor a
@@ -305,7 +405,9 @@ fn marker_in(argv: &[&str]) -> Option<&'static str> {
             arg.strip_prefix("--funcall=")
                 .or_else(|| arg.strip_prefix("--load="))
                 .is_some_and(|v| names(v, m))
-                || arg.strip_prefix("--eval=").is_some_and(|v| v == format!("({m})"))
+                || arg
+                    .strip_prefix("--eval=")
+                    .is_some_and(|v| v == format!("({m})"))
         }
     };
     MARKERS.into_iter().find(|m| {
@@ -524,7 +626,11 @@ mod tests {
         assert!(!s.join("sandbox/profile.eld").exists());
         // no copy in progress is left behind
         assert!(names(&mig).iter().all(|n| !n.ends_with(".partial")));
-        assert!(names(&mig.join("sandbox")).iter().all(|n| n != "folders.eld"));
+        assert!(
+            names(&mig.join("sandbox"))
+                .iter()
+                .all(|n| n != "folders.eld")
+        );
     }
 
     #[test]
@@ -578,6 +684,98 @@ mod tests {
         assert!(m2.moved.is_empty());
         assert_eq!(m2.left.len(), moved_names().len());
         assert!(t2.path().join("hub/registrations.eld").exists());
+    }
+
+    /// A removal that fails for the folder `hub/bodies` only.
+    fn stuck_on_bodies(path: &Path) -> io::Result<()> {
+        if path.ends_with("hub/bodies") {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        } else {
+            remove_any(path)
+        }
+    }
+
+    #[test]
+    fn a_source_that_cannot_be_removed_after_the_copy_still_counts_as_moved() {
+        let t = old_state();
+        let s = t.path();
+        let mig = s.join("hub").join(DIR);
+        let m = migrate_with(s, &exdev, &stuck_on_bodies).unwrap();
+        // the copy is in place and complete: moved, not left; the source waits for a later removal
+        assert!(m.moved.contains(&"hub/bodies".to_string()));
+        assert!(m.left.is_empty(), "{:?}", m.left);
+        assert_eq!(m.source_left, ["hub/bodies"]);
+        assert_eq!(
+            std::fs::read_to_string(mig.join("bodies/b1")).unwrap(),
+            "body"
+        );
+        assert!(s.join("hub/bodies/b1").exists());
+        assert_eq!(read_done(&mig.join(DONE)), Some(m.clone()));
+        // a start whose removal fails again changes nothing
+        assert_eq!(migrate_with(s, &exdev, &stuck_on_bodies).unwrap(), m);
+        // a start whose removal works finishes it
+        let later = migrate_with(s, &exdev, &remove_any).unwrap();
+        assert!(!s.join("hub/bodies").exists());
+        assert!(later.source_left.is_empty());
+        assert!(later.left.is_empty());
+        assert_eq!(later.moved, m.moved);
+        assert_eq!(read_done(&mig.join(DONE)), Some(later));
+        assert!(mig.join("bodies/b1").exists());
+    }
+
+    #[test]
+    fn a_leftover_source_is_removed_only_while_the_copy_covers_it() {
+        // the source changed since (a new hub wrote a file into it): it is not the old runtime's any more
+        let t = old_state();
+        let s = t.path();
+        migrate_with(s, &exdev, &stuck_on_bodies).unwrap();
+        put(&s.join("hub/bodies/b1"), "different");
+        let later = migrate_with(s, &exdev, &remove_any).unwrap();
+        assert!(later.source_left.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(s.join("hub/bodies/b1")).unwrap(),
+            "different"
+        );
+        // the copy is gone: nothing to cover the source, so it stays
+        let t = old_state();
+        let s = t.path();
+        migrate_with(s, &exdev, &stuck_on_bodies).unwrap();
+        std::fs::remove_dir_all(s.join("hub").join(DIR).join("bodies")).unwrap();
+        let later = migrate_with(s, &exdev, &remove_any).unwrap();
+        assert!(later.source_left.is_empty());
+        assert!(s.join("hub/bodies/b1").exists());
+        // part of the source already removed (a crash mid-removal): the rest goes
+        let t = old_state();
+        let s = t.path();
+        put(&s.join("hub/bodies/b2"), "second");
+        migrate_with(s, &exdev, &stuck_on_bodies).unwrap();
+        std::fs::remove_file(s.join("hub/bodies/b2")).unwrap();
+        let later = migrate_with(s, &exdev, &remove_any).unwrap();
+        assert!(later.source_left.is_empty());
+        assert!(!s.join("hub/bodies").exists());
+    }
+
+    #[test]
+    fn a_job_whose_source_is_left_is_not_moved_twice() {
+        let t = tempfile::tempdir().unwrap();
+        let s = t.path();
+        put(&s.join("jobs/j/exit"), "0");
+        put(&s.join("jobs/j/log"), "out");
+        let stuck = |p: &Path| -> io::Result<()> {
+            if p.ends_with("jobs/j") {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            } else {
+                remove_any(p)
+            }
+        };
+        let m = migrate_with(s, &exdev, &stuck).unwrap();
+        assert_eq!(m.moved, ["jobs/j"]);
+        assert!(m.left.is_empty());
+        assert_eq!(m.source_left, ["jobs/j"]);
+        assert_eq!(migrate_with(s, &exdev, &stuck).unwrap(), m);
+        let later = migrate_with(s, &exdev, &remove_any).unwrap();
+        assert!(!s.join("jobs/j").exists());
+        assert!(later.left.is_empty() && later.source_left.is_empty());
     }
 
     #[test]

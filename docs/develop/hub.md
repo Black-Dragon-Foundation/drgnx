@@ -459,8 +459,11 @@ counts as ended once its folder has been quiet for a minute). A live job's folde
 
 A move is a `rename`; across filesystems (`EXDEV`) it copies into a temporary name beside the target, syncs every file
 and folder, renames it into place and only then removes the source. A copy that fails (a socket in the tree cannot be
-copied) leaves the source untouched and the name in `left`. Nothing is deleted otherwise. `migrated-p7/done` is the
-JSON `Moved` `{at, moved, left}` (names relative to `<state>`); once it exists later starts skip the `hub/` and
+copied) leaves the source untouched and the name in `left`. Once the copy is in place the name is `moved`: if syncing
+its folder or removing the source then fails, the name also goes in `source_left`, and the next start removes the
+source, but only while the copy is there and holds all of it (a source that changed since stays). Nothing is deleted
+otherwise. `migrated-p7/done` is the JSON `Moved` `{at, moved, left, source_left}` (names relative to `<state>`;
+`source_left` is absent when empty); once it exists later starts skip the `hub/` and
 `sandbox/` items and only move the jobs that have ended since, shrinking `left`. A fresh install (nothing to move,
 nothing left) writes nothing.
 
