@@ -1,0 +1,32 @@
+{"scenario": "lifecycle/a-running-lisp-job-is-left-in-place", "requires": ["v1"], "doc": "The editor's command jobs (<state>/jobs/<id>/) move to migrated-p7/jobs only once they have ended: an `exit` file, or a pid file naming a process that is gone. A job whose process still runs keeps its folder (and its log keeps being written where its shell writes it), and the doctor names it in legacy.left. After it ends, the next start moves it. A `sleep` stands in for the running job; the scenario holds it."}
+{"do": "root"}
+{"do": "spawn", "capture": "job", "argv": ["sleep", "300"]}
+{"do": "write_file", "path": "$STATE/jobs/live/pid", "text": "$job"}
+{"do": "write_file", "path": "$STATE/jobs/live/log", "text": "still running"}
+{"do": "write_file", "path": "$STATE/jobs/exited/pid", "text": "$job"}
+{"do": "write_file", "path": "$STATE/jobs/exited/exit", "text": "0"}
+{"do": "write_file", "path": "$STATE/jobs/exited/log", "text": "done"}
+{"do": "write_file", "path": "$STATE/jobs/gone/pid", "text": "2147483646"}
+{"do": "write_file", "path": "$STATE/jobs/gone/log", "text": "died"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "ping"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"pid": "$PID(h)"}}}
+{"do": "file", "path": "$STATE/jobs/live/log", "contains": "still running"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/jobs/exited/log", "contains": "done"}
+{"do": "file", "path": "$STATE/hub/migrated-p7/jobs/gone/log", "contains": "died"}
+{"do": "file", "path": "$STATE/jobs/exited", "exists": false}
+{"do": "file", "path": "$STATE/jobs/gone", "exists": false}
+{"do": "file", "path": "$STATE/hub/migrated-p7/jobs/live", "exists": false}
+{"do": "run", "args": ["doctor", "--json"], "expect_code": 0, "expect_stdout": {"legacy": {"moved": ["jobs/exited", "jobs/gone"], "left": ["jobs/live"]}}}
+{"do": "kill", "pid": "job", "signal": "TERM"}
+{"do": "pid", "capture": "job", "alive": false, "within_ms": 4000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "d", "hub": "h2"}
+{"do": "send", "conn": "d", "json": {"id": 2, "method": "ping"}}
+{"do": "expect", "conn": "d", "json": {"id": 2, "result": {"pid": "$PID(h2)"}}}
+{"do": "file", "path": "$STATE/hub/migrated-p7/jobs/live/log", "contains": "still running"}
+{"do": "file", "path": "$STATE/jobs/live", "exists": false}
+{"do": "run", "args": ["doctor", "--json"], "expect_code": 0, "expect_stdout": {"legacy": {"moved": ["jobs/exited", "jobs/gone", "jobs/live"], "left": []}}}

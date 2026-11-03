@@ -433,6 +433,27 @@ The timer does not undo your choices: after `drgnx update --back`, or after an u
 the timer skips that same commit and waits for a newer one; running `drgnx update` yourself takes it. A checkout with
 local changes, on another branch or diverged fails the timer's run with the same message, until you fix it.
 
+### Updating past phase 7
+
+Phase 7 removes the Lisp runtime: the editor no longer starts a Lisp hub or backend, and the agent, job, sandbox and
+coordination code that ran in it is the Rust hub's. An update over a running install needs nothing from you beyond
+restarting drgnx, and nothing you had is lost. At its first start the new hub:
+
+1. **Ends the old backend.** If the hub you were running had a Lisp backend (the Emacs child it started), the new hub
+   stops it and its processes before it answers anyone, so nothing waits on it. The editor reconnects by itself.
+2. **Moves what the old runtime wrote aside, never deleting it,** into `~/.local/state/drgnx/hub/migrated-p7/` (mode
+   0700, the original names kept): the old hub's `registrations.eld`, `sessions.eld`, `port` and
+   `hub-timers-report.eld`, its `bodies/` folder, a `hub-*.d/` folder that holds only the backend's socket, the
+   `sandbox/` folder, and the editor's command jobs (`~/.local/state/drgnx/jobs/<id>/`, the logs of tree-sitter
+   grammar builds, installs and the like). `migrated-p7/done` records what moved. Later starts move nothing from
+   `hub/` or `sandbox/`.
+3. **Leaves a job that is still running where it is.** A command job whose process is alive keeps its folder and its
+   log until it ends; the next start after that moves it too. `drgnx doctor` names such a job under `legacy`, and
+   lists any process of yours that is still the old Lisp hub or coordination server (a window you have not restarted
+   yet).
+
+Once you have restarted drgnx and nothing is listed, `migrated-p7/` is yours to keep or delete: nothing reads it.
+
 ## Uninstall
 
 ```sh

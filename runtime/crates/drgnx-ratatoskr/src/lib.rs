@@ -8,6 +8,7 @@
 //! - [`client`]: the blocking client those commands use (a raw ping, a proven user connection).
 //! - [`idle`]: restart-when-idle: the binary on disk changed, restart between turns.
 //! - [`doctor`]: `status`, `doctor --json` and `restart`.
+//! - [`legacy`]: what the Lisp runtime left, moved aside at the first start (never deleted), and the doctor's `legacy` section.
 //! - [`lock`]: one hub per data dir (an exclusive `flock`; a Lisp hub's lock directory respected).
 //! - [`server`]: the start order (the store opened, or made, or migrated, before anything is served), the accept loops, signals, the parent watch, the schema tick and the stop.
 //! - [`conn`]: one connection: the peer-uid check, the challenge, lines, the writer queue that drops a stopped reader.
@@ -75,6 +76,7 @@ pub mod graph_cli;
 pub mod hello;
 pub mod idle;
 pub mod job_cli;
+pub mod legacy;
 pub mod lock;
 pub mod log;
 pub mod manager;

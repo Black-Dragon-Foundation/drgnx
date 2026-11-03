@@ -61,7 +61,9 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      with its `-wal` and `-shm` as `runtime.db.newer-N-UNIXTIME` and a new file is made: the sessions it kept are lost
      (their bridges fail and their editors open them again), which is accepted because installs are disposable.
   6. The process groups `runtime.db` recorded are reaped ([The reaper](#the-reaper): a crashed run's, or the Lisp
-     backend an older hub ran), then the session sockets whose owners still run are bound again. No child Emacs is
+     backend an older hub ran).
+  7. What the Lisp hub left in `<state>` is moved aside, once (`legacy::migrate`, [below](#what-the-lisp-runtime-left)),
+     then the session sockets whose owners still run are bound again. No child Emacs is
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
@@ -444,6 +446,27 @@ start time or boot id is skipped and never signalled; a pid whose start time or 
 deletes them all, so the backend an older or crashed hub left is killed with its group when the new binary starts.
 The window left open is the reused leader ("The window left open", above): the recorded group died and its leader's
 pid went to another process's group before the next start.
+
+### What the Lisp runtime left
+
+`legacy::migrate` (`src/legacy.rs`) runs once per start, after the reaper and before anything is served. It moves, each
+only when present, into `<state>/hub/migrated-p7/` (0700, original names): from `<state>/hub/` the files
+`registrations.eld`, `sessions.eld`, `port` and `hub-timers-report.eld`, the folder `bodies/` and every `hub-*.d/` that
+holds only `backend.sock`; then `<state>/sandbox/`; and each `<state>/jobs/<id>/` of the editor's old command jobs
+(`core/drgnx-jobs.el`) that has ended (an `exit` file, or a `pid` file naming a process that is gone; a job with neither
+counts as ended once its folder has been quiet for a minute). A live job's folder stays and is listed in `left`.
+
+A move is a `rename`; across filesystems (`EXDEV`) it copies into a temporary name beside the target, syncs every file
+and folder, renames it into place and only then removes the source. A copy that fails (a socket in the tree cannot be
+copied) leaves the source untouched and the name in `left`. Nothing is deleted otherwise. `migrated-p7/done` is the
+JSON `Moved` `{at, moved, left}` (names relative to `<state>`); once it exists later starts skip the `hub/` and
+`sandbox/` items and only move the jobs that have ended since, shrinking `left`. A fresh install (nothing to move,
+nothing left) writes nothing.
+
+`doctor --json` has `legacy: {moved, left, at, lisp_processes: [{pid, what}]}`: `moved` and `at` from `done`, `left`
+read afresh (a job may have ended since), and the user's processes whose command line has `drgnx-hub-main` or
+`drgnx-coord-mcp-main` (from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
+Rows: `lifecycle/{an-old-backend-is-reaped-at-start,lisp-state-is-moved-once,a-second-start-moves-nothing,a-running-lisp-job-is-left-in-place}`.
 
 ## The client
 
